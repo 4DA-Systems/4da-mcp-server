@@ -80,7 +80,14 @@ const SERVER_VERSION: string = (() => {
   }
 })();
 
-import { createDatabase, DEPENDENCY_GROUP_QUERY, FourDADatabase, type DatabaseValidationResult } from "./db.js";
+import {
+  createDatabase,
+  DEPENDENCY_GROUP_QUERY,
+  FourDADatabase,
+  isUnreadableDbError,
+  unreadableDbMessage,
+  type DatabaseValidationResult,
+} from "./db.js";
 
 // =============================================================================
 // Server Setup
@@ -422,7 +429,15 @@ export function buildServer(): Server {
       const database = getDatabase();
       return await dispatchTool(name, database, args as Record<string, unknown> | undefined);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // A database that turns out damaged mid-session (SQLITE_CORRUPT on a
+      // page the open did not touch) gets the same guidance as one that
+      // fails to open, instead of the bare SQLite text.
+      const errorMessage =
+        db && isUnreadableDbError(error)
+          ? unreadableDbMessage(db.dbPath, error)
+          : error instanceof Error
+            ? error.message
+            : String(error);
       return {
         content: [
           {
@@ -492,6 +507,7 @@ async function main() {
                         refused unless MCP_AUTH_SECRET is set; authentication
                         is then mandatory for every request.
     --setup             Detect editors and write MCP config
+    --dry-run           With --setup: print each file and entry, write nothing
     --doctor            Validate database, bindings, and LLM providers
 
   Environment:
@@ -515,7 +531,7 @@ async function main() {
 
   // Setup command: configure editors
   if (args.includes("--setup") || args.includes("setup")) {
-    runSetup();
+    runSetup(args.includes("--dry-run"));
     return;
   }
 

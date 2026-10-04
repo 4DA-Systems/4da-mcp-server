@@ -45,9 +45,9 @@ claude plugin install 4da@4da
 The hook: when your agent edits a dependency's version in `package.json`, `Cargo.toml`, `pyproject.toml`, `requirements.txt` or `go.mod`, it is told which packages moved and given the exact `dependency_check` and `upgrade_impact` calls to make before it installs and builds. The hook is plain Node, contacts nothing, and stays silent for every other edit.
 
 <details>
-<summary><b>Cursor / Windsurf</b></summary>
+<summary><b>Cursor / Windsurf / Devin Desktop</b></summary>
 
-Add to `~/.cursor/mcp.json` or `~/.windsurf/mcp.json`:
+Add to `~/.cursor/mcp.json` (Cursor), `~/.codeium/windsurf/mcp_config.json` (Windsurf), or `~/.config/devin/mcp_config.json` (Devin Desktop and Devin CLI; `%APPDATA%devinmcp_config.json` on Windows):
 ```json
 {
   "mcpServers": {
@@ -63,7 +63,7 @@ Add to `~/.cursor/mcp.json` or `~/.windsurf/mcp.json`:
 <details>
 <summary><b>VS Code (Copilot)</b></summary>
 
-Add to `~/.vscode/mcp.json`:
+Run **MCP: Open User Configuration** and add the entry, or edit the file directly: `%APPDATA%CodeUsermcp.json` (Windows), `~/Library/Application Support/Code/User/mcp.json` (macOS), `~/.config/Code/User/mcp.json` (Linux). VS Code uses `servers`, not `mcpServers`:
 ```json
 {
   "servers": {
@@ -97,8 +97,11 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 <summary><b>Auto-setup</b> (detects all installed editors)</summary>
 
 ```bash
+npx @4da/mcp-server --setup --dry-run   # show each file and entry, write nothing
 npx @4da/mcp-server --setup
 ```
+
+Writes Cursor, VS Code (and Insiders), Windsurf, Devin Desktop and Claude Desktop configs it finds, merging into what is there: other servers, settings and comments are kept, a backup (`.bak`) is written first, and a file it cannot parse is left untouched with the entry to add by hand. For Claude Code it prints the `claude mcp add` command instead of editing `~/.claude.json`.
 </details>
 
 Then ask your AI: **"What changes if I upgrade X to Y?"**, **"Scan for vulnerabilities"** or **"What should I upgrade first?"**

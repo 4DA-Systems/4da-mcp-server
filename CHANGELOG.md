@@ -2,6 +2,53 @@
 
 ## 6.0.2 — unreleased
 
+### `--setup` writes the files editors actually read
+
+Three of the four editors `--setup` reported as configured were configured in
+files those editors never read, so nothing happened:
+
+| Editor | Before | Now |
+|---|---|---|
+| VS Code | `~/.vscode/mcp.json` | the user profile's `mcp.json`: `%APPDATA%\Code\User\` (Windows), `~/Library/Application Support/Code/User/` (macOS), `$XDG_CONFIG_HOME/Code/User/` (Linux, default `~/.config`), key `servers`, `"type": "stdio"` |
+| Windsurf | `~/.windsurf/mcp.json` | `~/.codeium/windsurf/mcp_config.json`, key `mcpServers` |
+| Claude Code | `mcpServers` in the project's `.claude/settings.json` (or, outside a project, rewrote `~/.claude.json`) | prints `claude mcp add --scope user 4da -- npx @4da/mcp-server`; `~/.claude.json` is never edited |
+
+Added: VS Code Insiders, Claude Desktop (`claude_desktop_config.json`) and
+Devin Desktop / Devin CLI (`~/.config/devin/mcp_config.json`,
+`%APPDATA%\devin\` on Windows), Windsurf's successor. Cursor
+(`~/.cursor/mcp.json`) was already right.
+
+- **A config file setup cannot parse is left untouched.** It used to be read
+  as `{}`, so a VS Code `mcp.json` with a comment or a trailing comma (both
+  legal there) was replaced by our entry alone, deleting every other server.
+  Files are now parsed as JSONC and edited in place with `jsonc-parser`
+  (Microsoft's, the parser VS Code uses; no dependencies of its own), which
+  keeps comments, formatting, other servers and other keys. A file that does
+  not parse is reported with the entry to add by hand.
+- An existing `4da` entry is updated, not duplicated, and keeps its other
+  fields (`env`); an identical one is left alone, so a second run writes
+  nothing.
+- Every modified file is backed up first (`<file>.bak`; an earlier backup is
+  never overwritten) and replaced atomically (temp file, then rename).
+- `--setup --dry-run` wrote anyway when run through `npx @4da/mcp-server`
+  (only the `4da-mcp-setup` entry honoured the flag). It now writes nothing on
+  either, and prints each file and the exact entry it would add.
+
+### Clearer answers when the database cannot help
+
+- A desktop-only tool (`get_relevant_content`, `get_actionable_signals`,
+  `knowledge_gaps`, `record_feedback`, `developer_dna`) called without the
+  desktop app's database answered `[]`, which reads as "nothing relevant". It
+  now carries a `desktop_app_note` saying it needs the app.
+- A database file that is damaged or not SQLite answered every call with
+  SQLite's bare "file is not a database". The message now names the file and
+  what to do, and never advises deleting it (`--doctor`'s integrity check used
+  to say "Try deleting data/4da.db"). The handle a failed open left behind is
+  closed, so on Windows the file can be moved aside while the server runs.
+- The database lookup no longer checks `data/4da.db` two directories above the
+  server's own files, a leftover from when the server was a folder of the app
+  repository; installed, it pointed into `node_modules/@4da/`.
+
 - Dependencies: `@modelcontextprotocol/server` ^2.2.0, `hono` ^4.13.12; dev: `@types/node` ^26.6.3, `vitest` ^5.0.3 (#2).
 
 ## 6.0.1 — 2026-10-04

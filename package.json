@@ -83,7 +83,8 @@
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.2.0",
     "better-sqlite3": "^12.9.0",
-    "hono": "^4.13.12"
+    "hono": "^4.13.12",
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

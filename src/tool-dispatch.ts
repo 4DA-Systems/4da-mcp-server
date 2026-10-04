@@ -12,6 +12,7 @@ import type { FourDADatabase } from "./db.js";
 import { assertToolPermission } from "./auth-context.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { cleanStrings } from "./tool-args.js";
+import { TOOL_REGISTRY } from "./schema-registry.js";
 
 import {
   executeGetRelevantContent,
@@ -127,7 +128,13 @@ export async function dispatchTool(
   // Feed freshness describes the desktop app's feed; a standalone install has
   // none, and telling it to "run fourda-engine" is noise.
   const withFreshness = FRESHNESS_TOOLS.has(name) && !db.isStandalone;
-  const payload = cleanStrings(withFreshness ? attachFreshness(db, result) : result);
+  // A desktop-only tool called without the desktop app's database (tools/list
+  // hides these in standalone mode, but a host can call one by name) used to
+  // answer `[]`, which reads as "nothing relevant" rather than "no app".
+  const desktopOnly = db.isStandalone && TOOL_REGISTRY[name]?.standalone === false;
+  const payload = cleanStrings(
+    withFreshness ? attachFreshness(db, result) : desktopOnly ? attachDesktopAppNote(name, result) : result,
+  );
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.
   const failed =
@@ -181,6 +188,23 @@ function attachFreshness(db: FourDADatabase, result: unknown): unknown {
     return { data_freshness, ...extras, ...(result as Record<string, unknown>) };
   }
   return { data_freshness, ...extras, result };
+}
+
+/** What a desktop-only tool says when no desktop app database was found. */
+export function desktopAppNote(name: string): string {
+  return (
+    `${name} reads the 4DA desktop app's database, and none was found (standalone mode), so this result is empty or partial. ` +
+    "Install the app (https://github.com/4DA-Systems/4DA/releases/latest) or set FOURDA_DB_PATH to its database. " +
+    "The dependency, vulnerability, upgrade and decision tools work without it."
+  );
+}
+
+/** Same wrapping as attachFreshness: an array becomes { desktop_app_note, item_count, items }. */
+function attachDesktopAppNote(name: string, result: unknown): unknown {
+  const desktop_app_note = desktopAppNote(name);
+  if (Array.isArray(result)) return { desktop_app_note, item_count: result.length, items: result };
+  if (result && typeof result === "object") return { desktop_app_note, ...(result as Record<string, unknown>) };
+  return { desktop_app_note, result };
 }
 
 /** Check if a tool exists in the dispatch map */
