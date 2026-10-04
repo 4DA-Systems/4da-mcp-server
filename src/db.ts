@@ -9,8 +9,6 @@
 import path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
 
 // Type-only import (erased at compile time) — keeps Database.Database type usable.
 // Runtime import is dynamic below, so native binding failures get a clear error message.
@@ -30,8 +28,6 @@ export function nativeBindingProblem(): string | null {
   return checkNativeBindings(Database);
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 import type {
   SourceItem,
   RelevantItem,
@@ -51,10 +47,16 @@ import { dbRecoveryNote, readDbRecoveredMarker, readEngineBlockMarker } from "./
 /**
  * Resolve the database path by checking multiple locations in priority order:
  * 1. FOURDA_DB_PATH env var
- * 2. data/4da.db relative to cwd (development)
- * 3. data/4da.db relative to project root (mcp-4da-server is inside project root)
- * 4. Platform-specific Tauri app data dirs (production)
- * 5. Final fallback: data/4da.db relative to cwd
+ * 2. data/4da.db relative to cwd: the desktop app's development database,
+ *    when the server is started in a checkout of the app's repository
+ * 3. The deployed desktop app's database (desktopAppDbPaths)
+ * 4. Otherwise the standalone database (standaloneDbPath), created on first use
+ *
+ * Until 6.0.2 a step between 2 and 3 looked for data/4da.db two directories
+ * above this file, which found the app's database while this server was the
+ * app repository's mcp-4da-server/ folder. Since the server moved to its own
+ * repository (6.0.1) that resolves to node_modules/@4da/ or to the folder
+ * holding a clone, never to an app database, so it was removed.
  */
 function getDefaultDbPath(): string {
   // 1. Environment variable (highest priority)
@@ -62,24 +64,18 @@ function getDefaultDbPath(): string {
     return process.env.FOURDA_DB_PATH;
   }
 
-  // 2. Relative to cwd (development)
+  // 2. Relative to cwd (the app repository's development database)
   const cwdPath = path.resolve(process.cwd(), "data", "4da.db");
   if (fs.existsSync(cwdPath)) {
     return cwdPath;
   }
 
-  // 3. Relative to project root (mcp-4da-server is inside project root)
-  const projectRootPath = path.resolve(__dirname, "..", "..", "data", "4da.db");
-  if (fs.existsSync(projectRootPath)) {
-    return projectRootPath;
-  }
-
-  // 4. The desktop app's own database, where the deployed app keeps it.
+  // 3. The desktop app's own database, where the deployed app keeps it.
   for (const appDataPath of desktopAppDbPaths()) {
     if (fs.existsSync(appDataPath)) return appDataPath;
   }
 
-  // 5. No desktop database: the standalone database, in the user's data dir.
+  // 4. No desktop database: the standalone database, in the user's data dir.
   return standaloneDbPath();
 }
 
@@ -132,6 +128,41 @@ export function standaloneDbPath(): string {
         ? path.join(home, "Library", "Application Support")
         : process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
   return path.join(base, "4da-mcp", "standalone.db");
+}
+
+/**
+ * Whether an error says the database file itself is unreadable: not SQLite at
+ * all, or damaged. better-sqlite3 reports these as SQLITE_NOTADB ("file is not
+ * a database") and SQLITE_CORRUPT ("database disk image is malformed").
+ */
+export function isUnreadableDbError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "SQLITE_NOTADB" || code === "SQLITE_CORRUPT") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /file is not a database|database disk image is malformed/i.test(message);
+}
+
+/**
+ * What to tell the user about an unreadable database. Every tool call used to
+ * answer with the bare SQLite text ("file is not a database"), with no way
+ * out. Nothing is deleted or moved automatically: the desktop app's database
+ * can be the user's whole corpus, and the standalone one holds their recorded
+ * decisions and agent memory.
+ */
+export function unreadableDbMessage(absolutePath: string, error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const isStandaloneFile = path.resolve(absolutePath) === path.resolve(standaloneDbPath());
+  const remedy = isStandaloneFile
+    ? "It is this server's standalone database: move it aside (keep it if it holds decisions or agent " +
+      "memory you want) and the next call creates a new one."
+    : process.env.FOURDA_DB_PATH
+      ? "FOURDA_DB_PATH points at it: point it at a valid 4DA database, or unset it to use the default."
+      : "If it is the 4DA desktop app's database, start the app, which checks its database on startup. " +
+        "Do not delete it: it may be your only copy of the app's data.";
+  return (
+    `The 4DA database at ${absolutePath} cannot be read (${detail}): the file is damaged or is not ` +
+    `a SQLite database. ${remedy} Run \`npx @4da/mcp-server --doctor\` for details.`
+  );
 }
 
 /** Marker table written into every standalone database. */
@@ -284,6 +315,8 @@ export const DEPENDENCY_GROUP_QUERY =
 export class FourDADatabase {
   private db: BetterSqlite3.Database;
   private _isStandalone: boolean = false;
+  /** Absolute path of the open database file. */
+  readonly dbPath: string;
 
   constructor(dbPath?: string) {
     const resolvedPath = dbPath || getDefaultDbPath();
@@ -303,16 +336,29 @@ export class FourDADatabase {
       }
     }
 
+    let opened: BetterSqlite3.Database | null = null;
     try {
-      this.db = new Database(absolutePath, { readonly: false }); // Need write for feedback
-      this.db.pragma("journal_mode = WAL");
+      opened = new Database(absolutePath, { readonly: false }); // Need write for feedback
+      opened.pragma("journal_mode = WAL");
     } catch (error) {
+      // Close the handle a failed pragma leaves open: every tool call retries
+      // the open, and on Windows each leaked handle also keeps the file locked
+      // against the move-aside the message below suggests.
+      try {
+        opened?.close();
+      } catch {
+        // Nothing to close when the open itself failed.
+      }
       throw new Error(
         isNativeBindingError(error)
           ? nativeBindingMessage(error)
-          : `Failed to open 4DA database at ${absolutePath}: ${error instanceof Error ? error.message : String(error)}`
+          : isUnreadableDbError(error)
+            ? unreadableDbMessage(absolutePath, error)
+            : `Failed to open 4DA database at ${absolutePath}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+    this.db = opened;
+    this.dbPath = absolutePath;
 
     // Standalone mode: create schema for a brand-new database, and recognise
     // an existing standalone database as one on every later session.
@@ -400,8 +446,10 @@ export class FourDADatabase {
         if (integrityStatus !== "ok") {
           return {
             valid: false,
-            error: `Database integrity check failed: ${integrityStatus}. `
-              + "The database file may be corrupt. Try deleting data/4da.db and restarting 4DA.",
+            // It used to say "Try deleting data/4da.db": a path that is not
+            // where the app keeps its database, and advice that destroys the
+            // user's only copy of it.
+            error: unreadableDbMessage(absolutePath, new Error(`integrity check failed: ${integrityStatus}`)),
           };
         }
       }
@@ -421,8 +469,9 @@ export class FourDADatabase {
     } catch (error) {
       return {
         valid: false,
-        error: `Failed to open database at ${absolutePath}: `
-          + (error instanceof Error ? error.message : String(error)),
+        error: isUnreadableDbError(error)
+          ? unreadableDbMessage(absolutePath, error)
+          : `Failed to open database at ${absolutePath}: ` + (error instanceof Error ? error.message : String(error)),
       };
     } finally {
       try {
