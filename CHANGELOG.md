@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.0.1 — unreleased
+## 6.0.1 — 2026-10-04
 
 ### The server has its own repository
 
