@@ -23,7 +23,8 @@ updates:
     assignees:
       - "runyourempire"
     commit-message:
-      prefix: "chore(deps)"
+      # "chore" + include: scope renders as chore(deps) / chore(deps-dev).
+      prefix: "chore"
       include: "scope"
     ignore:
       # DEFERRED 2026-09-24 (4DA #446). better-sqlite3 13 ships no Windows
