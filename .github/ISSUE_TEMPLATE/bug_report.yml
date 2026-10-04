@@ -1,0 +1,36 @@
+name: Bug report
+description: A tool returned something wrong, failed, or the server would not start.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The tool call (name and arguments) and what came back. Paste the JSON if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `npx @4da/mcp-server --doctor`
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Server version
+      placeholder: "npx @4da/mcp-server --version"
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: MCP host and OS
+      placeholder: "Claude Code 2.x on macOS 15, Cursor on Windows 11, ..."
+    validations:
+      required: true

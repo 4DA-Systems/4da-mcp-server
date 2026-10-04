@@ -3,16 +3,15 @@
   "name": "io.github.4DA-Systems/4da-mcp-server",
   "description": "Upgrade intelligence for AI agents: what an upgrade changes, where it touches your code, CVE scans.",
   "repository": {
-    "url": "https://github.com/4DA-Systems/4DA",
-    "source": "github",
-    "subfolder": "mcp-4da-server"
+    "url": "https://github.com/4DA-Systems/4da-mcp-server",
+    "source": "github"
   },
-  "version": "6.0.0",
+  "version": "6.0.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@4da/mcp-server",
-      "version": "6.0.0",
+      "version": "6.0.1",
       "transport": {
         "type": "stdio"
       }

@@ -1,4 +1,10 @@
-
+# Build output and dependencies
+node_modules/
+dist/
+dist-mcpb/
+*.tgz
+coverage/
 # Runtime database (standalone mode creates it on first run) — never commit
 data/
-dist-mcpb/
+# Cargo output if the fixture is ever built
+test-fixtures/**/target/

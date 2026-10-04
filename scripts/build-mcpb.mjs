@@ -75,10 +75,10 @@ const manifest = {
   author: { name: "4DA Systems", url: "https://4da.ai" },
   homepage: "https://4da.ai/mcp/",
   documentation: "https://4da.ai/mcp/",
-  support: "https://github.com/4DA-Systems/4DA/issues",
+  support: "https://github.com/4DA-Systems/4da-mcp-server/issues",
   license: "Apache-2.0",
   keywords: ["security", "dependencies", "cve", "developer-intelligence", "privacy"],
-  repository: { type: "git", url: "https://github.com/4DA-Systems/4DA" },
+  repository: { type: "git", url: "https://github.com/4DA-Systems/4da-mcp-server" },
   server: {
     type: "node",
     entry_point: "server/dist/index.js",
