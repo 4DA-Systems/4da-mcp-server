@@ -23,6 +23,7 @@
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -287,7 +288,9 @@ function backupPath(filePath: string): string {
  * @returns The backup path, when one was made.
  */
 export function writeConfigAtomic(filePath: string, content: string): string | null {
-  const target = existsSync(filePath) ? realpathSync(filePath) : filePath;
+  // Only a symlinked file is resolved: resolving the whole path would turn
+  // macOS's /var/... into /private/var/... in every path reported back.
+  const target = existsSync(filePath) && lstatSync(filePath).isSymbolicLink() ? realpathSync(filePath) : filePath;
   mkdirSync(path.dirname(target), { recursive: true });
   let backup: string | null = null;
   if (existsSync(target)) {

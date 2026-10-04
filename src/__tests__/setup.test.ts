@@ -8,7 +8,18 @@
  * Paths are resolved from an injected platform/env/home, so every platform is
  * checked on every CI runner; the write tests use a temp home.
  */
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -361,6 +372,17 @@ describe("writeConfigAtomic", () => {
     expect(writeConfigAtomic(file, "{}\n")).toBeNull();
     expect(readFileSync(file, "utf-8")).toBe("{}\n");
     expect(readdirSync(path.dirname(file))).toEqual(["mcp.json"]);
+  });
+
+  // Creating a symlink on Windows needs a privilege CI runners may lack.
+  it.skipIf(process.platform === "win32")("writes through a symlinked config to its target", () => {
+    const real = path.join(dir, "dotfiles-mcp.json");
+    const link = path.join(dir, "mcp.json");
+    writeFileSync(real, "v1");
+    symlinkSync(real, link);
+    writeConfigAtomic(link, "v2");
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(real, "utf-8")).toBe("v2");
   });
 
   it("never overwrites an earlier backup", () => {
