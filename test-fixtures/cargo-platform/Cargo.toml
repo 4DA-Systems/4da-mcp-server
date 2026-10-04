@@ -1,0 +1,29 @@
+# Fixture for src/__tests__/cargo-platform.test.ts: a crate whose Cargo.lock
+# lists crates the host build never compiles, on both axes the scanner filters.
+#   feature axis: `itoa` is optional and no enabled feature turns it on.
+#   target axis:  `windows-sys` builds only on Windows, `libc` only on unix.
+# Cargo.lock is target- and feature-agnostic, so all four are locked.
+[package]
+name = "cargo-platform-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+ryu = "1"
+itoa = { version = "1", optional = true }
+
+[features]
+extra = ["dep:itoa"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# A standalone workspace: never let cargo walk up into an enclosing one.
+[workspace]
