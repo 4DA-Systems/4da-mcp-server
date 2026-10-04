@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   hostTriple,
   activeCratesForHost,
@@ -31,18 +32,19 @@ import type { VulnerabilityEntry } from "../live/types.js";
 
 beforeEach(() => _resetCargoPlatformCache());
 
-/** The Rust workspace this repo ships, if the test is running inside it. */
-function repoCargoDir(): string | null {
-  let dir = process.cwd();
-  for (let i = 0; i < 5; i++) {
-    const candidate = path.join(dir, "src-tauri");
-    if (fs.existsSync(path.join(candidate, "Cargo.toml"))) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
+/**
+ * A crate whose Cargo.lock locks crates this host never compiles: `itoa` is
+ * behind a feature nothing enables, `windows-sys` is Windows-only and `libc`
+ * unix-only (see its Cargo.toml). CI runs `cargo fetch` on it first, so the
+ * offline `cargo tree` this module runs can answer.
+ */
+const FIXTURE_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "test-fixtures",
+  "cargo-platform",
+);
 
 function cargoAvailable(): boolean {
   try {
@@ -133,14 +135,33 @@ describe("activeCratesForHost", () => {
     expect(activeCratesForHost(path.join(process.cwd(), "no-such-dir-xyz"))).toBeNull();
   });
 
-  const dir = repoCargoDir();
-  const runnable = dir !== null && cargoAvailable() && hostTriple() !== null;
+  const runnable = cargoAvailable() && hostTriple() !== null;
 
-  // These two shell out to real cargo. `cargo metadata` normally answers in
-  // ~1s, but it takes the same lock a concurrent `cargo build`/`cargo test`
-  // holds, and CI runs both. The default 5s test timeout made them flake under
-  // that contention; the work itself is bounded by execFileSync's own 30s.
+  // These shell out to real cargo. `cargo tree` normally answers in ~1s, but it
+  // takes the same lock a concurrent `cargo build`/`cargo test` holds. The
+  // default 5s test timeout made them flake under that contention; the work
+  // itself is bounded by execFileSync's own 30s.
   const CARGO_TEST_TIMEOUT_MS = 90_000;
+
+  /**
+   * `null` means cargo declined to answer — `--offline` needs the fixture's
+   * crates in the local registry cache (`cargo fetch`). That is a HANDLED
+   * outcome (callers keep every crate active), not a defect. CI fetches first
+   * and sets FOURDA_REQUIRE_CARGO=1, so there a `null` fails instead of hiding
+   * the assertions.
+   */
+  function resolvedOrSkip(): Set<string> | null {
+    const crates = activeCratesForHost(FIXTURE_DIR);
+    if (crates === null) {
+      if (process.env.FOURDA_REQUIRE_CARGO === "1") {
+        throw new Error(
+          "cargo tree --offline returned nothing for the fixture: run `cargo fetch --manifest-path test-fixtures/cargo-platform/Cargo.toml` first",
+        );
+      }
+      console.warn("cargo tree --offline unavailable here — assertions skipped");
+    }
+    return crates;
+  }
 
   it.runIf(runnable)(
     "excludes a crate no enabled feature ever compiles",
@@ -148,46 +169,31 @@ describe("activeCratesForHost", () => {
       // 2026-09-08 divergence: `cargo metadata --filter-platform` resolves the
       // TARGET axis only, so it kept the `reqwest -> quinn` edge even though
       // `reqwest`'s enabled features contain no `http3`. `quinn-proto` — never
-      // compiled on this machine — counted as built-on-host, and it was
+      // compiled on that machine — counted as built-on-host, and it was
       // Preemption's #1 HIGH on the founder instance. `cargo tree` resolves
-      // features too, which is what the build does.
-      const crates = activeCratesForHost(dir!);
-      if (crates === null) {
-        console.warn("cargo tree --offline unavailable here — assertions skipped");
-        return;
-      }
-      expect(crates.has("serde"), "a crate the build DOES compile").toBe(true);
-      expect(
-        crates.has("quinn-proto"),
-        "an optional dep of a disabled feature is not built here",
-      ).toBe(false);
+      // features too, which is what the build does. The fixture locks `itoa`
+      // behind a feature nothing enables.
+      const crates = resolvedOrSkip();
+      if (crates === null) return;
+      expect(crates.has("ryu"), "a crate the build DOES compile").toBe(true);
+      expect(crates.has("itoa"), "an optional dep of a disabled feature is not built here").toBe(false);
     },
     CARGO_TEST_TIMEOUT_MS,
   );
 
   it.runIf(runnable)(
-    "excludes transitive crates that never build on this host",
+    "excludes locked crates that never build on this host",
     () => {
-      const crates = activeCratesForHost(dir!);
-
-      // `null` means cargo declined to answer — `--offline` needs a warm
-      // registry, and a CI checkout may not have one. That is a HANDLED
-      // outcome (callers keep every crate active), not a defect, so asserting
-      // non-null here would fail the build for an environment condition
-      // rather than a regression. Verify the behaviour when cargo does answer.
-      if (crates === null) {
-        console.warn("cargo tree --offline unavailable here — assertions skipped");
-        return;
-      }
-
-      expect(crates.size).toBeGreaterThan(50);
-
+      // The live incident: nine Linux-only GTK3 crates reported on a Windows
+      // host. The fixture locks one crate per OS family.
+      const crates = resolvedOrSkip();
+      if (crates === null) return;
       if (process.platform === "win32") {
-        // The exact cluster the live scan reported as vulnerable on Windows.
-        for (const linuxOnly of ["gtk", "gdk", "atk", "glib", "gdkx11", "gtk3-macros"]) {
-          expect(crates.has(linuxOnly), `${linuxOnly} must not be active on Windows`).toBe(false);
-        }
         expect(crates.has("windows-sys"), "windows-sys must be active on Windows").toBe(true);
+        expect(crates.has("libc"), "libc is unix-only here and must not be active on Windows").toBe(false);
+      } else {
+        expect(crates.has("libc"), "libc must be active on unix").toBe(true);
+        expect(crates.has("windows-sys"), "windows-sys must not be active off Windows").toBe(false);
       }
     },
     CARGO_TEST_TIMEOUT_MS,
@@ -196,8 +202,8 @@ describe("activeCratesForHost", () => {
   it.runIf(runnable)(
     "memoizes per directory",
     () => {
-      const first = activeCratesForHost(dir!);
-      const second = activeCratesForHost(dir!);
+      const first = activeCratesForHost(FIXTURE_DIR);
+      const second = activeCratesForHost(FIXTURE_DIR);
       // Identity holds for a real answer; `null === null` also holds when cargo
       // declines, so this asserts the memo either way.
       expect(second).toBe(first);

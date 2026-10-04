@@ -250,9 +250,11 @@ describe("readYarnLock", () => {
   });
 });
 
-const repoLock = fileURLToPath(new URL("../../../pnpm-lock.yaml", import.meta.url));
+// This package's own lockfile: a real pnpm v9 lockfile with scoped packages,
+// always present in a checkout.
+const repoLock = fileURLToPath(new URL("../../pnpm-lock.yaml", import.meta.url));
 
-describe.skipIf(!fs.existsSync(repoLock))("readPnpmLock: this repository's own lockfile", () => {
+describe("readPnpmLock: this repository's own lockfile", () => {
   it("names every scoped package key, and only bare names", () => {
     const content = fs.readFileSync(repoLock, "utf-8");
     const versions = read(content);
