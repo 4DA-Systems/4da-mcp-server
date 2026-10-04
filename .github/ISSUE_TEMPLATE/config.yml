@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/4DA-Systems/4da-mcp-server/security/advisories/new
+    about: Privately, never as a public issue.
+  - name: The 4DA desktop app
+    url: https://github.com/4DA-Systems/4DA/issues
+    about: Issues with the desktop app itself (feed, scoring, UI) go to its repository.

@@ -1,0 +1,50 @@
+# Dependabot for @4da/mcp-server.
+#   - npm (/)            the package (pnpm-lock.yaml; the "npm" ecosystem reads pnpm lockfiles)
+#   - github-actions (/) workflow action pins
+# test-fixtures/ holds frozen fixture lockfiles on purpose and is not watched.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    labels:
+      - "dependencies"
+    assignees:
+      - "runyourempire"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    ignore:
+      # DEFERRED 2026-09-24 (4DA #446). better-sqlite3 13 ships no Windows
+      # prebuild for the Node 22 ABI, so `npm install` falls back to node-gyp
+      # and fails on any Windows machine without Visual Studio: every Windows
+      # user of `npx @4da/mcp-server` on Node 22. (Its engines floor, Node 22,
+      # already matches ours.) Lift this once a Node 22 win32 prebuild exists.
+      - dependency-name: "better-sqlite3"
+        versions: [">=13"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    groups:
+      actions:
+        patterns: ["*"]
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(ci)"

@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Nightly: the desktop app's schema moves on its own repository's schedule,
+  # so the contract is re-checked against its `main` even when nothing here
+  # changed. A failure opens an issue.
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
+    # better-sqlite3 is a native module with per-platform prebuilds, and the
+    # scanner shells out to cargo and reads OS-specific paths, so the suite
+    # runs on every OS the server is installed on.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: "22" }
+          - { os: ubuntu-latest, node: "24" }
+          - { os: windows-latest, node: "22" }
+          - { os: macos-latest, node: "22" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+        # version: read from package.json "packageManager"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      # The cargo-platform tests resolve a fixture crate with `cargo tree
+      # --offline`; fetch its crates first so they assert instead of skipping.
+      - name: Fetch the cargo fixture's crates
+        run: cargo fetch --manifest-path test-fixtures/cargo-platform/Cargo.toml
+
+      - run: pnpm test
+        env:
+          FOURDA_REQUIRE_CARGO: "1"
+
+  checks:
+    name: Checks (gates, audit, package, contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - name: Repository gates (SPDX, retired claims, REMOVE BY, pnpm pin)
+        run: pnpm run check
+
+      # npm retired the audit endpoint pnpm <= 10 uses (HTTP 410, 2026-07-14);
+      # pnpm 11 speaks the bulk advisory endpoint. Audit only: installing with
+      # pnpm 11 would drop the overrides in package.json (see check-repo.mjs).
+      - name: Audit the lockfile (pnpm 11, high and above)
+        run: npx -y pnpm@11.13.0 audit --audit-level=high
+
+      - name: Package contents
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const [p] = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
+            const files = p.files.map((f) => f.path);
+            const bad = files.filter((f) => /__tests__|test-setup|\.map$|^src\/|^test-fixtures\/|^contract\//.test(f));
+            if (bad.length) { console.error("unexpected files in the package:", bad); process.exit(1); }
+            for (const need of ["dist/index.js", "dist/setup.js", "README.md", "LICENSE", "CHANGELOG.md"]) {
+              if (!files.includes(need)) { console.error("missing from the package:", need); process.exit(1); }
+            }
+            console.log(`${p.name}@${p.version}: ${files.length} files, ${(p.size / 1024).toFixed(1)} kB packed`);
+          '
+
+      - name: App-schema contract (vendored contract/app-schema.sql)
+        run: pnpm run contract
+
+      - name: App-schema contract (the desktop app's current main)
+        run: |
+          url=https://raw.githubusercontent.com/4DA-Systems/4DA/main/src-tauri/contract/app-schema.sql
+          code=$(curl -sS -o upstream-schema.sql -w '%{http_code}' "$url")
+          if [ "$code" = "404" ]; then
+            echo "::notice::4DA main has no src-tauri/contract/app-schema.sql yet; only the vendored copy was checked."
+            exit 0
+          fi
+          [ "$code" = "200" ] || { echo "::error::$url -> HTTP $code"; exit 1; }
+          pnpm run contract -- --schema upstream-schema.sql
+          if ! cmp -s <(tr -d '\r' < upstream-schema.sql) <(tr -d '\r' < contract/app-schema.sql); then
+            echo "::warning::contract/app-schema.sql is behind 4DA main. The server passes against both; refresh it with 'pnpm run contract:sync'."
+          fi
+
+  nightly-report:
+    name: Report a nightly failure
+    needs: [test, checks]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Nightly CI failed (app-schema contract or platform tests)"
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          body="The nightly run failed: $RUN_URL
+
+          If the contract step failed, the desktop app's schema on 4DA main no longer matches what this server reads. See contract/README.md, 'When it fails'."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

@@ -1,5 +1,36 @@
 # Changelog
 
+## 6.0.1 — unreleased
+
+### The server has its own repository
+
+`@4da/mcp-server` now lives at
+[github.com/4DA-Systems/4da-mcp-server](https://github.com/4DA-Systems/4da-mcp-server),
+with its full history, instead of a folder of the 4DA desktop app's monorepo.
+Issues, releases and the Claude Code plugin marketplace move with it:
+
+```bash
+claude plugin marketplace add 4DA-Systems/4da-mcp-server
+claude plugin install 4da@4da
+```
+
+The package, its name in the MCP Registry (`io.github.4DA-Systems/4da-mcp-server`)
+and every tool are unchanged.
+
+- **Published with provenance.** Releases are built and published from this
+  repository's `release.yml` through npm trusted publishing, so each version
+  carries a SLSA provenance attestation tying it to the commit it was built from.
+- **App-schema contract.** The server reads the desktop app's database, which
+  is now maintained in a different repository. `pnpm run contract` checks every
+  statement the server issues, and every column it probes for, against the
+  schema the app's migrations produce (`contract/app-schema.sql`, generated in
+  the app's CI). The app's CI runs the same check before a migration merges.
+- **Removed dead code.** `explainRelevance`, `getSourceItem`,
+  `recordAgentFeedback` and `getAgentFeedbackStats` had no callers since their
+  tools were removed; the standalone schema no longer creates the unused
+  `agent_feedback` table.
+- The Claude Code plugin pins the exact server version it was released with.
+
 ## 6.0.0 — 2026-10-02
 
 ### New: `upgrade_impact`

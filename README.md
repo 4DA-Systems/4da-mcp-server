@@ -2,8 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/@4da/mcp-server?color=gold)](https://www.npmjs.com/package/@4da/mcp-server)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/Node-%3E%3D20-brightgreen)](https://nodejs.org/)
-[![smithery badge](https://smithery.ai/badge/@4da/mcp-server)](https://smithery.ai/server/@4da/mcp-server)
+[![Node](https://img.shields.io/badge/Node-%3E%3D22-brightgreen)](https://nodejs.org/)
+[![CI](https://github.com/4DA-Systems/4da-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/4DA-Systems/4da-mcp-server/actions/workflows/ci.yml)
 
 **Upgrade intelligence for AI coding agents.** Before your agent bumps a dependency it learns what changes between the version you run and the one you want, which of your files that touches, and which vulnerabilities the move fixes, from your own lockfiles, on your machine. Plus vulnerability scanning at osv-scanner parity, ranked upgrade plans and decision memory. Zero config, no account.
 
@@ -38,7 +38,7 @@ claude mcp add 4da -- npx @4da/mcp-server
 **As a Claude Code plugin** (the MCP server plus a hook):
 
 ```bash
-claude plugin marketplace add 4DA-Systems/4DA --sparse .claude-plugin mcp-4da-server
+claude plugin marketplace add 4DA-Systems/4da-mcp-server
 claude plugin install 4da@4da
 ```
 
@@ -268,11 +268,11 @@ Any tool that supports [MCP](https://modelcontextprotocol.io): Claude Code, Clau
 ## Build from Source
 
 ```bash
-git clone https://github.com/4DA-Systems/4DA.git
-cd 4DA/mcp-4da-server
+git clone https://github.com/4DA-Systems/4da-mcp-server.git
+cd 4da-mcp-server
 pnpm install
 pnpm build
-pnpm test    # 662 tests, offline
+pnpm test    # offline
 ```
 
 ## License
