@@ -1,5 +1,9 @@
 # Changelog
 
+## 6.0.2 — unreleased
+
+- Dependencies: `@modelcontextprotocol/server` ^2.2.0, `hono` ^4.13.12; dev: `@types/node` ^26.6.3, `vitest` ^5.0.3 (#2).
+
 ## 6.0.1 — 2026-10-04
 
 ### The server has its own repository
