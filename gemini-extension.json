@@ -5,7 +5,10 @@
   "mcpServers": {
     "4da": {
       "command": "npx",
-      "args": ["-y", "@4da/mcp-server"]
+      "args": [
+        "-y",
+        "@4da/mcp-server"
+      ]
     }
   }
 }
