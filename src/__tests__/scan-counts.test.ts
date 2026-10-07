@@ -119,3 +119,23 @@ describe("dedupeDependencies target label", () => {
     expect(merged.target).toBe("cfg(unix)");
   });
 });
+
+describe("vulnerability_scan recommendations", () => {
+  it("one row per installed version, each advisory counted once (rsa, 2026-10-07 eval)", () => {
+    const marvin = { package: "rsa", vulnId: "RUSTSEC-2023-0071", fixedVersion: null, summary: "Marvin Attack" };
+    const out = formatScanResult(
+      scan([
+        // The scan shape the eval saw: one entry per version, every pinning directory listed.
+        vuln({ ...marvin, currentVersion: "0.9.10", isDirect: false, sourceDirs: ["/repo/relay", "/repo/src-tauri"] }),
+        vuln({ ...marvin, currentVersion: "0.10.0-rc.18", sourceDirs: ["/repo/src-tauri"] }),
+      ]),
+      undefined,
+      { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true },
+    );
+    const rsa = out.recommendations.filter((r) => r.includes("rsa"));
+    expect(rsa).toEqual([
+      "Review rsa 0.9.10 in relay, src-tauri — 1 known vulnerability [1 medium], no fix version published",
+      "Review rsa 0.10.0-rc.18 in src-tauri — 1 known vulnerability [1 medium], no fix version published",
+    ]);
+  });
+});
