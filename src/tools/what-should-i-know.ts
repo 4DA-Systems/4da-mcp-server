@@ -33,12 +33,18 @@ import { getEmbeddingConfig } from "../embeddings.js";
 import { executeCheckDecisionAlignment } from "./decision-enforcement.js";
 import {
   advisoriesFor,
+  caretLine,
+  detectFamilyPackages,
   detectTaskPackages,
   judgedReadingFor,
   majorOf,
   releasesFor,
+  wantsLatest,
   type TaskPackage,
 } from "./briefing-task-scope.js";
+import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
+import { majorsCrossed } from "./upgrade-impact-report.js";
+import type { ResolvedDependency } from "../live/types.js";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import {
   getRelevantWisdom,
@@ -54,6 +60,8 @@ import {
 export interface WhatShouldIKnowParams {
   task: string;
   files?: string[];
+  /** Project directory the task is about. Default: the project the server was started in. */
+  project_path?: string;
 }
 
 interface Advisory {
@@ -83,8 +91,15 @@ interface TaskDependency {
   direct: boolean;
   dev_only: boolean;
   requested: { from: string | null; to: string | null };
-  /** Major versions the requested upgrade crosses, when both ends are known. */
+  /** Major versions the requested upgrade crosses, when both ends are known (below 1.0 a minor counts). */
   majors_crossed: number | null;
+  /** Set when found through a family the task names ("all tauri plugins" -> "tauri"), not by its own name. */
+  family?: string;
+  /**
+   * For a "latest" task: the newest stable release on the registry and whether
+   * the installed version is already on its major line (caret line below 1.0).
+   */
+  latest?: { version: string | null; installed_line: string | null; latest_line: string | null; on_latest_major: boolean | null };
   vulnerabilities: ReturnType<typeof advisoriesFor>;
   /** Registry releases newer than the installed version that the 4DA feed recorded (desktop app only). */
   newer_releases: ReturnType<typeof releasesFor>;
@@ -123,6 +138,8 @@ export interface BriefingScan {
 export interface WhatShouldIKnowResult {
   task: string;
   files: string[];
+  /** The project the briefing read dependencies from. */
+  project_path: string | null;
   task_dependencies: TaskDependency[];
   advisories: Advisory[];
   decision_windows: DecisionWindow[];
@@ -151,7 +168,13 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
   Partial<
     Pick<
       LiveIntelligence,
-      "refreshIfLockfilesChanged" | "getResolutionProvenance" | "getResolvedDeps" | "getAuditDeps" | "getVulnerabilities" | "getHeadlines"
+      | "refreshIfLockfilesChanged"
+      | "getResolutionProvenance"
+      | "getResolvedDeps"
+      | "getAuditDeps"
+      | "getVulnerabilities"
+      | "getHeadlines"
+      | "fetchRegistryHealth"
     >
   >;
 
@@ -161,6 +184,9 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
  * on a warm network; past it the briefing answers "unknown" rather than block.
  */
 const SCAN_WAIT_MS = 8_000;
+
+/** How long a "latest" task waits for registry versions before answering without them. */
+const LATEST_WAIT_MS = 10_000;
 
 const SCAN_UNAVAILABLE_REASON =
   "Vulnerability scan unavailable — treat this task as unreviewed, not as safe";
@@ -175,7 +201,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses, and newer releases the 4DA feed saw. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
+    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and newer releases the 4DA feed saw. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -189,6 +215,11 @@ export const whatShouldIKnowTool = {
         items: { type: "string" },
         description:
           "File paths involved in the task (optional). Manifest and source paths help find the packages involved.",
+      },
+      project_path: {
+        type: "string",
+        description:
+          "Project directory the task is about; its lockfiles decide which packages exist. Default: the project the server was started in.",
       },
     },
     required: ["task"],
@@ -237,15 +268,28 @@ export async function executeWhatShouldIKnow(
   const files = params.files || [];
   const relevance = createRelevanceScorer([task, ...files].join(" "));
 
+  // An explicit project_path resolves that project's lockfiles; omitted, the
+  // server's own project (what the live layer was initialised for).
+  if (params.project_path !== undefined) {
+    const scope = resolveProjectScope(params.project_path);
+    if (scope.kind === "error") throw new Error(scope.error);
+    liveIntel = liveIntelFor(liveIntel, db, scope) as BriefingLiveIntel | null;
+  }
+  const allDeps = () => [...(liveIntel?.getResolvedDeps?.() ?? []), ...(liveIntel?.getAuditDeps?.() ?? [])];
+
   // ── 0. The vulnerability scan — awaited, bounded, never assumed ───────
-  const taskPackages = () =>
-    detectTaskPackages(task, files, [...(liveIntel?.getResolvedDeps?.() ?? []), ...(liveIntel?.getAuditDeps?.() ?? [])]);
+  const taskPackages = () => {
+    const deps = allDeps();
+    const exact = detectTaskPackages(task, files, deps);
+    return [...exact, ...detectFamilyPackages(task, files, deps, exact)];
+  };
   const { scan, scanStatus, scanBlock } = await awaitScan(liveIntel, () => taskPackages().some((p) => p.dev));
 
   // ── 1. The dependencies this task touches ─────────────────────────────
   const packages = taskPackages();
   const vulns = scan?.vulnerabilities ?? [];
-  const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns));
+  const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages, allDeps()) : null;
+  const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns, latest));
 
   // ── 2. Advisories: confirmed for the task, stored feed rows, project-wide
   // One row per task package (the per-advisory detail is in task_dependencies;
@@ -315,6 +359,7 @@ export async function executeWhatShouldIKnow(
     return {
       task,
       files,
+      project_path: liveIntel?.getProjectRoot?.() ?? null,
       task_dependencies: taskDependencies,
       advisories,
       decision_windows: decisionWindows,
@@ -390,10 +435,64 @@ async function awaitScan(
   };
 }
 
-function describePackage(db: FourDADatabase, pkg: TaskPackage, vulns: VulnerabilityScanResult["vulnerabilities"]): TaskDependency {
+/**
+ * Newest stable release per task package, for a "latest" task. Bounded: a
+ * slow registry yields no answer (the field says null), never a stalled briefing.
+ */
+async function latestVersions(
+  liveIntel: BriefingLiveIntel | null,
+  packages: TaskPackage[],
+  deps: ResolvedDependency[],
+): Promise<Map<string, string | null> | null> {
+  if (!liveIntel?.fetchRegistryHealth || !liveIntel.isEnabled() || packages.length === 0) return null;
+  const wanted: ResolvedDependency[] = [];
+  for (const pkg of packages) {
+    const dep = deps.find((d) => d.name === pkg.name && d.ecosystem === pkg.ecosystem && d.version);
+    if (dep) wanted.push(dep);
+  }
+  if (wanted.length === 0) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const infos = await Promise.race([
+      liveIntel.fetchRegistryHealth(wanted),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), LATEST_WAIT_MS);
+      }),
+    ]);
+    if (!infos) return null;
+    const out = new Map<string, string | null>();
+    for (const info of infos) out.set(`${info.ecosystem}\0${info.name}`, info.latestStableVersion ?? null);
+    return out;
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function describePackage(
+  db: FourDADatabase,
+  pkg: TaskPackage,
+  vulns: VulnerabilityScanResult["vulnerabilities"],
+  latestByPackage: Map<string, string | null> | null = null,
+): TaskDependency {
   const fromMajor = majorOf(pkg.requested_from) ?? majorOf(pkg.installed[0] ?? null);
   const toMajor = majorOf(pkg.requested_to);
-  const majors = fromMajor !== null && toMajor !== null && toMajor > fromMajor ? toMajor - fromMajor : fromMajor !== null && toMajor !== null ? 0 : null;
+  let majors = fromMajor !== null && toMajor !== null && toMajor > fromMajor ? toMajor - fromMajor : fromMajor !== null && toMajor !== null ? 0 : null;
+  let latest: TaskDependency["latest"];
+  if (latestByPackage) {
+    const version = latestByPackage.get(`${pkg.ecosystem}\0${pkg.name}`) ?? null;
+    const newest = pkg.installed.length > 0 ? maxVersion(pkg.installed, pkg.ecosystem) : null;
+    const installedLine = caretLine(newest);
+    const latestLine = caretLine(version);
+    latest = {
+      version,
+      installed_line: installedLine,
+      latest_line: latestLine,
+      on_latest_major: installedLine && latestLine ? installedLine === latestLine : null,
+    };
+    if (pkg.requested_to === null && newest && version) majors = majorsCrossed(newest, version);
+  }
   const target = pkg.requested_to && /^v?\d+\.\d+\.\d+/.test(pkg.requested_to) ? pkg.requested_to.replace(/^v/, "") : null;
   const impactArgs = JSON.stringify({ package: pkg.name, ...(target ? { to_version: target } : {}), ecosystem: pkg.ecosystem });
   return {
@@ -404,6 +503,8 @@ function describePackage(db: FourDADatabase, pkg: TaskPackage, vulns: Vulnerabil
     dev_only: pkg.dev,
     requested: { from: pkg.requested_from, to: pkg.requested_to },
     majors_crossed: majors,
+    ...(pkg.family ? { family: pkg.family } : {}),
+    ...(latest ? { latest } : {}),
     vulnerabilities: advisoriesFor(pkg, vulns),
     newer_releases: releasesFor(db, pkg),
     next_step:
@@ -509,6 +610,15 @@ function summarize(
       ? `Task touches ${deps.map((d) => `${d.package}${d.installed.length ? ` ${d.installed.join("/")}` : ""}`).join(", ")}`
       : "No dependency of this project is named in the task",
   );
+  const known = deps.filter((d) => d.latest && d.latest.on_latest_major !== null);
+  if (known.length > 0) {
+    const on = known.filter((d) => d.latest!.on_latest_major);
+    const behind = known.filter((d) => !d.latest!.on_latest_major);
+    if (on.length > 0) parts.push(`already on the latest major: ${on.map((d) => `${d.package} (${d.latest!.latest_line}.x, latest ${d.latest!.version})`).join(", ")}`);
+    if (behind.length > 0) parts.push(`behind the latest major: ${behind.map((d) => `${d.package} ${d.latest!.installed_line}.x -> ${d.latest!.version}`).join(", ")}`);
+  }
+  const family = deps.filter((d) => d.family).length;
+  if (family > 0) parts.push(`${family} found through the package famil${new Set(deps.map((d) => d.family).filter(Boolean)).size === 1 ? "y" : "ies"} the task names`);
   const task = deps.reduce((n, d) => n + d.vulnerabilities.length, 0);
   if (task > 0) parts.push(`${task} confirmed vulnerabilit${task !== 1 ? "ies" : "y"} in them`);
   const project = advisories.filter((a) => a.scope === "project").length;

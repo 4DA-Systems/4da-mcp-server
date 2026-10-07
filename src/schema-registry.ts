@@ -109,7 +109,7 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
     annotations: { title: "Dependency health", ...READ_NETWORK },
   },
   upgrade_planner: {
-    summary: "Prioritized upgrade plan: the 4DA app's work order when computed (per-line targets, manifest vs lockfile fix), else the smallest version that fixes each vulnerability from the lockfiles. Call when the user asks what to upgrade.",
+    summary: "Prioritized upgrade plan for one project (project_path): the 4DA app's work order when computed (per-line targets, manifest vs lockfile fix), else the smallest version that fixes each vulnerability. Call when the user asks what to upgrade.",
     definition: upgradePlannerTool,
     category: "security",
     tags: ["upgrade", "dependencies", "recommendations", "versions"],
@@ -135,7 +135,7 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
 
   // --- Intelligence (mixed) ---
   what_should_i_know: {
-    summary: "Pre-task briefing scoped to the task: the dependencies it touches, their installed versions, version-confirmed vulnerabilities, releases since, your recorded decisions, and a delegation verdict. Call BEFORE starting a non-trivial task, especially one that changes dependencies.",
+    summary: "Pre-task briefing for a task in one project: the dependencies and package families it names, installed versions, confirmed vulnerabilities, releases since, your decisions, a delegation verdict. Call BEFORE a non-trivial task, especially one that changes dependencies.",
     definition: whatShouldIKnowTool,
     category: "intelligence",
     tags: ["briefing", "advisories", "pre-task", "delegation"],

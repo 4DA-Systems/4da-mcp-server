@@ -16,6 +16,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { isWithin } from "./project-scope.js";
 
 /** The snapshot schema this reader understands (Rust `PLAN_SCHEMA_VERSION`). */
 export const APP_PLAN_SCHEMA_VERSION = 4;
@@ -162,8 +163,29 @@ export interface AppPlanResult {
   totalSteps: number;
   steps: AppPlanStepView[];
   summary: string;
+  /** The project the steps were narrowed to, or null for every project in the plan. */
+  projectScope: string | null;
+  /** Steps of the full plan that only touch other projects (left out by projectScope). */
+  otherProjectSteps?: number;
   snapshot: Omit<AppPlanSnapshot, "steps" | "generatedAt" | "expiresAt">;
   provenance: { mode: "app_plan"; note: string };
+}
+
+/**
+ * The steps that touch `scope` (a project directory): each step keeps only the
+ * installed lines with a site in that project, and those lines keep only
+ * those sites. Null keeps everything.
+ */
+export function scopeAppPlanSteps(steps: AppPlanStepView[], scope: string | null): AppPlanStepView[] {
+  if (!scope) return steps;
+  const out: AppPlanStepView[] = [];
+  for (const step of steps) {
+    const lines = step.lines
+      .map((line) => ({ ...line, sites: line.sites.filter((s) => isWithin(s.project, scope)) }))
+      .filter((line) => line.sites.length > 0);
+    if (lines.length > 0) out.push({ ...step, lines });
+  }
+  return out;
 }
 
 const APP_PROVENANCE_NOTE =
@@ -174,10 +196,12 @@ const APP_PROVENANCE_NOTE =
 export function formatAppPlan(
   read: Extract<AppPlanRead, { kind: "plan" }>,
   params: { risk_threshold?: string; max_recommendations?: number; package?: string },
+  scope: string | null = null,
 ): AppPlanResult {
   const { snapshot, stale } = read;
   const threshold = params.risk_threshold ?? "all";
-  let steps = snapshot.steps;
+  const scoped = scopeAppPlanSteps(snapshot.steps, scope);
+  let steps = scoped;
   // `package` narrows the app's plan the same way it narrows the standalone one.
   const wanted = params.package?.trim().toLowerCase();
   if (wanted) steps = steps.filter((s) => s.package.toLowerCase() === wanted);
@@ -191,8 +215,9 @@ export function formatAppPlan(
   const count = (m: AppPlanStep["mechanism"]) => selected.filter((s) => s.mechanism === m).length;
   const majors = selected.filter((s) => s.lines.some((l) => l.upgrade_type === "major")).length;
   const parts = [
-    `${selected.length} step${selected.length !== 1 ? "s" : ""} from the 4DA app's plan (generated ${snapshot.generatedAt})`,
+    `${selected.length} step${selected.length !== 1 ? "s" : ""} from the 4DA app's plan (generated ${snapshot.generatedAt})${scope ? ` for ${scope}` : " across every project it tracks"}`,
   ];
+  const otherProjectSteps = snapshot.steps.length - scoped.length;
   if (count("manifest_bump") > 0) parts.push(`${count("manifest_bump")} manifest bump(s)`);
   if (count("lockfile_or_parent_update") > 0) {
     parts.push(`${count("lockfile_or_parent_update")} lockfile or parent update(s) (transitive only)`);
@@ -200,8 +225,11 @@ export function formatAppPlan(
   if (count("mixed") > 0) parts.push(`${count("mixed")} mixed (direct in some projects, transitive in others)`);
   if (count("no_fix") > 0) parts.push(`${count("no_fix")} with no fix published`);
   if (majors > 0) parts.push(`${majors} cross a major version`);
-  if (selected.length < snapshot.steps.length) {
-    parts.push(`${snapshot.steps.length} in the full plan (raise max_recommendations for the rest)`);
+  if (selected.length < scoped.length) {
+    parts.push(`${scoped.length} in ${scope ? "the plan for this project" : "the full plan"} (raise max_recommendations for the rest)`);
+  }
+  if (scope && otherProjectSteps > 0) {
+    parts.push(`${otherProjectSteps} step${otherProjectSteps !== 1 ? "s" : ""} only touch other projects (project_path "*" lists every project)`);
   }
   const staleness = stale
     ? `STALE: past its freshness horizon (${snapshot.expiresAt}). The advisories or installs may have changed since; open the 4DA app to recompute.`
@@ -213,9 +241,11 @@ export function formatAppPlan(
     expiresAt: snapshot.expiresAt,
     stale,
     staleness,
-    totalSteps: snapshot.steps.length,
+    totalSteps: scoped.length,
     steps: selected,
     summary: parts.join(". ") + ".",
+    projectScope: scope,
+    ...(scope ? { otherProjectSteps } : {}),
     snapshot: {
       schemaVersion: snapshot.schemaVersion,
       generatorVersion: snapshot.generatorVersion,
