@@ -3,19 +3,22 @@
  * Database module for 4DA MCP Server
  *
  * The desktop app's database (`4da.db`) is opened READ-ONLY
- * (`{ readonly: true, fileMustExist: true }`): the app owns that file and its
- * migrations, so this server never creates, alters or writes anything in it.
- * Everything the server writes goes to files it owns, under serverDataDir():
+ * (`{ readonly: true, fileMustExist: true }`) for everything the server reads.
+ * The app owns that file and its migrations: the server never creates or
+ * alters anything in it. It writes rows into exactly the app-owned tables its
+ * tools exist to write (APP_WRITABLE_TABLES: decisions, agent memory, feedback
+ * and interactions, which the app's calibration and decision UI read), through
+ * a separate write connection opened only for those statements (writerFor).
  *
+ * Everything else the server writes goes to files it owns, under
+ * serverDataDir():
  * - `cache.db`: registry, OSV and changelog responses (LiveCache).
- * - `standalone.db`: the standalone database when no app is installed, and,
- *   when the app IS installed, the store for what agents record through this
- *   server (decisions, agent memory, feedback) — see getMemoryStore().
+ * - `standalone.db`: the standalone database when no app is installed, and
+ *   the fallback for a record the app's schema cannot hold (schema drift).
  *
- * Until 6.0.2 the app's database was opened read-write: the server created a
- * `live_cache` table in it (2,774 rows on one machine, 2026-10-07), added
- * `embedding` columns to two app tables when an embedding provider was set, and
- * wrote decisions, agent memory and feedback into app tables.
+ * Until 6.0.2 the server created a `live_cache` table inside the app's
+ * database (2,774 rows on one machine, 2026-10-07) and added `embedding`
+ * columns to two app tables when an embedding provider was set.
  */
 
 import path from "path";
@@ -334,6 +337,25 @@ export function dedupeByTitle<T extends { title: string | null }>(items: T[], th
  * the `is_direct` standalone-schema gap slipped through precisely because the
  * two modes were only ever tested separately.
  */
+/**
+ * The app-owned tables this server is designed to write when the desktop app
+ * is installed: decisions (decision_memory), agent memory (agent_memory) and
+ * feedback (record_feedback -> the app's calibration). Nothing else in the
+ * app's database is ever written, and nothing in it is created or altered.
+ */
+export const APP_WRITABLE_TABLES = ["developer_decisions", "agent_memory", "interactions", "feedback"] as const;
+export type AppWritableTable = (typeof APP_WRITABLE_TABLES)[number];
+
+/** How long a write into the app's database waits for the app's own lock. */
+const APP_WRITE_BUSY_TIMEOUT_MS = 3000;
+
+export interface WriteTarget {
+  raw: BetterSqlite3.Database;
+  /** database = the open (standalone) database; app = the app's table; server_store = fallback on schema drift. */
+  target: "database" | "app" | "server_store";
+  note?: string;
+}
+
 export const DEPENDENCY_GROUP_QUERY =
   "SELECT DISTINCT package_name, language, project_path, is_dev, is_direct FROM project_dependencies";
 
@@ -442,20 +464,53 @@ export class FourDADatabase {
     return this._isStandalone;
   }
 
-  /** True for the desktop app's database, which this server only ever reads. */
+  /** True for the desktop app's database, which this connection only reads. */
   get isReadOnly(): boolean {
     return this.db.readonly;
   }
 
   private memoryStore: FourDADatabase | null = null;
+  private appWriter: BetterSqlite3.Database | null = null;
 
   /**
-   * Where what agents record through this server is written: decisions
-   * (decision_memory), agent memory (agent_memory), feedback (record_feedback)
-   * and the embeddings cached for semantic recall. A standalone database is
-   * its own store. With the desktop app's database, which is read-only here,
-   * it is this server's standalone database (standaloneDbPath()), so the
-   * record follows the user whether or not the app is installed.
+   * The connection a record into one of the app-owned tables this server is
+   * designed to write (APP_WRITABLE_TABLES) goes through, and where it lands.
+   *
+   * - Standalone database: the database itself.
+   * - The desktop app's database: a SEPARATE writable connection, opened on
+   *   first use for these statements only (the main connection stays
+   *   read-only), with a busy timeout so a write waits briefly for the app
+   *   instead of failing. Only when the app's table has every column the
+   *   statement names; nothing is ever created or altered in the app's file.
+   * - Schema drift (table or column missing in the app): the record goes to
+   *   this server's own store (standaloneDbPath()) and `note` says so.
+   */
+  writerFor(table: AppWritableTable, columns: readonly string[]): WriteTarget {
+    if (!this.isReadOnly) return { raw: this.db, target: "database" };
+    const missing = columns.filter((c) => !this.hasColumn(table, c));
+    if (missing.length === 0) {
+      if (!this.appWriter?.open) {
+        const writer = new Database(this.dbPath, { fileMustExist: true });
+        writer.pragma(`busy_timeout = ${APP_WRITE_BUSY_TIMEOUT_MS}`);
+        this.appWriter = writer;
+      }
+      return { raw: this.appWriter, target: "app" };
+    }
+    const store = this.getMemoryStore();
+    return {
+      raw: store.db,
+      target: "server_store",
+      note:
+        `The desktop app's ${table} table ${this.hasTable(table) ? `has no ${missing.join(", ")} column` : "does not exist"} ` +
+        `in this app version, so this was recorded in the server's own store (${store.dbPath}) instead; the app will not see it. ` +
+        `The server never changes the app's schema.`,
+    };
+  }
+
+  /**
+   * The server's own store: its standalone database (standaloneDbPath()).
+   * Used for records the app's schema cannot hold (see writerFor). A
+   * standalone database is its own store.
    */
   getMemoryStore(): FourDADatabase {
     if (!this.isReadOnly) return this;
@@ -567,6 +622,8 @@ export class FourDADatabase {
   close(): void {
     this.memoryStore?.close();
     this.memoryStore = null;
+    if (this.appWriter?.open) this.appWriter.close();
+    this.appWriter = null;
     this.db.close();
   }
 
@@ -1135,6 +1192,14 @@ export class FourDADatabase {
     }
   }
 
+  hasTable(table: string): boolean {
+    try {
+      return (this.db.pragma(`table_info(${table})`) as unknown[]).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   hasColumn(table: string, column: string): boolean {
     try {
       const cols = this.db.pragma(`table_info(${table})`) as Array<{ name: string }>;
@@ -1569,26 +1634,29 @@ export class FourDADatabase {
     const label = relevanceLabel[action];
 
     try {
-      // The desktop app's database is read-only here: the record goes to this
-      // server's own store (getMemoryStore()), never into the app's tables.
-      const store = this.getMemoryStore();
-      const target = store.db;
-      if (label !== undefined) store.ensureFeedbackTable();
-      const insertInteraction = target.prepare(`
+      // Into the app's own interactions/feedback tables (the app's calibration
+      // reads them) through the separate write connection; on schema drift,
+      // into the server's store with a note. See writerFor.
+      if (!this.isReadOnly && label !== undefined) this.ensureFeedbackTable();
+      const interactionsTo = this.writerFor("interactions", ["item_id", "action_type", "item_source", "signal_strength", "timestamp"]);
+      const feedbackTo = label !== undefined ? this.writerFor("feedback", ["source_item_id", "relevant"]) : null;
+      if (interactionsTo.target === "server_store" || feedbackTo?.target === "server_store") {
+        this.getMemoryStore().ensureFeedbackTable();
+      }
+      const insertInteraction = interactionsTo.raw.prepare(`
         INSERT INTO interactions (item_id, action_type, item_source, signal_strength, timestamp)
         VALUES (?, ?, ?, ?, datetime('now'))
       `);
-      const write = target.transaction(() => {
+      const insertFeedback = feedbackTo?.raw.prepare(`INSERT INTO feedback (source_item_id, relevant) VALUES (?, ?)`);
+      // One short transaction when both rows go to the same file.
+      const write = () => {
         const r = insertInteraction.run(itemId, action, row.source_type, signalStrength[action]);
-        if (label !== undefined) {
-          target
-            .prepare(`INSERT INTO feedback (source_item_id, relevant) VALUES (?, ?)`)
-            .run(itemId, label);
-        }
+        insertFeedback?.run(itemId, label);
         return r;
-      });
-      const result = write();
-      const where = store === this ? "" : ` in this server's store (${store.dbPath}); the desktop app's database is read-only to this server`;
+      };
+      const result = feedbackTo && feedbackTo.raw !== interactionsTo.raw ? write() : interactionsTo.raw.transaction(write)();
+      const notes = [interactionsTo.note, feedbackTo?.note].filter((n): n is string => Boolean(n));
+      const where = notes.length > 0 ? ` (${[...new Set(notes)].join(" ")})` : "";
 
       return {
         success: true,
@@ -1598,6 +1666,7 @@ export class FourDADatabase {
             : `Recorded ${action} feedback for item ${itemId} (relevance label: ${label === 1 ? "relevant" : "not relevant"})`) + where,
         interaction_id: result.lastInsertRowid as number,
         relevance_label: label === undefined ? null : label === 1,
+        ...(notes.length > 0 ? { _meta: { written_to: "server_store", note: [...new Set(notes)].join(" ") } } : {}),
       };
     } catch (error) {
       return {

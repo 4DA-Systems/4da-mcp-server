@@ -7,7 +7,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
-import { memoryStoreOf } from "../memory-store.js";
+import { writeMeta, writerOf } from "../memory-store.js";
 import { executeCheckDecisionAlignment } from "./decision-enforcement.js";
 
 // ============================================================================
@@ -192,11 +192,9 @@ function parseDecisionRow(row: DecisionRow) {
 // ============================================================================
 
 export function executeDecisionMemory(
-  appDb: FourDADatabase,
+  db: FourDADatabase,
   params: DecisionMemoryParams
 ): object | Promise<object> {
-  // Never the desktop app's database: it is read-only to this server.
-  const db = memoryStoreOf(appDb);
   const rawDb = db.getRawDb();
 
   switch (params.action) {
@@ -207,7 +205,10 @@ export function executeDecisionMemory(
         };
       }
 
-      const stmt = rawDb.prepare(
+      // The app's own developer_decisions table (separate write connection), or
+      // the server's store when the app's schema cannot hold the row.
+      const to = writerOf(db, "developer_decisions", ["decision_type", "subject", "decision", "rationale", "alternatives_rejected", "context_tags", "confidence", "status"]);
+      const stmt = to.raw.prepare(
         `INSERT INTO developer_decisions
            (decision_type, subject, decision, rationale,
             alternatives_rejected, context_tags, confidence, status)
@@ -228,6 +229,7 @@ export function executeDecisionMemory(
         success: true,
         id: result.lastInsertRowid,
         message: `Decision recorded: ${params.subject}`,
+        ...writeMeta(to),
       };
     }
 
@@ -306,7 +308,8 @@ export function executeDecisionMemory(
       sets.push("updated_at = datetime('now')");
       values.push(params.id);
 
-      const updated = rawDb
+      const updater = writerOf(db, "developer_decisions", ["id", "updated_at", ...sets.map((s) => s.split(" ")[0])]);
+      const updated = updater.raw
         .prepare(
           `UPDATE developer_decisions SET ${sets.join(", ")} WHERE id = ?`
         )
@@ -335,7 +338,7 @@ export function executeDecisionMemory(
         return { error: `No decision with id ${missing.join(" or ")}. Use action "list" to find ids.` };
       }
 
-      rawDb
+      writerOf(db, "developer_decisions", ["id", "status", "superseded_by", "updated_at"]).raw
         .prepare(
           `UPDATE developer_decisions
            SET status = 'superseded',

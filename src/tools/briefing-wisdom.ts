@@ -9,7 +9,6 @@
  */
 
 import type { FourDADatabase } from "../db.js";
-import { memoryStoreOf } from "../memory-store.js";
 import { rankRowsByRecall, type RankedRecall, type RecallField } from "./recall.js";
 import { semanticScores, type EmbeddingConfig } from "../embeddings.js";
 import { decisionEmbedText } from "./decision-recall.js";
@@ -120,9 +119,8 @@ function toWisdomEntry(item: {
  * Lexical wisdom retrieval (the default, provider-free path): rank decisions and
  * memories independently, merge by score, take the top entries.
  */
-export function getRelevantWisdom(appDb: FourDADatabase, task: string, files: string[]): WisdomEntry[] {
-  // Decisions and memories recorded through this server live in its own store.
-  const rawDb = memoryStoreOf(appDb).getRawDb();
+export function getRelevantWisdom(db: FourDADatabase, task: string, files: string[]): WisdomEntry[] {
+  const rawDb = db.getRawDb();
   const query = [task, ...files].join(" ");
 
   const entries: Array<RankedRecall<WisdomDecisionRow | WisdomMemoryRow> & {
@@ -149,12 +147,11 @@ export function getRelevantWisdom(appDb: FourDADatabase, task: string, files: st
  * shared words. Falls back to pure lexical (and reports it) when nothing embeds.
  */
 export async function getRelevantWisdomHybrid(
-  appDb: FourDADatabase,
+  db: FourDADatabase,
   task: string,
   files: string[],
   config: EmbeddingConfig,
 ): Promise<{ wisdom: WisdomEntry[]; recall_mode: WisdomRecallMode }> {
-  const db = memoryStoreOf(appDb);
   const rawDb = db.getRawDb();
   const query = [task, ...files].join(" ");
   const decisions = loadWisdomDecisions(rawDb);

@@ -4,27 +4,34 @@
 
 Fixes from an agent eval over stdio JSON-RPC against real projects (2026-10-07).
 
-### The desktop app's database is read-only to the server
+### The server never changes the desktop app's schema
 
 The server opened the 4DA app's live `4da.db` read-write, created a
 `live_cache` table in it (2,774 rows on one machine) that the app's
-migrations do not own, added `embedding` columns to app tables when an
-embedding provider was set, and wrote decisions, agent memory and feedback
-into app tables.
+migrations do not own, and added `embedding` columns to app tables when an
+embedding provider was set.
 
-- The app's database is opened `{ readonly: true, fileMustExist: true }`.
-  Nothing the server does writes to it; a test proves the file is
-  byte-for-byte unchanged after every tool ran.
-- Everything the server writes goes to its own folder (`%LOCALAPPDATA%\4da-mcp`,
-  `~/Library/Application Support/4da-mcp`, `~/.local/share/4da-mcp`;
-  `FOURDA_MCP_HOME` moves it): `cache.db` for registry, OSV and changelog
-  responses, and `standalone.db` for decisions, agent memory and feedback.
-- With the app installed, `decision_memory`, `check_decision_alignment`,
-  `agent_memory` and `record_feedback` now record in `standalone.db`.
-  Decisions recorded in the app's own UI are no longer read by these tools,
-  and feedback recorded through the server no longer reaches the app.
+- Reads go through a `{ readonly: true, fileMustExist: true }` connection.
+  Nothing is created or altered in the app's database: no tables, columns
+  or indexes.
+- The response cache moved to `cache.db` in the server's own folder
+  (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp`,
+  `~/.local/share/4da-mcp`; `FOURDA_MCP_HOME` moves it).
+- Decisions, agent memory and feedback still go into the app's own
+  `developer_decisions`, `agent_memory`, `interactions` and `feedback`
+  tables, so the app's decision UI and calibration see them. They go through a
+  separate write connection (busy timeout 3 s, one short transaction per
+  record). If the app's table or a column a record needs is missing (schema
+  drift), the record goes to the server's `standalone.db` and the response
+  says so in `_meta`; the server never creates it.
+- Semantic-recall embeddings are cached in the app's tables only when they
+  already have `embedding` / `embedding_model` columns; otherwise they are
+  computed per call.
+- Tests: the app's `sqlite_master` is identical after every tool ran, and
+  only those four tables gain rows; caching alone leaves the file
+  byte-for-byte unchanged.
 - The `live_cache` table already inside existing app databases is left
-  alone; the app owns that file.
+  alone; the app owns that file and can drop it.
 
 ### `upgrade_impact`
 

@@ -122,7 +122,9 @@ Results are cached (24h for registry data, 1h for vulnerabilities, 30min for new
 
 **What's sent over the network:** package names and versions (the same data visible in your lockfile), and, only for `ecosystem_pulse`, the names of a few of your dependencies as search terms. No source code, no file paths, no personal data. The call-site scan of `upgrade_impact` runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls.
 
-**What's written to disk, and where:** only files the server owns, in its folder in your user data directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp` or `~/.local/share/4da-mcp`; `FOURDA_MCP_HOME` moves it): `cache.db` (registry, OSV and changelog responses; safe to delete) and `standalone.db` (your project scan in standalone mode, and the decisions, agent memory and feedback you record). Nothing is written inside your repository. When the 4DA desktop app is installed, the server opens the app's database (`4da.db`) **read-only** and never writes to it; what you record through the server goes to `standalone.db`, not into the app. (Before 6.1 the server created a `live_cache` table inside the app's database and wrote decisions, memory and feedback there; the app owns that file, so the server no longer touches it.)
+**What's written to disk, and where:** only files the server owns, in its folder in your user data directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp` or `~/.local/share/4da-mcp`; `FOURDA_MCP_HOME` moves it): `cache.db` (registry, OSV and changelog responses; safe to delete) and `standalone.db` (without the desktop app: your project scan and the decisions, agent memory and feedback you record). Nothing is written inside your repository.
+
+When the 4DA desktop app is installed, the server reads the app's database (`4da.db`) through a **read-only** connection and never creates or alters anything in it: no tables, no columns, no cache. The only writes are rows in the four app-owned tables the tools exist to fill, so the app sees them: decisions (`decision_memory` -> `developer_decisions`), agent memory (`agent_memory`), and feedback (`record_feedback` -> `interactions` and `feedback`, which the app's calibration reads). Those go through a separate write connection that waits briefly for the app's lock. If your app version lacks the table or a column a record needs, the record goes to `standalone.db` instead and the response says so in `_meta`. (Before 6.1 the server also created a `live_cache` table inside the app's database; it now keeps that cache in `cache.db`.)
 
 > The one exception: if you *explicitly* configure an OpenAI embedding provider (`FOURDA_EMBED_PROVIDER=openai`) for semantic recall, the decision/memory text you store is sent to OpenAI to be embedded. The default — no embedding provider, or a local Ollama one — keeps everything on your machine, and `FOURDA_OFFLINE=true` overrides it regardless.
 
@@ -168,7 +170,7 @@ Results are cached (24h for registry data, 1h for vulnerabilities, 30min for new
 | `get_relevant_content`* | Scored content feed that passed the desktop app's relevance judge. |
 | `get_actionable_signals`* | Judge-accepted feed items the app classified (advisories, breaking changes), plus your live vulnerabilities. |
 | `knowledge_gaps`* | Dependencies with judge-accepted advisories or releases you have not looked at. |
-| `record_feedback`* | Save or dismiss items. Recorded in the server's own store; the desktop app's database is read-only to the server. |
+| `record_feedback`* | Save or dismiss items; recorded in the app's own feedback tables, which its calibration reads. |
 
 ### Decisions & Memory
 
