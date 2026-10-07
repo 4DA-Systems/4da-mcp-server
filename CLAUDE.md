@@ -23,8 +23,10 @@ pnpm run inspect                 # MCP Inspector
   `contract/app-schema.sql`. Users run the app and this server at independent versions, so
   guard newer columns with `db.hasColumn()`. `pnpm run contract` must pass; CI also checks
   against the app's current `main`, and the app's merge queue checks this repo's `main`.
-- **Never install with pnpm 11.** It ignores the `pnpm` field in package.json and drops every
-  security override. pnpm 11 is used only for `audit` (`npx -y pnpm@11.13.0 audit`).
+- **pnpm settings live in pnpm-workspace.yaml** (overrides, onlyBuiltDependencies), never in a
+  `pnpm` field of package.json: pnpm 11 ignores that field and dropped every security override
+  (issue #9). `pnpm run check` enforces it. Install with the pinned pnpm 10 (`packageManager`);
+  pnpm 11 is used for `audit` only (`npx -y pnpm@11.13.1 audit --audit-level=high`).
 - **Every source file starts with `// SPDX-License-Identifier: Apache-2.0`.** The app is FSL;
   this package is Apache-2.0.
 - **No tool counts in static listing text** (npm description, server.json, directory copy):
