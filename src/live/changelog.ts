@@ -30,6 +30,14 @@ export interface ChangelogEntry {
    * under actix-web's "Removed" reads as harmless, to an agent and to a rater alike.
    */
   under?: string;
+  /**
+   * Bullets nested under this entry (feature lists, "Breaking change: ..."
+   * notes). They belong to the entry, not beside it: sqlx 0.9.0's Breaking
+   * section has 23 top-level bullets, and counting every nested one reported
+   * "83 entries flagged breaking" (2026-10-07). A nested bullet that is more
+   * severe than its parent raises the parent's kind.
+   */
+  details?: string[];
 }
 
 export interface ChangelogSection {
@@ -96,7 +104,14 @@ function extractDate(text: string): string | null {
  * heading. Exported for tests.
  */
 export function parseVersionHeading(raw: string): { version: string; date: string | null } | null {
-  const text = raw.trim().replace(/^\*\*|\*\*$/g, "");
+  // Inline HTML is markup, not heading text: stripe writes
+  // `## <a id="23-0-0"></a>23.0.0 - 2026-09-30`, and until 6.0.2 no stripe
+  // release was found (changelog.found: false, 2026-10-07).
+  const text = raw
+    .replace(/<\/?[A-Za-z][^<>]*>/g, " ")
+    .trim()
+    .replace(/^\*\*|\*\*$/g, "")
+    .trim();
   const m = HEADING.exec(text);
   if (!m) return null;
   const [, keyword, namePrefix, version, rest] = m;
@@ -141,20 +156,47 @@ interface ParseState {
   /** Text of the current sub-heading and of the parent bullet, for ChangelogEntry.under. */
   headingText: string | null;
   parentText: string | null;
-  pending: { text: string; context: EntryContext | null; indent: number; under: string | null } | null;
+  pending: {
+    text: string;
+    context: EntryContext | null;
+    indent: number;
+    under: string | null;
+    /** An outermost bullet: nested bullets after it become its details. */
+    outer?: boolean;
+    /** A nested bullet: folded into this entry's details instead of becoming an entry. */
+    into?: ChangelogEntry | null;
+  } | null;
+  /** The outermost-level bullet entry nested bullets currently belong to. */
+  parentEntry: ChangelogEntry | null;
 }
 
+const KIND_SEVERITY: Record<EntryKind, number> = { breaking: 3, security: 2, deprecation: 1, change: 0 };
+/** Nested lines kept per entry, and the length of each. */
+const MAX_DETAILS = 12;
+const MAX_DETAIL_CHARS = 200;
+
 function flush(state: ParseState): void {
-  if (state.pending && state.current) {
-    const text = sanitizeEntry(state.pending.text);
-    const under = state.pending.under;
-    // Layout markup is not a change: actix-web 4 wraps pre-release notes in
-    // `<details> <summary>...</summary>`, and both lines were counted as removals.
-    if (text && !HTML_LAYOUT.test(text)) {
-      state.current.entries.push({ kind: classifyEntry(text, state.pending.context), text, ...(under ? { under } : {}) });
-    }
-  }
+  const pending = state.pending;
   state.pending = null;
+  if (!pending || !state.current) return;
+  const text = sanitizeEntry(pending.text);
+  // Layout markup is not a change: actix-web 4 wraps pre-release notes in
+  // `<details> <summary>...</summary>`, and both lines were counted as removals.
+  if (!text || HTML_LAYOUT.test(text)) return;
+  const kind = classifyEntry(text, pending.context);
+  if (pending.into) {
+    const parent = pending.into;
+    const details = (parent.details ??= []);
+    if (details.length < MAX_DETAILS) details.push(sanitizeEntry(pending.text, MAX_DETAIL_CHARS));
+    // "Breaking change: adds a DB type parameter" under a plain "fix: RawSql
+    // lifetime issues" bullet makes the entry breaking.
+    if (KIND_SEVERITY[kind] > KIND_SEVERITY[parent.kind]) parent.kind = kind;
+    return;
+  }
+  const under = pending.under;
+  const entry: ChangelogEntry = { kind, text, ...(under ? { under } : {}) };
+  state.current.entries.push(entry);
+  if (pending.outer) state.parentEntry = entry;
 }
 
 /**
@@ -178,6 +220,7 @@ function openSection(state: ParseState, heading: { version: string; date: string
   state.parentIndent = null;
   state.headingText = null;
   state.parentText = null;
+  state.parentEntry = null;
 }
 
 /** A heading or parent bullet as context text: emphasis and code marks dropped, one line, at most 80 characters. */
@@ -201,6 +244,8 @@ function addLine(state: ParseState, line: string): void {
       if (label) {
         state.parentKind = classifyHeading(label[1]) ?? state.headingKind;
         state.parentText = contextText(label[1]);
+        // A label's children are entries of their own, under the label.
+        state.parentEntry = null;
         return;
       }
       // A breaking bullet lends "breaking" to its sub-points (date-fns 3.0: "**BREAKING**: Functions
@@ -212,7 +257,8 @@ function addLine(state: ParseState, line: string): void {
     }
     const context = !outer && state.parentKind ? state.parentKind : state.headingKind;
     const under = !outer && state.parentText ? state.parentText : state.headingText;
-    state.pending = { text, context, indent, under };
+    if (outer) state.parentEntry = null;
+    state.pending = { text, context, indent, under, outer, into: outer ? null : state.parentEntry };
     return;
   }
   if (line.trim() === "") {
@@ -227,7 +273,21 @@ function addLine(state: ParseState, line: string): void {
     state.pending.text += ` ${line.trim()}`; // wrapped paragraph line
     return;
   }
+  // An indented paragraph after a blank line continues the list item above it
+  // (stripe 23.0.0: "* ⚠️ Remove ErrorType export", blank, "  Remove the ErrorType
+  // interface ..."): a detail of that entry, not an entry of its own.
+  if (!state.pending && state.parentEntry && /^\s{2,}\S/.test(line)) {
+    state.pending = {
+      text: line.trim(),
+      context: state.parentKind ?? state.headingKind,
+      indent: -2,
+      under: state.headingText,
+      into: state.parentEntry,
+    };
+    return;
+  }
   flush(state);
+  state.parentEntry = null;
   state.pending = { text: line, context: state.headingKind, indent: -1, under: state.headingText };
 }
 
@@ -244,6 +304,7 @@ export function parseChangelog(text: string): ChangelogSection[] {
     headingText: null,
     parentText: null,
     pending: null,
+    parentEntry: null,
   };
   let inFence = false;
   let inComment = false;
@@ -286,6 +347,7 @@ export function parseChangelog(text: string): ChangelogSection[] {
         state.parentKind = null;
         state.parentIndent = null;
         state.parentText = null;
+        state.parentEntry = null;
       }
       continue;
     }
@@ -330,6 +392,7 @@ export function parseChangelog(text: string): ChangelogSection[] {
       state.parentKind = null;
       state.parentIndent = null;
       state.parentText = null;
+      state.parentEntry = null;
       continue;
     }
     if (state.current) addLine(state, line);

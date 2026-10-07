@@ -30,6 +30,8 @@ export interface ReportEntry {
   text: string;
   /** The changelog heading or parent bullet the entry sits under ("Removed", "Breaking Changes"). */
   under?: string;
+  /** Bullets nested under the entry: part of it, not counted as entries of their own. */
+  details?: string[];
   touches_your_code?: boolean;
   matched_symbols?: string[];
   /** String literals in your code that use the syntax this entry retires (route patterns and the like). */
@@ -93,9 +95,15 @@ export function shapeChangelog(
       return true;
     });
     const entries: ReportEntry[] = unique.map((e) => {
-      const entry: ReportEntry = { kind: e.kind, text: e.text, ...(e.under ? { under: e.under } : {}) };
+      const entry: ReportEntry = {
+        kind: e.kind,
+        text: e.text,
+        ...(e.under ? { under: e.under } : {}),
+        ...(e.details?.length ? { details: e.details } : {}),
+      };
       if (e.kind === "breaking" || e.kind === "deprecation") {
-        const matched = matchSymbols(e.text, symbols);
+        // The nested points name the affected functions (date-fns 3.0) as often as the entry does.
+        const matched = matchSymbols([e.text, ...(e.details ?? [])].join(" "), symbols);
         if (matched.length > 0) {
           entry.touches_your_code = true;
           entry.matched_symbols = matched;

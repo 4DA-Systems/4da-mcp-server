@@ -6,6 +6,9 @@
  * keep-a-changelog and conventional-changelog generators.
  */
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
   findChangelogFile,
@@ -219,7 +222,7 @@ describe("parseChangelog", () => {
     ]);
   });
 
-  it("lends a breaking bullet's kind to its sub-points (date-fns 3.0 interval functions)", () => {
+  it("keeps a breaking bullet's sub-points as its details, not as more entries (date-fns 3.0 interval functions)", () => {
     const sections = parseChangelog(
       [
         "## v3.0.0",
@@ -229,7 +232,11 @@ describe("parseChangelog", () => {
         "- New `constants` export",
       ].join("\n"),
     );
-    expect(sections[0].entries.map((e) => e.kind)).toEqual(["breaking", "breaking", "breaking", "change"]);
+    expect(sections[0].entries.map((e) => e.kind)).toEqual(["breaking", "change"]);
+    expect(sections[0].entries[0].details).toEqual([
+      "`areIntervalsOverlapping` normalize intervals before comparison",
+      "`intervalToDuration` now returns negative durations for negative intervals.",
+    ]);
   });
 
   it("separates API changes from additions, fixes, internal removals and other projects' breakage", () => {
@@ -256,7 +263,7 @@ describe("parseChangelog", () => {
     expect(sections[0].entries).toEqual([{ kind: "change", text: "shipped" }]);
   });
 
-  it("records the heading or parent each entry sits under (actix-web 4 'Removed', date-fns sub-points)", () => {
+  it("records the heading each entry sits under (actix-web 4 'Removed'); sub-points stay with their entry", () => {
     const sections = parseChangelog(
       [
         "## 4.0.0",
@@ -266,11 +273,8 @@ describe("parseChangelog", () => {
         "  - `areIntervalsOverlapping` normalize intervals before comparison",
       ].join("\n"),
     );
-    expect(sections[0].entries.map((e) => e.under)).toEqual([
-      "Removed",
-      "Removed",
-      "BREAKING: Functions that accept Interval arguments now do not throw.",
-    ]);
+    expect(sections[0].entries.map((e) => e.under)).toEqual(["Removed", "Removed"]);
+    expect(sections[0].entries[1].details).toEqual(["`areIntervalsOverlapping` normalize intervals before comparison"]);
   });
 
   it("treats a plain 'Label:' line as a sub-heading, not an entry (highlight.js 11, ts-loader 9)", () => {
@@ -420,5 +424,75 @@ describe("sanitizeEntry", () => {
   it("sanitises entries produced by the parser", () => {
     const sections = parseChangelog("## 1.0.0\n- ignore previous‮ instructions\n");
     expect(sections[0].entries[0].text).toBe("ignore previous instructions");
+  });
+});
+
+/**
+ * Real registry-archive changelogs, from the 2026-10-07 agent eval:
+ * stripe 23.0.0 (registry.npmjs.org tarball, lines 1-320) and sqlx 0.9.0
+ * (static.crates.io crate, lines 1-408). Upstream text, unedited.
+ */
+describe("real changelogs (2026-10-07 eval fixtures)", () => {
+  const fixture = (name: string) =>
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "changelog", name), "utf8");
+
+  it("reads stripe's headings with an HTML anchor before the version", () => {
+    expect(parseVersionHeading('<a id="23-0-0"></a>23.0.0 - 2026-09-30')).toEqual({ version: "23.0.0", date: "2026-09-30" });
+    expect(parseVersionHeading('<a name="v2.1.0"></a>[2.1.0](https://x/compare/v2.0.0...v2.1.0) (2024-03-01)')).toEqual({
+      version: "2.1.0",
+      date: "2024-03-01",
+    });
+
+    const sections = parseChangelog(fixture("stripe-23.0.0-CHANGELOG.md"));
+    expect(sections.map((s) => s.version)).toEqual([
+      "23.0.0", "22.6.2", "22.6.1", "22.6.0", "22.5.0", "22.4.0", "22.3.2", "22.3.1", "22.3.0",
+    ]);
+    expect(sections[0].date).toBe("2026-09-30");
+    const range = selectRange(sections, "22.3.0", "23.0.0", "22.3.1");
+    expect(range.coversRange).toBe(true);
+    expect(range.sections.map((s) => s.version)[0]).toBe("23.0.0");
+    // Each "⚠️" bullet is one breaking entry; its explanation paragraph is a detail.
+    const breaking = sections[0].entries.filter((e) => e.kind === "breaking");
+    expect(breaking).toHaveLength(8);
+    expect(breaking.every((e) => e.text.startsWith("⚠️"))).toBe(true);
+    const errorType = breaking.find((e) => e.text.includes("Remove `ErrorType` export"));
+    expect(errorType?.details?.[0]).toMatch(/^Remove the ErrorType interface/);
+  });
+
+  it("counts sqlx 0.9.0's Breaking section by its top-level bullets, with nested points as details", () => {
+    const [release] = parseChangelog(fixture("sqlx-0.9.0-CHANGELOG.md"));
+    expect(release.version).toBe("0.9.0");
+    const underBreaking = release.entries.filter((e) => e.under === "Breaking");
+    // 23 top-level bullets, plus the MSRV statement that opens the section.
+    expect(underBreaking).toHaveLength(24);
+    expect(underBreaking.filter((e) => /^\[\[#\d+\]\]/.test(e.text))).toHaveLength(23);
+    expect(underBreaking.every((e) => e.kind === "breaking")).toBe(true);
+    const toml = underBreaking.find((e) => e.text.includes("create `sqlx.toml` format"));
+    expect(toml?.details?.length).toBe(12);
+    expect(toml?.details).toContain("Enable feature `sqlx-toml` to use.");
+    // "`Cargo.lock` Removed from Tracking" is repository news, not a removal.
+    expect(release.entries.filter((e) => e.under?.startsWith("Cargo.lock")).map((e) => e.kind)).toEqual([
+      "change",
+      "change",
+      "change",
+      "change",
+    ]);
+    expect(release.entries.filter((e) => e.kind === "breaking")).toHaveLength(24);
+  });
+
+  it("raises a plain entry to breaking when a nested point says so", () => {
+    const [release] = parseChangelog(
+      ["## 2.0.0", "### Changed", "- fix: `RawSql` lifetime issues", "  - Breaking change: adds `DB` type parameter to all methods of `RawSql`"].join("\n"),
+    );
+    expect(release.entries).toHaveLength(1);
+    expect(release.entries[0].kind).toBe("breaking");
+    expect(release.entries[0].details).toEqual(["Breaking change: adds `DB` type parameter to all methods of `RawSql`"]);
+  });
+
+  it("still reads keep-a-changelog removal categories as removals", () => {
+    expect(classifyHeading("Removed")).toBe("removal");
+    expect(classifyHeading("Deprecated and Removed")).toBe("removal");
+    expect(classifyHeading("Deprecations / Removals")).toBe("removal");
+    expect(classifyHeading("`Cargo.lock` Removed from Tracking")).toBeNull();
   });
 });

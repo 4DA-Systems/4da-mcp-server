@@ -193,7 +193,10 @@ const ADDITIVE_HEADING =
 /** Context implied by a heading or label, or null when it carries no signal ("### Changed"). */
 export function classifyHeading(heading: string): EntryContext | null {
   if (/(?<!-)\bbreaking\b|⚠|incompatib|migration|\bmajor changes?\b/i.test(heading)) return "breaking";
-  if (/\bremov(?:e|ed|als?)\b|\bapi changes?\b/i.test(heading)) return "removal";
+  // "Removed", "Removals", "Deprecated and Removed", "API changes": a category.
+  // "`Cargo.lock` Removed from Tracking" (sqlx 0.9.0) is a news item about the
+  // repository, and its three paragraphs were flagged breaking.
+  if (/(?:^\W*|(?:\band|[&/,])\s*)remov(?:e|ed|als?)\b|\bapi changes?\b/i.test(heading)) return "removal";
   if (/security|vulnerab/i.test(heading)) return "security";
   if (/deprecat/i.test(heading)) return "deprecation";
   if (ADDITIVE_HEADING.test(heading)) return "additive";
