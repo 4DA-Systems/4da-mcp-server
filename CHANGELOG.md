@@ -1,5 +1,82 @@
 # Changelog
 
+## 6.1.0 — unreleased
+
+Fixes from an agent eval over stdio JSON-RPC against real projects (2026-10-07).
+
+### The desktop app's database is read-only to the server
+
+The server opened the 4DA app's live `4da.db` read-write, created a
+`live_cache` table in it (2,774 rows on one machine) that the app's
+migrations do not own, added `embedding` columns to app tables when an
+embedding provider was set, and wrote decisions, agent memory and feedback
+into app tables.
+
+- The app's database is opened `{ readonly: true, fileMustExist: true }`.
+  Nothing the server does writes to it; a test proves the file is
+  byte-for-byte unchanged after every tool ran.
+- Everything the server writes goes to its own folder (`%LOCALAPPDATA%\4da-mcp`,
+  `~/Library/Application Support/4da-mcp`, `~/.local/share/4da-mcp`;
+  `FOURDA_MCP_HOME` moves it): `cache.db` for registry, OSV and changelog
+  responses, and `standalone.db` for decisions, agent memory and feedback.
+- With the app installed, `decision_memory`, `check_decision_alignment`,
+  `agent_memory` and `record_feedback` now record in `standalone.db`.
+  Decisions recorded in the app's own UI are no longer read by these tools,
+  and feedback recorded through the server no longer reaches the app.
+- The `live_cache` table already inside existing app databases is left
+  alone; the app owns that file.
+
+### `upgrade_impact`
+
+- Reads changelog headings with inline HTML before the version (stripe:
+  `## <a id="23-0-0"></a>23.0.0 - 2026-09-30`). stripe 22.3.0 -> 23.0.0 went
+  from "no changelog" to 8 releases with 11 entries flagged breaking.
+- Bullets nested under an entry are that entry's `details`, not entries of
+  their own; a breaking detail makes the entry breaking. sqlx 0.8.6 -> 0.9.0
+  went from "83 entries flagged breaking" to 24 (its Breaking section's 23
+  bullets plus the MSRV statement).
+- "`Cargo.lock` Removed from Tracking" is no longer read as a Removed
+  category.
+
+### Breaking version ranges
+
+- `dependency_health` and `upgrade_planner` label a 0.x minor bump (and a
+  0.0.x patch bump) "major", as `upgrade_impact` and `dependency_check`
+  already did: under caret rules 0.12 -> 0.13 is breaking.
+- `dependency_check` returns `review` for a breaking range (a major, a 0.x
+  minor) with "breaking version range, run upgrade_impact". It returned
+  `proceed` for vitest 3 -> 5, reqwest 0.12 -> 0.13 and stripe 22 -> 23.
+
+### Project scope
+
+- `upgrade_planner` and `what_should_i_know` take `project_path`. Default:
+  the project the server was started in; `"*"` for every project. Called
+  from 4DA, the app's plan led with navcal, verax and 4da-ledger steps; it
+  is now narrowed to the project's steps, lines and sites, and says how
+  many steps only touch other projects.
+
+### `what_should_i_know`
+
+- Expands the package families a task names ("all tauri plugins", "tauri
+  and its plugins", "@tauri-apps packages", "tauri-plugin-*") to the
+  project's direct dependencies in them. It matched only `tauri`.
+- For a task asking for the latest release, each package gets `latest`
+  (newest stable, installed vs latest major line, `on_latest_major`) and the
+  summary says which are already on the latest major.
+
+### `vulnerability_scan`
+
+- One recommendation per installed version, each advisory counted once.
+  "rsa 0.9.10 — 2 known vulnerabilities" was one advisory on two versions.
+
+### Build
+
+- pnpm settings (overrides, onlyBuiltDependencies) moved from package.json
+  to pnpm-workspace.yaml: pnpm 11 ignores package.json's `pnpm` field, so
+  the CI audit ran without the security overrides. New override
+  source-map-js >= 1.2.2 (GHSA-68fv-2mgg-jv7q, high). Fixes the nightly CI
+  (#9).
+
 ## 6.0.2 — 2026-10-04
 
 ### `--setup` writes the files editors actually read

@@ -64,7 +64,8 @@ function fingerprint(file: string): { sha: string; mtimeMs: number; siblings: st
   };
 }
 
-describe("the desktop app's database is read-only to the server", () => {
+// Generous: these create and open SQLite files, which an on-access scanner can hold.
+describe("the desktop app's database is read-only to the server", { timeout: 60_000 }, () => {
   let dir: string;
   let file: string;
 
@@ -85,9 +86,19 @@ describe("the desktop app's database is read-only to the server", () => {
       expect(db.isReadOnly).toBe(true);
       const raw = db.getRawDb();
       expect(raw.readonly).toBe(true);
-      expect(() => raw.prepare("INSERT INTO feedback (source_item_id, relevant) VALUES (7, 1)").run()).toThrow(
-        /readonly/i,
-      );
+      // A scanner opening the fresh temp file can make SQLite report BUSY first
+      // (seen twice under load on Windows); the refusal itself is READONLY.
+      let code: string | undefined;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          raw.prepare("INSERT INTO feedback (source_item_id, relevant) VALUES (7, 1)").run();
+          code = "WROTE";
+        } catch (error) {
+          code = (error as { code?: string }).code;
+        }
+        if (code !== "SQLITE_BUSY") break;
+      }
+      expect(code).toBe("SQLITE_READONLY");
       expect(() => db.ensureColumn("agent_memory", "embedding", "BLOB")).toThrow(/never alters/);
     } finally {
       db.close();
