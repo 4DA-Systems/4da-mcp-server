@@ -33,12 +33,15 @@ import { formatAppPlan, readAppPlan, type AppPlanResult } from "./app-plan.js";
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
+import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
   max_recommendations?: number;
   risk_threshold?: "all" | "low" | "medium" | "high" | "critical";
   package?: string;
+  /** Project directory to plan for; "*" for every project. Default: the server's project, when it is one. */
+  project_path?: string;
 }
 
 interface UpgradeRecommendation {
@@ -95,6 +98,8 @@ interface UpgradePlanResult {
   };
   /** Why the 4DA app's own plan was not used (no database, no snapshot, other schema). */
   appPlanUnavailable?: string;
+  /** The project the plan covers, or null when it is not narrowed to one. */
+  projectScope?: string | null;
 }
 
 /** How long a plan waits for its own OSV scan before answering CVE-blind (the scan keeps running). */
@@ -107,7 +112,7 @@ const PROVENANCE_NOTE =
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan — call before upgrading, adding, or auditing any dependency to pick the safest order. When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev) and the mechanism (manifest_bump, lockfile_or_parent_update, mixed, no_fix); flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), deprecation and version distance; it runs the OSV scan itself when none has run. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev) and the mechanism (manifest_bump, lockfile_or_parent_update, mixed, no_fix); flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), deprecation and version distance; it runs the OSV scan itself when none has run. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -127,6 +132,11 @@ export const upgradePlannerTool = {
       package: {
         type: "string",
         description: "Plan for this one package only (exact name, any ecosystem). Default: every dependency.",
+      },
+      project_path: {
+        type: "string",
+        description:
+          "Project directory to plan for: the app's plan is narrowed to the steps (and installed lines) that touch it; the standalone plan resolves that project's lockfiles. \"*\" for every project the app tracks. Default: the project the server was started in, when that directory is a project.",
       },
     },
   },
@@ -159,12 +169,22 @@ export async function executeUpgradePlanner(
   params: UpgradePlannerParams,
   liveIntel: LiveIntelligence | null,
 ): Promise<UpgradePlanResult | AppPlanResult> {
+  const scope = resolveProjectScope(params.project_path);
+  if (scope.kind === "error") throw new Error(scope.error);
+  const scopePath = scope.kind === "project" ? scope.path : null;
   // One brain: the app's plan wins whenever there is one, stale or not (a
   // stale plan is returned flagged, never silently replaced by a heuristic).
+  // It covers every project the app tracks, so it is narrowed to this one.
   const appPlan = readAppPlan(db);
-  if (appPlan.kind === "plan") return formatAppPlan(appPlan, params);
-  const standalone = await executeStandalonePlanner(params, liveIntel);
-  return { ...standalone, appPlanUnavailable: appPlan.reason };
+  if (appPlan.kind === "plan") return formatAppPlan(appPlan, params, scopePath);
+  // The live layer already covers the server's own project; only an explicit
+  // project_path elsewhere resolves another tree.
+  const scoped =
+    scope.kind === "project" && scope.source === "argument"
+      ? (liveIntelFor(liveIntel, db, scope) as LiveIntelligence | null)
+      : liveIntel;
+  const standalone = await executeStandalonePlanner(params, scoped);
+  return { ...standalone, appPlanUnavailable: appPlan.reason, projectScope: scopePath ?? standalone.projectPath };
 }
 
 async function executeStandalonePlanner(
@@ -293,7 +313,13 @@ async function executeStandalonePlanner(
     // Check version distance
     if (dep.versionsBehind) {
       const d = dep.versionsBehind;
-      if (d.label === "major") {
+      if (d.label === "major" && d.major === 0) {
+        // A 0.x bump: breaking under caret rules, though the major number is unchanged.
+        const n = d.minor > 0 ? d.minor : d.patch;
+        const unit = d.minor > 0 ? "minor version" : "patch";
+        reasons.push(`${n} 0.x ${unit}${n !== 1 ? (unit === "patch" ? "es" : "s") : ""} behind (breaking: below 1.0 a ${unit === "patch" ? "0.0.x patch" : "minor"} bump is a major one)`);
+        if (risk === "low") risk = "medium";
+      } else if (d.label === "major") {
         reasons.push(`${d.major} major version${d.major !== 1 ? "s" : ""} behind`);
         if (risk === "low") risk = "medium";
       } else if (d.label === "minor") {

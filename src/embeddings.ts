@@ -22,7 +22,7 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { FourDADatabase } from "./db.js";
+import type { AppWritableTable, FourDADatabase } from "./db.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -304,13 +304,24 @@ export async function semanticScores(
     return { semanticById: new Map(), queryEmbedded: false, embeddedCount: 0, newlyEmbedded: 0, model: tag };
   }
 
-  // Cache columns are optional and added lazily for databases that predate them.
-  db.ensureColumn(table, "embedding", "BLOB");
-  db.ensureColumn(table, "embedding_model", "TEXT");
+  // Cache columns are optional. This server's own database gets them lazily;
+  // the desktop app's database is never altered, so there the cache is used
+  // only when the app's table already has both columns (written through the
+  // separate write connection, see FourDADatabase.writerFor), and vectors are
+  // otherwise computed per call and not stored.
+  const readOnly = (db as Partial<Pick<FourDADatabase, "isReadOnly">>).isReadOnly === true;
+  let cacheDb: ReturnType<FourDADatabase["getRawDb"]> | null = null;
+  if (!readOnly) {
+    db.ensureColumn(table, "embedding", "BLOB");
+    db.ensureColumn(table, "embedding_model", "TEXT");
+    cacheDb = db.getRawDb();
+  } else if (db.hasColumn(table, "embedding") && db.hasColumn(table, "embedding_model")) {
+    const to = db.writerFor(table as AppWritableTable, ["id", "embedding", "embedding_model"]);
+    cacheDb = to.target === "app" ? to.raw : null;
+  }
 
-  const rawDb = db.getRawDb();
-  const stored = loadStoredEmbeddings(rawDb, table, items.map((i) => i.id), tag);
-  const updateStmt = rawDb.prepare(
+  const stored = cacheDb ? loadStoredEmbeddings(db.getRawDb(), table, items.map((i) => i.id), tag) : new Map<number, Float32Array>();
+  const updateStmt = cacheDb?.prepare(
     `UPDATE ${table} SET embedding = ?, embedding_model = ? WHERE id = ?`,
   );
   const maxNew = opts.maxNewEmbeds ?? DEFAULT_MAX_NEW_EMBEDS;
@@ -325,7 +336,7 @@ export async function semanticScores(
       vec = await embedText(item.text, config);
       if (vec) {
         try {
-          updateStmt.run(vectorToBlob(vec), tag, item.id);
+          updateStmt?.run(vectorToBlob(vec), tag, item.id);
         } catch {
           // Persisting the cache is best-effort; scoring still proceeds.
         }

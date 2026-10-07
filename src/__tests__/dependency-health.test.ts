@@ -167,3 +167,33 @@ describe("dependency_health loads its own vulnerability data", () => {
     expect(result.summary).toContain("CVE data not loaded: offline mode (FOURDA_OFFLINE)");
   });
 });
+
+/**
+ * 2026-10-07 eval: dependency_health labelled sqlx 0.8 -> 0.9, reqwest
+ * 0.12 -> 0.13, lopdf 0.42 -> 0.45 and tower-http 0.6 -> 0.7 "minor". Under
+ * the caret rules npm and Cargo apply, a 0.x minor bump is breaking.
+ */
+describe("version distance below 1.0", () => {
+  it.each([
+    ["0.8.6", "0.9.0", "major"],
+    ["0.12.28", "0.13.5", "major"],
+    ["0.42.0", "0.45.0", "major"],
+    ["0.6.8", "0.7.0", "major"],
+    ["0.0.3", "0.0.4", "major"],
+    ["0.8.6", "0.8.7", "patch"],
+    ["1.26.1", "1.27.0", "minor"],
+    ["2.0.0", "3.1.0", "major"],
+    ["1.2.3", "1.2.3", "up-to-date"],
+  ])("%s -> %s is %s", async (from, to, label) => {
+    const { computeSemverDistance } = await import("../live/semver-utils.js");
+    expect(computeSemverDistance(from, to)?.label).toBe(label);
+  });
+
+  it("agrees with upgrade_impact's upgrade type", async () => {
+    const { computeSemverDistance } = await import("../live/semver-utils.js");
+    const { upgradeType } = await import("../tools/upgrade-impact-report.js");
+    for (const [from, to] of [["0.8.6", "0.9.0"], ["0.0.3", "0.0.4"], ["1.2.0", "1.3.0"], ["0.4.1", "0.4.2"], ["22.3.0", "23.0.0"]]) {
+      expect(computeSemverDistance(from, to)?.label, `${from} -> ${to}`).toBe(upgradeType(from, to));
+    }
+  });
+});

@@ -19,6 +19,26 @@ const emptySettings = join(tmpdir(), "4da-test-empty-settings.json");
 writeFileSync(emptySettings, "{}");
 process.env.FOURDA_SETTINGS_PATH = emptySettings;
 
+// Every file the server writes (cache.db, and standalone.db as the memory
+// store beside the desktop app's read-only database) goes under FOURDA_MCP_HOME:
+// a per-worker temp directory, never the operator's real data directory.
+if (!process.env.FOURDA_MCP_HOME) {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { afterAll } = await import("vitest");
+  const home = mkdtempSync(join(tmpdir(), "4da-mcp-home-"));
+  process.env.FOURDA_MCP_HOME = home;
+  afterAll(async () => {
+    const { closeServerCacheDb } = await import("./live/cache.js");
+    closeServerCacheDb();
+    try {
+      rmSync(home, { recursive: true, force: true });
+    } catch {
+      // A handle a test left open (Windows): the OS temp cleaner gets it.
+    }
+    delete process.env.FOURDA_MCP_HOME;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // App-schema contract recording (scripts/app-schema-contract.mjs).
 //

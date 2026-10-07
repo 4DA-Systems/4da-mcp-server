@@ -15,9 +15,11 @@
  *      above allows quoting one as history.
  *   3. REMOVE BY markers. `REMOVE BY YYYY-MM-DD` puts an expiry on temporary
  *      code; a marker on or past its date fails.
- *   4. pnpm overrides tripwire. pnpm 11 stops reading the `pnpm` field of
- *      package.json, which silently drops every security override in it. The
- *      pin must stay below 11 while the overrides live there.
+ *   4. pnpm settings location. pnpm 11 stops reading the `pnpm` field of
+ *      package.json and silently dropped every security override in it (the
+ *      CI audit step, issue #9). Overrides and the build allowlist live in
+ *      pnpm-workspace.yaml, which pnpm 10 and 11 both read; package.json must
+ *      not carry a `pnpm` field, and the workspace file must hold overrides.
  *
  * Exit 1 on any finding.
  */
@@ -99,15 +101,20 @@ for (const file of sources) {
     });
 }
 
-// 4. pnpm overrides tripwire ---------------------------------------------------
+// 4. pnpm settings location -----------------------------------------------------
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const pnpmMajor = Number((pkg.packageManager ?? "").match(/^pnpm@(\d+)/)?.[1] ?? NaN);
 if (!Number.isFinite(pnpmMajor)) {
   findings.push('package.json: "packageManager" must pin pnpm (CI and contributors install with it)');
-} else if (pnpmMajor >= 11 && pkg.pnpm && Object.keys(pkg.pnpm.overrides ?? {}).length > 0) {
+}
+if (pkg.pnpm !== undefined) {
   findings.push(
-    `package.json: pnpm ${pnpmMajor} ignores the "pnpm" field, so its ${Object.keys(pkg.pnpm.overrides).length} security overrides would be dropped. Move them to pnpm-workspace.yaml first.`,
+    'package.json: a "pnpm" field. pnpm 11 ignores it (dropping overrides and the build allowlist); put those settings in pnpm-workspace.yaml.',
   );
+}
+const workspace = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
+if (!/^overrides:[ \t]*\r?\n[ \t]+\S/m.test(workspace)) {
+  findings.push("pnpm-workspace.yaml: no `overrides:` block. The security overrides must live there (pnpm 10 and 11 read it).");
 }
 
 if (findings.length) {

@@ -29,6 +29,8 @@ export interface TaskPackage {
   /** Versions the task text names after the package ("5.x to 7.x" -> from 5.x, to 7.x). */
   requested_from: string | null;
   requested_to: string | null;
+  /** Set when the package was found through a family the task names ("all tauri plugins" -> "tauri"). */
+  family?: string;
 }
 
 /**
@@ -115,6 +117,108 @@ export function detectTaskPackages(
   });
   packages.sort((a, b) => Number(b.direct) - Number(a.direct));
   return packages.slice(0, limit);
+}
+
+/** Words after a name that make it a family: "tauri plugins", "@tauri-apps packages". */
+const FAMILY_NOUNS = /^(?:plugins?|packages?|crates?|family|families|ecosystem|deps|dependencies|libraries|libs|modules|siblings)$/i;
+
+/**
+ * The package families a task names, as base names: "all tauri plugins",
+ * "tauri and its plugins", "@tauri-apps packages", "tauri-plugin-*",
+ * "@tauri-apps/*". A name alone ("bump tauri") is not a family.
+ */
+export function detectFamilyBases(task: string, files: string[] = []): string[] {
+  const tokens = tokenize(`${task} ${files.join(" ")}`);
+  const bases = new Set<string>();
+  let lastName: string | null = null;
+  tokens.forEach((token, i) => {
+    // Globs: "tauri-plugin-*" -> tauri, "@tauri-apps/*" -> @tauri-apps.
+    const glob = /^(@?[a-z0-9][\w.-]*?)(?:-plugin)?(?:[-_/]\*)$/.exec(token);
+    if (glob) {
+      bases.add(glob[1]);
+      return;
+    }
+    const next = tokens[i + 1];
+    if (next && FAMILY_NOUNS.test(next) && /^@?[a-z][\w.@/-]*$/.test(token) && !FAMILY_NOUNS.test(token)) {
+      if (!/^(?:all|every|its|their|the|other|any|some|these|those|related|official|first-party|in|of|for|with|from|our|my|your|and|or|to|dev|npm|cargo|pip|go|rust|js|node|python|workspace|root|outdated|vulnerable|new|old|unused|direct|transitive)$/.test(token)) {
+        bases.add(token);
+      } else if (token === "its" || token === "their") {
+        // "tauri and its plugins": the name the possessive refers to.
+        if (lastName) bases.add(lastName);
+      }
+    }
+    if (/^@?[a-z][\w.@/-]*$/.test(token) && !FAMILY_NOUNS.test(token) && !/^(?:and|or|its|their|all|every|to|the|bump|upgrade|update)$/.test(token)) {
+      lastName = token;
+    }
+  });
+  return [...bases];
+}
+
+/** True when `name` belongs to the family of `base`: base-*, base_*, @base/*, @base-apps/*. */
+export function inFamily(name: string, base: string): boolean {
+  const n = name.toLowerCase();
+  const b = base.toLowerCase();
+  if (n === b) return false;
+  if (b.startsWith("@")) return n.startsWith(`${b}/`);
+  return (
+    n.startsWith(`${b}-`) ||
+    n.startsWith(`${b}_`) ||
+    n.startsWith(`@${b}/`) ||
+    n.startsWith(`@${b}-`) // @tauri-apps/api, @tauri-apps/plugin-shell
+  );
+}
+
+/**
+ * The direct dependencies in the families the task names, other than the
+ * packages it names exactly. Only packages this project actually declares:
+ * a family is expanded against the lockfiles, never guessed. Measured
+ * 2026-10-07: "bump tauri and all tauri plugins" matched only `tauri`.
+ */
+export function detectFamilyPackages(
+  task: string,
+  files: string[],
+  deps: ResolvedDependency[],
+  exact: TaskPackage[],
+  limit = 25,
+): TaskPackage[] {
+  const bases = detectFamilyBases(task, files);
+  if (bases.length === 0) return [];
+  const taken = new Set(exact.map((p) => `${p.ecosystem}\0${p.name}`));
+  const groups = new Map<string, { base: string; copies: ResolvedDependency[] }>();
+  for (const dep of deps) {
+    if (!dep.name || !dep.isDirect) continue;
+    const key = `${dep.ecosystem}\0${dep.name}`;
+    if (taken.has(key)) continue;
+    const base = bases.find((b) => inFamily(dep.name, b));
+    if (!base) continue;
+    const group = groups.get(key) ?? { base, copies: [] };
+    group.copies.push(dep);
+    groups.set(key, group);
+  }
+  const out = [...groups.values()].map(({ base, copies }) => ({
+    name: copies[0].name,
+    ecosystem: copies[0].ecosystem,
+    installed: [...new Set(copies.map((d) => d.version).filter((v): v is string => Boolean(v)))],
+    direct: true,
+    dev: copies.every((d) => d.isDev),
+    requested_from: null,
+    requested_to: null,
+    family: base,
+  }));
+  out.sort((a, b) => a.ecosystem.localeCompare(b.ecosystem) || a.name.localeCompare(b.name));
+  return out.slice(0, limit);
+}
+
+/** True when the task asks for the newest release ("to latest", "newest major"). */
+export function wantsLatest(task: string): boolean {
+  return /\b(?:latest|newest|most recent)\b/i.test(task);
+}
+
+/** The caret line a version sits on: "2" for 2.12.1, "0.13" for 0.13.5. */
+export function caretLine(version: string | null): string | null {
+  const m = version ? /^v?(\d+)\.(\d+)/.exec(version) : null;
+  if (!m) return null;
+  return m[1] === "0" ? `0.${m[2]}` : m[1];
 }
 
 /** Major version of a version or a `7.x` / `v7` request; null when unreadable. */

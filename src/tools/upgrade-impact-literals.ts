@@ -91,7 +91,7 @@ export async function flagOldSyntax(
   const candidates = sections
     .flatMap((s) => s.entries)
     .filter((e) => e.kind === "breaking" || e.kind === "deprecation")
-    .map((entry) => ({ entry, shapes: oldSyntaxShapes(entry.text) }))
+    .map((entry) => ({ entry, shapes: [entry.text, ...(entry.details ?? [])].flatMap(oldSyntaxShapes) }))
     .filter((c) => c.shapes.length > 0);
   if (!root || candidates.length === 0 || files.length === 0) return { newlyTouching: 0, examples: [] };
 

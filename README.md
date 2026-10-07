@@ -122,6 +122,10 @@ Results are cached (24h for registry data, 1h for vulnerabilities, 30min for new
 
 **What's sent over the network:** package names and versions (the same data visible in your lockfile), and, only for `ecosystem_pulse`, the names of a few of your dependencies as search terms. No source code, no file paths, no personal data. The call-site scan of `upgrade_impact` runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls.
 
+**What's written to disk, and where:** only files the server owns, in its folder in your user data directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp` or `~/.local/share/4da-mcp`; `FOURDA_MCP_HOME` moves it): `cache.db` (registry, OSV and changelog responses; safe to delete) and `standalone.db` (without the desktop app: your project scan and the decisions, agent memory and feedback you record). Nothing is written inside your repository.
+
+When the 4DA desktop app is installed, the server reads the app's database (`4da.db`) through a **read-only** connection and never creates or alters anything in it: no tables, no columns, no cache. The only writes are rows in the four app-owned tables the tools exist to fill, so the app sees them: decisions (`decision_memory` -> `developer_decisions`), agent memory (`agent_memory`), and feedback (`record_feedback` -> `interactions` and `feedback`, which the app's calibration reads). Those go through a separate write connection that waits briefly for the app's lock. If your app version lacks the table or a column a record needs, the record goes to `standalone.db` instead and the response says so in `_meta`. (Before 6.1 the server also created a `live_cache` table inside the app's database; it now keeps that cache in `cache.db`.)
+
 > The one exception: if you *explicitly* configure an OpenAI embedding provider (`FOURDA_EMBED_PROVIDER=openai`) for semantic recall, the decision/memory text you store is sent to OpenAI to be embedded. The default — no embedding provider, or a local Ollama one — keeps everything on your machine, and `FOURDA_OFFLINE=true` overrides it regardless.
 
 **Ecosystems supported:** npm, crates.io (Rust), PyPI (Python), Go. `upgrade_impact`: npm and crates.io.
@@ -153,20 +157,20 @@ Results are cached (24h for registry data, 1h for vulnerabilities, 30min for new
 | `upgrade_impact` | What changes between the installed and a target version of one dependency: releases in between, changelog entries classified breaking / deprecation / security, the breaking ones that touch your code (symbols you import, and route or pattern syntax in your string literals, e.g. axum 0.8's `/:id` -> `/{id}`), the files that import it, advisories fixed. |
 | `vulnerability_scan` | Every installed copy in every lockfile matched against OSV.dev. Scope-adjusted severity, the fix version on your release line, where each version is pinned. Concise by default (one row per vulnerable package version, the 40 most severe, about 4k tokens on a 290-advisory project); `package` for one dependency; `response_format: "detailed"` for every advisory. |
 | `dependency_health` | Version freshness, deprecation (of the version you run) and vulnerability counts per dependency. |
-| `upgrade_planner` | The smallest version that fixes each vulnerability, majors flagged, transitive fixes waiting on upstream. `package` for a one-package plan. |
-| `dependency_check` | Call before adding a dependency or applying a bump. Verdict per item (`proceed` / `wait` / `review` / `avoid` / `unknown`) with evidence: advisories on the target, release age (holds releases under 3 days unless they fix an advisory you have), publish-trust drop, new install scripts, brand-new transitive dependencies, yanked or deprecated. npm and crates.io. |
+| `upgrade_planner` | The smallest version that fixes each vulnerability, majors flagged (a 0.x minor counts as a major), transitive fixes waiting on upstream. For one project: `project_path` (default: the project the server was started in; `"*"` for every project the desktop app tracks). `package` for a one-package plan. |
+| `dependency_check` | Call before adding a dependency or applying a bump. Verdict per item (`proceed` / `wait` / `review` / `avoid` / `unknown`) with evidence: advisories on the target, release age (holds releases under 3 days unless they fix an advisory you have), publish-trust drop, new install scripts, brand-new transitive dependencies, yanked or deprecated, and a breaking version range (a major, or a 0.x minor) is `review` with a pointer to `upgrade_impact`. npm and crates.io. |
 
 ### Intelligence
 
 | Tool | What it does |
 |------|-------------|
-| `what_should_i_know` | Pre-task briefing built from the task: the dependencies it names, their versions and confirmed vulnerabilities, majors crossed, your recorded decisions, and a delegation verdict only confirmed evidence can raise. |
+| `what_should_i_know` | Pre-task briefing built from the task: the dependencies it names (and the families it names: "all tauri plugins" adds the project's tauri-*, tauri-plugin-* and @tauri-apps/* packages; for "latest", whether each is already on the newest major), their versions and confirmed vulnerabilities, majors crossed, your recorded decisions, and a delegation verdict only confirmed evidence can raise. |
 | `ecosystem_pulse` | Hacker News headlines that name your dependencies, then your languages (labelled as such). Fetched only when called. |
 | `get_context` | Your tech stack, resolved dependency versions, interests, detected topics. |
 | `get_relevant_content`* | Scored content feed that passed the desktop app's relevance judge. |
 | `get_actionable_signals`* | Judge-accepted feed items the app classified (advisories, breaking changes), plus your live vulnerabilities. |
 | `knowledge_gaps`* | Dependencies with judge-accepted advisories or releases you have not looked at. |
-| `record_feedback`* | Save or dismiss items so 4DA can record explicit interaction history. |
+| `record_feedback`* | Save or dismiss items; recorded in the app's own feedback tables, which its calibration reads. |
 
 ### Decisions & Memory
 
@@ -253,6 +257,7 @@ npx @4da/mcp-server --version    # Print version
 |----------|-------------|---------|
 | `FOURDA_DB_PATH` | Path to 4DA's SQLite database | Auto-detected |
 | `FOURDA_OFFLINE` | Disable all network calls | `false` |
+| `FOURDA_MCP_HOME` | Folder for the files the server writes (`cache.db`, `standalone.db`) | Your user data folder + `4da-mcp` |
 | `MCP_AUTH_SECRET` | Shared secret for verifying Bearer tokens on `--http` (HMAC-SHA256). Falls back to `JWT_SECRET`. Unset means no token is accepted. | Unset |
 | `MCP_AUTH_REQUIRED` | Require auth on a **loopback** `--http` bind. Always required on a non-loopback bind. | `false` |
 | `MCP_ALLOWED_HOSTS` | Extra comma-separated hostnames accepted in `Host`/`Origin` (needed when binding to `0.0.0.0`). | localhost only |

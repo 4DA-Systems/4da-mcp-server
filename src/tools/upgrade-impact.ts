@@ -341,7 +341,7 @@ function cacheFor(db: FourDADatabase | null): LiveCache | null {
     }
     return cache;
   } catch {
-    return null; // a read-only or closed database: run uncached rather than fail
+    return null; // a closed database: run uncached rather than fail (a read-only one uses the server cache file)
   }
 }
 

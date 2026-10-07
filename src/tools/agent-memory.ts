@@ -7,6 +7,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { writeMeta, writerOf } from "../memory-store.js";
 import { rankRowsByRecall, type RecallField } from "./recall.js";
 import {
   getEmbeddingConfig,
@@ -211,8 +212,14 @@ export function executeAgentMemory(
 
       // --- Storage quota: max 1000 entries per agent ---
       const agentType = params.agent_type || "unknown";
+      // The app's own agent_memory table (separate write connection), or the
+      // server's store when the app's schema cannot hold the row.
+      const to = writerOf(db, "agent_memory", [
+        "session_id", "agent_type", "memory_type", "subject", "content", "context_tags", "expires_at",
+      ]);
       try {
-        const countRow = rawDb
+        // Counted where the row will go.
+        const countRow = (to.target === "server_store" ? to.raw : rawDb)
           .prepare(
             `SELECT COUNT(*) as cnt FROM agent_memory WHERE agent_type = ?`,
           )
@@ -230,7 +237,7 @@ export function executeAgentMemory(
       }
 
       try {
-        const stmt = rawDb.prepare(
+        const stmt = to.raw.prepare(
           `INSERT INTO agent_memory
              (session_id, agent_type, memory_type, subject, content, context_tags, expires_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -250,6 +257,7 @@ export function executeAgentMemory(
           success: true,
           id: result.lastInsertRowid,
           message: `Memory stored: ${params.subject}`,
+          ...writeMeta(to),
         };
       } catch (error) {
         return {

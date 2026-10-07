@@ -118,7 +118,7 @@ export function rangesContain(ranges: AdvisoryRangeEvent[][], installed: string)
  * An advisory naming your dependency is only a gap if you are actually
  * exposed: the live tool once graded three Hono CVEs `critical` on hono
  * 4.13.2 when all three are fixed in 4.12.34, a version this repo had already
- * pinned past via `pnpm.overrides`.
+ * pinned past via pnpm overrides.
  *
  * Conservative by construction: a missing or unreadable installed version
  * counts as AFFECTED. Never claim someone is safe on missing information.

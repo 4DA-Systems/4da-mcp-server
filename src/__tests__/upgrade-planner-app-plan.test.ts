@@ -122,11 +122,19 @@ function dbWith(name: string, snapshot: string | null, withStore = true): FourDA
   return db;
 }
 
+let priorProjectDir: string | undefined;
+
 beforeAll(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "4da-app-plan-"));
+  // These suites read the whole plan: the server's directory is not a project,
+  // so the default scope is every project (see the project_path suite below).
+  priorProjectDir = process.env.FOURDA_PROJECT_DIR;
+  process.env.FOURDA_PROJECT_DIR = root;
 });
 
 afterAll(() => {
+  if (priorProjectDir === undefined) delete process.env.FOURDA_PROJECT_DIR;
+  else process.env.FOURDA_PROJECT_DIR = priorProjectDir;
   for (const db of opened) db.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -263,5 +271,56 @@ describe("readAppPlan", () => {
       expect(read.snapshot.steps[0].title).toBeNull();
       expect(read.snapshot.steps[0].lines[0].target).toBe("6.28.1");
     }
+  });
+});
+
+/**
+ * 2026-10-07 eval: called from D:\4DA, the planner's top steps were for
+ * navcal, verax and 4da-ledger: the app's plan covers every project it
+ * tracks. It is narrowed to one project now.
+ */
+describe("upgrade_planner project_path", () => {
+  function scopedEnvelope(web: string, navcal: string) {
+    const env = envelope();
+    const steps = env.steps as Array<{ lines: Array<{ sites: Array<{ project: string }> }> }>;
+    steps[0].lines[0].sites[0].project = navcal.split(path.sep).join("/").toLowerCase();
+    steps[1].lines[0].sites[0].project = navcal.split(path.sep).join("/").toLowerCase();
+    steps[1].lines[0].sites[1].project = web.split(path.sep).join("/").toLowerCase();
+    steps[2].lines[0].sites[0].project = `${web.split(path.sep).join("/").toLowerCase()}/relay`;
+    return env;
+  }
+
+  it("defaults to the server's project and keeps only the lines and sites in it", async () => {
+    const web = path.join(root, "web");
+    const navcal = path.join(root, "navcal");
+    fs.mkdirSync(path.join(web, "relay"), { recursive: true });
+    fs.mkdirSync(navcal, { recursive: true });
+    fs.writeFileSync(path.join(web, "package.json"), "{}");
+    const db = dbWith("scoped", JSON.stringify(scopedEnvelope(web, navcal)));
+    process.env.FOURDA_PROJECT_DIR = web;
+    try {
+      const result = (await executeUpgradePlanner(db, {}, null)) as AppPlanResult;
+      expect(result.provenance.mode).toBe("app_plan");
+      expect(result.projectScope).toBe(path.resolve(web));
+      // undici only touches navcal; brace-expansion keeps its web site only; rsa sits under web/relay.
+      expect(result.steps.map((s) => s.package)).toEqual(["brace-expansion", "rsa"]);
+      expect(result.steps[0].lines[0].sites).toEqual([{ project: web.split(path.sep).join("/").toLowerCase(), direct: true, dev: false }]);
+      expect(result.otherProjectSteps).toBe(1);
+      expect(result.summary).toMatch(/1 step only touch(es)? other projects/);
+
+      const navcalOnly = (await executeUpgradePlanner(db, { project_path: navcal }, null)) as AppPlanResult;
+      expect(navcalOnly.steps.map((s) => s.package)).toEqual(["undici", "brace-expansion"]);
+
+      const all = (await executeUpgradePlanner(db, { project_path: "*" }, null)) as AppPlanResult;
+      expect(all.projectScope).toBeNull();
+      expect(all.steps).toHaveLength(3);
+    } finally {
+      process.env.FOURDA_PROJECT_DIR = root;
+    }
+  });
+
+  it("rejects a project_path that is not a directory", async () => {
+    const db = dbWith("scoped-bad", JSON.stringify(envelope()));
+    await expect(executeUpgradePlanner(db, { project_path: path.join(root, "nope") }, null)).rejects.toThrow(/not a directory/);
   });
 });

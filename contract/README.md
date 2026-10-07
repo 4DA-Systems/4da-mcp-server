@@ -1,7 +1,9 @@
 # App-schema contract
 
-The server reads (and in a few places writes) the database of the 4DA desktop
-app, `4da.db`. The app lives in another repository
+The server reads the database of the 4DA desktop app, `4da.db`, through a
+read-only connection, and adds rows to the four app-owned tables its tools
+exist to write (`developer_decisions`, `agent_memory`, `interactions`,
+`feedback`) through a separate one. It never creates or alters anything there. The app lives in another repository
 ([4DA-Systems/4DA](https://github.com/4DA-Systems/4DA)), so a migration there
 and a query here cannot see each other. This folder is where they meet.
 
@@ -32,9 +34,9 @@ and a query here cannot see each other. This folder is where they meet.
 1. Runs the test suite with SQL recording on. Among the suites,
    `src/__tests__/app-schema-contract.test.ts` loads the app schema, seeds a
    row into every table, and calls every tool through the real dispatcher.
-2. Applies what the server adds to the app's database itself (`live_cache`,
-   the `embedding` columns on `agent_memory` and `developer_decisions`), then
-   re-prepares every statement server code issued during the run. SQLite
+2. Applies the DDL the server runs on its own files (`live_cache` in its
+   `cache.db`, the `embedding` columns in its standalone store; since 6.1 it
+   never creates or alters anything in the app's database), then re-prepares every statement server code issued during the run. SQLite
    resolves every table and column at prepare time, so a dropped or renamed
    one fails here.
 3. Checks every `hasColumn()` probe. A probe that comes back false means a tool

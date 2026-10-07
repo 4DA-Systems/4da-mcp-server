@@ -80,10 +80,11 @@ jobs:
         run: pnpm run check
 
       # npm retired the audit endpoint pnpm <= 10 uses (HTTP 410, 2026-07-14);
-      # pnpm 11 speaks the bulk advisory endpoint. Audit only: installing with
-      # pnpm 11 would drop the overrides in package.json (see check-repo.mjs).
+      # pnpm 11 speaks the bulk advisory endpoint. It reads the overrides from
+      # pnpm-workspace.yaml (it ignores package.json's `pnpm` field, issue #9).
+      # 11.13.0 is deprecated upstream as broken; 11.13.1 is the audit pin.
       - name: Audit the lockfile (pnpm 11, high and above)
-        run: npx -y pnpm@11.13.0 audit --audit-level=high
+        run: npx -y pnpm@11.13.1 audit --audit-level=high
 
       - name: Package contents
         run: |
