@@ -19,6 +19,14 @@ const emptySettings = join(tmpdir(), "4da-test-empty-settings.json");
 writeFileSync(emptySettings, "{}");
 process.env.FOURDA_SETTINGS_PATH = emptySettings;
 
+// Every file the server writes (cache.db, and standalone.db as the memory
+// store beside the desktop app's read-only database) goes under FOURDA_MCP_HOME:
+// a per-worker temp directory, never the operator's real data directory.
+if (!process.env.FOURDA_MCP_HOME) {
+  const { mkdtempSync } = await import("node:fs");
+  process.env.FOURDA_MCP_HOME = mkdtempSync(join(tmpdir(), "4da-mcp-home-"));
+}
+
 // ---------------------------------------------------------------------------
 // App-schema contract recording (scripts/app-schema-contract.mjs).
 //

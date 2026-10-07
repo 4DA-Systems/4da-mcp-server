@@ -249,7 +249,9 @@ describe("version-resolver — import spellings resolve to the lockfile's canoni
 });
 
 describe("knowledge_gaps — version fallback and generic-word evidence", () => {
-  function makeGapsDb(): { db: FourDADatabase; dir: string } {
+  // The server opens an app database read-only, so fixtures are written through
+  // a separate writable connection (`seed`), closed with the server's handle.
+  function makeGapsDb(): { db: FourDADatabase; dir: string; seed: Database.Database } {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-gaps-"));
     const dbPath = path.join(dir, "test.db");
     const raw = new Database(dbPath);
@@ -268,14 +270,13 @@ describe("knowledge_gaps — version fallback and generic-word evidence", () => 
         package_name TEXT, affected_ranges TEXT, withdrawn_at TEXT
       );
     `);
-    raw.close();
-    return { db: new FourDADatabase(dbPath), dir };
+    return { db: new FourDADatabase(dbPath), dir, seed: raw };
   }
 
   it("resolves a null DB version from the lockfile set and downgrades a patched advisory", () => {
-    const { db, dir } = makeGapsDb();
+    const { db, dir, seed } = makeGapsDb();
     try {
-      const raw = db.getRawDb();
+      const raw = seed;
       raw.prepare(
         "INSERT INTO project_dependencies (package_name, version, project_path, language) VALUES ('tokio', NULL, 'd:/proj', 'rust')",
       ).run();
@@ -312,14 +313,15 @@ describe("knowledge_gaps — version fallback and generic-word evidence", () => 
       expect(critical).toBeUndefined();
     } finally {
       db.close();
+      seed.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("requires an ecosystem cue before an English-word dep counts a mention", () => {
-    const { db, dir } = makeGapsDb();
+    const { db, dir, seed } = makeGapsDb();
     try {
-      const raw = db.getRawDb();
+      const raw = seed;
       raw.prepare(
         "INSERT INTO project_dependencies (package_name, version, project_path, language) VALUES ('tower', '0.5.3', 'd:/proj', 'rust')",
       ).run();
@@ -342,14 +344,15 @@ describe("knowledge_gaps — version fallback and generic-word evidence", () => 
       expect(titles.some((t) => t.includes("0.5.4 released"))).toBe(true);
     } finally {
       db.close();
+      seed.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("excludes advisories published in the distant past from missed items", () => {
-    const { db, dir } = makeGapsDb();
+    const { db, dir, seed } = makeGapsDb();
     try {
-      const raw = db.getRawDb();
+      const raw = seed;
       raw.prepare(
         "INSERT INTO project_dependencies (package_name, version, project_path, language) VALUES ('hono', '4.13.2', 'd:/proj', 'javascript')",
       ).run();
@@ -364,6 +367,7 @@ describe("knowledge_gaps — version fallback and generic-word evidence", () => 
       expect(honoGap).toBeUndefined();
     } finally {
       db.close();
+      seed.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

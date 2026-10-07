@@ -122,6 +122,8 @@ Results are cached (24h for registry data, 1h for vulnerabilities, 30min for new
 
 **What's sent over the network:** package names and versions (the same data visible in your lockfile), and, only for `ecosystem_pulse`, the names of a few of your dependencies as search terms. No source code, no file paths, no personal data. The call-site scan of `upgrade_impact` runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls.
 
+**What's written to disk, and where:** only files the server owns, in its folder in your user data directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp` or `~/.local/share/4da-mcp`; `FOURDA_MCP_HOME` moves it): `cache.db` (registry, OSV and changelog responses; safe to delete) and `standalone.db` (your project scan in standalone mode, and the decisions, agent memory and feedback you record). Nothing is written inside your repository. When the 4DA desktop app is installed, the server opens the app's database (`4da.db`) **read-only** and never writes to it; what you record through the server goes to `standalone.db`, not into the app. (Before 6.1 the server created a `live_cache` table inside the app's database and wrote decisions, memory and feedback there; the app owns that file, so the server no longer touches it.)
+
 > The one exception: if you *explicitly* configure an OpenAI embedding provider (`FOURDA_EMBED_PROVIDER=openai`) for semantic recall, the decision/memory text you store is sent to OpenAI to be embedded. The default — no embedding provider, or a local Ollama one — keeps everything on your machine, and `FOURDA_OFFLINE=true` overrides it regardless.
 
 **Ecosystems supported:** npm, crates.io (Rust), PyPI (Python), Go. `upgrade_impact`: npm and crates.io.
@@ -166,7 +168,7 @@ Results are cached (24h for registry data, 1h for vulnerabilities, 30min for new
 | `get_relevant_content`* | Scored content feed that passed the desktop app's relevance judge. |
 | `get_actionable_signals`* | Judge-accepted feed items the app classified (advisories, breaking changes), plus your live vulnerabilities. |
 | `knowledge_gaps`* | Dependencies with judge-accepted advisories or releases you have not looked at. |
-| `record_feedback`* | Save or dismiss items so 4DA can record explicit interaction history. |
+| `record_feedback`* | Save or dismiss items. Recorded in the server's own store; the desktop app's database is read-only to the server. |
 
 ### Decisions & Memory
 
@@ -253,6 +255,7 @@ npx @4da/mcp-server --version    # Print version
 |----------|-------------|---------|
 | `FOURDA_DB_PATH` | Path to 4DA's SQLite database | Auto-detected |
 | `FOURDA_OFFLINE` | Disable all network calls | `false` |
+| `FOURDA_MCP_HOME` | Folder for the files the server writes (`cache.db`, `standalone.db`) | Your user data folder + `4da-mcp` |
 | `MCP_AUTH_SECRET` | Shared secret for verifying Bearer tokens on `--http` (HMAC-SHA256). Falls back to `JWT_SECRET`. Unset means no token is accepted. | Unset |
 | `MCP_AUTH_REQUIRED` | Require auth on a **loopback** `--http` bind. Always required on a non-loopback bind. | `false` |
 | `MCP_ALLOWED_HOSTS` | Extra comma-separated hostnames accepted in `Host`/`Origin` (needed when binding to `0.0.0.0`). | localhost only |

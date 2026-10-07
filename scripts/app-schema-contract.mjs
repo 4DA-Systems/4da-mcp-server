@@ -12,9 +12,10 @@
  *      (FOURDA_SQL_CORPUS, see src/test-setup.ts). The suite includes
  *      app-schema-contract.test.ts, which calls every tool against the app
  *      schema; the other suites reach code paths that need specific data.
- *   2. Loads the app schema into an empty database, applies the tables this
- *      server creates for itself in the app's database (live_cache, ...), then
- *      re-prepares every statement server code issued. Preparing is enough:
+ *   2. Loads the app schema into an empty database, applies the DDL this
+ *      server runs on its OWN files (live_cache in cache.db, the embedding
+ *      columns of its store; it never writes to the app's database, which it
+ *      opens read-only), then re-prepares every statement server code issued. Preparing is enough:
  *      SQLite resolves every table and column at prepare time.
  *   3. Checks every hasColumn() probe against the schema: a probe that comes
  *      back false is a tool quietly running in a degraded mode.
@@ -114,9 +115,11 @@ const { schemaVersion } = loadAppSchema(db, readFileSync(schemaPath, "utf8"));
 const failures = [];
 const where = (e) => `${e.file}:${e.line} (${e.fn})`;
 
-// What this server adds to the app's database for itself is applied first, as
-// it is at runtime: its own tables (CREATE ... IF NOT EXISTS, which never
-// replaces one of the app's) and the columns ensureColumn() adds to app tables
+// The DDL the server runs on its own files is applied first: the corpus does
+// not record which connection a statement ran on, and the memory tools issue
+// the same agent_memory/developer_decisions SQL against the server's store as
+// they once did against the app. Its own tables (CREATE ... IF NOT EXISTS,
+// which never replaces one of the app's) and the columns ensureColumn() adds
 // (agent_memory/developer_decisions `embedding`, `embedding_model`).
 const ddl = entries.filter(
   (e) => e.kind === "exec" && (/^\s*(--[^\n]*\n\s*)*CREATE\s/i.test(e.sql) || /^\s*ALTER TABLE \w+ ADD COLUMN /i.test(e.sql)),

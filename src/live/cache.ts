@@ -1,6 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type Database from "better-sqlite3";
+import fs from "node:fs";
+import path from "node:path";
+
+import Database from "better-sqlite3";
+
+import { serverCacheDbPath } from "../db.js";
+
+let serverCache: Database.Database | null = null;
+
+/**
+ * The server's own cache file (serverCacheDbPath(), `cache.db`), opened once
+ * per process. Falls back to an in-memory database when the file cannot be
+ * created (a read-only home directory): the server then runs uncached on disk
+ * rather than failing.
+ */
+export function getServerCacheDb(): Database.Database {
+  if (serverCache?.open) return serverCache;
+  const file = serverCacheDbPath();
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    serverCache = new Database(file);
+    serverCache.pragma("journal_mode = WAL");
+  } catch (error) {
+    console.error(
+      `[4da] cannot open the cache at ${file} (${error instanceof Error ? error.message : String(error)}); caching in memory for this session`,
+    );
+    serverCache = new Database(":memory:");
+  }
+  return serverCache;
+}
 
 interface CacheRow {
   cache_key: string;
@@ -10,11 +39,19 @@ interface CacheRow {
   expires_at: string;
 }
 
+/**
+ * Registry, OSV and changelog responses with a TTL.
+ *
+ * The cache never lives in the desktop app's database. A read-only connection
+ * (the app's `4da.db`, see FourDADatabase) is replaced by the server's own
+ * cache file; until 6.0.2 the server created a `live_cache` table inside the
+ * app's database and filled it.
+ */
 export class LiveCache {
   private db: Database.Database;
 
   constructor(db: Database.Database) {
-    this.db = db;
+    this.db = db.readonly ? getServerCacheDb() : db;
     this.ensureTable();
     this.purgeExpired();
   }

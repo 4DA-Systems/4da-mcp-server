@@ -2,8 +2,20 @@
 /**
  * Database module for 4DA MCP Server
  *
- * Read-only access to the 4DA SQLite database.
- * Only the record_feedback function performs writes.
+ * The desktop app's database (`4da.db`) is opened READ-ONLY
+ * (`{ readonly: true, fileMustExist: true }`): the app owns that file and its
+ * migrations, so this server never creates, alters or writes anything in it.
+ * Everything the server writes goes to files it owns, under serverDataDir():
+ *
+ * - `cache.db`: registry, OSV and changelog responses (LiveCache).
+ * - `standalone.db`: the standalone database when no app is installed, and,
+ *   when the app IS installed, the store for what agents record through this
+ *   server (decisions, agent memory, feedback) — see getMemoryStore().
+ *
+ * Until 6.0.2 the app's database was opened read-write: the server created a
+ * `live_cache` table in it (2,774 rows on one machine, 2026-10-07), added
+ * `embedding` columns to two app tables when an embedding provider was set, and
+ * wrote decisions, agent memory and feedback into app tables.
  */
 
 import path from "path";
@@ -120,6 +132,17 @@ export function desktopAppDbPaths(
  * in, so agent memory and decisions did not follow the user between projects.
  */
 export function standaloneDbPath(): string {
+  return path.join(serverDataDir(), "standalone.db");
+}
+
+/**
+ * The directory holding every file this server writes: a per-user data
+ * directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp`,
+ * `$XDG_DATA_HOME/4da-mcp`). FOURDA_MCP_HOME overrides it (tests use a temp dir).
+ */
+export function serverDataDir(): string {
+  const override = process.env.FOURDA_MCP_HOME?.trim();
+  if (override) return override;
   const home = os.homedir();
   const base =
     process.platform === "win32"
@@ -127,7 +150,12 @@ export function standaloneDbPath(): string {
       : process.platform === "darwin"
         ? path.join(home, "Library", "Application Support")
         : process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
-  return path.join(base, "4da-mcp", "standalone.db");
+  return path.join(base, "4da-mcp");
+}
+
+/** The server's response cache (registry, OSV, changelogs). Disposable: deleting it costs refetches only. */
+export function serverCacheDbPath(): string {
+  return path.join(serverDataDir(), "cache.db");
 }
 
 /**
@@ -337,9 +365,25 @@ export class FourDADatabase {
     }
 
     let opened: BetterSqlite3.Database | null = null;
+    let standalone = isNew;
     try {
-      opened = new Database(absolutePath, { readonly: false }); // Need write for feedback
-      opened.pragma("journal_mode = WAL");
+      if (isNew) {
+        opened = new Database(absolutePath, { readonly: false });
+        opened.pragma("journal_mode = WAL");
+      } else {
+        // An existing file is opened read-only first. Reading the schema here
+        // makes a damaged or non-SQLite file fail now, with the message below.
+        opened = new Database(absolutePath, { readonly: true, fileMustExist: true });
+        opened.prepare("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").all();
+        standalone = detectStandalone(opened);
+        if (standalone) {
+          // This server's own database: reopen it writable.
+          opened.close();
+          opened = null;
+          opened = new Database(absolutePath, { readonly: false, fileMustExist: true });
+          opened.pragma("journal_mode = WAL");
+        }
+      }
     } catch (error) {
       // Close the handle a failed pragma leaves open: every tool call retries
       // the open, and on Windows each leaked handle also keeps the file locked
@@ -359,26 +403,23 @@ export class FourDADatabase {
     }
     this.db = opened;
     this.dbPath = absolutePath;
+    this._isStandalone = standalone;
+
+    // The desktop app's database: read-only, and nothing below runs against it.
+    if (!standalone) return;
 
     // Standalone mode: create schema for a brand-new database, and recognise
     // an existing standalone database as one on every later session.
-    if (isNew) {
-      this.createMinimalSchema();
-      this._isStandalone = true;
-    } else {
-      this._isStandalone = detectStandalone(this.db);
-    }
-    if (this._isStandalone) {
-      this.db.exec(`CREATE TABLE IF NOT EXISTS ${STANDALONE_MARKER} (created_at TEXT DEFAULT (datetime('now')))`);
-    }
+    if (isNew) this.createMinimalSchema();
+    this.db.exec(`CREATE TABLE IF NOT EXISTS ${STANDALONE_MARKER} (created_at TEXT DEFAULT (datetime('now')))`);
 
     // Schema upgrade for standalone databases created before `is_direct` was
     // added to the minimal schema: the full-DB init branch queries that column
     // (DEPENDENCY_GROUP_QUERY), and without it session 2+ of a standalone
     // install throws, gets caught, and silently disables vulnerability_scan /
     // dependency_health / upgrade_planner. Scanner-inserted manifest deps are
-    // direct by definition, so DEFAULT 1 backfills correctly. The desktop
-    // app's database already has the column — no-op there.
+    // direct by definition, so DEFAULT 1 backfills correctly. Standalone
+    // databases only: the desktop app's database is never altered.
     try {
       const hasDepsTable = this.db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_dependencies'")
@@ -399,6 +440,37 @@ export class FourDADatabase {
    */
   get isStandalone(): boolean {
     return this._isStandalone;
+  }
+
+  /** True for the desktop app's database, which this server only ever reads. */
+  get isReadOnly(): boolean {
+    return this.db.readonly;
+  }
+
+  private memoryStore: FourDADatabase | null = null;
+
+  /**
+   * Where what agents record through this server is written: decisions
+   * (decision_memory), agent memory (agent_memory), feedback (record_feedback)
+   * and the embeddings cached for semantic recall. A standalone database is
+   * its own store. With the desktop app's database, which is read-only here,
+   * it is this server's standalone database (standaloneDbPath()), so the
+   * record follows the user whether or not the app is installed.
+   */
+  getMemoryStore(): FourDADatabase {
+    if (!this.isReadOnly) return this;
+    if (!this.memoryStore) {
+      const storePath = standaloneDbPath();
+      if (path.resolve(storePath) === path.resolve(this.dbPath)) {
+        throw new Error(`The server's store ${storePath} is open read-only; it cannot record.`);
+      }
+      const store = new FourDADatabase(storePath);
+      // Rows here reference the app's items and decisions by id; those rows
+      // live in the other file, so foreign keys cannot be enforced here.
+      store.db.pragma("foreign_keys = OFF");
+      this.memoryStore = store;
+    }
+    return this.memoryStore;
   }
 
   /**
@@ -436,7 +508,7 @@ export class FourDADatabase {
 
     let testDb: BetterSqlite3.Database | null = null;
     try {
-      testDb = new Database(absolutePath, { readonly: true });
+      testDb = new Database(absolutePath, { readonly: true, fileMustExist: true });
 
       // Deep, opt-in integrity check (slow: full-database scan). Only on --doctor.
       if (opts?.deep) {
@@ -493,6 +565,8 @@ export class FourDADatabase {
    * Close the database connection
    */
   close(): void {
+    this.memoryStore?.close();
+    this.memoryStore = null;
     this.db.close();
   }
 
@@ -1078,6 +1152,9 @@ export class FourDADatabase {
    */
   ensureColumn(table: string, column: string, type: string): void {
     if (this.hasColumn(table, column)) return;
+    if (this.isReadOnly) {
+      throw new Error(`${this.dbPath} is the desktop app's database, which this server never alters (${table}.${column}).`);
+    }
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
@@ -1492,28 +1569,33 @@ export class FourDADatabase {
     const label = relevanceLabel[action];
 
     try {
-      if (label !== undefined) this.ensureFeedbackTable();
-      const insertInteraction = this.db.prepare(`
+      // The desktop app's database is read-only here: the record goes to this
+      // server's own store (getMemoryStore()), never into the app's tables.
+      const store = this.getMemoryStore();
+      const target = store.db;
+      if (label !== undefined) store.ensureFeedbackTable();
+      const insertInteraction = target.prepare(`
         INSERT INTO interactions (item_id, action_type, item_source, signal_strength, timestamp)
         VALUES (?, ?, ?, ?, datetime('now'))
       `);
-      const write = this.db.transaction(() => {
+      const write = target.transaction(() => {
         const r = insertInteraction.run(itemId, action, row.source_type, signalStrength[action]);
         if (label !== undefined) {
-          this.db
+          target
             .prepare(`INSERT INTO feedback (source_item_id, relevant) VALUES (?, ?)`)
             .run(itemId, label);
         }
         return r;
       });
       const result = write();
+      const where = store === this ? "" : ` in this server's store (${store.dbPath}); the desktop app's database is read-only to this server`;
 
       return {
         success: true,
         message:
-          label === undefined
+          (label === undefined
             ? `Recorded ${action} feedback for item ${itemId}`
-            : `Recorded ${action} feedback for item ${itemId} (relevance label: ${label === 1 ? "relevant" : "not relevant"})`,
+            : `Recorded ${action} feedback for item ${itemId} (relevance label: ${label === 1 ? "relevant" : "not relevant"})`) + where,
         interaction_id: result.lastInsertRowid as number,
         relevance_label: label === undefined ? null : label === 1,
       };

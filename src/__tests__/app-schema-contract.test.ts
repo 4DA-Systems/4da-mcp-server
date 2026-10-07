@@ -3,7 +3,7 @@
  * App-schema contract: every tool, run against the desktop app's REAL schema.
  *
  * The desktop app (github.com/4DA-Systems/4DA) owns `4da.db`; this server
- * reads about 30 of its tables and writes a few. The two live in different
+ * reads about 30 of its tables and writes none (read-only). The two live in different
  * repositories, so neither one's tests can see the other's changes. The app
  * publishes its schema as `src-tauri/contract/app-schema.sql`, generated from
  * its migrations and checked in its CI; `contract/app-schema.sql` here is a
@@ -20,6 +20,7 @@
  * uses that to test a migration before it merges).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -138,9 +139,11 @@ describe.skipIf(!fs.existsSync(SCHEMA_PATH))("app-schema contract", () => {
   const missingProbes = new Map<string, number>();
   const restore: (() => void)[] = [];
   let priorOffline: string | undefined;
+  let appFile: string;
+  let appSha: string;
 
   beforeAll(() => {
-    // Live tools must reach their database work (the live_cache table, the
+    // Live tools must reach their database work (the cache, the
     // dependency groups), so they run ONLINE against a network that refuses
     // every request at once, instead of FOURDA_OFFLINE, which returns early.
     priorOffline = process.env.FOURDA_OFFLINE;
@@ -191,6 +194,8 @@ describe.skipIf(!fs.existsSync(SCHEMA_PATH))("app-schema contract", () => {
       dbProto.hasColumn = hasColumn;
     });
 
+    appFile = file;
+    appSha = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
     db = new FourDADatabase(file);
     const priorLive = getLiveIntelligence();
     setLiveIntelligence(new LiveIntelligence(db.getRawDb()));
@@ -229,6 +234,14 @@ describe.skipIf(!fs.existsSync(SCHEMA_PATH))("app-schema contract", () => {
   it("finds every column the server probes for", () => {
     const unexpected = [...missingProbes.keys()].filter((k) => !(k in EXPECTED_MISSING_COLUMNS));
     expect(unexpected, "hasColumn() found these missing from the app schema").toEqual([]);
+  });
+
+  it("leaves the app database byte-for-byte unchanged after every tool ran", () => {
+    // The app owns 4da.db: the server opens it read-only and writes its cache,
+    // decisions, agent memory and feedback to its own files (FOURDA_MCP_HOME).
+    expect(db.isReadOnly).toBe(true);
+    expect(createHash("sha256").update(fs.readFileSync(appFile)).digest("hex")).toBe(appSha);
+    expect(fs.existsSync(appFile + "-wal")).toBe(false);
   });
 
   it("keeps the expected-missing list honest", () => {

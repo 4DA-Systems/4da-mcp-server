@@ -7,6 +7,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { memoryStoreOf } from "../memory-store.js";
 import { executeCheckDecisionAlignment } from "./decision-enforcement.js";
 
 // ============================================================================
@@ -191,9 +192,11 @@ function parseDecisionRow(row: DecisionRow) {
 // ============================================================================
 
 export function executeDecisionMemory(
-  db: FourDADatabase,
+  appDb: FourDADatabase,
   params: DecisionMemoryParams
 ): object | Promise<object> {
+  // Never the desktop app's database: it is read-only to this server.
+  const db = memoryStoreOf(appDb);
   const rawDb = db.getRawDb();
 
   switch (params.action) {

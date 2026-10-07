@@ -367,8 +367,13 @@ describe("standalone schema compatibility (is_direct regression)", () => {
   it("legacy 5.0.2 standalone DB (no is_direct) is upgraded on open and the query succeeds", async () => {
     await withTmpDb("standalone-legacy", (tmpPath) => {
       // Session 1 under 5.0.2: minimal schema WITHOUT is_direct.
+      // Every standalone schema since the first carried schema_version = 1,
+      // which is how a pre-marker standalone database is recognised (an
+      // unrecognised one is treated as the desktop app's and opened read-only).
       const legacy = new Database(tmpPath);
       legacy.exec(`
+        CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+        INSERT INTO schema_version (version) VALUES (1);
         CREATE TABLE project_dependencies (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           project_path TEXT NOT NULL,

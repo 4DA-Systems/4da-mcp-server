@@ -7,6 +7,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { memoryStoreOf } from "../memory-store.js";
 import { rankRowsByRecall, type RecallField } from "./recall.js";
 import {
   getEmbeddingConfig,
@@ -187,9 +188,11 @@ function parseStringList(json: string | null): string[] {
 // ============================================================================
 
 export function executeAgentMemory(
-  db: FourDADatabase,
+  appDb: FourDADatabase,
   params: AgentMemoryParams,
 ): object | Promise<object> {
+  // Never the desktop app's database: it is read-only to this server.
+  const db = memoryStoreOf(appDb);
   const rawDb = db.getRawDb();
 
   switch (params.action) {

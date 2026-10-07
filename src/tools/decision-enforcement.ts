@@ -15,6 +15,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { memoryStoreOf } from "../memory-store.js";
 import { matchesRecallQuery } from "./recall.js";
 import { getEmbeddingConfig } from "../embeddings.js";
 import {
@@ -295,9 +296,11 @@ function assembleAlignment(
 // ============================================================================
 
 export function executeCheckDecisionAlignment(
-  db: FourDADatabase,
+  appDb: FourDADatabase,
   params: CheckDecisionAlignmentParams,
 ): AlignmentResult | Promise<AlignmentResult> {
+  // Decisions recorded through this server live in its own store.
+  const db = memoryStoreOf(appDb);
   const rawDb = db.getRawDb();
 
   let candidates: DecisionRow[];

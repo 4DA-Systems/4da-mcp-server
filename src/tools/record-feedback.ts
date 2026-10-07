@@ -21,7 +21,7 @@ Feedback actions:
 - "dismiss": User dismissed the item
 - "mark_irrelevant": User said the item is not relevant (also records a relevance label)
 
-Only "save" and "mark_irrelevant" are relevance labels; they are what 4DA's accuracy measurement reads. Use them only when the user actually says whether the item matters to them. This does not train content preferences.`,
+Only "save" and "mark_irrelevant" are relevance labels. Use them only when the user actually says whether the item matters to them. This does not train content preferences. Feedback is kept in this server's own store: the 4DA desktop app's database is read-only to this server.`,
   inputSchema: {
     type: "object" as const,
     properties: {
