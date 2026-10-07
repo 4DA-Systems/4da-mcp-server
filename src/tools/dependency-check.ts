@@ -77,7 +77,7 @@ export const dependencyCheckTool = {
     "- install_script_added (npm): `to` runs preinstall/install/postinstall and `from` did not -> review. For a new dependency, information only.",
     "- new_dependencies: runtime dependencies added since the baseline, each with its first-publish age. Any under 30 days old, or no longer on the registry -> review.",
     "- yanked_or_deprecated: `to` yanked, unpublished or deprecated -> avoid.",
-    "- upgrade_type: patch | minor | major (a 0.x minor counts as major) | downgrade | new_dependency. Information only.",
+    "- upgrade_type: patch | minor | major (a 0.x minor counts as major) | downgrade | new_dependency. major (a breaking version range) -> review: call upgrade_impact for what it changes. The others are information only.",
     "",
     "Verdict precedence: avoid > review > unknown > wait > proceed. `unknown` means a registry or OSV.dev lookup failed, or the package is not on the public registry (private package, or a misspelled/hallucinated name); it is never a silent proceed. Apply only `proceed` items; report the others with their evidence. For WHAT the bump changes in your code, call upgrade_impact.",
     "",

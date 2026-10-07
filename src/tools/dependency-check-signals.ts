@@ -281,11 +281,26 @@ export function withdrawnSignal(item: CheckItem, to: ReleaseRecord): Signal {
   return { id: "yanked_or_deprecated", value: null, effect: "proceed", evidence: `${item.to} is neither yanked nor deprecated.` };
 }
 
+/**
+ * The bump's semver class. A breaking range (a major, or below 1.0 a minor or
+ * 0.0.x patch) is `review`: the supply-chain signals say nothing about whether
+ * the project's code survives it. Until 6.0.2 this was information only, so
+ * vitest 3 -> 5, reqwest 0.12 -> 0.13 and stripe 22 -> 23 all came back
+ * "proceed" and the summary told the agent to apply them (2026-10-07 eval).
+ */
 export function upgradeTypeSignal(item: CheckItem): Signal {
   const kind = upgradeType(item.from, item.to);
   const text = item.from ? `${item.from} -> ${item.to}: ${kind}` : `new dependency at ${item.to}`;
-  const zeroX = kind === "major" && /^0\./.test(item.from ?? "") ? " (0.x: a minor bump is breaking)" : "";
-  return { id: "upgrade_type", value: kind, evidence: `${text}${zeroX}.`, effect: "info" };
+  if (kind === "major") {
+    const zeroX = /^0\./.test(item.from ?? "") ? " (below 1.0 a minor bump is a major one)" : "";
+    return {
+      id: "upgrade_type",
+      value: kind,
+      evidence: `${text}${zeroX}: breaking version range, run upgrade_impact to see what changes for this project.`,
+      effect: "review",
+    };
+  }
+  return { id: "upgrade_type", value: kind, evidence: `${text}.`, effect: "info" };
 }
 
 export function upgradeType(from: string | undefined, to: string): "patch" | "minor" | "major" | "downgrade" | "none" | "new_dependency" | "unknown" {

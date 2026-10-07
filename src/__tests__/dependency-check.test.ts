@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
-import { upgradeType } from "../tools/dependency-check-signals.js";
+import { decide, upgradeType, upgradeTypeSignal } from "../tools/dependency-check-signals.js";
 import type { FourDADatabase } from "../db.js";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "dependency-check");
@@ -364,5 +364,45 @@ describe("upgrade_type", () => {
     expect(upgradeType("0.3.1", "0.3.2")).toBe("patch");
     expect(upgradeType("1.2.3", "1.2.0")).toBe("downgrade");
     expect(upgradeType(undefined, "1.0.0")).toBe("new_dependency");
+  });
+});
+
+/**
+ * 2026-10-07 eval: vitest 3 -> 5, reqwest 0.12 -> 0.13 and stripe 22 -> 23 all
+ * came back "proceed", and the summary says to apply only proceed items. The
+ * supply-chain signals cannot tell whether a breaking range is safe.
+ */
+describe("a breaking version range is review, not proceed", () => {
+  it.each([
+    ["3.2.4", "5.0.3", ""],
+    ["0.12.28", "0.13.5", " (below 1.0 a minor bump is a major one)"],
+    ["22.3.0", "23.0.0", ""],
+  ])("%s -> %s", (from, to, zeroX) => {
+    const s = upgradeTypeSignal({ ecosystem: "npm", package: "x", from, to });
+    expect(s.effect).toBe("review");
+    expect(s.evidence).toBe(`${from} -> ${to}: major${zeroX}: breaking version range, run upgrade_impact to see what changes for this project.`);
+    const clean = [
+      { id: "advisories", value: null, evidence: "none", effect: "proceed" as const },
+      { id: "release_age", value: null, evidence: "old enough", effect: "proceed" as const },
+    ];
+    const { verdict, reason } = decide([...clean, s]);
+    expect(verdict).toBe("review");
+    expect(reason).toContain("breaking version range, run upgrade_impact");
+  });
+
+  it("leaves patch and minor bumps to the other signals", () => {
+    expect(upgradeTypeSignal({ ecosystem: "npm", package: "x", from: "1.2.3", to: "1.3.0" }).effect).toBe("info");
+    expect(upgradeTypeSignal({ ecosystem: "npm", package: "x", from: "0.3.1", to: "0.3.2" }).effect).toBe("info");
+    expect(upgradeTypeSignal({ ecosystem: "npm", package: "x", to: "1.0.0" }).effect).toBe("info");
+  });
+
+  it("returns review end to end for a clean major bump, keeping the supply-chain signals", async () => {
+    const out = await check([{ ecosystem: "crates.io", package: "fixture-crate", from: "1.9.0", to: "2.0.0" }]);
+    const r = out.results[0];
+    expect(r.verdict).toBe("review");
+    expect(signal(r, "upgrade_type")).toMatchObject({ value: "major", effect: "review" });
+    expect(signal(r, "advisories")).toBeDefined();
+    expect(signal(r, "release_age")).toBeDefined();
+    expect(r.reason).toContain("run upgrade_impact");
   });
 });

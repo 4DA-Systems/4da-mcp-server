@@ -156,7 +156,7 @@ Results are cached (24h for registry data, 1h for vulnerabilities, 30min for new
 | `vulnerability_scan` | Every installed copy in every lockfile matched against OSV.dev. Scope-adjusted severity, the fix version on your release line, where each version is pinned. Concise by default (one row per vulnerable package version, the 40 most severe, about 4k tokens on a 290-advisory project); `package` for one dependency; `response_format: "detailed"` for every advisory. |
 | `dependency_health` | Version freshness, deprecation (of the version you run) and vulnerability counts per dependency. |
 | `upgrade_planner` | The smallest version that fixes each vulnerability, majors flagged, transitive fixes waiting on upstream. `package` for a one-package plan. |
-| `dependency_check` | Call before adding a dependency or applying a bump. Verdict per item (`proceed` / `wait` / `review` / `avoid` / `unknown`) with evidence: advisories on the target, release age (holds releases under 3 days unless they fix an advisory you have), publish-trust drop, new install scripts, brand-new transitive dependencies, yanked or deprecated. npm and crates.io. |
+| `dependency_check` | Call before adding a dependency or applying a bump. Verdict per item (`proceed` / `wait` / `review` / `avoid` / `unknown`) with evidence: advisories on the target, release age (holds releases under 3 days unless they fix an advisory you have), publish-trust drop, new install scripts, brand-new transitive dependencies, yanked or deprecated, and a breaking version range (a major, or a 0.x minor) is `review` with a pointer to `upgrade_impact`. npm and crates.io. |
 
 ### Intelligence
 
