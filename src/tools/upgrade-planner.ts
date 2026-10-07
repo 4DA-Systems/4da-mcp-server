@@ -293,7 +293,13 @@ async function executeStandalonePlanner(
     // Check version distance
     if (dep.versionsBehind) {
       const d = dep.versionsBehind;
-      if (d.label === "major") {
+      if (d.label === "major" && d.major === 0) {
+        // A 0.x bump: breaking under caret rules, though the major number is unchanged.
+        const n = d.minor > 0 ? d.minor : d.patch;
+        const unit = d.minor > 0 ? "minor version" : "patch";
+        reasons.push(`${n} 0.x ${unit}${n !== 1 ? (unit === "patch" ? "es" : "s") : ""} behind (breaking: below 1.0 a ${unit === "patch" ? "0.0.x patch" : "minor"} bump is a major one)`);
+        if (risk === "low") risk = "medium";
+      } else if (d.label === "major") {
         reasons.push(`${d.major} major version${d.major !== 1 ? "s" : ""} behind`);
         if (risk === "low") risk = "medium";
       } else if (d.label === "minor") {

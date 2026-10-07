@@ -171,6 +171,8 @@ export function upgradeType(from: string, to: string): UpgradeType {
   if (b.prerelease.length > 0) return "prerelease";
   if (a.major !== b.major) return "major";
   if (a.major === 0 && a.minor !== b.minor) return "major";
+  // ^0.0.3 admits only 0.0.3: any 0.0.x change is breaking (dependency_health and dependency_check agree).
+  if (a.major === 0 && a.minor === 0 && a.patch !== b.patch) return "major";
   if (a.minor !== b.minor) return "minor";
   return "patch";
 }

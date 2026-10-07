@@ -31,6 +31,12 @@ export function getServerCacheDb(): Database.Database {
   return serverCache;
 }
 
+/** Close the shared cache connection (tests; the next getServerCacheDb() reopens it). */
+export function closeServerCacheDb(): void {
+  if (serverCache?.open) serverCache.close();
+  serverCache = null;
+}
+
 interface CacheRow {
   cache_key: string;
   data: string;
