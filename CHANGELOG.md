@@ -235,6 +235,18 @@ project re-scanned with osv-scanner.
   and re-scanning with osv-scanner: 104 of 104 steps cleared their
   advisories (proshop-mern npm 45, taxonomy pnpm 21, chatgpt-tauri pnpm and
   Cargo 26, nushell Cargo 12).
+- **`vulnerability_scan` and `what_should_i_know` run the same check** on
+  the targets they recommend. "Upgrade openssl 0.10.38 → 0.10.79" is now
+  "→ 0.10.80 (... 0.10.79, the highest per-advisory fix, is itself affected
+  by GHSA-phqj-4mhp-q6mq)". Concise rows carry `fix_checked`; detailed
+  output adds `fix_targets` per vulnerable package version, while each
+  advisory row keeps its own `fixed_version`. The check is cached and
+  bounded (5 s per call, most severe first); what it could not reach in time
+  says `installed_advisories_only`. On nushell, cold: 33 of 39 package
+  versions checked in the first call.
+- The test suite is offline by construction: `fetch` throws unless a test
+  stubs it (`FOURDA_TEST_NETWORK=1` lifts that), so no assertion can depend
+  on live OSV or registry data.
 - Each vulnerable step says how its target was checked: `fixPathChecked`
   is `all_advisories`, or `installed_advisories_only` when OSV or the
   registry did not answer (offline, or past the 25 s budget), and the

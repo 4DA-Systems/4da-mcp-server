@@ -279,6 +279,55 @@ export async function cleanFixTarget(
   return smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published });
 }
 
+/**
+ * Verified targets for many installed copies at once, within a time budget:
+ * the copies that could not be checked in time (or offline) are simply
+ * absent from the result, and the caller says so. Keyed by `key`.
+ */
+export async function verifyFixTargets(
+  sources: FixPathSources | null,
+  items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[] }>,
+  budgetMs: number,
+  concurrency = 12,
+): Promise<Map<string, CleanTarget>> {
+  const out = new Map<string, CleanTarget>();
+  const todo = items.filter((i) => i.fixes.length > 0);
+  if (!sources || todo.length === 0) return out;
+  const deadline = Date.now() + budgetMs;
+  let next = 0;
+  const worker = async () => {
+    while (next < todo.length && Date.now() < deadline) {
+      const item = todo[next++];
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+      });
+      try {
+        const clean = await Promise.race([cleanFixTarget(sources, item.ecosystem, item.name, item.fixes).catch(() => null), late]);
+        if (clean) out.set(item.key, clean);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, todo.length) }, worker));
+  return out;
+}
+
+/** One clause for a target that is not the highest per-advisory fix, or null when it is. */
+export function targetNote(clean: CleanTarget): string | null {
+  const parts: string[] = [];
+  if (clean.target && clean.target !== clean.floor) {
+    parts.push(
+      `${clean.target} is the smallest version clear of every advisory a release fixes; ${clean.floor}, the highest per-advisory fix, ${clean.floorAffectedBy.length > 0 ? `is itself affected by ${clean.floorAffectedBy.join(", ")}` : "is not a published release"}`,
+    );
+  }
+  if (clean.target && clean.stillAffectedBy.length > 0) {
+    parts.push(`${clean.stillAffectedBy.join(", ")} also affect${clean.stillAffectedBy.length === 1 ? "s" : ""} it and every newer release (no fix published)`);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 export interface RefreshVerdict {
   /** True when every parent's requirement already admits a clean version. */
   refreshFixes: boolean;

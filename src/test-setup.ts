@@ -129,3 +129,12 @@ if (process.env.FOURDA_SQL_CORPUS) {
     };
   }
 }
+
+// The suite is offline: a test that needs the network stubs `fetch` itself
+// (vi.stubGlobal). Anything else reaching a real host would make results
+// depend on live OSV and registry data, so it fails loudly instead.
+if (process.env.FOURDA_TEST_NETWORK !== "1") {
+  globalThis.fetch = (async (input: unknown) => {
+    throw new Error(`network disabled in tests (fetch ${String(input)}); stub fetch or set FOURDA_TEST_NETWORK=1`);
+  }) as typeof fetch;
+}

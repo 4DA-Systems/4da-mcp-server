@@ -26,6 +26,7 @@ import type { VulnerabilityScanResult } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { maxVersion } from "../live/version-compare.js";
+import { targetNote, verifyFixTargets } from "../live/fix-paths.js";
 import { installDriftAdvisories } from "./install-drift-notes.js";
 import { getLiveIntelligence } from "../live-singleton.js";
 import { createRelevanceScorer } from "./recall.js";
@@ -43,7 +44,7 @@ import {
 } from "./briefing-task-scope.js";
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
-import type { ResolvedDependency } from "../live/types.js";
+import type { OsvEcosystem, ResolvedDependency } from "../live/types.js";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import {
   getRelevantWisdom,
@@ -174,8 +175,12 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
       | "getVulnerabilities"
       | "getHeadlines"
       | "fetchRegistryHealth"
+      | "getFixPathSources"
     >
   >;
+
+/** How long a briefing spends checking its upgrade targets against every advisory (cached). */
+const TARGET_CHECK_BUDGET_MS = 5_000;
 
 /**
  * How long a briefing waits for the startup vulnerability scan. OSV's batch
@@ -294,13 +299,29 @@ export async function executeWhatShouldIKnow(
   // One row per task package (the per-advisory detail is in task_dependencies;
   // listing every advisory twice doubled the briefing).
   const advisories: Advisory[] = [];
+  // The highest per-advisory fix can itself be affected by another advisory
+  // (openssl 0.10.79): check each target against all of the package's.
+  const verified = await verifyFixTargets(
+    liveIntel?.getFixPathSources?.() ?? null,
+    taskDependencies
+      .filter((d) => d.vulnerabilities.some((v) => v.fixed_version))
+      .map((d) => ({
+        key: `${d.ecosystem}\0${d.package}`,
+        ecosystem: d.ecosystem as OsvEcosystem,
+        name: d.package,
+        fixes: d.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f)),
+      })),
+    TARGET_CHECK_BUDGET_MS,
+  );
   for (const dep of taskDependencies) {
     if (dep.vulnerabilities.length === 0) continue;
     const rank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, unknown: 0 };
     const top = dep.vulnerabilities.reduce((a, b) => (rank[b.severity] > rank[a.severity] ? b : a));
     const fixes = dep.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f));
     const unfixed = dep.vulnerabilities.length - fixes.length;
-    const smallest = fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null;
+    const clean = verified.get(`${dep.ecosystem}\0${dep.package}`);
+    const smallest = clean ? clean.target : fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null;
+    const note = clean ? targetNote(clean) : null;
     const n = dep.vulnerabilities.length;
     advisories.push({
       title: `${dep.package} ${dep.installed.join("/")}: ${n} confirmed vulnerabilit${n !== 1 ? "ies" : "y"}, highest ${top.severity}`,
@@ -308,10 +329,12 @@ export async function executeWhatShouldIKnow(
       priority: top.severity,
       action:
         smallest && unfixed === 0
-          ? `Upgrade ${dep.package} to ${smallest} (the smallest version that fixes all ${n})`
+          ? `Upgrade ${dep.package} to ${smallest} (the smallest version that fixes all ${n}${note ? `; ${note}` : ""})`
           : smallest
             ? `Upgrade ${dep.package} to ${smallest} fixes ${fixes.length}; Review ${dep.package}: ${unfixed} have no fixed release`
-            : `Review ${dep.package}: no fixed release published`,
+            : clean && fixes.length > 0
+              ? `Review ${dep.package}: no published version clears every advisory (${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")})`
+              : `Review ${dep.package}: no fixed release published`,
       url: null,
       scope: "task",
       version_confirmed: true,
