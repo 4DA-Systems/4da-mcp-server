@@ -24,6 +24,9 @@ export function getServerCacheDb(): SqliteDatabase | null {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     serverCache = openDatabase(file);
     serverCache.pragma("journal_mode = WAL");
+    // A cache, not a record: in WAL mode NORMAL never corrupts the file, and
+    // a crash can only lose the last few writes, which are refetched.
+    serverCache.pragma("synchronous = NORMAL");
   } catch (error) {
     console.error(
       `[4da] cannot open the cache at ${file} (${error instanceof Error ? error.message : String(error)}); caching in memory for this session`,
@@ -135,6 +138,27 @@ export class LiveCache {
       INSERT OR REPLACE INTO live_cache (cache_key, data, source, fetched_at, expires_at)
       VALUES (?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'))
     `).run(key, JSON.stringify(data), source, ttlSeconds);
+  }
+
+  /**
+   * Many entries in ONE transaction. A scan caches one row per dependency;
+   * as separate autocommits each paid its own WAL commit, and superset's
+   * 4,516 rows took about 40 s of a 55 s cold scan whose network part ended
+   * at 12 s (2026-10-10).
+   */
+  setMany(entries: Array<[key: string, data: unknown]>, source: string, ttlSeconds: number): void {
+    if (entries.length === 0) return;
+    if (this.memory) {
+      for (const [key, data] of entries) this.set(key, data, source, ttlSeconds);
+      return;
+    }
+    const insert = this.db!.prepare(`
+      INSERT OR REPLACE INTO live_cache (cache_key, data, source, fetched_at, expires_at)
+      VALUES (?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'))
+    `);
+    this.db!.transaction(() => {
+      for (const [key, data] of entries) insert.run(key, JSON.stringify(data), source, ttlSeconds);
+    })();
   }
 
   purgeExpired(): number {
