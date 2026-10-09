@@ -19,9 +19,19 @@ export interface VersionSource {
   instances: PackageInstance[];
   /** Absolute path of the file the versions were read from, or null when none exists. */
   source: string | null;
-  /** `lockfile` = exact versions; `manifest` = read from a manifest (pins or specifier floors). */
-  kind: "lockfile" | "manifest" | null;
+  /**
+   * `lockfile` = exact versions; `manifest` = exact pins from a requirements
+   * file; `declared_ranges` = a manifest with no lockfile (package.json,
+   * Cargo.toml): its versions are the floors of declared ranges, not installs.
+   */
+  kind: SourceKind | null;
+  /** Every further file read for this ecosystem in this directory (Python reads several). */
+  extraSources?: string[];
+  /** declared_ranges: the declared requirement per name ("^1.2.0"), for names whose version is only a floor. */
+  ranges?: Map<string, string>;
 }
+
+export type SourceKind = "lockfile" | "manifest" | "declared_ranges";
 
 export function emptySource(): VersionSource {
   return { versions: new Map(), instances: [], source: null, kind: null };
@@ -59,12 +69,14 @@ export function found(
   versions: Map<string, string>,
   instances: InstanceSet | PackageInstance[],
   source: string,
-  kind: "lockfile" | "manifest",
+  kind: SourceKind,
+  extra: Pick<VersionSource, "extraSources" | "ranges"> = {},
 ): VersionSource {
   return {
     versions,
     instances: Array.isArray(instances) ? instances : instances.toArray(),
     source,
     kind,
+    ...extra,
   };
 }

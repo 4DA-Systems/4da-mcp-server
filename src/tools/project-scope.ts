@@ -124,6 +124,7 @@ export function liveIntelFor<T extends Pick<LiveIntelligence, "getProjectRoot">>
     raw = undefined;
   }
   const scoped = new LiveIntelligence(raw ?? getServerCacheDb());
-  scoped.initFromProjectTree(scope.path, treeResolutionGroups(scanProjectTree(scope.path)));
+  const { entries, discovery } = scanProjectTree(scope.path);
+  scoped.initFromProjectTree(scope.path, treeResolutionGroups(entries), discovery);
   return scoped;
 }

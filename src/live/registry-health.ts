@@ -24,6 +24,7 @@ function unavailable(dep: ResolvedDependency, fetchError: string): RegistryPacka
     latestVersion: null, latestStableVersion: null, versionsBehind: null,
     deprecated: false, deprecationMessage: null, lastPublished: null,
     license: null, weeklyDownloads: null, isDev: dep.isDev, fetchError,
+    ...(dep.declaredRange ? { declaredRange: dep.declaredRange } : {}),
   };
 }
 
@@ -95,5 +96,6 @@ function restampRegistryContext(
     currentVersion: dep.version,
     isDev: dep.isDev,
     versionsBehind: dep.version && latest ? computeSemverDistance(dep.version, latest) : null,
+    ...(dep.declaredRange ? { declaredRange: dep.declaredRange } : {}),
   };
 }

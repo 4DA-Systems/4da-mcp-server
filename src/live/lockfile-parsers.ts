@@ -28,7 +28,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { readBunLock } from "./bun-lockfile.js";
 import { readPnpmLock, readYarnLock } from "./js-lockfile-readers.js";
-import { resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
+import { requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
 import { emptySource, found, InstanceSet, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import type { OsvEcosystem } from "./types.js";
 
@@ -37,19 +37,22 @@ export type { PackageInstance, VersionSource } from "./lockfile-types.js";
 const LOCKFILES: Partial<Record<OsvEcosystem, string[]>> = {
   npm: ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"],
   "crates.io": ["Cargo.lock"],
-  PyPI: ["poetry.lock", "uv.lock", "Pipfile.lock"],
+  PyPI: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   Go: ["go.mod", "go.sum"],
 };
 
 const MANIFESTS: Partial<Record<OsvEcosystem, string>> = {
   npm: "package.json",
   "crates.io": "Cargo.toml",
-  PyPI: "requirements.txt",
 };
 
-/** Every lock file the resolver may read for this ecosystem, present or not, in priority order. */
+/**
+ * Every lock file the resolver may read for this ecosystem, present or not,
+ * in priority order; for Python also every requirements file present now.
+ */
 export function lockfileCandidates(cwd: string, ecosystem: OsvEcosystem): string[] {
-  return (LOCKFILES[ecosystem] ?? []).map((name) => path.join(cwd, name));
+  const fixed = (LOCKFILES[ecosystem] ?? []).map((name) => path.join(cwd, name));
+  return ecosystem === "PyPI" ? [...fixed, ...requirementFiles(cwd)] : fixed;
 }
 
 /** The manifest the resolver falls back to for this ecosystem, or null when it has none. */
@@ -76,6 +79,29 @@ export function resolveVersionSource(cwd: string, ecosystem: OsvEcosystem): Vers
 /** Instances for a manifest-only read: one per name, scope unknown. */
 function manifestInstances(versions: Map<string, string>): PackageInstance[] {
   return [...versions].map(([name, version]) => ({ name, version }));
+}
+
+/**
+ * A manifest read with no lockfile beside it. Only an exact pin names the
+ * version that gets installed; any other requirement ("^1.2.0", "0.8") is
+ * kept in `ranges`, and its floor in `versions` is a label, not an install.
+ * nushell's samples/wasm/Cargo.toml (no Cargo.lock) was scanned as if its
+ * floors were installed and produced 2 false findings (2026-10-10).
+ */
+function declaredRanges(declared: Map<string, string>, exact: (spec: string) => boolean, file: string): VersionSource {
+  const versions = new Map<string, string>();
+  const ranges = new Map<string, string>();
+  for (const [name, spec] of declared) {
+    // "0.3" and "1" are ranges too: their floor is 0.3.0 / 1.0.0.
+    const partial = /(\d+)(?:\.(\d+))?/.exec(spec);
+    const version = extractVersionFromSpec(spec) ?? (partial ? `${partial[1]}.${partial[2] ?? "0"}.0` : null);
+    if (!version) continue;
+    versions.set(name, version);
+    if (!exact(spec)) ranges.set(name, spec);
+  }
+  // Only exact pins are installs; ranged names are not instances at all.
+  const pinned = new Map([...versions].filter(([name]) => !ranges.has(name)));
+  return found(versions, manifestInstances(pinned), file, "declared_ranges", { ranges });
 }
 
 // =============================================================================
@@ -131,19 +157,18 @@ function resolveNpm(cwd: string): VersionSource {
     } catch { /* fall through */ }
   }
 
-  // Fallback: extract version floors from package.json ranges
+  // No lockfile: package.json declares ranges, not installed versions.
   const pkgPath = path.join(cwd, "package.json");
   if (fs.existsSync(pkgPath)) {
-    const versions = new Map<string, string>();
+    const declared = new Map<string, string>();
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-      const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-      for (const [name, spec] of Object.entries(allDeps)) {
-        const version = extractVersionFromSpec(spec as string);
-        if (version) versions.set(name, version);
+      for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
+        if (typeof spec === "string") declared.set(name, spec);
       }
     } catch { /* skip */ }
-    return found(versions, manifestInstances(versions), pkgPath, "manifest");
+    // npm installs exactly "1.2.3" (or "=1.2.3"); anything else is a range.
+    return declaredRanges(declared, (spec) => /^=?v?\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(spec.trim()), pkgPath);
   }
 
   return emptySource();
@@ -283,25 +308,30 @@ function resolveRust(cwd: string): VersionSource {
 }
 
 function resolveRustFromManifest(cwd: string): VersionSource {
-  const versions = new Map<string, string>();
+  const declared = new Map<string, string>();
   const cargoPath = path.join(cwd, "Cargo.toml");
   if (!fs.existsSync(cargoPath)) return emptySource();
 
   try {
-    const content = fs.readFileSync(cargoPath, "utf-8");
-    // name = "1.0" or name = { version = "1.0", ... }
-    const depRegex = /^([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]+)"|.*?version\s*=\s*"([^"]+)")/gm;
-    let match;
-    while ((match = depRegex.exec(content)) !== null) {
-      const name = match[1];
-      const version = match[2] || match[3];
-      if (version && /^\d/.test(version)) {
-        versions.set(name, version);
+    // name = "1.0" or name = { version = "1.0", ... }, inside dependency tables
+    // only: [package]'s own `version = "0.1.0"` and `edition = "2021"` were read
+    // as crates named "version" and "edition".
+    let inDeps = false;
+    for (const line of fs.readFileSync(cargoPath, "utf-8").split(/\r?\n/)) {
+      const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+      if (header) {
+        inDeps = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(header[1].trim());
+        continue;
       }
+      if (!inDeps) continue;
+      const match = /^\s*([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]+)"|.*?\bversion\s*=\s*"([^"]+)")/.exec(line);
+      const spec = match?.[2] ?? match?.[3];
+      if (match && spec && /^[=^~]?\s*\d/.test(spec)) declared.set(match[1], spec);
     }
   } catch { /* skip */ }
 
-  return found(versions, manifestInstances(versions), cargoPath, "manifest");
+  // Cargo reads "1.0" as "^1.0": only "=1.2.3" names one version.
+  return declaredRanges(declared, (spec) => /^=\s*\d+\.\d+\.\d+/.test(spec.trim()), cargoPath);
 }
 
 // =============================================================================

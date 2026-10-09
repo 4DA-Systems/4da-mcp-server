@@ -12,6 +12,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
+import { discoveryNote } from "../project-tree.js";
 
 export interface DependencyHealthParams {
   include_dev?: boolean;
@@ -234,6 +235,9 @@ export async function executeDependencyHealth(
   if (hidden > 0) {
     parts.push(`${hidden} advisor${hidden !== 1 ? "ies" : "y"} not counted (platform-inactive or maintenance notices)`);
   }
+  // "all healthy" over a partial walk must say it is partial.
+  const partial = discoveryNote(liveIntel.getDiscovery());
+  if (partial) parts.push(partial.replace(/[.]$/, ""));
   if (!vulnResult) {
     parts.push(liveIntel.isEnabled()
       ? `CVE data not loaded: the OSV scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000}s or OSV was unreachable. Call again to use it once it completes`
