@@ -110,7 +110,10 @@ export function lockfilesIn(dir: string, listing?: string[]): string[] {
  * repository's .gitignore excludes are not part of the project and are
  * skipped (gitignore.ts); they are not reported as left out either.
  */
-export function scanProjectTree(root: string): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
+export function scanProjectTree(
+  root: string,
+  limits: { maxDepth: number; maxProjects: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
+): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
   const entries: ProjectTreeEntry[] = [{ dir: root, scan: scanCurrentProject(root) }];
   const ignore = new IgnoreRules(root);
   const skipped: TreeDiscovery["skipped"] = [];
@@ -143,7 +146,7 @@ export function scanProjectTree(root: string): { entries: ProjectTreeEntry[]; di
       const names = grandchildren.map((g) => g.name);
       const locks = lockfilesIn(sub, names).filter((name) => !ignore.ignores(`${childRel}/${name}`, false));
       if (locks.length > 0) {
-        const reason = depth > MAX_DEPTH ? "depth" : entries.length >= MAX_PROJECTS ? "project_limit" : null;
+        const reason = depth > limits.maxDepth ? "depth" : entries.length >= limits.maxProjects ? "project_limit" : null;
         if (reason === null) {
           entries.push({ dir: sub, scan: scanCurrentProject(sub) });
         } else {
@@ -158,7 +161,7 @@ export function scanProjectTree(root: string): { entries: ProjectTreeEntry[]; di
   walk(root, "", 1, listing(root) ?? []);
   return {
     entries,
-    discovery: { projects: entries.length, maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS, skipped, skippedCount, walkTruncated },
+    discovery: { projects: entries.length, maxDepth: limits.maxDepth, maxProjects: limits.maxProjects, skipped, skippedCount, walkTruncated },
   };
 }
 

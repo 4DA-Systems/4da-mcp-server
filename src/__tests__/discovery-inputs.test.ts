@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MAX_PROJECTS, discoveryNote, scanProjectTree, treeResolutionGroups } from "../project-tree.js";
+import { MAX_DEPTH, MAX_PROJECTS, discoveryNote, scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { resolvePython, readRequirementsFile } from "../live/lockfile-parsers-pygo.js";
 import { resolveVersionSource } from "../live/lockfile-parsers.js";
 import { resolveGroup } from "../live/resolution.js";
@@ -52,12 +52,14 @@ describe("project-tree bounds are wider and never silent", () => {
   });
 
   it("past the project limit, every skipped lockfile is counted and named, and the note says so", () => {
-    for (let i = 0; i < MAX_PROJECTS + 4; i++) write(`templates/t${String(i).padStart(3, "0")}/poetry.lock`, POETRY("x", "1.0.0"));
-    const { entries, discovery } = scanProjectTree(dir);
-    expect(entries.length).toBe(MAX_PROJECTS);
+    // The production limits, and the behaviour at a test-sized limit (the root plus 5 projects).
+    expect([MAX_DEPTH, MAX_PROJECTS]).toEqual([4, 256]);
+    for (let i = 0; i < 10; i++) write(`templates/t${String(i).padStart(3, "0")}/poetry.lock`, POETRY("x", "1.0.0"));
+    const { entries, discovery } = scanProjectTree(dir, { maxDepth: MAX_DEPTH, maxProjects: 6 });
+    expect(entries.length).toBe(6);
     expect(discovery.skippedCount).toBe(5);
     expect(discovery.skipped.every((s) => s.reason === "project_limit")).toBe(true);
-    expect(discoveryNote(discovery)).toMatch(/^Partial scan: 5 lockfiles were found but NOT scanned \(past the 256-project limit\): templates\/t\d+\/poetry\.lock/);
+    expect(discoveryNote(discovery)).toMatch(/^Partial scan: 5 lockfiles were found but NOT scanned \(past the 6-project limit\): templates\/t\d+\/poetry\.lock/);
   });
 
   it("a lockfile deeper than the depth bound is reported, not dropped silently", () => {
