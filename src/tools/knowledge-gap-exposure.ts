@@ -12,7 +12,7 @@
  * ecosystem's same-named package decided the gap for every project in it.
  */
 
-import type BetterSqlite3 from "better-sqlite3";
+import type { SqliteStatement } from "../sqlite-driver.js";
 import type { FourDADatabase } from "../db.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import { samePackage, type Exposure } from "./knowledge-gap-grading.js";
@@ -136,8 +136,8 @@ function toEntry(row: AdvisoryRow): AdvisoryEntry {
 
 /** Read access to the OSV mirror (`osv_advisories`), feature-detected column by column. */
 export class AdvisoryStore {
-  private readonly byPackage: BetterSqlite3.Statement | null = null;
-  private readonly byId: BetterSqlite3.Statement | null = null;
+  private readonly byPackage: SqliteStatement | null = null;
+  private readonly byId: SqliteStatement | null = null;
   private readonly idMatchesAliases: boolean = false;
   private readonly rowsById = new Map<string, AdvisoryRow[]>();
 

@@ -9,9 +9,11 @@
  * (local or -g) left no better_sqlite3.node, `--doctor` still reported the
  * bindings as loaded, and every tool failed with "Could not locate the
  * bindings file" and no hint why. `npx @4da/mcp-server` was unaffected.
+ *
+ * Since 6.1.0 the server uses Node's built-in node:sqlite when the runtime
+ * has it (sqlite-driver.ts), so this matters only on Node 22.0-22.12, where
+ * better-sqlite3 is the one driver.
  */
-
-import type BetterSqlite3 from "better-sqlite3";
 
 // Each remedy measured on npm 12.2.0 (node:24-bookworm-slim), 2026-10-03.
 export const NATIVE_BINDING_FIX =
@@ -35,7 +37,7 @@ export function nativeBindingMessage(err: unknown): string {
 }
 
 /** Null when an in-memory database opens; otherwise why not, with the fix. */
-export function checkNativeBindings(Database: typeof BetterSqlite3): string | null {
+export function checkNativeBindings(Database: new (file: string) => { close(): unknown }): string | null {
   try {
     new Database(":memory:").close();
     return null;

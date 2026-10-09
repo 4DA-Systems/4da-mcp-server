@@ -3,30 +3,32 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import Database from "better-sqlite3";
+import { openDatabase, sqliteDriverStatus, type SqliteDatabase } from "../sqlite-driver.js";
 
 import { serverCacheDbPath } from "../db.js";
 
-let serverCache: Database.Database | null = null;
+let serverCache: SqliteDatabase | null = null;
 
 /**
  * The server's own cache file (serverCacheDbPath(), `cache.db`), opened once
  * per process. Falls back to an in-memory database when the file cannot be
  * created (a read-only home directory): the server then runs uncached on disk
- * rather than failing.
+ * rather than failing. Null when no SQLite driver is usable at all
+ * (sqlite-driver.ts); LiveCache then keeps entries in a Map for the session.
  */
-export function getServerCacheDb(): Database.Database {
+export function getServerCacheDb(): SqliteDatabase | null {
   if (serverCache?.open) return serverCache;
+  if (!sqliteDriverStatus().driver) return null;
   const file = serverCacheDbPath();
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    serverCache = new Database(file);
+    serverCache = openDatabase(file);
     serverCache.pragma("journal_mode = WAL");
   } catch (error) {
     console.error(
       `[4da] cannot open the cache at ${file} (${error instanceof Error ? error.message : String(error)}); caching in memory for this session`,
     );
-    serverCache = new Database(":memory:");
+    serverCache = openDatabase(":memory:");
   }
   return serverCache;
 }
@@ -54,15 +56,27 @@ interface CacheRow {
  * app's database and filled it.
  */
 export class LiveCache {
-  private db: Database.Database;
+  private db: SqliteDatabase | null;
+  /** Without any SQLite driver: entries for this session only, keyed like the table. */
+  private memory: Map<string, CacheRow> | null = null;
 
-  constructor(db: Database.Database) {
-    this.db = db.readonly ? getServerCacheDb() : db;
+  constructor(db: SqliteDatabase | null) {
+    this.db = !db || db.readonly ? getServerCacheDb() : db;
+    if (!this.db) {
+      this.memory = new Map();
+      return;
+    }
     this.ensureTable();
     this.purgeExpired();
   }
 
+  /** The Map store's equivalent of datetime('now') comparisons. */
+  private live(row: CacheRow): boolean {
+    return Date.parse(row.expires_at) > Date.now();
+  }
+
   private ensureTable(): void {
+    if (!this.db) return;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS live_cache (
         cache_key TEXT PRIMARY KEY,
@@ -77,7 +91,11 @@ export class LiveCache {
   }
 
   get<T>(key: string): T | null {
-    const row = this.db.prepare(
+    if (this.memory) {
+      const hit = this.memory.get(key);
+      return hit && this.live(hit) ? (JSON.parse(hit.data) as T) : null;
+    }
+    const row = this.db!.prepare(
       "SELECT data FROM live_cache WHERE cache_key = ? AND expires_at > datetime('now')",
     ).get(key) as { data: string } | undefined;
 
@@ -90,7 +108,11 @@ export class LiveCache {
   }
 
   getStale<T>(key: string): { data: T; fetchedAt: string } | null {
-    const row = this.db.prepare(
+    if (this.memory) {
+      const hit = this.memory.get(key);
+      return hit ? { data: JSON.parse(hit.data) as T, fetchedAt: hit.fetched_at } : null;
+    }
+    const row = this.db!.prepare(
       "SELECT data, fetched_at FROM live_cache WHERE cache_key = ?",
     ).get(key) as { data: string; fetched_at: string } | undefined;
 
@@ -103,24 +125,43 @@ export class LiveCache {
   }
 
   set(key: string, data: unknown, source: string, ttlSeconds: number): void {
-    this.db.prepare(`
+    if (this.memory) {
+      const now = Date.now();
+      const iso = (ms: number) => new Date(ms).toISOString();
+      this.memory.set(key, { cache_key: key, data: JSON.stringify(data), source, fetched_at: iso(now), expires_at: iso(now + ttlSeconds * 1000) });
+      return;
+    }
+    this.db!.prepare(`
       INSERT OR REPLACE INTO live_cache (cache_key, data, source, fetched_at, expires_at)
       VALUES (?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'))
     `).run(key, JSON.stringify(data), source, ttlSeconds);
   }
 
   purgeExpired(): number {
-    const result = this.db.prepare(
+    if (this.memory) {
+      let purged = 0;
+      for (const [key, row] of this.memory) if (!this.live(row) && this.memory.delete(key)) purged++;
+      return purged;
+    }
+    const result = this.db!.prepare(
       "DELETE FROM live_cache WHERE expires_at <= datetime('now')",
     ).run();
     return result.changes;
   }
 
   invalidateSource(source: string): void {
-    this.db.prepare("DELETE FROM live_cache WHERE source = ?").run(source);
+    if (this.memory) {
+      for (const [key, row] of this.memory) if (row.source === source) this.memory.delete(key);
+      return;
+    }
+    this.db!.prepare("DELETE FROM live_cache WHERE source = ?").run(source);
   }
 
   invalidateAll(): void {
-    this.db.prepare("DELETE FROM live_cache").run();
+    if (this.memory) {
+      this.memory.clear();
+      return;
+    }
+    this.db!.prepare("DELETE FROM live_cache").run();
   }
 }

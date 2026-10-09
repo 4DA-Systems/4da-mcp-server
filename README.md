@@ -27,9 +27,7 @@ One command to install. No API keys. No accounts. Your code never leaves your ma
 
 Requires Node.js 22 or later.
 
-> **npm 12+:** npm 12 blocks dependency install scripts unless you allow them, which leaves the SQLite module (`better-sqlite3`) unbuilt. Allow it once, then clear the npx cache:
-> `npm config set allow-scripts=better-sqlite3 --location=user` and `npx clear-npx-cache`.
-> `npx @4da/mcp-server --doctor` checks this by opening a database. npm 10 and 11, which every current Node release ships, are not affected.
+The server uses Node's built-in `node:sqlite` (Node 22.13 and later), so it needs no install script and works with npm 12's default of blocking them. On Node 22.0-22.12 it uses the optional `better-sqlite3`, whose native module npm 10 and 11 build on install. `npx @4da/mcp-server --doctor` shows which one is in use.
 
 ```bash
 claude mcp add 4da -- npx @4da/mcp-server

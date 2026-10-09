@@ -32,6 +32,9 @@ jobs:
           - { os: ubuntu-latest, node: "24" }
           - { os: windows-latest, node: "22" }
           - { os: macos-latest, node: "22" }
+          # The last Node without node:sqlite: the server falls back to
+          # better-sqlite3 here (src/sqlite-driver.ts).
+          - { os: ubuntu-latest, node: "22.12" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -56,6 +59,15 @@ jobs:
 
       - run: pnpm test
         env:
+          FOURDA_REQUIRE_CARGO: "1"
+
+      # The run above uses node:sqlite where the runtime has it. Once more on
+      # better-sqlite3, forced, so both drivers pass the whole suite.
+      - name: Test on better-sqlite3
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
+        run: pnpm test
+        env:
+          FOURDA_SQLITE_DRIVER: better
           FOURDA_REQUIRE_CARGO: "1"
 
   checks:

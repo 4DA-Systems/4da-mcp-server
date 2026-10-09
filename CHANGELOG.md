@@ -4,6 +4,34 @@
 
 Fixes from an agent eval over stdio JSON-RPC against real projects (2026-10-07).
 
+### Install: runs under npm 12 with no install scripts
+
+npm 12 blocks dependency install scripts unless allowed, so a default
+`npx @4da/mcp-server` or `npm install` left better-sqlite3's native module
+unbuilt and every tool failed (6.0.x documented an `allow-scripts` workaround).
+
+- The server uses Node's built-in `node:sqlite` when the runtime has it
+  (Node 22.13.0 and later; npm 12 itself requires 22.22.2+). No install
+  script, no native download. better-sqlite3 moved to `optionalDependencies`
+  and is used only where `node:sqlite` is missing (Node 22.0-22.12), if its
+  native module opens a database.
+- One driver interface (`src/sqlite-driver.ts`) covers what the server uses;
+  node:sqlite is adapted to match better-sqlite3: plain-object rows, BLOBs as
+  Buffers, error codes (`SQLITE_BUSY`, `SQLITE_NOTADB`, ...), the 5 s busy
+  timeout, savepoint-nested transactions, `readonly` / `fileMustExist`.
+  Read-only connections also set `PRAGMA query_only`.
+- With no usable driver at all the server no longer exits at import: it
+  starts, `vulnerability_scan`, `dependency_health`, `dependency_check` and
+  `upgrade_impact` run without a database (in-memory cache), and the other
+  tools return the fix (upgrade Node, or allow better-sqlite3's build).
+- `--doctor` reports the driver in use. `FOURDA_SQLITE_DRIVER=node|better|none`
+  forces one (tests, diagnostics). node:sqlite's one-time ExperimentalWarning
+  is filtered; other warnings pass.
+- Tests: the suite passes on each driver (CI runs it on both, and on Node
+  22.12, which has no node:sqlite); driver parity tests; the built server over
+  stdio with better-sqlite3's native module missing (fails on 6.0.2: every
+  tool answered "Could not locate the bindings file").
+
 ### The server never changes the desktop app's schema
 
 The server opened the 4DA app's live `4da.db` read-write, created a

@@ -10,7 +10,7 @@
  * could judge one project's install and name another's.
  */
 
-import type BetterSqlite3 from "better-sqlite3";
+import type { SqliteStatement } from "../sqlite-driver.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { ResolvedDependency } from "../live/types.js";
@@ -84,7 +84,7 @@ interface LockRow {
  * sibling's version.
  */
 export class InstallResolver {
-  private readonly lockStmt: BetterSqlite3.Statement | null = null;
+  private readonly lockStmt: SqliteStatement | null = null;
   private readonly lockRowsByName = new Map<string, LockRow[]>();
   private readonly resolved: ResolvedDependency[];
   private readonly activeRoots: readonly string[];

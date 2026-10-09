@@ -25,22 +25,20 @@ import path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
-// Type-only import (erased at compile time) — keeps Database.Database type usable.
-// Runtime import is dynamic below, so native binding failures get a clear error message.
-import type BetterSqlite3 from "better-sqlite3";
-import { checkNativeBindings, isNativeBindingError, nativeBindingMessage } from "./native-bindings.js";
+import {
+  openDatabase,
+  sqliteDriverStatus,
+  SqliteUnavailableError,
+  type SqliteDatabase,
+} from "./sqlite-driver.js";
+import { isNativeBindingError, nativeBindingMessage } from "./native-bindings.js";
 
-let Database: typeof BetterSqlite3;
-try {
-  Database = (await import("better-sqlite3")).default;
-} catch (err) {
-  console.error(`\n  [4DA] ${nativeBindingMessage(err)}\n`);
-  process.exit(1);
-}
-
-/** Null when better-sqlite3 can open a database here; otherwise why not, with the fix. */
+/**
+ * Null when a SQLite driver (node:sqlite, or better-sqlite3 with a working
+ * native module) can open a database here; otherwise why not, with the fix.
+ */
 export function nativeBindingProblem(): string | null {
-  return checkNativeBindings(Database);
+  return sqliteDriverStatus().problem;
 }
 
 import type {
@@ -163,7 +161,7 @@ export function serverCacheDbPath(): string {
 
 /**
  * Whether an error says the database file itself is unreadable: not SQLite at
- * all, or damaged. better-sqlite3 reports these as SQLITE_NOTADB ("file is not
+ * all, or damaged. SQLite reports these as SQLITE_NOTADB ("file is not
  * a database") and SQLITE_CORRUPT ("database disk image is malformed").
  */
 export function isUnreadableDbError(error: unknown): boolean {
@@ -208,7 +206,7 @@ const STANDALONE_MARKER = "mcp_standalone";
  * app's, so tools/list advertised five tools with no data behind them and the
  * project was never rescanned.
  */
-function detectStandalone(db: BetterSqlite3.Database): boolean {
+function detectStandalone(db: SqliteDatabase): boolean {
   try {
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
       (t) => t.name,
@@ -350,7 +348,7 @@ export type AppWritableTable = (typeof APP_WRITABLE_TABLES)[number];
 const APP_WRITE_BUSY_TIMEOUT_MS = 3000;
 
 export interface WriteTarget {
-  raw: BetterSqlite3.Database;
+  raw: SqliteDatabase;
   /** database = the open (standalone) database; app = the app's table; server_store = fallback on schema drift. */
   target: "database" | "app" | "server_store";
   note?: string;
@@ -363,7 +361,7 @@ export const DEPENDENCY_GROUP_QUERY =
  * 4DA Database accessor
  */
 export class FourDADatabase {
-  private db: BetterSqlite3.Database;
+  private db: SqliteDatabase;
   private _isStandalone: boolean = false;
   /** Absolute path of the open database file. */
   readonly dbPath: string;
@@ -386,23 +384,23 @@ export class FourDADatabase {
       }
     }
 
-    let opened: BetterSqlite3.Database | null = null;
+    let opened: SqliteDatabase | null = null;
     let standalone = isNew;
     try {
       if (isNew) {
-        opened = new Database(absolutePath, { readonly: false });
+        opened = openDatabase(absolutePath, { readonly: false });
         opened.pragma("journal_mode = WAL");
       } else {
         // An existing file is opened read-only first. Reading the schema here
         // makes a damaged or non-SQLite file fail now, with the message below.
-        opened = new Database(absolutePath, { readonly: true, fileMustExist: true });
+        opened = openDatabase(absolutePath, { readonly: true, fileMustExist: true });
         opened.prepare("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").all();
         standalone = detectStandalone(opened);
         if (standalone) {
           // This server's own database: reopen it writable.
           opened.close();
           opened = null;
-          opened = new Database(absolutePath, { readonly: false, fileMustExist: true });
+          opened = openDatabase(absolutePath, { readonly: false, fileMustExist: true });
           opened.pragma("journal_mode = WAL");
         }
       }
@@ -415,6 +413,7 @@ export class FourDADatabase {
       } catch {
         // Nothing to close when the open itself failed.
       }
+      if (error instanceof SqliteUnavailableError) throw error;
       throw new Error(
         isNativeBindingError(error)
           ? nativeBindingMessage(error)
@@ -470,7 +469,7 @@ export class FourDADatabase {
   }
 
   private memoryStore: FourDADatabase | null = null;
-  private appWriter: BetterSqlite3.Database | null = null;
+  private appWriter: SqliteDatabase | null = null;
 
   /**
    * The connection a record into one of the app-owned tables this server is
@@ -490,7 +489,7 @@ export class FourDADatabase {
     const missing = columns.filter((c) => !this.hasColumn(table, c));
     if (missing.length === 0) {
       if (!this.appWriter?.open) {
-        const writer = new Database(this.dbPath, { fileMustExist: true });
+        const writer = openDatabase(this.dbPath, { fileMustExist: true });
         writer.pragma(`busy_timeout = ${APP_WRITE_BUSY_TIMEOUT_MS}`);
         this.appWriter = writer;
       }
@@ -536,7 +535,7 @@ export class FourDADatabase {
    * By default this runs a CHEAP probe (open + list tables, ~0.1s) which surfaces
    * a missing, locked, or corrupt-header file. It deliberately does NOT run a full
    * `PRAGMA integrity_check`: that is an O(database-size) scan (~11s on a 1.7 GB DB,
-   * and growing) and, because better-sqlite3 is synchronous, it blocks the event
+   * and growing) and, because the SQLite drivers are synchronous, it blocks the event
    * loop — running it on the startup path stalls the MCP stdio handshake until it
    * finishes, so the host's connect timeout can fire and the server looks like it
    * "failed to start". Pass `{ deep: true }` for the full integrity_check on the
@@ -561,9 +560,9 @@ export class FourDADatabase {
       };
     }
 
-    let testDb: BetterSqlite3.Database | null = null;
+    let testDb: SqliteDatabase | null = null;
     try {
-      testDb = new Database(absolutePath, { readonly: true, fileMustExist: true });
+      testDb = openDatabase(absolutePath, { readonly: true, fileMustExist: true });
 
       // Deep, opt-in integrity check (slow: full-database scan). Only on --doctor.
       if (opts?.deep) {
@@ -610,9 +609,9 @@ export class FourDADatabase {
   }
 
   /**
-   * Get the raw better-sqlite3 database instance for custom queries
+   * Get the raw database connection (sqlite-driver.ts) for custom queries
    */
-  getRawDb(): BetterSqlite3.Database {
+  getRawDb(): SqliteDatabase {
     return this.db;
   }
 

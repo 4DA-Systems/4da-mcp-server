@@ -23,6 +23,11 @@ pnpm run inspect                 # MCP Inspector
   `contract/app-schema.sql`. Users run the app and this server at independent versions, so
   guard newer columns with `db.hasColumn()`. `pnpm run contract` must pass; CI also checks
   against the app's current `main`, and the app's merge queue checks this repo's `main`.
+- **Open databases through `src/sqlite-driver.ts`, never `better-sqlite3` directly.** Server code
+  runs on Node's built-in `node:sqlite` (Node 22.13+, no install script, so npm 12's blocked
+  scripts do not matter); better-sqlite3 is an optional fallback for older Node. Type
+  connections as `SqliteDatabase`. `FOURDA_SQLITE_DRIVER=better pnpm test` runs the suite on
+  the fallback (CI does too).
 - **pnpm settings live in pnpm-workspace.yaml** (overrides, onlyBuiltDependencies), never in a
   `pnpm` field of package.json: pnpm 11 ignores that field and dropped every security override
   (issue #9). `pnpm run check` enforces it. Install with the pinned pnpm 10 (`packageManager`);

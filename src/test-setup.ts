@@ -72,6 +72,8 @@ if (process.env.FOURDA_SQL_CORPUS) {
     for (const line of stack) {
       const norm = line.replaceAll("\\", "/");
       if (!norm.includes("/src/") || norm.includes("/node_modules/") || norm.includes("/src/test-setup")) continue;
+      // The driver adapter (pragma() prepares PRAGMA ...): the caller is the server code.
+      if (norm.includes("/src/sqlite-driver")) continue;
       if (norm.includes("/src/__tests__/")) continue;
       const m =
         norm.match(/at (?:async )?([^\s(]+) \(.*?(\/src\/[^:)]+):(\d+)/) ?? norm.match(/at ()(?:.*?)(\/src\/[^:)]+):(\d+)/);
@@ -88,23 +90,28 @@ if (process.env.FOURDA_SQL_CORPUS) {
 
   if (!g.__fourdaCorpusPatched) {
     g.__fourdaCorpusPatched = true;
+    // Both drivers (sqlite-driver.ts): better-sqlite3's Database, and the
+    // node:sqlite adapter the server uses when the runtime has node:sqlite.
     const BetterSqlite3 = (await import("better-sqlite3")).default;
-    const proto = BetterSqlite3.prototype as unknown as {
-      prepare: (sql: string) => unknown;
-      exec: (sql: string) => unknown;
-    };
-    const prepare = proto.prepare;
-    proto.prepare = function (this: unknown, sql: string) {
-      const site = serverCallsite();
-      if (site) record({ kind: "prepare", sql, ...site });
-      return prepare.call(this, sql);
-    };
-    const exec = proto.exec;
-    proto.exec = function (this: unknown, sql: string) {
-      const site = serverCallsite();
-      if (site) record({ kind: "exec", sql, ...site });
-      return exec.call(this, sql);
-    };
+    const { NodeSqliteDatabase } = await import("./sqlite-driver.js");
+    for (const Ctor of [BetterSqlite3, NodeSqliteDatabase]) {
+      const proto = Ctor.prototype as unknown as {
+        prepare: (sql: string) => unknown;
+        exec: (sql: string) => unknown;
+      };
+      const prepare = proto.prepare;
+      proto.prepare = function (this: unknown, sql: string) {
+        const site = serverCallsite();
+        if (site) record({ kind: "prepare", sql, ...site });
+        return prepare.call(this, sql);
+      };
+      const exec = proto.exec;
+      proto.exec = function (this: unknown, sql: string) {
+        const site = serverCallsite();
+        if (site) record({ kind: "exec", sql, ...site });
+        return exec.call(this, sql);
+      };
+    }
   }
   // hasColumn() probes: the columns server code expects on a current database.
   const { FourDADatabase } = await import("./db.js");

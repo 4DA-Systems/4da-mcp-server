@@ -188,7 +188,8 @@ function walk(dir) {
   return readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
     if (statSync(p).isDirectory()) return name === "__tests__" ? [] : walk(p);
-    return p.endsWith(".ts") && !name.startsWith("test-setup") ? [p] : [];
+    // sqlite-driver.ts is the driver adapter: its prepare() calls are not queries.
+    return p.endsWith(".ts") && !name.startsWith("test-setup") && name !== "sqlite-driver.ts" ? [p] : [];
   });
 }
 const callsites = walk(join(root, "src")).flatMap((file) =>

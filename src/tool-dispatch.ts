@@ -74,6 +74,19 @@ const DISPATCH_MAP: Record<string, ToolExecutor> = {
 };
 
 /**
+ * Tools that answer from the project's lockfiles and the registries alone, so
+ * they still run when no SQLite driver is usable at all (sqlite-driver.ts:
+ * Node < 22.13 with better-sqlite3 unbuilt). Their executors accept a null
+ * database; every other tool needs one.
+ */
+export const DATABASE_FREE_TOOLS: ReadonlySet<string> = new Set([
+  "vulnerability_scan",
+  "dependency_health",
+  "dependency_check",
+  "upgrade_impact",
+]);
+
+/**
  * DB-backed tools whose payload reflects the curated feed and can therefore go stale. The MCP
  * server reads `4da.db` but cannot fetch or score, so these get a `data_freshness` annotation that
  * tells the caller whether the data is fresh. Live tools (vulnerability_scan, dependency_health,
@@ -96,12 +109,15 @@ const FRESHNESS_TOOLS = new Set([
  */
 export async function dispatchTool(
   name: string,
-  db: FourDADatabase,
+  db: FourDADatabase | null,
   args: Record<string, unknown> | undefined,
 ): Promise<CallToolResult> {
   const executor = DISPATCH_MAP[name];
   if (!executor) {
     throw new Error(`Unknown tool: ${name}`);
+  }
+  if (!db && !DATABASE_FREE_TOOLS.has(name)) {
+    throw new Error(`${name} needs a database, and none is open.`);
   }
 
   assertToolPermission(name);
@@ -115,25 +131,25 @@ export async function dispatchTool(
   const toolArgs = (args || {}) as Record<string, unknown>;
   let result: unknown;
   try {
-    result = await executor(db, toolArgs);
+    result = await executor(db as FourDADatabase, toolArgs);
   } catch (error: unknown) {
     const code = (error as { code?: string }).code;
     if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
       await new Promise((resolve) => setTimeout(resolve, 150));
-      result = await executor(db, toolArgs);
+      result = await executor(db as FourDADatabase, toolArgs);
     } else {
       throw error;
     }
   }
   // Feed freshness describes the desktop app's feed; a standalone install has
   // none, and telling it to "run fourda-engine" is noise.
-  const withFreshness = FRESHNESS_TOOLS.has(name) && !db.isStandalone;
+  const withFreshness = db !== null && FRESHNESS_TOOLS.has(name) && !db.isStandalone;
   // A desktop-only tool called without the desktop app's database (tools/list
   // hides these in standalone mode, but a host can call one by name) used to
   // answer `[]`, which reads as "nothing relevant" rather than "no app".
-  const desktopOnly = db.isStandalone && TOOL_REGISTRY[name]?.standalone === false;
+  const desktopOnly = db !== null && db.isStandalone && TOOL_REGISTRY[name]?.standalone === false;
   const payload = cleanStrings(
-    withFreshness ? attachFreshness(db, result) : desktopOnly ? attachDesktopAppNote(name, result) : result,
+    withFreshness ? attachFreshness(db!, result) : desktopOnly ? attachDesktopAppNote(name, result) : result,
   );
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.
