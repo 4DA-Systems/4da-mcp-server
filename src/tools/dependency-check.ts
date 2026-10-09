@@ -123,7 +123,7 @@ interface ItemResult {
 }
 
 export async function executeDependencyCheck(
-  _db: FourDADatabase,
+  _db: FourDADatabase | null,
   params: DependencyCheckParams,
   liveIntel: LiveIntelligence | null,
   opts: { now?: Date } = {},

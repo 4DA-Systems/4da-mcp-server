@@ -15,7 +15,7 @@
  * (unknown and runtime both get no discount), but `dev_scope_known` would lie.
  */
 
-import type Database from "better-sqlite3";
+import type { SqliteDatabase } from "../sqlite-driver.js";
 import type { ResolvedDependency } from "./types.js";
 
 interface InstanceScope {
@@ -42,7 +42,7 @@ function instanceKey(ecosystem: string, name: string, version: string): string {
   return `${normalized}\0${version}`;
 }
 
-function hasInstancesTable(db: Database.Database): boolean {
+function hasInstancesTable(db: SqliteDatabase): boolean {
   try {
     return (
       db
@@ -55,7 +55,7 @@ function hasInstancesTable(db: Database.Database): boolean {
 }
 
 /** Every instance row for one (project, ecosystem), keyed by name + version. Null when unreadable. */
-function loadScopeIndex(db: Database.Database, dir: string, ecosystem: string): ScopeIndex | null {
+function loadScopeIndex(db: SqliteDatabase, dir: string, ecosystem: string): ScopeIndex | null {
   const project = canonicalStoragePath(dir);
   type Row = { package_name: string; version: string; is_dev: number; scope?: string | null };
   let rows: Row[];
@@ -98,7 +98,7 @@ function loadScopeIndex(db: Database.Database, dir: string, ecosystem: string): 
  * objects; never throws; a database without the table changes nothing.
  */
 export function applyInstanceDevScope(
-  db: Database.Database | null,
+  db: SqliteDatabase | null,
   deps: ResolvedDependency[],
 ): ResolvedDependency[] {
   if (!db || !hasInstancesTable(db)) return deps;

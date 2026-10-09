@@ -9,7 +9,7 @@
  * Set FOURDA_OFFLINE=true to disable all network calls.
  */
 
-import type Database from "better-sqlite3";
+import type { SqliteDatabase } from "../sqlite-driver.js";
 import { LiveCache } from "./cache.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
 import { OsvScanner } from "./osv-scanner.js";
@@ -53,7 +53,7 @@ export type {
 const WARMUP_RETRY_MS = 60_000;
 
 export class LiveIntelligence {
-  private db: Database.Database;
+  private db: SqliteDatabase | null;
   private cache: LiveCache;
   private rateLimiter: RateLimiter;
   private osvScanner: OsvScanner;
@@ -104,7 +104,7 @@ export class LiveIntelligence {
   /** When the last warmup came back offline; gates the retry so an offline host is not re-probed on every call. */
   private warmupFailedAt: number | null = null;
 
-  constructor(db: Database.Database) {
+  constructor(db: SqliteDatabase | null) {
     this.db = db;
     this.enabled = process.env.FOURDA_OFFLINE !== "true";
     this.cache = new LiveCache(db);

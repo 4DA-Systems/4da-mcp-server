@@ -31,6 +31,7 @@ import { changedTables, snapshotDb, type DbSnapshot } from "./helpers/db-snapsho
 import { LiveIntelligence } from "../live/index.js";
 import { getLiveIntelligence, setLiveIntelligence } from "../live-singleton.js";
 import { dispatchTool } from "../tool-dispatch.js";
+import { NodeSqliteDatabase } from "../sqlite-driver.js";
 // @ts-expect-error -- plain ESM helper shared with scripts/app-schema-contract.mjs
 import { loadAppSchema, SCHEMA_ERROR } from "../../scripts/app-schema-loader.mjs";
 
@@ -166,21 +167,24 @@ describe.skipIf(!fs.existsSync(SCHEMA_PATH))("app-schema contract", () => {
     })();
     raw.close();
 
-    // Watch every statement and probe the server makes from here on.
-    const proto = Database.prototype as unknown as { prepare: (sql: string) => unknown };
-    const prepare = proto.prepare;
-    proto.prepare = function (this: unknown, sql: string) {
-      try {
-        return prepare.call(this, sql);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (SCHEMA_ERROR.test(message)) schemaErrors.push({ sql: sql.replace(/\s+/g, " ").trim(), error: message });
-        throw error;
-      }
-    };
-    restore.push(() => {
-      proto.prepare = prepare;
-    });
+    // Watch every statement and probe the server makes from here on, on
+    // whichever driver it uses (sqlite-driver.ts).
+    for (const Ctor of [Database, NodeSqliteDatabase]) {
+      const proto = Ctor.prototype as unknown as { prepare: (sql: string) => unknown };
+      const prepare = proto.prepare;
+      proto.prepare = function (this: unknown, sql: string) {
+        try {
+          return prepare.call(this, sql);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (SCHEMA_ERROR.test(message)) schemaErrors.push({ sql: sql.replace(/\s+/g, " ").trim(), error: message });
+          throw error;
+        }
+      };
+      restore.push(() => {
+        proto.prepare = prepare;
+      });
+    }
     const dbProto = FourDADatabase.prototype as unknown as { hasColumn: (t: string, c: string) => boolean };
     const hasColumn = dbProto.hasColumn;
     dbProto.hasColumn = function (this: unknown, table: string, column: string) {

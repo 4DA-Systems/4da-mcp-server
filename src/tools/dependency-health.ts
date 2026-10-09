@@ -64,7 +64,7 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
 }
 
 export async function executeDependencyHealth(
-  _db: FourDADatabase,
+  _db: FourDADatabase | null,
   params: DependencyHealthParams,
   liveIntel: LiveIntelligence | null,
 ): Promise<DependencyHealthResult> {

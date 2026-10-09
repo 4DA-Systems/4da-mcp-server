@@ -35,7 +35,9 @@ cpSync(join(root, "dist"), join(stage, "server", "dist"), { recursive: true });
 writeFileSync(
   join(stage, "server", "package.json"),
   JSON.stringify(
-    { name: pkg.name, version: pkg.version, type: "module", dependencies: pkg.dependencies },
+    // better-sqlite3 is optional (node:sqlite comes first, src/sqlite-driver.ts); the
+    // bundle keeps its prebuild for a host Node older than 22.13.
+    { name: pkg.name, version: pkg.version, type: "module", dependencies: pkg.dependencies, optionalDependencies: pkg.optionalDependencies },
     null,
     2,
   ),

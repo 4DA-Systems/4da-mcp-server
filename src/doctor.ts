@@ -4,7 +4,7 @@
  *
  * Validates that the MCP server can run correctly:
  * 1. Node.js version is sufficient
- * 2. Native bindings (better-sqlite3) load successfully
+ * 2. A SQLite driver opens a database (node:sqlite, else better-sqlite3)
  * 3. Database is found and readable
  * 4. LLM providers are configured (optional)
  *
@@ -14,7 +14,8 @@
  */
 
 import { existsSync } from "node:fs";
-import { FourDADatabase, nativeBindingProblem } from "./db.js";
+import { FourDADatabase } from "./db.js";
+import { NODE_SQLITE_MIN, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 
 interface Check {
@@ -43,14 +44,19 @@ export function runDoctor(): void {
       : `${nodeVersion} — Node.js ${nodeRequired}+ required`,
   });
 
-  // 2. Native bindings — opening a database, not just importing the package:
-  // the import succeeds without the compiled module (npm 12 blocking its
-  // install script left none, and this check used to say "loaded").
-  const bindingProblem = nativeBindingProblem();
+  // 2. SQLite driver — opening a database, not just importing a package:
+  // better-sqlite3's import succeeds without its compiled module (npm 12
+  // blocking its install script left none, and this check used to say "loaded").
+  const sqlite = sqliteDriverStatus();
+  const passedOver = sqlite.rejected.map((r) => `${r.name} not used: ${r.reason}`).join("; ");
   checks.push({
-    name: "SQLite native bindings",
-    status: bindingProblem ? "fail" : "pass",
-    detail: bindingProblem ?? "better-sqlite3 opened an in-memory database",
+    name: "SQLite driver",
+    status: sqlite.driver ? "pass" : "fail",
+    detail: !sqlite.driver
+      ? (sqlite.problem ?? "no SQLite driver")
+      : sqlite.driver.name === "node:sqlite"
+        ? `node:sqlite (built into Node ${process.versions.node}) opened an in-memory database`
+        : `better-sqlite3 opened an in-memory database (${passedOver || `node:sqlite needs Node ${NODE_SQLITE_MIN}+`})`,
   });
 
   // 3. Database discovery — deep integrity_check is appropriate here: --doctor is

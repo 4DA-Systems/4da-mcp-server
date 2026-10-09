@@ -61,7 +61,8 @@ import {
 } from "./schema-registry.js";
 
 // Map-based tool dispatch (replaces per-tool imports + switch statement)
-import { dispatchTool } from "./tool-dispatch.js";
+import { DATABASE_FREE_TOOLS, dispatchTool } from "./tool-dispatch.js";
+import { SqliteUnavailableError, sqliteDriverStatus } from "./sqlite-driver.js";
 import { getPrompt, listPrompts } from "./prompts.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 
@@ -239,6 +240,35 @@ function getDatabase(): FourDADatabase {
     }
   }
   return db;
+}
+
+/**
+ * No SQLite driver is usable (Node < 22.13 and better-sqlite3's native module
+ * unbuilt): the live layer alone, from a project scan and an in-memory cache,
+ * so the dependency tools (DATABASE_FREE_TOOLS) still answer. Every other
+ * tool returns the driver error, which says how to fix it.
+ */
+function initWithoutDatabase(): void {
+  if (liveIntel) return;
+  liveIntel = new LiveIntelligence(null);
+  setLiveIntelligence(liveIntel);
+  const cwd = resolveProjectDir();
+  const groups = treeResolutionGroups(scanProjectTree(cwd));
+  console.error(`[4DA] No SQLite driver: the dependency tools run without a database (${cwd}).`);
+  if (groups.length === 0) return;
+  liveIntel.initFromProjectTree(cwd, groups);
+  if (liveIntel.isEnabled()) liveIntel.startVulnerabilityWarmup(cwd);
+}
+
+/** The database for a tool call; null only for a database-free tool when no SQLite driver is usable. */
+function databaseFor(tool: string): FourDADatabase | null {
+  try {
+    return getDatabase();
+  } catch (error) {
+    if (!(error instanceof SqliteUnavailableError) || !DATABASE_FREE_TOOLS.has(tool)) throw error;
+    initWithoutDatabase();
+    return null;
+  }
 }
 
 /** Standalone vs desktop-app database, decided once by the cheap probe (no scan, no resolution). */
@@ -426,7 +456,7 @@ export function buildServer(): Server {
     }
 
     try {
-      const database = getDatabase();
+      const database = databaseFor(name);
       return await dispatchTool(name, database, args as Record<string, unknown> | undefined);
     } catch (error) {
       // A database that turns out damaged mid-session (SQLITE_CORRUPT on a
@@ -580,6 +610,11 @@ async function main() {
   // -------------------------------------------------------------------------
   const dbPath = process.env.FOURDA_DB_PATH || undefined;
   const validation: DatabaseValidationResult = FourDADatabase.validateDatabase(dbPath);
+  const sqlite = sqliteDriverStatus();
+  if (!sqlite.driver) {
+    console.error(`[4DA] ${sqlite.problem}`);
+    console.error(`  Dependency tools (${[...DATABASE_FREE_TOOLS].join(", ")}) still run, without a database.`);
+  }
 
   if (validation.valid) {
     console.error(`[4DA] Database validated — ${validation.tables?.length ?? 0} tables found`);

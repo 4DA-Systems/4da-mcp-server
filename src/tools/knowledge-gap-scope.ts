@@ -6,11 +6,11 @@
  * and `knowledge_decay::{get_active_project_paths, linked_to}`.
  */
 
-import type BetterSqlite3 from "better-sqlite3";
+import type { SqliteStatement } from "../sqlite-driver.js";
 import type { FourDADatabase } from "../db.js";
 
 /** `stmt.all(...)`, or [] when the statement cannot run: a read here never throws out of the tool. */
-export function allRows<T>(stmt: BetterSqlite3.Statement, ...args: unknown[]): T[] {
+export function allRows<T>(stmt: SqliteStatement, ...args: unknown[]): T[] {
   try {
     return stmt.all(...args) as T[];
   } catch {
