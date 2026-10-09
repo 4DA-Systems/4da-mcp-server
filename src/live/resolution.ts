@@ -40,8 +40,15 @@ export interface GroupResolution {
   /** The full lockfile set plus drift entries (vulnerability scanning). */
   audit: ResolvedDependency[];
   drift: InstallDriftRecord[];
-  /** The file the versions were read from, or null when the group resolved from nothing. */
+  /** The (first) file the versions were read from, or null when the group resolved from nothing. */
   source: ResolutionSourceRecord | null;
+  /** Every file read, `source` first (Python merges its lockfiles and requirement files). */
+  sources: ResolutionSourceRecord[];
+  /**
+   * Set when no lockfile pins this group's versions: the manifest and how many
+   * of its dependencies are declared ranges, which are not sent to OSV.
+   */
+  unresolved: { manifest: string; ranges: number } | null;
   signatures: Map<string, FileSignature>;
   resolvedAt: string;
 }
@@ -56,11 +63,20 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
   ]);
 
   const read = resolveVersionSource(group.dir, ecosystem);
+  const readFiles = read.source ? [read.source, ...(read.extraSources ?? [])] : [];
   // The manifest only matters when the resolver fell back to it; editing a
   // script in package.json must not throw away a scan of an unchanged lockfile.
-  if (manifest && read.kind === "lockfile") signatures.delete(manifest);
+  if (manifest && !readFiles.includes(manifest)) signatures.delete(manifest);
 
   let resolved = resolveVersionsFrom(group.dir, group.deps, group.devDeps, ecosystem, read.versions, group.targets);
+  // No lockfile: a ranged dependency's version is the range's floor, a label.
+  const ranges = read.kind === "declared_ranges" ? read.ranges ?? new Map<string, string>() : null;
+  if (ranges && ranges.size > 0) {
+    resolved = resolved.map((dep) => {
+      const declaredRange = ranges.get(dep.name);
+      return declaredRange ? { ...dep, declaredRange } : dep;
+    });
+  }
   let drift: InstallDriftRecord[] = [];
   let driftAudit: ResolvedDependency[] = [];
   // Only a lockfile pins exact versions; comparing node_modules against a
@@ -85,14 +101,14 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
       read.instances,
     ),
     ...driftAudit,
-  ];
+  ].filter((dep) => !dep.declaredRange);
 
-  const source: ResolutionSourceRecord | null =
-    read.source && read.kind
-      ? { path: read.source, kind: read.kind, mtimeMs: signatureMtime(signatures.get(read.source)) }
-      : null;
+  const sources: ResolutionSourceRecord[] = read.kind
+    ? readFiles.map((file) => ({ path: file, kind: read.kind!, mtimeMs: signatureMtime(signatures.get(file)) }))
+    : [];
+  const unresolved = ranges && ranges.size > 0 && read.source ? { manifest: read.source, ranges: ranges.size } : null;
 
-  return { group, resolved, audit, drift, source, signatures, resolvedAt };
+  return { group, resolved, audit, drift, source: sources[0] ?? null, sources, unresolved, signatures, resolvedAt };
 }
 
 /** True when any file the resolution depended on changed, appeared, or vanished. */

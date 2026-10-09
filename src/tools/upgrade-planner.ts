@@ -35,6 +35,7 @@ import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { verifyFixPaths, type FixPathInput } from "./upgrade-planner-fixpaths.js";
+import { discoveryNote } from "../project-tree.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -93,6 +94,8 @@ interface UpgradeRecommendation {
   installedVersion?: string;
   /** npm: the command that reinstalls from the lockfile, when `installedVersion` is set. */
   installFix?: string;
+  /** No lockfile: the manifest's declared requirement; `currentVersion` is its floor, not an install. */
+  declaredRange?: string;
 }
 
 interface UpgradePlanResult {
@@ -383,6 +386,9 @@ async function executeStandalonePlanner(
 
     // Skip if no upgrade needed (no vuln, not deprecated, not behind, no drift => no reasons)
     if (reasons.length === 0) continue;
+    if (dep.declaredRange) {
+      reasons.push(`No lockfile: ${dep.currentVersion} is the floor of the declared range "${dep.declaredRange}", not an installed version`);
+    }
 
     // Never recommend a downgrade: when the current version is a prerelease
     // AHEAD of the latest stable (rsa 0.10.0-rc.18 vs stable 0.9.10), the
@@ -425,6 +431,7 @@ async function executeStandalonePlanner(
       action,
       platformActive,
       ...(installedVersion ? { installedVersion, installFix } : {}),
+      ...(dep.declaredRange ? { declaredRange: dep.declaredRange } : {}),
     };
     recommendations.push(rec);
     if (fixable && !reinstallOnly && action === "upgrade_direct" && vulns) {
@@ -541,6 +548,8 @@ async function executeStandalonePlanner(
   if (maintenanceNotices.size > 0) {
     parts.push(`${maintenanceNotices.size} unmaintained-package notice${maintenanceNotices.size !== 1 ? "s" : ""} not ranked (no fix exists; see vulnerability_scan maintenance_notices)`);
   }
+  const partial = discoveryNote(liveIntel.getDiscovery());
+  if (partial) parts.push(partial.replace(/[.]$/, ""));
   const nothing = vulnerabilityDataAvailable ? "nothing to upgrade (no known vulnerability, deprecation, or newer release of a direct dependency)" : "no vulnerability data to plan from";
   if (only && limited.length === 0) parts.push(emptyAnswerNote(only, liveIntel, includeDev, nothing));
   if (!vulnerabilityDataAvailable) {

@@ -26,6 +26,7 @@ import { fetchRegistryHealthFor } from "./registry-health.js";
 import { commonPathRoot, dedupeDependencies, emptyVulnResult } from "./dependency-set.js";
 import { groupIsStale, resolveGroup, type GroupResolution, type ResolutionGroup } from "./resolution.js";
 import { mapEcosystem } from "./version-resolver.js";
+import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import type {
   InstallDriftRecord,
@@ -87,6 +88,8 @@ export class LiveIntelligence {
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
   private groupResults: GroupResolution[] = [];
+  /** The project-tree walk's report of what it left out, when the groups came from one. */
+  private discovery: TreeDiscovery | null = null;
   /** When the dependency set in use was assembled: at init, or at the last re-resolution. */
   private resolvedAt: string | null = null;
   /**
@@ -175,8 +178,22 @@ export class LiveIntelligence {
    * project-tree.ts): each group resolves from its own directory and keeps
    * its manifest's platform targets; `root` is the reported project root.
    */
-  initFromProjectTree(root: string, groups: ResolutionGroup[]): void {
+  initFromProjectTree(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
     this.applyGroups(groups, root);
+    this.discovery = discovery;
+  }
+
+  /**
+   * Manifests with no lockfile beside them, whose ranged dependencies were not
+   * scanned: their versions are declared ranges, not installs.
+   */
+  getUnresolvedManifests(): Array<{ dir: string; manifest: string; ranges: number }> {
+    return this.groupResults.flatMap((r) => (r.unresolved ? [{ dir: r.group.dir, ...r.unresolved }] : []));
+  }
+
+  /** What the project-tree walk left out (lockfiles past its bounds); null when the set did not come from a walk. */
+  getDiscovery(): TreeDiscovery | null {
+    return this.discovery;
   }
 
   /**
@@ -245,9 +262,11 @@ export class LiveIntelligence {
     const seen = new Set<string>();
     const sources: ResolutionSourceRecord[] = [];
     for (const result of this.groupResults) {
-      if (!result.source || seen.has(result.source.path)) continue;
-      seen.add(result.source.path);
-      sources.push(result.source);
+      for (const source of result.sources) {
+        if (seen.has(source.path)) continue;
+        seen.add(source.path);
+        sources.push(source);
+      }
     }
     return { resolvedAt: this.resolvedAt, sources };
   }

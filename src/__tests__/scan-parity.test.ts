@@ -421,7 +421,7 @@ describe("project discovery", () => {
     write("proto/Cargo.lock", "");
     write("proto/Cargo.toml", '[package]\nname = "proto"\n');
     write("relay/Cargo.lock", '[[package]]\nname = "rsa"\nversion = "0.9.10"\nsource = "registry+x"\n');
-    const rel = scanProjectTree(dir).map((t) => path.relative(dir, t.dir).replace(/\\/g, "/") || ".").sort();
+    const rel = scanProjectTree(dir).entries.map((t) => path.relative(dir, t.dir).replace(/\\/g, "/") || ".").sort();
     expect(rel).toEqual([".", "relay"]);
   });
 
@@ -446,7 +446,7 @@ describe("project discovery", () => {
     write("tests/fixtures/old/package-lock.json", "{}");
     write("tools/requirements.txt", "requests==2.25.0\n");
 
-    const tree = scanProjectTree(dir);
+    const tree = scanProjectTree(dir).entries;
     const rel = tree.map((t) => path.relative(dir, t.dir).replace(/\\/g, "/") || ".").sort();
     expect(rel).toEqual([".", "src-tauri", "tools"]);
     const groups = treeResolutionGroups(tree);

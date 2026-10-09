@@ -113,6 +113,56 @@ embedding provider was set.
 - One recommendation per installed version, each advisory counted once.
   "rsa 0.9.10 — 2 known vulnerabilities" was one advisory on two versions.
 
+### What the standalone scan reads
+
+From the same 19-repository corpus, checked against osv-scanner and
+pip-audit.
+
+- **The project-tree walk is wider, and never silent about its bounds.**
+  langchain keeps 108 lockfiles up to three levels down; the walk (depth 2,
+  64 projects) read 64 and dropped 44 (4,852 advisory findings) without a
+  word in any answer. Bounds are now 4 levels and 256 projects (langchain:
+  about 2 s for the walk and every project scan). Past a bound the walk keeps
+  counting without scanning (up to 20,000 directories), and
+  `vulnerability_scan` returns a `coverage` block (concise and detailed:
+  `complete: false`, a note, `lockfiles_not_scanned`; detailed also lists
+  each skipped lockfile and why). `dependency_health` and `upgrade_planner`
+  say "Partial scan: ..." in their summaries.
+- **Python reads every source in a directory, merged:** poetry.lock, uv.lock,
+  pdm.lock (new), Pipfile.lock and every requirements file:
+  `*requirements*.txt` (requirements-dev.txt, _test_minimum_requirements.txt)
+  and the `.txt` files of a `requirements/` folder (superset keeps its 100
+  runtime pins in requirements/base.txt, which nothing read), plus a
+  `.txt` that `-r`-includes a requirements file and pins packages itself
+  (CTFd's development.txt). It read one source per directory, so langchain's
+  libs/community poetry.lock hid the _test_minimum_requirements.txt beside
+  it. `-r` includes are followed; a `-c` constraints file only gives a
+  version to a name a requirements file lists (it installs nothing by
+  itself). Against pip-audit on the newly read files: superset 149/152 rows
+  agree (the 3 others are advisories OSV lists and pip-audit's data does not
+  yet) and 262/262 of pip-audit's advisories are found; CTFd 6/6; langchain
+  libs 38/38 rows, 64/65 advisories (the miss is a langchainjs CVE pip-audit
+  files under the Python package).
+- A `dir/*/` .gitignore rule hid the files beside the ignored
+  subdirectories: `docs/api_reference/*/` made langchain's
+  docs/api_reference/requirements.txt look ignored. A directory-only rule now
+  ignores a file only through a directory above it.
+- **Dev scope from a requirements file's name, and only from it:**
+  requirements-dev.txt, requirements/testing.txt, docs-requirements.txt and
+  the like mark their packages dev. A package any other file lists keeps an
+  unknown scope (never "dev"), so a runtime package is never graded down by
+  a dev file that includes the runtime one.
+- **No lockfile: declared ranges are labelled, never scanned as installs.**
+  A package.json or Cargo.toml with no lockfile used to have its range
+  floors scanned as installed versions (nushell samples/wasm: 2 false
+  findings). Ranged dependencies now carry `declaredRange` ("^1.2.0") in
+  `dependency_health` and `upgrade_planner` and are not sent to OSV; exact
+  pins still are. `vulnerability_scan` lists each such manifest under
+  `coverage.unresolved_manifests` with the command that writes its lockfile.
+- A Cargo.toml read without Cargo.lock took `[package]`'s own `version =
+  "0.1.0"` and `edition = "2021"` for crates named "version" and "edition";
+  only dependency tables are read now.
+
 ### Fix paths (`upgrade_planner`)
 
 From a fix-path oracle on 19 public repositories (2026-10-10): each

@@ -21,7 +21,7 @@ import * as path from "node:path";
 import { emptySource, found, InstanceSet, type VersionSource } from "./lockfile-types.js";
 
 // =============================================================================
-// Python: poetry.lock > uv.lock > Pipfile.lock > requirements.txt
+// Python: every lockfile and requirements file in the directory, merged
 // =============================================================================
 
 /** PEP 503 normalised name: lowercase, runs of `-`, `_`, `.` become one `-`. */
@@ -29,50 +29,191 @@ export function normalizePythonName(name: string): string {
   return name.trim().toLowerCase().replace(/[-_.]+/g, "-");
 }
 
+/** The TOML lockfiles: arrays of [[package]] tables. */
+const PYTHON_TOML_LOCKS = ["poetry.lock", "uv.lock", "pdm.lock"];
+
+/**
+ * Requirement files in a project directory: `*requirements*.txt` beside it
+ * (requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt)
+ * and every `.txt` in a `requirements/` folder (pip-compile-multi: superset
+ * keeps its 100 runtime pins in requirements/base.txt, which nothing read).
+ */
+export function requirementFiles(cwd: string): string[] {
+  const out: string[] = [];
+  try {
+    for (const name of fs.readdirSync(cwd).sort()) {
+      if (/requirements[\w.-]*\.txt$/i.test(name) || includesRequirements(path.join(cwd, name))) out.push(path.join(cwd, name));
+    }
+  } catch {
+    return out;
+  }
+  try {
+    for (const name of fs.readdirSync(path.join(cwd, "requirements")).sort()) {
+      if (/\.txt$/i.test(name)) out.push(path.join(cwd, "requirements", name));
+    }
+  } catch {
+    // no requirements/ folder
+  }
+  return out;
+}
+
+/** Above this a .txt is not read to decide whether it is a requirements file. */
+const MAX_SNIFF_BYTES = 256 * 1024;
+
+/**
+ * A `.txt` whose name does not say "requirements" but that includes one with
+ * `-r` and pins packages itself: CTFd's development.txt (`-r requirements.txt`,
+ * then pytest==5.4.2 and 21 more pins, 6 advisories pip-audit reports).
+ */
+function includesRequirements(file: string): boolean {
+  if (!/\.txt$/i.test(file) || /requirements[\w.-]*\.txt$/i.test(file)) return false;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > MAX_SNIFF_BYTES) return false;
+    const content = fs.readFileSync(file, "utf-8");
+    return /^\s*(?:-r|--requirement)[\s=]+\S+\.txt\s*$/m.test(content) && parseRequirements(content).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a requirements file is dev-only by name: requirements-dev.txt,
+ * dev-requirements.txt, requirements/testing.txt, _test_minimum_requirements.txt,
+ * docs-requirements.txt. The convention is near universal, but it is a name:
+ * a package any other file also lists keeps an unknown scope, never "dev".
+ */
+export function devRequirementsFile(file: string): boolean {
+  const name = path.basename(file).replace(/\.txt$/i, "");
+  return /(?:^|[-_.])(?:dev|devel|develop|development|test|tests|testing|lint|linting|docs?|ci|typing|mypy|bench|benchmarks?)(?:[-_.]|$)/i.test(name);
+}
+
+/**
+ * Every Python source in a directory, merged: poetry.lock, uv.lock, pdm.lock,
+ * Pipfile.lock AND the requirement files. One source per ecosystem dropped
+ * whatever sat beside the first: langchain's libs/community has a
+ * poetry.lock and _test_minimum_requirements.txt, and only the lock was read.
+ * The version a direct dependency resolves to comes from a lockfile first.
+ */
 export function resolvePython(cwd: string): VersionSource {
-  // poetry.lock and uv.lock are TOML arrays of [[package]] tables.
-  for (const file of ["poetry.lock", "uv.lock"]) {
+  const versions = new Map<string, string>();
+  const instances = new InstanceSet();
+  const sources: string[] = [];
+  let lockfile = false;
+  const take = (name: string, version: string, dev: boolean | undefined) => {
+    instances.add(name, version, dev);
+    if (!versions.has(name)) versions.set(name, version);
+  };
+
+  for (const file of PYTHON_TOML_LOCKS) {
     const lockPath = path.join(cwd, file);
     if (!fs.existsSync(lockPath)) continue;
     try {
       const read = readTomlPackageLock(fs.readFileSync(lockPath, "utf-8"));
-      if (read.instances.size > 0) return found(read.versions, read.instances, lockPath, "lockfile");
-    } catch { /* fall through */ }
+      if (read.instances.size === 0) continue;
+      for (const i of read.instances.toArray()) take(i.name, i.version, i.dev);
+      sources.push(lockPath);
+      lockfile = true;
+    } catch { /* unreadable: the next source */ }
   }
 
   const pipfileLock = path.join(cwd, "Pipfile.lock");
   if (fs.existsSync(pipfileLock)) {
     try {
       const lock = JSON.parse(fs.readFileSync(pipfileLock, "utf-8"));
-      const versions = new Map<string, string>();
-      const instances = new InstanceSet();
+      let any = false;
       for (const [section, dev] of [["default", false], ["develop", true]] as const) {
         for (const [name, info] of Object.entries(lock[section] ?? {})) {
           const version = (info as { version?: string }).version?.replace(/^===?/, "");
           if (!version) continue;
-          const normalized = normalizePythonName(name);
-          instances.add(normalized, version, dev);
-          if (!versions.has(normalized)) versions.set(normalized, version);
+          take(normalizePythonName(name), version, dev);
+          any = true;
         }
       }
-      if (instances.size > 0) return found(versions, instances, pipfileLock, "lockfile");
-    } catch { /* fall through */ }
-  }
-
-  const reqPath = path.join(cwd, "requirements.txt");
-  if (fs.existsSync(reqPath)) {
-    const versions = new Map<string, string>();
-    const instances = new InstanceSet();
-    try {
-      for (const { name, version } of parseRequirements(fs.readFileSync(reqPath, "utf-8"))) {
-        instances.add(name, version);
-        if (!versions.has(name)) versions.set(name, version);
+      if (any) {
+        sources.push(pipfileLock);
+        lockfile = true;
       }
-    } catch { /* skip */ }
-    return found(versions, instances, reqPath, "manifest");
+    } catch { /* unreadable */ }
   }
 
-  return emptySource();
+  for (const file of requirementFiles(cwd)) {
+    const dev = devRequirementsFile(file) ? true : undefined;
+    const pins = readRequirementsFile(file);
+    if (pins === null) continue;
+    for (const { name, version } of pins) take(name, version, dev);
+    sources.push(file);
+  }
+
+  if (sources.length === 0) return emptySource();
+  return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1) });
+}
+
+/**
+ * Exact pins from one requirements file, following `-r`/`--requirement`
+ * includes (relative to the file) and applying `-c`/`--constraint` files:
+ * a constraints file installs nothing by itself, so its pins only give a
+ * version to a name the requirements list without one. Null when unreadable.
+ */
+export function readRequirementsFile(file: string, visited: Set<string> = new Set()): Array<{ name: string; version: string }> | null {
+  const key = path.resolve(file).toLowerCase();
+  if (visited.has(key)) return [];
+  visited.add(key);
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf-8");
+  } catch {
+    return null;
+  }
+  const dir = path.dirname(file);
+  const out = parseRequirements(content);
+  const constraints = new Map<string, string>();
+  for (const { option, target } of requirementOptions(content)) {
+    const included = path.resolve(dir, target);
+    if (option === "r") out.push(...(readRequirementsFile(included, visited) ?? []));
+    else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
+  }
+  if (constraints.size > 0) {
+    const pinned = new Set(out.map((p) => p.name));
+    for (const name of unpinnedRequirementNames(content)) {
+      const version = constraints.get(name);
+      if (version && !pinned.has(name)) out.push({ name, version });
+    }
+  }
+  return out;
+}
+
+function safeRead(file: string): string {
+  try {
+    return fs.readFileSync(file, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+/** `-r file` / `--requirement=file` / `-c file` / `--constraint file` lines (local paths only). */
+function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
+  const out: Array<{ option: "r" | "c"; target: string }> = [];
+  for (const raw of content.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+    const m = /^\s*(?:-(r|c)|--(requirement|constraint))(?:\s*=\s*|\s+)(\S+)/.exec(raw);
+    if (!m || /^[a-z][a-z+]*:\/\//i.test(m[3])) continue;
+    out.push({ option: (m[1] ?? (m[2] === "requirement" ? "r" : "c")) as "r" | "c", target: m[3] });
+  }
+  return out;
+}
+
+/** Names a requirements file lists with no exact pin ("flask", "flask>=2"), PEP 503 normalised. */
+function unpinnedRequirementNames(content: string): string[] {
+  const out: string[] = [];
+  for (const raw of content.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+    const line = raw.replace(/(^|\s)#.*$/, "").trim();
+    if (!line || line.startsWith("-")) continue;
+    const spec = line.split(";")[0].trim();
+    if (/===?/.test(spec)) continue;
+    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(spec);
+    if (m) out.push(normalizePythonName(m[1]));
+  }
+  return out;
 }
 
 /**

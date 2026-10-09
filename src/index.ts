@@ -132,7 +132,7 @@ function getDatabase(): FourDADatabase {
       const cwd = resolveProjectDir();
       // The root and every independently-locked project below it
       // (project-tree.ts): a repo root's own lockfile is often not the only one.
-      const tree = scanProjectTree(cwd);
+      const { entries: tree, discovery } = scanProjectTree(cwd);
       const scan = tree[0].scan;
       db.populateFromScan(scan);
       const groups = treeResolutionGroups(tree);
@@ -153,7 +153,7 @@ function getDatabase(): FourDADatabase {
         // Initialize live intelligence with per-ecosystem resolved versions
         // (targets carry platform-gated dep info so advisories can be flagged
         // platform-relevant for the host).
-        liveIntel.initFromProjectTree(cwd, groups);
+        liveIntel.initFromProjectTree(cwd, groups, discovery);
 
         if (liveIntel.isEnabled()) {
           console.error(`[4DA]   Live intelligence: enabled (OSV.dev)`);
@@ -253,10 +253,11 @@ function initWithoutDatabase(): void {
   liveIntel = new LiveIntelligence(null);
   setLiveIntelligence(liveIntel);
   const cwd = resolveProjectDir();
-  const groups = treeResolutionGroups(scanProjectTree(cwd));
+  const { entries, discovery } = scanProjectTree(cwd);
+  const groups = treeResolutionGroups(entries);
   console.error(`[4DA] No SQLite driver: the dependency tools run without a database (${cwd}).`);
   if (groups.length === 0) return;
-  liveIntel.initFromProjectTree(cwd, groups);
+  liveIntel.initFromProjectTree(cwd, groups, discovery);
   if (liveIntel.isEnabled()) liveIntel.startVulnerabilityWarmup(cwd);
 }
 

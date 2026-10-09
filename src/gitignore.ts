@@ -115,8 +115,13 @@ export class IgnoreRules {
     for (const rule of this.rules) {
       if (rule.base && !relPath.startsWith(`${rule.base}/`)) continue;
       const local = rule.base ? relPath.slice(rule.base.length + 1) : relPath;
-      if (rule.dirOnly && !isDir && !local.includes("/")) continue;
-      if (!rule.regex.test(local)) continue;
+      if (rule.dirOnly && !isDir) {
+        // A `dir/` rule ignores a file only through a directory above it:
+        // `docs/api_reference/*/` matched docs/api_reference/requirements.txt
+        // itself, so langchain's docs requirements were never read.
+        const parent = local.includes("/") ? local.slice(0, local.lastIndexOf("/")) : null;
+        if (parent === null || !rule.regex.test(parent)) continue;
+      } else if (!rule.regex.test(local)) continue;
       if (rule.negated) reincludable = true;
       else ignored = true;
     }

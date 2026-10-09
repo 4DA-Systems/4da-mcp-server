@@ -50,6 +50,12 @@ export interface ResolvedDependency {
   installDriftOf?: string;
   /** On drift entries: the command that reinstalls from the lockfile. */
   installFix?: InstallFixCommand;
+  /**
+   * Set when no lockfile pins this dependency: the requirement the manifest
+   * declares ("^1.2.0"). `version` is then that range's floor, NOT an
+   * installed version, and the dependency is never sent to OSV as if it were.
+   */
+  declaredRange?: string;
 }
 
 /**
@@ -69,7 +75,8 @@ export interface InstallDriftRecord {
 export interface ResolutionSourceRecord {
   /** Absolute path. */
   path: string;
-  kind: "lockfile" | "manifest";
+  /** lockfile = exact versions; manifest = exact requirement pins; declared_ranges = no lockfile, range floors only. */
+  kind: "lockfile" | "manifest" | "declared_ranges";
   /** Modification time when it was read, or null if it vanished since. */
   mtimeMs: number | null;
 }
@@ -199,6 +206,11 @@ export interface RegistryPackageInfo {
   weeklyDownloads: number | null;
   isDev: boolean;
   fetchError: string | null;
+  /**
+   * No lockfile: the declared requirement ("^1.2.0"); `currentVersion` is then
+   * its floor, not an installed version.
+   */
+  declaredRange?: string;
   /**
    * The version node_modules actually holds, present only when it differs
    * from `currentVersion` (the lockfile's). Several differing installs across
