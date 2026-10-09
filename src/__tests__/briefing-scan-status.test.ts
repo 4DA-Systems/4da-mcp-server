@@ -346,6 +346,26 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     expect(result.delegation_assessment.reason).toContain("2 major versions of fastembed");
   });
 
+  it("a 0.x minor bump is a major one: reqwest 0.12 -> 0.13 is not safe to delegate", async () => {
+    // 2026-10-09 assessment: a plain major-number compare read 0.12 -> 0.13
+    // as 0 majors crossed and answered safe_to_delegate.
+    const intel = stubIntel(scanOf([]), { getResolvedDeps: () => [...DEPS, dep("reqwest", "0.12.24", "crates.io")] });
+    const named = await executeWhatShouldIKnow(db, { task: "Upgrade reqwest from 0.12 to 0.13" }, intel);
+    const reqwest = named.task_dependencies.find((d) => d.package === "reqwest");
+    expect(reqwest?.majors_crossed).toBe(1);
+    expect(named.delegation_assessment.level).toBe("review_needed");
+
+    // Only the target named: the installed 0.12.24 is the "from".
+    const toOnly = await executeWhatShouldIKnow(db, { task: "Bump reqwest to 0.13.1" }, intel);
+    expect(toOnly.task_dependencies.find((d) => d.package === "reqwest")?.majors_crossed).toBe(1);
+    expect(toOnly.delegation_assessment.level).toBe("review_needed");
+
+    // A patch on the same 0.x line crosses nothing.
+    const patch = await executeWhatShouldIKnow(db, { task: "Bump reqwest to 0.12.28" }, intel);
+    expect(patch.task_dependencies.find((d) => d.package === "reqwest")?.majors_crossed).toBe(0);
+    expect(patch.delegation_assessment.level).toBe("safe_to_delegate");
+  });
+
   it("advisories that appear in both passes are reported once", async () => {
     insertItem(db, {
       title: "CRITICAL: jsonwebtoken authorization bypass in relay auth",

@@ -18,7 +18,7 @@ import { matchSymbols, scanCallSites, scanNpmSource, scanRustSource } from "../t
 import { majorsCrossed, nearestVersions, shapeChangelog, upgradeType } from "../tools/upgrade-impact-report.js";
 import { analyzeUpgradeImpact, type InstalledDep, type UpgradeImpactParams } from "../tools/upgrade-impact.js";
 import { createUpgradeNet, releaseNotesUrl, type UpgradeCache } from "../live/upgrade-sources.js";
-import { parseChangelog } from "../live/changelog.js";
+import { CHANGELOG_PARSER_VERSION, parseChangelog } from "../live/changelog.js";
 import type { FetchFn } from "../live/package-archive.js";
 
 // ---------------------------------------------------------------- helpers
@@ -417,7 +417,18 @@ describe("analyzeUpgradeImpact", () => {
     const first = registry.calls.length;
     await run({ package: "demo-lib" }, registry, { cache });
     expect(registry.calls.length).toBe(first);
-    expect(cache.keys().some((k) => k.startsWith("upgrade-impact:changelog:npm:demo-lib:2.0.0"))).toBe(true);
+    expect(cache.keys()).toContain(`upgrade-impact:changelog:p${CHANGELOG_PARSER_VERSION}:npm:demo-lib:2.0.0`);
+  });
+
+  it("never serves a changelog parsed by an older parser version", async () => {
+    // The parse result is cached for 7 days; before the key carried the parser
+    // version, a parser fix shipped in a release was invisible for a week.
+    const cache = memoryCache();
+    const stale = { found: false, file: "CHANGELOG.md", reason: "CHANGELOG.md has no version headings this parser recognises" };
+    cache.set("upgrade-impact:changelog:npm:demo-lib:2.0.0", stale, "upgrade-impact", 3600);
+    cache.set(`upgrade-impact:changelog:p${CHANGELOG_PARSER_VERSION - 1}:npm:demo-lib:2.0.0`, stale, "upgrade-impact", 3600);
+    const r = await run({ package: "demo-lib" }, fakeNpm(), { cache });
+    expect(r.changelog.found).toBe(true);
   });
 
   it("returns actionable errors", async () => {

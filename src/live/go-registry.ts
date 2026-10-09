@@ -126,7 +126,7 @@ export class GoRegistry {
  * Escape uppercase letters in Go module paths for the proxy URL.
  * Go proxy convention: uppercase 'X' becomes '!x'.
  */
-function escapeModulePath(mod: string): string {
+export function escapeModulePath(mod: string): string {
   return mod.replace(/[A-Z]/g, (c) => "!" + c.toLowerCase());
 }
 

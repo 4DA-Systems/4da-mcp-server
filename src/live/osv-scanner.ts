@@ -12,7 +12,8 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout, fetchJson } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
-import { compareVersions, isComparable, maxVersion, samePackageName } from "./version-compare.js";
+import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
+import { collectAffectedSpans } from "./osv-ranges.js";
 import type {
   ResolvedDependency,
   OsvVulnerability,
@@ -345,12 +346,6 @@ function cvssToSeverity(score: number): "critical" | "high" | "medium" | "low" |
   return "unknown";
 }
 
-/** One vulnerable interval: [introduced, fixed) — `fixed: null` = still open. */
-interface VulnerableInterval {
-  introduced: string;
-  fixed: string | null;
-}
-
 /**
  * Pick the fix version for the OSV range that actually CONTAINS the installed
  * version — never another release line's fix. The old code returned the first
@@ -377,7 +372,7 @@ export function extractFixedVersion(
 ): string | null {
   if (!affected) return null;
 
-  const intervals = collectVulnerableIntervals(affected, packageName, ecosystem);
+  const intervals = collectAffectedSpans(affected, packageName, ecosystem);
   const fixes = intervals
     .map((i) => i.fixed)
     .filter((f): f is string => f !== null);
@@ -397,7 +392,9 @@ export function extractFixedVersion(
   const containing = intervals.find(
     (i) =>
       cmp(installedVersion, i.introduced) >= 0 &&
-      (i.fixed === null || cmp(installedVersion, i.fixed) < 0),
+      (i.fixed !== null
+        ? cmp(installedVersion, i.fixed) < 0
+        : i.lastAffected === null || cmp(installedVersion, i.lastAffected) <= 0),
   );
   if (containing?.fixed && cmp(containing.fixed, installedVersion) > 0) {
     return containing.fixed;
@@ -408,46 +405,4 @@ export function extractFixedVersion(
   const above = fixes.filter((f) => cmp(f, installedVersion) > 0);
   if (above.length === 0) return null;
   return above.reduce((min, v) => (cmp(v, min) < 0 ? v : min), above[0]);
-}
-
-/**
- * Flatten the matching package's version ranges into [introduced, fixed)
- * intervals. OSV sorts events within a range; each `introduced` opens an
- * interval and the next `fixed` closes it. GIT ranges hold commit hashes,
- * not versions, and are skipped.
- */
-function collectVulnerableIntervals(
-  affected: NonNullable<OsvVulnerability["affected"]>,
-  packageName: string,
-  ecosystem: string,
-): VulnerableInterval[] {
-  const intervals: VulnerableInterval[] = [];
-  for (const a of affected) {
-    // Names compare the registry's way: PEP 503 for PyPI (`Jinja2` is
-    // `jinja2`), `-`/`_` folding for crates. An exact compare found no range
-    // for Jinja2 or PyYAML and reported "no fix version published" for both.
-    if (a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
-    for (const range of a.ranges || []) {
-      if (range.type === "GIT") continue;
-      let open: VulnerableInterval | null = null;
-      for (const event of range.events || []) {
-        if (event.introduced !== undefined) {
-          if (open) intervals.push(open);
-          open = { introduced: event.introduced, fixed: null };
-        } else if (event.fixed !== undefined) {
-          if (open) {
-            open.fixed = event.fixed;
-            intervals.push(open);
-            open = null;
-          } else {
-            // `fixed` with no preceding `introduced` — treat as vulnerable
-            // since inception ("0" = OSV's since-the-beginning sentinel).
-            intervals.push({ introduced: "0", fixed: event.fixed });
-          }
-        }
-      }
-      if (open) intervals.push(open);
-    }
-  }
-  return intervals;
 }
