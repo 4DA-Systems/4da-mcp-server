@@ -20,10 +20,12 @@ import { PyPIRegistry } from "./pypi-registry.js";
 import { GoRegistry } from "./go-registry.js";
 import { NpmPackumentReader } from "./npm-packument.js";
 import { CratesVersionsReader } from "./crates-versions.js";
+import { FixPathSources } from "./fix-paths.js";
 import type { ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
 import { commonPathRoot, dedupeDependencies, emptyVulnResult } from "./dependency-set.js";
 import { groupIsStale, resolveGroup, type GroupResolution, type ResolutionGroup } from "./resolution.js";
+import { mapEcosystem } from "./version-resolver.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import type {
   InstallDriftRecord,
@@ -62,6 +64,7 @@ export class LiveIntelligence {
   private goRegistry: GoRegistry;
   private npmPackuments: NpmPackumentReader;
   private cratesVersions: CratesVersionsReader;
+  private fixPathSources: FixPathSources;
   private enabled: boolean;
 
   private lastVulnScan: VulnerabilityScanResult | null = null;
@@ -114,6 +117,24 @@ export class LiveIntelligence {
     this.goRegistry = new GoRegistry(this.cache, this.rateLimiter);
     this.npmPackuments = new NpmPackumentReader(this.cache, this.rateLimiter);
     this.cratesVersions = new CratesVersionsReader(this.cache, this.rateLimiter);
+    this.fixPathSources = new FixPathSources(this.cache, this.rateLimiter);
+  }
+
+  /** Advisory, registry and parent-requirement lookups for fix paths; null when offline. */
+  getFixPathSources(): FixPathSources | null {
+    return this.enabled ? this.fixPathSources : null;
+  }
+
+  /**
+   * The lockfile one manifest directory resolved this ecosystem from, or null
+   * when it resolved from a manifest or nothing. `dir` is spelled as the
+   * resolution group spells it (the scan's sourceDirs).
+   */
+  lockfileFor(dir: string, ecosystem: string): string | null {
+    for (const r of this.groupResults) {
+      if (r.group.dir === dir && mapEcosystem(r.group.language) === ecosystem && r.source?.kind === "lockfile") return r.source.path;
+    }
+    return null;
   }
 
   /**

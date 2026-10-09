@@ -96,8 +96,10 @@ export interface OsvVulnerability {
     package: { name: string; ecosystem: string };
     ranges: Array<{
       type: string;
-      events: Array<{ introduced?: string; fixed?: string }>;
+      events: Array<{ introduced?: string; fixed?: string; last_affected?: string; limit?: string }>;
     }>;
+    /** Versions listed explicitly, in addition to (or instead of) the ranges. */
+    versions?: string[];
   }>;
   references?: Array<{ type: string; url: string }>;
   /** GitHub-advisory severity label: LOW | MODERATE | HIGH | CRITICAL. */

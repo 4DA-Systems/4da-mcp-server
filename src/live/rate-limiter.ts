@@ -56,6 +56,11 @@ export class RateLimiter {
 
 export const DEFAULT_RATE_LIMITS = {
   osv: { maxPerMinute: 10 },
+  // Per-package advisory lists for fix-path checks (/v1/query), one request per vulnerable package.
+  "osv-package": { maxPerMinute: 300 },
+  // Fix-path lookups on registry CDNs (crates.io sparse index, abbreviated npm
+  // documents): separate from the API buckets so a plan never starves health checks.
+  "fixpath-registry": { maxPerMinute: 600 },
   hn: { maxPerMinute: 30 },
   npm: { maxPerMinute: 120 },
   crates: { maxPerMinute: 50 },

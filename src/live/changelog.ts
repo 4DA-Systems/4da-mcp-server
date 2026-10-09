@@ -21,6 +21,14 @@
 import { compareVersionPrecedence } from "./semver-precedence.js";
 import { classifyEntry, classifyHeading, sanitizeEntry, type EntryContext, type EntryKind } from "./changelog-classify.js";
 
+/**
+ * Version of the parser AND classifier output. A parsed changelog is cached
+ * for 7 days per package version, so a fix to either one stays invisible
+ * for a week unless this changes: bump it with every change to parseChangelog
+ * or changelog-classify.ts that can alter a section or an entry's kind.
+ */
+export const CHANGELOG_PARSER_VERSION = 2;
+
 export interface ChangelogEntry {
   kind: EntryKind;
   text: string;

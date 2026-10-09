@@ -37,13 +37,12 @@ import {
   detectFamilyPackages,
   detectTaskPackages,
   judgedReadingFor,
-  majorOf,
   releasesFor,
   wantsLatest,
   type TaskPackage,
 } from "./briefing-task-scope.js";
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
-import { majorsCrossed } from "./upgrade-impact-report.js";
+import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import {
@@ -476,9 +475,12 @@ function describePackage(
   vulns: VulnerabilityScanResult["vulnerabilities"],
   latestByPackage: Map<string, string | null> | null = null,
 ): TaskDependency {
-  const fromMajor = majorOf(pkg.requested_from) ?? majorOf(pkg.installed[0] ?? null);
-  const toMajor = majorOf(pkg.requested_to);
-  let majors = fromMajor !== null && toMajor !== null && toMajor > fromMajor ? toMajor - fromMajor : fromMajor !== null && toMajor !== null ? 0 : null;
+  // 0.x minors count as majors (caret rules: 0.12 -> 0.13 is breaking), the
+  // same reading as upgrade_impact and dependency_check.
+  // Without a stated "from", the furthest installed copy sets the distance.
+  const froms = pkg.requested_from ? [pkg.requested_from] : pkg.installed.length > 0 ? pkg.installed : [null];
+  const distances = froms.map((f) => majorsCrossedLoose(f, pkg.requested_to)).filter((d): d is number => d !== null);
+  let majors: number | null = distances.length > 0 ? Math.max(...distances) : null;
   let latest: TaskDependency["latest"];
   if (latestByPackage) {
     const version = latestByPackage.get(`${pkg.ecosystem}\0${pkg.name}`) ?? null;

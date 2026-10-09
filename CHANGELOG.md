@@ -44,6 +44,10 @@ embedding provider was set.
   bullets plus the MSRV statement).
 - "`Cargo.lock` Removed from Tracking" is no longer read as a Removed
   category.
+- The parsed-changelog cache key carries the parser version
+  (`upgrade-impact:changelog:p2:...`). Parsed changelogs are cached for 7
+  days, so before this a parser fix in a release stayed invisible for a week
+  on every machine that had already read that package.
 
 ### Breaking version ranges
 
@@ -53,6 +57,11 @@ embedding provider was set.
 - `dependency_check` returns `review` for a breaking range (a major, a 0.x
   minor) with "breaking version range, run upgrade_impact". It returned
   `proceed` for vitest 3 -> 5, reqwest 0.12 -> 0.13 and stripe 22 -> 23.
+- `what_should_i_know` counts a 0.x minor bump as a major one in
+  `majors_crossed` and the delegation verdict. It compared plain major
+  numbers, so "upgrade reqwest from 0.12 to 0.13" crossed 0 majors and came
+  back `safe_to_delegate`; it is now `review_needed`. Without a stated
+  "from", the furthest installed copy sets the distance.
 
 ### Project scope
 
@@ -75,6 +84,53 @@ embedding provider was set.
 
 - One recommendation per installed version, each advisory counted once.
   "rsa 0.9.10 — 2 known vulnerabilities" was one advisory on two versions.
+
+### Fix paths (`upgrade_planner`)
+
+From a fix-path oracle on 19 public repositories (2026-10-10): each
+recommended step was applied to a copy, the lockfile re-resolved and the
+project re-scanned with osv-scanner.
+
+- **A target is checked against every advisory of the package, not only the
+  ones the installed version has.** openssl 0.10.38 was sent to 0.10.79,
+  which GHSA-phqj-4mhp-q6mq affects (0.10.50 up to 0.10.80): the upgrade
+  traded old advisories for a new one. The target is now the smallest
+  published version at or above every per-advisory fix that no advisory
+  affects (0.10.80). The package's advisories come from one OSV `/v1/query`
+  per vulnerable package; versions from its registry (npm, crates.io sparse
+  index, PyPI, Go proxy), else from the advisories' own fix events. An
+  advisory no release fixes (braces GHSA-vfj7-8cjw-p6xm, last affected
+  3.0.3, the newest release) does not disqualify a target and is named in
+  the step. OSV `last_affected` events are read as closed ranges.
+- **"Waiting on upstream" only when a parent really blocks the fix.** Every
+  transitive finding used to be `waiting_on_upstream`; for minimist 1.2.5
+  (npm), braces 3.0.2 (pnpm) and mio 0.8.0 (Cargo) that was wrong: each
+  parent's declared requirement already admitted the fix, and a lockfile
+  refresh fixed all three. The planner now reads the parents of the
+  installed copy (package-lock v1-v3, yarn v1 and berry and bun.lock record
+  the ranges; pnpm and Cargo.lock do not, so the parent's requirement comes
+  from registry.npmjs.org or the crates.io sparse index) and returns
+  `action: "lockfile_refresh"` with `refreshCommands` (`npm update
+  minimist`, `pnpm update braces`, `yarn up -R`, `cargo update -p
+  mio@0.8.0 --precise 0.8.11`) when every requirement admits a clean
+  version. A step still waiting on upstream names the requirement that
+  blocks it (`left-pad 1.0.0 requires "1.2.5"`). Summary and
+  `lockfileRefreshes` count them.
+- A Cargo refresh names the locked crates `--precise` cannot move by itself.
+  `cargo update -p openssl@0.10.38 --precise 0.10.80` fails on nushell:
+  0.10.80 pulls syn 2, which needs quote ^1.0.25, and quote 1.0.15 is held
+  by rstest. The step is now `cargo update -p bytemuck@1.8.0 -p
+  proc-macro2@1.0.36 -p quote@1.0.15 && cargo update -p openssl@0.10.38
+  --precise 0.10.80`, found by walking the target's dependency requirements
+  against the lockfile.
+- Checked by applying every `lockfile_refresh` step of four plans to a copy
+  and re-scanning with osv-scanner: 104 of 104 steps cleared their
+  advisories (proshop-mern npm 45, taxonomy pnpm 21, chatgpt-tauri pnpm and
+  Cargo 26, nushell Cargo 12).
+- Each vulnerable step says how its target was checked: `fixPathChecked`
+  is `all_advisories`, or `installed_advisories_only` when OSV or the
+  registry did not answer (offline, or past the 25 s budget), and the
+  summary counts those.
 
 ### Build
 

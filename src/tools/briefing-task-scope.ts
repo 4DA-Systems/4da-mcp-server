@@ -221,12 +221,6 @@ export function caretLine(version: string | null): string | null {
   return m[1] === "0" ? `0.${m[2]}` : m[1];
 }
 
-/** Major version of a version or a `7.x` / `v7` request; null when unreadable. */
-export function majorOf(version: string | null): number | null {
-  const m = version ? /^v?(\d+)/.exec(version) : null;
-  return m ? Number(m[1]) : null;
-}
-
 /** Actionable advisories on the installed copies of one package, highest presented severity first. */
 export function advisoriesFor(pkg: TaskPackage, vulns: VulnerabilityEntry[]) {
   const rank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, unknown: 0 };

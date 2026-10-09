@@ -186,6 +186,26 @@ export function majorsCrossed(from: string, to: string): number {
   return Math.max(0, b.major - a.major);
 }
 
+/**
+ * `majorsCrossed` for versions as a task names them: "0.13", "7.x", "v2",
+ * "1.4.0". A partial version is read as the start of its line (0.13 ->
+ * 0.13.0, 7.x -> 7.0.0). Null when either side is unreadable. A plain
+ * major-number compare read reqwest 0.12 -> 0.13 as 0 majors crossed, and
+ * the briefing called a breaking upgrade safe to delegate.
+ */
+export function majorsCrossedLoose(from: string | null, to: string | null): number | null {
+  const pad = (v: string | null): string | null => {
+    const m = v ? /^v?(\d+)(?:\.(\d+|[x*]))?(?:\.(\d+|[x*]))?/i.exec(v.trim()) : null;
+    if (!m) return null;
+    const num = (s: string | undefined) => (s === undefined || /[x*]/i.test(s) ? "0" : s);
+    return `${m[1]}.${num(m[2])}.${num(m[3])}`;
+  };
+  const a = pad(from);
+  const b = pad(to);
+  if (!a || !b) return null;
+  return majorsCrossed(a, b);
+}
+
 /** Up to `count` published versions nearest to `wanted` by precedence, for "version not found" errors. */
 export function nearestVersions(published: string[], requested: string, count = 5): string[] {
   // "7" / "7.x" / "7.1" are not semver: read them as the start of that line,

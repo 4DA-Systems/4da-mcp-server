@@ -20,7 +20,7 @@
 
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
 import { ArchiveError, defaultFetch, fetchArchiveRootFiles, type FetchFn } from "./package-archive.js";
-import { findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection } from "./changelog.js";
+import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection } from "./changelog.js";
 
 export type UpgradeEcosystem = "npm" | "crates.io";
 
@@ -184,6 +184,11 @@ export function archiveUrl(index: RegistryIndex, version: PublishedVersion): str
   }
 }
 
+/** Cache key of one version's parsed changelog; it carries CHANGELOG_PARSER_VERSION. */
+export function changelogCacheKey(ecosystem: string, name: string, version: string): string {
+  return `upgrade-impact:changelog:p${CHANGELOG_PARSER_VERSION}:${ecosystem}:${name}:${version}`;
+}
+
 /** Parsed changelog shipped inside one version's archive (cached 7 days per version). */
 export async function getChangelog(
   net: UpgradeNet,
@@ -194,7 +199,8 @@ export async function getChangelog(
   if (!url) {
     return { found: false, reason: "the version's archive is not hosted on the package's own registry" };
   }
-  const key = `upgrade-impact:changelog:${index.ecosystem}:${index.name}:${version.version}`;
+  // The parser version is in the key: a parser fix must not wait out the 7-day TTL.
+  const key = changelogCacheKey(index.ecosystem, index.name, version.version);
   const hit = net.cache?.get<ChangelogResult>(key);
   if (hit) return hit;
 
