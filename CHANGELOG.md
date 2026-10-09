@@ -113,6 +113,36 @@ embedding provider was set.
 - One recommendation per installed version, each advisory counted once.
   "rsa 0.9.10 — 2 known vulnerabilities" was one advisory on two versions.
 
+### `vulnerability_scan` latency
+
+A cold scan (empty cache) through the server's own modules, same machine,
+same network, two runs each (2026-10-10):
+
+| Project | Dependencies | Before | After |
+|---|---|---|---|
+| superset | 4,516 | 71 s, 143 s | 9.4 s, 9.2 s |
+| proshop-mern | 1,545 | 34 s, 34 s | 6.5 s, 6.5 s |
+| nushell | 531 | 20 s, 17 s | 4.5 s, 4.4 s |
+
+- **Cache writes in one transaction.** A scan caches one row per dependency
+  and one per advisory, and each was its own autocommit: on superset the
+  network part of a cold scan ended at 12 s and the remaining ~40 s were
+  4,516 WAL commits. They are now one transaction per batch, and the cache
+  file runs `synchronous = NORMAL` (a cache: in WAL mode a crash can lose
+  only the last writes, never corrupt the file).
+- **Advisory details in a pool of 24, not rounds of 8.** OSV has no batch
+  endpoint for advisory records; rounds of 8 each waited for their slowest
+  request. A throttled (429), failed or timed-out detail request is retried
+  once instead of leaving the advisory without severity or summary.
+- **querybatch chunks (1,000 dependencies each) are sent 4 at a time**
+  instead of one after another; every chunk must answer or the scan fails, so
+  an unanswered chunk can never read as clean.
+- **No duplicate work beside the warm-up.** The startup warm-up scan and the
+  first tool call's scan ran side by side and both fetched every advisory
+  before either could cache it. An identical scan already running is now
+  awaited (a forced refresh still runs its own), and a detail request in
+  flight is shared by every scanner in the process.
+
 ### What the standalone scan reads
 
 From the same 19-repository corpus, checked against osv-scanner and

@@ -10,7 +10,7 @@
 
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
-import { fetchWithTimeout, fetchJson } from "./http-utils.js";
+import { fetchWithTimeout } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
@@ -27,9 +27,40 @@ const OSV_TIMEOUT_MS = 15_000;
 const OSV_CACHE_TTL = 3600; // 1 hour
 const OSV_DETAIL_TTL = 86_400; // 24 hours — advisory details change rarely
 const MAX_BATCH_SIZE = 1000;
-// Bounded concurrency for advisory-detail hydration. Only the *vulnerable*
-// subset is hydrated (not every scanned dep), so this stays small in practice.
-const HYDRATE_CONCURRENCY = 8;
+/**
+ * Advisory details have no batch endpoint: one GET /v1/vulns/{id} each. They
+ * were fetched in rounds of 8, each round waiting for its slowest request, so
+ * a project with 900 distinct advisories (superset) made ~113 sequential
+ * round trips. Now a pool of HYDRATE_CONCURRENCY workers keeps that many
+ * requests in flight (osv-scanner itself hydrates in parallel), a failed or
+ * throttled request is retried once, and every result is cached for 24 h.
+ */
+const HYDRATE_CONCURRENCY = 24;
+/** querybatch chunks (1,000 dependencies each) sent at once. */
+const BATCH_CONCURRENCY = 4;
+const DETAIL_RETRY_DELAY_MS = 750;
+
+/**
+ * Detail fetches in flight, shared by every scanner in the process. The
+ * startup warm-up scan and the first tool call's scan used to run side by
+ * side and fetch the same advisories twice, both before either could cache
+ * them; a concurrent scan now waits on the request already made.
+ */
+const detailsInFlight = new Map<string, Promise<OsvVulnerability | null>>();
+
+/** Run `work` over `items` with at most `limit` in flight; results in input order. */
+async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await work(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 interface OsvBatchQuery {
   package: { name: string; ecosystem: string };
@@ -121,35 +152,33 @@ export class OsvScanner {
     // Phase 1 — enumerate advisory IDs per dep via the lightweight batch index.
     // querybatch returns only `{ id, modified }`; the rich fields (severity,
     // fixed version, summary, references) come from per-advisory hydration below.
-    const matches: Array<{ dep: ResolvedDependency; ids: string[] }> = [];
-
-    for (let offset = 0; offset < deps.length; offset += MAX_BATCH_SIZE) {
-      if (!this.rateLimiter.canProceed("osv")) {
+    const chunks: ResolvedDependency[][] = [];
+    for (let offset = 0; offset < deps.length; offset += MAX_BATCH_SIZE) chunks.push(deps.slice(offset, offset + MAX_BATCH_SIZE));
+    // Every chunk is answered or the scan fails: a partial answer would call
+    // the unanswered dependencies clean. The rate limit is checked for all of
+    // them before any is sent.
+    for (let i = 0; i < chunks.length; i++) {
+      if (!this.rateLimiter.consume("osv")) {
         throw new Error("OSV rate limit reached before all dependency batches completed");
       }
-      const chunk = deps.slice(offset, offset + MAX_BATCH_SIZE);
+    }
+    const answered = await pool(chunks, BATCH_CONCURRENCY, async (chunk) => {
       const queries: OsvBatchQuery[] = chunk.map((d) => ({
         package: { name: d.name, ecosystem: d.ecosystem },
         ...(d.version ? { version: d.version } : {}),
       }));
-
       const response = await fetchWithTimeout(OSV_BATCH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ queries }),
       }, OSV_TIMEOUT_MS);
-
       if (!response.ok) {
         throw new Error(`OSV API error: ${response.status}`);
       }
-      this.rateLimiter.consume("osv");
-
       const data = (await response.json()) as OsvBatchResponse;
-      for (let i = 0; i < chunk.length; i++) {
-        const ids = (data.results[i]?.vulns ?? []).map((v) => v.id);
-        matches.push({ dep: chunk[i], ids });
-      }
-    }
+      return chunk.map((dep, i) => ({ dep, ids: (data.results[i]?.vulns ?? []).map((v) => v.id) }));
+    });
+    const matches = answered.flat();
 
     // Phase 2 — hydrate each unique advisory once (cached, bounded concurrency).
     const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
@@ -158,16 +187,17 @@ export class OsvScanner {
     // Phase 3 — map to entries and cache per-dep (empty results cached too, so
     // clean deps are not re-queried).
     const results: VulnerabilityEntry[] = [];
+    const rows: Array<[string, VulnerabilityEntry[]]> = [];
     for (const { dep, ids } of matches) {
       // Drop advisories OSV has withdrawn/retracted — surfacing them is a false
       // positive. Un-hydrated ids (detail fetch failed) are kept: we can't know,
       // and dropping a real advisory is worse than keeping an un-enriched one.
       const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
       const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
-      const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
-      this.cache.set(cacheKey, depVulns, "osv", OSV_CACHE_TTL);
+      rows.push([`osv:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
+    this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
 
     return results;
   }
@@ -188,31 +218,38 @@ export class OsvScanner {
       else toFetch.push(id);
     }
 
-    for (let i = 0; i < toFetch.length; i += HYDRATE_CONCURRENCY) {
-      const slice = toFetch.slice(i, i + HYDRATE_CONCURRENCY);
-      const settled = await Promise.allSettled(slice.map((id) => this.fetchDetail(id)));
-      settled.forEach((res, j) => {
-        if (res.status === "fulfilled" && res.value) {
-          const id = slice[j];
-          out.set(id, res.value);
-          this.cache.set(`osv:detail:${id}`, res.value, "osv", OSV_DETAIL_TTL);
-        }
-      });
-    }
+    const fetched: Array<[string, OsvVulnerability]> = [];
+    await pool(toFetch, HYDRATE_CONCURRENCY, async (id) => {
+      let pending = detailsInFlight.get(id);
+      if (!pending) {
+        pending = this.fetchDetail(id).finally(() => detailsInFlight.delete(id));
+        detailsInFlight.set(id, pending);
+      }
+      const detail = await pending;
+      if (detail) {
+        out.set(id, detail);
+        fetched.push([`osv:detail:${id}`, detail]);
+      }
+    });
+    this.cache.setMany(fetched, "osv", OSV_DETAIL_TTL);
 
     return out;
   }
 
+  /** One advisory's record; retried once after a throttle, a server error or a network failure. Null when it cannot be had. */
   private async fetchDetail(id: string): Promise<OsvVulnerability | null> {
-    try {
-      return await fetchJson<OsvVulnerability>(
-        `${OSV_VULN_URL}${encodeURIComponent(id)}`,
-        {},
-        OSV_TIMEOUT_MS,
-      );
-    } catch {
-      return null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await fetchWithTimeout(`${OSV_VULN_URL}${encodeURIComponent(id)}`, {}, OSV_TIMEOUT_MS);
+        if (response.ok) return (await response.json()) as OsvVulnerability;
+        // 404 and other client errors are answers, not failures to retry.
+        if (response.status !== 429 && response.status < 500) return null;
+      } catch {
+        // network failure or timeout: retry once
+      }
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, DETAIL_RETRY_DELAY_MS));
     }
+    return null;
   }
 }
 

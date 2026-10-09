@@ -80,6 +80,8 @@ export class LiveIntelligence {
    * runs, 2026-10-03 pre-publish verification).
    */
   private scanRequests = 0;
+  /** Scans running now, by generation, scope and path: a request for one of them awaits it. */
+  private scansInFlight = new Map<string, Promise<VulnerabilityScanResult>>();
   private storedScanRequest = 0;
   private lastHeadlines: LiveHeadline[] = [];
   private resolvedDeps: ResolvedDependency[] = [];
@@ -317,13 +319,28 @@ export class LiveIntelligence {
       this.cache.invalidateSource("osv");
     }
 
+    // The same scan already running (the startup warm-up, or a second call
+    // while the first is out) is awaited, not repeated. A forced refresh
+    // always runs its own.
+    const shareKey = `${this.generation} ${options?.includeDev ? "dev" : "runtime"} ${projectPath}`;
+    const running = options?.forceRefresh ? undefined : this.scansInFlight.get(shareKey);
+    if (running) return running;
+    const scan = this.runScan(deps, projectPath, options?.includeDev ?? false);
+    if (!options?.forceRefresh) {
+      this.scansInFlight.set(shareKey, scan);
+      void scan.finally(() => this.scansInFlight.delete(shareKey));
+    }
+    return scan;
+  }
+
+  private async runScan(deps: ResolvedDependency[], projectPath: string, includeDev: boolean): Promise<VulnerabilityScanResult> {
     const generation = this.generation;
     const request = ++this.scanRequests;
     try {
       const result = await this.osvScanner.scan(deps, projectPath);
       if (generation === this.generation && request > this.storedScanRequest) {
         this.lastVulnScan = result;
-        this.lastVulnScanIncludesDev = options?.includeDev ?? false;
+        this.lastVulnScanIncludesDev = includeDev;
         this.storedScanRequest = request;
       }
       return result;
