@@ -1,8 +1,13 @@
 # Changelog
 
-## 6.1.0 — unreleased
+## 6.1.0 — 2026-10-10
 
-Fixes from an agent eval over stdio JSON-RPC against real projects (2026-10-07).
+Fixes from an agent eval over stdio JSON-RPC against real projects (2026-10-07)
+and an engine-generalization test on 19 public repositories against
+osv-scanner, pip-audit and a fix-path oracle (2026-10-10): precision 1.00 over
+19,115 findings and recall 19,115 of 19,116 on the lockfiles the server reads
+(was 0.74 overall, with 44 langchain lockfiles dropped silently); the median
+`vulnerability_scan` over the corpus went from 27 s to 8.6 s.
 
 ### Install: runs under npm 12 with no install scripts
 
