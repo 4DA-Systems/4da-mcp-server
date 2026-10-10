@@ -12,7 +12,7 @@
       "name": "4da",
       "source": "./",
       "description": "What changes between the version you run and the one you want, which of your files it touches, which vulnerabilities it fixes; a hook points the agent at it whenever a dependency version is edited.",
-      "version": "6.0.2",
+      "version": "6.1.0",
       "homepage": "https://4da.ai/mcp/",
       "license": "Apache-2.0"
     }

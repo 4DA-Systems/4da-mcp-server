@@ -1,7 +1,7 @@
 {
   "name": "4da",
   "description": "Upgrade intelligence for your agent: what changes between the version you run and the one you want, which of your files it touches, which vulnerabilities it fixes. Vulnerability scans against your real lockfile tree, ranked upgrade plans, decision memory. Only public package names and versions ever leave your machine.",
-  "version": "6.0.2",
+  "version": "6.1.0",
   "author": {
     "name": "4DA Systems",
     "url": "https://4da.ai"
@@ -21,7 +21,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@4da/mcp-server@6.0.2"
+        "@4da/mcp-server@6.1.0"
       ]
     }
   }

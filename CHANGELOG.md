@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.1.0 — unreleased
+## 6.1.0 — 2026-10-10
 
 Fixes from an agent eval over stdio JSON-RPC against real projects (2026-10-07)
 and an engine-generalization test on 19 public repositories against
