@@ -206,7 +206,7 @@ The MCP server works without the desktop app. It keeps a small local database in
 | Tech stack detection + resolved versions | Yes | Yes |
 | Decision memory + alignment checking | Yes | Yes |
 | Agent memory (cross-session) | Yes | Yes |
-| Scored content feed (20+ sources) | -- | Yes |
+| Developer news judged against your stack (the app's feed) | -- | Yes |
 | Actionable signals + knowledge gaps | -- | Yes |
 | The analysis layer (Signal Chains, Knowledge Gaps, temporal analysis) | -- | Yes |
 
@@ -266,7 +266,7 @@ npx @4da/mcp-server --version    # Print version
 No. The server sends package names and versions to public APIs ([OSV.dev](https://osv.dev), npm registry, crates.io, PyPI, Go proxy), downloads the target version's archive from the package's own registry for `upgrade_impact`, and, only when you call `ecosystem_pulse`, sends a few dependency names as search terms to [HN Algolia](https://hn.algolia.com/api). No source code, no file paths, no personal data: the call-site scan runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls. (The sole exception is opt-in OpenAI embeddings — see the network note above.)
 
 **Do I need the 4DA desktop app?**
-No. 11 tools work standalone: upgrade impact, pre-install dependency checks, vulnerability scanning, dependency health, upgrade planning, ecosystem news, pre-task briefings, project context, decision memory, alignment checking, and agent memory. The desktop app adds a scored content feed from 20+ sources, judged against your actual stack.
+No. 11 tools work standalone: upgrade impact, pre-install dependency checks, vulnerability scanning, dependency health, upgrade planning, ecosystem news, pre-task briefings, project context, decision memory, alignment checking, and agent memory. The desktop app is where the same engine runs day to day: one worklist across every project on the machine, a morning Brief of what changed in your stack, and an Upgrade Plan. With it installed, your agent also gets 5 more tools: signals, knowledge gaps, developer news judged against your stack, Developer DNA and feedback.
 
 **Which AI tools does this work with?**
 Any tool that supports [MCP](https://modelcontextprotocol.io): Claude Code, Claude Desktop, Cursor, Windsurf, VS Code (Copilot), and any custom MCP client.
