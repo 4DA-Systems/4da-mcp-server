@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.1 — unreleased
+## 6.2.1 — 2026-10-11
 
 ### Feed tools leave out sources you turned off in the 4DA app
 
