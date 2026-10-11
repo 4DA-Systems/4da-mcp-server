@@ -21,7 +21,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const run = (cmd, args) => execFileSync(cmd, args, { cwd: root, stdio: "inherit", shell: process.platform === "win32" });
+// Windows needs a shell only to find pnpm's .cmd shim. git runs without one:
+// through cmd.exe, `git commit -am "release: ..."` is split at its spaces.
+const run = (cmd, args) =>
+  execFileSync(cmd, args, { cwd: root, stdio: "inherit", shell: process.platform === "win32" && cmd !== "git" });
 const out = (cmd, args) => execFileSync(cmd, args, { cwd: root, encoding: "utf8" }).trim();
 const json = (file) => JSON.parse(readFileSync(join(root, file), "utf8"));
 const write = (file, data) => writeFileSync(join(root, file), JSON.stringify(data, null, 2) + "\n");
