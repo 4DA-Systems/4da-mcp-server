@@ -148,7 +148,19 @@ function list(advisories: AdvisoryRef[]): string {
   return advisories.length > 3 ? `${shown} and ${advisories.length - 3} more` : shown;
 }
 
-export function releaseAgeSignal(item: CheckItem, to: ReleaseRecord, advisories: Signal, now: Date): Signal {
+/**
+ * Why the hold does not apply to a clean `to`: every safe release on its line
+ * is inside the hold too, and every older release on it has an advisory, so
+ * holding back would leave only vulnerable releases to write.
+ */
+export interface HoldWaiver {
+  /** The release line judged ("7.x", "v0", "==3.1.*"). */
+  line: string;
+  /** Releases on the line past the hold, all with a known advisory. */
+  olderVulnerable: number;
+}
+
+export function releaseAgeSignal(item: CheckItem, to: ReleaseRecord, advisories: Signal, now: Date, waiver?: HoldWaiver): Signal {
   if (!to.publishedAt) {
     return { id: "release_age", value: null, evidence: `The registry gives no publish time for ${item.to}.`, effect: "unknown" };
   }
@@ -165,6 +177,17 @@ export function releaseAgeSignal(item: CheckItem, to: ReleaseRecord, advisories:
       value,
       effect: "proceed",
       evidence: `${ageText}, under the ${WAIT_DAYS}-day hold, but it fixes ${fixed.join(", ")} affecting ${item.from}; a security fix is not held back.`,
+    };
+  }
+  if (waiver) {
+    return {
+      id: "release_age",
+      value: { ...value, hold_waived: "no_settled_safe_release" },
+      effect: "proceed",
+      evidence:
+        `${ageText}, under the ${WAIT_DAYS}-day hold, but every release of ${waiver.line} older than that has a known advisory ` +
+        `(${waiver.olderVulnerable} of them) and no safe one is past the hold; a vulnerable release is the worse risk, so the hold is not applied. ` +
+        `Tell the user this version is ${value.days} day${value.days === 1 ? "" : "s"} old.`,
     };
   }
   return {

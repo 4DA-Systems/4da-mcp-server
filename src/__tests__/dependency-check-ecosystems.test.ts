@@ -335,6 +335,50 @@ describe("Go", () => {
     expect(signal(r, "install_script_added").evidence).toMatch(/Go runs no package code/);
   });
 
+  // G7 g01 (2026-10-11): the only safe x/net releases were 1.8 and 2.8 days old and
+  // every older v0 release had an advisory. "wait" left the agent nothing safe to write.
+  it("when every safe release on the line is inside the hold and every older one is vulnerable, the hold is waived", async () => {
+    const live = new LiveIntelligence(new Database(":memory:"));
+    const atG7 = new Date("2026-10-11T13:21:36Z");
+    const out = await executeDependencyCheck(
+      noDb,
+      {
+        items: [
+          { ecosystem: "Go", package: "golang.org/x/net", to: "latest" },
+          { ecosystem: "Go", package: "golang.org/x/net", to: "v0" },
+          { ecosystem: "Go", package: "golang.org/x/net", to: "v0.60.0" },
+        ],
+      },
+      live,
+      { now: atG7 },
+    );
+    expect(out.results.map((r) => [r.to, r.verdict])).toEqual([
+      ["v0.61.0", "proceed"],
+      ["v0.61.0", "proceed"],
+      ["v0.60.0", "proceed"],
+    ]);
+    for (const r of out.results) {
+      const age = signal(r, "release_age");
+      expect(age.effect).toBe("proceed");
+      expect(age.value).toMatchObject({ hold_waived: "no_settled_safe_release" });
+      expect(age.evidence).toMatch(/every release of v0 older than that has a known advisory/);
+      expect(age.evidence).toMatch(/Tell the user this version is \d/);
+    }
+  });
+
+  it("a package whose only releases are new keeps the hold, even with no advisories", async () => {
+    router.pypi.fresh = {
+      info: { name: "fresh" },
+      releases: {
+        "0.1.0": [{ upload_time_iso_8601: daysAgo(2), yanked: false }],
+        "0.2.0": [{ upload_time_iso_8601: daysAgo(1), yanked: false }],
+      },
+    };
+    const r = (await check([{ ecosystem: "PyPI", package: "fresh", to: "0.2.0" }])).results[0];
+    expect(r.verdict).toBe("wait");
+    expect(signal(r, "release_age").value).not.toHaveProperty("hold_waived");
+  });
+
   it("an exact version without its `v` is read as the module version; affected -> safe releases on the module's line", async () => {
     const r = (await check([{ ecosystem: "Go", package: "golang.org/x/net", to: "0.23.0" }])).results[0];
     expect(r.to).toBe("v0.23.0");

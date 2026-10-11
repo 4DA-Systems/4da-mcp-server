@@ -61,6 +61,7 @@ import {
   type AdvisoryRef,
   type CheckItem,
   type CreatedAtFact,
+  type HoldWaiver,
   type Signal,
   type Verdict,
 } from "./dependency-check-signals.js";
@@ -93,7 +94,7 @@ export const dependencyCheckTool = {
     "",
     "Per item: `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason`, `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release.",
     "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`.",
-    "- release_age: under 3 days -> wait, unless `to` fixes an advisory affecting `from`.",
+    "- release_age: under 3 days -> wait, unless `to` fixes an advisory affecting `from`, or every release on its line past the hold has an advisory and no safe one is past it (then proceed; tell the user its age).",
     "- yanked_or_deprecated: yanked, unpublished, retracted (Go) or deprecated -> avoid.",
     "- publish_trust (npm, crates.io): trusted publisher / provenance dropped -> review. install_script_added (npm): new install script -> review. new_dependencies (npm, crates.io): a new runtime dependency under 30 days old -> review. Not applicable elsewhere, and said so.",
     "- upgrade_type: major (0.x minor counts) -> review: call upgrade_impact for what it breaks.",
@@ -237,6 +238,8 @@ export async function executeDependencyCheck(
     item.rangeCheck = checkRange({ ecosystem: item.ecosystem, index: lookup.data, range: line, basis: "same_line", advisories, from: item.from });
   }
 
+  const holdWaivers = await findHoldWaivers(items, indexes, advisoryLists, fixSources, sources.Go, advisoriesFor, now);
+
   // Phase 2: first-publish dates of newly introduced dependencies.
   const plans = items.map((item) => planItem(item, indexes.get(lookupKey(item))!));
   const wantedCreated = new Map<string, { ecosystem: CheckEcosystem; name: string }>();
@@ -279,7 +282,7 @@ export async function executeDependencyCheck(
     }
     const signals: Signal[] = [
       advisories,
-      releaseAgeSignal(item, to, advisories, now),
+      releaseAgeSignal(item, to, advisories, now, holdWaivers.get(item)),
       publishTrustSignal(item, to, base),
       installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
       newDependenciesSignal(item, to, base, p.introduced, createdForItem),
@@ -418,6 +421,73 @@ function newestOf(ecosystem: CheckEcosystem, versions: string[]): string | null 
   const stable = versions.filter((v) => !isPrereleaseIn(ecosystem, v));
   const pool = stable.length > 0 ? stable : versions;
   return pool.reduce<string | null>((max, v) => (max === null || compareIn(ecosystem, v, max) > 0 ? v : max), null);
+}
+
+/** Go publish dates read per item to decide a hold waiver (the list has none). */
+const GO_WAIVER_READS = 8;
+
+function isYoung(at: string | null | undefined, now: Date): boolean {
+  return Boolean(at) && (now.getTime() - Date.parse(at!)) / DAY_MS < WAIT_DAYS;
+}
+
+/**
+ * Clean `to` versions inside the release-age hold for which holding back
+ * leaves nothing safe to write: every safe release on the line is inside the
+ * hold as well, and the line has older releases, all with a known advisory.
+ * A package whose only releases are new keeps the hold, which is what it is for.
+ * An undated release (Go lists carry no dates) counts as old, never as safe.
+ */
+async function findHoldWaivers(
+  items: Resolved[],
+  indexes: Map<string, RegistryLookup<PackageReleaseIndex>>,
+  advisoryLists: Map<string, AdvisoryRanges[] | null>,
+  fixSources: FixPathSources | null,
+  go: ReleaseMetadataSource,
+  advisoriesFor: (item: CheckItem) => AdvisoryFacts,
+  now: Date,
+): Promise<Map<Resolved, HoldWaiver>> {
+  const out = new Map<Resolved, HoldWaiver>();
+  const held = items.filter((i) => {
+    const lookup = indexes.get(lookupKey(i));
+    if (i.unresolved || lookup?.status !== "ok") return false;
+    const facts = advisoriesFor(i);
+    return facts.available && !hasRealAdvisory(facts) && isYoung(lookup.data.releases[i.to]?.publishedAt, now);
+  });
+  if (held.length === 0) return out;
+  const missing = held.filter((i) => !advisoryLists.has(lookupKey(i)));
+  for (const [k, v] of await packageAdvisoryLists(fixSources, missing)) advisoryLists.set(k, v);
+
+  for (const item of held) {
+    const lookup = indexes.get(lookupKey(item));
+    const advisories = advisoryLists.get(lookupKey(item));
+    const line = lineOf(item.ecosystem, item.to);
+    if (lookup?.status !== "ok" || !advisories || !line) continue;
+    const index = lookup.data;
+    const rc = checkRange({ ecosystem: item.ecosystem, index, range: line, basis: "same_line", advisories, from: item.from });
+    // safe_versions holds the newest few; it must reach the smallest to cover them all.
+    if (rc.smallest_safe_in_range === null || !rc.safe_versions.includes(rc.smallest_safe_in_range)) continue;
+    if (item.ecosystem === "Go") {
+      const undated = rc.safe_versions.filter((v) => !index.releases[v]?.publishedAt).slice(0, GO_WAIVER_READS);
+      if (undated.length > 0) {
+        const read = await go.getReleases(item.package, undated);
+        if (read.status === "ok") {
+          for (const v of undated) if (read.data.releases[v]) index.releases[v] = read.data.releases[v];
+        }
+      }
+    }
+    if (!rc.safe_versions.every((v) => isYoung(index.releases[v]?.publishedAt, now))) continue;
+    const safe = new Set(rc.safe_versions);
+    const older = Object.values(index.releases).filter(
+      (r) =>
+        !r.withdrawn &&
+        !safe.has(r.version) &&
+        !isPrereleaseIn(item.ecosystem, r.version) &&
+        rangeAdmits(item.ecosystem, line, r.version) === true &&
+        !isYoung(r.publishedAt, now),
+    );
+    if (older.length > 0) out.set(item, { line, olderVulnerable: older.length });
+  }
+  return out;
 }
 
 async function packageAdvisoryLists(
