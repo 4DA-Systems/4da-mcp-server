@@ -130,7 +130,10 @@ export function shapeChangelog(
     if (format === "concise") {
       const important = entries.filter((e) => e.kind !== "change");
       const others = entries.filter((e) => e.kind === "change");
-      const additive = (e: ReportEntry) => (e.under ? classifyHeading(e.under) === "additive" : false);
+      const additive = (e: ReportEntry) => {
+        const ctx = e.under ? classifyHeading(e.under) : null;
+        return ctx === "additive" || ctx === "fixes";
+      };
       const neutral = others.filter((e) => !additive(e)).slice(0, CONCISE_NEUTRAL_PER_VERSION);
       const minor = others.filter(additive).slice(0, CONCISE_ADDITIVE_PER_VERSION);
       // Keep document order among the kept plain changes.
