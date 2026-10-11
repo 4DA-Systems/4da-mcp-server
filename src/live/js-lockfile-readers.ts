@@ -63,6 +63,75 @@ export function parsePnpmKey(rawKey: string): [string, string] | null {
   return null;
 }
 
+/** One `packages:`/`snapshots:` entry: its key and the fields that say what it installs. */
+interface PnpmEntry {
+  key: string;
+  /** The entry's own `name:` and `version:` fields (written when the key is not `name@version`). */
+  name?: string;
+  version?: string;
+  tarball?: string;
+  /** A git or directory resolution (`commit:`, `repo:`, `directory:`): not a registry release. */
+  local: boolean;
+  dev?: boolean;
+  inResolution: boolean;
+}
+
+function yamlScalar(text: string, key: string): string | null {
+  if (!text.startsWith(`${key}:`)) return null;
+  const value = unquote(text.slice(key.length + 1).trim()).trim();
+  return value === "" ? null : value;
+}
+
+function pnpmEntryField(entry: PnpmEntry, text: string): void {
+  entry.inResolution = false;
+  const dev = /^dev:\s*(true|false)\s*$/.exec(text);
+  const name = yamlScalar(text, "name");
+  const version = yamlScalar(text, "version");
+  if (dev) entry.dev = dev[1] === "true";
+  else if (name) entry.name = name;
+  else if (version) entry.version = exactVersion(version) ?? undefined;
+  else if (text.startsWith("resolution:")) {
+    entry.inResolution = true;
+    pnpmResolutionText(entry, text.slice("resolution:".length));
+  }
+}
+
+/** `resolution:` is a flow mapping, on one line or (pnpm 5) spread over several. */
+function pnpmResolutionText(entry: PnpmEntry, text: string): void {
+  for (const part of text.split(/[,{}]/)) {
+    const field = part.trim();
+    if (field.startsWith("tarball:")) entry.tarball = unquote(field.slice("tarball:".length).trim());
+    else if (/^(?:commit|repo|directory):/.test(field)) entry.local = true;
+  }
+}
+
+/** A registry tarball (`https://<registry>/<name>/-/<name>-<version>.tgz`, query allowed), not a codeload/git/arbitrary archive. */
+function isRegistryTarball(url: string): boolean {
+  const pathPart = url.split(/[?#]/)[0];
+  return pathPart.includes("/-/") && /\.tgz$/i.test(pathPart);
+}
+
+/**
+ * The (name, version) a pnpm entry installs from a registry, or null.
+ *
+ * The key is not always `name@version`: pnpm 5 keys a package fetched by
+ * tarball URL by that URL and writes `name:`/`version:` fields under it.
+ * trpc's lockfile installs @prisma/client 4.7.1 four times that way, from
+ * registry.npmjs.com, and none of them was read (4DA conformance corpus,
+ * 2026-10-12). The fields win when present; a tarball that is not a registry
+ * artifact, a git checkout or a directory is not a registry release.
+ */
+function pnpmEntryIdentity(entry: PnpmEntry): [string, string] | null {
+  if (entry.local) return null;
+  const parsed = parsePnpmKey(entry.key);
+  if (entry.name && PACKAGE_NAME.test(entry.name)) {
+    if (entry.tarball && !isRegistryTarball(entry.tarball)) return null;
+    const version = entry.version ?? parsed?.[1];
+    return version ? [entry.name, version] : null;
+  }
+  return parsed;
+}
+
 /**
  * Reads a pnpm lockfile (v5.x, v6 or v9) into `versions`; the first version seen wins.
  *
@@ -85,7 +154,15 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   let section = "";
   let blockIndent = -1; // column of the dependency block being read, or -1
   let pending: string | null = null; // v6/v9: a name whose `version:` line follows
-  let packageKey: string | null = null; // the packages/snapshots key whose fields are being read
+  let entry: PnpmEntry | null = null; // the packages/snapshots entry whose fields are being read
+  const finish = () => {
+    const id = entry ? pnpmEntryIdentity(entry) : null;
+    if (id) {
+      transitive.push(id);
+      if (entry!.dev !== undefined) devByKey.set(`${id[0]}\0${id[1]}`, entry!.dev);
+    }
+    entry = null;
+  };
 
   for (const line of content.split(/\r?\n/)) {
     const text = line.trim();
@@ -93,20 +170,20 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
     const indent = line.length - line.trimStart().length;
 
     if (indent === 0) {
+      finish();
       section = text.endsWith(":") ? text.slice(0, -1) : "";
       blockIndent = DEPENDENCY_BLOCKS.has(text) ? 0 : -1;
       pending = null;
-      packageKey = null;
       continue;
     }
     if (section === "packages" || section === "snapshots") {
       if (indent === 2 && text.endsWith(":")) {
-        const parsed = parsePnpmKey(text.slice(0, -1));
-        packageKey = parsed ? `${parsed[0]}\0${parsed[1]}` : null;
-        if (parsed) transitive.push(parsed);
-      } else if (indent === 4 && packageKey) {
-        const dev = /^dev:\s*(true|false)\s*$/.exec(text);
-        if (dev) devByKey.set(packageKey, dev[1] === "true");
+        finish();
+        entry = { key: text.slice(0, -1), inResolution: false, local: false };
+      } else if (entry && indent === 4) {
+        pnpmEntryField(entry, text);
+      } else if (entry?.inResolution && indent > 4) {
+        pnpmResolutionText(entry, text);
       }
       continue;
     }
@@ -136,12 +213,28 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
     }
   }
 
+  finish();
   for (const [name, version] of transitive) setFirst(name, version);
   if (!instances) return;
   for (const [name, version] of versions) {
     if (!transitive.some(([n, v]) => n === name && v === version)) instances.add(name, version);
   }
   for (const [name, version] of transitive) instances.add(name, version, devByKey.get(`${name}\0${version}`));
+}
+
+/**
+ * The registry package a yarn block installs. An npm alias
+ * (`"string-width-cjs": "npm:string-width@^4.2.0"`) keys the block by the
+ * alias, which is not a package: OSV knows `string-width`, so the alias was
+ * queried for nothing and the real package went unscanned (hono's
+ * benchmarks/routers yarn.lock, 4DA conformance corpus, 2026-10-12). berry
+ * names the real package in `resolution:`; v1 only in the alias spec.
+ */
+function yarnPackageName(block: string, firstLine: string, headerName: string): string {
+  const resolution = /^\s+resolution:\s+"?((?:@[^\s/@"]+\/)?[^\s/@"]+)@npm:/m.exec(block);
+  if (resolution) return resolution[1];
+  const alias = /^"?(?:@[^\s/@"]+\/)?[^\s/@"]+@npm:((?:@[^\s/@"]+\/)?[^\s/@"]+)@/.exec(firstLine);
+  return alias ? alias[1] : headerName;
 }
 
 /**
@@ -164,11 +257,12 @@ export function readYarnLock(
     const line = /^\s+version:?\s+"?([^"\s]+)"?\s*$/m.exec(block);
     const version = line ? exactVersion(line[1]) : null;
     if (!version) continue;
+    const name = yarnPackageName(block, firstLine, header[1]);
     // One block per resolved version. Blocks are sorted by spec, so the first
     // block of a name can be an old nested copy; `specs` lets the caller pick
     // the copy a package.json range resolves to instead.
-    if (!versions.has(header[1])) versions.set(header[1], version);
-    instances?.add(header[1], version);
+    if (!versions.has(name)) versions.set(name, version);
+    instances?.add(name, version);
     if (specs) {
       for (const spec of firstLine.replace(/:\s*$/, "").split(",")) {
         specs.set(unquote(spec.trim()).replace(/@npm:/, "@"), version);

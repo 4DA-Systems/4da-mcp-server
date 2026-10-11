@@ -71,87 +71,37 @@ interface OsvBatchResponse {
   results: Array<{ vulns?: OsvVulnerability[] }>;
 }
 
-export class OsvScanner {
-  private cache: LiveCache;
-  private rateLimiter: RateLimiter;
+/**
+ * Where advisories come from. The scanner asks which advisory ids affect each
+ * exact (ecosystem, name, version), then for the records behind those ids.
+ *
+ * - OsvHttpSource (the server's): OSV.dev's own evaluator decides membership
+ *   (`/v1/querybatch`), records come from `/v1/vulns/{id}`, both cached.
+ * - PinnedRecordsSource (pinned-advisories.ts): a fixed set of records on
+ *   disk, membership decided locally by osv-ranges.ts. No network. The
+ *   conformance harness scores the engine with it against the 4DA corpus.
+ */
+export interface AdvisorySource {
+  /** True when answers come over the network: rate-limited, and cached per dependency. */
+  readonly network: boolean;
+  /** The advisory ids affecting each dependency, in input order. Throws when it cannot answer for all of them. */
+  query(deps: ResolvedDependency[]): Promise<string[][]>;
+  /** The full record of each id it can find; a missing id is left out, never fatal. */
+  details(ids: string[]): Promise<Map<string, OsvVulnerability>>;
+}
 
-  constructor(cache: LiveCache, rateLimiter: RateLimiter) {
-    this.cache = cache;
-    this.rateLimiter = rateLimiter;
-  }
+/** OSV.dev over HTTP: querybatch for membership, per-id hydration for records. */
+export class OsvHttpSource implements AdvisorySource {
+  readonly network = true;
 
-  async scan(deps: ResolvedDependency[], projectPath: string): Promise<VulnerabilityScanResult> {
-    const start = Date.now();
-    const scannable = deps.filter((d) => d.version !== null);
-    const ecosystems = [...new Set(scannable.map((d) => d.ecosystem))];
+  constructor(
+    private readonly cache: LiveCache,
+    private readonly rateLimiter: RateLimiter,
+  ) {}
 
-    // Check cache for each dep individually
-    const uncached: ResolvedDependency[] = [];
-    const cachedVulns: VulnerabilityEntry[] = [];
-
-    for (const dep of scannable) {
-      const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
-      const cached = this.cache.get<VulnerabilityEntry[]>(cacheKey);
-      if (cached !== null) {
-        cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
-      } else {
-        uncached.push(dep);
-      }
-    }
-
-    // Fetch uncached from OSV
-    let fetchedVulns: VulnerabilityEntry[] = [];
-    let offline = false;
-
-    if (uncached.length > 0) {
-      if (!this.rateLimiter.canProceed("osv")) {
-        offline = true;
-      } else {
-        try {
-          fetchedVulns = await this.batchQuery(uncached);
-        } catch {
-          offline = true;
-          // Try stale cache for uncached deps
-          for (const dep of uncached) {
-            const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
-            const stale = this.cache.getStale<VulnerabilityEntry[]>(cacheKey);
-            if (stale) cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
-          }
-        }
-      }
-    }
-
-    const allVulns = [...cachedVulns, ...fetchedVulns];
-    const vulnerablePackages = new Set(allVulns.map((v) => v.package));
-    const platformInactiveVulnerable = new Set(
-      allVulns.filter((v) => !v.platformActive).map((v) => v.package),
-    ).size;
-
-    const bySeverity = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
-    for (const v of allVulns) {
-      bySeverity[v.severity]++;
-    }
-
-    return {
-      scannedAt: new Date().toISOString(),
-      projectPath,
-      ecosystemsScanned: ecosystems,
-      totalScanned: scannable.length,
-      totalVulnerable: vulnerablePackages.size,
-      platformInactiveVulnerable,
-      bySeverity,
-      vulnerabilities: allVulns,
-      cleanCount: offline ? 0 : scannable.length - vulnerablePackages.size,
-      scanDurationMs: Date.now() - start,
-      cached: uncached.length === 0,
-      offline,
-    };
-  }
-
-  private async batchQuery(deps: ResolvedDependency[]): Promise<VulnerabilityEntry[]> {
-    // Phase 1 — enumerate advisory IDs per dep via the lightweight batch index.
+  async query(deps: ResolvedDependency[]): Promise<string[][]> {
     // querybatch returns only `{ id, modified }`; the rich fields (severity,
-    // fixed version, summary, references) come from per-advisory hydration below.
+    // fixed version, summary, references) come from per-advisory hydration.
     const chunks: ResolvedDependency[][] = [];
     for (let offset = 0; offset < deps.length; offset += MAX_BATCH_SIZE) chunks.push(deps.slice(offset, offset + MAX_BATCH_SIZE));
     // Every chunk is answered or the scan fails: a partial answer would call
@@ -176,30 +126,9 @@ export class OsvScanner {
         throw new Error(`OSV API error: ${response.status}`);
       }
       const data = (await response.json()) as OsvBatchResponse;
-      return chunk.map((dep, i) => ({ dep, ids: (data.results[i]?.vulns ?? []).map((v) => v.id) }));
+      return chunk.map((_, i) => (data.results[i]?.vulns ?? []).map((v) => v.id));
     });
-    const matches = answered.flat();
-
-    // Phase 2 — hydrate each unique advisory once (cached, bounded concurrency).
-    const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
-    const detailById = await this.hydrateDetails(uniqueIds);
-
-    // Phase 3 — map to entries and cache per-dep (empty results cached too, so
-    // clean deps are not re-queried).
-    const results: VulnerabilityEntry[] = [];
-    const rows: Array<[string, VulnerabilityEntry[]]> = [];
-    for (const { dep, ids } of matches) {
-      // Drop advisories OSV has withdrawn/retracted — surfacing them is a false
-      // positive. Un-hydrated ids (detail fetch failed) are kept: we can't know,
-      // and dropping a real advisory is worse than keeping an un-enriched one.
-      const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
-      const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
-      rows.push([`osv:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
-      results.push(...depVulns);
-    }
-    this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
-
-    return results;
+    return answered.flat();
   }
 
   /**
@@ -208,7 +137,7 @@ export class OsvScanner {
    * skipped (not fatal) — the caller falls back to the index-only shape so a
    * real advisory is never silently dropped just because its detail 404'd.
    */
-  private async hydrateDetails(ids: string[]): Promise<Map<string, OsvVulnerability>> {
+  async details(ids: string[]): Promise<Map<string, OsvVulnerability>> {
     const out = new Map<string, OsvVulnerability>();
     const toFetch: string[] = [];
 
@@ -250,6 +179,117 @@ export class OsvScanner {
       if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, DETAIL_RETRY_DELAY_MS));
     }
     return null;
+  }
+}
+
+export class OsvScanner {
+  private cache: LiveCache;
+  private rateLimiter: RateLimiter;
+  private source: AdvisorySource;
+
+  constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource) {
+    this.cache = cache;
+    this.rateLimiter = rateLimiter;
+    this.source = source ?? new OsvHttpSource(cache, rateLimiter);
+  }
+
+  async scan(deps: ResolvedDependency[], projectPath: string): Promise<VulnerabilityScanResult> {
+    const start = Date.now();
+    const scannable = deps.filter((d) => d.version !== null);
+    const ecosystems = [...new Set(scannable.map((d) => d.ecosystem))];
+    // Per-dependency caching and the rate limit are for network answers; a
+    // pinned source answers locally and must never seed the shared cache.
+    const network = this.source.network;
+
+    // Check cache for each dep individually
+    const uncached: ResolvedDependency[] = [];
+    const cachedVulns: VulnerabilityEntry[] = [];
+
+    for (const dep of scannable) {
+      const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
+      const cached = network ? this.cache.get<VulnerabilityEntry[]>(cacheKey) : null;
+      if (cached !== null) {
+        cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
+      } else {
+        uncached.push(dep);
+      }
+    }
+
+    // Fetch uncached from OSV
+    let fetchedVulns: VulnerabilityEntry[] = [];
+    let offline = false;
+
+    if (uncached.length > 0) {
+      if (network && !this.rateLimiter.canProceed("osv")) {
+        offline = true;
+      } else {
+        try {
+          fetchedVulns = await this.batchQuery(uncached);
+        } catch {
+          offline = true;
+          // Try stale cache for uncached deps
+          for (const dep of uncached) {
+            if (!network) break;
+            const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
+            const stale = this.cache.getStale<VulnerabilityEntry[]>(cacheKey);
+            if (stale) cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
+          }
+        }
+      }
+    }
+
+    const allVulns = [...cachedVulns, ...fetchedVulns];
+    const vulnerablePackages = new Set(allVulns.map((v) => v.package));
+    const platformInactiveVulnerable = new Set(
+      allVulns.filter((v) => !v.platformActive).map((v) => v.package),
+    ).size;
+
+    const bySeverity = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+    for (const v of allVulns) {
+      bySeverity[v.severity]++;
+    }
+
+    return {
+      scannedAt: new Date().toISOString(),
+      projectPath,
+      ecosystemsScanned: ecosystems,
+      totalScanned: scannable.length,
+      totalVulnerable: vulnerablePackages.size,
+      platformInactiveVulnerable,
+      bySeverity,
+      vulnerabilities: allVulns,
+      cleanCount: offline ? 0 : scannable.length - vulnerablePackages.size,
+      scanDurationMs: Date.now() - start,
+      cached: uncached.length === 0,
+      offline,
+    };
+  }
+
+  private async batchQuery(deps: ResolvedDependency[]): Promise<VulnerabilityEntry[]> {
+    // Phase 1 — enumerate advisory IDs per dep (OSV: the lightweight batch index).
+    const idsPerDep = await this.source.query(deps);
+    const matches = deps.map((dep, i) => ({ dep, ids: idsPerDep[i] ?? [] }));
+
+    // Phase 2 — the record behind each unique advisory, once.
+    const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
+    const detailById = await this.source.details(uniqueIds);
+
+    // Phase 3 — map to entries and cache per-dep (empty results cached too, so
+    // clean deps are not re-queried; network answers only).
+    const results: VulnerabilityEntry[] = [];
+    const rows: Array<[string, VulnerabilityEntry[]]> = [];
+    for (const { dep, ids } of matches) {
+      // Drop advisories OSV has withdrawn/retracted — surfacing them is a false
+      // positive. Un-hydrated ids (detail fetch failed) are kept: we can't know,
+      // and dropping a real advisory is worse than keeping an un-enriched one.
+      const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
+      const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
+      rows.push([`osv:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      results.push(...depVulns);
+    }
+    if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
+
+    return results;
   }
 }
 

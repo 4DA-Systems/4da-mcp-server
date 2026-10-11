@@ -104,7 +104,7 @@ jobs:
           node -e '
             const [p] = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
             const files = p.files.map((f) => f.path);
-            const bad = files.filter((f) => /__tests__|test-setup|\.map$|^src\/|^test-fixtures\/|^contract\//.test(f));
+            const bad = files.filter((f) => /__tests__|test-setup|\.map$|^src\/|^test-fixtures\/|^contract\/|^conformance(\/|\.lock$)/.test(f));
             if (bad.length) { console.error("unexpected files in the package:", bad); process.exit(1); }
             for (const need of ["dist/index.js", "dist/setup.js", "README.md", "LICENSE", "CHANGELOG.md"]) {
               if (!files.includes(need)) { console.error("missing from the package:", need); process.exit(1); }
@@ -129,9 +129,79 @@ jobs:
             echo "::warning::contract/app-schema.sql is behind 4DA main. The server passes against both; refresh it with 'pnpm run contract:sync'."
           fi
 
+  # The dependency engine scored against the 4DA conformance corpus (lockfiles,
+  # pinned OSV records, adjudicated truth) at the commit conformance.lock pins.
+  # Offline and platform-independent once pinned, so ubuntu only. The corpus
+  # is fetched (sparse, shallow, one commit) and cached by that commit; it is
+  # never vendored here. conformance/thresholds.json is the ratchet.
+  conformance:
+    name: conformance (pinned)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Read the pinned corpus commit
+        id: lock
+        run: echo "commit=$(node -p "require('./conformance.lock').commit")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: conformance/corpus
+          key: conformance-corpus-${{ steps.lock.outputs.commit }}
+
+      - name: Fetch the corpus (skipped when the cache holds this commit)
+        run: node scripts/fetch-conformance.mjs
+
+      - name: Conformance ratchet
+        run: pnpm exec vitest run src/__tests__/conformance.test.ts src/__tests__/conformance-drift.test.ts
+        env:
+          FOURDA_REQUIRE_CONFORMANCE: "1"
+
+  # Nightly: the same harness against the corpus on 4DA's current main, the
+  # way the app-schema contract is re-checked. A truth correction, a new case
+  # or a new pinned advisory there that this engine disagrees with fails here
+  # and opens the nightly issue, before anyone bumps conformance.lock.
+  conformance-main:
+    name: conformance (4DA main)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Fetch the corpus at 4DA main
+        run: node scripts/fetch-conformance.mjs --ref main
+
+      - name: Conformance ratchet (4DA main)
+        run: |
+          echo "corpus: $(node -p "require('./conformance/corpus/.source.json').commit") (pinned: $(node -p "require('./conformance.lock').commit"))"
+          pnpm exec vitest run src/__tests__/conformance.test.ts
+        env:
+          FOURDA_REQUIRE_CONFORMANCE: "1"
+          FOURDA_CONFORMANCE_UNPINNED: "1"
+
   nightly-report:
     name: Report a nightly failure
-    needs: [test, checks]
+    needs: [test, checks, conformance, conformance-main]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
@@ -146,7 +216,9 @@ jobs:
           existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
           body="The nightly run failed: $RUN_URL
 
-          If the contract step failed, the desktop app's schema on 4DA main no longer matches what this server reads. See contract/README.md, 'When it fails'."
+          If the contract step failed, the desktop app's schema on 4DA main no longer matches what this server reads. See contract/README.md, 'When it fails'.
+
+          If 'conformance (4DA main)' failed, this server's dependency engine disagrees with the conformance corpus on 4DA main. See conformance/README.md, 'When it fails'."
           if [ -n "$existing" ]; then
             gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"
           else

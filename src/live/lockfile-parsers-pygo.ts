@@ -217,6 +217,24 @@ function unpinnedRequirementNames(content: string): string[] {
 }
 
 /**
+ * Whether a lockfile [[package]] entry is a release from a package index.
+ * Only those are what PyPI advisories describe. Not one: the project itself
+ * and local code (uv `editable`/`virtual`/`directory`/`path`), a git checkout
+ * or a direct-URL archive (uv `git`/`url`; poetry `[package.source] type =
+ * "git" | "url" | "file" | "directory"`). A git checkout keeps the version
+ * number of a release it is not: pydantic's uv.lock pins
+ * pydantic-extra-types 2.10.0 from git `main` (4DA conformance corpus).
+ * poetry's `legacy` source is a private index, so its packages are releases.
+ */
+function fromPackageIndex(block: string, body: string): boolean {
+  const uv = /^source\s*=\s*\{\s*([a-z-]+)\s*=/m.exec(body)?.[1];
+  if (uv && uv !== "registry") return false;
+  const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
+  const poetryType = /^type\s*=\s*"([^"]*)"/m.exec(poetrySource)?.[1];
+  return !(poetryType && ["git", "url", "file", "directory"].includes(poetryType));
+}
+
+/**
  * [[package]] tables from poetry.lock (any version) or uv.lock. A pre-1.2
  * poetry.lock records `category = "dev"` for dev-only packages; newer files
  * and uv.lock do not record scope here, so it stays unknown.
@@ -231,8 +249,7 @@ export function readTomlPackageLock(content: string): { versions: Map<string, st
     const name = field("name");
     const version = field("version");
     if (!name || !version) continue;
-    // uv.lock lists the project itself (source = { editable/virtual = "." }); it is not a release.
-    if (/^source\s*=\s*\{\s*(?:editable|virtual)\s*=/m.test(body)) continue;
+    if (!fromPackageIndex(block, body)) continue;
     const category = field("category");
     const normalized = normalizePythonName(name);
     instances.add(normalized, version, category === null ? undefined : category === "dev");
@@ -282,41 +299,55 @@ export function resolveGo(cwd: string): VersionSource {
   } catch {
     return emptySource();
   }
-  const versions = new Map<string, string>();
-  const instances = new InstanceSet();
-  for (const { module, version } of mod.requires) {
-    versions.set(module, version);
-    instances.add(module, version);
-  }
-
+  // The build list: go.mod's requirements and, before go 1.17, the modules
+  // go.sum says the build selected; `replace` applies to both.
+  const selected = new Map(mod.rawRequires.map((r) => [r.module, r.version] as const));
   // From go 1.17 the go.mod `require` list names every module the build needs
   // (module-graph pruning), so it IS the selected set and go.sum (which keeps
   // hashes for versions the build never selects) would only over-report.
   // Before 1.17 go.mod lists direct requirements only; transitives come from
-  // go.sum, at the highest version whose module zip is hashed there — what
-  // minimal version selection picked.
+  // go.sum (selectedFromGoSum: the version MVS picked, when its source is built).
   if (!mod.goVersionAtLeast117) {
     const goSumPath = path.join(cwd, "go.sum");
     if (fs.existsSync(goSumPath)) {
       try {
         for (const [module, version] of selectedFromGoSum(fs.readFileSync(goSumPath, "utf-8"))) {
-          if (versions.has(module)) continue;
-          versions.set(module, version);
-          instances.add(module, version);
+          if (!selected.has(module)) selected.set(module, version);
         }
       } catch { /* skip */ }
     }
   }
+  const versions = new Map<string, string>();
+  for (const [module, version] of selected) {
+    const target = mod.replacement(module, version);
+    if (target === null) continue; // replaced by a local directory: local code, not a registry module
+    if (target) versions.set(target.module, target.version);
+    else if (!versions.has(module)) versions.set(module, version);
+  }
+  const instances = new InstanceSet();
+  for (const [module, version] of versions) instances.add(module, version);
   return found(versions, instances, goModPath, "lockfile");
 }
 
-/** `require` lines (block and single form) with `replace` applied, and whether the go directive is >= 1.17. */
+/** A `replace` target: another module version, or null for a local directory. */
+type GoReplacement = { module: string; version: string } | null;
+
+/**
+ * `require` lines (block and single form) with `replace` applied, the same
+ * lines as written, `replace` for any other module version, and whether the
+ * go directive is >= 1.17. A `replace` may name the version it replaces
+ * (`old v1.2.3 => new v1.3.0`); that one wins over a versionless one.
+ */
 export function parseGoMod(content: string): {
   requires: Array<{ module: string; version: string; indirect: boolean }>;
+  /** Requirements as written, before `replace`. */
+  rawRequires: Array<{ module: string; version: string; indirect: boolean }>;
+  /** What `replace` maps a module version to: undefined for nothing, null for local code. */
+  replacement: (module: string, version: string) => GoReplacement | undefined;
   goVersionAtLeast117: boolean;
 } {
   const requires = new Map<string, { module: string; version: string; indirect: boolean }>();
-  const replaces = new Map<string, { module: string; version: string } | null>();
+  const replaces = new Map<string, GoReplacement>();
   let block: "require" | "replace" | null = null;
 
   for (const rawLine of content.split(/\r?\n/)) {
@@ -342,42 +373,62 @@ export function parseGoMod(content: string): {
       // `old [v] => new v` replaces with another module version; `=> ./path` is local code.
       const [left, right] = rest.split("=>").map((s) => s.trim().split(/\s+/));
       if (!left?.[0] || !right?.[0]) continue;
-      replaces.set(left[0], right[1] && GO_VERSION.test(right[1]) ? { module: right[0], version: right[1] } : null);
+      const key = left[1] ? `${left[0]} ${left[1]}` : left[0];
+      replaces.set(key, right[1] && GO_VERSION.test(right[1]) ? { module: right[0], version: right[1] } : null);
     }
   }
 
+  const replacement = (module: string, version: string): GoReplacement | undefined => {
+    const exact = `${module} ${version}`;
+    if (replaces.has(exact)) return replaces.get(exact);
+    return replaces.has(module) ? replaces.get(module) : undefined;
+  };
+  const rawRequires = [...requires.values()];
   const result: Array<{ module: string; version: string; indirect: boolean }> = [];
-  for (const req of requires.values()) {
-    if (!replaces.has(req.module)) {
-      result.push(req);
-      continue;
-    }
-    const target = replaces.get(req.module);
-    if (target) result.push({ module: target.module, version: target.version, indirect: req.indirect });
+  for (const req of rawRequires) {
+    const target = replacement(req.module, req.version);
+    if (target === undefined) result.push(req);
+    else if (target) result.push({ module: target.module, version: target.version, indirect: req.indirect });
   }
 
   const go = /^go\s+(\d+)\.(\d+)/m.exec(content);
   const goVersionAtLeast117 = go ? Number(go[1]) > 1 || Number(go[2]) >= 17 : false;
-  return { requires: result, goVersionAtLeast117 };
+  return { requires: result, rawRequires, replacement, goVersionAtLeast117 };
 }
 
 /**
- * Per module, the highest version go.sum records — minimal version selection
- * picks the highest required version, and go.sum records every version the
- * module graph required. A module listed only by its `/go.mod` hash is still
- * in Go's build list (`go list -m all`): measured 2026-10-02 on gh cli v1.0
- * (go 1.13), skipping those lines missed 14 advisories (grpc 1.21.0,
- * jwt-go, gorilla/websocket, ...) the build list carries.
+ * Per module, the version the build selected according to go.sum (go < 1.17):
+ * the HIGHEST version recorded there by either line, since minimal version
+ * selection picks the highest version the module graph requires and go.sum
+ * records every one, kept only when go.sum also hashes that version's SOURCE
+ * (`module v1.2.3 h1:...`, not only `module v1.2.3/go.mod h1:...`).
+ *
+ * The go command records the go.mod hash of every module version it visits
+ * while walking the graph, but downloads and hashes the source only of
+ * modules whose packages the build imports. A module with only a `/go.mod`
+ * line at its selected version is in `go list -m all` but is never compiled.
+ * Counting those (the 6.2 rule) read 728 never-built modules as installed
+ * on hugo, node_exporter and traefik: 4DA conformance corpus, 2026-10-12,
+ * whose truth is the build list restricted to source-hashed modules, as the
+ * desktop app reads it. An older version's leftover source hash does not make
+ * that older version built either: node_exporter hashes gogo/protobuf
+ * v1.1.1's source while the graph selects v1.2.1 (go.mod hash only), so
+ * neither is installed.
  */
 export function selectedFromGoSum(content: string): Map<string, string> {
-  const selected = new Map<string, string>();
+  const highest = new Map<string, string>();
+  const sourceHashed = new Set<string>();
   for (const line of content.split(/\r?\n/)) {
     const [module, rawVersion] = line.trim().split(/\s+/);
-    const version = rawVersion?.replace(/\/go\.mod$/, "");
-    if (!module || !version || !GO_VERSION.test(version)) continue;
-    const current = selected.get(module);
-    if (!current || compareGoVersions(version, current) > 0) selected.set(module, version);
+    if (!module || !rawVersion) continue;
+    const version = rawVersion.replace(/\/go\.mod$/, "");
+    if (!GO_VERSION.test(version)) continue;
+    if (version === rawVersion) sourceHashed.add(`${module} ${version}`);
+    const current = highest.get(module);
+    if (!current || compareGoVersions(version, current) > 0) highest.set(module, version);
   }
+  const selected = new Map<string, string>();
+  for (const [module, version] of highest) if (sourceHashed.has(`${module} ${version}`)) selected.set(module, version);
   return selected;
 }
 

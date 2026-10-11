@@ -6,5 +6,8 @@ dist-mcpb/
 coverage/
 # Runtime database (standalone mode creates it on first run) — never commit
 data/
+# The 4DA conformance corpus, fetched by scripts/fetch-conformance.mjs; never vendored
+conformance/corpus/
+conformance/corpus.fetch-*/
 # Cargo output if the fixture is ever built
 test-fixtures/**/target/

@@ -103,10 +103,20 @@ export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecos
   };
 }
 
-/** True when `version` lies in a span (or the explicit list) of this advisory. */
+/**
+ * True when `version` lies in a span (or the explicit list) of this advisory.
+ *
+ * A listed version matches when it is the same version in the ecosystem's
+ * order, not only the same string: OSV lists certifi `2020.12.05` (from the
+ * git tag) and pip installs `2020.12.5`, the same PEP 440 version, which OSV
+ * reports as affected by PYSEC-2024-230 (4DA conformance corpus, 2026-10-12).
+ */
 export function advisoryAffects(advisory: AdvisoryRanges, version: string, ecosystem: string): boolean {
   if (advisory.versions.includes(version)) return true;
   const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
+  if (isComparable(version, ecosystem) && advisory.versions.some((v) => v !== "0" && isComparable(v, ecosystem) && cmp(v, version) === 0)) {
+    return true;
+  }
   return advisory.spans.some(
     (s) =>
       cmp(version, s.introduced) >= 0 &&
