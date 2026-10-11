@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.0 — unreleased
+## 6.2.0 — 2026-10-11
 
 ### `dependency_check`: the release-age hold no longer leaves only vulnerable choices
 
