@@ -350,7 +350,10 @@ export function refreshCommand(format: LockfileFormat, name: string, installed: 
     case "yarn-berry":
       return `yarn up -R ${name}`;
     case "yarn":
-      return `delete the ${name}@ entries from yarn.lock, then run yarn install`;
+      // Yarn 1 has no command that refreshes a transitive copy. Its blocks are keyed
+      // by every spec that resolved to them, and an alias block's first key names
+      // the alias ("string-width-cjs@npm:string-width@^4.2.0"), so name both forms.
+      return `delete every yarn.lock entry that resolves to ${name} (keys "${name}@…" and alias keys "…@npm:${name}@…"), then run yarn install`;
     case "bun":
       return `delete the ${name} entries from bun.lock, then run bun install`;
     case "cargo":

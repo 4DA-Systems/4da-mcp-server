@@ -2,6 +2,14 @@
 
 ## 6.2.3 — unreleased
 
+### Yarn 1 refresh instruction covers alias entries
+
+The yarn 1 refresh step said "delete the `<name>@` entries from yarn.lock". A
+yarn 1 block is keyed by every spec that resolved to it, and an alias block's
+first key names the alias (`"string-width-cjs@npm:string-width@^4.2.0"`), so
+following the step left those blocks and kept the vulnerable version. It now
+names both forms: keys `"<name>@…"` and alias keys `"…@npm:<name>@…"`.
+
 ### Fix-path parents name the real package
 
 The parent reader behind the fix-path rule ("a lockfile refresh is enough"
