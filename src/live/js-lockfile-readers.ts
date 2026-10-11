@@ -30,7 +30,7 @@ function unquote(s: string): string {
 }
 
 /** An exact version with pnpm's peer suffixes removed: v6/v9 `1.2.3(react@18)`, v5 `1.2.3_react@18`. */
-function exactVersion(raw: string): string | null {
+export function exactVersion(raw: string): string | null {
   const version = unquote(raw.trim()).split("(")[0].split("_")[0].trim();
   return /^\d/.test(version) ? version : null;
 }
@@ -132,6 +132,65 @@ function pnpmEntryIdentity(entry: PnpmEntry): [string, string] | null {
   return parsed;
 }
 
+/** A `packages:`/`snapshots:` key, or a dependency value that points at one, in one spelling: unquoted, no leading `/`. */
+export function pnpmKeyRef(raw: string): string {
+  return unquote(raw.trim()).replace(/^\//, "");
+}
+
+export interface PnpmEntryReader {
+  /** One line inside a `packages:` or `snapshots:` section (indent > 0). */
+  line(indent: number, text: string): void;
+  /** Ends the entry being read: call at every section change and at the end of the file. */
+  finish(): void;
+}
+
+/**
+ * Reads `packages:`/`snapshots:` entries line by line and reports the
+ * registry (name, version) each installs (see pnpmEntryIdentity); entries
+ * that install no registry release are not reported.
+ */
+export function pnpmEntryReader(onEntry: (key: string, id: [string, string], dev: boolean | undefined) => void): PnpmEntryReader {
+  let entry: PnpmEntry | null = null;
+  const finish = () => {
+    const id = entry ? pnpmEntryIdentity(entry) : null;
+    if (entry && id) onEntry(entry.key, id, entry.dev);
+    entry = null;
+  };
+  return {
+    line(indent, text) {
+      if (indent === 2 && text.endsWith(":")) {
+        finish();
+        entry = { key: text.slice(0, -1), inResolution: false, local: false };
+      } else if (entry && indent === 4) {
+        pnpmEntryField(entry, text);
+      } else if (entry?.inResolution && indent > 4) {
+        pnpmResolutionText(entry, text);
+      }
+    },
+    finish,
+  };
+}
+
+/** Every `packages:`/`snapshots:` entry's registry (name, version), by pnpmKeyRef of its key. */
+export function pnpmEntryIdentities(content: string): Map<string, [string, string]> {
+  const ids = new Map<string, [string, string]>();
+  const reader = pnpmEntryReader((key, id) => ids.set(pnpmKeyRef(key), id));
+  let inEntries = false;
+  for (const line of content.split(/\r?\n/)) {
+    const text = line.trim();
+    if (text === "" || text.startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0) {
+      reader.finish();
+      inEntries = text === "packages:" || text === "snapshots:";
+    } else if (inEntries) {
+      reader.line(indent, text);
+    }
+  }
+  reader.finish();
+  return ids;
+}
+
 /**
  * Reads a pnpm lockfile (v5.x, v6 or v9) into `versions`; the first version seen wins.
  *
@@ -154,15 +213,10 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   let section = "";
   let blockIndent = -1; // column of the dependency block being read, or -1
   let pending: string | null = null; // v6/v9: a name whose `version:` line follows
-  let entry: PnpmEntry | null = null; // the packages/snapshots entry whose fields are being read
-  const finish = () => {
-    const id = entry ? pnpmEntryIdentity(entry) : null;
-    if (id) {
-      transitive.push(id);
-      if (entry!.dev !== undefined) devByKey.set(`${id[0]}\0${id[1]}`, entry!.dev);
-    }
-    entry = null;
-  };
+  const entries = pnpmEntryReader((_key, id, dev) => {
+    transitive.push(id);
+    if (dev !== undefined) devByKey.set(`${id[0]}\0${id[1]}`, dev);
+  });
 
   for (const line of content.split(/\r?\n/)) {
     const text = line.trim();
@@ -170,21 +224,14 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
     const indent = line.length - line.trimStart().length;
 
     if (indent === 0) {
-      finish();
+      entries.finish();
       section = text.endsWith(":") ? text.slice(0, -1) : "";
       blockIndent = DEPENDENCY_BLOCKS.has(text) ? 0 : -1;
       pending = null;
       continue;
     }
     if (section === "packages" || section === "snapshots") {
-      if (indent === 2 && text.endsWith(":")) {
-        finish();
-        entry = { key: text.slice(0, -1), inResolution: false, local: false };
-      } else if (entry && indent === 4) {
-        pnpmEntryField(entry, text);
-      } else if (entry?.inResolution && indent > 4) {
-        pnpmResolutionText(entry, text);
-      }
+      entries.line(indent, text);
       continue;
     }
     if (section === "importers" && indent <= 4) {
@@ -213,7 +260,7 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
     }
   }
 
-  finish();
+  entries.finish();
   for (const [name, version] of transitive) setFirst(name, version);
   if (!instances) return;
   for (const [name, version] of versions) {
@@ -230,7 +277,7 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
  * benchmarks/routers yarn.lock, 4DA conformance corpus, 2026-10-12). berry
  * names the real package in `resolution:`; v1 only in the alias spec.
  */
-function yarnPackageName(block: string, firstLine: string, headerName: string): string {
+export function yarnPackageName(block: string, firstLine: string, headerName: string): string {
   const resolution = /^\s+resolution:\s+"?((?:@[^\s/@"]+\/)?[^\s/@"]+)@npm:/m.exec(block);
   if (resolution) return resolution[1];
   const alias = /^"?(?:@[^\s/@"]+\/)?[^\s/@"]+@npm:((?:@[^\s/@"]+\/)?[^\s/@"]+)@/.exec(firstLine);

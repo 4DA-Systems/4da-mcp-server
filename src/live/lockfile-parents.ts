@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { stripTrailingCommas } from "./bun-lockfile.js";
-import { parsePnpmKey } from "./js-lockfile-readers.js";
+import { exactVersion, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, yarnPackageName } from "./js-lockfile-readers.js";
 import { packageNameFromNodeModulesPath, parseCargoLockPackages } from "./lockfile-parsers.js";
 
 export type LockfileFormat = "package-lock" | "pnpm" | "yarn" | "yarn-berry" | "bun" | "cargo";
@@ -153,19 +153,31 @@ export function packageLockParents(
 // pnpm-lock.yaml (v5, v6, v9)
 // ---------------------------------------------------------------------------
 
-function exactVersion(raw: string): string | null {
-  const unquoted = raw.trim().replace(/^['"]|['"]$/g, "");
-  const v = unquoted.split("(")[0].split("_")[0].trim();
-  return /^\d/.test(v) ? v : null;
-}
-
 /**
  * Parents from `packages:` (v5/v6) or `snapshots:` (v9) entries whose
  * dependency blocks resolve `name` to `version`. pnpm records resolved
  * versions only, so `range` is null. Importers (the project's own manifests)
  * become local edges with their `specifier` when the lockfile records one.
+ *
+ * Entries and dependency values are named the way the package reader names
+ * them (pnpmEntryIdentities): a pnpm 5 entry keyed by its tarball URL is the
+ * package its `name:`/`version:` fields say, and a dependency value that is a
+ * key rather than a version (that tarball key, or an alias's
+ * `/real/1.2.3`, `/real@1.2.3`, `real@1.2.3`) is an edge to the package it points at.
  */
 export function pnpmParents(content: string, name: string, version: string): ParentEdge[] {
+  const ids = pnpmEntryIdentities(content);
+  /** The (name, version) a dependency line installs: `dep: 1.2.3`, or a value that points at an entry. */
+  const installs = (dep: string, value: string): [string, string] | null => {
+    const exact = exactVersion(value);
+    if (exact) return [dep, exact];
+    const ref = pnpmKeyRef(value);
+    return ids.get(ref) ?? parsePnpmKey(ref);
+  };
+  const isTarget = (dep: string, value: string) => {
+    const id = installs(dep, value);
+    return id !== null && id[0] === name && id[1] === version;
+  };
   const edges: ParentEdge[] = [];
   const seen = new Set<string>();
   let section = "";
@@ -173,7 +185,7 @@ export function pnpmParents(content: string, name: string, version: string): Par
   let importer: string | null = null;
   let inDeps = false;
   let depIndent = -1;
-  let pendingImporterDep = false;
+  let pendingDep: string | null = null;
   let importerSpecifier: string | null = null;
 
   const add = (edge: ParentEdge) => {
@@ -198,13 +210,13 @@ export function pnpmParents(content: string, name: string, version: string): Par
     }
     if (section === "packages" || section === "snapshots") {
       if (indent === 2 && text.endsWith(":")) {
-        parent = parsePnpmKey(text.slice(0, -1));
+        parent = ids.get(pnpmKeyRef(text.slice(0, -1))) ?? null;
         inDeps = false;
       } else if (indent === 4 && parent) {
         inDeps = /^(?:dependencies|optionalDependencies):$/.test(text);
       } else if (indent === 6 && parent && inDeps) {
         const m = /^(?:'([^']+)'|"([^"]+)"|([^\s:'"]+)):\s*(.+)$/.exec(text);
-        if (m && (m[1] ?? m[2] ?? m[3]) === name && exactVersion(m[4]) === version) {
+        if (m && isTarget(m[1] ?? m[2] ?? m[3], m[4])) {
           add({ parent: parent[0], parentVersion: parent[1], range: null, local: false });
         }
       }
@@ -226,19 +238,19 @@ export function pnpmParents(content: string, name: string, version: string): Par
     // A dependency of the project itself: v5 `name: 1.2.3`, v6/v9 `name:` + `specifier:` + `version:`.
     if (indent === depIndent + 2) {
       const m = /^(?:'([^']+)'|"([^"]+)"|([^\s:'"]+)):(?:\s+(.*))?$/.exec(text);
-      pendingImporterDep = !!m && (m[1] ?? m[2] ?? m[3]) === name;
+      pendingDep = m ? m[1] ?? m[2] ?? m[3] : null;
       importerSpecifier = null;
-      if (pendingImporterDep && m?.[4] && exactVersion(m[4]) === version) {
-        add({ parent: importer, parentVersion: null, range: null, local: true });
-        pendingImporterDep = false;
+      if (pendingDep && m?.[4]) {
+        if (isTarget(pendingDep, m[4])) add({ parent: importer, parentVersion: null, range: null, local: true });
+        pendingDep = null;
       }
-    } else if (indent === depIndent + 4 && pendingImporterDep) {
+    } else if (indent === depIndent + 4 && pendingDep) {
       const spec = /^specifier:\s*(.+)$/.exec(text);
       if (spec) importerSpecifier = spec[1].replace(/^['"]|['"]$/g, "");
       const ver = /^version:\s*(.+)$/.exec(text);
-      if (ver && exactVersion(ver[1]) === version) {
-        add({ parent: importer, parentVersion: null, range: importerSpecifier, local: true });
-        pendingImporterDep = false;
+      if (ver) {
+        if (isTarget(pendingDep, ver[1])) add({ parent: importer, parentVersion: null, range: importerSpecifier, local: true });
+        pendingDep = null;
       }
     }
   }
@@ -263,8 +275,10 @@ function parseYarnBlocks(content: string): YarnBlock[] {
   for (const block of content.split(/\r?\n(?=\S)/)) {
     const lines = block.split(/\r?\n/);
     const header = lines[0];
-    const name = /^"?(@?[^@\s"]+)@/.exec(header)?.[1];
-    if (!name || name.startsWith("__")) continue;
+    const headerName = /^"?(@?[^@\s"]+)@/.exec(header)?.[1];
+    if (!headerName || headerName.startsWith("__")) continue;
+    // An npm alias block (`string-width-cjs@npm:string-width@^4.2.0`) installs the real package.
+    const name = yarnPackageName(block, header, headerName);
     const version = /^\s+version:?\s+"?([^"\s]+)"?\s*$/m.exec(block)?.[1];
     if (!version) continue;
     const specs = header.replace(/:\s*$/, "").split(",").map((s) => unquote(s).replace(/@npm:/, "@"));
@@ -293,17 +307,24 @@ function parseYarnBlocks(content: string): YarnBlock[] {
   return blocks;
 }
 
+/**
+ * Blocks whose dependencies resolve `name` to `version`. An npm alias edge
+ * (`string-width-cjs: "npm:string-width@^4.2.0"`) is an edge to the real
+ * package, with the real package's range; it resolves through the block whose
+ * spec is `string-width-cjs@npm:string-width@^4.2.0`.
+ */
 export function yarnParents(content: string, name: string, version: string): ParentEdge[] {
   const blocks = parseYarnBlocks(content);
-  const resolved = new Map<string, string>();
-  for (const b of blocks) for (const spec of b.specs) resolved.set(spec, b.version);
+  const resolved = new Map<string, YarnBlock>();
+  for (const b of blocks) for (const spec of b.specs) resolved.set(spec, b);
   const edges: ParentEdge[] = [];
   for (const b of blocks) {
     for (const [dep, rawRange] of b.deps) {
-      if (dep !== name) continue;
-      const range = rawRange.replace(/^npm:/, "");
-      if (resolved.get(`${name}@${range}`) !== version) continue;
-      edges.push({ parent: b.name, parentVersion: b.version, range, local: false });
+      const spec = rawRange.replace(/^npm:/, "");
+      const target = resolved.get(`${dep}@${spec}`);
+      if (!target || target.name !== name || target.version !== version) continue;
+      const alias = /^npm:((?:@[^\s/@]+\/)?[^\s/@]+)@(.+)$/.exec(rawRange);
+      edges.push({ parent: b.name, parentVersion: b.version, range: alias ? alias[2] : spec, local: false });
     }
   }
   return edges;

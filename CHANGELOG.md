@@ -1,5 +1,27 @@
 # Changelog
 
+## 6.2.3 — unreleased
+
+### Fix-path parents name the real package
+
+The parent reader behind the fix-path rule ("a lockfile refresh is enough"
+vs "the parent must move") parsed lockfiles with its own code and still had
+the two naming defects 6.2.2 fixed in the package readers. It now names
+packages with the readers' helpers.
+
+- **yarn (v1 and berry): npm aliases.** A parent installed under an alias was
+  reported by the alias: on hono's benchmarks/routers lockfile, string-width
+  4.2.3 and wrap-ansi 7.0.0 were named `string-width-cjs` and `wrap-ansi-cjs`.
+  An aliased dependency edge (`string-width-cjs: "npm:string-width@^4.2.0"`)
+  was never matched, so @isaacs/cliui was missing from string-width 4.2.3's
+  parents, and its range is now the real package's `^4.2.0`.
+- **pnpm 5: entries keyed by a tarball URL.** Such an entry was dropped as a
+  parent and as a dependency: trpc's tarball-keyed @prisma/client 4.7.1 was
+  missing from prisma 4.7.1's parents, and the four workspace projects that
+  depend on it were missing from @prisma/client's. A dependency value that
+  points at another entry (that tarball key, or a pnpm alias's
+  `/real/1.2.3`) is now an edge to the package it installs.
+
 ## 6.2.2 — 2026-10-11
 
 ### Lockfile readers agree with the 4DA conformance corpus
