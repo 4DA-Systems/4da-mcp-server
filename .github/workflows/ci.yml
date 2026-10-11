@@ -152,7 +152,12 @@ jobs:
 
       - name: Read the pinned corpus commit
         id: lock
-        run: echo "commit=$(node -p "require('./conformance.lock').commit")" >> "$GITHUB_OUTPUT"
+        # conformance.lock is JSON without a .json extension: require() would
+        # parse it as JavaScript and fail, leaving the cache key without a commit.
+        run: |
+          commit=$(node -e "console.log(JSON.parse(require('fs').readFileSync('conformance.lock', 'utf8')).commit)")
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::conformance.lock has no commit SHA (got '$commit')"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -193,7 +198,7 @@ jobs:
 
       - name: Conformance ratchet (4DA main)
         run: |
-          echo "corpus: $(node -p "require('./conformance/corpus/.source.json').commit") (pinned: $(node -p "require('./conformance.lock').commit"))"
+          echo "corpus: $(node -p "require('./conformance/corpus/.source.json').commit") (pinned: $(node -p "JSON.parse(require('fs').readFileSync('conformance.lock', 'utf8')).commit"))"
           pnpm exec vitest run src/__tests__/conformance.test.ts
         env:
           FOURDA_REQUIRE_CONFORMANCE: "1"
