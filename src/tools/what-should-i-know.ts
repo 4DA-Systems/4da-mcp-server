@@ -533,7 +533,7 @@ function describePackage(
     vulnerabilities: advisoriesFor(pkg, vulns),
     newer_releases: releasesFor(db, pkg),
     next_step:
-      pkg.ecosystem === "npm" || pkg.ecosystem === "crates.io"
+      pkg.ecosystem === "npm" || pkg.ecosystem === "crates.io" || pkg.ecosystem === "PyPI" || pkg.ecosystem === "Go"
         ? `Call upgrade_impact ${impactArgs} for the changelog, breaking changes and the files that import it.`
         : `Call upgrade_planner {"package":"${pkg.name}"} for the smallest version that fixes its advisories.`,
   };

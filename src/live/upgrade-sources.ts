@@ -3,14 +3,16 @@
  * Network sources for `upgrade_impact`: registry version index, the target
  * version's changelog (read from its registry archive) and OSV advisories.
  *
- * Privacy rule (Decision 1, option A): the only hosts contacted are the
- * package's own registry (registry.npmjs.org; crates.io + static.crates.io)
- * and api.osv.dev. A changelog is never fetched from GitHub or a docs site,
- * even when the archive ships none — the report then hands the agent a
- * `release_notes_url` built from registry metadata, and the agent decides
- * whether to fetch it. Every request goes through `UpgradeNet`, which records
- * the host so `_meta.sources` is a fact, not a claim, and which tests replace
- * with a fake fetch.
+ * Privacy rule (Decision 1, option A): by default the only hosts contacted
+ * are the package's own registry (registry.npmjs.org; crates.io +
+ * static.crates.io; pypi.org + files.pythonhosted.org; proxy.golang.org) and
+ * api.osv.dev. A changelog is read from GitHub only when the user opts in
+ * (Decision 1, option B: FOURDA_GITHUB_CHANGELOG, github-releases.ts) and the
+ * archive has none for the range; otherwise the report hands the agent a
+ * `release_notes_url` built from registry metadata and says how to enable the
+ * fallback. Every request goes through `UpgradeNet`, which records the host
+ * so `_meta.sources` is a fact, not a claim, and which tests replace with a
+ * fake fetch.
  *
  * Request budget per call: index (1) + archive (1) + OSV for from/to (2) = 4,
  * each cached (index 6 h, parsed changelog 7 d, OSV 1 h). The npm packument
@@ -19,10 +21,41 @@
  */
 
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
-import { ArchiveError, defaultFetch, fetchArchiveRootFiles, type FetchFn } from "./package-archive.js";
-import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection } from "./changelog.js";
+import { ArchiveError, defaultFetch, fetchArchiveBytes, readRootTextFiles, type FetchFn } from "./package-archive.js";
+import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection, type VersionOrder } from "./changelog.js";
+import { compareVersions, isComparable } from "./version-compare.js";
+import { isPrereleaseVersion } from "./osv-ranges.js";
+import { looksLikeZip, readZipRootTextFiles } from "./zip-archive.js";
+import { loadPypiIndex, normalizePypiName, PYPI_NAME } from "./upgrade-pypi.js";
+import { GO_MODULE, goZipUrl, loadGoIndex } from "./upgrade-go.js";
 
-export type UpgradeEcosystem = "npm" | "crates.io";
+export type UpgradeEcosystem = "npm" | "crates.io" | "PyPI" | "Go";
+export const UPGRADE_ECOSYSTEMS: readonly UpgradeEcosystem[] = ["npm", "crates.io", "PyPI", "Go"];
+
+/** Version order for an ecosystem: semver precedence (npm, crates.io, Go without its `v`), PEP 440 (PyPI). Null = unreadable. */
+export function versionOrder(ecosystem: UpgradeEcosystem): VersionOrder {
+  if (ecosystem === "npm" || ecosystem === "crates.io") return compareVersionPrecedence;
+  return (a, b) => (isComparable(a, ecosystem) && isComparable(b, ecosystem) ? compareVersions(a, b, ecosystem) : null);
+}
+
+/** Readable as a version in this ecosystem. */
+export function isReadableVersion(version: string, ecosystem: UpgradeEcosystem): boolean {
+  if (ecosystem === "npm" || ecosystem === "crates.io") return parseSemverPrecedence(version) !== null;
+  return version !== "0" && isComparable(version, ecosystem);
+}
+
+/** A prerelease in this ecosystem's own terms (PEP 440 `a`/`b`/`rc`/`.dev`; semver `-x`; a Go pseudo-version). */
+export function isPrerelease(version: string, ecosystem: UpgradeEcosystem): boolean {
+  if (ecosystem === "npm" || ecosystem === "crates.io") return (parseSemverPrecedence(version)?.prerelease.length ?? 0) > 0;
+  return isPrereleaseVersion(version, ecosystem);
+}
+
+/** Package-name identity: crates.io folds `-`/`_`, PyPI normalises per PEP 503, npm and Go are exact. */
+export function sameUpgradeName(a: string, b: string, ecosystem: string): boolean {
+  if (ecosystem === "crates.io") return a.replace(/-/g, "_") === b.replace(/-/g, "_");
+  if (ecosystem === "PyPI") return normalizePypiName(a) === normalizePypiName(b);
+  return a === b;
+}
 
 /** crates.io refuses API requests without a descriptive User-Agent. */
 export const CRATES_USER_AGENT = "4da-mcp-server (https://4da.ai; upgrade_impact)";
@@ -39,7 +72,7 @@ export interface PublishedVersion {
   published: string | null;
   deprecated?: string;
   yanked?: boolean;
-  /** Archive URL (npm `dist.tarball`); crates archives are derived from name + version. */
+  /** Archive URL (npm `dist.tarball`, PyPI sdist); crates and Go archives are derived from name + version. */
   tarball?: string;
 }
 
@@ -49,6 +82,8 @@ export interface RegistryIndex {
   ecosystem: UpgradeEcosystem;
   versions: PublishedVersion[];
   repository: string | null;
+  /** Links the project itself labels as its changelog (PyPI `project_urls`). */
+  changelogLinks?: string[];
 }
 
 export interface ChangelogResult {
@@ -56,6 +91,10 @@ export interface ChangelogResult {
   file?: string;
   sections?: ChangelogSection[];
   reason?: string;
+  /** Where the sections came from: the registry archive (default), or the opt-in GitHub fallback. */
+  source?: "archive" | "github-releases" | "github-file";
+  /** The page or API the GitHub fallback read. */
+  url?: string;
 }
 
 /** The cache surface used here; `LiveCache` satisfies it. */
@@ -87,7 +126,16 @@ const NPM_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/i;
 const CRATE_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 export function isValidPackageName(name: string, ecosystem: UpgradeEcosystem): boolean {
-  return ecosystem === "npm" ? NPM_NAME.test(name) && name.length <= 214 : CRATE_NAME.test(name);
+  switch (ecosystem) {
+    case "npm":
+      return NPM_NAME.test(name) && name.length <= 214;
+    case "crates.io":
+      return CRATE_NAME.test(name);
+    case "PyPI":
+      return PYPI_NAME.test(name);
+    case "Go":
+      return GO_MODULE.test(name) && name.length <= 300 && !name.split("/").some((p) => p === "." || p === "..");
+  }
 }
 
 async function cached<T>(net: UpgradeNet, key: string, ttl: number, load: () => Promise<T>): Promise<T> {
@@ -156,25 +204,39 @@ export async function getRegistryIndex(
   ecosystem: UpgradeEcosystem,
   name: string,
 ): Promise<RegistryIndex | null> {
-  const key = `upgrade-impact:index:${ecosystem}:${ecosystem === "crates.io" ? name.replace(/-/g, "_") : name}`;
-  const index = await cached(net, key, INDEX_TTL, () =>
-    ecosystem === "npm" ? loadNpmIndex(net, name) : loadCratesIndex(net, name),
-  );
+  const keyName =
+    ecosystem === "crates.io" ? name.replace(/-/g, "_") : ecosystem === "PyPI" ? normalizePypiName(name) : name;
+  const key = `upgrade-impact:index:${ecosystem}:${keyName}`;
+  const index = await cached(net, key, INDEX_TTL, () => {
+    switch (ecosystem) {
+      case "npm":
+        return loadNpmIndex(net, name);
+      case "crates.io":
+        return loadCratesIndex(net, name);
+      case "PyPI":
+        return loadPypiIndex(net, name);
+      case "Go":
+        return loadGoIndex(net, name);
+    }
+  });
   if (!index) return null;
+  const order = versionOrder(ecosystem);
   const versions = index.versions
-    .filter((v) => parseSemverPrecedence(v.version) !== null)
-    .sort((a, b) => compareVersionPrecedence(a.version, b.version) ?? 0);
+    .filter((v) => isReadableVersion(v.version, ecosystem))
+    .sort((a, b) => order(a.version, b.version) ?? 0);
   return { ...index, versions };
 }
 
-const ARCHIVE_HOSTS = new Set(["registry.npmjs.org", "static.crates.io"]);
+const ARCHIVE_HOSTS = new Set(["registry.npmjs.org", "static.crates.io", "files.pythonhosted.org", "proxy.golang.org"]);
 
 /** The registry archive URL for one version, or null when it is not on the package's own registry. */
 export function archiveUrl(index: RegistryIndex, version: PublishedVersion): string | null {
   const url =
     index.ecosystem === "crates.io"
       ? `https://static.crates.io/crates/${index.name}/${index.name}-${version.version}.crate`
-      : version.tarball;
+      : index.ecosystem === "Go"
+        ? goZipUrl(index.name, version.version)
+        : version.tarball;
   if (!url) return null;
   try {
     const parsed = new URL(url);
@@ -197,7 +259,13 @@ export async function getChangelog(
 ): Promise<ChangelogResult> {
   const url = archiveUrl(index, version);
   if (!url) {
-    return { found: false, reason: "the version's archive is not hosted on the package's own registry" };
+    return {
+      found: false,
+      reason:
+        index.ecosystem === "PyPI" && !version.tarball
+          ? `${version.version} has no source distribution on PyPI (wheels only), so there is no archive changelog to read`
+          : "the version's archive is not hosted on the package's own registry",
+    };
   }
   // The parser version is in the key: a parser fix must not wait out the 7-day TTL.
   const key = changelogCacheKey(index.ecosystem, index.name, version.version);
@@ -207,7 +275,11 @@ export async function getChangelog(
   const headers: Record<string, string> = index.ecosystem === "crates.io" ? { "User-Agent": CRATES_USER_AGENT } : {};
   let files: Map<string, string>;
   try {
-    files = await fetchArchiveRootFiles(url, isChangelogName, net.fetch, headers);
+    const bytes = await fetchArchiveBytes(url, net.fetch, headers);
+    // A Go module zip holds its files under `<module>@<version>/`; a zip sdist and every tar one directory deep.
+    files = looksLikeZip(bytes)
+      ? readZipRootTextFiles(bytes, isChangelogName, index.ecosystem === "Go" ? `${index.name}@${version.version}/` : null)
+      : readRootTextFiles(bytes, isChangelogName);
   } catch (err) {
     const result = { found: false, reason: `could not read the ${version.version} archive: ${(err as Error).message}` };
     // A published archive never changes, so a cap or format refusal is permanent;
@@ -221,7 +293,7 @@ export async function getChangelog(
     ? { found: false, reason: `the ${version.version} archive ships no changelog file` }
     : sections.length === 0
       ? { found: false, file, reason: `${file} has no version headings this parser recognises` }
-      : { found: true, file, sections };
+      : { found: true, file, sections, source: "archive" };
   net.cache?.set(key, result, CACHE_SOURCE, CHANGELOG_TTL);
   return result;
 }

@@ -8,6 +8,8 @@
  *   conventional          `## [7.0.0](https://…/compare/…) (2025-06-24)`
  *   plain / prefixed      `## 1.2.3`, `# v1.2.3 (2024-01-01)`, `### Version 1.2.3`, `## fastembed 5.0.0`
  *   setext                `1.2.3` underlined with `===` / `---`
+ *   reStructuredText      `Version 3.0.0` underlined (or over- and underlined)
+ *                         with any of `= - ~ ^ * + # " '`, then `Released 2023-09-30`
  *   History.md (express)  `1.2.3 / 2020-01-01`
  * A heading only opens a section when the rest of it looks like a trailer
  * (date, link, "yanked") — `## Upgrading from 1.x` or `#### Rust 1.70 support`
@@ -27,7 +29,7 @@ import { classifyEntry, classifyHeading, sanitizeEntry, type EntryContext, type 
  * for a week unless this changes: bump it with every change to parseChangelog
  * or changelog-classify.ts that can alter a section or an entry's kind.
  */
-export const CHANGELOG_PARSER_VERSION = 2;
+export const CHANGELOG_PARSER_VERSION = 3;
 
 export interface ChangelogEntry {
   kind: EntryKind;
@@ -138,7 +140,13 @@ export function parseVersionHeading(raw: string): { version: string; date: strin
 }
 
 const ATX = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
-const SETEXT_RULE = /^\s*(=+|-+)\s*$/;
+/**
+ * A setext / reStructuredText underline. `=` and `-` at any length (Markdown);
+ * the other RST adornments need three, so a stray `**` is not a heading rule.
+ */
+const SETEXT_RULE = /^\s*(=+|-+|~{3,}|\^{3,}|\*{3,}|\+{3,}|#{3,}|"{3,}|'{3,})\s*$/;
+/** `Released 2023-09-30`, `Released on 2024-01-01`, `Release date: ...`, `Unreleased`: a date line under an RST heading. */
+const RELEASED_LINE = /^\s*(?:\*{0,2}(?:released|release date|date)\*{0,2}(?:\s+on)?\s*:?\s*(.*)|unreleased|\(unreleased\))\s*$/i;
 const BULLET = /^(\s*)(?:[-*+•]|\d+[.)])\s+(.*)$/;
 const LINK_DEF = /^\s*\[[^\]]+\]:\s*\S+/;
 const FENCE = /^\s*(```|~~~)/;
@@ -299,6 +307,37 @@ function addLine(state: ParseState, line: string): void {
   state.pending = { text: line, context: state.headingKind, indent: -1, under: state.headingText };
 }
 
+/** A heading that is not a release: a category inside the current release, or the end of it. */
+function subHeading(state: ParseState, raw: string, level: number, setext = false): void {
+  flush(state);
+  // A setext title ends the release only from a strictly higher level: "text" over
+  // "---" is also how a paragraph followed by a rule reads.
+  if (setext && level >= state.sectionLevel) level = state.sectionLevel + 1;
+  // "## Migration guide" after the last release must not be read as part of it.
+  // A change-category heading ("## Changed", "## Breaking Changes") at the
+  // release's own level is still inside it: date-fns 3.0.0 writes
+  // "## v3.0.0" then "## Changed", and its ten BREAKING entries were dropped.
+  if (state.current && level <= state.sectionLevel && !isCategoryHeading(raw)) state.current = null;
+  state.headingKind = classifyHeading(raw);
+  state.headingText = contextText(raw);
+  state.parentKind = null;
+  state.parentIndent = null;
+  state.parentText = null;
+  state.parentEntry = null;
+}
+
+/**
+ * Setext / RST title level by adornment. Markdown fixes `=` at 1 and `-` at 2;
+ * reStructuredText ranks adornments in the order a document first uses them,
+ * so the rest rank below both, in a fixed order: close enough to compare a
+ * sub-heading with the release title above it.
+ */
+function adornmentLevel(ch: string): number {
+  const order = "=-~^*+#\"'";
+  const i = order.indexOf(ch);
+  return i === -1 ? 3 : i + 1;
+}
+
 /** Parse a changelog into version sections, in document order (usually newest first). */
 export function parseChangelog(text: string): ChangelogSection[] {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
@@ -343,30 +382,28 @@ export function parseChangelog(text: string): ChangelogSection[] {
       const heading = parseVersionHeading(atx[2]);
       const level = atx[1].length;
       if (heading) openSection(state, heading, level);
-      else {
-        flush(state);
-        // "## Migration guide" after the last release must not be read as part of it.
-        // A change-category heading ("## Changed", "## Breaking Changes") at the
-        // release's own level is still inside it: date-fns 3.0.0 writes
-        // "## v3.0.0" then "## Changed", and its ten BREAKING entries were dropped.
-        if (state.current && level <= state.sectionLevel && !isCategoryHeading(atx[2])) state.current = null;
-        state.headingKind = classifyHeading(atx[2]);
-        state.headingText = contextText(atx[2]);
-        state.parentKind = null;
-        state.parentIndent = null;
-        state.parentText = null;
-        state.parentEntry = null;
-      }
+      else subHeading(state, atx[2], level);
       continue;
     }
     const next = lines[i + 1];
-    if (next !== undefined && SETEXT_RULE.test(next) && line.trim() !== "" && !BULLET.test(line)) {
+    if (next !== undefined && SETEXT_RULE.test(next) && line.trim() !== "" && !BULLET.test(line) && !SETEXT_RULE.test(line)) {
+      const level = adornmentLevel(next.trim()[0]);
       const heading = parseVersionHeading(line);
+      i++;
       if (heading) {
-        openSection(state, heading, next.trim().startsWith("=") ? 1 : 2);
-        i++;
+        openSection(state, heading, level);
         continue;
       }
+      // A non-release setext / RST title is a sub-heading ("Breaking Changes" over
+      // `~~~~`), as an ATX one is: it was an entry until parser version 3.
+      subHeading(state, line, level, true);
+      continue;
+    }
+    // `Released 2023-09-30` right under an RST release title is its date, not a change (flask, werkzeug, click).
+    const released = state.current && state.current.entries.length === 0 && !state.pending ? RELEASED_LINE.exec(line) : null;
+    if (released && (released[1] === undefined || extractDate(released[1]) || /^(?:unreleased|tbd|-)?$/i.test(released[1].trim()))) {
+      if (released[1]) state.current!.date ??= extractDate(released[1]);
+      continue;
     }
     // History.md style without an underline: `1.2.3 / 2020-01-01` alone on a line.
     const history = new RegExp(String.raw`^v?(${VERSION})\s+/\s+(.+)$`).exec(line.trim());
@@ -409,10 +446,13 @@ export function parseChangelog(text: string): ChangelogSection[] {
   return state.sections;
 }
 
-/** True when `version` lies in (from, to] by semver precedence; unreadable versions are out. */
-export function inRange(version: string, from: string, to: string): boolean {
-  const lower = compareVersionPrecedence(version, from);
-  const upper = compareVersionPrecedence(version, to);
+/** Version order: 1, -1, 0, or null when either side is unreadable. Semver precedence by default. */
+export type VersionOrder = (a: string, b: string) => number | null;
+
+/** True when `version` lies in (from, to] by `order`; unreadable versions are out. */
+export function inRange(version: string, from: string, to: string, order: VersionOrder = compareVersionPrecedence): boolean {
+  const lower = order(version, from);
+  const upper = order(version, to);
   return lower !== null && upper !== null && lower > 0 && upper <= 0;
 }
 
@@ -428,10 +468,11 @@ export function selectRange(
   from: string,
   to: string,
   firstInRange: string,
+  order: VersionOrder = compareVersionPrecedence,
 ): { sections: ChangelogSection[]; coversRange: boolean } {
-  const readable = sections.filter((s) => compareVersionPrecedence(s.version, s.version) !== null);
-  const selected = readable.filter((s) => inRange(s.version, from, to));
-  const reachesTop = readable.some((s) => (compareVersionPrecedence(s.version, to) ?? -1) >= 0);
-  const reachesBottom = readable.some((s) => (compareVersionPrecedence(s.version, firstInRange) ?? 1) <= 0);
+  const readable = sections.filter((s) => order(s.version, s.version) !== null);
+  const selected = readable.filter((s) => inRange(s.version, from, to, order));
+  const reachesTop = readable.some((s) => (order(s.version, to) ?? -1) >= 0);
+  const reachesBottom = readable.some((s) => (order(s.version, firstInRange) ?? 1) <= 0);
   return { sections: selected, coversRange: selected.length > 0 && reachesTop && reachesBottom };
 }
