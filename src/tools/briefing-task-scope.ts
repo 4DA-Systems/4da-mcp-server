@@ -256,7 +256,7 @@ export function releasesFor(db: FourDADatabase, pkg: TaskPackage): Array<{ versi
       .getRawDb()
       .prepare(
         `SELECT title, url, created_at FROM source_items
-         WHERE source_type = ? AND title LIKE ? ORDER BY created_at DESC LIMIT 50`,
+         WHERE source_type = ? AND title LIKE ?${db.enabledSourceClause("source_type")} ORDER BY created_at DESC LIMIT 50`,
       )
       .all(spec.source, `${spec.prefix}${pkg.name} v%`) as typeof rows;
   } catch {
@@ -298,7 +298,7 @@ export function judgedReadingFor(db: FourDADatabase, packages: TaskPackage[], li
          SELECT s.id, s.title, s.url, s.source_type, l.relevance_score AS verdict, s.created_at
          FROM source_items s JOIN latest l ON l.source_item_id = s.id AND l.rn = 1
          WHERE s.feed_relevant = 1 AND l.relevance_score >= 0.5
-           AND s.created_at > datetime('now', '-30 days')
+           AND s.created_at > datetime('now', '-30 days')${db.enabledSourceClause("s.source_type")}
          ORDER BY l.relevance_score DESC, s.created_at DESC LIMIT 2000`,
       )
       .all() as typeof rows;
