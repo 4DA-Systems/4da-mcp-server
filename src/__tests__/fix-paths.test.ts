@@ -23,7 +23,7 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion } from "../live/osv-ranges.js";
 import { extractFixedVersion } from "../live/osv-scanner.js";
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
-import { cargoPrecisePrerequisites, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
+import { cargoPrecisePrerequisites, refreshCommand, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
 import { bunParents, cargoParents, packageLockParents, pnpmParents, yarnParents } from "../live/lockfile-parents.js";
 import type { FourDADatabase } from "../db.js";
 import type { OsvVulnerability, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
@@ -452,5 +452,23 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const openssl = plan.recommendations.find((s: { package: string }) => s.package === "openssl");
     expect(openssl).toMatchObject({ targetVersion: "0.10.79", action: "waiting_on_upstream", fixPathChecked: "installed_advisories_only" });
     expect(plan.summary).toMatch(/checked only against the installed version's advisories/);
+  });
+});
+
+describe("refreshCommand", () => {
+  // Yarn 1 keys a block by every spec that resolved to it; an alias block's first
+  // key names the alias, so "delete the string-width@ entries" left it in place.
+  it("yarn 1 names the package's own keys and its npm-alias keys", () => {
+    const cmd = refreshCommand("yarn", "string-width", "4.2.3", "4.2.4");
+    expect(cmd).toContain('"string-width@…"');
+    expect(cmd).toContain('"…@npm:string-width@…"');
+    expect(cmd).toMatch(/then run yarn install$/);
+  });
+
+  it("the other formats keep their one-line commands", () => {
+    expect(refreshCommand("package-lock", "braces", "3.0.2", "3.0.3")).toBe("npm update braces");
+    expect(refreshCommand("pnpm", "braces", "3.0.2", "3.0.3")).toBe("pnpm update braces");
+    expect(refreshCommand("yarn-berry", "braces", "3.0.2", "3.0.3")).toBe("yarn up -R braces");
+    expect(refreshCommand("cargo", "mio", "0.8.10", "0.8.11")).toBe("cargo update -p mio@0.8.10 --precise 0.8.11");
   });
 });
