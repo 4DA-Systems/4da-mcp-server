@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Per-release registry metadata, normalised across npm and crates.io.
+ * Per-release registry metadata, normalised across npm, crates.io, PyPI and Go.
  *
  * `dependency_check` judges ONE proposed version against the one installed
  * (or, for a new dependency, against the previous release on the same line).
@@ -10,8 +10,11 @@
  * raw responses into this shape so the signal logic never sees a registry's
  * wire format.
  *
- * Privacy: every request behind this shape carries the package NAME only.
- * Versions are selected locally from the full release list.
+ * Privacy: every npm, crates.io and PyPI request behind this shape carries
+ * the package NAME only; versions are selected locally from the full release
+ * list. The Go module proxy lists versions without dates, so a Go release's
+ * date is read from its own `/@v/<version>.info` (the proxy `go get` itself
+ * downloads from), for the versions being judged only.
  */
 
 /**
@@ -30,18 +33,25 @@ export interface ReleaseRecord {
   trust: TrustLevel;
   /** Human label for the trust evidence, e.g. "trusted publisher (github)". */
   trustEvidence: string;
-  /** npm: install-time lifecycle scripts declared (preinstall/install/postinstall, or a gypfile). Null for crates. */
+  /** npm: install-time lifecycle scripts declared (preinstall/install/postinstall, or a gypfile). Null elsewhere. */
   installScripts: string[] | null;
   /** npm deprecation message, or null. */
   deprecated: string | null;
-  /** crates.io: yanked. npm: unpublished (listed in `time` but gone from `versions`). */
-  withdrawn: "yanked" | "unpublished" | null;
-  /** Runtime dependency NAMES (npm dependencies + optionalDependencies; crates normal + build). Null when unknown. */
+  /**
+   * crates.io / PyPI: yanked (PyPI: every file of the release). npm: unpublished
+   * (listed in `time` but gone from `versions`). Go: retracted by a `retract`
+   * directive in the module's latest go.mod.
+   */
+  withdrawn: "yanked" | "unpublished" | "retracted" | null;
+  /** Runtime dependency NAMES (npm dependencies + optionalDependencies; crates normal + build). Null when unknown or not read (PyPI, Go). */
   dependencies: string[] | null;
 }
 
+/** The registries dependency_check reads. */
+export type CheckEcosystem = "npm" | "crates.io" | "PyPI" | "Go";
+
 export interface PackageReleaseIndex {
-  ecosystem: "npm" | "crates.io";
+  ecosystem: CheckEcosystem;
   name: string;
   /** When the package itself was first published, or null. */
   createdAt: string | null;

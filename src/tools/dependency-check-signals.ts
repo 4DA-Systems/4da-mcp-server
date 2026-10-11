@@ -10,14 +10,14 @@
  * verdict fall through to `proceed`.
  */
 
-import { comparePrecedence, parseSemverPrecedence } from "../live/semver-precedence.js";
-import type { PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
+import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
+import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
 
 export type Verdict = "proceed" | "wait" | "review" | "avoid" | "unknown";
 export type SignalEffect = Verdict | "info";
 
 export interface CheckItem {
-  ecosystem: "npm" | "crates.io";
+  ecosystem: CheckEcosystem;
   package: string;
   to: string;
   from?: string;
@@ -75,18 +75,20 @@ export function selectBaseline(
       note: rec ? `installed ${item.from}` : `installed version ${item.from} is not listed on the registry`,
     };
   }
-  const target = parseSemverPrecedence(item.to);
-  if (!target) return { record: null, kind: "previous_on_line", note: "target version is not readable semver" };
-  let best: { rec: ReleaseRecord; p: NonNullable<ReturnType<typeof parseSemverPrecedence>> } | null = null;
+  const eco = item.ecosystem;
+  const target = versionParts(eco, item.to);
+  if (!target) return { record: null, kind: "previous_on_line", note: "target version is not readable" };
+  const targetPre = isPrereleaseIn(eco, item.to);
+  let best: ReleaseRecord | null = null;
   for (const rec of Object.values(index.releases)) {
     if (rec.withdrawn) continue;
-    const p = parseSemverPrecedence(rec.version);
-    if (!p || !sameLine(p, target) || comparePrecedence(p, target) >= 0) continue;
-    if (p.prerelease.length > 0 && target.prerelease.length === 0) continue;
-    if (!best || comparePrecedence(p, best.p) > 0) best = { rec, p };
+    const p = versionParts(eco, rec.version);
+    if (!p || !sameLine(p, target) || compareIn(eco, rec.version, item.to) >= 0) continue;
+    if (isPrereleaseIn(eco, rec.version) && !targetPre) continue;
+    if (!best || compareIn(eco, rec.version, best.version) > 0) best = rec;
   }
   return best
-    ? { record: best.rec, kind: "previous_on_line", note: `previous release on the same line, ${best.rec.version}` }
+    ? { record: best, kind: "previous_on_line", note: `previous release on the same line, ${best.version}` }
     : { record: null, kind: "previous_on_line", note: "first release on its line; nothing earlier to compare" };
 }
 
@@ -174,6 +176,9 @@ export function releaseAgeSignal(item: CheckItem, to: ReleaseRecord, advisories:
 }
 
 export function publishTrustSignal(item: CheckItem, to: ReleaseRecord, base: ReturnType<typeof selectBaseline>): Signal {
+  if (item.ecosystem === "PyPI" || item.ecosystem === "Go") {
+    return { id: "publish_trust", value: "not_applicable", evidence: to.trustEvidence, effect: "info" };
+  }
   if (to.withdrawn === "unpublished") {
     // Its publisher record is gone with it; comparing would report a "drop" we cannot see.
     return { id: "publish_trust", value: null, evidence: `${item.to} was unpublished; its publish metadata is gone.`, effect: "info" };
@@ -197,7 +202,7 @@ export function publishTrustSignal(item: CheckItem, to: ReleaseRecord, base: Ret
 
 export function installScriptSignal(item: CheckItem, to: ReleaseRecord, from: ReleaseRecord | null): Signal {
   if (item.ecosystem !== "npm") {
-    return { id: "install_script_added", value: "not_applicable", evidence: "npm only (crates run build.rs at build time, which the registry does not expose).", effect: "info" };
+    return { id: "install_script_added", value: "not_applicable", evidence: NO_INSTALL_SCRIPTS[item.ecosystem], effect: "info" };
   }
   const scripts = to.installScripts ?? [];
   if (!item.from) {
@@ -228,12 +233,27 @@ export function installScriptSignal(item: CheckItem, to: ReleaseRecord, from: Re
   };
 }
 
+const NO_INSTALL_SCRIPTS: Record<Exclude<CheckEcosystem, "npm">, string> = {
+  "crates.io": "not applicable: npm only (crates run build.rs at build time, which the registry does not expose).",
+  PyPI: "not applicable: PyPI's index exposes no install hooks (an sdist-only release runs its build backend at install).",
+  Go: "not applicable: Go runs no package code when a module is downloaded.",
+};
+
 export function newDependenciesSignal(
+  item: CheckItem,
   to: ReleaseRecord,
   base: ReturnType<typeof selectBaseline>,
   introduced: string[] | null,
   created: Map<string, CreatedAtFact>,
 ): Signal {
+  if (item.ecosystem === "PyPI" || item.ecosystem === "Go") {
+    return {
+      id: "new_dependencies",
+      value: "not_applicable",
+      evidence: `not applicable: per-release dependency lists are not read for ${item.ecosystem}.`,
+      effect: "info",
+    };
+  }
   if (!base.record) {
     return { id: "new_dependencies", value: null, evidence: `No baseline to diff against: ${base.note}.`, effect: "info" };
   }
@@ -289,10 +309,10 @@ export function withdrawnSignal(item: CheckItem, to: ReleaseRecord): Signal {
  * "proceed" and the summary told the agent to apply them (2026-10-07 eval).
  */
 export function upgradeTypeSignal(item: CheckItem): Signal {
-  const kind = upgradeType(item.from, item.to);
+  const kind = upgradeType(item.from, item.to, item.ecosystem);
   const text = item.from ? `${item.from} -> ${item.to}: ${kind}` : `new dependency at ${item.to}`;
   if (kind === "major") {
-    const zeroX = /^0\./.test(item.from ?? "") ? " (below 1.0 a minor bump is a major one)" : "";
+    const zeroX = /^v?0\./.test(item.from ?? "") ? " (below 1.0 a minor bump is a major one)" : "";
     return {
       id: "upgrade_type",
       value: kind,
@@ -303,12 +323,16 @@ export function upgradeTypeSignal(item: CheckItem): Signal {
   return { id: "upgrade_type", value: kind, evidence: `${text}.`, effect: "info" };
 }
 
-export function upgradeType(from: string | undefined, to: string): "patch" | "minor" | "major" | "downgrade" | "none" | "new_dependency" | "unknown" {
+export function upgradeType(
+  from: string | undefined,
+  to: string,
+  ecosystem: CheckEcosystem = "npm",
+): "patch" | "minor" | "major" | "downgrade" | "none" | "new_dependency" | "unknown" {
   if (!from) return "new_dependency";
-  const a = parseSemverPrecedence(from);
-  const b = parseSemverPrecedence(to);
+  const a = versionParts(ecosystem, from);
+  const b = versionParts(ecosystem, to);
   if (!a || !b) return "unknown";
-  const cmp = comparePrecedence(b, a);
+  const cmp = compareIn(ecosystem, to, from);
   if (cmp === 0) return "none";
   if (cmp < 0) return "downgrade";
   if (a.major !== b.major) return "major";

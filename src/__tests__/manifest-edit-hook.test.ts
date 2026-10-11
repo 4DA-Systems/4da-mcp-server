@@ -55,9 +55,9 @@ describe("manifest-edit hook", () => {
     const text = context(npm.stdout);
     expect(text).toContain("vite: ^6.0.0 -> ^7.0.0");
     expect(text).toContain('upgrade_impact {"package":"@tauri-apps/api","to_version":"2.12.0","ecosystem":"npm"}');
-    // dependency_check gets the exact pin only; the vite range has no exact target.
+    // The exact pin is checked as that version, the vite range as a constraint (its safe releases).
     expect(text).toContain(
-      'dependency_check {"items":[{"ecosystem":"npm","package":"@tauri-apps/api","to":"2.12.0","from":"2.11.1"}]}',
+      'dependency_check {"items":[{"ecosystem":"npm","package":"vite","to":"^7.0.0"},{"ecosystem":"npm","package":"@tauri-apps/api","to":"2.12.0","from":"2.11.1"}]}',
     );
 
     const cargo = run({
@@ -65,10 +65,10 @@ describe("manifest-edit hook", () => {
       tool_input: { file_path: "Cargo.toml", old_string: 'tokio = { version = "1.40", features = ["full"] }', new_string: 'tokio = { version = "1.47", features = ["full"] }' },
     });
     expect(context(cargo.stdout)).toContain("tokio: 1.40 -> 1.47");
-    expect(context(cargo.stdout)).not.toContain("dependency_check");
+    expect(context(cargo.stdout)).toContain('dependency_check {"items":[{"ecosystem":"crates.io","package":"tokio","to":"1.47"}]}');
   });
 
-  it("names the upgrade_impact call for Python and Go edits (dependency_check reads npm and crates.io only)", () => {
+  it("names the dependency_check and upgrade_impact calls for Python and Go edits", () => {
     const py = context(
       run({
         tool_name: "Edit",
@@ -76,8 +76,7 @@ describe("manifest-edit hook", () => {
       }).stdout,
     );
     expect(py).toContain('django: ==4.2.16 -> ==5.1; check with upgrade_impact {"package":"django","to_version":"5.1","ecosystem":"PyPI"}');
-    expect(py).not.toContain("dependency_check");
-    expect(py).toContain("vulnerability_scan after installing");
+    expect(py).toContain('dependency_check {"items":[{"ecosystem":"PyPI","package":"django","to":"5.1","from":"4.2.16"}]}');
 
     const go = context(
       run({
@@ -86,6 +85,7 @@ describe("manifest-edit hook", () => {
       }).stdout,
     );
     expect(go).toContain('upgrade_impact {"package":"github.com/spf13/cobra","to_version":"1.10.2","ecosystem":"Go"}');
+    expect(go).toContain('dependency_check {"items":[{"ecosystem":"Go","package":"github.com/spf13/cobra","to":"v1.10.2","from":"v1.8.0"}]}');
   });
 
   it("stays silent for non-manifest files, unchanged versions, Write and bad input", () => {

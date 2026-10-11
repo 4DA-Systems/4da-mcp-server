@@ -20,8 +20,10 @@ import { PyPIRegistry } from "./pypi-registry.js";
 import { GoRegistry } from "./go-registry.js";
 import { NpmPackumentReader } from "./npm-packument.js";
 import { CratesVersionsReader } from "./crates-versions.js";
+import { PypiReleasesReader } from "./pypi-releases.js";
+import { GoReleasesReader } from "./go-releases.js";
 import { FixPathSources } from "./fix-paths.js";
-import type { ReleaseMetadataSource } from "./release-metadata.js";
+import type { CheckEcosystem, ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
 import { commonPathRoot, dedupeDependencies, emptyVulnResult } from "./dependency-set.js";
 import { groupIsStale, resolveGroup, type GroupResolution, type ResolutionGroup } from "./resolution.js";
@@ -65,6 +67,8 @@ export class LiveIntelligence {
   private goRegistry: GoRegistry;
   private npmPackuments: NpmPackumentReader;
   private cratesVersions: CratesVersionsReader;
+  private pypiReleases: PypiReleasesReader;
+  private goReleases: GoReleasesReader;
   private fixPathSources: FixPathSources;
   private enabled: boolean;
 
@@ -122,6 +126,8 @@ export class LiveIntelligence {
     this.goRegistry = new GoRegistry(this.cache, this.rateLimiter);
     this.npmPackuments = new NpmPackumentReader(this.cache, this.rateLimiter);
     this.cratesVersions = new CratesVersionsReader(this.cache, this.rateLimiter);
+    this.pypiReleases = new PypiReleasesReader(this.cache, this.rateLimiter);
+    this.goReleases = new GoReleasesReader(this.cache, this.rateLimiter);
     this.fixPathSources = new FixPathSources(this.cache, this.rateLimiter);
   }
 
@@ -517,8 +523,8 @@ export class LiveIntelligence {
   }
 
   /** Per-release registry readers for dependency_check (name-only requests). */
-  getReleaseSources(): { npm: ReleaseMetadataSource; "crates.io": ReleaseMetadataSource } {
-    return { npm: this.npmPackuments, "crates.io": this.cratesVersions };
+  getReleaseSources(): Record<CheckEcosystem, ReleaseMetadataSource> {
+    return { npm: this.npmPackuments, "crates.io": this.cratesVersions, PyPI: this.pypiReleases, Go: this.goReleases };
   }
 
   /**

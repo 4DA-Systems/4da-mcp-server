@@ -15,6 +15,7 @@
 import type { OsvVulnerability } from "./types.js";
 import { compareVersions, isComparable, parsePep440, samePackageName } from "./version-compare.js";
 import { parseSemverPrecedence } from "./semver-precedence.js";
+import { isMaintenanceNotice } from "./maintenance.js";
 
 /**
  * One affected span: [introduced, fixed), or [introduced, lastAffected]
@@ -31,6 +32,12 @@ export interface AdvisoryRanges {
   id: string;
   spans: AffectedSpan[];
   versions: string[];
+  /**
+   * A maintenance notice (RustSec "unmaintained" and other informational
+   * notices), not an exploitable vulnerability. Absent on entries cached
+   * before 6.2.
+   */
+  maintenance?: boolean;
 }
 
 /**
@@ -87,10 +94,12 @@ function listedVersions(affected: OsvVulnerability["affected"] | undefined, pack
 /** One advisory's ranges for one package; null when the advisory is withdrawn. */
 export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecosystem: string): AdvisoryRanges | null {
   if (vuln.withdrawn) return null;
+  const informational = (vuln.database_specific as { informational?: unknown } | undefined)?.informational;
   return {
     id: vuln.id,
     spans: collectAffectedSpans(vuln.affected, packageName, ecosystem),
     versions: listedVersions(vuln.affected, packageName, ecosystem),
+    maintenance: isMaintenanceNotice({ summary: vuln.summary ?? "" }) || informational === "unmaintained" || informational === "notice",
   };
 }
 

@@ -249,10 +249,11 @@ describe("dependency_check verdicts (fixtures)", () => {
     }
   });
 
-  it("rejects ranges and malformed input instead of guessing", async () => {
-    await expect(check([{ ecosystem: "npm", package: "axios", to: "^1.14.0" }])).rejects.toThrow(/exact version/);
+  it("rejects malformed input instead of guessing", async () => {
+    await expect(check([{ ecosystem: "npm", package: "axios", to: "the newest one" }])).rejects.toThrow(/exact version, "latest", or a npm version constraint/);
+    await expect(check([{ ecosystem: "npm", package: "axios", to: "1.14.1", from: "^1.14.0" }])).rejects.toThrow(/from must be an exact version/);
     await expect(check([])).rejects.toThrow(/1 to 25/);
-    await expect(check([{ ecosystem: "pypi", package: "x", to: "1.0.0" }])).rejects.toThrow(/ecosystem/);
+    await expect(check([{ ecosystem: "maven", package: "x", to: "1.0.0" }])).rejects.toThrow(/ecosystem/);
   });
 
   it("offline mode answers unknown for every item without any request", async () => {
