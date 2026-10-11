@@ -110,16 +110,18 @@ const PRIVACY = "Only the package's own registry and OSV.dev were contacted; not
 const PRIVACY_GITHUB =
   "The package's own registry and OSV.dev were contacted, and GitHub for release notes because FOURDA_GITHUB_CHANGELOG is on (repository name and versions only); nothing about your code left the machine";
 /**
- * How far `kind` can be trusted. Final measurement 2026-10-03 under a stop
- * rule (no tuning after it): 47 upgrades never used for tuning, 3 blind
- * raters who saw each entry's heading (Fleiss kappa 0.982): precision 98.6%
- * (95% CI 94.9-99.6%), recall about 65%. Earlier fresh corpora, before the
- * last parser fixes, measured 73-87%, so precision depends on how a changelog
- * is written. Stated in every answer so an agent never reads the flags as
- * exhaustive.
+ * How far `kind` can be trusted. Gate G3, 2026-10-11 (src/__tests__/
+ * g3-breaking-precision.test.ts, re-run on every test run): 40 upgrades across
+ * npm, crates.io, PyPI and Go, 1,618 entries, gold = majority of 3 blind raters
+ * with verbatim evidence (Fleiss kappa 0.984). Rules were changed from the 20
+ * dev pairs' errors only; on the 20 held-out pairs precision is 94.8% (95% CI
+ * 89.1-97.6%) and recall 71.7%; over all 40, 97.2% and 74.8%. Go release
+ * notes written as prose are the weakest (recall 54%). The 2026-10-03 panel
+ * (47 npm / crates.io upgrades) measured 98.6% and about 65%. Stated in every
+ * answer so an agent never reads the flags as exhaustive.
  */
 const CLASSIFICATION =
-  "Entries are flagged from the changelog's headings and wording, not by reading code. On 47 upgrades not used to build the rules (three blind raters, 2026-10-03), 99% of entries flagged breaking were breaking and about 65% of breaking entries were flagged; behaviour changes filed under fixes are the usual miss. Read every entry of a major upgrade, using `under` for each entry's heading.";
+  "Entries are flagged from the changelog's headings and wording, not by reading code. On 20 upgrades across npm, crates.io, PyPI and Go held out from rule-making (three blind raters, 2026-10-11), 95% of entries flagged breaking were breaking and about 72% of breaking entries were flagged; behaviour changes filed under fixes and release notes written as prose are the usual misses. Read every entry of a major upgrade, using `under` for each entry's heading."
 
 export const upgradeImpactTool = {
   name: "upgrade_impact",

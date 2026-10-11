@@ -29,7 +29,7 @@ import { classifyEntry, classifyHeading, sanitizeEntry, type EntryContext, type 
  * for a week unless this changes: bump it with every change to parseChangelog
  * or changelog-classify.ts that can alter a section or an entry's kind.
  */
-export const CHANGELOG_PARSER_VERSION = 3;
+export const CHANGELOG_PARSER_VERSION = 4;
 
 export interface ChangelogEntry {
   kind: EntryKind;

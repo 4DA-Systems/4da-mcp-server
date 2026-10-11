@@ -1,0 +1,26 @@
+[
+ {
+  "tag_name": "v11.0.1",
+  "name": "v11.0.1",
+  "body": "## [11.0.1](https://github.com/mochajs/mocha/compare/v11.0.0...v11.0.1) (2024-12-02)\n\n\n### 🌟 Features\n\n* bumped glob dependency from 8 to 10 ([#5250](https://github.com/mochajs/mocha/issues/5250)) ([43c3157](https://github.com/mochajs/mocha/commit/43c3157c6ef4f2d4bfecf3ad3a42479fd64187b8))\n\n\n### 📚 Documentation\n\n* fix examples for `linkPartialObjects` methods ([#5255](https://github.com/mochajs/mocha/issues/5255)) ([34e0e52](https://github.com/mochajs/mocha/commit/34e0e52e047a9119aeae9cb5b660a8438656a1e0))",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2024-12-02T15:59:24Z"
+ },
+ {
+  "tag_name": "v11.0.0",
+  "name": "v11.0.0 Prerelease",
+  "body": "## [11.0.0](https://github.com/mochajs/mocha/compare/v10.8.2...v11.0.0) (2024-11-11)\r\n\r\n\r\n### ⚠ BREAKING CHANGES\r\n\r\n* adapt new engine range for Mocha 11 ([#5216](https://github.com/mochajs/mocha/issues/5216))\r\n\r\n### 🌟 Features\r\n\r\n* allow calling hook methods ([#5231](https://github.com/mochajs/mocha/issues/5231)) ([e3da641](https://github.com/mochajs/mocha/commit/e3da641b08bed20f12df524fc64cb9579f980c1e))\r\n\r\n\r\n### 🩹 Fixes\r\n\r\n* adapt new engine range for Mocha 11 ([#5216](https://github.com/mochajs/mocha/issues/5216)) ([80da25a](https://github.com/mochajs/mocha/commit/80da25a4132ca50d3ad35087cb62c9b0f8fc946a))\r\n\r\n\r\n### 📚 Documentation\r\n\r\n* downgrade example/tests chai to 4.5.0 ([#5245](https://github.com/mochajs/mocha/issues/5245)) ([eac87e1](https://github.com/mochajs/mocha/commit/eac87e10f49207a9b388f87d77d198583c6f889a))",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2024-11-11T17:55:45Z"
+ },
+ {
+  "tag_name": "v10.8.2",
+  "name": "v10.8.2",
+  "body": "## [10.8.2](https://github.com/mochajs/mocha/compare/v10.8.1...v10.8.2) (2024-10-30)\n\n\n### 🩹 Fixes\n\n* support errors with circular dependencies in object values with --parallel ([#5212](https://github.com/mochajs/mocha/issues/5212)) ([ba0fefe](https://github.com/mochajs/mocha/commit/ba0fefe10b08a689cf49edc3818026938aa3a240))\n* test link in html reporter ([#5224](https://github.com/mochajs/mocha/issues/5224)) ([f054acc](https://github.com/mochajs/mocha/commit/f054acc1f60714bbe00ad1ab270fb4977836d045))\n\n\n### 📚 Documentation\n\n* indicate 'exports' interface does not work in browsers ([#5181](https://github.com/mochajs/mocha/issues/5181)) ([14e640e](https://github.com/mochajs/mocha/commit/14e640ee49718d587779a9594b18f3796c42cf2a))\n\n\n### 🧹 Chores\n\n* fix docs builds by re-adding eleventy and ignoring gitignore again ([#5240](https://github.com/mochajs/mocha/issues/5240)) ([881e3b0](https://github.com/mochajs/mocha/commit/881e3b0ca2e24284aab2a04f63639a0aa9e0ad1b))\n\n\n### 🤖 Automation\n\n* **deps:** bump the github-actions group with 1 update ([#5132](https://github.com/mochajs/mocha/issues/5132)) ([e536ab2](https://github.com/mochajs/mocha/commit/e536ab25b308774e3103006c044cb996a2e17c87))",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2024-10-30T16:31:47Z"
+ }
+]

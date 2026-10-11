@@ -357,7 +357,9 @@ describe("classification", () => {
   it("lets a signalling heading override the line's wording", () => {
     expect(classifyHeading("⚠ BREAKING CHANGES")).toBe("breaking");
     expect(classifyHeading("Major Changes")).toBe("breaking");
-    expect(classifyHeading("Bug Fixes")).toBe("additive");
+    // A fix heading is additive and stricter (G3, 2026-10-11): API-shaped wording in a fix is not a break.
+    expect(classifyHeading("Bug Fixes")).toBe("fixes");
+    expect(classifyHeading("Features")).toBe("additive");
     expect(classifyHeading("Changed")).toBeNull();
     expect(classifyEntry("tweak the loader", "breaking")).toBe("breaking");
     expect(classifyEntry("Removed a thing", null)).toBe("breaking");
@@ -406,6 +408,65 @@ describe("classification", () => {
     for (const text of breaking) expect(classifyText(text), text).toBe("breaking");
     for (const text of notBreaking) expect(classifyText(text), text).not.toBe("breaking");
     expect(classifyText("Deprecated `Itertools::group_by` (renamed `chunk_by`) (#866, #879)")).toBe("deprecation");
+  });
+
+  it("reads API changes under any heading but a fix one, and the wording that undoes them (G3 dev pairs, 2026-10-11)", () => {
+    // Under no heading, or a neutral one ("Changed", "Other Changes").
+    for (const text of [
+      "Changed the default ``blocksize`` to 16KB to match OpenSSL's default read amounts",
+      "`urlencoded` parser now defaults `extended` to `false`",
+      "Changed name of ``Retry.BACK0FF_MAX`` to be ``Retry.DEFAULT_BACKOFF_MAX``.",
+      "Changed all parameters in the ``HTTPConnection`` and ``HTTPSConnection`` constructors to be keyword-only except ``host`` and ``port``",
+      "`LoadDataType` moved to `*Conn` as `LoadType`.",
+      "`Bit` and `Varbit` are both replaced by the `Bits` type.",
+      "Assorted array helper methods and types made private.",
+      "`marshmallow.fields.UUID` no longer subclasses `marshmallow.fields.String`.",
+      "The `SimpleProcessor` type in `go.opentelemetry.io/otel/sdk/log` is no longer comparable. (#5693)",
+      "Drop support for [Go 1.21](https://go.dev/doc/go1.21). (#5736, #5740, #5800)",
+      "Replace go 1.21 with go 1.22 in go mod by @XSAM in https://github.com/open-telemetry/opentelemetry-go/pull/5740",
+    ]) {
+      expect(classifyEntry(text, null), text).toBe("breaking");
+      expect(classifyEntry(text, classifyHeading("Other Changes")), text).toBe("breaking");
+    }
+    // Under "Features": a leading removal or rename of something API-shaped, a runtime dropped.
+    for (const text of [
+      "remove UMD build ([#645](https://github.com/uuidjs/uuid/issues/645))",
+      "remove deprecated v4 string parameter ([#454](https://github.com/uuidjs/uuid/issues/454))",
+      "**rt:** rename to `Http2ClientConnExec` and `Http2ServerConnExec`",
+      "**server:** default `http1` `header_read_timeout` to 30 seconds",
+      "update node support matrix (only support node 16-20) ([#750](https://github.com/uuidjs/uuid/issues/750))",
+    ]) {
+      expect(classifyEntry(text, classifyHeading("Features")), text).toBe("breaking");
+    }
+    // A fix heading keeps API-shaped wording a fix; a dropped runtime still breaks.
+    expect(classifyEntry("change default export to named function ([#545])", classifyHeading("Bug Fixes"))).toBe("change");
+    expect(classifyEntry("drop node 10.x to upgrade dev dependencies", classifyHeading("Miscellaneous Chores"))).toBe("breaking");
+    // Removal lists: "(deprecated in X)" was removed; a stated no-op, a private name or an undo is not a break.
+    const removedList = classifyHeading("Previously-deprecated APIs have been removed, including");
+    expect(removedList).toBe("removal");
+    expect(classifyEntry("`marshmallow.utils.pprint` (deprecated in 3.7.0). Use `pprint.pprint` instead.", removedList)).toBe("breaking");
+    const removed = classifyHeading("Removed");
+    for (const text of [
+      "Removed default value of ``None`` for the ``request_context`` parameter. This change should have no effect on users.",
+      "Removed ``DEFAULT_CIPHERS``, ``HAS_SNI`` from the private module ``urllib3.util.ssl_``",
+      "Removed the ``_prepare_conn`` method from ``HTTPConnectionPool``.",
+      "Removed `bower.json`.",
+    ]) {
+      expect(classifyEntry(text, removed), text).toBe("change");
+    }
+    for (const text of [
+      "`.addHelpCommand()` now takes a Command (passing string or boolean still works as before but deprecated) (#2087)",
+      "This release removes the deprecation notice from options.MergeClientOptions and fixes buffer handling",
+      "Furthermore, the release includes a task to restore the `ReadCompressedCompressedMessage()` function to the wiremessage API.",
+      "Remove myself from MAINTAINERS.md by @mvdkleijn in https://github.com/stretchr/testify/pull/1367",
+      "Drop support for Go 1.21 in dice example by @MrAlias in https://github.com/open-telemetry/opentelemetry-go/pull/5800",
+      "rename repository to github:uuidjs/uuid ([#351](https://github.com/uuidjs/uuid/issues/351))",
+      "Move from `winapi` to `windows` crate.",
+      "**client:** remove Send bounds for request `Body` (#3266)",
+    ]) {
+      expect(classifyEntry(text, null), text).not.toBe("breaking");
+      expect(classifyEntry(text, classifyHeading("Features")), text).not.toBe("breaking");
+    }
   });
 });
 

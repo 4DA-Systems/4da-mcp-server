@@ -41,8 +41,9 @@ export function sanitizeEntry(text: string, cap: number = MAX_ENTRY_CHARS): stri
 // `BREAKING` but not the file name `BREAKING-CHANGES.md` (ratatui links it from routine entries);
 // a leading "Breaking -" / "[Breaking]" label too (webpack-merge 5, handlebars-rust).
 // Case-sensitive on purpose: lowercase "breaking" is prose, handled (with negation) below.
+// "*Backwards-incompatible*:" (marshmallow 4) is the same call in other words.
 const EXPLICIT_BREAKING_MARKER =
-  /\bBREAKING\b(?![-_.]\w)|⚠|^\s*\*{0,2}\w+(?:\([^)]*\))?!:|^\s*\*{0,2}[Bb]reaking\*{0,2}\s*(?::|[-–—]\s)|^\s*\[(?:[Bb]reaking|[Rr]emoved)\]/;
+  /\bBREAKING\b(?![-_.]\w)|⚠|^\s*\*{0,2}\w+(?:\([^)]*\))?!:|^\s*\*{0,2}[Bb]reaking\*{0,2}\s*(?::|[-–—]\s)|^\s*\[(?:[Bb]reaking|[Rr]emoved)\]|\b[Bb]ackwards?[- ][Ii]ncompatible\b/;
 /**
  * Text ABOUT breaking changes rather than one: a pointer to the list ("⚠️ List
  * of breaking changes can be found here"), a CI label check, a docs fix
@@ -143,7 +144,89 @@ const BREAKING_HEURISTIC = new RegExp(
 );
 /** Removals that change nothing a caller sees: "Removed unused imports", "Removed Webpack". */
 const INTERNAL_CHANGE =
-  /\b(?:unused|unneeded|unnecessary|internal(?:ly)?|dead code|tests?|ci|lint(?:ing)?|typos?|comments?|docs?|documentation|readme|redundant|duplicated?|webpack|dev-?dependenc(?:y|ies)|dependency|warnings?|examples?|benchmarks?|release process|build process|tooling|usage|incorrect|wrong|erroneous|stray|spurious)\b/i;
+  /\b(?:unused|unneeded|unnecessary|internal(?:ly)?|dead code|tests?|ci|lint(?:ing)?|typos?|comments?|docs?|documentation|readme|redundant|duplicated?|webpack|dev-?dependenc(?:y|ies)|dependency|warnings?|examples?|benchmarks?|release process|build process|tooling|usage|incorrect|wrong|erroneous|stray|spurious|private|maintainers?|contributors?|invalid|broken|bogus|[\w-]+\.(?:md|json|ya?ml|toml|lock|txt|cfg)(?![\w(]))\b/i;
+/**
+ * The removed thing is private by its name (`_prepare_conn`, a leading
+ * underscore): urllib3 2.0 lists such removals under "Removed".
+ */
+const PRIVATE_NAME = /^\W*(?:remove[sd]?|delete[sd]?|drop(?:s|ped)?)\b[^`]{0,40}`_[A-Za-z]/i;
+const isInternal = (t: string): boolean => INTERNAL_CHANGE.test(t) || PRIVATE_NAME.test(t);
+/** Public API made private ("Assorted array helper methods and types made private"): a removal, though it says "private". */
+const MADE_PRIVATE = /\b(?:made|make|makes|is now|are now)\b[^.]{0,60}\bprivate\b/i;
+/**
+ * The entry says it changes nothing for users: "passing string or boolean still
+ * works as before", "This change should have no effect on users".
+ */
+const STATED_COMPATIBLE =
+  /\b(?:still works?|still work as before|continues? to work|(?:is|are) still supported|remains? supported|(?:should|will|has|have) (?:have )?no (?:effect|impact) on (?:users|you|most users|existing code)|no user-facing)\b|(?<!\bnot |\bnon-?)\bbackwards?[- ]compatib(?:le|ility)\b/i;
+/**
+ * Not an API change although worded like one: undoing a removal or deprecation
+ * ("removes the deprecation notice from", "restore the `X()` function"), a
+ * relaxation ("remove Send bounds for request `Body`"), a repository rename, a
+ * swapped dependency ("Move from `winapi` to `windows` crate").
+ */
+const UNDO = /\bremov\w*\s+(?:the\s+)?(?:[\w`]+\s+)?(?:bounds?|restrictions?|limitations?|limits?|requirements?|constraints?|need for)\b|\brenam\w*\s+(?:the\s+)?(?:github\s+)?repo(?:sitory)?\b|\bmov(?:e|ed|es)\s+from\s+\x60[^\x60]+\x60\s+to\s+\x60[^\x60]+\x60\s+(?:crate|package|library)\b|\bremov\w*\s+(?:the\s+)?deprecation\s+(?:notices?|warnings?|messages?)\b|\bun-?deprecat|\b(?:restore[sd]?|restoring|re-?add(?:ed|s)?|reintroduc\w*)\b/i;
+/** A change confined to examples, docs, tests or CI: "Drop support for Go 1.21 in dice example". */
+const SCOPED_NON_API = /\bin (?:the )?(?:[\w-]+ )?(?:examples?|docs?|documentation|tests?|ci|workflows?|benchmarks?|readme)\b/i;
+const LEAD = String.raw`^\W*(?:\*\*[^*]{1,40}\*\*:?\s*)?`;
+/**
+ * Runtime and language support: dropped versions and raised minimums ("drop
+ * node 10.x", "Drop support for Go 1.21", "only support node 16-20", "Replace
+ * go 1.21 with go 1.22 in go mod", "increase MSRV to 1.63"). Breaking whatever
+ * the reason the entry gives ("drop node 10.x to upgrade dev dependencies").
+ */
+const RUNTIME_SUPPORT = new RegExp(
+  [
+    String.raw`\b(?:drop(?:s|ped|ping)?|remove[sd]?|removing|end(?:s|ed)?)\s+(?:official\s+)?(?:support\s+(?:for\s+)?)?(?:node(?:\.?js)?|python|py|go|golang|ruby|php|java|jdk|rust|rustc)\s*v?\d`,
+    String.raw`\b(?:only supports?|now requires?|requires? at least|minimum (?:supported )?(?:version of )?)\s*(?:node(?:\.?js)?|python|go|golang|rust|ruby|php|java)\s*v?\d`,
+    String.raw`\bonly supports? (?:node(?:\.?js)?|python|go|golang)\b`,
+    String.raw`\bgo\s*1\.\d+[^.]{0,30}\bgo\.?\s?mod\b`,
+    String.raw`\b(?:bump|bumped|raise|raised|increase|increased|update|updated|require|requires|now)\b.{0,60}\b(?:MSRV|minimum supported rust version|rust-version)\b.{0,30}\d+\.\d+`,
+  ].join("|"),
+  "i",
+);
+/**
+ * Wording that changes the API whatever heading it sits under (rule set added
+ * 2026-10-11 from the G3 panel's dev pairs): a leading removal or rename of
+ * something API-shaped, a changed default, a type made private, a move, a
+ * replacement, keyword-only arguments, "now ... instead of".
+ */
+const API_CHANGE = new RegExp(
+  [
+    // "remove UMD build", "remove `ReasonPhrase::from_bytes_unchecked()` method", "Remove previously deprecated code".
+    // The removed thing is named within the next few words, as in REMOVAL_HEURISTIC: "Remove a window when ...
+    // `cd`able by non-owners" (a security fix) has its backtick far later.
+    String.raw`${LEAD}(?:remove[sd]?|delete[sd]?|drop(?:s|ped)?)\b(?=(?:\s+[\w.:/-]+){0,4}\s*\(?\x60|(?:\s+[\w.:/-]+){0,5}?\s+(?:support|builds?|param(?:eter)?s?|options?|methods?|functions?|modules?|class(?:es)?|types?|exports?|features?|flags?|apis?|prefix(?:es)?|constructors?|requires|imports|entry ?points?|fields?|propert(?:y|ies)|arguments?|attributes?|traits?|structs?|enums?|macros?|commands?|settings?|config|keys?|aliases?|fallback|deprecated|code)\b)`,
+    String.raw`${LEAD}renamed?\b`,
+    String.raw`\x60[^\x60]+\x60\s+(?:is |was |has been )?renamed\b|\bchanged? (?:the )?name of\b`,
+    // Defaults: "Changed the default `blocksize` to 16KB", "now defaults `extended` to `false`", "default `header_read_timeout` to 30 seconds".
+    String.raw`${LEAD}(?:change[sd]?|set|make|made)\b[^.]{0,60}\bdefaults?\b[^.]{0,60}\bto\b`,
+    String.raw`${LEAD}default\s[^.]{0,60}\bto\b`,
+    String.raw`\bnow defaults?\b[^.]{0,40}\bto\b|\bdefaults? (?:value |values )?(?:is|are) now\b`,
+    String.raw`\b(?:keyword|positional)[- ]only\b`,
+    String.raw`\x60[^\x60]+\x60\s+(?:has been |have been |was |were |is |are )?moved (?:to|into|out of)\b`,
+    String.raw`${LEAD}moved?\b[^.]{0,80}\x60[^\x60]+\x60[^.]{0,60}\b(?:to|into|out of)\b`,
+    String.raw`\b(?:are|is|was|were|been)\s+(?:both\s+)?replaced\b|\x60[^\x60]+\x60\s+replaces\s+\x60`,
+    String.raw`\bnow\b[^.]{0,60}\binstead of\b`,
+    String.raw`\b(?:accepts?|takes?|returns?|receives?)\s+(?:a |an )?(?:pointer|reference|value|slice|copy)\b[^.]{0,30}\binstead of\b`,
+    String.raw`\bchang(?:e|ed|es)\b[^.]{0,80}\bfrom\s+\x60[^\x60]+\x60\s+to\s+\x60`,
+    String.raw`\bno longer (?:subclass(?:es)?|inherits?|comparable|usable|considers?|escapes?|initiali[sz]ed|quotes?|sets?|ha(?:s|ve) a default|safe|valid|recogni[sz]ed|parsed?|emitted|exposed|called)\b|\bis not set anymore\b|\bnot set anymore\b`,
+  ].join("|"),
+  "i",
+);
+
+/**
+ * The text classified: RST ``literals`` read as `literals`, link targets and
+ * bare URLs dropped (a `go.dev/doc/go1.21` link made "Drop support for Go 1.21"
+ * read as a docs change), GitHub's "by @user in <PR url>" suffix dropped.
+ */
+export function classificationText(text: string): string {
+  return text
+    .replace(/``/g, "`")
+    .replace(/\]\([^)]*\)/g, "]")
+    .replace(/\bby @[\w-]+(?:\[bot\])? in\s+\S+/g, " ")
+    .replace(/https?:\/\/\S+/g, " ");
+}
 const DEPRECATION = /deprecat/i;
 /**
  * An entry whose main verb is "deprecate" is a deprecation even when it names
@@ -153,9 +236,11 @@ const DEPRECATION = /deprecat/i;
 const LEADING_DEPRECATION = /^\W*(?:\*\*[^*]{1,40}\*\*:?\s*)?(?:deprecated?|deprecates|deprecating)\b/i;
 
 /** Kind of a single changelog line by its own wording. */
-export function classifyText(text: string): EntryKind {
+export function classifyText(raw: string): EntryKind {
+  const text = classificationText(raw);
   if (META_BREAKING.test(text)) return SECURITY.test(text) ? "security" : "change";
   if (EXPLICIT_BREAKING_MARKER.test(text)) return "breaking";
+  if (STATED_COMPATIBLE.test(text)) return DEPRECATION.test(text) ? "deprecation" : "change";
   if (NON_BREAKING_LABEL.test(text)) {
     if (SECURITY.test(text)) return "security";
     return DEPRECATION.test(text) ? "deprecation" : "change";
@@ -167,8 +252,13 @@ export function classifyText(text: string): EntryKind {
   if (EXPLICIT_BREAKING_PROSE.test(text)) return "breaking";
   if (SECURITY.test(text)) return "security";
   if (FUTURE_INTENT.test(text)) return DEPRECATION.test(text) ? "deprecation" : "change";
-  if (BREAKING_HEURISTIC.test(text)) return "breaking";
-  if (REMOVAL_HEURISTIC.test(text) && !INTERNAL_CHANGE.test(text) && !LEADING_FIX.test(text)) return "breaking";
+  if (UNDO.test(text)) return DEPRECATION.test(text) ? "deprecation" : "change";
+  if (!SCOPED_NON_API.test(text)) {
+    if (RUNTIME_SUPPORT.test(text) || BREAKING_HEURISTIC.test(text)) return "breaking";
+    if (MADE_PRIVATE.test(text) && !LEADING_FIX.test(text)) return "breaking";
+    if (API_CHANGE.test(text) && !isInternal(text) && !LEADING_FIX.test(text)) return "breaking";
+  }
+  if (REMOVAL_HEURISTIC.test(text) && !isInternal(text) && !LEADING_FIX.test(text)) return "breaking";
   if (DEPRECATION.test(text)) return "deprecation";
   return "change";
 }
@@ -185,10 +275,14 @@ export function classifyText(text: string): EntryKind {
  *   where only an explicit marker makes an entry breaking ("Added a clear()
  *   function ... removed from an axios instance" is not a removal).
  */
-export type EntryContext = EntryKind | "removal" | "additive";
+export type EntryContext = EntryKind | "removal" | "additive" | "fixes";
 
+const FIX_HEADING = /^\W*(?:fixed|fixes|bug ?fixes|bugfixes|fix)\W*$/i;
+
+// "Other changes" / "Misc" are not additive: pgx 5 files its type removals and renames
+// under "Other Changes", and marshmallow 4 a changed base class.
 const ADDITIVE_HEADING =
-  /^\W*(?:added|adds|new|new features?|features?|enhancements?|improvements?|fixed|fixes|bug ?fixes|performance(?: improvements)?|perf|optimi[sz]ations?|docs?|documentation|tests?|testing|internal|chores?|ci|build|refactor(?:ing)?|misc(?:ellaneous)?|other(?: changes)?)\W*$/i;
+  /^\W*(?:added|adds|new|new features?|features?|enhancements?|improvements?|fixed|fixes|bug ?fixes|performance(?: improvements)?|perf|optimi[sz]ations?|docs?|documentation|tests?|testing|internal|chores?|ci|build|refactor(?:ing)?)\W*$/i;
 
 /** Context implied by a heading or label, or null when it carries no signal ("### Changed"). */
 export function classifyHeading(heading: string): EntryContext | null {
@@ -196,27 +290,44 @@ export function classifyHeading(heading: string): EntryContext | null {
   // "Removed", "Removals", "Deprecated and Removed", "API changes": a category.
   // "`Cargo.lock` Removed from Tracking" (sqlx 0.9.0) is a news item about the
   // repository, and its three paragraphs were flagged breaking.
-  if (/(?:^\W*|(?:\band|[&/,])\s*)remov(?:e|ed|als?)\b|\bapi changes?\b/i.test(heading)) return "removal";
+  // "Previously-deprecated APIs have been removed, including" (marshmallow 4) is a removal list, not a deprecation one.
+  if (/(?:^\W*|(?:\band|[&/,])\s*)remov(?:e|ed|als?)\b|\bapi changes?\b|\b(?:have|has) been removed\b|\b(?:were|are) removed\b/i.test(heading)) return "removal";
   if (/security|vulnerab/i.test(heading)) return "security";
   if (/deprecat/i.test(heading)) return "deprecation";
+  // Fixes are additive, and stricter: the author filed the entry as a bug fix, so API-shaped
+  // wording in it ("change default export to named function") is not read as a break.
+  if (FIX_HEADING.test(heading)) return "fixes";
   if (ADDITIVE_HEADING.test(heading)) return "additive";
   return null;
 }
 
 /** Final kind: an explicit heading or bullet parent wins; removal and additive contexts refine the line's wording. */
-export function classifyEntry(text: string, context: EntryContext | null): EntryKind {
+export function classifyEntry(raw: string, context: EntryContext | null): EntryKind {
   if (context === "breaking" || context === "security" || context === "deprecation") {
     // A security line under "Breaking" stays breaking: the heading is the author's own call.
     return context;
   }
+  const text = classificationText(raw);
   if (context === "removal") {
     if (META_BREAKING.test(text)) return "change";
     if (EXPLICIT_BREAKING_MARKER.test(text)) return "breaking";
-    if (DEPRECATION.test(text) && !/\bremov/i.test(text)) return "deprecation";
-    return INTERNAL_CHANGE.test(text) ? "change" : "breaking";
+    if (STATED_COMPATIBLE.test(text) || UNDO.test(text)) return DEPRECATION.test(text) ? "deprecation" : "change";
+    // A deprecation filed under Removed is one when it leads with it; "`x` (deprecated in 3.24.0)" was removed.
+    if (LEADING_DEPRECATION.test(text) || (DEPRECATION.test(text) && !/\bremov|\(deprecated (?:in|since)\b|\bno longer\b|\bwere replaced\b/i.test(text))) {
+      return "deprecation";
+    }
+    return isInternal(text) ? "change" : "breaking";
   }
-  if (context === "additive") {
+  if (context === "additive" || context === "fixes") {
     if (!META_BREAKING.test(text) && EXPLICIT_BREAKING_MARKER.test(text)) return "breaking";
+    // An API removal, rename or raised runtime minimum is breaking under "Features" too
+    // (uuid 11 lists "remove UMD build" there; hyper 1.0 "rename to `Http2ClientConnExec`").
+    const quiet = STATED_COMPATIBLE.test(text) || UNDO.test(text) || SCOPED_NON_API.test(text) || NON_BREAKING_LABEL.test(text);
+    if (!quiet && !META_BREAKING.test(text)) {
+      if (RUNTIME_SUPPORT.test(text)) return "breaking";
+      if (context === "additive" && MADE_PRIVATE.test(text) && !LEADING_FIX.test(text)) return "breaking";
+      if (context === "additive" && API_CHANGE.test(text) && !isInternal(text) && !LEADING_FIX.test(text)) return "breaking";
+    }
     if (SECURITY.test(text)) return "security";
     return DEPRECATION.test(text) ? "deprecation" : "change";
   }

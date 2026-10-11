@@ -1,0 +1,555 @@
+[
+ {
+  "id": "npm-commander-12",
+  "ecosystem": "npm",
+  "package": "commander",
+  "from": "11.1.0",
+  "to": "12.0.0",
+  "first_in_range": "12.0.0",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/npm-commander-12.releases.json"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "npm-yargs-18",
+  "ecosystem": "npm",
+  "package": "yargs",
+  "from": "17.7.2",
+  "to": "18.0.0",
+  "first_in_range": "17.7.3",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/npm-yargs-18.releases.json"
+  },
+  "split": "test"
+ },
+ {
+  "id": "npm-uuid-11",
+  "ecosystem": "npm",
+  "package": "uuid",
+  "from": "10.0.0",
+  "to": "11.0.0",
+  "first_in_range": "11.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/npm-uuid-11.CHANGELOG.md",
+   "origin": "https://registry.npmjs.org/uuid/-/uuid-11.0.0.tgz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "npm-helmet-8",
+  "ecosystem": "npm",
+  "package": "helmet",
+  "from": "7.2.0",
+  "to": "8.0.0",
+  "first_in_range": "8.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/npm-helmet-8.CHANGELOG.md",
+   "origin": "https://registry.npmjs.org/helmet/-/helmet-8.0.0.tgz"
+  },
+  "split": "test"
+ },
+ {
+  "id": "npm-body-parser-2",
+  "ecosystem": "npm",
+  "package": "body-parser",
+  "from": "1.20.3",
+  "to": "2.0.0",
+  "first_in_range": "1.20.4",
+  "source": {
+   "type": "file",
+   "path": "sources/npm-body-parser-2.HISTORY.md",
+   "origin": "https://registry.npmjs.org/body-parser/-/body-parser-2.0.0.tgz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "npm-ioredis-5",
+  "ecosystem": "npm",
+  "package": "ioredis",
+  "from": "4.28.5",
+  "to": "5.0.0",
+  "first_in_range": "4.29.1",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/npm-ioredis-5.releases.json"
+  },
+  "split": "test"
+ },
+ {
+  "id": "npm-js-yaml-4",
+  "ecosystem": "npm",
+  "package": "js-yaml",
+  "from": "3.14.1",
+  "to": "4.0.0",
+  "first_in_range": "3.14.2",
+  "source": {
+   "type": "file",
+   "path": "sources/npm-js-yaml-4.CHANGELOG.md",
+   "origin": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.0.0.tgz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "npm-react-router-7",
+  "ecosystem": "npm",
+  "package": "react-router",
+  "from": "6.28.0",
+  "to": "7.0.0",
+  "first_in_range": "6.28.1",
+  "source": {
+   "type": "file",
+   "path": "sources/npm-react-router-7.CHANGELOG.md",
+   "origin": "https://registry.npmjs.org/react-router/-/react-router-7.0.0.tgz"
+  },
+  "split": "test"
+ },
+ {
+  "id": "npm-postcss-8",
+  "ecosystem": "npm",
+  "package": "postcss",
+  "from": "7.0.39",
+  "to": "8.0.0",
+  "first_in_range": "8.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/npm-postcss-8.CHANGELOG.md",
+   "origin": "https://registry.npmjs.org/postcss/-/postcss-8.0.0.tgz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "npm-mocha-11",
+  "ecosystem": "npm",
+  "package": "mocha",
+  "from": "10.8.2",
+  "to": "11.0.1",
+  "first_in_range": "11.0.0",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/npm-mocha-11.releases.json"
+  },
+  "split": "test"
+ },
+ {
+  "id": "cr-hyper-1",
+  "ecosystem": "crates.io",
+  "package": "hyper",
+  "from": "0.14.28",
+  "to": "1.0.0",
+  "first_in_range": "0.14.29",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/cr-hyper-1.releases.json"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "cr-nom-8",
+  "ecosystem": "crates.io",
+  "package": "nom",
+  "from": "7.1.3",
+  "to": "8.0.0",
+  "first_in_range": "8.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-nom-8.CHANGELOG.md",
+   "origin": "https://static.crates.io/crates/nom/nom-8.0.0.crate"
+  },
+  "split": "test"
+ },
+ {
+  "id": "cr-bitflags-2",
+  "ecosystem": "crates.io",
+  "package": "bitflags",
+  "from": "1.3.2",
+  "to": "2.0.0",
+  "first_in_range": "2.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-bitflags-2.CHANGELOG.md",
+   "origin": "https://static.crates.io/crates/bitflags/bitflags-2.0.0.crate"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "cr-tracing-subscriber-0.3",
+  "ecosystem": "crates.io",
+  "package": "tracing-subscriber",
+  "from": "0.2.25",
+  "to": "0.3.0",
+  "first_in_range": "0.3.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-tracing-subscriber-0.3.CHANGELOG.md",
+   "origin": "https://static.crates.io/crates/tracing-subscriber/tracing-subscriber-0.3.0.crate"
+  },
+  "split": "test"
+ },
+ {
+  "id": "cr-mio-1",
+  "ecosystem": "crates.io",
+  "package": "mio",
+  "from": "0.8.11",
+  "to": "1.0.0",
+  "first_in_range": "1.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-mio-1.CHANGELOG.md",
+   "origin": "https://static.crates.io/crates/mio/mio-1.0.0.crate"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "cr-tower-0.5",
+  "ecosystem": "crates.io",
+  "package": "tower",
+  "from": "0.4.13",
+  "to": "0.5.0",
+  "first_in_range": "0.5.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-tower-0.5.CHANGELOG.md",
+   "origin": "https://static.crates.io/crates/tower/tower-0.5.0.crate"
+  },
+  "split": "test"
+ },
+ {
+  "id": "cr-image-0.25",
+  "ecosystem": "crates.io",
+  "package": "image",
+  "from": "0.24.9",
+  "to": "0.25.0",
+  "first_in_range": "0.25.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-image-0.25.CHANGES.md",
+   "origin": "https://static.crates.io/crates/image/image-0.25.0.crate"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "cr-hashbrown-0.15",
+  "ecosystem": "crates.io",
+  "package": "hashbrown",
+  "from": "0.14.5",
+  "to": "0.15.0",
+  "first_in_range": "0.15.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-hashbrown-0.15.CHANGELOG.md",
+   "origin": "https://static.crates.io/crates/hashbrown/hashbrown-0.15.0.crate"
+  },
+  "split": "test"
+ },
+ {
+  "id": "cr-sysinfo-0.30",
+  "ecosystem": "crates.io",
+  "package": "sysinfo",
+  "from": "0.29.11",
+  "to": "0.30.0",
+  "first_in_range": "0.30.0",
+  "source": {
+   "type": "file",
+   "path": "sources/cr-sysinfo-0.30.CHANGELOG.md",
+   "origin": "https://static.crates.io/crates/sysinfo/sysinfo-0.30.0.crate"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "cr-quick-xml-0.31",
+  "ecosystem": "crates.io",
+  "package": "quick-xml",
+  "from": "0.30.0",
+  "to": "0.31.0",
+  "first_in_range": "0.31.0",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/cr-quick-xml-0.31.releases.json"
+  },
+  "split": "test"
+ },
+ {
+  "id": "py-flask-2.3",
+  "ecosystem": "PyPI",
+  "package": "Flask",
+  "from": "2.2.5",
+  "to": "2.3.0",
+  "first_in_range": "2.3.0",
+  "source": {
+   "type": "file",
+   "path": "sources/py-flask-2.3.CHANGES.rst",
+   "origin": "https://files.pythonhosted.org/packages/04/f4/22384e109d9b7e295b20580bc6af5f45b78730d03f41f826639a5c006d1a/Flask-2.3.0.tar.gz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "py-werkzeug-3",
+  "ecosystem": "PyPI",
+  "package": "Werkzeug",
+  "from": "2.3.8",
+  "to": "3.0.0",
+  "first_in_range": "3.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/py-werkzeug-3.CHANGES.rst",
+   "origin": "https://files.pythonhosted.org/packages/8c/47/75c7099c78dc207486e30cdb2b16059ca6d5c6cdcf9290f4621368bd06e4/werkzeug-3.0.0.tar.gz"
+  },
+  "split": "test"
+ },
+ {
+  "id": "py-click-8.2",
+  "ecosystem": "PyPI",
+  "package": "click",
+  "from": "8.1.8",
+  "to": "8.2.0",
+  "first_in_range": "8.2.0",
+  "source": {
+   "type": "file",
+   "path": "sources/py-click-8.2.CHANGES.rst",
+   "origin": "https://files.pythonhosted.org/packages/cd/0f/62ca20172d4f87d93cf89665fbaedcd560ac48b465bd1d92bfc7ea6b0a41/click-8.2.0.tar.gz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "py-jinja2-3",
+  "ecosystem": "PyPI",
+  "package": "Jinja2",
+  "from": "2.11.3",
+  "to": "3.0.0",
+  "first_in_range": "3.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/py-jinja2-3.CHANGES.rst",
+   "origin": "https://files.pythonhosted.org/packages/7a/0c/23cbcf515b5394e9f59a3e6629f26e1142b92d474ee0725a26aa5a3bcf76/Jinja2-3.0.0.tar.gz"
+  },
+  "split": "test"
+ },
+ {
+  "id": "py-urllib3-2",
+  "ecosystem": "PyPI",
+  "package": "urllib3",
+  "from": "1.26.18",
+  "to": "2.0.0",
+  "first_in_range": "1.26.19",
+  "source": {
+   "type": "file",
+   "path": "sources/py-urllib3-2.CHANGES.rst",
+   "origin": "https://files.pythonhosted.org/packages/aa/52/078c46565a4b4983e15d862cb7461e5c63a2e7b3c8436e8622a601120ea0/urllib3-2.0.0.tar.gz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "py-httpx-0.28",
+  "ecosystem": "PyPI",
+  "package": "httpx",
+  "from": "0.27.2",
+  "to": "0.28.0",
+  "first_in_range": "0.28.0",
+  "source": {
+   "type": "file",
+   "path": "sources/py-httpx-0.28.CHANGELOG.md",
+   "origin": "https://files.pythonhosted.org/packages/10/df/676b7cf674dd1bdc71a64ad393c89879f75e4a0ab8395165b498262ae106/httpx-0.28.0.tar.gz"
+  },
+  "split": "test"
+ },
+ {
+  "id": "py-marshmallow-4",
+  "ecosystem": "PyPI",
+  "package": "marshmallow",
+  "from": "3.26.1",
+  "to": "4.0.0",
+  "first_in_range": "3.26.2",
+  "source": {
+   "type": "file",
+   "path": "sources/py-marshmallow-4.CHANGELOG.rst",
+   "origin": "https://files.pythonhosted.org/packages/1e/ff/26df5a9f5ac57ccf693a5854916ab47243039d2aa9e0fe5f5a0331e7b74b/marshmallow-4.0.0.tar.gz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "py-itsdangerous-2",
+  "ecosystem": "PyPI",
+  "package": "itsdangerous",
+  "from": "1.1.0",
+  "to": "2.0.0",
+  "first_in_range": "2.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/py-itsdangerous-2.CHANGES.rst",
+   "origin": "https://files.pythonhosted.org/packages/af/1a/d00de29ae487412998f4a2172f0e8322dbe707d4475d981daec560b0ff58/itsdangerous-2.0.0.tar.gz"
+  },
+  "split": "test"
+ },
+ {
+  "id": "py-markupsafe-3",
+  "ecosystem": "PyPI",
+  "package": "MarkupSafe",
+  "from": "2.1.5",
+  "to": "3.0.0",
+  "first_in_range": "3.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/py-markupsafe-3.CHANGES.rst",
+   "origin": "https://files.pythonhosted.org/packages/5c/84/3f683b24fcffa08c5b7ef3fb8a845661057dd39c321c1ae16fa37a3eb35b/markupsafe-3.0.0.tar.gz"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "py-redis-5",
+  "ecosystem": "PyPI",
+  "package": "redis",
+  "from": "4.6.0",
+  "to": "5.0.0",
+  "first_in_range": "5.0.0",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/py-redis-5.releases.json"
+  },
+  "split": "test"
+ },
+ {
+  "id": "go-pgx-5",
+  "ecosystem": "Go",
+  "package": "github.com/jackc/pgx/v5",
+  "from": "v4.18.3",
+  "to": "v5.0.0",
+  "first_in_range": "v5.0.0",
+  "source": {
+   "type": "file",
+   "path": "sources/go-pgx-5.CHANGELOG.md",
+   "origin": "https://proxy.golang.org/github.com/jackc/pgx/v5/@v/v5.0.0.zip"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "go-jwt-5",
+  "ecosystem": "Go",
+  "package": "github.com/golang-jwt/jwt/v5",
+  "from": "v4.5.0",
+  "to": "v5.0.0",
+  "first_in_range": "v4.5.1",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/go-jwt-5.releases.json",
+   "tag_prefix": ""
+  },
+  "split": "test"
+ },
+ {
+  "id": "go-mongo-2",
+  "ecosystem": "Go",
+  "package": "go.mongodb.org/mongo-driver/v2",
+  "from": "v1.17.0",
+  "to": "v2.0.0",
+  "first_in_range": "v1.17.1",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/go-mongo-2.releases.json",
+   "tag_prefix": ""
+  },
+  "split": "dev"
+ },
+ {
+  "id": "go-viper-1.20",
+  "ecosystem": "Go",
+  "package": "github.com/spf13/viper",
+  "from": "v1.19.0",
+  "to": "v1.20.0",
+  "first_in_range": "v1.20.0",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/go-viper-1.20.releases.json",
+   "tag_prefix": ""
+  },
+  "split": "test"
+ },
+ {
+  "id": "go-testify-1.9",
+  "ecosystem": "Go",
+  "package": "github.com/stretchr/testify",
+  "from": "v1.8.4",
+  "to": "v1.9.0",
+  "first_in_range": "v1.9.0",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/go-testify-1.9.releases.json",
+   "tag_prefix": ""
+  },
+  "split": "dev"
+ },
+ {
+  "id": "go-prom-1.20",
+  "ecosystem": "Go",
+  "package": "github.com/prometheus/client_golang",
+  "from": "v1.19.1",
+  "to": "v1.20.0",
+  "first_in_range": "v1.20.0",
+  "source": {
+   "type": "file",
+   "path": "sources/go-prom-1.20.CHANGELOG.md",
+   "origin": "https://proxy.golang.org/github.com/prometheus/client_golang/@v/v1.20.0.zip"
+  },
+  "split": "test"
+ },
+ {
+  "id": "go-otel-1.30",
+  "ecosystem": "Go",
+  "package": "go.opentelemetry.io/otel",
+  "from": "v1.28.0",
+  "to": "v1.30.0",
+  "first_in_range": "v1.29.0",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/go-otel-1.30.releases.json",
+   "tag_prefix": ""
+  },
+  "split": "dev"
+ },
+ {
+  "id": "go-cli-3",
+  "ecosystem": "Go",
+  "package": "github.com/urfave/cli/v3",
+  "from": "v2.27.5",
+  "to": "v3.1.0",
+  "first_in_range": "v2.27.6",
+  "source": {
+   "type": "github-releases",
+   "path": "sources/go-cli-3.releases.json",
+   "tag_prefix": ""
+  },
+  "split": "test"
+ },
+ {
+  "id": "go-zap-1.27",
+  "ecosystem": "Go",
+  "package": "go.uber.org/zap",
+  "from": "v1.24.0",
+  "to": "v1.27.0",
+  "first_in_range": "v1.25.0",
+  "source": {
+   "type": "file",
+   "path": "sources/go-zap-1.27.CHANGELOG.md",
+   "origin": "https://proxy.golang.org/go.uber.org/zap/@v/v1.27.0.zip"
+  },
+  "split": "dev"
+ },
+ {
+  "id": "go-echo-4.11",
+  "ecosystem": "Go",
+  "package": "github.com/labstack/echo/v4",
+  "from": "v4.10.2",
+  "to": "v4.11.0",
+  "first_in_range": "v4.11.0",
+  "source": {
+   "type": "file",
+   "path": "sources/go-echo-4.11.CHANGELOG.md",
+   "origin": "https://proxy.golang.org/github.com/labstack/echo/v4/@v/v4.11.0.zip"
+  },
+  "split": "test"
+ }
+]

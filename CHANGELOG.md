@@ -29,7 +29,7 @@ upgrades at the briefing.
 - The parser reads reStructuredText changelogs: titles underlined (or over-
   and underlined) with any RST adornment, their `Released <date>` lines, and
   non-release setext/RST titles as sub-headings. `CHANGELOG_PARSER_VERSION` is
-  3, so changelogs cached by 6.1 are re-read.
+  4 (with the classifier changes below), so changelogs cached by 6.1 are re-read.
 - A zip reader (central directory only, stored and deflate entries, every
   inflate capped) for Go module zips and zip sdists.
 
@@ -52,6 +52,55 @@ links on GitHub in `project_urls`), with the same parser and classifier.
   changelog is unavailable and gives `github_fallback.how_to_enable` (or says
   enabling it would not help: no GitHub repository). `_meta.sources` and
   `_meta.privacy` name GitHub whenever it was contacted.
+
+### Breaking-entry precision gate (G3)
+
+A held-out panel, re-measured by the test suite on every run
+(`src/__tests__/g3-breaking-precision.test.ts`, fixtures in
+`src/__tests__/fixtures/g3/`): 40 real upgrade pairs, 10 each from npm,
+crates.io, PyPI and Go, none of them a package the 6.1 rules were built on.
+Each pair records the changelog source the tool read live (registry archive or
+GitHub releases), trimmed to the range and checked to parse identically. Gold
+for each of the 1,618 entries shown is the majority of three blind raters
+working to a written rubric (`rubric.txt`), each label backed by a verbatim
+quote from the entry (Fleiss kappa 0.984; the raters were model instances,
+so agreement may be higher than independent human raters would reach). The
+test fails below 90% precision, overall or on the held-out half, and on any
+entry without a label.
+
+| | flagged | precision | recall |
+|---|---|---|---|
+| 6.1 rules, all 40 pairs | 246 | 94.7% | 55.0% |
+| 6.1 rules, 20 held-out pairs | 108 | 95.4% | 67.8% |
+| 6.2 rules, all 40 pairs | 326 | 97.2% (95% CI 94.8-98.5) | 74.8% |
+| 6.2 rules, 20 held-out pairs | 115 | 94.8% (95% CI 89.1-97.6) | 71.7% |
+
+The 6.2 rule changes were made from the 20 dev pairs' errors only:
+
+- An API change is read under any heading but a fix one. Covered: a leading
+  removal or rename of something API-shaped ("remove UMD build"), a changed
+  default, a type made private, a move or replacement, keyword-only
+  arguments, "now ... instead of", and "no longer comparable / usable /
+  subclasses".
+- Dropped runtimes and raised minimums break whatever the reason given
+  ("drop node 10.x to upgrade dev dependencies", "Replace go 1.21 with go 1.22
+  in go mod").
+- "Other Changes" / "Misc" headings are neutral, not additive: pgx 5 filed its
+  type removals there.
+- Fix headings are their own context.
+- "Previously-deprecated APIs have been removed" is a removal list.
+- `*Backwards-incompatible*` is an explicit marker.
+- Link targets, bare URLs and GitHub's "by @user in <PR>" are dropped before
+  classifying (a `go.dev/doc/...` link read "Drop support for Go 1.21" as a
+  docs change); RST ``literals`` read as code.
+- No longer breaking: entries that say they still work or have no effect on
+  users, private modules and `_names`, removing a deprecation notice,
+  restoring an API, relaxing a bound, renaming the repository, swapping a
+  dependency crate, and changes scoped to an example, docs or CI.
+
+Per ecosystem over all 40 pairs: npm 99.0% / 84.2%, crates.io 99.0% /
+81.3%, PyPI 95.7% / 72.5%, Go 92.0% / 54.1% (Go's GitHub release notes are
+largely PR titles and prose). `CHANGELOG_PARSER_VERSION` is 4.
 
 ### Hook and briefing
 

@@ -1,0 +1,34 @@
+[
+ {
+  "tag_name": "v12.0.0",
+  "name": "v12.0.0",
+  "body": "### Added\r\n\r\n- `.addHelpOption()` as another way of configuring built-in help option (#2006)\r\n- `.helpCommand()` for configuring built-in help command (#2087)\r\n\r\n### Fixed\r\n\r\n- *Breaking:* use non-zero exit code when spawned executable subcommand terminates due to a signal (#2023)\r\n- *Breaking:* check `passThroughOptions` constraints when using `.addCommand` and throw if parent command does not have `.enablePositionalOptions()` enabled (#1937)\r\n\r\n### Changed\r\n\r\n- *Breaking:* Commander 12 requires Node.js v18 or higher (#2027)\r\n- *Breaking:* throw an error if add an option with a flag which is already in use (#2055)\r\n- *Breaking:* throw an error if add a command with name or alias which is already in use (#2059)\r\n- *Breaking:* throw error when calling `.storeOptionsAsProperties()` after setting an option value (#1928)\r\n- replace non-standard JSDoc of `@api private` with documented `@private` (#1949)\r\n- `.addHelpCommand()` now takes a Command (passing string or boolean still works as before but deprecated) (#2087)\r\n- refactor internal implementation of built-in help option (#2006)\r\n- refactor internal implementation of built-in help command (#2087)\r\n\r\n### Deprecated\r\n\r\n- `.addHelpCommand()` passing string or boolean (use `.helpCommand()` or pass a Command) (#2087)\r\n\r\n### Removed\r\n\r\n- *Breaking:* removed default export of a global Command instance from CommonJS (use the named `program` export instead) (#2017)\r\n\r\n### Migration Tips\r\n\r\n**global program**\r\n\r\nIf you are using the [deprecated](./docs/deprecated.md#default-import-of-global-command-object) default import of the global Command object, you need to switch to using a named import (or create a new `Command`).\r\n\r\n```js\r\n// const program = require('commander');\r\nconst { program } = require('commander');\r\n```\r\n\r\n**option and command clashes**\r\n\r\nA couple of configuration problems now throw an error, which will pick up issues in existing programs:\r\n\r\n- adding an option which uses the same flag as a previous option\r\n- adding a command which uses the same name or alias as a previous command",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2024-02-03T09:46:10Z"
+ },
+ {
+  "tag_name": "v12.0.0-1",
+  "name": "v12.0.0-1",
+  "body": "### Added\r\n\r\n- `.addHelpOption()` as another way of configuring built-in help option (#2006)\r\n- `.helpCommand()` for configuring built-in help command (#2087)\r\n\r\n### Changed\r\n\r\n- `.addHelpCommand()` now takes a Command (passing string or boolean still works as before but deprecated) (#2087)\r\n- refactor internal implementation of built-in help option (#2006)\r\n- refactor internal implementation of built-in help command (#2087)\r\n\r\n### Deprecated\r\n\r\n- `.addHelpCommand()` passing string or boolean (use `.helpCommand()` or pass a Command) (#2087)\r\n",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2024-01-19T20:17:25Z"
+ },
+ {
+  "tag_name": "v12.0.0-0",
+  "name": "v12.0.0-0 Prerelease",
+  "body": "### Fixed\r\n\r\n- *Breaking:* use non-zero exit code when spawned executable subcommand terminates due to a signal (#2023)\r\n- *Breaking:* check `passThroughOptions` constraints when using `.addCommand` and throw if parent command does not have `.enablePositionalOptions()` enabled (#1937)\r\n\r\n### Changed\r\n\r\n- *Breaking:* Commander 12 requires Node.js v18 or higher (#2027)\r\n- *Breaking:* throw an error if add an option with a flag which is already in use (#2055)\r\n- *Breaking:* throw an error if add a command with name or alias which is already in use (#2059)\r\n- *Breaking:* throw error when calling `.storeOptionsAsProperties()` after setting an option value (#1928)\r\n- replace non-standard JSDoc of `@api private` with documented `@private` (#1949)\r\n\r\n### Removed\r\n\r\n- *Breaking:* removed default export of a global Command instance from CommonJS (use the named `program` export instead) (#2017)\r\n\r\n### Migration Tips\r\n\r\n**global program**\r\n\r\nIf you are using the [deprecated](./docs/deprecated.md#default-import-of-global-command-object) default import of the global Command object, you need to switch to using a named import (or create a new `Command`).\r\n\r\n```js\r\n// const program = require('commander');\r\nconst { program } = require('commander');\r\n```\r\n\r\n**option and command clashes**\r\n\r\nA couple of configuration problems now throw an error, which will pick up issues in existing programs:\r\n\r\n- adding an option which uses the same flag as a previous option\r\n- adding a command which uses the same name or alias as a previous command\r\n",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2023-11-11T05:46:25Z"
+ },
+ {
+  "tag_name": "v11.1.0",
+  "name": "v11.1.0",
+  "body": "### Fixed\r\n\r\n- TypeScript: update `OptionValueSource` to allow any string, to match supported use of custom sources (#1983)\r\n- TypeScript: add that `Command.version()` can also be used as getter (#1982)\r\n- TypeScript: add null return type to `Commands.executableDir()`, for when not configured (#1965)\r\n- subcommands with an executable handler and only a short help flag are now handled correctly by the parent's help command (#1930)\r\n\r\n### Added\r\n\r\n- `registeredArguments` property on `Command` with the array of defined `Argument` (like `Command.options` for `Option`) (#2010)\r\n- TypeScript declarations for Option properties: `envVar`, `presetArg` (#2019)\r\n- TypeScript declarations for Argument properties: `argChoices`, `defaultValue`, `defaultValueDescription` (#2019)\r\n- example file which shows how to configure help to display any custom usage in the list of subcommands (#1896)\r\n\r\n### Changed\r\n\r\n- (developer) refactor TypeScript configs for multiple use-cases, and enable checks in JavaScript files in supporting editors (#1969)\r\n\r\n### Deprecated\r\n\r\n- `Command._args` was private anyway, but now available as `registeredArguments` (#2010)",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2023-10-13T00:32:47Z"
+ }
+]

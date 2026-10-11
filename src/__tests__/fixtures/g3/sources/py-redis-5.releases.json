@@ -1,0 +1,66 @@
+[
+ {
+  "tag_name": "v5.0.0",
+  "name": "5.0.0",
+  "body": "## What's new?\r\n\r\n### Triggers and Functions support\r\nTriggers and Functions allow you to execute server-side functions triggered when key values are modified or created in Redis, a stream entry arrival, or explicitly calling them. Simply put, you can replace Lua scripts with easy-to-develop JavaScript or TypeScript code. Move your business logic closer to the data to ensure a lower latency, and forget about updating dependent key values manually in your code. \r\n[Try it for yourself with Quick start](https://redis.io/docs/interact/programmability/triggers-and-functions/quick_start/)\r\n\r\n### Full [Redis 7.2](https://redis.com/blog/introducing-redis-7-2/) and [RESP3 support](https://github.com/redis/redis-specifications/blob/master/protocol/RESP3.md) \r\n\r\n### Python 3.7 End-of-Life\r\n[Python 3.7 has reached its end-of-life (EOL) as of June 2023](https://devguide.python.org/versions/). This means that starting from this date, Python 3.7 will no longer receive any updates, including security patches, bug fixes, or improvements. If you continue to use Python 3.7 post-EOL, you may expose your projects and systems to potential security vulnerabilities. We ended its support in this version and strongly recommend migrating to Python 3.10.\r\n\r\n## 🐛 Bug Fixes\r\n\r\n- Fix timeout retrying on pipeline execution (#2812)\r\n- Fix socket garbage collection (#2859)\r\n\r\n## 🧰 Maintenance\r\n\r\n- Updating client license to clear, MIT (#2884)\r\n- Add py.typed in accordance with PEP-561 (#2738)\r\n- Dependabot label change (#2880)\r\n- Fix type hints in SearchCommands (#2817)\r\n- Add sync modules (except search) tests to cluster CI (#2850)\r\n- Fix a duplicate word in `CONTRIBUTING.md` (#2848)\r\n- Fixing doc builds (#2869)\r\n- Change cluster docker to edge and enable debug command (#2853)\r\n\r\n## Contributors\r\nWe'd like to thank all the contributors who worked on this release!\r\n\r\n@JoanFM, @Ovsyanka83, @chayim, @dependabot, @dependabot[bot], @dvora-h, @kristjanvalur, @kurtmckee, @pall-j and @shacharPash\r\n",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2023-08-15T09:57:30Z"
+ },
+ {
+  "tag_name": "v5.0.0rc2",
+  "name": "5.0.0rc2",
+  "body": "## Changes\r\n\r\n\r\n## 🧰 Maintenance\r\n\r\n- RESP3 response-callbacks cleanup (#2841)\r\n- Merge master to 5.0 (#2827)",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2023-07-16T12:12:21Z"
+ },
+ {
+  "tag_name": "v5.0.0rc1",
+  "name": "5.0.0rc1",
+  "body": "## Changes\r\n\r\n\r\n## 🔥 Breaking Changes\r\n\r\n- Change `SISMEMBER` return type to int by (#2813)\r\n\r\n## 🚀 New Features\r\n\r\n- RESP3 modules support (#2803)\r\n\r\n## 🐛 Bug Fixes\r\n\r\n- Fixing asyncio import (#2759)\r\n- Fix sharded pubsub threads issue (#2799)\r\n\r\n## 🧰 Maintenance\r\n\r\n- RESP3 tests (#2780) (#2806)\r\n- RESP3 response callbacks (#2798)\r\n- Adding RESP3 tests support (#2793)\r\n",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2023-06-27T18:35:56Z"
+ },
+ {
+  "tag_name": "v4.6.0",
+  "name": "4.6.0",
+  "body": "# Changes\r\n\r\n## 🧪 Experimental Features\r\n\r\n- Support `JSON.MERGE` command (#2761)\r\n- Support `JSON.MSET` command (#2766)\r\n\r\n## 🚀 New Features\r\n\r\n- Extract abstract async connection class (#2734)\r\n- Add support for `WAITAOF` (#2760)\r\n- Introduce OutOfMemoryError exception for Redis write command rejections due to OOM errors (#2778)\r\n- Add `WITHSCORE` argument to `ZRANK` (#2758)\r\n\r\n## 🐛 Bug Fixes\r\n\r\n- Fix dead weakref in sentinel connection causing ReferenceError (#2767) (#2771)\r\n- Fix Key Error in parse_xinfo_stream (#2788)\r\n- Remove unnecessary \\_\\_del\\_\\_ handlers (#2755)\r\n- Added support for missing argument to SentinelManagedConnection.read_response() (#2756)\r\n\r\n## 🧰 Maintenance\r\n\r\n- Fix type hint for retry_on_error in async cluster (#2804)\r\n- Clean up documents and fix some redirects (#2801)\r\n- Add unit tests for the `connect` method of all Redis connection classes (#2631)\r\n- Docstring formatting fix (#2796)\r\n\r\n## Contributors\r\nWe'd like to thank all the contributors who worked on this release!\r\n\r\n@Smit-Parmar, @TheKevJames, @aciddust, @bmacphee, @bodevone, @dvora-h, @kristjanvalur, @shacharPash, @shahar-lev, @vmihailenco and @woutdenolf\r\n",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2023-06-25T13:12:47Z"
+ },
+ {
+  "tag_name": "v5.0.0b4",
+  "name": "5.0.0b4",
+  "body": "# Changes\r\n\r\n## 🚀 New Features\r\n\r\n - Add support for sharded pubsub in sync client (#2762)\r\n\r\n## 🐛 Bug Fixes\r\n\r\n - Fixed resp3 dict parse response (#2757)",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2023-05-28T09:27:39Z"
+ },
+ {
+  "tag_name": "v5.0.0b3",
+  "name": "5.0.0b3",
+  "body": "# Changes\r\n\r\nThis beta release includes 2 bug fixes for the RESP3 parser.\r\n\r\n## 🐛 Bug Fixes\r\n\r\n- Fix protocol version check (#2737)\r\n- Fix `COMMAND` response callback (#2740)",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2023-05-04T09:42:34Z"
+ },
+ {
+  "tag_name": "v5.0.0b2",
+  "name": "5.0.0b2",
+  "body": "# Changes\r\n\r\nThis release includes only support for RESP3, it should be treated as a beta. Please note response types change for those using RESP3 - meaning there breaking changes. Today this includes support for the following:\r\n\r\n- Pub/Sub (#2721)\r\n- Async Pub/Sub (#2721)\r\n\r\nThe following are not yet implemented:\r\n\r\n- Async Pub/Sub with hiredis support, for PUSH responses.\r\n\r\nRESP3 support introduces two different ways to enable a RESP3 redis connection, when your redis server supports it.\r\n\r\n1. redis_url has been updated to match the [uri specification](https://github.com/redis/redis-specifications/blob/master/uri/redis.txt) meaning one can now connect by:\r\n```\r\nimport redis\r\nr = redis.Redis.from_url(\"redis://localhost:6379?protocol=3\")\r\nr.ping()\r\n```\r\n\r\n2. One can pass ```protocol=3``` into any existing connection object eg:\r\n```\r\nfrom redis.asyncio import  Redis\r\nr = Redis(host=\"localhost\", port=6379, protocol=3)\r\nr.ping()\r\n```",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2023-04-24T15:07:07Z"
+ },
+ {
+  "tag_name": "v5.0.0b1",
+  "name": "5.0.0b1",
+  "body": "# Changes\r\n\r\nThis release includes only support for RESP3, it should be treated as a beta. Please note response types change for those using RESP3 - meaning there breaking changes. Today this includes support for the following:\r\n\r\n- Sync connections\r\n- RedisCluster connections\r\n- Async\r\n- AsyncCluster\r\n- Single connections both sync and async\r\n- RedisStack support\r\n- Pipelines\r\n- Sentinel\r\n\r\nThe following are not yet implemented:\r\n\r\n- Pub/Sub\r\n- Monitor\r\n\r\nThis release introduces two different ways to enable a RESP3 redis connection, when your redis server supports it.\r\n\r\n1. redis_url has been updated to match the [uri specification](https://github.com/redis/redis-specifications/blob/master/uri/redis.txt) meaning one can now connect by:\r\n```\r\nimport redis\r\nr = redis.Redis.from_url(\"redis://localhost:6379?protocol=3\")\r\nr.ping()\r\n```\r\n\r\n2. One can pass ```protocol=3``` into any existing connection object eg:\r\n```\r\nfrom redis.asyncio import  Redis\r\nr = Redis(host=\"localhost\", port=6379, protocol=3)\r\nr.ping()\r\n```\r\n",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2023-03-23T14:47:33Z"
+ }
+]

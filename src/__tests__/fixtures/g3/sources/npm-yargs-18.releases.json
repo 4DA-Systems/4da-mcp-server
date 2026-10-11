@@ -1,0 +1,26 @@
+[
+ {
+  "tag_name": "v17.7.3",
+  "name": "v17.7.3",
+  "body": "## [17.7.3](https://github.com/yargs/yargs/compare/v17.7.2...v17.7.3) (2026-06-19)\r\n\r\n### Bug Fixes\r\n\r\n* fix: use entry point with file extension for anything that supports exports ([#2514](https://github.com/yargs/yargs/issues/2514)) ([c7597e3](https://github.com/yargs/yargs/commit/c7597e34a0ff27b4c2f3fdf6f3e1c137fe2212ed))",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2026-06-19T02:32:35Z"
+ },
+ {
+  "tag_name": "v18.0.0",
+  "name": "v18.0.0",
+  "body": "## [18.0.0](https://github.com/yargs/yargs/compare/v17.7.2...v18.0.0) (2025-05-26)\r\n\r\n\r\n### ⚠ BREAKING CHANGES\r\n\r\n* command names are not derived from modules passed to `command`.\r\n* singleton usage of yargs yargs.foo, yargs().argv, has been removed.\r\n* minimum node.js versions now `^20.19.0 || ^22.12.0 || >=23`.\r\n* yargs is now ESM first\r\n\r\n### Features\r\n\r\n* commandDir now works with ESM files ([#2461](https://github.com/yargs/yargs/issues/2461)) ([27eec18](https://github.com/yargs/yargs/commit/27eec188dad09656fe2e8dd42b529a5d98fea794))\r\n* **locale:** adds hebrew translation ([#2357](https://github.com/yargs/yargs/issues/2357)) ([4266485](https://github.com/yargs/yargs/commit/4266485b20e9b0f3a7f196e84c6d8284b04642cd))\r\n* yargs is now ESM first ([d90af45](https://github.com/yargs/yargs/commit/d90af45f18db093396b41196830b04e6930aa542))\r\n* **zsh:** Add default completion as fallback ([#2331](https://github.com/yargs/yargs/issues/2331)) ([e02c91b](https://github.com/yargs/yargs/commit/e02c91b861380eccf743ac9c5c27c6895366e320))\r\n\r\n\r\n### Bug Fixes\r\n\r\n* addDirectory do not support absolute command dir ([#2465](https://github.com/yargs/yargs/issues/2465)) ([3a40a78](https://github.com/yargs/yargs/commit/3a40a787edc5784b8134af022948b30c707001ba))\r\n* allows ESM modules commands to be extensible using visit option ([#2468](https://github.com/yargs/yargs/issues/2468)) ([200e1aa](https://github.com/yargs/yargs/commit/200e1aae95aeac71fc084aabf449fa95edf63300))\r\n* **browser:** fix shims so that yargs continues working in browser context ([#2457](https://github.com/yargs/yargs/issues/2457)) ([4ae5f57](https://github.com/yargs/yargs/commit/4ae5f5742e2ce7bd9d7b18f3de25c90a938e5cc3))\r\n* **build:** address problems with typescript compilation ([#2445](https://github.com/yargs/yargs/issues/2445)) ([8d72fb3](https://github.com/yargs/yargs/commit/8d72fb3968498447df52e994e259920c9fefc2b5))\r\n* coerce should play well with parser configuration ([#2308](https://github.com/yargs/yargs/issues/2308)) ([8343c66](https://github.com/yargs/yargs/commit/8343c66eac10fbe60e85fc17adfe07eadd45cb35))\r\n* **deps:** update dependency yargs-parser to v22 ([#2470](https://github.com/yargs/yargs/issues/2470)) ([639130d](https://github.com/yargs/yargs/commit/639130d332066c204776c263b4217ac265a0a861))\r\n* exit after async handler done ([#2313](https://github.com/yargs/yargs/issues/2313)) ([e326cde](https://github.com/yargs/yargs/commit/e326cde53173e82407bf5e79cfdd58a199bcb909))\r\n* handle spaces in bash completion ([#2452](https://github.com/yargs/yargs/issues/2452)) ([83b7788](https://github.com/yargs/yargs/commit/83b7788a09576feb2ca1c8aa762431a8a4d6a186))\r\n* parser-configuration should work well with generated completion script ([#2332](https://github.com/yargs/yargs/issues/2332)) ([888db19](https://github.com/yargs/yargs/commit/888db19ccebcb5065a7aa415445e41cb15411c50))\r\n* propagate Dictionary including undefined in value type ([#2393](https://github.com/yargs/yargs/issues/2393)) ([2b2f7f5](https://github.com/yargs/yargs/commit/2b2f7f5611ec6b4229ca609041b0fc8ffc393d14))\r\n* **zsh:** completion no longer requires double tab when using autoloaded ([0dd8fe4](https://github.com/yargs/yargs/commit/0dd8fe42ce98401fa54fd2458bf248bb38cb064d))\r\n\r\n\r\n### Code Refactoring\r\n\r\n* command names are not derived from modules passed to `command`. ([d90af45](https://github.com/yargs/yargs/commit/d90af45f18db093396b41196830b04e6930aa542))\r\n* singleton usage of yargs yargs.foo, yargs().argv, has been removed. ([d90af45](https://github.com/yargs/yargs/commit/d90af45f18db093396b41196830b04e6930aa542))\r\n\r\n\r\n### Build System\r\n\r\n* minimum node.js versions now `^20.19.0 || ^22.12.0 || >=23`. ([d90af45](https://github.com/yargs/yargs/commit/d90af45f18db093396b41196830b04e6930aa542))",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2025-05-27T14:26:35Z"
+ },
+ {
+  "tag_name": "v17.7.2",
+  "name": "v17.7.2",
+  "body": "## [17.7.2](https://github.com/yargs/yargs/compare/v17.7.1...v17.7.2) (2023-04-27)\n\n\n### Bug Fixes\n\n* do not crash completion when having negated options ([#2322](https://github.com/yargs/yargs/issues/2322)) ([7f42848](https://github.com/yargs/yargs/commit/7f428485e75e9b1b0db1320216d1c31469770563))",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2023-04-27T19:57:21Z"
+ }
+]
