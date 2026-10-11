@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.2 — unreleased
+## 6.2.2 — 2026-10-11
 
 ### Lockfile readers agree with the 4DA conformance corpus
 
