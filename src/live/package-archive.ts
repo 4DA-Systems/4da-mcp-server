@@ -185,6 +185,17 @@ async function readCapped(response: Response, cap: number): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/** Download a registry archive, refusing at MAX_COMPRESSED_BYTES. */
+export async function fetchArchiveBytes(
+  url: string,
+  fetchFn: FetchFn = defaultFetch,
+  headers: Record<string, string> = {},
+): Promise<Buffer> {
+  const response = await fetchFn(url, { headers }, ARCHIVE_TIMEOUT_MS);
+  if (!response.ok) throw new ArchiveError(`archive download failed: HTTP ${response.status}`);
+  return readCapped(response, MAX_COMPRESSED_BYTES);
+}
+
 /** Download a registry archive (size-capped) and return the accepted root-level text files. */
 export async function fetchArchiveRootFiles(
   url: string,
@@ -192,8 +203,5 @@ export async function fetchArchiveRootFiles(
   fetchFn: FetchFn = defaultFetch,
   headers: Record<string, string> = {},
 ): Promise<Map<string, string>> {
-  const response = await fetchFn(url, { headers }, ARCHIVE_TIMEOUT_MS);
-  if (!response.ok) throw new ArchiveError(`archive download failed: HTTP ${response.status}`);
-  const gz = await readCapped(response, MAX_COMPRESSED_BYTES);
-  return readRootTextFiles(gz, accept);
+  return readRootTextFiles(await fetchArchiveBytes(url, fetchFn, headers), accept);
 }

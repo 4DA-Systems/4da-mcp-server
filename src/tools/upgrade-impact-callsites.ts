@@ -20,13 +20,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { IgnoreRules } from "../gitignore.js";
 import type { UpgradeEcosystem } from "../live/upgrade-sources.js";
+import { scanGoSource, scanPythonSource } from "./upgrade-impact-imports.js";
 
 const SKIP_DIRS = new Set([
   "node_modules", "target", ".git", "dist", "build", "out", ".next",
-  "coverage", "vendor", ".claude", ".venv",
+  "coverage", "vendor", ".claude", ".venv", "venv", "__pycache__", "site-packages",
 ]);
 const NPM_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte"]);
 const RUST_EXTS = new Set([".rs"]);
+const PY_EXTS = new Set([".py", ".pyi"]);
+const GO_EXTS = new Set([".go"]);
+const EXTS: Record<UpgradeEcosystem, Set<string>> = { npm: NPM_EXTS, "crates.io": RUST_EXTS, PyPI: PY_EXTS, Go: GO_EXTS };
 const MAX_FILES = 6000;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_REPORTED_FILES = 50;
@@ -164,13 +168,27 @@ export async function scanCallSites(
   root: string,
   pkg: string,
   ecosystem: UpgradeEcosystem,
-  opts: { timeBudgetMs?: number; concurrency?: number } = {},
+  opts: { timeBudgetMs?: number; concurrency?: number; importNames?: string[] } = {},
 ): Promise<CallSiteReport> {
-  const exts = ecosystem === "npm" ? NPM_EXTS : RUST_EXTS;
+  const exts = EXTS[ecosystem];
   const budget = { left: MAX_FILES };
   const symbols = new Set<string>();
   const hits: Array<{ path: string; matches: number }> = [];
-  const needle = ecosystem === "npm" ? pkg : pkg.replace(/-/g, "_");
+  // PyPI: the module names the distribution is imported as (upgrade-impact-imports.ts).
+  const importNames = opts.importNames ?? [pkg];
+  const needles = ecosystem === "PyPI" ? importNames : [ecosystem === "crates.io" ? pkg.replace(/-/g, "_") : pkg];
+  const scan = (source: string): number => {
+    switch (ecosystem) {
+      case "npm":
+        return scanNpmSource(source, pkg, symbols);
+      case "crates.io":
+        return scanRustSource(source, pkg, symbols);
+      case "PyPI":
+        return scanPythonSource(source, importNames, symbols);
+      case "Go":
+        return scanGoSource(source, pkg, symbols);
+    }
+  };
   const deadline = Date.now() + (opts.timeBudgetMs ?? CALLSITE_TIME_BUDGET_MS);
   const files = listSources(root, exts, budget);
 
@@ -191,9 +209,8 @@ export async function scanCallSites(
       } catch {
         continue;
       }
-      if (!source.includes(needle)) continue;
-      const matches =
-        ecosystem === "npm" ? scanNpmSource(source, pkg, symbols) : scanRustSource(source, pkg, symbols);
+      if (!needles.some((n) => source.includes(n))) continue;
+      const matches = scan(source);
       if (matches > 0) hits.push({ path: path.relative(root, file).split(path.sep).join("/"), matches });
     }
   };

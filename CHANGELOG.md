@@ -1,5 +1,65 @@
 # Changelog
 
+## 6.2.0 — unreleased
+
+### `upgrade_impact` reads PyPI and Go
+
+Until 6.1 it answered for npm and crates.io only, and pointed Python and Go
+upgrades at the briefing.
+
+- **PyPI.** Versions, publish dates and yanks from the PyPI JSON API, ordered
+  by PEP 440 (`2.0`, `3.0.0rc1` and `1.0.post1` are releases, not unreadable
+  semver); a two-part version such as pydantic `2.0` is that release, not a
+  line. The changelog is read from the target release's sdist on
+  files.pythonhosted.org (`CHANGES.rst`, `HISTORY.md`, ...); a release with
+  wheels only says so. Import sites are matched on the MODULE the
+  distribution installs, established from the project's virtualenv metadata
+  (`.venv` / `venv` / `env`: `top_level.txt`, else `RECORD`), else a table of
+  well-known differences (`PyYAML` -> `yaml`, `beautifulsoup4` -> `bs4`,
+  `Pillow` -> `PIL`), else the distribution name, which the answer labels an
+  assumption (`your_code.import_name_source`, `import_name_note`) instead of
+  guessing silently.
+- **Go.** Versions from proxy.golang.org (`/@v/list`, dates from `.info`), the
+  changelog from the module zip. A major version 2+ is a different module
+  path: `github.com/jackc/pgx/v4` -> `v5.0.0` reads the `/v5` module, lists
+  the rest of the v4 line and the v5 releases crossed, and reports
+  `module_path_change` with the files that import the old path. An up-to-date
+  module whose next major exists says so (`newer_major_module`). Import sites
+  come from `import "module/..."` specs, never counting another major's path.
+- The parser reads reStructuredText changelogs: titles underlined (or over-
+  and underlined) with any RST adornment, their `Released <date>` lines, and
+  non-release setext/RST titles as sub-headings. `CHANGELOG_PARSER_VERSION` is
+  3, so changelogs cached by 6.1 are re-read.
+- A zip reader (central directory only, stored and deflate entries, every
+  inflate capped) for Go module zips and zip sdists.
+
+### GitHub release notes, opt-in (`FOURDA_GITHUB_CHANGELOG`)
+
+Off by default: the default contract is unchanged, and only the package's
+own registry and OSV.dev are contacted. With `FOURDA_GITHUB_CHANGELOG=true`,
+when the archive has no changelog for the range, `upgrade_impact` reads the
+repository's GitHub releases (for PyPI, first a changelog file the project
+links on GitHub in `project_urls`), with the same parser and classifier.
+
+- The repository comes from registry metadata; for Go from the proxy's
+  recorded VCS origin, so vanity paths (`google.golang.org/grpc`) and
+  multi-module repositories (`service/s3/v1.50.0` tags) resolve. Monorepo tags
+  for other packages are skipped.
+- Unauthenticated REST API, or `GITHUB_TOKEN` when set. A rate limit is
+  reported with its reset time and how to raise it, and is not cached.
+  Results are cached under a key that carries `CHANGELOG_PARSER_VERSION`.
+- With the fallback off and no usable changelog, the answer says the
+  changelog is unavailable and gives `github_fallback.how_to_enable` (or says
+  enabling it would not help: no GitHub repository). `_meta.sources` and
+  `_meta.privacy` name GitHub whenever it was contacted.
+
+### Hook and briefing
+
+- The manifest-edit hook names the exact `upgrade_impact` call for
+  `pyproject.toml`, `requirements.txt` and `go.mod` edits (`ecosystem: "PyPI"`
+  / `"Go"`); `what_should_i_know`'s next step for a PyPI or Go package is
+  `upgrade_impact`.
+
 ## 6.1.0 — 2026-10-10
 
 Fixes from an agent eval over stdio JSON-RPC against real projects (2026-10-07)

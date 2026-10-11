@@ -68,14 +68,24 @@ describe("manifest-edit hook", () => {
     expect(context(cargo.stdout)).not.toContain("dependency_check");
   });
 
-  it("points Python and Go edits at the briefing (upgrade_impact covers npm and crates.io)", () => {
-    const { stdout } = run({
-      tool_name: "Edit",
-      tool_input: { file_path: "requirements.txt", old_string: "django==4.2.16", new_string: "django==5.1.1" },
-    });
-    const text = context(stdout);
-    expect(text).toContain("django: ==4.2.16 -> ==5.1.1");
-    expect(text).toContain("what_should_i_know");
+  it("names the upgrade_impact call for Python and Go edits (dependency_check reads npm and crates.io only)", () => {
+    const py = context(
+      run({
+        tool_name: "Edit",
+        tool_input: { file_path: "requirements.txt", old_string: "django==4.2.16", new_string: "django==5.1" },
+      }).stdout,
+    );
+    expect(py).toContain('django: ==4.2.16 -> ==5.1; check with upgrade_impact {"package":"django","to_version":"5.1","ecosystem":"PyPI"}');
+    expect(py).not.toContain("dependency_check");
+    expect(py).toContain("vulnerability_scan after installing");
+
+    const go = context(
+      run({
+        tool_name: "Edit",
+        tool_input: { file_path: "go.mod", old_string: "\tgithub.com/spf13/cobra v1.8.0", new_string: "\tgithub.com/spf13/cobra v1.10.2" },
+      }).stdout,
+    );
+    expect(go).toContain('upgrade_impact {"package":"github.com/spf13/cobra","to_version":"1.10.2","ecosystem":"Go"}');
   });
 
   it("stays silent for non-manifest files, unchanged versions, Write and bad input", () => {

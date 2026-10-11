@@ -51,10 +51,29 @@ function versionChanges(file, before, after) {
 
 const exact = (spec) => /^v?\d+\.\d+\.\d+([-+][\w.]+)?$/.test(spec.replace(/^[=\s]+/, "")) ? spec.replace(/^[=v\s]+/, "") : null;
 
+const ECOSYSTEM = {
+  "package.json": "npm",
+  "Cargo.toml": "crates.io",
+  "pyproject.toml": "PyPI",
+  "requirements.txt": "PyPI",
+  "go.mod": "Go",
+};
+
+/** An exact pin: `==2.0` (PEP 440 two-part releases too) or a full x.y.z. */
+const exactFor = (ecosystem, spec) => {
+  if (ecosystem === "PyPI") {
+    const m = /^={2,3}\s*(\d[\w.!+-]*)$/.exec(spec.trim());
+    return m ? m[1] : null;
+  }
+  return exact(spec);
+};
+
 function adviceFor(file, changes) {
-  const ecosystem = file === "package.json" ? "npm" : file === "Cargo.toml" ? "crates.io" : null;
+  const ecosystem = ECOSYSTEM[file] ?? null;
+  // dependency_check reads npm and crates.io; upgrade_impact reads all four.
+  const checkable = ecosystem === "npm" || ecosystem === "crates.io";
   const lines = changes.slice(0, 8).map((c) => {
-    const target = exact(c.to);
+    const target = exactFor(ecosystem, c.to);
     const call = ecosystem
       ? `; check with upgrade_impact ${JSON.stringify({ package: c.name, ...(target ? { to_version: target } : {}), ecosystem })}`
       : "";
@@ -62,7 +81,7 @@ function adviceFor(file, changes) {
   });
   const more = changes.length > 8 ? `\n- ...and ${changes.length - 8} more` : "";
   // dependency_check takes exact versions only; a range ("^1.2") gets no item.
-  const items = ecosystem
+  const items = checkable
     ? changes.slice(0, 25).flatMap((c) => {
         const to = exact(c.to);
         const from = c.from ? exact(c.from) : null;
@@ -73,7 +92,7 @@ function adviceFor(file, changes) {
     ? `Before installing, call the 4da MCP tool dependency_check ${JSON.stringify({ items })} for a proceed/review/avoid verdict (advisories, release age, publisher trust, new install scripts).\n`
     : "";
   const tail = ecosystem
-    ? "Before building, call the 4da MCP tool upgrade_impact for each upgraded package: it lists the breaking changes between the versions and the files in this project that use the package."
+    ? `Before building, call the 4da MCP tool upgrade_impact for each upgraded package: it lists the breaking changes between the versions and the files in this project that use the package.${checkable ? "" : " Run vulnerability_scan after installing."}`
     : "Before building, call the 4da MCP tool what_should_i_know with the upgrade as the task, and vulnerability_scan after installing.";
   return `4DA: this edit changes dependency versions in ${file}:\n${lines.join("\n")}${more}\n${check}${tail}`;
 }

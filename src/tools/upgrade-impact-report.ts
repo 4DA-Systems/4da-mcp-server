@@ -231,6 +231,15 @@ export interface SummaryInput {
   /** missing = no changelog file; no_entries = a file with no section for these releases; partial = some of them. */
   changelog: "missing" | "no_entries" | "partial" | "complete";
   advisoriesFixed: number | null;
+  /** Versions as the ecosystem writes them (`v1.2.3`, `3.0rc1`); `from`/`to` are their semver reading. */
+  fromLabel?: string;
+  toLabel?: string;
+  /** Where the entries came from when not the archive ("GitHub release notes"). */
+  changelogFrom?: string | null;
+  /** How to get a changelog that is missing (the opt-in GitHub fallback), when it would help. */
+  githubHint?: string | null;
+  /** Go: the upgrade moves to another module path. */
+  pathChange?: { from: string; to: string; files: number } | null;
 }
 
 /** The one sentence a human or agent reads first. */
@@ -242,9 +251,10 @@ export function summarize(input: SummaryInput): string {
   ].filter(Boolean);
   let breaking: string;
   const atLeast = input.changelog === "partial" ? "at least " : "";
-  if (input.changelog === "missing") breaking = "no changelog in the package archive (see release_notes_url)";
+  const hint = input.githubHint ? `; ${input.githubHint}` : "";
+  if (input.changelog === "missing") breaking = `no changelog in the package archive, so breaking changes are unknown (see release_notes_url${hint})`;
   else if (input.changelog === "no_entries") {
-    breaking = "the package's changelog has no entries for these releases, so breaking changes are unknown (see release_notes_url)";
+    breaking = `the package's changelog has no entries for these releases, so breaking changes are unknown (see release_notes_url${hint})`;
   } else {
     // "flagged", not "N breaking changes": the flags come from headings and
     // wording and are neither exhaustive nor always right (_meta.classification).
@@ -254,8 +264,12 @@ export function summarize(input: SummaryInput): string {
       const verb = input.breaking === 1 ? "it touches" : `${input.touching} touch`;
       breaking = `${flagged} (${verb} your code: ${names})`;
     } else breaking = flagged;
+    if (input.changelogFrom) breaking += ` (from ${input.changelogFrom})`;
   }
   const advisories =
     input.advisoriesFixed === null ? "advisories unknown (OSV unreachable)" : `${input.advisoriesFixed} advisories fixed`;
-  return `${input.pkg} ${input.from} -> ${input.to}: ${parts.join(", ")}, ${breaking}, ${advisories}.`;
+  const path = input.pathChange
+    ? `, module path changes to ${input.pathChange.to} (${input.pathChange.files} ${input.pathChange.files === 1 ? "file imports" : "files import"} ${input.pathChange.from})`
+    : "";
+  return `${input.pkg} ${input.fromLabel ?? input.from} -> ${input.toLabel ?? input.to}: ${parts.join(", ")}${path}, ${breaking}, ${advisories}.`;
 }

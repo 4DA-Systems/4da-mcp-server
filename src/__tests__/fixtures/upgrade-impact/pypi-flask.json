@@ -1,0 +1,69 @@
+{
+ "info": {
+  "name": "Flask",
+  "home_page": null,
+  "project_urls": {
+   "Changes": "https://flask.palletsprojects.com/page/changes/",
+   "Chat": "https://discord.gg/pallets",
+   "Documentation": "https://flask.palletsprojects.com/",
+   "Donate": "https://palletsprojects.com/donate",
+   "Source": "https://github.com/pallets/flask/"
+  }
+ },
+ "releases": {
+  "2.3.2": [
+   {
+    "filename": "Flask-2.3.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/fa/1a/f191d32818e5cd985bdd3f47a6e4f525e2db1ce5e8150045ca0c31813686/Flask-2.3.2-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "upload_time_iso_8601": "2023-05-01T15:42:08.893644Z",
+    "yanked": false,
+    "yanked_reason": null
+   },
+   {
+    "filename": "Flask-2.3.2.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/4d/00/ef81c18da32fdfcde6381c315f4b11597fb6691180a330418848efee0ae7/Flask-2.3.2.tar.gz",
+    "packagetype": "sdist",
+    "upload_time_iso_8601": "2023-05-01T15:42:12.038448Z",
+    "yanked": false,
+    "yanked_reason": null
+   }
+  ],
+  "2.3.3": [
+   {
+    "filename": "flask-2.3.3-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/fd/56/26f0be8adc2b4257df20c1c4260ddd0aa396cf8e75d90ab2f7ff99bc34f9/flask-2.3.3-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "upload_time_iso_8601": "2023-08-21T19:52:33.115955Z",
+    "yanked": false,
+    "yanked_reason": null
+   },
+   {
+    "filename": "flask-2.3.3.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/46/b7/4ace17e37abd9c21715dea5ee11774a25e404c486a7893fa18e764326ead/flask-2.3.3.tar.gz",
+    "packagetype": "sdist",
+    "upload_time_iso_8601": "2023-08-21T19:52:35.012171Z",
+    "yanked": false,
+    "yanked_reason": null
+   }
+  ],
+  "3.0.0": [
+   {
+    "filename": "flask-3.0.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/36/42/015c23096649b908c809c69388a805a571a3bea44362fe87e33fc3afa01f/flask-3.0.0-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "upload_time_iso_8601": "2023-09-30T14:36:10.961495Z",
+    "yanked": false,
+    "yanked_reason": null
+   },
+   {
+    "filename": "flask-3.0.0.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/d8/09/c1a7354d3925a3c6c8cfdebf4245bae67d633ffda1ba415add06ffc839c5/flask-3.0.0.tar.gz",
+    "packagetype": "sdist",
+    "upload_time_iso_8601": "2023-09-30T14:36:12.918335Z",
+    "yanked": false,
+    "yanked_reason": null
+   }
+  ]
+ }
+}
