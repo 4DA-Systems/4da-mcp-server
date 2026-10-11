@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.3 — unreleased
+## 6.2.3 — 2026-10-11
 
 ### Yarn 1 refresh instruction covers alias entries
 
