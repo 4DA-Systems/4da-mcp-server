@@ -29,10 +29,12 @@ interface Pep440 {
   pre: [number, number] | null;
   post: number | null;
   dev: number | null;
+  /** Local label segments ("1.0+ubuntu.1" -> ["ubuntu", 1]); empty for none. */
+  local: Array<number | string>;
 }
 
 const PEP440 =
-  /^v?(?:(\d+)!)?(\d+(?:\.\d+)*)(?:[-_.]?(a|alpha|b|beta|c|rc|pre|preview)[-_.]?(\d*))?(?:(?:[-_.]?(?:post|rev|r)[-_.]?(\d*))|-(\d+))?(?:[-_.]?dev[-_.]?(\d*))?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+  /^v?(?:(\d+)!)?(\d+(?:\.\d+)*)(?:[-_.]?(a|alpha|b|beta|c|rc|pre|preview)[-_.]?(\d*))?(?:(?:[-_.]?(?:post|rev|r)[-_.]?(\d*))|-(\d+))?(?:[-_.]?dev[-_.]?(\d*))?(?:\+([a-z0-9]+(?:[-_.][a-z0-9]+)*))?$/i;
 
 export function parsePep440(version: string): Pep440 | null {
   const m = PEP440.exec(version.trim());
@@ -44,6 +46,7 @@ export function parsePep440(version: string): Pep440 | null {
     pre: m[3] ? [preRank[m[3].toLowerCase()], m[4] ? Number(m[4]) : 0] : null,
     post: m[5] !== undefined ? (m[5] ? Number(m[5]) : 0) : m[6] !== undefined ? Number(m[6]) : null,
     dev: m[7] !== undefined ? (m[7] ? Number(m[7]) : 0) : null,
+    local: m[8] ? m[8].split(/[-_.]/).map((seg) => (/^\d+$/.test(seg) ? Number(seg) : seg.toLowerCase())) : [],
   };
 }
 
@@ -70,7 +73,25 @@ export function comparePep440(a: Pep440, b: Pep440): number {
   for (let i = 0; i < ka.length; i++) {
     if (ka[i] !== kb[i]) return ka[i] > kb[i] ? 1 : -1;
   }
-  return 0;
+  return compareLocal(a.local, b.local);
+}
+
+/**
+ * PEP 440 local labels, which decide only between otherwise equal versions:
+ * none sorts below any (1.0 < 1.0+abc.5); segment by segment, numbers compare
+ * numerically and sort above strings, strings compare case-folded; a label
+ * that extends another sorts above it (1.0+abc.5 < 1.0+abc.7 < 1.0+5).
+ * Dropping the label made these compare equal, so a `last_affected` bound
+ * equal to a local-labelled install was misread.
+ */
+function compareLocal(a: Array<number | string>, b: Array<number | string>): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    const [x, y] = [a[i], b[i]];
+    if (x === y) continue;
+    if (typeof x !== typeof y) return typeof x === "number" ? 1 : -1;
+    return x > y ? 1 : -1;
+  }
+  return Math.sign(a.length - b.length);
 }
 
 // ---------------------------------------------------------------------------

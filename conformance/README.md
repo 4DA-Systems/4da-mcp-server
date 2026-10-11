@@ -36,10 +36,35 @@ How a case runs: the project-tree walk over the case directory, the readers thro
 - `engine-disagreements.json`: every difference from the truth in a ratcheted ecosystem,
   grouped by verdict with a reason. A difference listed nowhere fails the test.
 
+## Shared rule vectors
+
+The corpus checks what the engine finds. The rule vectors beside it (`<corpus>/vectors/`,
+spec and truth sources in its `README.md`) check which fix it recommends and why: version
+order, OSV range evaluation, the fix target, the refresh-or-parent verdict, the refresh
+command, and `dependency_check`'s `range_check`. The desktop app's Rust engine runs the same
+files. They arrive with the corpus fetch.
+
+```bash
+pnpm exec vitest run src/__tests__/rule-vectors.test.ts   # prints pass/skip/fail per file
+```
+
+`src/__tests__/helpers/rule-vectors.ts` maps each file to the function that implements the
+rule here. `vectors-skip.json` lists the vector ids this engine does not satisfy yet, each
+with a reason (4DA's `engines_skip.json` is read-only from here, so its `ts` section stays
+empty). The list is shrink-only, against `TS_SKIP_BASELINE` in the test: an unskipped
+failure fails, a skipped vector that passes fails (remove it), the list may not grow, a
+shrink must lower the baseline in the same change, and an entry that names no vector or has
+no reason fails.
+
+When a vector fails: fix the engine with a unit test (`src/__tests__/rule-vector-defects.test.ts`).
+If the vector's expected value is wrong, fix it in 4DA (the vector and its `source`), then
+bump `conformance.lock`; never weaken the runner here.
+
 ## CI
 
-- `conformance (pinned)`: every PR and push, ubuntu, corpus cached by the pinned commit.
-- `conformance (4DA main)`: nightly, against 4DA's current main; a failure opens the
+- `conformance (pinned)`: every PR and push, ubuntu, corpus cached by the pinned commit;
+  runs the corpus ratchet and the rule vectors.
+- `conformance (4DA main)`: nightly, both against 4DA's current main; a failure opens the
   nightly issue.
 
 ## When it fails

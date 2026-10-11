@@ -140,15 +140,17 @@ function test(set: Comparator[], version: SemverPrecedence): boolean {
 
 /**
  * Whether an npm range admits `version`. Null when the range is not a
- * registry semver range (git, file, link, workspace, alias, tag) or the
- * version is unreadable.
+ * registry semver range (git, file, link, workspace, tag) or the version is
+ * unreadable. An npm alias ("npm:string-width@^4.2.0", the spec a lockfile
+ * records for "string-width-cjs") is read by its range: it is the parent's
+ * requirement on the aliased package.
  */
 export function npmRangeAdmits(range: string, version: string): boolean | null {
   const v = parseSemverPrecedence(version);
   if (!v) return null;
-  // yarn berry writes "npm:^1.2.0"; an alias ("npm:other@^1") names another package.
-  const text = range.trim().replace(/^npm:(?=[\^~<>=\dvxX*\s]|$)/, "");
-  // Protocols (git+https:, file:, link:, workspace:, npm:alias@), paths, GitHub shorthand.
+  // yarn berry writes "npm:^1.2.0"; an alias writes "npm:<name>@<range>" (scoped names too).
+  const text = range.trim().replace(/^npm:(?:(?:@[^@\s/]+\/)?[^@\s/]+@)?(?=[\^~<>=\dvxX*\s]|$)/, "");
+  // Protocols (git+https:, file:, link:, workspace:), paths, GitHub shorthand.
   if (/^[a-z][a-z+]*:/i.test(text) || text.includes("/")) return null;
   // A dist-tag ("latest", "next", "beta").
   if (/^[a-z][\w.-]*$/i.test(text) && !WILD.test(text)) return null;

@@ -70,9 +70,11 @@ interface UpgradeRecommendation {
   /**
    * Direct deps you can bump yourself; `lockfile_refresh` = transitive, and
    * every parent's declared requirement already admits a clean version, so
-   * `refreshCommands` fixes it; `waiting_on_upstream` = transitive, and a
-   * parent's requirement excludes every clean version (or could not be
-   * read); `reinstall` = the lockfile's version is fine
+   * `refreshCommands` fixes it (`refreshInferred` when that is inferred from
+   * semver because a requirement could not be read); `waiting_on_upstream` =
+   * transitive, and a parent's requirement excludes every clean version (or
+   * none could be read and the target leaves the semver-compatible range);
+   * `reinstall` = the lockfile's version is fine
    * but node_modules holds another one, so the fix is `installFix`;
    * `no_fix_available` = vulnerable with no fixed release to move to;
    * `not_built_on_this_host` = every advisory is against code this host never compiles.
@@ -88,6 +90,12 @@ interface UpgradeRecommendation {
   fixPathChecked?: "all_advisories" | "installed_advisories_only";
   /** lockfile_refresh: the command to run, per lockfile directory. */
   refreshCommands?: Array<{ dir: string; command: string }>;
+  /**
+   * lockfile_refresh: true when not every parent's requirement could be read
+   * (none read excludes the target) and the target is semver-compatible with
+   * the installed version, so the refresh is inferred rather than read.
+   */
+  refreshInferred?: boolean;
   /** False when the dependency is gated behind a target spec not active on this host (label, never suppressed). */
   platformActive: boolean;
   /** npm: the version node_modules holds, when it differs from `currentVersion` (the lockfile's). */

@@ -30,9 +30,11 @@ import { fetchWithTimeout } from "./http-utils.js";
 import { escapeModulePath } from "./go-registry.js";
 import { advisoryRanges, advisoryAffects, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
 import * as fs from "node:fs";
-import { readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
+import * as path from "node:path";
+import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
-import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
+import { cargoReqAdmits } from "./range-satisfies.js";
+import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
@@ -329,10 +331,17 @@ export function targetNote(clean: CleanTarget): string | null {
 }
 
 export interface RefreshVerdict {
-  /** True when every parent's requirement already admits a clean version. */
+  /** True when a lockfile refresh reaches a clean version (read, or inferred: see `inferred`). */
   refreshFixes: boolean;
+  /**
+   * True when no parent's requirement could be read (or not every one) and none
+   * excludes the target, so the verdict comes from semver compatibility
+   * (4DA AD-055 ¶1): a refresh when the target is caret-compatible with the
+   * installed version, the parent otherwise.
+   */
+  inferred: boolean;
   format: LockfileFormat;
-  /** The command, run in the lockfile's directory. */
+  /** The command, run in the lockfile's directory; for yarn 1 and bun, the manual steps (no command moves one copy in place). */
   command: string;
   /** Parent requirements that do NOT admit a clean version (why it is waiting on upstream). */
   blocking: Array<{ parent: string; parentVersion: string | null; requirement: string }>;
@@ -340,32 +349,69 @@ export interface RefreshVerdict {
   resolvesTo: string | null;
 }
 
-/** The refresh command for one lockfile format. */
-export function refreshCommand(format: LockfileFormat, name: string, installed: string, target: string): string {
+/**
+ * The command that refreshes one transitive copy in place, for the tools it
+ * can be named for (4DA AD-055 ¶4); null for yarn 1 and bun, which have none
+ * (see `manualRefreshSteps`).
+ *
+ * pnpm: at a workspace root (`pnpm-workspace.yaml`), `pnpm update <pkg>`
+ * touches only the root project's tree, so a member's transitive copy stayed
+ * where it was; `-r` reaches every member (measured with pnpm 10.34.6: a
+ * member's mkdirp -> minimist 1.2.5 moved to 1.2.8 only with `-r`). `--depth
+ * Infinity` is the form the fix-path oracle applied (2026-10-10, U04/U10);
+ * pnpm 8.15 to 10.34 also moved a root project's transitive copy without it.
+ */
+export function refreshCommand(format: LockfileFormat, name: string, installed: string, target: string, workspaceRoot = false): string | null {
   switch (format) {
     case "package-lock":
       return `npm update ${name}`;
     case "pnpm":
-      return `pnpm update ${name}`;
+      return `pnpm update ${workspaceRoot ? "-r " : ""}${name} --depth Infinity`;
     case "yarn-berry":
       return `yarn up -R ${name}`;
     case "yarn":
-      // Yarn 1 has no command that refreshes a transitive copy. Its blocks are keyed
-      // by every spec that resolved to them, and an alias block's first key names
-      // the alias ("string-width-cjs@npm:string-width@^4.2.0"), so name both forms.
-      return `delete every yarn.lock entry that resolves to ${name} (keys "${name}@…" and alias keys "…@npm:${name}@…"), then run yarn install`;
     case "bun":
-      return `delete the ${name} entries from bun.lock, then run bun install`;
+      return null;
     case "cargo":
       return `cargo update -p ${name}@${installed} --precise ${target}`;
   }
 }
 
+/** For a lockfile with no in-place refresh command (yarn 1, bun): the steps that move the copy. */
+export function manualRefreshSteps(format: "yarn" | "bun", name: string): string {
+  // Yarn 1 keys a block by every spec that resolved to it, and an alias block's
+  // first key names the alias ("string-width-cjs@npm:string-width@^4.2.0"), so
+  // name both forms. Deleting the entries and reinstalling is what moved the
+  // copy in the fix-path oracle (case U11).
+  return format === "yarn"
+    ? `delete every yarn.lock entry that resolves to ${name} (keys "${name}@…" and alias keys "…@npm:${name}@…"), then run yarn install`
+    : `delete the ${name} entries from bun.lock, then run bun install`;
+}
+
+/** Whether a pnpm lockfile sits at a workspace root (`pnpm-workspace.yaml` beside it). */
+function isPnpmWorkspaceRoot(lockfile: string): boolean {
+  return fs.existsSync(path.join(path.dirname(lockfile), "pnpm-workspace.yaml"));
+}
+
+/** The refresh command for the project whose lockfile is `lockfile`; null when no command is named for it. */
+export function refreshCommandFor(lockfile: string, name: string, installed: string, target: string): string | null {
+  let content: string;
+  try {
+    content = fs.readFileSync(lockfile, "utf-8");
+  } catch {
+    return null;
+  }
+  const format = lockfileFormat(lockfile, content);
+  return format ? refreshCommand(format, name, installed, target, format === "pnpm" && isPnpmWorkspaceRoot(lockfile)) : null;
+}
+
 /**
  * Whether refreshing `lockfile` moves `name@installed` to a clean version
- * without any parent changing its declared requirement. Null when the
- * lockfile or a requirement cannot be read (the caller keeps "waiting on
- * upstream", the conservative answer).
+ * without any parent changing its declared requirement: `refreshRule` over
+ * every requirement the parents declare (read from the lockfile, else the
+ * parent's registry metadata). Null when the lockfile cannot be read or no
+ * verdict is possible (the caller keeps "waiting on upstream", the
+ * conservative answer).
  */
 export async function refreshVerdict(
   sources: FixPathSources,
@@ -380,48 +426,52 @@ export async function refreshVerdict(
   const parents = readLockfileParents(lockfile, name, installed);
   if (!parents || parents.edges.length === 0) return null;
   const isCargo = parents.format === "cargo";
-  const admits = (range: string, version: string) => (isCargo ? cargoReqAdmits(range, version) : npmRangeAdmits(range, version));
+  const dialect: RequirementDialect = isCargo ? "cargo" : "npm";
   const clean = (v: string) => !advisories || !advisories.some((a) => advisoryAffects(a, v, ecosystem));
   const releases = (published ?? []).filter((v) => !isPrereleaseVersion(v, ecosystem));
 
-  const blocking: RefreshVerdict["blocking"] = [];
-  let resolvesTo: string | null = null;
   const edgeReqs = await Promise.all(parents.edges.map((edge) => requirementsOf(sources, ecosystem, edge, name)));
+  const reqs: Array<ParentRequirement & { edge: ParentEdge }> = [];
   for (const [i, edge] of parents.edges.entries()) {
     const all = edgeReqs[i];
-    if (all === null || all.length === 0) return null;
+    if (all === null || all.length === 0) {
+      reqs.push({ parent: edge.parent, text: null, dialect, edge }); // not read: the rule cannot count it as admitting
+      continue;
+    }
     // A parent can declare the same crate twice under different names (feature-gated
     // `mio-0_6` / `mio-0_7` aliases): only the requirements this copy satisfies apply.
-    const matching = all.filter((req) => admits(req, installed) === true);
-    const reqs = matching.length > 0 ? [...new Set(matching)] : [...new Set(all)];
-    for (const req of reqs) {
-      if (isCargo) {
-        // `cargo update --precise` moves to exactly the clean target, if every requirement admits it.
-        const ok = admits(req, target);
-        if (ok === null) return null;
-        if (!ok) blocking.push({ parent: edge.parent, parentVersion: edge.parentVersion, requirement: req });
-        else resolvesTo = target;
-        continue;
-      }
-      // npm, pnpm, yarn and bun resolve each requirement to its newest match.
-      if (releases.length > 0) {
+    const asReq = (text: string): ParentRequirement => ({ parent: edge.parent, text, dialect });
+    const matching = all.filter((text) => requirementAdmits(asReq(text), installed) === true);
+    for (const text of new Set(matching.length > 0 ? matching : all)) reqs.push({ ...asReq(text), edge });
+  }
+  const rule = refreshRule(installed, target, reqs);
+  if (rule.verdict === "unknown") return null;
+
+  const blocking: RefreshVerdict["blocking"] = [];
+  const block = (r: (typeof reqs)[number]) =>
+    blocking.push({ parent: r.edge.parent, parentVersion: r.edge.parentVersion, requirement: r.text ?? "" });
+  for (const r of reqs) if (requirementAdmits(r, target) === false) block(r);
+
+  let resolvesTo: string | null = null;
+  if (rule.verdict === "refresh" && !rule.inferred) {
+    if (isCargo) {
+      // `cargo update --precise` moves to exactly the clean target, which every requirement admits.
+      resolvesTo = target;
+    } else if (releases.length > 0) {
+      // npm, pnpm, yarn and bun resolve each requirement to its newest match, which must be clean too.
+      for (const r of reqs) {
         const newest = releases
-          .filter((v) => admits(req, v) === true)
+          .filter((v) => requirementAdmits(r, v) === true)
           .sort((a, b) => compareVersions(b, a, ecosystem))[0];
-        if (!newest || compareVersions(newest, target, ecosystem) < 0 || !clean(newest)) {
-          blocking.push({ parent: edge.parent, parentVersion: edge.parentVersion, requirement: req });
-        } else if (!resolvesTo || compareVersions(newest, resolvesTo, ecosystem) < 0) {
-          resolvesTo = newest;
-        }
-      } else {
-        const ok = admits(req, target);
-        if (ok === null) return null;
-        if (!ok) blocking.push({ parent: edge.parent, parentVersion: edge.parentVersion, requirement: req });
+        if (!newest || compareVersions(newest, target, ecosystem) < 0 || !clean(newest)) block(r);
+        else if (!resolvesTo || compareVersions(newest, resolvesTo, ecosystem) < 0) resolvesTo = newest;
       }
     }
   }
-  let command = refreshCommand(parents.format, name, installed, target);
-  if (isCargo && blocking.length === 0) {
+  const refreshFixes = rule.verdict === "refresh" && blocking.length === 0;
+  const named = refreshCommand(parents.format, name, installed, target, parents.format === "pnpm" && isPnpmWorkspaceRoot(lockfile));
+  let command = named ?? manualRefreshSteps(parents.format === "bun" ? "bun" : "yarn", name);
+  if (isCargo && refreshFixes) {
     let content: string;
     try {
       content = fs.readFileSync(lockfile, "utf-8");
@@ -433,11 +483,12 @@ export async function refreshVerdict(
     if (prereqs.length > 0) command = `cargo update ${prereqs.map((p) => `-p ${p}`).join(" ")} && ${command}`;
   }
   return {
-    refreshFixes: blocking.length === 0,
+    refreshFixes,
+    inferred: rule.inferred,
     format: parents.format,
     command,
     blocking,
-    resolvesTo: blocking.length === 0 ? resolvesTo : null,
+    resolvesTo: refreshFixes ? resolvesTo : null,
   };
 }
 

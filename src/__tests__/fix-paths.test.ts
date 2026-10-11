@@ -23,7 +23,7 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion } from "../live/osv-ranges.js";
 import { extractFixedVersion } from "../live/osv-scanner.js";
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
-import { cargoPrecisePrerequisites, refreshCommand, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
+import { cargoPrecisePrerequisites, manualRefreshSteps, refreshCommand, refreshCommandFor, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
 import { bunParents, cargoParents, packageLockParents, pnpmParents, yarnParents } from "../live/lockfile-parents.js";
 import type { FourDADatabase } from "../db.js";
 import type { OsvVulnerability, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
@@ -78,11 +78,13 @@ describe("range satisfaction", () => {
     [">=1.0.0 <1.2.6", "1.2.6", false], [">= 1.0.0", "3.0.0", true], ["1.2.x", "1.2.9", true], ["1.x || >=3", "3.1.0", true],
     ["1.2.5", "1.2.6", false], ["*", "9.9.9", true], ["", "1.0.0", true], ["1.0.0 - 1.2", "1.2.9", true], ["1.0.0 - 1.2", "1.3.0", false],
     ["^1.2.0", "1.3.0-beta.1", false], ["npm:^1.2.0", "1.2.7", true],
+    // An npm alias is the parent's requirement on the aliased package (cliui's "string-width-cjs"; 4DA rule vector rv-047).
+    ["npm:string-width@^4.2.0", "4.2.3", true], ["npm:@scope/pkg@~1.2.0", "1.3.0", false],
   ])("npm %s admits %s: %s", (range, version, expected) => {
     expect(npmRangeAdmits(range, version)).toBe(expected);
   });
 
-  it.each([["github:user/repo", "1.0.0"], ["file:../x", "1.0.0"], ["latest", "1.0.0"], ["npm:other@^1.0.0", "1.0.0"], ["workspace:*", "1.0.0"]])(
+  it.each([["github:user/repo", "1.0.0"], ["file:../x", "1.0.0"], ["latest", "1.0.0"], ["npm:other@latest", "1.0.0"], ["workspace:*", "1.0.0"]])(
     "npm %s is not a registry range (null)",
     (range, version) => {
       expect(npmRangeAdmits(range, version)).toBeNull();
@@ -280,11 +282,12 @@ function entriesFor(vulns: OsvVulnerability[], name: string, eco: "npm" | "crate
 const sparse = (versions: string[], reqs: Record<string, Record<string, string>> = {}) =>
   versions.map((vers) => JSON.stringify({ name: "x", vers, yanked: false, deps: Object.entries(reqs[vers] ?? {}).map(([name, req]) => ({ name, req, kind: "normal" })) })).join("\n");
 
-function stubNetwork(): string[] {
+/** `parentManifests`: per "name/version", the npm manifest dependencies to serve instead, or null for an unreachable registry (503). */
+function stubNetwork(parentManifests: Record<string, Record<string, string> | null> = {}): string[] {
   const calls: string[] = [];
   const advisories: Record<string, OsvVulnerability[]> = { openssl: OPENSSL, mio: MIO, minimist: MINIMIST, braces: BRACES, "left-pad": [] };
   const npmVersions: Record<string, string[]> = { minimist: MINIMIST_VERSIONS, braces: BRACES_VERSIONS };
-  const npmDeps: Record<string, Record<string, string>> = { "chokidar/3.5.3": { braces: "~3.0.2" }, "micromatch/4.0.5": { braces: "^3.0.2" } };
+  const npmDeps: Record<string, Record<string, string> | null> = { "chokidar/3.5.3": { braces: "~3.0.2" }, "micromatch/4.0.5": { braces: "^3.0.2" }, ...parentManifests };
   const crates: Record<string, string> = {
     "op/en/openssl": sparse(OPENSSL_VERSIONS),
     "3/m/mio": sparse(MIO_VERSIONS),
@@ -302,7 +305,10 @@ function stubNetwork(): string[] {
     const npm = /^https:\/\/registry\.npmjs\.org\/([^/]+)(?:\/(.+))?$/.exec(url);
     if (npm) {
       const name = decodeURIComponent(npm[1]);
-      if (npm[2]) return json({ dependencies: npmDeps[`${name}/${decodeURIComponent(npm[2])}`] ?? {} });
+      if (npm[2]) {
+        const deps = npmDeps[`${name}/${decodeURIComponent(npm[2])}`];
+        return deps === null ? new Response("", { status: 503 }) : json({ dependencies: deps ?? {} });
+      }
       return npmVersions[name] ? json({ versions: Object.fromEntries(npmVersions[name].map((v) => [v, {}])) }) : new Response("", { status: 404 });
     }
     const crate = /^https:\/\/index\.crates\.io\/(.+)$/.exec(url);
@@ -412,7 +418,7 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const li = intel(pnpmDir, "javascript", ["chokidar"], entriesFor(BRACES, "braces", "npm", "3.0.2", pnpmDir));
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const step = plan.recommendations.find((s: { package: string }) => s.package === "braces");
-    expect(step).toMatchObject({ targetVersion: "3.0.3", action: "lockfile_refresh", refreshCommands: [{ command: "pnpm update braces" }] });
+    expect(step).toMatchObject({ targetVersion: "3.0.3", action: "lockfile_refresh", refreshCommands: [{ command: "pnpm update braces --depth Infinity" }] });
     expect(step.reasons.join(" ")).toMatch(/GHSA-vfj7-8cjw-p6xm also affects 3\.0\.3 and every newer release/);
     expect(calls).toContain("https://registry.npmjs.org/chokidar/3.5.3");
     expect(calls).toContain("https://registry.npmjs.org/micromatch/4.0.5");
@@ -445,6 +451,25 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     expect(step.reasons.join(" ")).toMatch(/left-pad 1\.0\.0 requires "1\.2\.5"/);
   });
 
+  it("pnpm: when no parent's requirement can be read, a semver-compatible target is an inferred refresh, and says so (AD-055 ¶1)", async () => {
+    stubNetwork({ "chokidar/3.5.3": null, "micromatch/4.0.5": null });
+    const li = intel(pnpmDir, "javascript", ["chokidar"], entriesFor(BRACES, "braces", "npm", "3.0.2", pnpmDir));
+    const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
+    const step = plan.recommendations.find((s: { package: string }) => s.package === "braces");
+    expect(step).toMatchObject({ targetVersion: "3.0.3", action: "lockfile_refresh", refreshInferred: true, refreshCommands: [{ command: "pnpm update braces --depth Infinity" }] });
+    expect(step.reasons.join(" ")).toMatch(/3\.0\.3 is semver-compatible with 3\.0\.2, so a lockfile refresh should reach it \(inferred, not read from the parents\)/);
+  });
+
+  it("pnpm: a parent whose requirement excludes the target blocks it even when another parent's cannot be read (AD-055 ¶1)", async () => {
+    stubNetwork({ "chokidar/3.5.3": null, "micromatch/4.0.5": { braces: "3.0.2" } });
+    const li = intel(pnpmDir, "javascript", ["chokidar"], entriesFor(BRACES, "braces", "npm", "3.0.2", pnpmDir));
+    const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
+    const step = plan.recommendations.find((s: { package: string }) => s.package === "braces");
+    expect(step.action).toBe("waiting_on_upstream");
+    expect(step.refreshInferred).toBeUndefined();
+    expect(step.reasons.join(" ")).toMatch(/micromatch 4\.0\.5 requires "3\.0\.2"/);
+  });
+
   it("when OSV cannot be read, the target is labelled unverified instead of being trusted silently", async () => {
     vi.stubGlobal("fetch", async () => new Response("", { status: 503 }));
     const li = intel(cargoDir, "rust", ["tokio", "native-tls"], entriesFor(OPENSSL, "openssl", "crates.io", "0.10.38", cargoDir));
@@ -459,15 +484,31 @@ describe("refreshCommand", () => {
   // Yarn 1 keys a block by every spec that resolved to it; an alias block's first
   // key names the alias, so "delete the string-width@ entries" left it in place.
   it("yarn 1 names the package's own keys and its npm-alias keys", () => {
-    const cmd = refreshCommand("yarn", "string-width", "4.2.3", "4.2.4");
+    expect(refreshCommand("yarn", "string-width", "4.2.3", "4.2.4")).toBeNull();
+    const cmd = manualRefreshSteps("yarn", "string-width");
     expect(cmd).toContain('"string-width@…"');
     expect(cmd).toContain('"…@npm:string-width@…"');
     expect(cmd).toMatch(/then run yarn install$/);
   });
 
+  it("a pnpm workspace root gets -r, read from pnpm-workspace.yaml beside the lockfile", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-pnpm-ws-"));
+    try {
+      const lock = path.join(dir, "pnpm-lock.yaml");
+      fs.writeFileSync(lock, "lockfileVersion: '9.0'\n");
+      expect(refreshCommandFor(lock, "picomatch", "2.3.1", "2.3.2")).toBe("pnpm update picomatch --depth Infinity");
+      fs.writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
+      expect(refreshCommandFor(lock, "picomatch", "2.3.1", "2.3.2")).toBe("pnpm update -r picomatch --depth Infinity");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("the other formats keep their one-line commands", () => {
     expect(refreshCommand("package-lock", "braces", "3.0.2", "3.0.3")).toBe("npm update braces");
-    expect(refreshCommand("pnpm", "braces", "3.0.2", "3.0.3")).toBe("pnpm update braces");
+    expect(refreshCommand("pnpm", "braces", "3.0.2", "3.0.3")).toBe("pnpm update braces --depth Infinity");
+    expect(refreshCommand("pnpm", "braces", "3.0.2", "3.0.3", true)).toBe("pnpm update -r braces --depth Infinity");
+    expect(refreshCommand("bun", "braces", "3.0.2", "3.0.3")).toBeNull();
     expect(refreshCommand("yarn-berry", "braces", "3.0.2", "3.0.3")).toBe("yarn up -R braces");
     expect(refreshCommand("cargo", "mio", "0.8.10", "0.8.11")).toBe("cargo update -p mio@0.8.10 --precise 0.8.11");
   });
