@@ -2,6 +2,19 @@
 
 ## 6.2.0 — unreleased
 
+### `dependency_check`: the release-age hold no longer leaves only vulnerable choices
+
+The 3-day hold on new releases is waived for a clean version when every safe
+release on its line is inside the hold too and every older release on that line
+has a known advisory: holding back would leave only vulnerable releases to
+write. The `release_age` signal then says `proceed` with
+`hold_waived: "no_settled_safe_release"`, names the line and the count of
+vulnerable older releases, and asks the agent to tell the user the version's
+age. A package whose only releases are new keeps the hold (that is the
+supply-chain case it exists for). Found by G7 (golang.org/x/net on 2026-10-11:
+the only safe releases were 1.8 and 2.8 days old, 59 of 61 v0 releases were
+vulnerable, and every run left go.mod unchanged).
+
 ### `dependency_check`: PyPI and Go, safe versions in a constraint, and instructions that make agents call it
 
 The G7 agent evaluation (49 dependency tasks x 3 trials, 2026-10-11) found that
