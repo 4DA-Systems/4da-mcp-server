@@ -2,6 +2,52 @@
 
 ## 6.2.0 — unreleased
 
+### `dependency_check`: PyPI and Go, safe versions in a constraint, and instructions that make agents call it
+
+The G7 agent evaluation (49 dependency tasks x 3 trials, 2026-10-11) found that
+when an agent called a 4DA tool, 0 of 60 runs wrote a vulnerable version, and
+when it did not, 41 of 78 did. The misses were runs that never called one:
+PyPI and Go adds (`dependency_check` took npm and crates.io only), pin tasks
+("pin ws 7.x" wrote 7.5.10 from memory; body-parser 1.20.3), and agents told
+they could not browse concluding they could not check versions at all.
+
+- **PyPI.** Releases, upload times and yanks from the PyPI JSON API (a release
+  is yanked when every file is; one with no files is not installable), PEP 440
+  ordering, OSV.dev for the exact version.
+- **Go.** Versions from proxy.golang.org, each judged version's date from its
+  `.info` (the list has none), `retract` directives in the latest go.mod
+  reported like a yank, `+incompatible` releases matched (`v2.0.0` finds
+  `v2.0.0+incompatible`), pseudo-versions dated and judged, and a major 2+
+  without its `/vN` path named as the different module it is.
+- Signals the registry cannot supply (publisher trust, install scripts, new
+  transitive dependencies on PyPI and Go) say "not applicable" with the
+  reason, never a made-up value or an `unknown` that blocks the verdict.
+- **Constraints.** `to` may be the constraint the agent was given: `"7.x"`,
+  `"^1.20"`, `"=0.17"`, `"~=3.1"`, `"3.1.*"`, `">=2,<3"`, `"v1"`. The item then
+  returns `range_check` (`smallest_safe_in_range`, `newest_safe_in_range`,
+  `safe_versions`, `smallest_safe_upgrade` above `from`), from every advisory
+  OSV.dev lists for the package evaluated against each release the constraint
+  admits, and the verdict is given for the version it picks: the smallest safe
+  upgrade above `from`, else the newest safe release past the 3-day hold. An
+  exact `to` an advisory affects gets the same `range_check` over its own line,
+  so "is ws 7.5.10 safe?" answers avoid and names 7.5.11. Withdrawn and
+  deprecated releases are never picked; maintenance notices do not make a
+  release unsafe. When nothing in the constraint is safe, the advisories that
+  affect all of it and the newest safe release outside it are named. A test
+  holds the local range evaluation to OSV.dev's own per-version answers on
+  recorded data (ws, Jinja2, golang.org/x/net).
+- **Instructions and descriptions.** The server instructions now open with
+  the rule "before writing any dependency version into a manifest or
+  lockfile, call dependency_check on that exact version, or on the constraint
+  you were given", name add / pin / upgrade / bump / downgrade / choose a
+  version for all four ecosystems, and say the server reads the registries
+  for the agent (so "I cannot browse" is not a reason to skip it).
+  `vulnerability_scan` says it judges installed versions and points at
+  `dependency_check` for a version about to be written.
+- The manifest-edit hook names a `dependency_check` call for PyPI and Go edits
+  too, and passes a range edit (`^7.0.0`) as a constraint instead of dropping it.
+- `ecosystem` is matched case-insensitively (`pypi`, `go`).
+
 ### `upgrade_impact` reads PyPI and Go
 
 Until 6.1 it answered for npm and crates.io only, and pointed Python and Go

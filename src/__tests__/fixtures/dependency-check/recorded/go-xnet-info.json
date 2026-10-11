@@ -1,0 +1,82 @@
+{
+ "v0.17.0": {
+  "Version": "v0.17.0",
+  "Time": "2023-10-10T15:45:19Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Ref": "refs/tags/v0.17.0",
+   "Hash": "b225e7ca6dde1ef5a5ae5ce922861bda011cfabd"
+  }
+ },
+ "v0.23.0": {
+  "Version": "v0.23.0",
+  "Time": "2024-04-03T17:30:20Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Ref": "refs/tags/v0.23.0",
+   "Hash": "c48da131589f122489348be5dfbcb6457640046f"
+  }
+ },
+ "v0.33.0": {
+  "Version": "v0.33.0",
+  "Time": "2024-12-18T19:34:41Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Hash": "dfc720dfe0cfc125116068c20efcdcb5e4eab464",
+   "Ref": "refs/tags/v0.33.0"
+  }
+ },
+ "v0.36.0": {
+  "Version": "v0.36.0",
+  "Time": "2025-03-04T19:24:45Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Hash": "85d1d54551b68719346cb9fec24b911da4e452a1",
+   "Ref": "refs/tags/v0.36.0"
+  }
+ },
+ "v0.38.0": {
+  "Version": "v0.38.0",
+  "Time": "2025-03-27T19:51:24Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Hash": "e1fcd82abba34df74614020343be8eb1fe85f0d9",
+   "Ref": "refs/tags/v0.38.0"
+  }
+ },
+ "v0.61.0": {
+  "Version": "v0.61.0",
+  "Time": "2026-10-09T17:07:24Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Hash": "c1d31df183e51b1075a2fd670d6f6f4efb871773",
+   "Ref": "refs/tags/v0.61.0"
+  }
+ },
+ "v0.59.0": {
+  "Version": "v0.59.0",
+  "Time": "2026-09-08T19:18:02Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Hash": "540d04cfe5028e2655754591a4d3e08c586809f2",
+   "Ref": "refs/tags/v0.59.0"
+  }
+ },
+ "v0.60.0": {
+  "Version": "v0.60.0",
+  "Time": "2026-10-08T17:22:58Z",
+  "Origin": {
+   "VCS": "git",
+   "URL": "https://go.googlesource.com/net",
+   "Hash": "18ece0ce30bc35fa81fe72028bf309bb3ff3f4a5",
+   "Ref": "refs/tags/v0.60.0"
+  }
+ }
+}

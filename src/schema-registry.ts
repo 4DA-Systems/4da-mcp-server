@@ -93,7 +93,7 @@ const WRITE_LOCAL = { readOnlyHint: false, openWorldHint: false, destructiveHint
 export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
   // --- Dependency Security (standalone) ---
   vulnerability_scan: {
-    summary: "Scan this project's lockfiles (npm/pnpm/yarn/bun, Cargo, Python, Go) for known OSV.dev vulnerabilities, transitives included, with fix versions and where each is pinned; `package` for one dep. Call when the user asks about security, vulnerabilities or CVEs, or before recommending a dependency.",
+    summary: "Scan this project's lockfiles (npm/pnpm/yarn/bun, Cargo, Python, Go) for OSV.dev vulnerabilities in installed versions, transitives included, with fix versions and where each is pinned; `package` for one dep. Call when asked about security or CVEs. To vet a version first: dependency_check.",
     definition: vulnerabilityScanTool,
     category: "security",
     tags: ["security", "vulnerabilities", "cve", "dependencies", "osv"],
@@ -117,7 +117,7 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
     annotations: { title: "Upgrade planner", ...READ_NETWORK },
   },
   upgrade_impact: {
-    summary: "What changes between the installed version of ONE dependency and a target version: changelog entries per release, breaking changes, deprecations, security fixes, and the files in this project that import it. Call before upgrading or bumping a dependency.",
+    summary: "What changes between the installed version of ONE dependency and a target: changelog per release, breaking changes, deprecations, security fixes, and this project's files that import it. Call before upgrading or bumping a dependency.",
     definition: upgradeImpactTool,
     category: "security",
     tags: ["upgrade", "changelog", "breaking-changes", "migration", "release-notes"],
@@ -125,7 +125,7 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
     annotations: { title: "Upgrade impact", ...READ_NETWORK },
   },
   dependency_check: {
-    summary: "Verdict (proceed/wait/review/avoid/unknown) with evidence for adding a dependency or bumping one to a version. Call BEFORE you add a package or apply any version bump.",
+    summary: "Is a dependency version safe to write? Verdict on an exact version, or safe releases in a constraint (\"7.x\", \"~=3.1\"); npm, crates.io, PyPI, Go. Call BEFORE writing any version to a manifest: add, pin, upgrade, bump, downgrade.",
     definition: dependencyCheckTool,
     category: "security",
     tags: ["dependencies", "supply-chain", "pre-install", "upgrade", "versions"],

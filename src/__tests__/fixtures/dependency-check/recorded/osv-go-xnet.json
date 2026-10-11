@@ -1,0 +1,2139 @@
+[
+ {
+  "id": "GHSA-2wp2-chmh-r934",
+  "summary": "golang.org/x/net/html NULL Pointer Dereference vulnerability",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20180925071336-cf3bd585ca2a"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-2wrh-6pvc-2jm9",
+  "summary": "Improper rendering of text nodes in golang.org/x/net/html",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.13.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-39qc-96h7-956f",
+  "summary": "golang.org/x/net/http vulnerable to a reset flood",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190813141303-74dc4d7220e7"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-4374-p667-p6c8",
+  "summary": "HTTP/2 rapid reset can cause excessive work in net/http",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.17.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-4r78-hx75-jjj2",
+  "summary": "golang.org/x/net/html has Improper Restriction of Operations within the Bounds of a Memory Buffer",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190125002852-4b62a64f59f7"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-4v7x-pqxf-cx7m",
+  "summary": "net/http, x/net/http2: close connections when receiving too many headers",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "net/http",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/net/http"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.21.9"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net/http2",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net/http2"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.23.0"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "net/http",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/net/http"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "1.22.0-0"
+       },
+       {
+        "fixed": "1.22.2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.23.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-5cv4-jp36-h3mw",
+  "summary": "Go Net HTML parser is vulnerable to denial of service",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.55.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-5p4h-3377-7w67",
+  "summary": "golang.org/x/net/html NULL Pointer Dereference vulnerability",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20180816102801-aaf60122140d"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-69cg-p879-7622",
+  "summary": "golang.org/x/net/http2 Denial of Service vulnerability",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20220906165146-f3363e06e74c"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net/http2",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net/http2"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20220906165146-f3363e06e74c"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-83g2-8m93-v3w7",
+  "summary": "golang.org/x/net/html Infinite Loop vulnerability",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20210520170846-37e1c6afe023"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-fcf9-6fv2-fc5v",
+  "summary": "golang.org/x/net/html has Improper Restriction of Operations within the Bounds of a Memory Buffer",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20180921000356-2f5d2388922f"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-fxg5-wq6x-vr4w",
+  "summary": "golang.org/x/net/http2/h2c vulnerable to request smuggling attack",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0.0.0-20220524220425-1d687d428aca"
+       },
+       {
+        "fixed": "0.1.1-0.20221104162952-702349b0e862"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-h86h-8ppg-mxmh",
+  "summary": "golang.org/x/net/http/httpguts vulnerable to Uncontrolled Recursion",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20210428140749-89ef3d95e781"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-hgr8-6h9x-f7q9",
+  "summary": "golang.org/x/net/http vulnerable to ping floods",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190813141303-74dc4d7220e7"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-mv93-wvcp-7m7r",
+  "summary": "golang.org/x/net/html Improper Validation of Array Index vulnerability",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190125002852-4b62a64f59f7"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-qppj-fm5r-hxr3",
+  "summary": "HTTP/2 Stream Cancellation Attack",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.17.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-qxp5-gwg8-xv66",
+  "summary": "HTTP Proxy bypass using IPv6 Zone IDs in golang.org/x/net",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.36.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-vfw5-hrgq-h5wf",
+  "summary": "x/net/html Vulnerable to DoS During HTML Parsing",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190125091013-d26f9f9a57f3"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-vvgc-356p-c3xw",
+  "summary": "golang.org/x/net vulnerable to Cross-site Scripting",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.38.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-vvpx-j8f3-3w6h",
+  "summary": "golang.org/x/net vulnerable to Uncontrolled Resource Consumption",
+  "database_specific": {
+   "severity": "HIGH"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.7.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GHSA-xrjj-mj9h-534m",
+  "summary": "golang.org/x/net/http2 vulnerable to possible excessive memory growth",
+  "database_specific": {
+   "severity": "MODERATE"
+  },
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net/http2",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net/http2"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.4.0"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.4.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2020-0014",
+  "summary": "Infinite loop due to improper handling of \"select\" tags in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190125091013-d26f9f9a57f3"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2021-0078",
+  "summary": "Panic when parsing malformed HTML in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20180816102801-aaf60122140d"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2021-0238",
+  "summary": "Infinite loop when parsing inputs in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20210520170846-37e1c6afe023"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-0192",
+  "summary": "Incorrect parsing of nested templates in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20180925071336-cf3bd585ca2a"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-0193",
+  "summary": "Panic on unconsidered isindex and template combination in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20180921000356-2f5d2388922f"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-0197",
+  "summary": "Panic when parsing certain inputs in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190125002852-4b62a64f59f7"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-0236",
+  "summary": "Panic due to large headers in net/http and golang.org/x/net/http/httpguts",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.15.12"
+       },
+       {
+        "introduced": "1.16.0-0"
+       },
+       {
+        "fixed": "1.16.4"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20210428140749-89ef3d95e781"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-0288",
+  "summary": "Unbounded memory growth in net/http and golang.org/x/net/http2",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.16.12"
+       },
+       {
+        "introduced": "1.17.0-0"
+       },
+       {
+        "fixed": "1.17.5"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20211209124913-491a49abca63"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-0536",
+  "summary": "Reset flood in net/http and golang.org/x/net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.11.13"
+       },
+       {
+        "introduced": "1.12.0-0"
+       },
+       {
+        "fixed": "1.12.8"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20190813141303-74dc4d7220e7"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-0969",
+  "summary": "Denial of service in net/http and golang.org/x/net/http2",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.18.6"
+       },
+       {
+        "introduced": "1.19.0-0"
+       },
+       {
+        "fixed": "1.19.1"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.0.0-20220906165146-f3363e06e74c"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2022-1144",
+  "summary": "Excessive memory growth in net/http and golang.org/x/net/http2",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.18.9"
+       },
+       {
+        "introduced": "1.19.0-0"
+       },
+       {
+        "fixed": "1.19.4"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.4.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2023-1495",
+  "summary": "Request smuggling due to improper request handling in golang.org/x/net/http2/h2c",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0.0.0-20220524220425-1d687d428aca"
+       },
+       {
+        "fixed": "0.1.1-0.20221104162952-702349b0e862"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2023-1571",
+  "summary": "Denial of service via crafted HTTP/2 stream in net/http and golang.org/x/net",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.19.6"
+       },
+       {
+        "introduced": "1.20.0-0"
+       },
+       {
+        "fixed": "1.20.1"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.7.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2023-1988",
+  "summary": "Improper rendering of text nodes in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.13.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2023-2102",
+  "summary": "HTTP/2 rapid reset can cause excessive work in net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.20.10"
+       },
+       {
+        "introduced": "1.21.0-0"
+       },
+       {
+        "fixed": "1.21.3"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.17.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2024-2687",
+  "summary": "HTTP/2 CONTINUATION flood in net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.21.9"
+       },
+       {
+        "introduced": "1.22.0-0"
+       },
+       {
+        "fixed": "1.22.2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.23.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2024-3333",
+  "summary": "Non-linear parsing of case-insensitive content in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.33.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2025-3503",
+  "summary": "HTTP Proxy bypass using IPv6 Zone IDs in golang.org/x/net",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.23.7"
+       },
+       {
+        "introduced": "1.24.0-0"
+       },
+       {
+        "fixed": "1.24.1"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.36.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2025-3595",
+  "summary": "Incorrect Neutralization of Input During Web Page Generation in x/net in golang.org/x/net",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.38.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-4440",
+  "summary": "Quadratic parsing complexity in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.45.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-4441",
+  "summary": "Infinite parsing loop in golang.org/x/net",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.45.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-4559",
+  "summary": "Sending certain HTTP/2 frames can cause a server to panic in golang.org/x/net",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0.50.0"
+       },
+       {
+        "fixed": "0.51.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-4918",
+  "summary": "Infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE in net/http/internal/http2 in golang.org/x/net",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.53.0"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.25.10"
+       },
+       {
+        "introduced": "1.26.0-0"
+       },
+       {
+        "fixed": "1.26.3"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-5025",
+  "summary": "Invoking incorrect handling of namespaced elements in foreign content in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.55.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-5026",
+  "summary": "Invoking failure to reject ASCII-only Punycode-encoded labels in golang.org/x/net/idna",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.25.13"
+       },
+       {
+        "introduced": "1.26.0-0"
+       },
+       {
+        "fixed": "1.26.6"
+       },
+       {
+        "introduced": "1.27.0-0"
+       },
+       {
+        "fixed": "1.27.0-rc.3"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.55.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-5027",
+  "summary": "Invoking incorrect handling of HTML elements in foreign content in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.55.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-5028",
+  "summary": "Invoking denial of service when parsing arbitrary HTML in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.55.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-5029",
+  "summary": "Invoking incorrect handling of character references in DOCTYPE nodes in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.55.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-5030",
+  "summary": "Invoking duplicate attributes can cause XSS in golang.org/x/net/html",
+  "affected": [
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.55.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-5942",
+  "summary": "Parsing an invalid SVCB or HTTPS RR can panic in golang.org/x/net/dns/dnsmessage",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "1.26.0-0"
+       },
+       {
+        "fixed": "1.26.6"
+       },
+       {
+        "introduced": "1.27.0-0"
+       },
+       {
+        "fixed": "1.27.0-rc.3"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.56.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-6603",
+  "summary": "HTTP/2 server memory exhaustion due to Trailer headers in net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.26.9"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "1.27.0-0"
+       },
+       {
+        "fixed": "1.27.2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.60.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-6610",
+  "summary": "HTTP/2 transport accepts malformed framing-related headers in net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.26.9"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "1.27.0-0"
+       },
+       {
+        "fixed": "1.27.2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.60.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-6611",
+  "summary": "Excessive CPU consumption from repeated initial window changes in net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.26.9"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "1.27.0-0"
+       },
+       {
+        "fixed": "1.27.2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.60.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-6612",
+  "summary": "Double flow control refund on HTTP/2 server streams in net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.26.9"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "1.27.0-0"
+       },
+       {
+        "fixed": "1.27.2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.60.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "GO-2026-6617",
+  "summary": "HTTP/2 server crash due to HPACK encoder race in net/http",
+  "affected": [
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "1.26.9"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "stdlib",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/stdlib"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "1.27.0-0"
+       },
+       {
+        "fixed": "1.27.2"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "package": {
+     "name": "golang.org/x/net",
+     "ecosystem": "Go",
+     "purl": "pkg:golang/golang.org/x/net"
+    },
+    "ranges": [
+     {
+      "type": "SEMVER",
+      "events": [
+       {
+        "introduced": "0"
+       },
+       {
+        "fixed": "0.60.0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+]

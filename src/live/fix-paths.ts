@@ -45,7 +45,7 @@ const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
 /** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 export interface CrateDepReq {
   req: string;

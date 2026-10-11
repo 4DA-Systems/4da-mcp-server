@@ -1,0 +1,177 @@
+{
+ "7.0.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.0.1": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.1.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.1.1": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.1.2": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.2.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.2.1": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.2.2": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.2.3": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.2.5": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.3.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.3.1": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.4.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.4.1": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.4.2": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.4.3": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.4.4": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.4.5": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-6fc8-4gx4-v693",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.4.6": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.1": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.2": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.3": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.0.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.1.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.4": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.5": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.6": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.7": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.8": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.9": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.17.0": [
+  "GHSA-3h5v-q93c-6h6q",
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.10": [
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.17.1": [
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.18.0": [
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.18.1": [
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.18.2": [
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "8.18.3": [
+  "GHSA-58qx-3vcg-4xpx",
+  "GHSA-96hv-2xvq-fx4p"
+ ],
+ "7.5.11": [],
+ "7.5.12": [],
+ "7.5.13": []
+}

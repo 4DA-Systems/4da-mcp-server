@@ -1,0 +1,203 @@
+{
+ "info": {
+  "name": "Jinja2"
+ },
+ "releases": {
+  "3.0.0": [
+   {
+    "upload_time_iso_8601": "2021-05-11T21:08:16.608821Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2021-05-11T21:08:18.806712Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.0.0a1": [
+   {
+    "upload_time_iso_8601": "2020-02-05T22:36:18.551334Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2020-02-05T22:36:20.898864Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.0.0rc1": [
+   {
+    "upload_time_iso_8601": "2021-04-16T15:25:22.737652Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2021-04-16T15:25:24.842365Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.0.0rc2": [
+   {
+    "upload_time_iso_8601": "2021-04-25T15:12:58.105498Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2021-04-25T15:13:01.747083Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.0.1": [
+   {
+    "upload_time_iso_8601": "2021-05-18T20:39:17.008414Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2021-05-18T20:39:19.465144Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.0.2": [
+   {
+    "upload_time_iso_8601": "2021-10-05T00:49:27.588885Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2021-10-05T00:49:30.697595Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.0.3": [
+   {
+    "upload_time_iso_8601": "2021-11-09T20:27:27.116933Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2021-11-09T20:27:29.541476Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.1.0": [
+   {
+    "upload_time_iso_8601": "2022-03-24T14:14:01.622601Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2022-03-24T14:14:03.573233Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.1.1": [
+   {
+    "upload_time_iso_8601": "2022-03-25T22:32:55.469243Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2022-03-25T22:32:57.754607Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.1.2": [
+   {
+    "upload_time_iso_8601": "2022-04-28T17:21:25.336093Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2022-04-28T17:21:27.579532Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.1.3": [
+   {
+    "upload_time_iso_8601": "2024-01-10T23:12:19.504680Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2024-01-10T23:12:21.133641Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.1.4": [
+   {
+    "upload_time_iso_8601": "2024-05-05T23:41:59.928923Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2024-05-05T23:42:02.455073Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.1.5": [
+   {
+    "upload_time_iso_8601": "2024-12-21T18:30:19.133079Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2024-12-21T18:30:22.828157Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ],
+  "3.1.6": [
+   {
+    "upload_time_iso_8601": "2025-03-05T20:05:00.369721Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "bdist_wheel"
+   },
+   {
+    "upload_time_iso_8601": "2025-03-05T20:05:02.478302Z",
+    "yanked": false,
+    "yanked_reason": null,
+    "packagetype": "sdist"
+   }
+  ]
+ }
+}
