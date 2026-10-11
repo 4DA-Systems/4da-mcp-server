@@ -12,7 +12,7 @@
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import { LiveCache } from "./cache.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
-import { OsvScanner } from "./osv-scanner.js";
+import { OsvScanner, type AdvisorySource } from "./osv-scanner.js";
 import { HNFetcher } from "./hn-fetcher.js";
 import { NpmRegistry } from "./npm-registry.js";
 import { CratesRegistry } from "./crates-registry.js";
@@ -113,12 +113,17 @@ export class LiveIntelligence {
   /** When the last warmup came back offline; gates the retry so an offline host is not re-probed on every call. */
   private warmupFailedAt: number | null = null;
 
-  constructor(db: SqliteDatabase | null) {
+  /**
+   * `advisorySource` replaces OSV.dev for vulnerability scans (the conformance
+   * harness passes pinned records). A source that needs no network keeps
+   * scanning enabled under FOURDA_OFFLINE; nothing else changes.
+   */
+  constructor(db: SqliteDatabase | null, options: { advisorySource?: AdvisorySource } = {}) {
     this.db = db;
-    this.enabled = process.env.FOURDA_OFFLINE !== "true";
+    this.enabled = process.env.FOURDA_OFFLINE !== "true" || options.advisorySource?.network === false;
     this.cache = new LiveCache(db);
     this.rateLimiter = new RateLimiter(DEFAULT_RATE_LIMITS);
-    this.osvScanner = new OsvScanner(this.cache, this.rateLimiter);
+    this.osvScanner = new OsvScanner(this.cache, this.rateLimiter, options.advisorySource);
     this.hnFetcher = new HNFetcher(this.cache, this.rateLimiter);
     this.npmRegistry = new NpmRegistry(this.cache, this.rateLimiter);
     this.cratesRegistry = new CratesRegistry(this.cache, this.rateLimiter);

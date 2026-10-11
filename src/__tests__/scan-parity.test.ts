@@ -333,19 +333,22 @@ describe("Go", () => {
     expect(read.instances.find((i) => i.name === "example.com/extra")?.version).toBe("v1.1.0");
   });
 
-  it("go.sum: the highest version recorded, /go.mod-only lines included (Go's build list)", () => {
+  it("go.sum: the highest version recorded, only when its source is hashed (built), not /go.mod-only", () => {
     const selected = selectedFromGoSum(
       [
+        // Selected at v1.2.0 (go.mod hash only): never built, and the older
+        // v1.0.0 source hash does not make v1.0.0 the build's version.
         "github.com/a/b v1.0.0 h1:x=",
         "github.com/a/b v1.0.0/go.mod h1:x=",
         "github.com/a/b v1.2.0/go.mod h1:y=",
         "google.golang.org/grpc v1.21.0/go.mod h1:q=",
         "golang.org/x/sys v0.0.0-20200101000000-aaaaaaaaaaaa h1:z=",
         "golang.org/x/sys v0.0.0-20210101000000-bbbbbbbbbbbb h1:w=",
+        "golang.org/x/sys v0.0.0-20210101000000-bbbbbbbbbbbb/go.mod h1:w=",
       ].join("\n"),
     );
-    expect(selected.get("github.com/a/b")).toBe("v1.2.0");
-    expect(selected.get("google.golang.org/grpc")).toBe("v1.21.0");
+    expect(selected.has("github.com/a/b")).toBe(false);
+    expect(selected.has("google.golang.org/grpc")).toBe(false);
     expect(selected.get("golang.org/x/sys")).toBe("v0.0.0-20210101000000-bbbbbbbbbbbb");
     expect(compareGoVersions("v0.0.0-20210101000000-bbbbbbbbbbbb", "v0.1.0")).toBe(-1);
   });

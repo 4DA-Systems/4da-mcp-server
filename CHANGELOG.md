@@ -1,5 +1,42 @@
 # Changelog
 
+## 6.2.2 — unreleased
+
+### Lockfile readers agree with the 4DA conformance corpus
+
+The dependency engine is now scored in CI against the conformance corpus of
+the 4DA desktop app (35 public repositories and synthetic cases, pinned OSV
+records, adjudicated truth; see `conformance/README.md`), the same truth the
+app's own engine is held to. The first run found five reader defects, all
+fixed. On the corpus, findings and inventory precision and recall are now
+1.0 in npm, crates.io, PyPI and Go, with no silent drops.
+
+- **Go modules before go 1.17 report what is built.** go.sum records the
+  go.mod hash of every module version the graph walk visits, but the source
+  only of modules the build compiles. A module with only a `/go.mod` line at
+  its selected version was reported as installed: 728 never-built modules on
+  hugo, node_exporter and traefik, with 182 advisory findings that did not apply. A
+  module now counts when go.sum hashes its source at the version minimal
+  version selection picks, and `replace` applies to these modules as it does
+  to go.mod's own requirements (including `old v1.2.3 => new v1.3.0`).
+- **Versions an advisory lists match by value, not spelling.** OSV lists
+  certifi `2020.12.05` (from the git tag) and pip installs `2020.12.5`, the
+  same PEP 440 version. The local range check (fix targets, `range_check`,
+  `dependency_check`) did not see it as affected by PYSEC-2024-230.
+- **uv and poetry: a git, URL or local source is not a PyPI release.**
+  pydantic's uv.lock pins pydantic-extra-types 2.10.0 from git `main`; it was
+  scanned as the PyPI release of that number. poetry `[package.source]` types
+  `git`, `url`, `file` and `directory` are skipped too; `legacy` (a private
+  index) still counts.
+- **yarn: an npm alias is scanned as the package it installs.**
+  `"string-width-cjs@npm:string-width@^4.2.0"` was read as a package named
+  `string-width-cjs`, which OSV does not know, so string-width 4.2.3 was never
+  checked. berry's `resolution:` and v1's alias spec now name the package.
+- **pnpm 5: entries keyed by a tarball URL are read.** pnpm writes `name:`
+  and `version:` fields under such a key; trpc's lockfile installs
+  @prisma/client 4.7.1 four times that way and none was read. A tarball that
+  is not a registry artifact (codeload, a git archive) is still skipped.
+
 ## 6.2.1 — 2026-10-11
 
 ### Feed tools leave out sources you turned off in the 4DA app

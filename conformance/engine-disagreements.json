@@ -1,0 +1,5 @@
+{
+  "schema": 1,
+  "about": "Every difference between this server's engine and the 4DA corpus truth in a ratcheted ecosystem, grouped by verdict with a reason (corpus README, 'Consuming from the MCP repo', rule 4). The conformance test fails on a difference listed nowhere here, and prints entries that no longer occur so they can be removed. A truth error is never fixed here: it is fixed in 4DA through adjudications.json truth_overrides, and both engines pick it up. Empty since the first run's five reader fixes (2026-10-12).",
+  "engine_disagreements": []
+}
