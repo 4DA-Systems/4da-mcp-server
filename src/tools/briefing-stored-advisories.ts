@@ -44,7 +44,7 @@ export function storedAdvisoriesFor(db: FourDADatabase, packages: TaskPackage[],
            WHERE source_type IN (${ADVISORY_SOURCES.map(() => "?").join(", ")})
              AND created_at > datetime('now', '-90 days')
              AND LOWER(title) LIKE ?
-             ${hasFeedRelevant ? "AND (feed_relevant IS NULL OR feed_relevant = 1)" : ""}
+             ${hasFeedRelevant ? "AND (feed_relevant IS NULL OR feed_relevant = 1)" : ""}${db.enabledSourceClause("source_type")}
            ORDER BY created_at DESC LIMIT 20`,
         )
         .all(...ADVISORY_SOURCES, `%${pkg.name.toLowerCase()}%`) as typeof rows;

@@ -1,5 +1,20 @@
 # Changelog
 
+## 6.2.1 — unreleased
+
+### Feed tools leave out sources you turned off in the 4DA app
+
+Since app schema 126, social and editorial sources (Hacker News, Reddit, RSS
+and the rest) are opt-in "interests", off until turned on in Settings →
+Sources, and every app reader skips their items. The server still returned
+them. `get_relevant_content`, `get_actionable_signals`, `knowledge_gaps` and
+`what_should_i_know` now apply the app's own rule
+(`source_type NOT IN (SELECT source_type FROM sources WHERE enabled = 0)`), and
+say so in a `sources_note` when any source is off. A source with no `sources`
+row counts as on, as in the app; a database without `sources.enabled` is read
+unfiltered, as before. `developer_dna` is unchanged: like the app's own, it
+reports reading history. The vendored app-schema contract moves to schema 127.
+
 ## 6.2.0 — 2026-10-11
 
 ### `dependency_check`: the release-age hold no longer leaves only vulnerable choices

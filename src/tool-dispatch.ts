@@ -148,8 +148,9 @@ export async function dispatchTool(
   // hides these in standalone mode, but a host can call one by name) used to
   // answer `[]`, which reads as "nothing relevant" rather than "no app".
   const desktopOnly = db !== null && db.isStandalone && TOOL_REGISTRY[name]?.standalone === false;
+  const annotated = withFreshness ? attachFreshness(db!, result) : desktopOnly ? attachDesktopAppNote(name, result) : result;
   const payload = cleanStrings(
-    withFreshness ? attachFreshness(db!, result) : desktopOnly ? attachDesktopAppNote(name, result) : result,
+    db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated,
   );
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.
@@ -204,6 +205,44 @@ function attachFreshness(db: FourDADatabase, result: unknown): unknown {
     return { data_freshness, ...extras, ...(result as Record<string, unknown>) };
   }
   return { data_freshness, ...extras, result };
+}
+
+/**
+ * Tools that read the app's feed items and therefore skip items from sources
+ * the user turned off in the app (`FourDADatabase.enabledSourceClause`).
+ * developer_dna is not here: like the app's own developer_dna.rs it reports
+ * reading history, unfiltered, and returns no items.
+ */
+const SOURCE_FILTERED_TOOLS = new Set([
+  "get_relevant_content",
+  "get_actionable_signals",
+  "knowledge_gaps",
+  "what_should_i_know",
+]);
+
+/** The desktop app's always-on source types (`source_class::STACK_SOURCES`); every other type is an opt-in interest. */
+const STACK_SOURCES = new Set(["crates_io", "npm_registry", "pypi", "go_modules", "osv", "cve"]);
+
+/** The sentence `sources_note` carries, or null when no source is turned off. */
+export function sourcesNote(disabled: string[]): string | null {
+  if (disabled.length === 0) return null;
+  const kind = disabled.every((s) => !STACK_SOURCES.has(s)) ? "interest " : "";
+  const subject = disabled.length === 1 ? `1 ${kind}source is` : `${disabled.length} ${kind}sources are`;
+  return `${subject} turned off in the 4DA app; their items are not included. Turn them on in Settings → Sources.`;
+}
+
+/** Say, on the payload, that items from turned-off sources were left out. Best-effort, like attachFreshness. */
+function attachSourcesNote(db: FourDADatabase, result: unknown): unknown {
+  let sources_note: string | null;
+  try {
+    sources_note = sourcesNote(db.disabledSources());
+  } catch {
+    return result;
+  }
+  if (!sources_note) return result;
+  if (Array.isArray(result)) return { sources_note, item_count: result.length, items: result };
+  if (result && typeof result === "object") return { sources_note, ...(result as Record<string, unknown>) };
+  return { sources_note, result };
 }
 
 /** What a desktop-only tool says when no desktop app database was found. */

@@ -1199,6 +1199,45 @@ export class FourDADatabase {
     }
   }
 
+  /** Whether `sources.enabled` exists; probed once per connection (see enabledSourceClause). */
+  private sourcesEnabledColumn: boolean | undefined;
+
+  private hasSourcesEnabled(): boolean {
+    if (this.sourcesEnabledColumn === undefined) {
+      this.sourcesEnabledColumn = this.hasColumn("sources", "enabled");
+    }
+    return this.sourcesEnabledColumn;
+  }
+
+  /**
+   * ` AND <col> is a source the user has not turned off`, or `` when the
+   * database cannot say. The desktop app's rule, verbatim
+   * (`source_class::enabled_source_sql`, schema 126): every reader of source
+   * items skips a `source_type` whose `sources` row has `enabled = 0`. A type
+   * with no `sources` row counts as on, as in the app. A database without a
+   * `sources.enabled` column (or without `sources`) is read unfiltered, exactly
+   * as before this guard existed.
+   */
+  enabledSourceClause(col: string): string {
+    return this.hasSourcesEnabled()
+      ? ` AND ${col} NOT IN (SELECT source_type FROM sources WHERE enabled = 0)`
+      : ``;
+  }
+
+  /** Source types the user turned off in the app (`sources.enabled = 0`), sorted; [] when unknown. */
+  disabledSources(): string[] {
+    if (!this.hasSourcesEnabled()) return [];
+    try {
+      return (
+        this.db
+          .prepare("SELECT source_type FROM sources WHERE enabled = 0 ORDER BY source_type")
+          .all() as Array<{ source_type: string }>
+      ).map((r) => r.source_type);
+    } catch {
+      return [];
+    }
+  }
+
   hasColumn(table: string, column: string): boolean {
     try {
       const cols = this.db.pragma(`table_info(${table})`) as Array<{ name: string }>;
@@ -1303,7 +1342,7 @@ export class FourDADatabase {
              ${depCount} AS dep_match_count
       FROM source_items
       WHERE relevance_score >= ?
-        AND datetime(created_at) >= datetime(?)${versionGuard}${curationGuard}${advisoryFreshnessGuard}
+        AND datetime(created_at) >= datetime(?)${versionGuard}${curationGuard}${advisoryFreshnessGuard}${this.enabledSourceClause("source_type")}
     `;
     const params: (string | number)[] = [minScore, sinceDate];
 
@@ -1402,7 +1441,7 @@ export class FourDADatabase {
     let query = `
       SELECT id, source_type, source_id, url, title, content, content_hash, created_at, last_seen
       FROM source_items
-      WHERE datetime(created_at) >= datetime(?)${advisoryFreshnessGuard}
+      WHERE datetime(created_at) >= datetime(?)${advisoryFreshnessGuard}${this.enabledSourceClause("source_type")}
     `;
     const params: (string | number)[] = [sinceDate];
 

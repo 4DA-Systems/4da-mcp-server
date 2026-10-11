@@ -76,7 +76,7 @@ export function loadCandidates(db: FourDADatabase): GapCandidate[] {
               ${has("source_id") ? "si.source_id" : "NULL AS source_id"},
               substr(COALESCE(si.content, ''), 1, 2000) AS content_head
          FROM source_items si
-        WHERE si.created_at >= datetime('now', '-30 days')
+        WHERE si.created_at >= datetime('now', '-30 days')${db.enabledSourceClause("si.source_type")}
           ${hasRelevance ? "AND si.relevance_score IS NOT NULL AND si.relevance_score >= 0.2" : ""}
           ${hasContentType ? `AND (si.content_type IS NULL OR si.content_type NOT IN (${excludedTypes}))` : ""}
           ${engaged}
