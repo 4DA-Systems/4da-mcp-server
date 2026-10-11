@@ -133,7 +133,9 @@ jobs:
   # pinned OSV records, adjudicated truth) at the commit conformance.lock pins.
   # Offline and platform-independent once pinned, so ubuntu only. The corpus
   # is fetched (sparse, shallow, one commit) and cached by that commit; it is
-  # never vendored here. conformance/thresholds.json is the ratchet.
+  # never vendored here. conformance/thresholds.json is the ratchet. The shared
+  # rule vectors (fix target, refresh verdict, commands, range_check) arrive in
+  # the same checkout; conformance/vectors-skip.json is their shrink-only list.
   conformance:
     name: conformance (pinned)
     runs-on: ubuntu-latest
@@ -167,8 +169,8 @@ jobs:
       - name: Fetch the corpus (skipped when the cache holds this commit)
         run: node scripts/fetch-conformance.mjs
 
-      - name: Conformance ratchet
-        run: pnpm exec vitest run src/__tests__/conformance.test.ts src/__tests__/conformance-drift.test.ts
+      - name: Conformance ratchet and shared rule vectors
+        run: pnpm exec vitest run src/__tests__/conformance.test.ts src/__tests__/conformance-drift.test.ts src/__tests__/rule-vectors.test.ts
         env:
           FOURDA_REQUIRE_CONFORMANCE: "1"
 
@@ -196,10 +198,10 @@ jobs:
       - name: Fetch the corpus at 4DA main
         run: node scripts/fetch-conformance.mjs --ref main
 
-      - name: Conformance ratchet (4DA main)
+      - name: Conformance ratchet and shared rule vectors (4DA main)
         run: |
           echo "corpus: $(node -p "require('./conformance/corpus/.source.json').commit") (pinned: $(node -p "JSON.parse(require('fs').readFileSync('conformance.lock', 'utf8')).commit"))"
-          pnpm exec vitest run src/__tests__/conformance.test.ts
+          pnpm exec vitest run src/__tests__/conformance.test.ts src/__tests__/rule-vectors.test.ts
         env:
           FOURDA_REQUIRE_CONFORMANCE: "1"
           FOURDA_CONFORMANCE_UNPINNED: "1"

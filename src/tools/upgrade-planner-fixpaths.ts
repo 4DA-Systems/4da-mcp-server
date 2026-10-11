@@ -32,6 +32,8 @@ export interface FixPathStep {
   fixPathChecked?: "all_advisories" | "installed_advisories_only";
   /** lockfile_refresh: the command per lockfile directory. */
   refreshCommands?: Array<{ dir: string; command: string }>;
+  /** lockfile_refresh: true when not every parent's requirement could be read and the verdict comes from semver compatibility. */
+  refreshInferred?: boolean;
 }
 
 export interface FixPathInput {
@@ -180,6 +182,14 @@ async function refreshOrUpstream(
   if (verdicts.every((v) => v.verdict.refreshFixes)) {
     step.action = "lockfile_refresh";
     step.refreshCommands = verdicts.map((v) => ({ dir: where(v.dir), command: v.verdict.command }));
+    if (verdicts.some((v) => v.verdict.inferred)) {
+      // 4DA AD-055 ¶1: nothing readable falls back to semver compatibility, and says so.
+      step.refreshInferred = true;
+      replaceReason(
+        `Transitive dependency: not every parent's requirement on ${step.package} could be read, and none that was excludes ${target}; ${target} is semver-compatible with ${installed}, so a lockfile refresh should reach it (inferred, not read from the parents): ${verdicts.map((v) => `\`${v.verdict.command}\` in ${where(v.dir)}`).join("; ")}`,
+      );
+      return;
+    }
     const resolves = verdicts.map((v) => v.verdict.resolvesTo).filter((v): v is string => v !== null);
     const to = resolves.length > 0 ? ` (a refresh resolves it to ${[...new Set(resolves)].join(", ")})` : "";
     replaceReason(
@@ -187,6 +197,8 @@ async function refreshOrUpstream(
     );
     return;
   }
+  // Inferred from semver with nothing read that blocks: the conservative label and its reason stay.
+  if (verdicts.every((v) => v.verdict.blocking.length === 0)) return;
   const seen = new Set<string>();
   const blocking = verdicts.flatMap((v) => v.verdict.blocking).filter((b) => {
     const key = `${b.parent} ${b.parentVersion} ${b.requirement}`;

@@ -1,5 +1,41 @@
 # Changelog
 
+## 6.2.4 — unreleased
+
+### Fix paths held to the 4DA rule vectors
+
+The fix-path rules (version order, OSV range evaluation, the fix target, the
+refresh-or-parent verdict, the refresh command, `range_check`) now run in CI
+against the shared rule vectors of the 4DA desktop app, the same 333 vectors
+its Rust engine runs (see `conformance/README.md`). All pass. The first run
+found these defects:
+
+- **pnpm workspaces: the refresh command missed members.** At a pnpm workspace
+  root, `pnpm update <pkg>` touches only the root project, so a member's
+  vulnerable transitive copy stayed (measured with pnpm 10.34.6). The command
+  is now `pnpm update -r <pkg> --depth Infinity` there, and
+  `pnpm update <pkg> --depth Infinity` elsewhere (vectors fc-005..fc-008).
+- **A blocking parent was not named when another parent's requirement could
+  not be read.** `upgrade_planner` gave up on the whole copy and kept a
+  generic "waiting on upstream". A requirement that excludes the target now
+  decides on its own, and the reason names it (rv-048).
+- **Unread requirements fall back to semver, and say so.** When not every
+  parent's requirement can be read (the registry did not answer) and none read
+  excludes the target, the verdict comes from semver compatibility: a target
+  in the installed version's caret range is a `lockfile_refresh` with
+  `refreshInferred: true` and a reason that says it was inferred; any other
+  target stays `waiting_on_upstream` (AD-055 ¶1; rv-002..rv-032 even ids,
+  rv-049, rv-050).
+- **npm aliases were unreadable requirements.** `"npm:string-width@^4.2.0"`,
+  how package-lock records cliui's `string-width-cjs`, is now read as `^4.2.0`
+  on string-width (rv-047).
+- **PEP 440 local labels did not order.** `1.0`, `1.0+abc.5`, `1.0+abc.7` and
+  `1.0+5` compared equal; they now order as PEP 440 says (vo-013..vo-015), so a
+  `last_affected` bound equal to a local-labelled install is read correctly.
+- Yarn 1 and bun have no command that moves one transitive copy in place, so
+  none is named; the manual steps (delete the lockfile entries, reinstall) are
+  unchanged.
+
 ## 6.2.3 — 2026-10-11
 
 ### Yarn 1 refresh instruction covers alias entries
