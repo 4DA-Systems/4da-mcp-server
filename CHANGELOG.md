@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.4 — unreleased
+## 6.2.4 — 2026-10-12
 
 ### Fix paths held to the 4DA rule vectors
 
