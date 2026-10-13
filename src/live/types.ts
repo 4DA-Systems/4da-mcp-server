@@ -258,7 +258,18 @@ export interface DependencyHealthResult {
   scannedAt: string;
   projectPath: string;
   ecosystemsScanned: string[];
+  /**
+   * Direct dependencies checked against their registries (the rows in
+   * `dependencies`; devDependencies only with include_dev). Freshness,
+   * deprecation and `outdatedCount` / `deprecatedCount` are over these.
+   */
   totalDeps: number;
+  /** Installed packages (direct and transitive) the vulnerability scan covered: what `vulnerableCount` ranges over. */
+  treeDeps?: number;
+  /** Of `vulnerableCount`, the packages a manifest declares directly. Null when the check is incomplete. */
+  vulnerableDirectCount?: number | null;
+  /** The penalties the score subtracts from 100, and how each is computed. Absent when the score is withheld. */
+  healthScoreBasis?: { vulnerabilities: number; outdated: number; deprecated: number; note: string };
   outdatedCount: number;
   deprecatedCount: number;
   /**
@@ -266,7 +277,12 @@ export interface DependencyHealthResult {
    * maintenance notice — the same set `vulnerability_scan` reports as
    * `total_vulnerable_packages`, so the two tools agree over one scan.
    */
-  /** Null when any dependency could not be checked against OSV: a partial count is not a total. */
+  /**
+   * Distinct vulnerable packages across the full installed tree (`treeDeps`),
+   * the same set vulnerability_scan reports as `total_vulnerable_packages`
+   * for the same scope. It can exceed `totalDeps`, which counts direct
+   * dependencies only. Null when any dependency could not be checked.
+   */
   vulnerableCount: number | null;
   /**
    * Every advisory row the scan returned, before the platform and maintenance
@@ -280,6 +296,7 @@ export interface DependencyHealthResult {
   /** Present when the vulnerability check is incomplete: what was not checked and why. */
   vulnerabilityCoverage?: VulnerabilityCoverage;
   dependencies: RegistryPackageInfo[];
+  /** Advisories (not packages) on the full tree by severity, over the same actionable set. */
   vulnerabilitySummary: { critical: number; high: number; medium: number; low: number } | null;
   summary: string;
   scanDurationMs: number;

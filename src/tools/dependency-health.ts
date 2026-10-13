@@ -24,6 +24,10 @@ export interface DependencyHealthParams {
   limit?: number;
 }
 
+/** How the score is built, stated with every score. */
+const HEALTH_SCORE_BASIS =
+  "100 minus three capped penalties. Vulnerabilities: per advisory on the full installed tree (platform-inactive and maintenance notices excluded), critical 20, high 10, medium 4, low 1, unknown 2, a transitive one at a third, capped at 55. Outdated: over the direct dependencies, a major behind 1, a minor 0.35, a patch 0.1, as a share of them times 60, capped at 30. Deprecated: 8 per deprecated direct dependency, capped at 15.";
+
 /** How long a health check waits for its own OSV scan before answering without CVE data (the scan keeps running). */
 const HEALTH_SCAN_TIMEOUT_MS = 60_000;
 
@@ -31,6 +35,7 @@ export const dependencyHealthTool = {
   name: "dependency_health",
   description:
     "Assess health of project dependencies — version freshness, deprecation status, known CVEs. Auto-detects stack from lock files. Covers npm, Rust, Python, and Go. For npm, `installedVersion` appears beside `currentVersion` when node_modules holds a different version than the lockfile. " +
+    "Two populations: `totalDeps`, `outdatedCount` and `deprecatedCount` are over the DIRECT dependencies (registry rows; devDependencies only with include_dev); `vulnerableCount` is distinct vulnerable packages in the full installed tree of `treeDeps` (the same set as vulnerability_scan), `vulnerableDirectCount` the direct ones among them, so it can exceed `totalDeps`. `healthScoreBasis` gives the penalties behind `healthScore`. " +
     "When the CVE check is missing or incomplete (OSV.dev unreachable, timed out, rate limited, or FOURDA_OFFLINE), the summary starts with \"NOT CHECKED: ...\", `vulnerabilityCoverage` says how many dependencies were not checked, and `healthScore` and `vulnerableCount` are null: that is not a healthy result.",
   inputSchema: {
     type: "object" as const,
@@ -136,7 +141,8 @@ export async function executeDependencyHealth(
     expectedTotal: scopeTotal,
     notLoaded: `the OSV.dev scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
   });
-  const allVulns = vulnResult?.vulnerabilities ?? [];
+  // ecosystem_filter narrows the vulnerability counts too, not only the registry rows.
+  const allVulns = (vulnResult?.vulnerabilities ?? []).filter((v) => !params.ecosystem_filter || v.ecosystem === params.ecosystem_filter);
   const activeVulns = allVulns.filter(isActionableVulnerability);
   // Keyed by (ecosystem, name): a bare name let an npm advisory mark a
   // same-named crate as vulnerable, and counted the two as one package.
@@ -162,6 +168,14 @@ export async function executeDependencyHealth(
   // breakdown shown beside it. registryData is direct deps only — counting there
   // undercounts CVEs that live in transitive dependencies.
   const vulnerable = vulnMap.size;
+  // Of those, the ones a manifest declares (fixable by a direct bump).
+  const vulnerableDirect = new Set(activeVulns.filter((v) => v.isDirect).map((v) => vulnKey(v.ecosystem, v.package))).size;
+  // The tree the vulnerability counts range over (every installed copy OSV was asked about).
+  const treeDeps = vulnResult?.totalScanned ?? 0;
+  // Direct devDependencies left out of the registry rows (include_dev: true adds them).
+  const devExcluded = includeDev
+    ? 0
+    : liveIntel.getResolvedDeps().filter((d) => d.isDev && (!params.ecosystem_filter || d.ecosystem === params.ecosystem_filter)).length;
   const drifted = registryData.filter((d) => d.installedVersion).length;
 
   // Sort
@@ -194,7 +208,8 @@ export async function executeDependencyHealth(
   // regardless of severity, degree, or project size) pinned any real-sized
   // project at 0/100: a patch-behind dep cost the same as a critical CVE and
   // the number informed nothing.
-  const total = registryData.length || 1;
+  const total = registryData.length;
+  const denominator = total || 1;
 
   // Vulnerabilities: severity-weighted; transitive findings at one-third
   // weight (their fix arrives via a parent bump — the direct surface is what
@@ -218,7 +233,7 @@ export async function executeDependencyHealth(
     else if (label === "minor") stalenessWeight += 0.35;
     else if (label === "patch") stalenessWeight += 0.1;
   }
-  const outdatedPenalty = Math.min(30, Math.round((stalenessWeight / total) * 60));
+  const outdatedPenalty = Math.min(30, Math.round((stalenessWeight / denominator) * 60));
 
   const deprecatedPenalty = Math.min(deprecated * 8, 15);
   const healthScore = coverage ? null : Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
@@ -231,12 +246,23 @@ export async function executeDependencyHealth(
     }
   }
 
-  // Summary
+  // Summary. Two populations, each named: the direct dependencies checked
+  // against their registries (freshness, deprecation), and the full installed
+  // tree checked against OSV. 6.2.4 said "18 dependencies scanned, 26
+  // vulnerable" for navcal: 18 direct runtime dependencies, 26 vulnerable
+  // packages among 633 installed (2026-10-13 review).
   const parts: string[] = [];
-  parts.push(`${total} dependenc${total !== 1 ? "ies" : "y"} scanned`);
-  if (vulnerable > 0) parts.push(coverage ? `at least ${vulnerable} vulnerable (in the checked part)` : `${vulnerable} vulnerable`);
-  if (deprecated > 0) parts.push(`${deprecated} deprecated`);
-  if (outdated > 0) parts.push(`${outdated} outdated`);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  parts.push(
+    `${plural(total, "direct dependency", "direct dependencies")} checked against ${total === 1 ? "its registry" : "their registries"}` +
+      (devExcluded > 0 ? ` (${plural(devExcluded, "devDependency", "devDependencies")} left out; include_dev: true adds them)` : ""),
+  );
+  if (vulnResult) {
+    const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive)`;
+    parts.push(coverage ? `at least ${found}, in the checked part` : found);
+  }
+  if (deprecated > 0) parts.push(`${deprecated} deprecated (direct)`);
+  if (outdated > 0) parts.push(`${outdated} outdated (direct)`);
   if (drifted > 0) {
     parts.push(`${drifted} installed at a different version than the lockfile pins (see installedVersion; vulnerability_scan lists install_drift)`);
   }
@@ -259,6 +285,18 @@ export async function executeDependencyHealth(
     projectPath: liveIntel.getProjectRoot() ?? process.cwd(),
     ecosystemsScanned: ecosystems,
     totalDeps: total,
+    treeDeps,
+    vulnerableDirectCount: coverage ? null : vulnerableDirect,
+    ...(healthScore !== null
+      ? {
+          healthScoreBasis: {
+            vulnerabilities: vulnPenalty,
+            outdated: outdatedPenalty,
+            deprecated: deprecatedPenalty,
+            note: HEALTH_SCORE_BASIS,
+          },
+        }
+      : {}),
     outdatedCount: outdated,
     deprecatedCount: deprecated,
     vulnerableCount: coverage ? null : vulnerable,
@@ -268,8 +306,8 @@ export async function executeDependencyHealth(
     dependencies: limited,
     vulnerabilitySummary: vulnSummary,
     summary: coverage
-      ? `${coverage.note} Health score withheld until every dependency is checked. ${capitalise(parts.join(", "))}.`
-      : `Health: ${healthScore}/100. ${parts.join(", ")}.`,
+      ? `${coverage.note} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
+      : `Health: ${healthScore}/100 (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };

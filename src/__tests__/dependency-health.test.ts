@@ -207,3 +207,61 @@ describe("version distance below 1.0", () => {
     }
   });
 });
+
+/**
+ * 2026-10-13 review (also in 6.2.4): navcal read "Health: 19/100. 18
+ * dependencies scanned, 26 vulnerable": 18 was the direct runtime
+ * dependencies checked against the registry (25 devDependencies left out),
+ * 26 the vulnerable packages among the 633 installed. Each number now says
+ * which population it counts, and the score says how it was built.
+ */
+describe("dependency_health — direct and tree counts are named, the score explains itself", () => {
+  const tree = (scan: VulnerabilityScanResult): LiveIntelligence => {
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    process.env.FOURDA_OFFLINE = "true";
+    li.initFromDependencyGroups([{ dir: webDir, language: "javascript", deps: ["react"], devDeps: ["vitest"] }]);
+    li.fetchRegistryHealth = async (deps) =>
+      deps.map((d) => ({
+        name: d.name, ecosystem: d.ecosystem, currentVersion: d.version, latestVersion: "20.0.0", latestStableVersion: "20.0.0",
+        versionsBehind: { major: 1, minor: 0, patch: 0, label: "major" as const }, deprecated: false, deprecationMessage: null,
+        lastPublished: null, license: null, weeklyDownloads: null, isDev: d.isDev, fetchError: null,
+      }));
+    (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = scan;
+    return li;
+  };
+  const scan = { ...makeScan([
+    makeEntry({}),
+    makeEntry({ package: "semver", currentVersion: "5.7.1", isDirect: false, vulnId: "GHSA-semver", severity: "medium" }),
+    makeEntry({ package: "ws", currentVersion: "7.4.0", isDirect: false, vulnId: "GHSA-ws", severity: "high" }),
+  ]), totalScanned: 633 };
+
+  it("vulnerable can exceed the direct count, and the summary says why", async () => {
+    const result = await executeDependencyHealth(noDb, {}, tree(scan));
+    expect(result.totalDeps).toBe(1);
+    expect(result.vulnerableCount).toBe(3);
+    expect(result.vulnerableDirectCount).toBe(1);
+    expect(result.treeDeps).toBe(633);
+    expect(result.summary).toContain("1 direct dependency checked against its registry (1 devDependency left out; include_dev: true adds them)");
+    expect(result.summary).toContain("3 vulnerable packages in the full tree of 633 installed (1 direct, 2 transitive)");
+    expect(result.summary).toContain("1 outdated (direct)");
+    expect(result.summary).not.toMatch(/\d+ dependencies scanned/);
+  });
+
+  it("the score is 100 minus the penalties it lists", async () => {
+    const result = await executeDependencyHealth(noDb, {}, tree(scan));
+    const basis = result.healthScoreBasis!;
+    // react high direct 10 + semver medium transitive 4/3 + ws high transitive 10/3 = 14.67 -> 15
+    expect(basis.vulnerabilities).toBe(15);
+    expect(basis.outdated).toBe(30);
+    expect(result.healthScore).toBe(100 - basis.vulnerabilities - basis.outdated - basis.deprecated);
+    expect(result.summary).toMatch(/^Health: 55\/100 \(100 minus 15 for vulnerabilities, 30 for outdated, 0 for deprecated; see healthScoreBasis\)/);
+    expect(basis.note).toMatch(/full installed tree/);
+  });
+
+  it("ecosystem_filter narrows the vulnerability counts as well as the rows", async () => {
+    const mixed = { ...scan, vulnerabilities: [...scan.vulnerabilities, makeEntry({ package: "rsa", ecosystem: "crates.io", currentVersion: "0.9.6", isDirect: false, vulnId: "RUSTSEC-2023-0071" })] };
+    const result = await executeDependencyHealth(noDb, { ecosystem_filter: "npm" }, tree(mixed));
+    expect(result.vulnerableCount).toBe(3);
+  });
+});

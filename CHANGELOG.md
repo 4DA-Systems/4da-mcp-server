@@ -29,6 +29,20 @@ clean report. Reproduced 2026-10-12 with an empty cache: the 4DA app's `src-taur
   summaries start with "NOT CHECKED". The tool descriptions and the server
   instructions say an incomplete result is not a clean one.
 
+### dependency_health says what each number counts
+
+navcal read "Health: 19/100. 18 dependencies scanned, 26 vulnerable" (6.2.4
+too): 18 was the direct runtime dependencies checked against their registry
+(25 devDependencies left out), 26 the vulnerable packages among the 633
+installed. The summary now names both populations ("18 direct dependencies
+checked against their registries (25 devDependencies left out ...); 26
+vulnerable packages in the full tree of 633 installed (1 direct, 25
+transitive); 14 outdated (direct)"), the answer adds `treeDeps` and
+`vulnerableDirectCount`, and the score states its penalties ("100 minus 55 for
+vulnerabilities, 26 for outdated, 0 for deprecated") with `healthScoreBasis`.
+`ecosystem_filter` now narrows the vulnerability counts too, and a project with
+no direct dependencies reports 0, not 1.
+
 ### Coverage stated, not implied
 
 - **Ruby and PHP are read** (audit A2): `Gemfile.lock` (RubyGems; git and path
