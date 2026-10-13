@@ -38,7 +38,21 @@ const present = VECTOR_FILES.every((f) => fs.existsSync(path.join(vectorsDir, `$
 const required = process.env.FOURDA_REQUIRE_CONFORMANCE === "1";
 const MISSING = `rule vectors not found at ${vectorsDir}: run \`node scripts/fetch-conformance.mjs\` (pinned ${lock.repo}@${lock.commit.slice(0, 12)})`;
 
-if (!present && !required) console.warn(`[rule-vectors] skipped: ${MISSING}`);
+if (!present && !required) {
+  const bar = "!".repeat(78);
+  console.warn(
+    [
+      "",
+      bar,
+      `WARNING [rule-vectors]: the shared fix-path rule vectors DID NOT RUN (skipped, not passed).`,
+      `  ${MISSING}`,
+      "  On Windows the fetch needs long paths; the script passes core.longpaths=true.",
+      "  Set FOURDA_REQUIRE_CONFORMANCE=1 to make a missing corpus fail instead.",
+      bar,
+      "",
+    ].join("\n"),
+  );
+}
 
 const skipDoc = JSON.parse(fs.readFileSync(path.join(repoRoot, "conformance", "vectors-skip.json"), "utf8")) as { schema: number; skip: Record<string, string> };
 const skips = new Map(Object.entries(skipDoc.skip));

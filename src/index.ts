@@ -35,10 +35,9 @@
  */
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { Server } from "@modelcontextprotocol/server";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 
 import { startHttpServer } from "./http-transport.js";
 import { runSetup } from "./setup.js";
@@ -52,12 +51,12 @@ import { validateToolArgs } from "./tool-args.js";
 
 // Tool registry: listing, schema resources, category metadata
 import {
-  getCategoryManifest,
-  getSchemaResources,
   getSlimToolList,
-  getToolSchemaDocument,
-  hasToolSchema,
-  TOOL_REGISTRY,
+  listResources,
+  readResource,
+  toolEntry,
+  unknownPromptError,
+  unknownToolError,
 } from "./schema-registry.js";
 
 // Map-based tool dispatch (replaces per-tool imports + switch statement)
@@ -345,96 +344,18 @@ export function buildServer(): Server {
     };
   });
 
-  // List schema resources: full tool schemas as MCP Resources for lazy
-  // loading, plus the skill and category manifests.
-  server.setRequestHandler("resources/list", async () => {
-    const resources = [
-      ...getSchemaResources(),
-      // Skill manifest for agent dispatch
-      {
-        uri: "4da://skills",
-        name: "Skill manifest",
-        description: "Registry of 4DA skills for Claude Code agent dispatch",
-        mimeType: "application/json",
-      },
-      // Category manifest for tool discovery
-      {
-        uri: "4da://categories",
-        name: "Tool categories",
-        description: "Tool groupings by category with tag metadata",
-        mimeType: "application/json",
-      },
-    ];
+  // Resources: every tool's full schema (lazy loading), and the category
+  // manifest. An unknown URI is a resource-not-found protocol error.
+  server.setRequestHandler("resources/list", async () => ({ resources: listResources() }));
 
-    return { resources };
-  });
-
-  // Read a resource (schema or skill manifest)
-  server.setRequestHandler("resources/read", async (request) => {
-    const uri = request.params.uri;
-
-    // Handle category manifest
-    if (uri === "4da://categories") {
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify(getCategoryManifest(), null, 2),
-          },
-        ],
-      };
-    }
-
-    // Handle skill manifest
-    if (uri === "4da://skills") {
-      const skillsPath = join(homedir(), ".local", "share", "4da", "skills", "registry.json");
-      if (!existsSync(skillsPath)) {
-        throw new Error("Skill manifest not found. Run 4DA setup to create it.");
-      }
-      const skillsContent = readFileSync(skillsPath, "utf-8");
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: "application/json",
-            text: skillsContent,
-          },
-        ],
-      };
-    }
-
-    // Parse tool name from URI: 4da://schema/{tool_name}
-    const match = uri.match(/^4da:\/\/schema\/(.+)$/);
-    if (!match) {
-      throw new Error(`Invalid resource URI: ${uri}`);
-    }
-
-    const toolName = match[1];
-    const document = hasToolSchema(toolName) ? getToolSchemaDocument(toolName) : null;
-    if (!document) {
-      throw new Error(`Unknown tool: ${toolName}`);
-    }
-
-    return {
-      contents: [
-        {
-          uri,
-          mimeType: "application/json",
-          text: JSON.stringify(document, null, 2),
-        },
-      ],
-    };
-  });
+  server.setRequestHandler("resources/read", async (request) => readResource(request.params.uri));
 
   // Prompts: user-invoked workflows (surfaced as slash commands by some hosts).
   server.setRequestHandler("prompts/list", async () => ({ prompts: listPrompts() }));
 
   server.setRequestHandler("prompts/get", async (request) => {
     const prompt = getPrompt(request.params.name, request.params.arguments);
-    if (!prompt) {
-      throw new Error(`Unknown prompt: ${request.params.name}`);
-    }
+    if (!prompt) throw unknownPromptError(request.params.name);
     return prompt;
   });
 
@@ -442,18 +363,21 @@ export function buildServer(): Server {
   server.setRequestHandler("tools/call", async (request) => {
     const { name, arguments: args } = request.params;
 
+    // An unknown tool NAME is a JSON-RPC Invalid Params error (MCP spec), not
+    // a tool result: it used to come back as `isError` content like a tool
+    // that ran and failed.
+    const entry = toolEntry(name);
+    if (!entry) throw unknownToolError(name);
+
     // Arguments are checked against the published schema before anything
     // runs, so a wrong type or a misspelled parameter comes back as a
     // correctable error rather than a Node exception or a silent no-op.
-    const entry = TOOL_REGISTRY[name];
-    if (entry) {
-      const problem = validateToolArgs(name, entry.definition.inputSchema, (args ?? {}) as Record<string, unknown>);
-      if (problem) {
-        return {
-          content: [{ type: "text", text: JSON.stringify({ error: problem }) }],
-          isError: true,
-        };
-      }
+    const problem = validateToolArgs(name, entry.definition.inputSchema, (args ?? {}) as Record<string, unknown>);
+    if (problem) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: problem }) }],
+        isError: true,
+      };
     }
 
     try {

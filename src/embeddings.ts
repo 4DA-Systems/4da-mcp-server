@@ -20,11 +20,8 @@
  */
 
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import type { AppWritableTable, FourDADatabase } from "./db.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { join, dirname, resolve } from "node:path";
+import { desktopAppDbPaths, type AppWritableTable, type FourDADatabase } from "./db.js";
 
 // =============================================================================
 // Config
@@ -49,25 +46,28 @@ export function isOfflineMode(): boolean {
 }
 
 /**
- * Locate settings.json the same way llm.ts does, so embedding config lives
- * alongside the rest of the user's local configuration.
+ * Locate settings.json: FOURDA_SETTINGS_PATH, else the one beside an explicit
+ * FOURDA_DB_PATH (relative paths resolve against cwd, as the database's do),
+ * else the desktop app's own data directory.
+ *
+ * Never the working directory or its parent. Until 6.2.5 `cwd/data`,
+ * `cwd/../data` and the package's own `../data` were searched, so a cloned
+ * repository with `data/settings.json` could point semantic recall at any
+ * host, and stored agent memory and decisions were sent there to be embedded
+ * (audit 2026-10-12, B-3).
  */
 function findSettingsFile(): string | null {
-  const envPath = process.env.FOURDA_SETTINGS_PATH;
+  const envPath = process.env.FOURDA_SETTINGS_PATH?.trim();
   if (envPath && existsSync(envPath)) return envPath;
 
-  const dbPath = process.env.FOURDA_DB_PATH;
+  const dbPath = process.env.FOURDA_DB_PATH?.trim();
   if (dbPath) {
-    const sibling = join(dirname(dbPath), "settings.json");
+    const sibling = join(dirname(resolve(process.cwd(), dbPath)), "settings.json");
     if (existsSync(sibling)) return sibling;
   }
 
-  const candidates = [
-    join(process.cwd(), "data", "settings.json"),
-    join(__dirname, "..", "data", "settings.json"),
-    join(process.cwd(), "..", "data", "settings.json"),
-  ];
-  for (const candidate of candidates) {
+  for (const appDb of desktopAppDbPaths()) {
+    const candidate = join(dirname(appDb), "settings.json");
     if (existsSync(candidate)) return candidate;
   }
   return null;

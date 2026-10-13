@@ -90,7 +90,9 @@ export function runDoctor(): void {
     checks.push({
       name: "FOURDA_DB_PATH",
       status: envExists ? "pass" : "fail",
-      detail: envExists ? envDb : `Set to ${envDb} but file does not exist`,
+      detail: envExists
+        ? envDb
+        : `Set to ${envDb} but the file does not exist: the server refuses it and creates nothing. Point it at an existing database or unset it.`,
     });
   }
 
