@@ -12,6 +12,8 @@
 
 import type { LiveIntelligence } from "../live/index.js";
 import { cleanFixTarget, refreshVerdict, type FixPathSources, type RefreshVerdict } from "../live/fix-paths.js";
+import type { LockfileFormat } from "../live/lockfile-parents.js";
+import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
@@ -57,7 +59,9 @@ export async function verifyFixPaths(
   budgetMs = FIX_PATH_BUDGET_MS,
 ): Promise<number> {
   const sources = liveIntel.getFixPathSources();
-  const todo = inputs.filter((i) => i.fixes.length > 0 && i.step.currentVersion);
+  // A step with no per-advisory fix ("no_fix_available") is still looked up: its advisories
+  // may give only a last_affected bound with a clean release above it (A6).
+  const todo = inputs.filter((i) => (i.fixes.length > 0 || i.step.action === "no_fix_available") && i.step.currentVersion);
   if (!sources) {
     for (const i of todo) i.step.fixPathChecked = "installed_advisories_only";
     return todo.length;
@@ -99,7 +103,22 @@ async function verifyOne(
 ): Promise<boolean> {
   const { step } = input;
   const ecosystem = step.ecosystem as OsvEcosystem;
-  const clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes);
+  const clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion);
+  if (input.fixes.length === 0) {
+    // No advisory names a fix: the answer stays "no fix" unless the registry has a clean release past the bound.
+    if (!clean?.noAdvisoryFix || !clean.target) return true;
+    step.fixPathChecked = "all_advisories";
+    step.reasons.push(
+      `No advisory names a fixed version (they give only a last affected one); ${clean.target} is the first published release above ${step.currentVersion} that no known advisory affects`,
+    );
+    step.targetVersion = clean.target;
+    const d = step.currentVersion ? computeSemverDistance(step.currentVersion, clean.target) : null;
+    step.upgradeType = !d || d.label === "up-to-date" ? "unknown" : d.label;
+    step.breaking = step.scope === "direct" && step.upgradeType === "major";
+    step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
+    if (step.scope === "transitive" && step.currentVersion) await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
+    return true;
+  }
   if (!clean) return false;
   step.fixPathChecked = "all_advisories";
 
@@ -121,7 +140,9 @@ async function verifyOne(
   if (clean.target !== clean.floor) {
     const why = clean.floorAffectedBy.length > 0
       ? `is itself affected by ${clean.floorAffectedBy.join(", ")}`
-      : "is not a published release";
+      : clean.floorWithdrawn
+        ? "is deprecated or yanked on the registry"
+        : "is not a published release";
     step.reasons.push(
       `${clean.target} is the smallest ${clean.basis === "registry" ? "published " : ""}version clear of every advisory a release fixes (${clean.floor}, the highest per-advisory fix, ${why})`,
     );
@@ -208,7 +229,53 @@ async function refreshOrUpstream(
     .slice(0, 3)
     .map((b) => `${b.parent}${b.parentVersion ? ` ${b.parentVersion}` : ""} requires "${b.requirement}"`)
     .join(", ");
+  // A parent that will not move (deprecated, or already at its latest
+  // release) makes "waiting on upstream" a dead end (A4, request 2.88.2):
+  // the step is then an override of the transitive, or replacing the parent.
+  const stuck = await stuckParents(sources, ecosystem, blocking);
+  if (stuck.length > 0) {
+    step.action = "override_or_replace";
+    const formats = [...new Set(verdicts.map((v) => v.verdict.format))];
+    replaceReason(
+      `Transitive dependency: ${named}${blocking.length > 3 ? ` and ${blocking.length - 3} more` : ""}, and ${stuck.join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace the parent`,
+    );
+    return;
+  }
   replaceReason(
     `Transitive dependency, waiting on upstream: ${named}${blocking.length > 3 ? ` and ${blocking.length - 3} more` : ""}, so a refresh cannot reach a clean version; the fix arrives with a parent release that widens it`,
   );
+}
+
+/** Blocking parents that will not release a fix: deprecated, or already at their latest release. */
+async function stuckParents(
+  sources: FixPathSources,
+  ecosystem: OsvEcosystem,
+  blocking: Array<{ parent: string; parentVersion: string | null }>,
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const b of blocking.slice(0, 5)) {
+    if (!b.parentVersion) continue;
+    const facts = await sources.releaseFacts(ecosystem, b.parent).catch(() => null);
+    if (!facts) continue;
+    if (facts.deprecatedLatest) out.push(`${b.parent} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}")`);
+    else if (facts.latest && compareVersions(b.parentVersion, facts.latest, ecosystem) >= 0) out.push(`${b.parent} ${b.parentVersion} is already its latest release`);
+  }
+  return out;
+}
+
+/** How to force one transitive version, per lockfile format. */
+export function overrideHint(format: LockfileFormat, name: string, target: string): string {
+  switch (format) {
+    case "package-lock":
+      return `npm: add "overrides": { "${name}": "${target}" } to package.json (npm 8.3+), then npm install`;
+    case "pnpm":
+      return `pnpm: add "pnpm": { "overrides": { "${name}": "${target}" } } to package.json (or overrides: in pnpm-workspace.yaml), then pnpm install`;
+    case "yarn":
+    case "yarn-berry":
+      return `yarn: add "resolutions": { "${name}": "${target}" } to package.json, then yarn install`;
+    case "bun":
+      return `bun: add "overrides": { "${name}": "${target}" } to package.json, then bun install`;
+    case "cargo":
+      return `Cargo cannot select a version outside the parent's requirement; point [patch.crates-io] ${name} at a fork or path that carries the fix`;
+  }
 }

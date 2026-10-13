@@ -35,7 +35,9 @@ import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { verifyFixPaths, type FixPathInput } from "./upgrade-planner-fixpaths.js";
-import { discoveryNote } from "../project-tree.js";
+import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
+import { vulnerabilityCoverage } from "../live/scan-coverage.js";
+import type { VulnerabilityCoverage } from "../live/types.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -76,10 +78,14 @@ interface UpgradeRecommendation {
    * none could be read and the target leaves the semver-compatible range);
    * `reinstall` = the lockfile's version is fine
    * but node_modules holds another one, so the fix is `installFix`;
+   * `override_or_replace` = transitive, a parent's requirement excludes every
+   * clean version and that parent will not move (deprecated, or already at
+   * its latest release): force the version (npm `overrides`, pnpm
+   * `pnpm.overrides`, yarn `resolutions`, Cargo `[patch]`) or replace the parent;
    * `no_fix_available` = vulnerable with no fixed release to move to;
    * `not_built_on_this_host` = every advisory is against code this host never compiles.
    */
-  action: "upgrade_direct" | "lockfile_refresh" | "waiting_on_upstream" | "reinstall" | "no_fix_available" | "not_built_on_this_host";
+  action: "upgrade_direct" | "lockfile_refresh" | "waiting_on_upstream" | "override_or_replace" | "reinstall" | "no_fix_available" | "not_built_on_this_host";
   /**
    * For a vulnerable package: whether the target was checked against EVERY
    * known advisory of the package (`all_advisories`), or only against the
@@ -117,8 +123,10 @@ interface UpgradePlanResult {
   waitingOnUpstream: number;
   /** Transitive steps a lockfile refresh fixes (every parent already admits a clean version). */
   lockfileRefreshes: number;
-  /** False when no vulnerability scan has run this session — the ranking is then CVE-blind and says so. */
+  /** False unless OSV answered for EVERY dependency in scope: a plan over missing or partial data is not CVE-aware. */
   vulnerabilityDataAvailable: boolean;
+  /** Present when the vulnerability check is missing or incomplete: what was not checked and why. */
+  vulnerabilityCoverage?: VulnerabilityCoverage;
   provenance: {
     mode: "standalone_heuristic";
     note: string;
@@ -139,7 +147,7 @@ const PROVENANCE_NOTE =
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev) and the mechanism (manifest_bump, lockfile_or_parent_update, mixed, no_fix); flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it (waiting_on_upstream), deprecation and version distance; it runs the OSV scan itself when none has run. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev) and the mechanism (manifest_bump, lockfile_or_parent_update, mixed, no_fix); flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it (waiting_on_upstream; override_or_replace with the override syntax when that parent is deprecated or already at its latest release), deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\": the plan then misses whatever those dependencies carry. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -266,7 +274,17 @@ async function executeStandalonePlanner(
   // ensureVulnerabilities rescans at the wider scope when needed.
   const vulnResult =
     (await liveIntel.ensureVulnerabilities(root, PLANNER_SCAN_TIMEOUT_MS, { includeDev })) ?? liveIntel.getVulnerabilities();
-  const vulnerabilityDataAvailable = vulnResult !== null;
+  // Complete vulnerability data only: a partial scan (OSV.dev unreachable or
+  // rate limited for some dependencies) ranks what it found and says the rest
+  // is unchecked; it never claims the plan is CVE-aware (6.2.4 said
+  // vulnerabilityDataAvailable: true over 10,568 unchecked dependencies).
+  const scopeTotal = liveIntel.getAuditDeps().filter((d) => includeDev || !(d.isDirect && d.isDev)).length;
+  const coverage = vulnerabilityCoverage(vulnResult, {
+    enabled: liveIntel.isEnabled(),
+    expectedTotal: scopeTotal,
+    notLoaded: `the OSV.dev scan did not finish within ${PLANNER_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
+  });
+  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
   // charged with RUSTSEC-2026-0190 (fixed in 1.0.103 — it isn't affected) while
@@ -444,6 +462,8 @@ async function executeStandalonePlanner(
     recommendations.push(rec);
     if (fixable && !reinstallOnly && action === "upgrade_direct" && vulns) {
       fixPathInputs.set(rec, { fixes: vulns.map((v) => v.fixedVersion).filter((f): f is string => Boolean(f)), sourceDirs: [] });
+    } else if (vulnerable && action === "no_fix_available") {
+      fixPathInputs.set(rec, { fixes: [], sourceDirs: [] });
     }
   }
 
@@ -493,7 +513,7 @@ async function executeStandalonePlanner(
         platformActive,
       };
       recommendations.push(rec);
-      if (rec.action === "waiting_on_upstream") {
+      if (rec.action === "waiting_on_upstream" || rec.action === "no_fix_available") {
         fixPathInputs.set(rec, { fixes: fixedVersions, sourceDirs: [...new Set(entries.flatMap((e) => e.sourceDirs ?? []))] });
       }
     }
@@ -533,12 +553,14 @@ async function executeStandalonePlanner(
   const breakingChanges = upgrades.filter((r) => r.breaking).length;
   const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length;
   const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh").length;
+  const overrides = limited.filter((r) => r.action === "override_or_replace").length;
   const reinstalls = limited.filter((r) => r.action === "reinstall").length;
   const noFix = limited.filter((r) => r.action === "no_fix_available").length;
   const inactive = limited.filter((r) => r.action === "not_built_on_this_host").length;
 
   // Summary
   const parts: string[] = [];
+  if (coverage) parts.push(`${coverage.note} This plan ranks only what the checked part showed`);
   parts.push(
     filtered.length > limited.length
       ? `Showing ${limited.length} of ${filtered.length} recommendations (raise max_recommendations for the rest)`
@@ -548,6 +570,7 @@ async function executeStandalonePlanner(
   if (reinstalls > 0) parts.push(`${reinstalls} need only a reinstall (node_modules behind the lockfile)`);
   if (lockfileRefreshes > 0) parts.push(`${lockfileRefreshes} transitive, fixed by a lockfile refresh (every parent already admits a clean version)`);
   if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream`);
+  if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated or already latest): override the version or replace the parent`);
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
   if (noFix > 0) parts.push(`${noFix} vulnerable with no fixed release yet`);
   if (inactive > 0) parts.push(`${inactive} vulnerable only in code not built on this host`);
@@ -558,13 +581,10 @@ async function executeStandalonePlanner(
   }
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
+  // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...unreadableNotes(liveIntel.getLockfileProblems())]) parts.push(note.replace(/[.]$/, ""));
   const nothing = vulnerabilityDataAvailable ? "nothing to upgrade (no known vulnerability, deprecation, or newer release of a direct dependency)" : "no vulnerability data to plan from";
   if (only && limited.length === 0) parts.push(emptyAnswerNote(only, liveIntel, includeDev, nothing));
-  if (!vulnerabilityDataAvailable) {
-    parts.push(liveIntel.isEnabled()
-      ? `No vulnerability data: the OSV scan did not finish within ${PLANNER_SCAN_TIMEOUT_MS / 1000}s or OSV was unreachable, so this plan is CVE-blind. Call again to use the scan once it completes`
-      : "No vulnerability data: offline mode (FOURDA_OFFLINE), so this plan is CVE-blind");
-  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -577,6 +597,7 @@ async function executeStandalonePlanner(
     waitingOnUpstream,
     lockfileRefreshes,
     vulnerabilityDataAvailable,
+    ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
   };
 }

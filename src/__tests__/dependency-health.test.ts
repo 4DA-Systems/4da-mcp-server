@@ -61,13 +61,20 @@ function makeScan(entries: VulnerabilityEntry[]): VulnerabilityScanResult {
     cleanCount: 10 - entries.length,
     scanDurationMs: 5,
     cached: true,
-    offline: true,
+    // A complete scan: every dependency answered. (These stubs said offline:
+    // true and were counted as complete; 6.2.5 withholds counts from an
+    // offline scan, which is what the fail-closed tests below pin.)
+    offline: false,
+    unchecked: 0,
   };
 }
 
 function makeIntel(scan: VulnerabilityScanResult): LiveIntelligence {
+  delete process.env.FOURDA_OFFLINE;
   const li = new LiveIntelligence(new Database(":memory:"));
+  process.env.FOURDA_OFFLINE = "true";
   li.initFromDependencyGroups([{ dir: webDir, language: "javascript", deps: ["react"], devDeps: [] }]);
+  li.fetchRegistryHealth = async () => [];
   (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = scan;
   return li;
 }
@@ -164,7 +171,10 @@ describe("dependency_health loads its own vulnerability data", () => {
     const li = new LiveIntelligence(new Database(":memory:"));
     li.initFromDependencyGroups([{ dir: webDir, language: "javascript", deps: ["react"], devDeps: [] }]);
     const result = await executeDependencyHealth(noDb, {}, li);
-    expect(result.summary).toContain("CVE data not loaded: offline mode (FOURDA_OFFLINE)");
+    expect(result.summary).toMatch(/^NOT CHECKED: live lookups are disabled \(FOURDA_OFFLINE=true\)/);
+    expect(result.healthScore).toBeNull();
+    expect(result.vulnerableCount).toBeNull();
+    expect(result.vulnerabilityCoverage?.unchecked_dependencies).toBe(1);
   });
 });
 

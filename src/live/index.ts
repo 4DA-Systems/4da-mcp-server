@@ -26,10 +26,12 @@ import { FixPathSources } from "./fix-paths.js";
 import type { CheckEcosystem, ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
 import { commonPathRoot, dedupeDependencies, emptyVulnResult } from "./dependency-set.js";
+import { LOOKUPS_DISABLED } from "./scan-coverage.js";
 import { groupIsStale, resolveGroup, type GroupResolution, type ResolutionGroup } from "./resolution.js";
 import { mapEcosystem } from "./version-resolver.js";
 import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
+import type { LockfileProblem } from "./lockfile-types.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -204,6 +206,12 @@ export class LiveIntelligence {
     return this.groupResults.flatMap((r) => (r.unresolved ? [{ dir: r.group.dir, ...r.unresolved }] : []));
   }
 
+  /** Lockfiles present in a resolved directory that could not be read, each with the reason. */
+  getLockfileProblems(): LockfileProblem[] {
+    const seen = new Set<string>();
+    return this.groupResults.flatMap((r) => r.problems ?? []).filter((p) => !seen.has(p.file) && (seen.add(p.file), true));
+  }
+
   /** What the project-tree walk left out (lockfiles past its bounds); null when the set did not come from a walk. */
   getDiscovery(): TreeDiscovery | null {
     return this.discovery;
@@ -312,7 +320,7 @@ export class LiveIntelligence {
     options?: { includeDev?: boolean; forceRefresh?: boolean },
   ): Promise<VulnerabilityScanResult> {
     if (!this.enabled) {
-      return emptyVulnResult(projectPath, true);
+      return emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: LOOKUPS_DISABLED });
     }
 
     const scoped = options?.includeDev
@@ -355,12 +363,12 @@ export class LiveIntelligence {
         this.storedScanRequest = request;
       }
       return result;
-    } catch {
-      // Network failure — return last known or empty
-      if (generation === this.generation && this.lastVulnScan) {
-        return { ...this.lastVulnScan, offline: true, cached: true };
-      }
-      return emptyVulnResult(projectPath, true);
+    } catch (error) {
+      // The scanner reports unreachable dependencies itself; reaching here is
+      // an unexpected failure. Nothing was checked, and the answer says so
+      // (it used to hand back the last scan or an empty one, read as clean).
+      const reason = `the scan failed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+      return { ...emptyVulnResult(projectPath, true, { count: deps.length, reason }), ecosystemsScanned: [...new Set(deps.map((d) => d.ecosystem))] };
     }
   }
 
@@ -378,8 +386,8 @@ export class LiveIntelligence {
   startVulnerabilityWarmup(projectPath: string): void {
     if (this.warmup) return;
     this.warmupFailedAt = null;
-    this.warmup = this.scanVulnerabilities(projectPath).catch(() =>
-      emptyVulnResult(projectPath, true),
+    this.warmup = this.scanVulnerabilities(projectPath).catch((error) =>
+      emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: `the scan failed (${String(error).slice(0, 120)})` }),
     );
   }
 
@@ -539,11 +547,11 @@ export class LiveIntelligence {
    * stored project scan. Disabled or failed yields an `offline` result.
    */
   async queryAdvisories(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
-    if (!this.enabled) return emptyVulnResult("dependency_check", true);
+    if (!this.enabled) return emptyVulnResult("dependency_check", true, { count: deps.length, reason: LOOKUPS_DISABLED });
     try {
       return await this.osvScanner.scan(deps, "dependency_check");
-    } catch {
-      return emptyVulnResult("dependency_check", true);
+    } catch (error) {
+      return emptyVulnResult("dependency_check", true, { count: deps.length, reason: `the scan failed (${String(error).slice(0, 120)})` });
     }
   }
 

@@ -161,10 +161,38 @@ export interface VulnerabilityScanResult {
   platformInactiveVulnerable: number;
   bySeverity: { critical: number; high: number; medium: number; low: number; unknown: number };
   vulnerabilities: VulnerabilityEntry[];
+  /** Dependencies OSV answered for and found no advisory on (unchecked ones are never counted clean). */
   cleanCount: number;
   scanDurationMs: number;
   cached: boolean;
+  /** True when any dependency has no advisory answer (`unchecked` > 0), or lookups are disabled. */
   offline: boolean;
+  /**
+   * Dependencies with NO advisory answer: OSV.dev could not be reached, failed,
+   * timed out, or the query budget ran out, and no earlier answer was cached.
+   * Their absence from `vulnerabilities` means nothing. Absent (= 0) on older
+   * stubs.
+   */
+  unchecked?: number;
+  /** Why `unchecked` dependencies have no answer, in words; null when every one was answered. */
+  uncheckedReason?: string | null;
+  /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
+  staleAnswers?: number;
+}
+
+/** How much of a dependency set OSV actually answered for. */
+export interface VulnerabilityCoverage {
+  complete: false;
+  /** Dependencies sent for checking. */
+  total_dependencies: number;
+  /** Dependencies with an advisory answer (fresh or stale). */
+  checked_dependencies: number;
+  /** Dependencies with NO answer: nothing is known about their advisories. */
+  unchecked_dependencies: number;
+  /** Why, in words ("OSV.dev unreachable (fetch failed)", "live lookups disabled (FOURDA_OFFLINE=true)"). */
+  reason: string;
+  /** One line to read first; never a clean result. */
+  note: string;
 }
 
 export interface LiveHeadline {
@@ -238,7 +266,8 @@ export interface DependencyHealthResult {
    * maintenance notice — the same set `vulnerability_scan` reports as
    * `total_vulnerable_packages`, so the two tools agree over one scan.
    */
-  vulnerableCount: number;
+  /** Null when any dependency could not be checked against OSV: a partial count is not a total. */
+  vulnerableCount: number | null;
   /**
    * Every advisory row the scan returned, before the platform and maintenance
    * splits and before alias collapsing. Present so nothing is hidden by the
@@ -246,7 +275,10 @@ export interface DependencyHealthResult {
    * unmaintained-dependency notices.
    */
   advisoryCount: number;
-  healthScore: number;
+  /** Null when vulnerability data is missing or incomplete: a score computed without it would read as healthier than it is. */
+  healthScore: number | null;
+  /** Present when the vulnerability check is incomplete: what was not checked and why. */
+  vulnerabilityCoverage?: VulnerabilityCoverage;
   dependencies: RegistryPackageInfo[];
   vulnerabilitySummary: { critical: number; high: number; medium: number; low: number } | null;
   summary: string;

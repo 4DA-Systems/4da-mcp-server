@@ -12,7 +12,10 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
-import { discoveryNote } from "../project-tree.js";
+import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
+import { vulnerabilityCoverage } from "../live/scan-coverage.js";
+
+const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 export interface DependencyHealthParams {
   include_dev?: boolean;
@@ -27,7 +30,8 @@ const HEALTH_SCAN_TIMEOUT_MS = 60_000;
 export const dependencyHealthTool = {
   name: "dependency_health",
   description:
-    "Assess health of project dependencies — version freshness, deprecation status, known CVEs. Auto-detects stack from lock files. Covers npm, Rust, Python, and Go. For npm, `installedVersion` appears beside `currentVersion` when node_modules holds a different version than the lockfile.",
+    "Assess health of project dependencies — version freshness, deprecation status, known CVEs. Auto-detects stack from lock files. Covers npm, Rust, Python, and Go. For npm, `installedVersion` appears beside `currentVersion` when node_modules holds a different version than the lockfile. " +
+    "When the CVE check is missing or incomplete (OSV.dev unreachable, timed out, rate limited, or FOURDA_OFFLINE), the summary starts with \"NOT CHECKED: ...\", `vulnerabilityCoverage` says how many dependencies were not checked, and `healthScore` and `vulnerableCount` are null: that is not a healthy result.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -79,9 +83,9 @@ export async function executeDependencyHealth(
       totalDeps: 0,
       outdatedCount: 0,
       deprecatedCount: 0,
-      vulnerableCount: 0,
+      vulnerableCount: null,
       advisoryCount: 0,
-      healthScore: 0,
+      healthScore: null,
       dependencies: [],
       vulnerabilitySummary: null,
       summary: "Live intelligence not initialized. No project manifests detected.",
@@ -123,6 +127,15 @@ export async function executeDependencyHealth(
   // vulnerability_scan first" left a session's first health check CVE-blind.
   const root = liveIntel.getProjectRoot() ?? process.cwd();
   const vulnResult = (await liveIntel.ensureVulnerabilities(root, HEALTH_SCAN_TIMEOUT_MS, { includeDev })) ?? liveIntel.getVulnerabilities();
+  // What OSV did NOT answer for. A score or a vulnerable count computed
+  // without it reads as healthier than the project is (6.2.4 scored 75/100
+  // with 10,568 dependencies unchecked), so both are withheld.
+  const scopeTotal = liveIntel.getAuditDeps().filter((d) => includeDev || !(d.isDirect && d.isDev)).length;
+  const coverage = vulnerabilityCoverage(vulnResult, {
+    enabled: liveIntel.isEnabled(),
+    expectedTotal: scopeTotal,
+    notLoaded: `the OSV.dev scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
+  });
   const allVulns = vulnResult?.vulnerabilities ?? [];
   const activeVulns = allVulns.filter(isActionableVulnerability);
   // Keyed by (ecosystem, name): a bare name let an npm advisory mark a
@@ -208,10 +221,10 @@ export async function executeDependencyHealth(
   const outdatedPenalty = Math.min(30, Math.round((stalenessWeight / total) * 60));
 
   const deprecatedPenalty = Math.min(deprecated * 8, 15);
-  const healthScore = Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
+  const healthScore = coverage ? null : Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
 
   // Severity breakdown over the actionable set, matching the count above.
-  const vulnSummary = vulnResult ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
+  const vulnSummary = vulnResult && !coverage ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
   if (vulnSummary) {
     for (const v of activeVulns) {
       if (v.severity in vulnSummary) vulnSummary[v.severity as keyof typeof vulnSummary]++;
@@ -221,14 +234,14 @@ export async function executeDependencyHealth(
   // Summary
   const parts: string[] = [];
   parts.push(`${total} dependenc${total !== 1 ? "ies" : "y"} scanned`);
-  if (vulnerable > 0) parts.push(`${vulnerable} vulnerable`);
+  if (vulnerable > 0) parts.push(coverage ? `at least ${vulnerable} vulnerable (in the checked part)` : `${vulnerable} vulnerable`);
   if (deprecated > 0) parts.push(`${deprecated} deprecated`);
   if (outdated > 0) parts.push(`${outdated} outdated`);
   if (drifted > 0) {
     parts.push(`${drifted} installed at a different version than the lockfile pins (see installedVersion; vulnerability_scan lists install_drift)`);
   }
   // "All healthy" is a claim about CVEs too; it needs a scan behind it.
-  if (vulnResult && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
+  if (vulnResult && !coverage && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
     parts.push("all healthy");
   }
   const hidden = advisoryCount - activeVulns.length;
@@ -238,11 +251,8 @@ export async function executeDependencyHealth(
   // "all healthy" over a partial walk must say it is partial.
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
-  if (!vulnResult) {
-    parts.push(liveIntel.isEnabled()
-      ? `CVE data not loaded: the OSV scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000}s or OSV was unreachable. Call again to use it once it completes`
-      : "CVE data not loaded: offline mode (FOURDA_OFFLINE)");
-  }
+  // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...unreadableNotes(liveIntel.getLockfileProblems())]) parts.push(note.replace(/[.]$/, ""));
 
   return {
     scannedAt: new Date().toISOString(),
@@ -251,12 +261,15 @@ export async function executeDependencyHealth(
     totalDeps: total,
     outdatedCount: outdated,
     deprecatedCount: deprecated,
-    vulnerableCount: vulnerable,
+    vulnerableCount: coverage ? null : vulnerable,
     advisoryCount,
     healthScore,
+    ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     dependencies: limited,
     vulnerabilitySummary: vulnSummary,
-    summary: `Health: ${healthScore}/100. ${parts.join(", ")}.`,
+    summary: coverage
+      ? `${coverage.note} Health score withheld until every dependency is checked. ${capitalise(parts.join(", "))}.`
+      : `Health: ${healthScore}/100. ${parts.join(", ")}.`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };

@@ -36,6 +36,7 @@ const sources = (ok = true) =>
   ({
     packageAdvisories: async () => (ok ? OPENSSL : null),
     publishedVersions: async () => (ok ? VERSIONS : null),
+    releaseFacts: async () => (ok ? { versions: VERSIONS, withdrawn: [], latest: "0.10.81", deprecatedLatest: null } : null),
   }) as unknown as FixPathSources;
 
 function entry(dep: ResolvedDependency, id: string, fixed: string): VulnerabilityEntry {

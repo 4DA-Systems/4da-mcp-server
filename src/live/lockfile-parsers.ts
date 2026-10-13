@@ -29,7 +29,8 @@ import * as path from "node:path";
 import { readBunLock } from "./bun-lockfile.js";
 import { readPnpmLock, readYarnLock } from "./js-lockfile-readers.js";
 import { requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
-import { emptySource, found, InstanceSet, type PackageInstance, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
+import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import type { OsvEcosystem } from "./types.js";
 
 export type { PackageInstance, VersionSource } from "./lockfile-types.js";
@@ -39,6 +40,8 @@ const LOCKFILES: Partial<Record<OsvEcosystem, string[]>> = {
   "crates.io": ["Cargo.lock"],
   PyPI: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   Go: ["go.mod", "go.sum"],
+  RubyGems: ["Gemfile.lock"],
+  Packagist: ["composer.lock"],
 };
 
 const MANIFESTS: Partial<Record<OsvEcosystem, string>> = {
@@ -61,7 +64,27 @@ export function manifestCandidate(cwd: string, ecosystem: OsvEcosystem): string 
   return name ? path.join(cwd, name) : null;
 }
 
+/**
+ * The versions one directory pins for one ecosystem, plus every lockfile that
+ * is present but could not be read (`problems`). A damaged or conflicted
+ * lockfile used to fall through silently to the next candidate or to "no
+ * lockfile" (audit B-9): now the answer names the file and the error.
+ */
 export function resolveVersionSource(cwd: string, ecosystem: OsvEcosystem): VersionSource {
+  let read: VersionSource;
+  let thrown: LockfileProblem | null = null;
+  try {
+    read = readVersionSource(cwd, ecosystem);
+  } catch (error) {
+    read = emptySource();
+    const file = (LOCKFILES[ecosystem] ?? []).map((n) => path.join(cwd, n)).find((f) => fs.existsSync(f));
+    if (file) thrown = { file, error: describeParseError(file, error) ?? "could not be parsed" };
+  }
+  const problems = thrown ? [thrown] : unreadLockfiles(cwd, ecosystem, read);
+  return problems.length > 0 ? { ...read, problems } : read;
+}
+
+function readVersionSource(cwd: string, ecosystem: OsvEcosystem): VersionSource {
   switch (ecosystem) {
     case "npm":
       return resolveNpm(cwd);
@@ -71,9 +94,61 @@ export function resolveVersionSource(cwd: string, ecosystem: OsvEcosystem): Vers
       return resolvePython(cwd);
     case "Go":
       return resolveGo(cwd);
+    case "RubyGems":
+      return resolveRuby(cwd);
+    case "Packagist":
+      return resolvePhp(cwd);
     default:
       return emptySource();
   }
+}
+
+/** Lines git writes into a file it could not merge. */
+const CONFLICT_MARKER = /^(?:<{7}|>{7})(?: |$)|^={7}$/m;
+
+/**
+ * Lockfiles that exist here, rank above the file the versions came from (or
+ * there is none), and were not read: each with the reason, re-derived from
+ * the file so the note can say what is wrong with it.
+ */
+function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSource): LockfileProblem[] {
+  const readFiles = new Set([read.source, ...(read.extraSources ?? [])].filter((f): f is string => Boolean(f)).map((f) => path.resolve(f)));
+  const problems: LockfileProblem[] = [];
+  for (const name of LOCKFILES[ecosystem] ?? []) {
+    if (name === "go.sum") continue; // read with go.mod, never on its own
+    const file = path.join(cwd, name);
+    if (readFiles.has(path.resolve(file))) break; // everything after it ranks lower
+    if (!fs.existsSync(file)) continue;
+    const error = describeParseError(file, null);
+    if (error) problems.push({ file, error });
+  }
+  return problems;
+}
+
+/**
+ * Why a present lockfile yielded nothing, or null when nothing is wrong with
+ * it (a valid lockfile of a project with no dependencies).
+ */
+function describeParseError(file: string, error: unknown): string | null {
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf-8");
+  } catch (readError) {
+    return `could not be read (${readError instanceof Error ? readError.message : String(readError)})`;
+  }
+  if (CONFLICT_MARKER.test(content)) return "it contains git merge-conflict markers (<<<<<<< / >>>>>>>): resolve the conflict and reinstall to regenerate it";
+  if (/\.json$/i.test(file)) {
+    try {
+      JSON.parse(content);
+    } catch (parseError) {
+      return `invalid JSON (${parseError instanceof Error ? parseError.message.slice(0, 120) : String(parseError)})`;
+    }
+  }
+  if (error) return `could not be parsed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+  if (/\.json$/i.test(file)) return null;
+  // A text lockfile of some size that gave no package at all is damaged or in a format this reader does not know.
+  const lines = content.split(/\r?\n/).filter((l) => l.trim() !== "").length;
+  return lines > 20 ? "no package versions could be read from it (unsupported format or damaged)" : null;
 }
 
 /** Instances for a manifest-only read: one per name, scope unknown. */

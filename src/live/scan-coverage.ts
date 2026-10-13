@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Whether a vulnerability scan answered for every dependency it was given.
+ *
+ * Until 6.2.5 an OSV.dev outage, a 503, a timeout or the server's own rate
+ * limit turned a scan into `total_vulnerable_packages: 0`, flagged only by
+ * `_meta.offline` at the end of the answer, and dependency_health and
+ * upgrade_planner then scored and ranked that as a clean project (10,568
+ * dependencies of D:\4DA\src-tauri, 0 vulnerable, 2026-10-12). Every scan
+ * consumer now asks this module first, and an incomplete scan leads its
+ * answer with what was not checked.
+ */
+
+import type { VulnerabilityCoverage, VulnerabilityScanResult } from "./types.js";
+
+/** The reason given when live lookups are switched off. */
+export const LOOKUPS_DISABLED = "live lookups are disabled (FOURDA_OFFLINE=true)";
+
+/**
+ * Null when every dependency the scan was given has an advisory answer.
+ * Otherwise how many have none, and why. `result` null means no scan backs
+ * the answer at all: `expectedTotal` dependencies are then all unchecked.
+ */
+export function vulnerabilityCoverage(
+  result: VulnerabilityScanResult | null,
+  opts: { enabled: boolean; expectedTotal?: number; notLoaded?: string },
+): VulnerabilityCoverage | null {
+  if (!result) {
+    const total = opts.expectedTotal ?? 0;
+    const reason = opts.enabled ? (opts.notLoaded ?? "the OSV.dev scan did not finish in time or OSV.dev was unreachable") : LOOKUPS_DISABLED;
+    return build(total, total, reason);
+  }
+  // A stub or an older result that says offline without a count answered for nothing.
+  const unchecked = result.unchecked ?? (result.offline ? result.totalScanned : 0);
+  if (unchecked <= 0) return null;
+  return build(result.totalScanned, unchecked, result.uncheckedReason ?? "OSV.dev could not be queried");
+}
+
+function build(total: number, unchecked: number, reason: string): VulnerabilityCoverage {
+  return {
+    complete: false,
+    total_dependencies: total,
+    checked_dependencies: Math.max(0, total - unchecked),
+    unchecked_dependencies: unchecked,
+    reason,
+    note: notCheckedLine(reason, unchecked, total),
+  };
+}
+
+/** The first line an incomplete answer leads with. */
+export function notCheckedLine(reason: string, unchecked: number, total: number): string {
+  const n = (x: number) => x.toLocaleString("en-US");
+  const scope = total > 0 ? `${n(unchecked)} of ${n(total)} dependencies have no vulnerability answer` : "no dependency has a vulnerability answer";
+  return `NOT CHECKED: ${reason} — ${scope}. Their absence from the findings means nothing: this is not a clean result. Call again once OSV.dev answers (force_refresh), or check them another way.`;
+}

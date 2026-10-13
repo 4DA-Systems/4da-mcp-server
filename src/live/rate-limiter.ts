@@ -37,6 +37,21 @@ export class RateLimiter {
     return true;
   }
 
+  /**
+   * Take a token, waiting for one to refill when the bucket is empty, as long
+   * as it arrives by `deadline` (epoch ms). False when it would not: the
+   * caller then has no answer for that request and must say so, never treat
+   * it as an empty one.
+   */
+  async acquire(source: string, deadline: number): Promise<boolean> {
+    for (;;) {
+      if (this.consume(source)) return true;
+      const wait = Math.max(1, this.waitTimeMs(source));
+      if (Date.now() + wait > deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+
   waitTimeMs(source: string): number {
     const bucket = this.buckets.get(source);
     if (!bucket) return 0;
@@ -55,7 +70,12 @@ export class RateLimiter {
 }
 
 export const DEFAULT_RATE_LIMITS = {
-  osv: { maxPerMinute: 10 },
+  // querybatch requests (1,000 dependencies each). OSV.dev publishes no
+  // per-client limit for it and osv-scanner sends a tree's batches back to
+  // back; 10 a minute made any tree over 10,000 dependencies fail outright
+  // (D:\4DA\src-tauri, 10,568, reported 0 vulnerable on 2026-10-12). A burst
+  // of 60 covers 60,000 dependencies; past that a scan waits for tokens.
+  osv: { maxPerMinute: 60 },
   // Per-package advisory lists for fix-path checks (/v1/query), one request per vulnerable package.
   "osv-package": { maxPerMinute: 300 },
   // Fix-path lookups on registry CDNs (crates.io sparse index, abbreviated npm

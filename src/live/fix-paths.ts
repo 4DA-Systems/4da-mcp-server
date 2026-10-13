@@ -47,7 +47,19 @@ const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
 /** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
+
+/** What a registry says about one package's releases, for fix targets and parent advice. */
+export interface PackageReleaseFacts {
+  /** Published, installable versions: not yanked, not deprecated (npm), not withdrawn. */
+  versions: string[];
+  /** Versions the registry marks deprecated (npm) or yanked (crates.io): never a fix target. */
+  withdrawn: string[];
+  /** The registry's latest release (npm `latest` tag; crates.io the highest non-yanked), or null. */
+  latest: string | null;
+  /** The package-level deprecation of the newest release (npm), or null. */
+  deprecatedLatest: string | null;
+}
 
 export interface CrateDepReq {
   req: string;
@@ -57,6 +69,8 @@ export interface CrateDepReq {
 export interface CratesSparse {
   /** Versions not yanked. */
   versions: string[];
+  /** Yanked versions. */
+  yanked?: string[];
   /** version -> dependency crate name -> requirements (one per target/kind entry; dev-dependencies left out). */
   reqs: Record<string, Record<string, CrateDepReq[]>>;
 }
@@ -107,7 +121,7 @@ export class FixPathSources {
   async publishedVersions(ecosystem: OsvEcosystem, name: string): Promise<string[] | null> {
     switch (ecosystem) {
       case "npm":
-        return this.npmVersions(name);
+        return (await this.npmFacts(name))?.versions ?? null;
       case "crates.io":
         return (await this.cratesSparse(name))?.versions ?? null;
       case "PyPI":
@@ -152,23 +166,55 @@ export class FixPathSources {
     return typeof deps[dep] === "string" ? [deps[dep]] : [];
   }
 
-  private async npmVersions(name: string): Promise<string[] | null> {
-    const key = `fixpath:v${CACHE_VERSION}:npm-versions:${name}`;
-    const hit = this.cache.get<string[]>(key);
+  /**
+   * Release facts for a parent or a fix target: what is installable, what is
+   * deprecated or yanked, and the latest release. Null when the registry
+   * could not be read or is not supported.
+   */
+  async releaseFacts(ecosystem: OsvEcosystem, name: string): Promise<PackageReleaseFacts | null> {
+    if (ecosystem === "npm") return this.npmFacts(name);
+    if (ecosystem === "crates.io") {
+      const sparse = await this.cratesSparse(name);
+      if (!sparse) return null;
+      const latest = sparse.versions.filter((v) => !isPrereleaseVersion(v, ecosystem)).sort((a, b) => compareVersions(a, b, ecosystem)).pop() ?? null;
+      return { versions: sparse.versions, withdrawn: sparse.yanked ?? [], latest, deprecatedLatest: null };
+    }
+    const versions = await this.publishedVersions(ecosystem, name);
+    if (!versions) return null;
+    const latest = versions.filter((v) => !isPrereleaseVersion(v, ecosystem)).sort((a, b) => compareVersions(a, b, ecosystem)).pop() ?? null;
+    return { versions, withdrawn: [], latest, deprecatedLatest: null };
+  }
+
+  /**
+   * npm's abbreviated document: versions without READMEs, with each
+   * version's `deprecated` message. A deprecated release is never offered as
+   * a fix target: lodash 4.18.0 ("Bad release. Please use lodash@4.17.21
+   * instead.") was recommended by vulnerability_scan (audit B-8, 2026-10-12).
+   */
+  private async npmFacts(name: string): Promise<PackageReleaseFacts | null> {
+    const key = `fixpath:v${CACHE_VERSION}:npm-facts:${name}`;
+    const hit = this.cache.get<PackageReleaseFacts>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
-      // The abbreviated document: versions without READMEs.
       const res = await fetchWithTimeout(
         `https://registry.npmjs.org/${encodeURIComponent(name)}`,
         { headers: { Accept: "application/vnd.npm.install-v1+json" } },
         TIMEOUT_MS,
       );
       if (!res.ok) return null;
-      const doc = (await res.json()) as { versions?: Record<string, unknown> };
-      const versions = Object.keys(doc.versions ?? {});
-      this.cache.set(key, versions, "npm", VERSIONS_TTL);
-      return versions;
+      const doc = (await res.json()) as { versions?: Record<string, { deprecated?: unknown }>; "dist-tags"?: { latest?: string } };
+      const entries = Object.entries(doc.versions ?? {});
+      const deprecated = (v: { deprecated?: unknown } | undefined) => typeof v?.deprecated === "string" && v.deprecated.trim() !== "";
+      const latest = doc["dist-tags"]?.latest ?? null;
+      const facts: PackageReleaseFacts = {
+        versions: entries.filter(([, v]) => !deprecated(v)).map(([version]) => version),
+        withdrawn: entries.filter(([, v]) => deprecated(v)).map(([version]) => version),
+        latest,
+        deprecatedLatest: latest && deprecated(doc.versions?.[latest]) ? String(doc.versions?.[latest]?.deprecated) : null,
+      };
+      this.cache.set(key, facts, "npm", VERSIONS_TTL);
+      return facts;
     } catch {
       return null;
     }
@@ -183,7 +229,7 @@ export class FixPathSources {
     try {
       const res = await fetchWithTimeout(sparseIndexUrl(name), { headers: { "User-Agent": CRATES_USER_AGENT } }, TIMEOUT_MS);
       if (!res.ok) return null;
-      const out: CratesSparse = { versions: [], reqs: {} };
+      const out: CratesSparse = { versions: [], yanked: [], reqs: {} };
       for (const line of (await res.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -193,6 +239,7 @@ export class FixPathSources {
             deps?: Array<{ name: string; req: string; kind?: string | null; package?: string; optional?: boolean }>;
           };
           if (!entry.yanked) out.versions.push(entry.vers);
+          else out.yanked!.push(entry.vers);
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
@@ -265,20 +312,39 @@ function sparseIndexUrl(name: string): string {
 
 export type FixTargetResult = CleanTarget;
 
-/** The minimal clean target for one installed copy, or null when the advisories could not be read. */
+/**
+ * The minimal clean target for one installed copy, or null when the
+ * advisories could not be read.
+ *
+ * With no per-advisory fix at all (advisories that give only `last_affected`,
+ * audit A6), and the installed version known, the registry is asked for the
+ * first published release above the installed one that no known advisory
+ * affects: a fix candidate the advisories never named, flagged
+ * `noAdvisoryFix`, instead of "no fix".
+ */
 export async function cleanFixTarget(
   sources: FixPathSources,
   ecosystem: OsvEcosystem,
   name: string,
   perAdvisoryFixes: string[],
+  installed?: string | null,
 ): Promise<FixTargetResult | null> {
-  if (perAdvisoryFixes.length === 0) return null;
-  const [advisories, published] = await Promise.all([
+  if (perAdvisoryFixes.length === 0 && !installed) return null;
+  const [advisories, facts] = await Promise.all([
     sources.packageAdvisories(ecosystem, name),
-    sources.publishedVersions(ecosystem, name),
+    sources.releaseFacts(ecosystem, name),
   ]);
   if (!advisories) return null;
-  return smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published });
+  const published = facts?.versions ?? null;
+  if (perAdvisoryFixes.length > 0) {
+    const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published });
+    return clean && facts?.withdrawn.includes(clean.floor) ? { ...clean, floorWithdrawn: true } : clean;
+  }
+  // Only a registry list can show a release past a last_affected bound.
+  if (!published || published.length === 0) return null;
+  const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published });
+  if (!clean || clean.target === null || clean.target === installed || clean.stillAffectedBy.length > 0) return null;
+  return { ...clean, noAdvisoryFix: true };
 }
 
 /**
@@ -288,12 +354,12 @@ export async function cleanFixTarget(
  */
 export async function verifyFixTargets(
   sources: FixPathSources | null,
-  items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[] }>,
+  items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string }>,
   budgetMs: number,
   concurrency = 12,
 ): Promise<Map<string, CleanTarget>> {
   const out = new Map<string, CleanTarget>();
-  const todo = items.filter((i) => i.fixes.length > 0);
+  const todo = items.filter((i) => i.fixes.length > 0 || i.installed);
   if (!sources || todo.length === 0) return out;
   const deadline = Date.now() + budgetMs;
   let next = 0;
@@ -305,7 +371,7 @@ export async function verifyFixTargets(
         timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
       });
       try {
-        const clean = await Promise.race([cleanFixTarget(sources, item.ecosystem, item.name, item.fixes).catch(() => null), late]);
+        const clean = await Promise.race([cleanFixTarget(sources, item.ecosystem, item.name, item.fixes, item.installed).catch(() => null), late]);
         if (clean) out.set(item.key, clean);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
@@ -318,10 +384,13 @@ export async function verifyFixTargets(
 
 /** One clause for a target that is not the highest per-advisory fix, or null when it is. */
 export function targetNote(clean: CleanTarget): string | null {
+  if (clean.noAdvisoryFix) {
+    return `no advisory names a fixed version (they give only a last affected one); ${clean.target} is the first published release above the installed version that no known advisory affects`;
+  }
   const parts: string[] = [];
   if (clean.target && clean.target !== clean.floor) {
     parts.push(
-      `${clean.target} is the smallest version clear of every advisory a release fixes; ${clean.floor}, the highest per-advisory fix, ${clean.floorAffectedBy.length > 0 ? `is itself affected by ${clean.floorAffectedBy.join(", ")}` : "is not a published release"}`,
+      `${clean.target} is the smallest version clear of every advisory a release fixes; ${clean.floor}, the highest per-advisory fix, ${clean.floorAffectedBy.length > 0 ? `is itself affected by ${clean.floorAffectedBy.join(", ")}` : clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}`,
     );
   }
   if (clean.target && clean.stillAffectedBy.length > 0) {

@@ -23,6 +23,7 @@ import { checkInstallState } from "./install-state.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSource } from "./lockfile-parsers.js";
 import { mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
+import type { LockfileProblem } from "./lockfile-types.js";
 
 /** The inputs of one resolution, kept so the same resolution can be re-run. */
 export interface ResolutionGroup {
@@ -49,6 +50,8 @@ export interface GroupResolution {
    * of its dependencies are declared ranges, which are not sent to OSV.
    */
   unresolved: { manifest: string; ranges: number } | null;
+  /** Lockfiles present in this directory that could not be read, with the reason. */
+  problems: LockfileProblem[];
   signatures: Map<string, FileSignature>;
   resolvedAt: string;
 }
@@ -68,7 +71,10 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
   // script in package.json must not throw away a scan of an unchanged lockfile.
   if (manifest && !readFiles.includes(manifest)) signatures.delete(manifest);
 
-  let resolved = resolveVersionsFrom(group.dir, group.deps, group.devDeps, ecosystem, read.versions, group.targets);
+  // Ruby and PHP: the lockfile (and composer.json) name the direct dependencies; the project scanner does not.
+  const deps = group.deps.length === 0 && group.devDeps.length === 0 && read.direct ? read.direct.deps : group.deps;
+  const devDeps = group.deps.length === 0 && group.devDeps.length === 0 && read.direct ? read.direct.devDeps : group.devDeps;
+  let resolved = resolveVersionsFrom(group.dir, deps, devDeps, ecosystem, read.versions, group.targets);
   // No lockfile: a ranged dependency's version is the range's floor, a label.
   const ranges = read.kind === "declared_ranges" ? read.ranges ?? new Map<string, string>() : null;
   if (ranges && ranges.size > 0) {
@@ -92,8 +98,8 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
   const audit = [
     ...resolveAuditVersionsFrom(
       group.dir,
-      group.deps,
-      group.devDeps,
+      deps,
+      devDeps,
       ecosystem,
       read.versions,
       group.targets,
@@ -108,7 +114,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     : [];
   const unresolved = ranges && ranges.size > 0 && read.source ? { manifest: read.source, ranges: ranges.size } : null;
 
-  return { group, resolved, audit, drift, source: sources[0] ?? null, sources, unresolved, signatures, resolvedAt };
+  return { group, resolved, audit, drift, source: sources[0] ?? null, sources, unresolved, problems: read.problems ?? [], signatures, resolvedAt };
 }
 
 /** True when any file the resolution depended on changed, appeared, or vanished. */

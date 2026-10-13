@@ -137,6 +137,14 @@ export function isPrereleaseVersion(version: string, ecosystem: string): boolean
 export interface CleanTarget {
   /** The smallest candidate at or above every per-advisory fix that no fixable advisory affects; null when none is clean. */
   target: string | null;
+  /**
+   * True when no advisory named a fixed version (only `last_affected`) and
+   * `target` is the first published release above the installed version that
+   * no known advisory affects (fix-paths.ts cleanFixTarget).
+   */
+  noAdvisoryFix?: boolean;
+  /** True when `floor` is published but deprecated or yanked, so it is never the target. */
+  floorWithdrawn?: boolean;
   /** Where the candidates came from. */
   basis: "registry" | "advisory_fixes";
   /** The highest per-advisory fix. */
