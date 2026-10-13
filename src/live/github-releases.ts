@@ -100,6 +100,8 @@ const KNOWN_TAG_PREFIX = /^(?:v|version[-_]?|release[-_]?|rel[-_]?)?$/i;
  */
 export function versionFromTag(tag: string, pkg: string, tagPrefix: string | null): string | null {
   let rest = tag.trim();
+  // Real tags are short; the version regex below is superlinear on long ones (B-10).
+  if (rest.length > 256) return null;
   if (tagPrefix) {
     if (!rest.startsWith(`${tagPrefix}/`)) return null;
     rest = rest.slice(tagPrefix.length + 1);

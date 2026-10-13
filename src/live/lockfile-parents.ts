@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { stripTrailingCommas } from "./bun-lockfile.js";
-import { exactVersion, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, yarnPackageName } from "./js-lockfile-readers.js";
+import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, yarnBlockVersion, yarnPackageName } from "./js-lockfile-readers.js";
 import { packageNameFromNodeModulesPath, parseCargoLockPackages } from "./lockfile-parsers.js";
 
 export type LockfileFormat = "package-lock" | "pnpm" | "yarn" | "yarn-berry" | "bun" | "cargo";
@@ -270,16 +270,34 @@ interface YarnBlock {
   deps: Array<[string, string]>;
 }
 
+/**
+ * A yarn dependency line: v1 `name "range"`, berry `name: "npm:range"` or
+ * `"@scope/x": range`. The name by regex, the range by hand: the single regex
+ * this replaces had a lazy group before `"?\s*$` and was quadratic, ~5 s on a
+ * hostile 64 KB line (audit 2026-10-12, B-10). Same results otherwise.
+ */
+function yarnDepLine(text: string): [string, string] | null {
+  if (text.length > MAX_LOCKFILE_LINE) return null;
+  const head = /^"?((?:@[^\s"/]+\/)?[^\s":]+)"?:?\s+/.exec(text);
+  if (!head) return null;
+  let range = text.slice(head[0].length).trimEnd();
+  if (range.startsWith('"')) range = range.slice(1);
+  if (range.endsWith('"')) range = range.slice(0, -1);
+  if (range === "" || range.includes('"')) return null;
+  return [head[1], range];
+}
+
 function parseYarnBlocks(content: string): YarnBlock[] {
   const blocks: YarnBlock[] = [];
   for (const block of content.split(/\r?\n(?=\S)/)) {
     const lines = block.split(/\r?\n/);
     const header = lines[0];
+    if (header.length > MAX_LOCKFILE_LINE) continue;
     const headerName = /^"?(@?[^@\s"]+)@/.exec(header)?.[1];
     if (!headerName || headerName.startsWith("__")) continue;
     // An npm alias block (`string-width-cjs@npm:string-width@^4.2.0`) installs the real package.
     const name = yarnPackageName(block, header, headerName);
-    const version = /^\s+version:?\s+"?([^"\s]+)"?\s*$/m.exec(block)?.[1];
+    const version = yarnBlockVersion(block);
     if (!version) continue;
     const specs = header.replace(/:\s*$/, "").split(",").map((s) => unquote(s).replace(/@npm:/, "@"));
     const deps: Array<[string, string]> = [];
@@ -296,8 +314,8 @@ function parseYarnBlocks(content: string): YarnBlock[] {
       }
       if (inDeps && indent > depIndent) {
         // v1: `name "range"`; berry: `name: "npm:range"` or `"@scope/x": range`.
-        const m = /^"?((?:@[^\s"/]+\/)?[^\s":]+)"?:?\s+"?([^"]+?)"?\s*$/.exec(text);
-        if (m) deps.push([m[1], m[2]]);
+        const dep = yarnDepLine(text);
+        if (dep) deps.push(dep);
       } else {
         inDeps = false;
       }

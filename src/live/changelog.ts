@@ -139,7 +139,32 @@ export function parseVersionHeading(raw: string): { version: string; date: strin
   return { version, date: extractDate(rest) };
 }
 
-const ATX = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+/**
+ * An ATX heading `## text ##` as [level, text], parsed by hand in linear time.
+ * The regex it replaces (`/^(#{1,6})\s+(.*?)\s*#*\s*$/`) was cubic on interior
+ * whitespace: a 1,000-space heading in a package's CHANGELOG took over 20 s on
+ * the event loop (audit 2026-10-12, B-10). Same result otherwise ("C#" reads "C").
+ */
+function parseAtx(line: string): [number, string] | null {
+  const open = /^#{1,6}/.exec(line);
+  if (!open) return null;
+  const level = open[0].length;
+  const after = line.slice(level);
+  const body = after.trimStart();
+  if (body.length === after.length) return null; // "#tag" or "#######": not a heading
+  let end = body.length;
+  while (end > 0 && /\s/.test(body[end - 1])) end--;
+  while (end > 0 && body[end - 1] === "#") end--;
+  while (end > 0 && /\s/.test(body[end - 1])) end--;
+  return [level, body.slice(0, end)];
+}
+
+/**
+ * Lines longer than this are cut before the line-shape regexes run, so every
+ * one of them works on bounded input and a hostile line costs milliseconds.
+ * No real heading, label or entry comes near it.
+ */
+const MAX_LINE = 4096;
 /**
  * A setext / reStructuredText underline. `=` and `-` at any length (Markdown);
  * the other RST adornments need three, so a stray `**` is not a heading rule.
@@ -340,7 +365,10 @@ function adornmentLevel(ch: string): number {
 
 /** Parse a changelog into version sections, in document order (usually newest first). */
 export function parseChangelog(text: string): ChangelogSection[] {
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const lines = text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((l) => (l.length > MAX_LINE ? l.slice(0, MAX_LINE) : l));
   const state: ParseState = {
     sections: [],
     current: null,
@@ -377,12 +405,12 @@ export function parseChangelog(text: string): ChangelogSection[] {
     }
     if (LINK_DEF.test(line)) continue;
 
-    const atx = ATX.exec(line);
+    const atx = parseAtx(line);
     if (atx) {
-      const heading = parseVersionHeading(atx[2]);
-      const level = atx[1].length;
+      const [level, text] = atx;
+      const heading = parseVersionHeading(text);
       if (heading) openSection(state, heading, level);
-      else subHeading(state, atx[2], level);
+      else subHeading(state, text, level);
       continue;
     }
     const next = lines[i + 1];

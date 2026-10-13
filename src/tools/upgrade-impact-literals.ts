@@ -24,6 +24,26 @@ import type { ReportSection } from "./upgrade-impact-report.js";
 /** Punctuation that makes a fragment syntax rather than a name. */
 const SYNTAX_CHARS = /[/:*{}?$%@#<>]/g;
 const WORD = /[A-Za-z_][\w-]*/g;
+/** WORD, with a Rust raw identifier (`r#type`) read as one token. */
+const WORD_OR_RAW = /r#[A-Za-z_]\w*|[A-Za-z_][\w-]*/g;
+
+/**
+ * The part of an entry that names the OLD syntax. "from X to Y" -> X;
+ * "... instead of X" -> X; otherwise the text before the replacement is named
+ * (";", "use", "instead", "in favour of", "replaced by/with", "->", "now").
+ * Before 6.2.5 the whole entry was read when it had no "from ... to", so
+ * thiserror 2's "`{r#type}` ... is no longer accepted; simply use ... `{type}`"
+ * took the new `{type}` for the old syntax and flagged every `{name}` format
+ * string in the project (audit 2026-10-12, B-7).
+ */
+function oldSide(text: string): string {
+  const fromTo = /\bfrom\b([\s\S]*?)\bto\b/i.exec(text);
+  if (fromTo) return fromTo[1];
+  const insteadOf = /\binstead of\b([\s\S]*)$/i.exec(text);
+  if (insteadOf) return insteadOf[1];
+  const cut = /;|\binstead\b|\buse\b|\bin favou?r of\b|\breplaced? (?:by|with)\b|->|→|\bnow\b/i.exec(text);
+  return cut ? text.slice(0, cut.index) : text;
+}
 const MAX_FILES = 300;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_HITS_PER_ENTRY = 5;
@@ -44,8 +64,7 @@ function escapeRegex(text: string): string {
  * migrated project already uses) is never reported as needing a change.
  */
 export function oldSyntaxShapes(entryText: string): RegExp[] {
-  const fromTo = /\bfrom\b([\s\S]*?)\bto\b/i.exec(entryText);
-  const scope = fromTo ? fromTo[1] : entryText;
+  const scope = oldSide(entryText);
   const shapes: RegExp[] = [];
   for (const [, fragment] of scope.matchAll(/`([^`\s]{2,40})`/g)) {
     // A path or call (`Router::route`, `res.json()`, `a.b`) is a symbol, not syntax.
@@ -55,8 +74,10 @@ export function oldSyntaxShapes(entryText: string): RegExp[] {
     if (syntax.length < 2 || words.length === 0) continue;
     let pattern = "";
     let last = 0;
-    for (const m of fragment.matchAll(WORD)) {
-      pattern += escapeRegex(fragment.slice(last, m.index)) + "[A-Za-z_][\\w-]*";
+    for (const m of fragment.matchAll(WORD_OR_RAW)) {
+      // A Rust raw identifier keeps its `r#`: `{r#type}` is not any `{x#y}`.
+      const placeholder = m[0].startsWith("r#") ? "r#[A-Za-z_]\\w*" : "[A-Za-z_][\\w-]*";
+      pattern += escapeRegex(fragment.slice(last, m.index)) + placeholder;
       last = (m.index ?? 0) + m[0].length;
     }
     pattern += escapeRegex(fragment.slice(last));

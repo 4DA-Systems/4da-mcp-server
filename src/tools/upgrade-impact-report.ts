@@ -22,6 +22,7 @@ import { classifyHeading, type EntryKind } from "../live/changelog-classify.js";
 import type { ChangelogSection } from "../live/changelog.js";
 import { compareVersionPrecedence, parseSemverPrecedence } from "../live/semver-precedence.js";
 import { matchSymbols } from "./upgrade-impact-callsites.js";
+import { matchFeatures } from "./upgrade-impact-features.js";
 
 export type ResponseFormat = "concise" | "detailed";
 
@@ -34,6 +35,8 @@ export interface ReportEntry {
   details?: string[];
   touches_your_code?: boolean;
   matched_symbols?: string[];
+  /** Cargo features this project enables that the entry names (a renamed or removed feature). */
+  matched_features?: string[];
   /** String literals in your code that use the syntax this entry retires (route patterns and the like). */
   matched_literals?: Array<{ file: string; line: number; literal: string }>;
 }
@@ -69,6 +72,8 @@ export function shapeChangelog(
   sections: ChangelogSection[],
   symbols: string[],
   format: ResponseFormat,
+  /** Cargo features the project enables on the crate (upgrade-impact-features.ts). */
+  features: string[] = [],
 ): ShapedChangelog {
   const out: ShapedChangelog = {
     sections: [], breaking: 0, deprecations: 0, security: 0, touching: 0, touchingSymbols: [],
@@ -81,8 +86,18 @@ export function shapeChangelog(
   // once. Measured 2026-10-02 in an agent eval: axum 0.7.9 -> 0.8.4 reported
   // "20 breaking changes" for about ten distinct ones.
   const seen = new Set<string>();
+  // GitHub release notes list a change twice: the summary line, then the PR
+  // line with its conventional-commit prefix and "by @user in <url>" (reqwest
+  // 0.13: 12 such pairs). Neither makes it a different change.
   const key = (text: string) =>
-    text.toLowerCase().replace(/\(\[?#\d+\]?\)|\[#\d+\]|#\d+/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+    text
+      .toLowerCase()
+      .replace(/\s+by @[\w.-]+(?:\[bot\])?\s+in\s+https?:\/\/\S+/g, "")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/^\W*(?:feat|fix|chore|docs|refactor|perf|test|build|ci|style|deps)(?:\([^)]*\))?!?:\s*/, "")
+      .replace(/\(\[?#\d+\]?\)|\[#\d+\]|#\d+/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
 
   for (const section of sections) {
     const unique = section.entries.filter((e) => {
@@ -103,13 +118,17 @@ export function shapeChangelog(
       };
       if (e.kind === "breaking" || e.kind === "deprecation") {
         // The nested points name the affected functions (date-fns 3.0) as often as the entry does.
-        const matched = matchSymbols([e.text, ...(e.details ?? [])].join(" "), symbols);
-        if (matched.length > 0) {
+        const text = [e.text, ...(e.details ?? [])].join(" ");
+        const matched = matchSymbols(text, symbols);
+        const matchedFeatures = matchFeatures(text, features);
+        if (matched.length > 0) entry.matched_symbols = matched;
+        if (matchedFeatures.length > 0) entry.matched_features = matchedFeatures;
+        if (matched.length > 0 || matchedFeatures.length > 0) {
           entry.touches_your_code = true;
-          entry.matched_symbols = matched;
           if (e.kind === "breaking") {
             out.touching++;
             matched.forEach((s) => touched.add(s));
+            matchedFeatures.forEach((f) => touched.add(`feature "${f}"`));
           }
         }
       }
@@ -268,6 +287,7 @@ export function summarize(input: SummaryInput): string {
       breaking = `${flagged} (${verb} your code: ${names})`;
     } else breaking = flagged;
     if (input.changelogFrom) breaking += ` (from ${input.changelogFrom})`;
+    if (input.changelog === "partial" && input.githubHint) breaking += ` (the changelog covers only part of the range${hint})`;
   }
   const advisories =
     input.advisoriesFixed === null ? "advisories unknown (OSV unreachable)" : `${input.advisoriesFixed} advisories fixed`;
