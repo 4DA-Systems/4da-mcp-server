@@ -96,7 +96,44 @@ describe("database discovery", () => {
     expect(FourDADatabase.validateDatabase().error ?? "").not.toContain(planted);
   });
 
-  it("refuses a FOURDA_DB_PATH that names a missing file, and creates nothing", () => {
+  it("an ABSOLUTE FOURDA_DB_PATH naming a new file in an existing directory is created as a standalone database, and says so once (the G7 harness)", () => {
+    const home = path.join(base, "run", "server-home");
+    fs.mkdirSync(home, { recursive: true });
+    const file = path.join(home, "standalone.db");
+    process.env.FOURDA_DB_PATH = file;
+    const v = FourDADatabase.validateDatabase(process.env.FOURDA_DB_PATH);
+    expect(v.standalone).toBe(true);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = new FourDADatabase();
+    try {
+      expect(path.resolve(db.dbPath)).toBe(path.resolve(file));
+      expect(db.isStandalone).toBe(true);
+      expect(fs.existsSync(file)).toBe(true);
+      expect(err.mock.calls.flat().join(" ")).toMatch(/Created a new standalone database at .*standalone\.db/);
+      expect(db.takeCreationNote()).toMatch(/^Created a new standalone database at /);
+      expect(db.takeCreationNote()).toBeNull();
+    } finally {
+      db.close();
+    }
+    // Reopened later: an existing file, no note.
+    const again = new FourDADatabase();
+    try {
+      expect(again.takeCreationNote()).toBeNull();
+    } finally {
+      again.close();
+    }
+  });
+
+  it("an ABSOLUTE FOURDA_DB_PATH whose directory does not exist is refused, and nothing is created", () => {
+    const file = path.join(base, "no-such-dir", "standalone.db");
+    process.env.FOURDA_DB_PATH = file;
+    expect(() => new FourDADatabase()).toThrow(/its directory .* does not exist/);
+    expect(fs.existsSync(path.dirname(file))).toBe(false);
+    const v = FourDADatabase.validateDatabase(process.env.FOURDA_DB_PATH);
+    expect(v).toMatchObject({ valid: false, standalone: false });
+  });
+
+  it("refuses a RELATIVE FOURDA_DB_PATH that names a missing file, and creates nothing", () => {
     process.env.FOURDA_DB_PATH = "./data/4da.db";
     expect(() => new FourDADatabase()).toThrow(/FOURDA_DB_PATH/);
     expect(fs.existsSync(path.join(repo, "data"))).toBe(false);
@@ -119,5 +156,20 @@ describe("database discovery", () => {
       db.close();
     }
     expect(FourDADatabase.validateDatabase(process.env.FOURDA_DB_PATH).valid).toBe(true);
+  });
+});
+
+describe("the server applies the FOURDA_DB_PATH rules", () => {
+  // index.ts cannot be imported (it starts the server); its wiring is pinned on the source.
+  const indexSource = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "index.ts"), "utf8");
+
+  it("opens the database without passing FOURDA_DB_PATH as an explicit path (that bypassed the rules)", () => {
+    expect(indexSource).toMatch(/db = createDatabase\(\);/);
+    expect(indexSource).not.toMatch(/createDatabase\(process\.env\.FOURDA_DB_PATH\)|createDatabase\(dbPath\)/);
+  });
+
+  it("reports a newly created database in the first tool answer", () => {
+    expect(indexSource).toMatch(/takeCreationNote\(\)/);
+    expect(indexSource).toMatch(/database_note/);
   });
 });

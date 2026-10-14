@@ -59,8 +59,10 @@ import { dbRecoveryNote, readDbRecoveredMarker, readEngineBlockMarker } from "./
 
 /**
  * Resolve the database path, in priority order:
- * 1. FOURDA_DB_PATH (relative paths resolve against cwd). It must name an
- *    existing file: see explicitDbPathProblem().
+ * 1. FOURDA_DB_PATH (relative paths resolve against cwd). A relative path
+ *    must name an existing file; an absolute one may name a new file in an
+ *    existing directory, which becomes a standalone database (see
+ *    explicitDbPathProblem()).
  * 2. The deployed desktop app's database (desktopAppDbPaths)
  * 3. Otherwise the standalone database (standaloneDbPath), created on first use
  *
@@ -83,21 +85,39 @@ export function getDefaultDbPath(): string {
 }
 
 /**
- * Why the explicit FOURDA_DB_PATH cannot be used, or null. A path that names
- * no file is refused rather than created: the old behaviour silently made a
- * fresh standalone database named like the app's (`./data/4da.db` inside
- * whatever directory the server started in), and every decision and memory
- * written there was lost to the real one.
+ * Why the explicit FOURDA_DB_PATH cannot be used, or null.
+ *
+ * - An existing file: used.
+ * - A RELATIVE path naming no file is refused. It resolves against whatever
+ *   directory the host started the server in: `./data/4da.db` from 4DA's
+ *   `.mcp.json` silently created a fresh standalone database named like the
+ *   app's inside any repository, and every decision and memory written there
+ *   was lost to the real one (audit B-5).
+ * - An ABSOLUTE path naming no file, in a directory that exists, is a
+ *   deliberate choice of where the standalone database lives (the G7 agent
+ *   eval sets `<run>/server-home/standalone.db`): it is created, and the
+ *   first tool answer says so (FourDADatabase.takeCreationNote()).
+ * - An absolute path whose directory does not exist is refused: a typo there
+ *   would otherwise create directories.
  */
 export function explicitDbPathProblem(env: NodeJS.ProcessEnv = process.env): string | null {
   const explicit = env.FOURDA_DB_PATH?.trim();
   if (!explicit) return null;
   const absolute = path.resolve(process.cwd(), explicit);
   if (fs.existsSync(absolute)) return null;
+  if (path.isAbsolute(explicit)) {
+    if (fs.existsSync(path.dirname(absolute))) return null;
+    return (
+      `FOURDA_DB_PATH is set to "${explicit}", but its directory ${path.dirname(absolute)} does not exist. ` +
+      `Nothing was created. Create the directory to have a new standalone database made there, point ` +
+      `FOURDA_DB_PATH at an existing 4DA database, or unset it to use the desktop app's database or this server's own.`
+    );
+  }
   return (
-    `FOURDA_DB_PATH is set to "${explicit}", but there is no database at ${absolute}. ` +
-    `Nothing was created there. Point FOURDA_DB_PATH at an existing 4DA database (relative paths resolve ` +
-    `against the server's working directory), or unset it to use the desktop app's database or this server's own.`
+    `FOURDA_DB_PATH is set to the relative path "${explicit}", but there is no database at ${absolute} ` +
+    `(relative paths resolve against the server's working directory). Nothing was created there. Point it at an ` +
+    `existing 4DA database, use an absolute path to have a new standalone database created, or unset it to use ` +
+    `the desktop app's database or this server's own.`
   );
 }
 
@@ -374,6 +394,15 @@ export class FourDADatabase {
   private _isStandalone: boolean = false;
   /** Absolute path of the open database file. */
   readonly dbPath: string;
+  /** Set when this open created the database at an explicit FOURDA_DB_PATH; reported once. */
+  private creationNote: string | null = null;
+
+  /** "Created a new standalone database at ..." the first time it is asked after the database was created there; null afterwards. */
+  takeCreationNote(): string | null {
+    const note = this.creationNote;
+    this.creationNote = null;
+    return note;
+  }
 
   constructor(dbPath?: string) {
     // An explicit argument (tests, tools) may create a new file; the env var may not.
@@ -389,6 +418,11 @@ export class FourDADatabase {
       : path.resolve(process.cwd(), resolvedPath);
 
     const isNew = !fs.existsSync(absolutePath);
+    const envPath = process.env.FOURDA_DB_PATH?.trim();
+    if (isNew && !dbPath && envPath && path.resolve(process.cwd(), envPath) === path.resolve(absolutePath)) {
+      this.creationNote = `Created a new standalone database at ${absolutePath}: FOURDA_DB_PATH named no existing file.`;
+      console.error(`[4DA] ${this.creationNote}`);
+    }
 
     // Ensure parent directory exists (standalone mode may need to create it)
     if (isNew) {

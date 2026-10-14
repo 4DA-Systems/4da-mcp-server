@@ -95,9 +95,15 @@ no direct dependencies reports 0, not 1.
   "decisions". Settings come from `FOURDA_SETTINGS_PATH`, the `settings.json`
   beside `FOURDA_DB_PATH`, or the desktop app's data directory; the database
   from `FOURDA_DB_PATH`, the desktop app's data directory, or the server's own.
-- A `FOURDA_DB_PATH` that names no file is refused with a clear error instead
-  of silently creating a database there. Relative paths still resolve against
-  the working directory (4DA's own `.mcp.json` keeps working).
+- A RELATIVE `FOURDA_DB_PATH` that names no file is refused with a clear error
+  instead of silently creating a database inside whatever directory the server
+  started in (`./data/4da.db`). An existing file still opens through a relative
+  path (4DA's own `.mcp.json` keeps working). An ABSOLUTE path that names no
+  file is created as a standalone database when its directory exists, as
+  before, and now says so: one stderr line and `_meta.database_note` in the
+  first tool answer; its directory missing is refused. The server used to pass
+  `FOURDA_DB_PATH` to the database as an explicit path, which skipped these
+  rules.
 - Requirements `-r` / `-c` includes stay inside the project: absolute, UNC,
   drive-letter, or outside (also through a symlink) targets are not read.
 

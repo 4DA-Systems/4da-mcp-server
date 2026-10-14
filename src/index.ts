@@ -116,8 +116,10 @@ let liveIntel: LiveIntelligence | null = null;
  */
 function getDatabase(): FourDADatabase {
   if (!db) {
-    const dbPath = process.env.FOURDA_DB_PATH;
-    db = createDatabase(dbPath);
+    // No argument: the constructor resolves FOURDA_DB_PATH itself and applies
+    // its rules (a relative path must exist). Passing the env value as an
+    // explicit path bypassed them.
+    db = createDatabase();
 
     // Initialize live intelligence layer
     liveIntel = new LiveIntelligence(db.getRawDb());
@@ -382,7 +384,9 @@ export function buildServer(): Server {
 
     try {
       const database = databaseFor(name);
-      return await dispatchTool(name, database, args as Record<string, unknown> | undefined);
+      const result = await dispatchTool(name, database, args as Record<string, unknown> | undefined);
+      const note = database?.takeCreationNote() ?? null;
+      return note ? withDatabaseNote(result, note) : result;
     } catch (error) {
       // A database that turns out damaged mid-session (SQLITE_CORRUPT on a
       // page the open did not touch) gets the same guidance as one that
@@ -406,6 +410,19 @@ export function buildServer(): Server {
   });
 
   return server;
+}
+
+/** Attach a one-time database note to a tool result, in `_meta.database_note` of both its forms. */
+type ToolResult = Awaited<ReturnType<typeof dispatchTool>>;
+
+function withDatabaseNote(result: ToolResult, note: string): ToolResult {
+  const r = result as { content: Array<{ type: "text"; text: string }>; structuredContent?: Record<string, unknown> };
+  if (r.structuredContent) {
+    const payload = r.structuredContent;
+    const structuredContent = { ...payload, _meta: { ...((payload._meta as Record<string, unknown> | undefined) ?? {}), database_note: note } };
+    return { ...result, structuredContent, content: [{ type: "text" as const, text: JSON.stringify(structuredContent) }] } as ToolResult;
+  }
+  return { ...result, content: [...r.content, { type: "text" as const, text: JSON.stringify({ _meta: { database_note: note } }) }] } as ToolResult;
 }
 
 // =============================================================================
