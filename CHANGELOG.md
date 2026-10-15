@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.5 — unreleased
+## 6.2.5 — 2026-10-15
 
 ### An incomplete scan is never a clean one (audit A1/B-1/B-2, critical)
 
