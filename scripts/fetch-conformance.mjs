@@ -14,7 +14,10 @@
  *
  * A shallow, blob-filtered, sparse fetch of one commit: only the corpus
  * directory's blobs are downloaded. Git runs without a shell, with
- * core.autocrlf off so the lockfiles keep the bytes the truth was built from.
+ * core.autocrlf off so the lockfiles keep the bytes the truth was built from,
+ * and core.longpaths on: some corpus paths pass Windows' 260-character limit,
+ * and without it the checkout failed there, so a Windows contributor's
+ * `pnpm test` skipped the conformance suite.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -47,7 +50,7 @@ rmSync(work, { recursive: true, force: true });
 mkdirSync(work, { recursive: true });
 
 function git(...args) {
-  const r = spawnSync("git", ["-c", "core.autocrlf=false", "-c", "advice.detachedHead=false", ...args], {
+  const r = spawnSync("git", ["-c", "core.autocrlf=false", "-c", "core.longpaths=true", "-c", "advice.detachedHead=false", ...args], {
     cwd: work,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],

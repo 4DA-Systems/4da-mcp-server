@@ -7,6 +7,8 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
     exclude: ["node_modules", "dist"],
     setupFiles: ["./src/test-setup.ts"],
+    // Prints a visible warning when the conformance corpus is missing (its suites then skip).
+    globalSetup: ["./src/__tests__/helpers/global-setup.ts"],
     // Several suites write SQLite files and lockfile trees to disk, and one
     // runs `cargo tree`. Each takes 0.1-0.6 s alone; on a machine compiling
     // Rust in parallel (15 cargo/rustc processes, 2026-10-02) the same tests

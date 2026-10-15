@@ -14,7 +14,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { FourDADatabase } from "./db.js";
+import { explicitDbPathProblem, FourDADatabase } from "./db.js";
 import { NODE_SQLITE_MIN, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 
@@ -87,10 +87,13 @@ export function runDoctor(): void {
   const envDb = process.env.FOURDA_DB_PATH;
   if (envDb) {
     const envExists = existsSync(envDb);
+    const problem = explicitDbPathProblem();
     checks.push({
       name: "FOURDA_DB_PATH",
-      status: envExists ? "pass" : "fail",
-      detail: envExists ? envDb : `Set to ${envDb} but file does not exist`,
+      status: envExists ? "pass" : problem ? "fail" : "warn",
+      detail: envExists
+        ? envDb
+        : problem ?? `Set to ${envDb}, which does not exist yet: the server creates a new standalone database there on first use.`,
     });
   }
 

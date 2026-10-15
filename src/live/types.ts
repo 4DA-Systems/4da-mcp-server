@@ -161,10 +161,38 @@ export interface VulnerabilityScanResult {
   platformInactiveVulnerable: number;
   bySeverity: { critical: number; high: number; medium: number; low: number; unknown: number };
   vulnerabilities: VulnerabilityEntry[];
+  /** Dependencies OSV answered for and found no advisory on (unchecked ones are never counted clean). */
   cleanCount: number;
   scanDurationMs: number;
   cached: boolean;
+  /** True when any dependency has no advisory answer (`unchecked` > 0), or lookups are disabled. */
   offline: boolean;
+  /**
+   * Dependencies with NO advisory answer: OSV.dev could not be reached, failed,
+   * timed out, or the query budget ran out, and no earlier answer was cached.
+   * Their absence from `vulnerabilities` means nothing. Absent (= 0) on older
+   * stubs.
+   */
+  unchecked?: number;
+  /** Why `unchecked` dependencies have no answer, in words; null when every one was answered. */
+  uncheckedReason?: string | null;
+  /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
+  staleAnswers?: number;
+}
+
+/** How much of a dependency set OSV actually answered for. */
+export interface VulnerabilityCoverage {
+  complete: false;
+  /** Dependencies sent for checking. */
+  total_dependencies: number;
+  /** Dependencies with an advisory answer (fresh or stale). */
+  checked_dependencies: number;
+  /** Dependencies with NO answer: nothing is known about their advisories. */
+  unchecked_dependencies: number;
+  /** Why, in words ("OSV.dev unreachable (fetch failed)", "live lookups disabled (FOURDA_OFFLINE=true)"). */
+  reason: string;
+  /** One line to read first; never a clean result. */
+  note: string;
 }
 
 export interface LiveHeadline {
@@ -230,7 +258,18 @@ export interface DependencyHealthResult {
   scannedAt: string;
   projectPath: string;
   ecosystemsScanned: string[];
+  /**
+   * Direct dependencies checked against their registries (the rows in
+   * `dependencies`; devDependencies only with include_dev). Freshness,
+   * deprecation and `outdatedCount` / `deprecatedCount` are over these.
+   */
   totalDeps: number;
+  /** Installed packages (direct and transitive) the vulnerability scan covered: what `vulnerableCount` ranges over. */
+  treeDeps?: number;
+  /** Of `vulnerableCount`, the packages a manifest declares directly. Null when the check is incomplete. */
+  vulnerableDirectCount?: number | null;
+  /** The penalties the score subtracts from 100, and how each is computed. Absent when the score is withheld. */
+  healthScoreBasis?: { vulnerabilities: number; outdated: number; deprecated: number; note: string };
   outdatedCount: number;
   deprecatedCount: number;
   /**
@@ -238,7 +277,13 @@ export interface DependencyHealthResult {
    * maintenance notice — the same set `vulnerability_scan` reports as
    * `total_vulnerable_packages`, so the two tools agree over one scan.
    */
-  vulnerableCount: number;
+  /**
+   * Distinct vulnerable packages across the full installed tree (`treeDeps`),
+   * the same set vulnerability_scan reports as `total_vulnerable_packages`
+   * for the same scope. It can exceed `totalDeps`, which counts direct
+   * dependencies only. Null when any dependency could not be checked.
+   */
+  vulnerableCount: number | null;
   /**
    * Every advisory row the scan returned, before the platform and maintenance
    * splits and before alias collapsing. Present so nothing is hidden by the
@@ -246,8 +291,12 @@ export interface DependencyHealthResult {
    * unmaintained-dependency notices.
    */
   advisoryCount: number;
-  healthScore: number;
+  /** Null when vulnerability data is missing or incomplete: a score computed without it would read as healthier than it is. */
+  healthScore: number | null;
+  /** Present when the vulnerability check is incomplete: what was not checked and why. */
+  vulnerabilityCoverage?: VulnerabilityCoverage;
   dependencies: RegistryPackageInfo[];
+  /** Advisories (not packages) on the full tree by severity, over the same actionable set. */
   vulnerabilitySummary: { critical: number; high: number; medium: number; low: number } | null;
   summary: string;
   scanDurationMs: number;

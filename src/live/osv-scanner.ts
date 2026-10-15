@@ -71,6 +71,32 @@ interface OsvBatchResponse {
   results: Array<{ vulns?: OsvVulnerability[] }>;
 }
 
+/** Per-dependency advisory ids, null where there is no answer, and why. */
+export interface AdvisoryAnswer {
+  ids: Array<string[] | null>;
+  failure: string | null;
+}
+
+/** How long a scan may wait, in total, for query-budget tokens before the rest of its batches go unanswered. */
+const MAX_TOKEN_WAIT_MS = 60_000;
+/** A failed querybatch request (network, timeout, 429, 5xx) is retried once after this. */
+const BATCH_RETRY_DELAY_MS = 1_000;
+
+/** Why one querybatch request failed, in words a reader can act on. */
+function describeFailure(error: unknown): string {
+  if (error instanceof OsvHttpError) return `OSV.dev returned HTTP ${error.status}`;
+  const name = (error as { name?: string } | null)?.name;
+  if (name === "TimeoutError" || name === "AbortError") return `OSV.dev did not answer within ${OSV_TIMEOUT_MS / 1000} s`;
+  const message = error instanceof Error ? error.message : String(error);
+  return `OSV.dev unreachable (${message.slice(0, 120)})`;
+}
+
+class OsvHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`OSV API error: ${status}`);
+  }
+}
+
 /**
  * Where advisories come from. The scanner asks which advisory ids affect each
  * exact (ecosystem, name, version), then for the records behind those ids.
@@ -84,8 +110,13 @@ interface OsvBatchResponse {
 export interface AdvisorySource {
   /** True when answers come over the network: rate-limited, and cached per dependency. */
   readonly network: boolean;
-  /** The advisory ids affecting each dependency, in input order. Throws when it cannot answer for all of them. */
-  query(deps: ResolvedDependency[]): Promise<string[][]>;
+  /**
+   * The advisory ids affecting each dependency, in input order. An entry is
+   * null when the source has NO answer for that dependency (unreachable,
+   * failed, timed out, out of query budget): never an empty list, which means
+   * "checked, nothing found". `failure` says why when any entry is null.
+   */
+  query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer>;
   /** The full record of each id it can find; a missing id is left out, never fatal. */
   details(ids: string[]): Promise<Map<string, OsvVulnerability>>;
 }
@@ -97,38 +128,72 @@ export class OsvHttpSource implements AdvisorySource {
   constructor(
     private readonly cache: LiveCache,
     private readonly rateLimiter: RateLimiter,
+    /** Total wait for query budget per scan (tests shorten it). */
+    private readonly tokenWaitMs: number = MAX_TOKEN_WAIT_MS,
   ) {}
 
-  async query(deps: ResolvedDependency[]): Promise<string[][]> {
+  async query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer> {
     // querybatch returns only `{ id, modified }`; the rich fields (severity,
     // fixed version, summary, references) come from per-advisory hydration.
     const chunks: ResolvedDependency[][] = [];
     for (let offset = 0; offset < deps.length; offset += MAX_BATCH_SIZE) chunks.push(deps.slice(offset, offset + MAX_BATCH_SIZE));
-    // Every chunk is answered or the scan fails: a partial answer would call
-    // the unanswered dependencies clean. The rate limit is checked for all of
-    // them before any is sent.
-    for (let i = 0; i < chunks.length; i++) {
-      if (!this.rateLimiter.consume("osv")) {
-        throw new Error("OSV rate limit reached before all dependency batches completed");
+    // Batches go out as query budget allows, waiting for it to refill (bounded),
+    // instead of the whole scan failing when a tree needs more batches than the
+    // bucket holds. A batch that gets no budget, or fails twice, is unanswered:
+    // its dependencies come back null, and the scan reports them as unchecked.
+    const deadline = Date.now() + this.tokenWaitMs;
+    let failure: string | null = null;
+    // A batch that failed twice means OSV.dev is down or refusing: batches not
+    // yet sent are not tried (an outage would otherwise cost a timeout each).
+    let outage = false;
+    const answered = await pool(chunks, BATCH_CONCURRENCY, async (chunk): Promise<Array<string[] | null>> => {
+      if (outage) return chunk.map(() => null);
+      if (!(await this.rateLimiter.acquire("osv", deadline))) {
+        failure ??= `the OSV.dev query budget (${MAX_BATCH_SIZE.toLocaleString("en-US")} dependencies per request) ran out for ${Math.round(this.tokenWaitMs / 1000)} s`;
+        return chunk.map(() => null);
+      }
+      try {
+        return await this.sendBatch(chunk);
+      } catch (error) {
+        failure = describeFailure(error);
+        outage = true;
+        return chunk.map(() => null);
+      }
+    });
+    return { ids: answered.flat(), failure };
+  }
+
+  /** One querybatch request, retried once after a throttle, a server error, a timeout or a network failure. */
+  private async sendBatch(chunk: ResolvedDependency[]): Promise<string[][]> {
+    const queries: OsvBatchQuery[] = chunk.map((d) => ({
+      package: { name: d.name, ecosystem: d.ecosystem },
+      ...(d.version ? { version: d.version } : {}),
+    }));
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, BATCH_RETRY_DELAY_MS));
+      try {
+        const response = await fetchWithTimeout(OSV_BATCH_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ queries }),
+        }, OSV_TIMEOUT_MS);
+        if (!response.ok) {
+          lastError = new OsvHttpError(response.status);
+          // A client error other than a throttle will not change on a retry.
+          if (response.status !== 429 && response.status < 500) break;
+          continue;
+        }
+        const data = (await response.json()) as OsvBatchResponse;
+        if (!Array.isArray(data?.results) || data.results.length !== chunk.length) {
+          throw new Error(`OSV.dev answered ${Array.isArray(data?.results) ? data.results.length : "no"} results for ${chunk.length} queries`);
+        }
+        return chunk.map((_, i) => (data.results[i]?.vulns ?? []).map((v) => v.id));
+      } catch (error) {
+        lastError = error;
       }
     }
-    const answered = await pool(chunks, BATCH_CONCURRENCY, async (chunk) => {
-      const queries: OsvBatchQuery[] = chunk.map((d) => ({
-        package: { name: d.name, ecosystem: d.ecosystem },
-        ...(d.version ? { version: d.version } : {}),
-      }));
-      const response = await fetchWithTimeout(OSV_BATCH_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ queries }),
-      }, OSV_TIMEOUT_MS);
-      if (!response.ok) {
-        throw new Error(`OSV API error: ${response.status}`);
-      }
-      const data = (await response.json()) as OsvBatchResponse;
-      return chunk.map((_, i) => (data.results[i]?.vulns ?? []).map((v) => v.id));
-    });
-    return answered.flat();
+    throw lastError ?? new Error("OSV.dev querybatch failed");
   }
 
   /**
@@ -215,30 +280,43 @@ export class OsvScanner {
       }
     }
 
-    // Fetch uncached from OSV
+    // Fetch uncached from OSV. Dependencies it has no answer for fall back to
+    // an expired cached answer; with none they are UNCHECKED, counted and
+    // reported, and never counted clean.
     let fetchedVulns: VulnerabilityEntry[] = [];
-    let offline = false;
+    let unanswered: ResolvedDependency[] = [];
+    let failure: string | null = null;
 
     if (uncached.length > 0) {
-      if (network && !this.rateLimiter.canProceed("osv")) {
-        offline = true;
-      } else {
-        try {
-          fetchedVulns = await this.batchQuery(uncached);
-        } catch {
-          offline = true;
-          // Try stale cache for uncached deps
-          for (const dep of uncached) {
-            if (!network) break;
-            const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
-            const stale = this.cache.getStale<VulnerabilityEntry[]>(cacheKey);
-            if (stale) cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
-          }
-        }
+      try {
+        const outcome = await this.batchQuery(uncached);
+        fetchedVulns = outcome.vulns;
+        unanswered = outcome.unanswered;
+        failure = outcome.failure;
+      } catch (error) {
+        unanswered = uncached;
+        failure = error instanceof Error ? `OSV.dev could not be queried (${error.message.slice(0, 120)})` : "OSV.dev could not be queried";
       }
     }
 
-    const allVulns = [...cachedVulns, ...fetchedVulns];
+    let staleAnswers = 0;
+    const unchecked: ResolvedDependency[] = [];
+    for (const dep of unanswered) {
+      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
+      if (stale) {
+        staleAnswers++;
+        cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
+      } else {
+        unchecked.push(dep);
+      }
+    }
+    const offline = unchecked.length > 0;
+
+    // npm's security holding packages (`fs@0.0.1-security`) are empty
+    // placeholders npm publishes after taking a malicious package down; the
+    // malware advisory covering every version does not apply to them (the
+    // desktop app's osv::matching::is_npm_security_holding; audit A5).
+    const allVulns = [...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v));
     const vulnerablePackages = new Set(allVulns.map((v) => v.package));
     const platformInactiveVulnerable = new Set(
       allVulns.filter((v) => !v.platformActive).map((v) => v.package),
@@ -258,17 +336,27 @@ export class OsvScanner {
       platformInactiveVulnerable,
       bySeverity,
       vulnerabilities: allVulns,
-      cleanCount: offline ? 0 : scannable.length - vulnerablePackages.size,
+      // Answered dependencies with no advisory; an unchecked one is never clean.
+      cleanCount: Math.max(0, scannable.length - unchecked.length - vulnerableDependencyCount(allVulns)),
       scanDurationMs: Date.now() - start,
       cached: uncached.length === 0,
       offline,
+      unchecked: unchecked.length,
+      uncheckedReason: offline ? (failure ?? "OSV.dev could not be queried") : null,
+      staleAnswers,
     };
   }
 
-  private async batchQuery(deps: ResolvedDependency[]): Promise<VulnerabilityEntry[]> {
+  private async batchQuery(
+    deps: ResolvedDependency[],
+  ): Promise<{ vulns: VulnerabilityEntry[]; unanswered: ResolvedDependency[]; failure: string | null }> {
     // Phase 1 — enumerate advisory IDs per dep (OSV: the lightweight batch index).
-    const idsPerDep = await this.source.query(deps);
-    const matches = deps.map((dep, i) => ({ dep, ids: idsPerDep[i] ?? [] }));
+    const answer = await this.source.query(deps);
+    const unanswered = deps.filter((_, i) => !Array.isArray(answer.ids[i]));
+    const matches = deps.flatMap((dep, i) => {
+      const ids = answer.ids[i];
+      return Array.isArray(ids) ? [{ dep, ids }] : [];
+    });
 
     // Phase 2 — the record behind each unique advisory, once.
     const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
@@ -289,8 +377,13 @@ export class OsvScanner {
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
 
-    return results;
+    return { vulns: results, unanswered, failure: unanswered.length > 0 ? (answer.failure ?? "OSV.dev gave no answer") : null };
   }
+}
+
+/** Distinct (ecosystem, name, version) instances with at least one advisory row. */
+function vulnerableDependencyCount(vulns: VulnerabilityEntry[]): number {
+  return new Set(vulns.map((v) => `${v.ecosystem}\0${v.package}\0${v.currentVersion}`)).size;
 }
 
 /**
@@ -482,4 +575,9 @@ export function extractFixedVersion(
   const above = fixes.filter((f) => cmp(f, installedVersion) > 0);
   if (above.length === 0) return null;
   return above.reduce((min, v) => (cmp(v, min) < 0 ? v : min), above[0]);
+}
+
+/** An npm `-security` placeholder matched by a malicious-package (MAL-) advisory: not installed malware. */
+export function isNpmSecurityHolding(v: Pick<VulnerabilityEntry, "vulnId" | "ecosystem" | "currentVersion">): boolean {
+  return v.vulnId.startsWith("MAL-") && v.ecosystem === "npm" && v.currentVersion.trim().endsWith("-security");
 }

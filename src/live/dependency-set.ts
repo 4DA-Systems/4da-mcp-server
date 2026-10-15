@@ -76,12 +76,21 @@ function mergeInstallContext(existing: ResolvedDependency, dep: ResolvedDependen
   }
 }
 
-export function emptyVulnResult(projectPath: string, offline: boolean): VulnerabilityScanResult {
+/**
+ * A scan with no findings. `unchecked` dependencies (offline: none of them
+ * could be asked) are counted in `totalScanned` and reported as unchecked,
+ * never as clean.
+ */
+export function emptyVulnResult(
+  projectPath: string,
+  offline: boolean,
+  unchecked: { count: number; reason: string } | null = null,
+): VulnerabilityScanResult {
   return {
     scannedAt: new Date().toISOString(),
     projectPath,
     ecosystemsScanned: [],
-    totalScanned: 0,
+    totalScanned: unchecked?.count ?? 0,
     totalVulnerable: 0,
     platformInactiveVulnerable: 0,
     bySeverity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
@@ -90,5 +99,8 @@ export function emptyVulnResult(projectPath: string, offline: boolean): Vulnerab
     scanDurationMs: 0,
     cached: false,
     offline,
+    unchecked: unchecked?.count ?? 0,
+    uncheckedReason: unchecked?.reason ?? null,
+    staleAnswers: 0,
   };
 }

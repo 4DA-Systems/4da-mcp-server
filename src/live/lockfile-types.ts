@@ -29,6 +29,22 @@ export interface VersionSource {
   extraSources?: string[];
   /** declared_ranges: the declared requirement per name ("^1.2.0"), for names whose version is only a floor. */
   ranges?: Map<string, string>;
+  /**
+   * The direct dependencies the lockfile itself names (Gemfile.lock
+   * DEPENDENCIES, composer.json require / require-dev), for ecosystems whose
+   * manifest the project scanner does not read.
+   */
+  direct?: { deps: string[]; devDeps: string[] };
+  /** Lockfiles present here that could not be read, and why: never a silent "no lockfile". */
+  problems?: LockfileProblem[];
+}
+
+/** A lockfile that exists but could not be read. */
+export interface LockfileProblem {
+  /** Absolute path. */
+  file: string;
+  /** Why, in words ("merge-conflict markers", "invalid JSON: ..."). */
+  error: string;
 }
 
 export type SourceKind = "lockfile" | "manifest" | "declared_ranges";
@@ -70,7 +86,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct"> = {},
 ): VersionSource {
   return {
     versions,

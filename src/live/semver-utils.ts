@@ -33,8 +33,19 @@ export function computeSemverDistance(current: string, latest: string): SemverDi
   return { major: Math.max(0, major), minor: Math.max(0, minor), patch: Math.max(0, patch), label };
 }
 
+/**
+ * Whether the suffix after MAJOR.MINOR.PATCH marks a prerelease. Semver: only
+ * `-` does; `+build` metadata is ignored for precedence, so `0.25.17+spec-1.1.0`
+ * (toml_edit) is a release, and `+incompatible` is a Go release. Until 6.2.5 a
+ * `+` counted as a prerelease, which named toml_edit 0.23.9 its latest stable.
+ * PEP 440 spellings (PyPI uses this too): `a`/`b`/`rc`/`alpha`/`beta`/`c`/`pre`
+ * and `.dev` mark a prerelease; `.post` and `+local` do not.
+ */
 export function isPreRelease(version: string): boolean {
-  return /[-+]/.test(version.replace(/^v/, "").replace(/^\d+\.\d+\.\d+/, "").slice(0, 1));
+  const suffix = version.replace(/^v/, "").replace(/^\d+\.\d+\.\d+/, "").split("+")[0].toLowerCase();
+  if (suffix === "") return false;
+  if (suffix.startsWith("-")) return true;
+  return /^[._]?(?:a|b|c|rc|alpha|beta|pre|preview|dev)\d*/.test(suffix) && !/^[._-]?post/.test(suffix);
 }
 
 /**

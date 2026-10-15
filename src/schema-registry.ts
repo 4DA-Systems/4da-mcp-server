@@ -20,6 +20,7 @@
  * 4k tokens, inside the 3-5k band of well-regarded servers.
  */
 
+import { ProtocolError, ProtocolErrorCode, ResourceNotFoundError } from "@modelcontextprotocol/server";
 import {
   agentMemoryTool,
   checkDecisionAlignmentTool,
@@ -252,9 +253,19 @@ export function getSlimToolList(standaloneOnly?: boolean): Array<{
     }));
 }
 
+/**
+ * The registry entry for a tool NAME a client sent, or undefined. Own
+ * properties only: `TOOL_REGISTRY["constructor"]` is Object's constructor,
+ * and `"toString" in TOOL_REGISTRY` is true, so a read of
+ * `4da://schema/__proto__` used to throw a TypeError (audit 2026-10-12 B-14).
+ */
+export function toolEntry(name: string): ToolRegistryEntry | undefined {
+  return Object.hasOwn(TOOL_REGISTRY, name) ? TOOL_REGISTRY[name] : undefined;
+}
+
 /** The full schema document a `4da://schema/{tool}` resource serves. */
 export function getToolSchemaDocument(toolName: string): object | null {
-  const entry = TOOL_REGISTRY[toolName];
+  const entry = toolEntry(toolName);
   if (!entry) return null;
   return {
     name: toolName,
@@ -286,7 +297,44 @@ export function getSchemaResources(): Array<{
 
 /** Check if a tool exists */
 export function hasToolSchema(toolName: string): boolean {
-  return toolName in TOOL_REGISTRY;
+  return toolEntry(toolName) !== undefined;
+}
+
+/**
+ * MCP Resources: every tool's full schema, and the category manifest.
+ * `4da://skills` was advertised until 6.2.5, but it read a file nothing ever
+ * wrote, so every read failed (audit 2026-10-12 B-15).
+ */
+export function listResources(): Array<{ uri: string; name: string; description: string; mimeType: string }> {
+  return [
+    ...getSchemaResources(),
+    {
+      uri: "4da://categories",
+      name: "Tool categories",
+      description: "Tool groupings by category with tag metadata",
+      mimeType: "application/json",
+    },
+  ];
+}
+
+/** `resources/read`: the resource, or a resource-not-found protocol error naming the URI. */
+export function readResource(uri: string): { contents: Array<{ uri: string; mimeType: string; text: string }> } {
+  const json = (value: object) => ({ contents: [{ uri, mimeType: "application/json", text: JSON.stringify(value, null, 2) }] });
+  if (uri === "4da://categories") return json(getCategoryManifest());
+  const match = /^4da:\/\/schema\/(.+)$/.exec(uri);
+  const document = match ? getToolSchemaDocument(match[1]) : null;
+  if (!document) throw new ResourceNotFoundError(uri, `Resource not found: ${uri}`);
+  return json(document);
+}
+
+/** tools/call for a name no tool has: JSON-RPC Invalid Params (-32602), as the MCP spec says. */
+export function unknownToolError(name: string): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown tool: ${name}`);
+}
+
+/** prompts/get for a name no prompt has: JSON-RPC Invalid Params (-32602). */
+export function unknownPromptError(name: string): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown prompt: ${name}`);
 }
 
 /** Get tool names grouped by category */

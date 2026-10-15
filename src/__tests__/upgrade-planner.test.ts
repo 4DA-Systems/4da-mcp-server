@@ -224,7 +224,8 @@ describe("upgrade_planner — CVE-blind disclosure and provenance", () => {
   it("discloses a CVE-blind plan when no scan can run (offline)", async () => {
     const result = await executeUpgradePlanner(noDb, {}, makeIntel(null));
     expect(result.vulnerabilityDataAvailable).toBe(false);
-    expect(result.summary).toContain("offline mode (FOURDA_OFFLINE), so this plan is CVE-blind");
+    expect(result.summary).toMatch(/^NOT CHECKED: live lookups are disabled \(FOURDA_OFFLINE=true\)/);
+    expect((result as { vulnerabilityCoverage?: { unchecked_dependencies: number } }).vulnerabilityCoverage?.unchecked_dependencies).toBeGreaterThan(0);
   });
 
   // 2026-10-03 agent eval: a fresh session's first plan answered "CVE data not

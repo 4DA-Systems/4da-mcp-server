@@ -139,7 +139,7 @@ export function resolvePython(cwd: string): VersionSource {
 
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
-    const pins = readRequirementsFile(file);
+    const pins = readRequirementsFile(file, new Set(), cwd);
     if (pins === null) continue;
     for (const { name, version } of pins) take(name, version, dev);
     sources.push(file);
@@ -154,8 +154,19 @@ export function resolvePython(cwd: string): VersionSource {
  * includes (relative to the file) and applying `-c`/`--constraint` files:
  * a constraints file installs nothing by itself, so its pins only give a
  * version to a name the requirements list without one. Null when unreadable.
+ *
+ * Includes are confined to `root`, the project directory (default: the
+ * file's own directory). A cloned repository's `-r ../outside/secrets.txt`,
+ * an absolute path, or a UNC path (on Windows, opening `\\host\share\x.txt`
+ * makes an SMB connection that sends the user's NTLM hash) used to be read,
+ * and every `NAME==VALUE` line in it went to OSV.dev and back to the agent.
+ * Such an include is skipped; absolute and UNC ones before any fs call.
  */
-export function readRequirementsFile(file: string, visited: Set<string> = new Set()): Array<{ name: string; version: string }> | null {
+export function readRequirementsFile(
+  file: string,
+  visited: Set<string> = new Set(),
+  root: string = path.dirname(path.resolve(file)),
+): Array<{ name: string; version: string }> | null {
   const key = path.resolve(file).toLowerCase();
   if (visited.has(key)) return [];
   visited.add(key);
@@ -169,8 +180,9 @@ export function readRequirementsFile(file: string, visited: Set<string> = new Se
   const out = parseRequirements(content);
   const constraints = new Map<string, string>();
   for (const { option, target } of requirementOptions(content)) {
-    const included = path.resolve(dir, target);
-    if (option === "r") out.push(...(readRequirementsFile(included, visited) ?? []));
+    const included = confinedInclude(dir, target, root);
+    if (included === null) continue;
+    if (option === "r") out.push(...(readRequirementsFile(included, visited, root) ?? []));
     else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {
@@ -181,6 +193,45 @@ export function readRequirementsFile(file: string, visited: Set<string> = new Se
     }
   }
   return out;
+}
+
+/**
+ * The include's absolute path when `target` is a relative path that stays
+ * inside `root` (also after resolving symlinks, when it exists); otherwise
+ * null. Absolute, drive-letter and UNC targets are refused before any
+ * filesystem call.
+ */
+export function confinedInclude(dir: string, target: string, root: string): string | null {
+  if (/^[\\/]/.test(target) || /^[A-Za-z]:/.test(target) || path.isAbsolute(target)) return null;
+  const within = (base: string, p: string) => {
+    const rel = path.relative(base, p);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  };
+  const rootDir = path.resolve(root);
+  const included = path.resolve(dir, target);
+  if (!within(rootDir, included)) return null;
+  let real: string;
+  try {
+    real = fs.realpathSync(included);
+  } catch {
+    return included; // missing: nothing to escape through, and the read fails quietly
+  }
+  try {
+    return within(fs.realpathSync(rootDir), real) ? included : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Longer lines are not requirements; capping them keeps the regexes below linear in the file size. */
+const MAX_REQUIREMENT_LINE = 4096;
+
+/** Logical lines (backslash continuations joined), with over-long lines dropped. */
+function requirementLines(content: string): string[] {
+  return content
+    .replace(/\\\r?\n/g, " ")
+    .split(/\r?\n/)
+    .filter((line) => line.length <= MAX_REQUIREMENT_LINE);
 }
 
 function safeRead(file: string): string {
@@ -194,7 +245,7 @@ function safeRead(file: string): string {
 /** `-r file` / `--requirement=file` / `-c file` / `--constraint file` lines (local paths only). */
 function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
   const out: Array<{ option: "r" | "c"; target: string }> = [];
-  for (const raw of content.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+  for (const raw of requirementLines(content)) {
     const m = /^\s*(?:-(r|c)|--(requirement|constraint))(?:\s*=\s*|\s+)(\S+)/.exec(raw);
     if (!m || /^[a-z][a-z+]*:\/\//i.test(m[3])) continue;
     out.push({ option: (m[1] ?? (m[2] === "requirement" ? "r" : "c")) as "r" | "c", target: m[3] });
@@ -205,7 +256,7 @@ function requirementOptions(content: string): Array<{ option: "r" | "c"; target:
 /** Names a requirements file lists with no exact pin ("flask", "flask>=2"), PEP 503 normalised. */
 function unpinnedRequirementNames(content: string): string[] {
   const out: string[] = [];
-  for (const raw of content.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+  for (const raw of requirementLines(content)) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
     if (!line || line.startsWith("-")) continue;
     const spec = line.split(";")[0].trim();
@@ -266,8 +317,10 @@ export function readTomlPackageLock(content: string): { versions: Map<string, st
  */
 export function parseRequirements(content: string): Array<{ name: string; version: string }> {
   const out: Array<{ name: string; version: string }> = [];
-  // Backslash continuations join physical lines into one requirement.
-  const logical = content.replace(/\\\r?\n/g, " ").split(/\r?\n/);
+  // Backslash continuations join physical lines into one requirement; a line
+  // over 4 KB is no requirement and is dropped before any regex sees it (a
+  // 64 KB line took ~5 s in the pin regex, audit 2026-10-12 B-10).
+  const logical = requirementLines(content);
   for (const raw of logical) {
     // A `#` starts a comment at line start or after whitespace (PEP 508 URLs may contain `#`).
     const line = raw.replace(/(^|\s)#.*$/, "").trim();

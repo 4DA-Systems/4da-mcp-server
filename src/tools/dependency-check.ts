@@ -605,13 +605,26 @@ function osvDep(item: CheckItem, version: string): ResolvedDependency {
   };
 }
 
-function refs(entries: VulnerabilityEntry[] | undefined): AdvisoryRef[] {
-  const seen = new Set<string>();
-  return (entries ?? []).flatMap((v) => {
-    if (seen.has(v.vulnId)) return [];
-    seen.add(v.vulnId);
-    return [{ id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v) }];
-  });
+/**
+ * One reference per vulnerability: OSV lists GHSA and RUSTSEC/PYSEC records
+ * for the same issue, each naming the other in `aliases`. They were counted
+ * twice ("6 advisories" for tokio 1.18.0's three, audit A9). The kept record
+ * of an alias group is its most severe, so merging never softens a verdict.
+ */
+export function refs(entries: VulnerabilityEntry[] | undefined): AdvisoryRef[] {
+  const rank: Record<string, number> = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
+  const groups: Array<{ ids: Set<string>; best: VulnerabilityEntry }> = [];
+  for (const v of entries ?? []) {
+    const ids = [v.vulnId, ...(v.aliases ?? [])];
+    const group = groups.find((g) => ids.some((id) => g.ids.has(id)));
+    if (!group) {
+      groups.push({ ids: new Set(ids), best: v });
+      continue;
+    }
+    for (const id of ids) group.ids.add(id);
+    if ((rank[v.severity] ?? 0) > (rank[group.best.severity] ?? 0)) group.best = v;
+  }
+  return groups.map(({ best: v }) => ({ id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v) }));
 }
 
 const instanceKey = (eco: string, name: string, version: string) => `${eco}\0${eco === "PyPI" ? normalizePypi(name) : name}\0${version}`;

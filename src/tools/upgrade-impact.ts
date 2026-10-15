@@ -54,6 +54,7 @@ import { enrichGoVersions, goBasePath, goMajorPath, goPathMajor, goTagPrefix, go
 import { scanCallSites, type CallSiteReport } from "./upgrade-impact-callsites.js";
 import { resolveChangelog } from "./upgrade-impact-changelog.js";
 import { pythonImportNames, type PythonImportNames } from "./upgrade-impact-imports.js";
+import { projectCargoFeatures } from "./upgrade-impact-features.js";
 import { flagOldSyntax } from "./upgrade-impact-literals.js";
 import { nearestVersions, shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
 
@@ -389,7 +390,9 @@ export async function analyzeUpgradeImpact(
   ]);
   const { changelog, range } = resolved;
 
-  const shaped = shapeChangelog(range.sections, yourCode.symbols_used, params.response_format === "detailed" ? "detailed" : "concise");
+  // Cargo features this project enables on the crate: a renamed or removed one is a breaking change symbols cannot see.
+  const features = eco === "crates.io" ? projectCargoFeatures(ctx.projectRoot, index.name, ctx.installed) : [];
+  const shaped = shapeChangelog(range.sections, yourCode.symbols_used, params.response_format === "detailed" ? "detailed" : "concise", features);
   // Route and pattern syntax the upgrade retires, found in this project's string literals.
   const literal = await flagOldSyntax(shaped.sections, yourCode.files, ctx.projectRoot);
   shaped.touching += literal.newlyTouching;
@@ -451,7 +454,9 @@ export async function analyzeUpgradeImpact(
       : {}),
     your_code: py
       ? { ...yourCode, import_names: py.names, import_name_source: py.source, import_name_note: importNameNote(py, index.name) }
-      : yourCode,
+      : features.length > 0
+        ? { ...yourCode, cargo_features: features }
+        : yourCode,
     advisories_fixed: advisoriesFixed,
     advisories_remaining: advTo,
     ...(advFrom === null || advTo === null ? { advisories_note: "OSV.dev could not be reached; advisory fields are null, not empty." } : {}),
@@ -474,7 +479,9 @@ export async function analyzeUpgradeImpact(
       touchingSymbols: shaped.touchingSymbols,
       changelog: !changelog.found ? "missing" : !counted ? "no_entries" : range.coversRange ? "complete" : "partial",
       changelogFrom: fromGithub ? "GitHub release notes" : null,
-      githubHint: resolved.github_fallback?.how_to_enable ? "FOURDA_GITHUB_CHANGELOG=true reads GitHub release notes" : null,
+      githubHint: resolved.github_fallback?.how_to_enable
+        ? "to read the GitHub release notes, set FOURDA_GITHUB_CHANGELOG=true in this MCP server's environment (opt-in; see github_fallback)"
+        : null,
       advisoriesFixed: advisoriesFixed ? advisoriesFixed.length : null,
       pathChange: pathChange ? { from: fromName, to: targetName, files: yourCode.total_files } : null,
     }),

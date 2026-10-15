@@ -18,7 +18,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AdvisorySource } from "./osv-scanner.js";
+import type { AdvisoryAnswer, AdvisorySource } from "./osv-scanner.js";
 import { advisoryAffects, collectAffectedSpans } from "./osv-ranges.js";
 import { samePackageName } from "./version-compare.js";
 import type { OsvVulnerability, ResolvedDependency } from "./types.js";
@@ -78,8 +78,8 @@ export class PinnedRecordsSource implements AdvisorySource {
       .map((vuln) => vuln.id);
   }
 
-  async query(deps: ResolvedDependency[]): Promise<string[][]> {
-    return deps.map((dep) => (dep.version === null ? [] : this.affecting(dep.ecosystem, dep.name, dep.version)));
+  async query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer> {
+    return { ids: deps.map((dep) => (dep.version === null ? [] : this.affecting(dep.ecosystem, dep.name, dep.version))), failure: null };
   }
 
   async details(ids: string[]): Promise<Map<string, OsvVulnerability>> {

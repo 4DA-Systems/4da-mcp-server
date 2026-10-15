@@ -39,7 +39,21 @@ const present = fs.existsSync(path.join(corpus, "cases")) && fs.existsSync(path.
 const required = process.env.FOURDA_REQUIRE_CONFORMANCE === "1";
 const MISSING = `conformance corpus not found at ${corpus}: run \`node scripts/fetch-conformance.mjs\` (pinned ${lock.repo}@${lock.commit.slice(0, 12)})`;
 
-if (!present && !required) console.warn(`[conformance] skipped: ${MISSING}`);
+if (!present && !required) {
+  const bar = "!".repeat(78);
+  console.warn(
+    [
+      "",
+      bar,
+      `WARNING [conformance]: the dependency-engine conformance suite (the strongest engine tests) DID NOT RUN (skipped, not passed).`,
+      `  ${MISSING}`,
+      "  On Windows the fetch needs long paths; the script passes core.longpaths=true.",
+      "  Set FOURDA_REQUIRE_CONFORMANCE=1 to make a missing corpus fail instead.",
+      bar,
+      "",
+    ].join("\n"),
+  );
+}
 
 describe.skipIf(!present && !required)("dependency-engine conformance (4DA corpus)", () => {
   it("the corpus is present, and at the pinned commit", () => {

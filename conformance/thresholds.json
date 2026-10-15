@@ -5,10 +5,9 @@
     "Go": { "findings_precision": 1, "findings_recall": 1, "inventory_precision": 1, "inventory_recall": 1, "max_silent_drops": 0 },
     "PyPI": { "findings_precision": 1, "findings_recall": 1, "inventory_precision": 1, "inventory_recall": 1, "max_silent_drops": 0 },
     "crates.io": { "findings_precision": 1, "findings_recall": 1, "inventory_precision": 1, "inventory_recall": 1, "max_silent_drops": 0 },
-    "npm": { "findings_precision": 1, "findings_recall": 1, "inventory_precision": 1, "inventory_recall": 1, "max_silent_drops": 0 }
+    "npm": { "findings_precision": 1, "findings_recall": 1, "inventory_precision": 1, "inventory_recall": 1, "max_silent_drops": 0 },
+    "RubyGems": { "findings_precision": 1, "findings_recall": 1, "inventory_precision": 1, "inventory_recall": 1, "max_silent_drops": 0 },
+    "Packagist": { "findings_precision": 1, "findings_recall": 1, "inventory_precision": 1, "inventory_recall": 1, "max_silent_drops": 0 }
   },
-  "unsupported_by_engine": {
-    "RubyGems": "No Gemfile.lock reader in this engine (the desktop app reads it). rb-js-rails-6.0 is scored for its yarn.lock half; its Gemfile.lock rows are reported here, not counted.",
-    "Packagist": "No composer.lock reader in this engine (the desktop app reads it). php-js-symfony-demo is scored for its yarn.lock half; its composer.lock rows are reported here, not counted."
-  }
+  "unsupported_by_engine": {}
 }

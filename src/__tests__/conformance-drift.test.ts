@@ -283,11 +283,10 @@ describe("PinnedRecordsSource: OSV's question answered from pinned records", () 
   it("matches by the registry's name rules and the ecosystem's order; the scanner drops withdrawn records", async () => {
     const source = new PinnedRecordsSource(records);
     expect(source.network).toBe(false);
-    expect(await source.query([dep("jinja2", "3.1.3", "PyPI"), dep("Jinja2", "3.1.4", "PyPI"), dep("tokio-util", "0.7.2", "crates.io")])).toEqual([
-      ["GHSA-aaaa", "GHSA-withdrawn"],
-      ["GHSA-withdrawn"],
-      ["RUSTSEC-2024-0001"],
-    ]);
+    expect(await source.query([dep("jinja2", "3.1.3", "PyPI"), dep("Jinja2", "3.1.4", "PyPI"), dep("tokio-util", "0.7.2", "crates.io")])).toEqual({
+      ids: [["GHSA-aaaa", "GHSA-withdrawn"], ["GHSA-withdrawn"], ["RUSTSEC-2024-0001"]],
+      failure: null,
+    });
     const scanner = new OsvScanner(new LiveCache(null), new RateLimiter(DEFAULT_RATE_LIMITS), source);
     const scan = await scanner.scan([dep("jinja2", "3.1.3", "PyPI"), dep("tokio-util", "0.7.2", "crates.io")], "/p");
     expect(scan.offline).toBe(false);

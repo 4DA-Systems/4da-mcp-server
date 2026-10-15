@@ -112,7 +112,7 @@ export async function dispatchTool(
   db: FourDADatabase | null,
   args: Record<string, unknown> | undefined,
 ): Promise<CallToolResult> {
-  const executor = DISPATCH_MAP[name];
+  const executor = Object.hasOwn(DISPATCH_MAP, name) ? DISPATCH_MAP[name] : undefined;
   if (!executor) {
     throw new Error(`Unknown tool: ${name}`);
   }
@@ -147,7 +147,7 @@ export async function dispatchTool(
   // A desktop-only tool called without the desktop app's database (tools/list
   // hides these in standalone mode, but a host can call one by name) used to
   // answer `[]`, which reads as "nothing relevant" rather than "no app".
-  const desktopOnly = db !== null && db.isStandalone && TOOL_REGISTRY[name]?.standalone === false;
+  const desktopOnly = db !== null && db.isStandalone && Object.hasOwn(TOOL_REGISTRY, name) && TOOL_REGISTRY[name].standalone === false;
   const annotated = withFreshness ? attachFreshness(db!, result) : desktopOnly ? attachDesktopAppNote(name, result) : result;
   const payload = cleanStrings(
     db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated,
@@ -264,7 +264,7 @@ function attachDesktopAppNote(name: string, result: unknown): unknown {
 
 /** Check if a tool exists in the dispatch map */
 export function hasDispatchTool(name: string): boolean {
-  return name in DISPATCH_MAP;
+  return Object.hasOwn(DISPATCH_MAP, name);
 }
 
 /** Get count of registered tool executors */

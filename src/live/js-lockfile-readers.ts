@@ -278,10 +278,33 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
  * names the real package in `resolution:`; v1 only in the alias spec.
  */
 export function yarnPackageName(block: string, firstLine: string, headerName: string): string {
-  const resolution = /^\s+resolution:\s+"?((?:@[^\s/@"]+\/)?[^\s/@"]+)@npm:/m.exec(block);
-  if (resolution) return resolution[1];
+  const resolution = yarnBlockField(block, /^[ \t]+resolution:[ \t]+"?((?:@[^\s/@"]+\/)?[^\s/@"]+)@npm:/);
+  if (resolution) return resolution;
   const alias = /^"?(?:@[^\s/@"]+\/)?[^\s/@"]+@npm:((?:@[^\s/@"]+\/)?[^\s/@"]+)@/.exec(firstLine);
   return alias ? alias[1] : headerName;
+}
+
+/** Lines longer than this in a yarn.lock are not read: no real entry comes near it. */
+export const MAX_LOCKFILE_LINE = 4096;
+
+/**
+ * The first capture of `lineRe` on any line of a yarn.lock block, or null.
+ * Line by line with single-line regexes: the multiline `/^\s+version.../m`
+ * forms they replace let `\s+` run across lines and took ~5 s on a hostile
+ * 64 KB block (audit 2026-10-12, B-10).
+ */
+function yarnBlockField(block: string, lineRe: RegExp): string | null {
+  for (const line of block.split(/\r?\n/)) {
+    if (line.length > MAX_LOCKFILE_LINE) continue;
+    const m = lineRe.exec(line);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** The `version` of a yarn.lock block: v1 `  version "1.2.3"`, berry `  version: 1.2.3`. */
+export function yarnBlockVersion(block: string): string | null {
+  return yarnBlockField(block, /^[ \t]+version:?[ \t]+"?([^"\s]+)"?[ \t]*$/);
 }
 
 /**
@@ -298,11 +321,12 @@ export function readYarnLock(
 ): void {
   for (const block of content.split(/\r?\n(?=\S)/)) {
     const firstLine = block.split(/\r?\n/)[0];
+    if (firstLine.length > MAX_LOCKFILE_LINE) continue;
     const header = /^"?(@?[^@\s"]+)@/.exec(firstLine);
     if (!header || header[1].startsWith("__")) continue;
     if (/@(?:workspace|link|portal|file|exec|patch):/.test(firstLine)) continue;
-    const line = /^\s+version:?\s+"?([^"\s]+)"?\s*$/m.exec(block);
-    const version = line ? exactVersion(line[1]) : null;
+    const raw = yarnBlockVersion(block);
+    const version = raw ? exactVersion(raw) : null;
     if (!version) continue;
     const name = yarnPackageName(block, firstLine, header[1]);
     // One block per resolved version. Blocks are sorted by spec, so the first

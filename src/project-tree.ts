@@ -40,13 +40,50 @@ const LOCK_MARKERS = [
   "pdm.lock",
   "Pipfile.lock",
   "go.mod",
+  "Gemfile.lock",
+  "composer.lock",
 ];
 
 const SKIP_DIRS = new Set([
   "node_modules", "target", ".git", "dist", "build", "out", "vendor", ".venv", "venv",
-  "__pycache__", ".next", ".nuxt", "coverage", ".claude", ".codex", ".cursor", "fixtures",
-  "__fixtures__", "testdata", "test-fixtures", "__tests__", ".turbo", ".cache", ".pnpm-store",
+  "__pycache__", ".next", ".nuxt", "coverage", ".claude", ".codex", ".cursor",
+  ".turbo", ".cache", ".pnpm-store",
 ]);
+
+/**
+ * Directories whose lockfiles are test data, not the project's dependencies:
+ * a scan of D:\4DA\src-tauri read the 4DA conformance corpus
+ * (tests/conformance/cases, 10,000+ vendored packages) as the app's own
+ * (audit A3, 2026-10-12). Left out by default, counted and named in the
+ * answer (`not_scanned`), and scanned on request (include_test_fixtures).
+ */
+const FIXTURE_DIRS = new Set([
+  "fixtures", "__fixtures__", "testdata", "test-data", "test-fixtures", "__tests__", "tests", "test", "conformance",
+]);
+
+/**
+ * Manifests and lockfiles of ecosystems this server does not read, by file
+ * name: reported as `not_covered` so an empty or clean answer is never read
+ * as "no dependencies" (audit A2: a Maven or .NET project was told "No
+ * manifest files found... run from your project root").
+ */
+export function unsupportedEcosystem(name: string, names: string[]): string | null {
+  if (name === "pom.xml") return "Maven";
+  if (/^build\.gradle(\.kts)?$/.test(name) || name === "gradle.lockfile") return "Maven (Gradle)";
+  if (/\.(cs|fs|vb)proj$/i.test(name) || name === "packages.lock.json" || name === "packages.config" || name === "Directory.Packages.props") return "NuGet";
+  if (name === "pubspec.lock") return "Pub";
+  if (name === "mix.lock") return "Hex";
+  if (name === "Package.resolved") return "SwiftPM";
+  if (name === "Podfile.lock") return "CocoaPods";
+  if (name === "conan.lock") return "ConanCenter";
+  if (name === "renv.lock") return "CRAN";
+  if (name === "Gemfile" && !names.includes("Gemfile.lock")) return "RubyGems (Gemfile with no Gemfile.lock)";
+  if (name === "composer.json" && !names.includes("composer.lock")) return "Packagist (composer.json with no composer.lock)";
+  return null;
+}
+
+/** Entries listed in `notCovered`; the count covers the rest. */
+const MAX_LISTED_NOT_COVERED = 25;
 
 /**
  * Measured on langchain (108 lockfiles, up to 3 levels down; 2026-10-10):
@@ -77,6 +114,12 @@ export interface TreeDiscovery {
   skippedCount: number;
   /** True when the walk itself stopped at MAX_WALK_DIRS: lockfiles beyond it were not even counted. */
   walkTruncated: boolean;
+  /** Manifests and lockfiles of ecosystems this server does not read (the first MAX_LISTED_NOT_COVERED), relative to the root. */
+  notCovered?: Array<{ path: string; ecosystem: string }>;
+  /** Every such file found (`notCovered` may list fewer). */
+  notCoveredCount?: number;
+  /** Lockfiles under test-fixture directories, left out unless include_test_fixtures was set. */
+  fixtures?: { count: number; dirs: string[] };
 }
 
 /** Python requirement files: requirements.txt, requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt. */
@@ -113,6 +156,7 @@ export function lockfilesIn(dir: string, listing?: string[]): string[] {
 export function scanProjectTree(
   root: string,
   limits: { maxDepth: number; maxProjects: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
+  options: { includeFixtures?: boolean } = {},
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
   const entries: ProjectTreeEntry[] = [{ dir: root, scan: scanCurrentProject(root) }];
   const ignore = new IgnoreRules(root);
@@ -120,6 +164,17 @@ export function scanProjectTree(
   let skippedCount = 0;
   let visited = 0;
   let walkTruncated = false;
+  const notCovered: Array<{ path: string; ecosystem: string }> = [];
+  let notCoveredCount = 0;
+  const fixtures = { count: 0, dirs: [] as string[] };
+  const noteUnsupported = (rel: string, names: string[]) => {
+    for (const name of names) {
+      const ecosystem = unsupportedEcosystem(name, names);
+      if (!ecosystem) continue;
+      notCoveredCount++;
+      if (notCovered.length < MAX_LISTED_NOT_COVERED) notCovered.push({ path: rel ? `${rel}/${name}` : name, ecosystem });
+    }
+  };
   // One directory listing per directory: it decides both whether the
   // directory is a project and which children to descend into.
   const listing = (dir: string): fs.Dirent[] | null => {
@@ -127,6 +182,22 @@ export function scanProjectTree(
       return fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       return null;
+    }
+  };
+  // Test-fixture lockfiles: counted, never scanned (unless asked for).
+  const countFixtures = (dir: string, children: fs.Dirent[]) => {
+    for (const child of children) {
+      if (!child.isDirectory() || SKIP_DIRS.has(child.name) || child.name.startsWith(".")) continue;
+      if (++visited > MAX_WALK_DIRS) {
+        walkTruncated = true;
+        return;
+      }
+      const sub = path.join(dir, child.name);
+      const grandchildren = listing(sub);
+      if (!grandchildren) continue;
+      fixtures.count += lockfilesIn(sub, grandchildren.map((g) => g.name)).length;
+      countFixtures(sub, grandchildren);
+      if (walkTruncated) return;
     }
   };
   const walk = (dir: string, rel: string, depth: number, children: fs.Dirent[]) => {
@@ -141,9 +212,18 @@ export function scanProjectTree(
       const sub = path.join(dir, child.name);
       const grandchildren = listing(sub);
       if (!grandchildren) continue;
+      if (!options.includeFixtures && FIXTURE_DIRS.has(child.name.toLowerCase())) {
+        const before = fixtures.count;
+        fixtures.count += lockfilesIn(sub, grandchildren.map((g) => g.name)).length;
+        countFixtures(sub, grandchildren);
+        if (fixtures.count > before && fixtures.dirs.length < 10) fixtures.dirs.push(childRel);
+        if (walkTruncated) return;
+        continue;
+      }
       // A .gitignore is only read where one exists.
       if (grandchildren.some((g) => g.name === ".gitignore")) ignore.load(childRel);
       const names = grandchildren.map((g) => g.name);
+      noteUnsupported(childRel, names.filter((n) => !ignore.ignores(`${childRel}/${n}`, false)));
       const locks = lockfilesIn(sub, names).filter((name) => !ignore.ignores(`${childRel}/${name}`, false));
       if (locks.length > 0) {
         const reason = depth > limits.maxDepth ? "depth" : entries.length >= limits.maxProjects ? "project_limit" : null;
@@ -158,11 +238,53 @@ export function scanProjectTree(
       if (walkTruncated) return;
     }
   };
-  walk(root, "", 1, listing(root) ?? []);
+  const rootListing = listing(root) ?? [];
+  noteUnsupported("", rootListing.filter((d) => d.isFile()).map((d) => d.name));
+  walk(root, "", 1, rootListing);
   return {
     entries,
-    discovery: { projects: entries.length, maxDepth: limits.maxDepth, maxProjects: limits.maxProjects, skipped, skippedCount, walkTruncated },
+    discovery: {
+      projects: entries.length,
+      maxDepth: limits.maxDepth,
+      maxProjects: limits.maxProjects,
+      skipped,
+      skippedCount,
+      walkTruncated,
+      ...(notCoveredCount > 0 ? { notCovered, notCoveredCount } : {}),
+      ...(fixtures.count > 0 ? { fixtures } : {}),
+    },
   };
+}
+
+/** One note for lockfiles present but unreadable (conflict markers, invalid JSON), or none. */
+export function unreadableNotes(problems: Array<{ file: string; error: string }>): string[] {
+  if (problems.length === 0) return [];
+  return [
+    `UNREADABLE: ${problems.length} lockfile${problems.length === 1 ? "" : "s"} could not be read and ${problems.length === 1 ? "its" : "their"} dependencies were not checked: ${problems
+      .slice(0, 3)
+      .map((p) => `${p.file} (${p.error})`)
+      .join("; ")}${problems.length > 3 ? "; ..." : ""}.`,
+  ];
+}
+
+/** What a scan left out on purpose or cannot read: ecosystems it does not cover, and test fixtures. */
+export function exclusionNotes(discovery: TreeDiscovery | null): string[] {
+  const notes: string[] = [];
+  const unsupported = discovery?.notCoveredCount ?? 0;
+  if (unsupported > 0) {
+    const ecosystems = [...new Set((discovery?.notCovered ?? []).map((n) => n.ecosystem.split(" ")[0]))].join(", ");
+    const listed = (discovery?.notCovered ?? []).slice(0, 3).map((n) => n.path).join(", ");
+    notes.push(
+      `NOT COVERED: ${unsupported} manifest/lockfile${unsupported === 1 ? "" : "s"} of ecosystems this server does not read (${ecosystems}): ${listed}${unsupported > 3 ? ", ..." : ""}. Their dependencies were not checked at all; see not_covered.`,
+    );
+  }
+  const fixtures = discovery?.fixtures;
+  if (fixtures && fixtures.count > 0) {
+    notes.push(
+      `Not scanned: ${fixtures.count} test-fixture lockfile${fixtures.count === 1 ? "" : "s"} under ${fixtures.dirs.slice(0, 3).join(", ")}${fixtures.dirs.length > 3 ? ", ..." : ""} (pass include_test_fixtures: true to scan them).`,
+    );
+  }
+  return notes;
 }
 
 /** One sentence for an answer, or null when nothing was left out. */
@@ -191,6 +313,8 @@ const LOCKS_BY_LANGUAGE: Record<string, string[]> = {
   rust: ["Cargo.lock"],
   python: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   go: ["go.mod"],
+  ruby: ["Gemfile.lock"],
+  php: ["composer.lock"],
 };
 
 /**

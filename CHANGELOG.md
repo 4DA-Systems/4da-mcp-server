@@ -1,5 +1,147 @@
 # Changelog
 
+## 6.2.5 — unreleased
+
+### An incomplete scan is never a clean one (audit A1/B-1/B-2, critical)
+
+6.2.4 turned an OSV.dev outage, a 503, a timeout or its own rate limit into a
+clean report. Reproduced 2026-10-12 with an empty cache: the 4DA app's `src-tauri`
+(10,568 dependencies) came back `total_vulnerable_packages: 0`,
+`dependency_health` scored it 75/100 and `upgrade_planner` said
+`vulnerabilityDataAvailable: true`; the only trace was `_meta.offline`.
+
+- **Large trees are answered in full.** querybatch requests (1,000
+  dependencies each) go out as the query budget allows, waiting for it to
+  refill (60 s at most), instead of failing the whole scan past 10 batches.
+  The budget is 60 batches a minute. A failed batch is retried once. The same
+  tree, cold, now reports 11,203 dependencies and 431 vulnerable packages
+  (with `include_test_fixtures`; see below).
+- **What OSV did not answer is counted, and leads the answer.** Dependencies
+  with no answer (and no earlier cached one) are `unchecked`, never clean.
+  `vulnerability_scan` then starts with `summary: "NOT CHECKED: OSV.dev
+  unreachable (...) — N of M dependencies have no vulnerability answer"`,
+  `coverage.unchecked_dependencies` counts them, and `total_vulnerable_packages`,
+  `by_severity` and `clean_dependencies` are null (findings in the checked part
+  are under `found_in_checked_dependencies`).
+- `dependency_health` withholds `healthScore` and `vulnerableCount` (null) and
+  adds `vulnerabilityCoverage`; `upgrade_planner` sets
+  `vulnerabilityDataAvailable: false` and adds `vulnerabilityCoverage`. Both
+  summaries start with "NOT CHECKED". The tool descriptions and the server
+  instructions say an incomplete result is not a clean one.
+
+### dependency_health says what each number counts
+
+navcal read "Health: 19/100. 18 dependencies scanned, 26 vulnerable" (6.2.4
+too): 18 was the direct runtime dependencies checked against their registry
+(25 devDependencies left out), 26 the vulnerable packages among the 633
+installed. The summary now names both populations ("18 direct dependencies
+checked against their registries (25 devDependencies left out ...); 26
+vulnerable packages in the full tree of 633 installed (1 direct, 25
+transitive); 14 outdated (direct)"), the answer adds `treeDeps` and
+`vulnerableDirectCount`, and the score states its penalties ("100 minus 55 for
+vulnerabilities, 26 for outdated, 0 for deprecated") with `healthScoreBasis`.
+`ecosystem_filter` now narrows the vulnerability counts too, and a project with
+no direct dependencies reports 0, not 1.
+
+### Coverage stated, not implied
+
+- **Ruby and PHP are read** (audit A2): `Gemfile.lock` (RubyGems; git and path
+  gems are local code and are skipped, as the desktop app does) and
+  `composer.lock` (Packagist; `packages-dev` marked dev). Both are ratcheted at
+  1.0 in the conformance corpus (RubyGems 143/143 findings, Packagist 44/44).
+- **Ecosystems not read are listed.** Maven (`pom.xml`), Gradle, .NET
+  (`*.csproj`, `packages.lock.json`, ...), Pub, Hex, SwiftPM, CocoaPods and a
+  `Gemfile` / `composer.json` with no lockfile are reported in
+  `coverage.not_covered`, in mixed repositories too. A project made only of
+  them is told "NOT COVERED: ... Nothing was checked" instead of "No manifest
+  files found ... Run this tool from your project root directory".
+- **Test fixtures are not the project** (audit A3). Lockfiles under `tests/`,
+  `test/`, `fixtures/`, `testdata/`, `__fixtures__/`, `conformance/` and the like
+  are left out by default and counted in `coverage.not_scanned`;
+  `include_test_fixtures: true` scans them. The 4DA app's `src-tauri` is 905
+  dependencies of its own, not 10,568.
+- **An unreadable lockfile is named** (audit B-9): merge-conflict markers,
+  invalid JSON or a damaged file is listed in `coverage.unreadable_lockfiles`
+  with the reason, instead of falling through to "no lockfile".
+
+### Fix advice
+
+- **No deprecated or yanked release as a fix target** (audit B-8): lodash
+  4.17.15 is sent to 4.18.1, not the deprecated 4.18.0 ("Bad release"), and
+  the note says why.
+- **`last_affected`-only advisories** get the first published release above the
+  installed version that no known advisory affects as a candidate, labelled as
+  such, instead of "no fix" (audit A6), in `vulnerability_scan` and
+  `upgrade_planner`.
+- **A parent that will not move** (deprecated, or already at its latest
+  release) turns "waiting on upstream" into `override_or_replace`, with the
+  syntax for npm `overrides`, pnpm `pnpm.overrides`, yarn `resolutions`, or
+  Cargo `[patch]` (audit A4).
+- npm `-security` placeholder packages (`fs@0.0.1-security`) are no longer
+  reported as malware (audit A5), as in the desktop app.
+- `vulnerability_scan` includes direct devDependencies by default, labelled
+  `is_dev` and graded one level down, as the desktop app does (audit A8);
+  `include_dev: false` restores the runtime-only scan.
+- `dependency_check` counts a vulnerability once across its alias records
+  (GHSA + RUSTSEC), keeping the most severe grade. tokio 1.18.0's "6
+  advisories" are 3, all moderate or low, so its `review` verdict was right
+  (audit A9).
+
+### Security: the working directory is never trusted (audit B-3/B-4/B-5/B-11)
+
+- A `data/settings.json` or `data/4da.db` in (or beside) the directory the
+  server starts in is no longer read. A cloned repository could use them to
+  send stored memory and decisions to a host of its choosing, or to plant
+  "decisions". Settings come from `FOURDA_SETTINGS_PATH`, the `settings.json`
+  beside `FOURDA_DB_PATH`, or the desktop app's data directory; the database
+  from `FOURDA_DB_PATH`, the desktop app's data directory, or the server's own.
+- A RELATIVE `FOURDA_DB_PATH` that names no file is refused with a clear error
+  instead of silently creating a database inside whatever directory the server
+  started in (`./data/4da.db`). An existing file still opens through a relative
+  path (4DA's own `.mcp.json` keeps working). An ABSOLUTE path that names no
+  file is created as a standalone database when its directory exists, as
+  before, and now says so: one stderr line and `_meta.database_note` in the
+  first tool answer; its directory missing is refused. The server used to pass
+  `FOURDA_DB_PATH` to the database as an explicit path, which skipped these
+  rules.
+- Requirements `-r` / `-c` includes stay inside the project: absolute, UNC,
+  drive-letter, or outside (also through a symlink) targets are not read.
+
+### Robustness
+
+- Hostile input no longer blocks the server (audit B-10): changelog headings and
+  yarn.lock version and dependency lines are parsed in linear time, and lines
+  over 4 KB are skipped (requirements files too). A crafted CHANGELOG or lockfile
+  line took 5–20 s or more.
+- `+build` metadata is not a prerelease (audit B-12): toml_edit's latest stable
+  is 0.25.17, not 0.23.9. PyPI `rc` / `a` / `b` / `.dev` versions now count as
+  prereleases in the latest-stable pick.
+
+### upgrade_impact (audit B-6/B-7)
+
+- A breaking entry that names a Cargo feature your manifest enables (reqwest
+  0.13's `rustls-tls` / `macos-system-configuration`) counts as touching your
+  code; the features are listed in `your_code.cargo_features`.
+- A GitHub PR line ("... by @user in <url>") is no longer a second change, and
+  replacement syntax after "use" / "instead" / ";" is no longer read as old
+  syntax (thiserror 2 flagged every `{name}` format string; `r#` raw
+  identifiers no longer match).
+- When the changelog is missing or partial, the answer says how to turn on the
+  opt-in GitHub fallback (`FOURDA_GITHUB_CHANGELOG=true`).
+
+### Protocol and docs (audit B-13 to B-19)
+
+- An unknown tool or prompt name is a JSON-RPC -32602 error, and an unknown
+  resource is resource-not-found, as the MCP spec says. `4da://schema/__proto__`
+  (and other names inherited from Object) no longer reach Object internals.
+  `4da://skills`, which never existed, is no longer advertised.
+- `get_context` marks dependency names read from repository lockfiles as
+  untrusted data.
+- README: the network-host list is complete (api.npmjs.org, index.crates.io,
+  hn.algolia.com and the opt-in hosts), and HTTP mode is documented as
+  single-tenant.
+- The conformance fetch works with Windows long paths, and a missing corpus
+  prints a visible warning (the suites used to skip silently).
 ## 6.2.4 — 2026-10-12
 
 ### Fix paths held to the 4DA rule vectors

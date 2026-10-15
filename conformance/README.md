@@ -31,8 +31,9 @@ How a case runs: the project-tree walk over the case directory, the readers thro
 - `thresholds.json`: this engine's ratchet per OSV ecosystem (findings and inventory
   precision/recall, max silent drops), truncated to 4 decimals. It never falls; raise it in
   the PR that improves it (the run prints `ratchet can rise`). `unsupported_by_engine` names
-  ecosystems this engine has no reader for (RubyGems, Packagist): they are printed on every
-  run and not asserted.
+  ecosystems this engine has no reader for: they are printed on every run and not asserted.
+  It is empty since 6.2.5, which added the Gemfile.lock (RubyGems) and composer.lock
+  (Packagist) readers; both are ratcheted at 1.0.
 - `engine-disagreements.json`: every difference from the truth in a ratcheted ecosystem,
   grouped by verdict with a reason. A difference listed nowhere fails the test.
 
