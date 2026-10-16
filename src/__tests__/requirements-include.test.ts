@@ -3,11 +3,15 @@
  * B-11 / B-10 (audit 2026-10-12): requirements `-r`/`-c` includes are confined
  * to the project, and a pathological long line parses in linear time.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import Database from "better-sqlite3";
 import { parseRequirements, readRequirementsFile, resolvePython } from "../live/lockfile-parsers-pygo.js";
+import { resolveVersionSource } from "../live/lockfile-parsers.js";
+import { LiveIntelligence } from "../live/index.js";
+import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 
 let base: string;
 let proj: string;
@@ -71,5 +75,53 @@ describe("requirements parsing is linear on long lines (B-10)", () => {
     const pins = parseRequirements(long);
     expect(Date.now() - t0).toBeLessThan(200);
     expect(pins).toContainEqual({ name: "requests", version: "2.0.0" });
+  });
+});
+
+/**
+ * Readiness audit M4 (2026-10-16): the refusal stands, but it was silent.
+ * django in `-r ../outside.txt` went unchecked, total_dependencies_scanned
+ * read 2, and nothing said the result was partial. Each refused include is
+ * now a coverage problem naming the include and why it was not read.
+ */
+describe("a refused include is named in the coverage, never silent (M4)", () => {
+  it("resolveVersionSource lists each refused include with the file that names it", () => {
+    write("outside.txt", "django==3.2.0\n");
+    write("proj/sub/inner.txt", "jinja2==2.10\n");
+    write("proj/requirements.txt", "requests==2.19.0\n-r ../outside.txt\n-c \\\\host\\share\\c.txt\n-r sub/inner.txt\n");
+    const read = resolveVersionSource(proj, "PyPI");
+    expect(read.instances.map((i) => i.name).sort()).toEqual(["jinja2", "requests"]);
+    const problems = read.problems ?? [];
+    expect(problems).toHaveLength(2);
+    expect(problems[0].file).toBe(path.join(base, "outside.txt"));
+    expect(problems[0].error).toMatch(/-r \.\.\/outside\.txt.*requirements\.txt.*outside the project/);
+    expect(problems[1].file).toBe("\\\\host\\share\\c.txt");
+    expect(problems[1].error).toMatch(/-c /);
+  });
+
+  it("vulnerability_scan's coverage names the refused include", async () => {
+    write("outside.txt", "django==3.2.0\n");
+    write("proj/requirements.txt", "requests==2.19.0\n-r ../outside.txt\n");
+    const priorOffline = process.env.FOURDA_OFFLINE;
+    delete process.env.FOURDA_OFFLINE;
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/querybatch")) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: unknown[] };
+        return new Response(JSON.stringify({ results: queries.map(() => ({})) }), { status: 200 });
+      }
+      throw new TypeError(`fetch failed (${url})`);
+    });
+    try {
+      const result = (await executeVulnerabilityScan(null, { project_path: proj }, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
+      expect(result.total_dependencies_scanned).toBe(1);
+      expect(result.coverage?.complete).toBe(false);
+      expect(result.coverage.note).toMatch(/outside\.txt/);
+      expect(result.coverage.note).toMatch(/outside the project/);
+    } finally {
+      vi.unstubAllGlobals();
+      if (priorOffline === undefined) delete process.env.FOURDA_OFFLINE;
+      else process.env.FOURDA_OFFLINE = priorOffline;
+    }
   });
 });

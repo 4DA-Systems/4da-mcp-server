@@ -18,7 +18,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { emptySource, found, InstanceSet, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, type LockfileProblem, type VersionSource } from "./lockfile-types.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -137,16 +137,20 @@ export function resolvePython(cwd: string): VersionSource {
     } catch { /* unreadable */ }
   }
 
+  const refused: LockfileProblem[] = [];
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
-    const pins = readRequirementsFile(file, new Set(), cwd);
+    const pins = readRequirementsFile(file, new Set(), cwd, refused);
     if (pins === null) continue;
     for (const { name, version } of pins) take(name, version, dev);
     sources.push(file);
   }
+  // One problem per refused file, however many requirement files name it.
+  const problems = [...new Map(refused.map((p) => [p.file.toLowerCase(), p])).values()];
 
-  if (sources.length === 0) return emptySource();
-  return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1) });
+  if (sources.length === 0) return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
+  const read = found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1) });
+  return problems.length > 0 ? { ...read, problems } : read;
 }
 
 /**
@@ -161,11 +165,14 @@ export function resolvePython(cwd: string): VersionSource {
  * makes an SMB connection that sends the user's NTLM hash) used to be read,
  * and every `NAME==VALUE` line in it went to OSV.dev and back to the agent.
  * Such an include is skipped; absolute and UNC ones before any fs call.
+ * Skipped is not silent: each one goes to `refused` (audit M4), which the
+ * scan reports as a file whose pins were not checked.
  */
 export function readRequirementsFile(
   file: string,
   visited: Set<string> = new Set(),
   root: string = path.dirname(path.resolve(file)),
+  refused: LockfileProblem[] = [],
 ): Array<{ name: string; version: string }> | null {
   const key = path.resolve(file).toLowerCase();
   if (visited.has(key)) return [];
@@ -181,8 +188,11 @@ export function readRequirementsFile(
   const constraints = new Map<string, string>();
   for (const { option, target } of requirementOptions(content)) {
     const included = confinedInclude(dir, target, root);
-    if (included === null) continue;
-    if (option === "r") out.push(...(readRequirementsFile(included, visited, root) ?? []));
+    if (included === null) {
+      refused.push(refusedInclude(file, option, target));
+      continue;
+    }
+    if (option === "r") out.push(...(readRequirementsFile(included, visited, root, refused) ?? []));
     else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {
@@ -193,6 +203,19 @@ export function readRequirementsFile(
     }
   }
   return out;
+}
+
+/**
+ * A refused include as a coverage problem. `file` is the include as it
+ * resolves (an absolute, drive-letter or UNC target as written: it is never
+ * resolved or touched), so the note names the file whose pins went unchecked.
+ */
+function refusedInclude(from: string, option: "r" | "c", target: string): LockfileProblem {
+  const absolute = /^[\\/]/.test(target) || /^[A-Za-z]:/.test(target) || path.isAbsolute(target);
+  return {
+    file: absolute ? target : path.resolve(path.dirname(from), target),
+    error: `refused: \`-${option} ${target}\` in ${path.basename(from)} points outside the project directory, and includes outside it are never read, so the ${option === "r" ? "pins" : "constraints"} in it were not checked`,
+  };
 }
 
 /**

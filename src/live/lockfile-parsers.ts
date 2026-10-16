@@ -80,7 +80,8 @@ export function resolveVersionSource(cwd: string, ecosystem: OsvEcosystem): Vers
     const file = (LOCKFILES[ecosystem] ?? []).map((n) => path.join(cwd, n)).find((f) => fs.existsSync(f));
     if (file) thrown = { file, error: describeParseError(file, error) ?? "could not be parsed" };
   }
-  const problems = thrown ? [thrown] : unreadLockfiles(cwd, ecosystem, read);
+  // The reader's own problems (a refused requirements include, M4) and the lockfiles it could not read.
+  const problems = [...(read.problems ?? []), ...(thrown ? [thrown] : unreadLockfiles(cwd, ecosystem, read))];
   return problems.length > 0 ? { ...read, problems } : read;
 }
 
