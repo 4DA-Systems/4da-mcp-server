@@ -39,6 +39,7 @@
 
 import type { FourDADatabase } from "../db.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
+import { aliasSeverities } from "./dependency-check-alias-severity.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { FixPathSources } from "../live/fix-paths.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
@@ -211,8 +212,12 @@ export async function executeDependencyCheck(
     .filter((i) => !i.unresolved)
     .flatMap((item) => [item.to, item.from].filter((v): v is string => Boolean(v)).map((version) => osvDep(item, version)));
   const scan = await liveIntel.queryAdvisories(osvDeps);
+  // Go records are unrated; a GHSA alias's rating applies (audit M6). No answer leaves them unknown.
+  const rated = await aliasSeverities(scan.vulnerabilities);
   const byInstance = new Map<string, VulnerabilityEntry[]>();
-  for (const v of scan.vulnerabilities) {
+  for (const raw of scan.vulnerabilities) {
+    const alias = rated.get(raw.vulnId);
+    const v = alias ? { ...raw, severity: alias.severity, severityFrom: alias.from } : raw;
     const key = instanceKey(v.ecosystem, v.package, v.currentVersion);
     byInstance.set(key, [...(byInstance.get(key) ?? []), v]);
   }
@@ -612,8 +617,11 @@ function osvDep(item: CheckItem, version: string): ResolvedDependency {
  * twice ("6 advisories" for tokio 1.18.0's three, audit A9). The kept record
  * of an alias group is its most severe, so merging never softens a verdict.
  */
-export function refs(entries: VulnerabilityEntry[] | undefined): AdvisoryRef[] {
-  return groupAdvisories(entries).map(({ best: v }) => ({ id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v) }));
+export function refs(entries: Array<VulnerabilityEntry & { severityFrom?: string }> | undefined): AdvisoryRef[] {
+  return groupAdvisories(entries).map(({ best }) => {
+    const v = best as VulnerabilityEntry & { severityFrom?: string };
+    return { id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v), ...(v.severityFrom ? { severityFrom: v.severityFrom } : {}) };
+  });
 }
 
 const instanceKey = (eco: string, name: string, version: string) => `${eco}\0${eco === "PyPI" ? normalizePypi(name) : name}\0${version}`;

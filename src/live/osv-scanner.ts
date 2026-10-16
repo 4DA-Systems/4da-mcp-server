@@ -457,7 +457,7 @@ function mapVulnerability(
  * Never fabricates a default bucket — an advisory with no severity signal is
  * reported as `unknown`, not silently labeled "medium".
  */
-function deriveSeverity(vuln: Partial<OsvVulnerability>): {
+export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   severity: VulnerabilityEntry["severity"];
   cvssScore: number | null;
 } {
