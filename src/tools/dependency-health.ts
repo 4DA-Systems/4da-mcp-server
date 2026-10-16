@@ -184,8 +184,14 @@ export async function executeDependencyHealth(
   const unread = liveIntel.getLockfileProblems();
   const readGap = unread.length > 0 ? unreadableGapLine(unread) : null;
   const withheld = coverage !== null || readGap !== null;
-  // ecosystem_filter narrows the vulnerability counts too, not only the registry rows.
-  const allVulns = (vulnResult?.vulnerabilities ?? []).filter((v) => !params.ecosystem_filter || v.ecosystem === params.ecosystem_filter);
+  // One population for every count: the stored scan can be vulnerability_scan's,
+  // which includes direct devDependencies by default, while the registry rows
+  // leave them out without include_dev. navcal read "4 direct" vulnerable, 3 of
+  // them devDependencies, beside "25 devDependencies left out" (audit L2).
+  // The same predicate scanVulnerabilities scopes by. ecosystem_filter narrows
+  // the vulnerability counts too, not only the registry rows.
+  const inScope = (v: { isDirect: boolean; isDev: boolean }) => includeDev || !(v.isDirect && v.isDev);
+  const allVulns = (vulnResult?.vulnerabilities ?? []).filter((v) => inScope(v) && (!params.ecosystem_filter || v.ecosystem === params.ecosystem_filter));
   const activeVulns = allVulns.filter(isActionableVulnerability);
   // Keyed by (ecosystem, name): a bare name let an npm advisory mark a
   // same-named crate as vulnerable, and counted the two as one package.
@@ -218,7 +224,14 @@ export async function executeDependencyHealth(
   // Of those, the ones a manifest declares (fixable by a direct bump).
   const vulnerableDirect = new Set(activeVulns.filter((v) => v.isDirect).map((v) => vulnKey(v.ecosystem, v.package))).size;
   // The tree the vulnerability counts range over (every installed copy OSV was asked about).
-  const treeDeps = vulnResult?.totalScanned ?? 0;
+  // A wider (devDependency-inclusive) scan counts exactly the direct devDependencies more than this scope.
+  // Counted as the scan counts: copies with a version.
+  const versioned = liveIntel.getAuditDeps().filter((d) => d.version !== null);
+  const directDev = versioned.filter((d) => d.isDirect && d.isDev).length;
+  const runtimeScope = versioned.length - directDev;
+  const scannedAll = vulnResult?.totalScanned ?? 0;
+  const treeDeps = !includeDev && directDev > 0 && scannedAll === versioned.length ? runtimeScope : scannedAll;
+  const devScope = directDev > 0 ? (includeDev ? "; devDependencies included" : "; devDependencies left out") : "";
   // Direct devDependencies left out of the registry rows (include_dev: true adds them).
   const devExcluded = includeDev
     ? 0
@@ -305,7 +318,7 @@ export async function executeDependencyHealth(
       (devExcluded > 0 ? ` (${plural(devExcluded, "devDependency", "devDependencies")} left out; include_dev: true adds them)` : ""),
   );
   if (vulnResult) {
-    const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive)`;
+    const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive${devScope})`;
     parts.push(withheld ? `at least ${found}, in the checked part` : found);
   }
   if (deprecated > 0) parts.push(`${deprecated} deprecated (direct)`);

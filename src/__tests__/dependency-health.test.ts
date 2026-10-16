@@ -340,3 +340,61 @@ describe("dependency_health — an unreadable lockfile withholds the score (M5)"
     expect(result.summary).toMatch(/at least 1 vulnerable package/);
   });
 });
+/**
+ * Readiness audit L2 (2026-10-16): navcal's health said "4 direct" vulnerable,
+ * three of them devDependencies (vitest, sharp, vite), beside "18 direct
+ * dependencies checked ... 25 devDependencies left out". dependency_health
+ * reused the stored vulnerability_scan, which includes devDependencies by
+ * default. Without include_dev, both populations now leave direct
+ * devDependencies out, and the summary says which scope it counts.
+ */
+describe("dependency_health — one population for the registry rows and the vulnerable counts (L2)", () => {
+  const withDev = (): LiveIntelligence => {
+    const dir = fs.mkdtempSync(path.join(root, "l2-"));
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "l2", dependencies: { react: "19.2.6" }, devDependencies: { vitest: "3.2.4" } }));
+    fs.writeFileSync(
+      path.join(dir, "package-lock.json"),
+      JSON.stringify({
+        name: "l2",
+        lockfileVersion: 3,
+        packages: {
+          "": { name: "l2", dependencies: { react: "19.2.6" }, devDependencies: { vitest: "3.2.4" } },
+          "node_modules/react": { version: "19.2.6" },
+          "node_modules/vitest": { version: "3.2.4", dev: true },
+        },
+      }),
+    );
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    process.env.FOURDA_OFFLINE = "true";
+    li.initFromDependencyGroups([{ dir, language: "javascript", deps: ["react"], devDeps: ["vitest"] }]);
+    li.fetchRegistryHealth = async () => [];
+    // The stored scan is vulnerability_scan's: devDependencies included.
+    (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = {
+      ...makeScan([
+        makeEntry({}),
+        makeEntry({ package: "vitest", currentVersion: "3.2.4", isDev: true, vulnId: "GHSA-vitest", severity: "critical" }),
+      ]),
+      totalScanned: 2,
+    };
+    (li as unknown as { lastVulnScanIncludesDev: boolean }).lastVulnScanIncludesDev = true;
+    return li;
+  };
+
+  it("without include_dev, a direct devDependency is not counted as vulnerable, direct or penalised", async () => {
+    const result = await executeDependencyHealth(noDb, {}, withDev());
+    expect(result.vulnerableCount).toBe(1);
+    expect(result.vulnerableDirectCount).toBe(1);
+    expect(result.treeDeps).toBe(1);
+    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
+    expect(result.summary).toContain("1 vulnerable package in the full tree of 1 installed (1 direct, 0 transitive; devDependencies left out)");
+  });
+
+  it("with include_dev, both populations include them", async () => {
+    const result = await executeDependencyHealth(noDb, { include_dev: true }, withDev());
+    expect(result.vulnerableCount).toBe(2);
+    expect(result.vulnerableDirectCount).toBe(2);
+    expect(result.treeDeps).toBe(2);
+    expect(result.summary).toContain("2 vulnerable packages in the full tree of 2 installed (2 direct, 0 transitive; devDependencies included)");
+  });
+});
