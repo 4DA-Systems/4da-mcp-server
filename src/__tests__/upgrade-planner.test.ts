@@ -177,7 +177,8 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
     expect(result.summary).toMatch(/1 unmaintained-package notice/);
   });
 
-  it("excludes known-dev transitive vulns by default, keeps unknown-scope ones", async () => {
+  // Readiness audit H4 (2026-10-16): dev-only rows are in the plan by default, as in vulnerability_scan.
+  it("keeps known-dev transitive vulns by default, labelled isDev; include_dev: false excludes them and says so", async () => {
     const scan = makeScan(
       [
         makeEntry({ package: "dev-only-pkg", isDirect: false, isDev: true, devScopeKnown: true, vulnId: "GHSA-dev-1" }),
@@ -185,10 +186,14 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
       ],
       webDir,
     );
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const byDefault = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    expect(byDefault.recommendations.find((r) => r.package === "dev-only-pkg")).toMatchObject({ isDev: true });
+    expect(byDefault.recommendations.find((r) => r.package === "unknown-scope-pkg")).toBeDefined();
 
-    expect(result.recommendations.find((r) => r.package === "dev-only-pkg")).toBeUndefined();
-    expect(result.recommendations.find((r) => r.package === "unknown-scope-pkg")).toBeDefined();
+    const runtimeOnly = await executeUpgradePlanner(noDb, { include_dev: false }, makeIntel(scan));
+    expect(runtimeOnly.recommendations.find((r) => r.package === "dev-only-pkg")).toBeUndefined();
+    expect(runtimeOnly.recommendations.find((r) => r.package === "unknown-scope-pkg")).toBeDefined();
+    expect(runtimeOnly.summary).toMatch(/include_dev: false left out 1 dev-only vulnerable transitive copy/);
   });
 
   it("labels platform-inactive transitive vulns without suppressing them", async () => {

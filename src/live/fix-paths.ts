@@ -47,7 +47,7 @@ const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
 /** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
@@ -75,7 +75,19 @@ export interface CratesSparse {
   reqs: Record<string, Record<string, CrateDepReq[]>>;
 }
 
+/** npm's abbreviated document: per version, the fields fix paths read. */
+interface NpmAbbreviatedDoc {
+  versions?: Record<string, { deprecated?: unknown; dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> }>;
+  "dist-tags"?: { latest?: string };
+}
+
+/** How long, and how many, npm documents are kept in memory between the lookups of one plan. */
+const NPM_DOC_MEMORY_MS = 120_000;
+const NPM_DOCS_KEPT = 16;
+
 export class FixPathSources {
+  private npmDocs = new Map<string, { at: number; doc: Promise<NpmAbbreviatedDoc | null> }>();
+
   constructor(
     private cache: LiveCache,
     private rateLimiter: RateLimiter,
@@ -157,13 +169,76 @@ export class FixPathSources {
         );
         if (!res.ok) return null;
         const doc = (await res.json()) as Record<string, Record<string, string> | undefined>;
-        deps = { ...doc.peerDependencies, ...doc.optionalDependencies, ...doc.dependencies };
+        // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
+        // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
+        deps = { ...doc.optionalDependencies, ...doc.dependencies };
         this.cache.set(key, deps, "npm", VERSION_DEPS_TTL);
       } catch {
         return null;
       }
     }
     return typeof deps[dep] === "string" ? [deps[dep]] : [];
+  }
+
+  /**
+   * What every published release of `parent` requires of `dep`, from the
+   * registry: version -> requirements ([] when that release does not depend
+   * on it). npm reads dependencies and optionalDependencies of the
+   * abbreviated document (as `parentRequirements`); crates.io the sparse
+   * index. Null when unknown or unsupported. Used to find the smallest
+   * parent release that admits a clean version (audit H1).
+   */
+  async requirementHistory(ecosystem: OsvEcosystem, parent: string, dep: string): Promise<Record<string, string[]> | null> {
+    if (ecosystem === "crates.io") {
+      const sparse = await this.cratesSparse(parent);
+      if (!sparse) return null;
+      return Object.fromEntries(Object.entries(sparse.reqs).map(([v, deps]) => [v, (deps[dep] ?? []).map((d) => d.req)]));
+    }
+    if (ecosystem !== "npm") return null;
+    const key = `fixpath:v${CACHE_VERSION}:npm-requirement-history:${parent}:${dep}`;
+    const hit = this.cache.get<Record<string, string[]>>(key);
+    if (hit) return hit;
+    const doc = await this.npmDocument(parent);
+    if (!doc) return null;
+    const out: Record<string, string[]> = {};
+    for (const [version, m] of Object.entries(doc.versions ?? {})) {
+      const req = m?.dependencies?.[dep] ?? m?.optionalDependencies?.[dep];
+      out[version] = typeof req === "string" ? [req] : [];
+    }
+    this.cache.set(key, out, "npm", VERSIONS_TTL);
+    return out;
+  }
+
+  /**
+   * One npm abbreviated document per package, shared by the release facts and the requirement
+   * history of a plan (a parent's document was downloaded twice: NodeGoat's mongodb, ~600
+   * releases). Kept in memory for a short while, at most a few at a time; a failure is not kept.
+   */
+  private npmDocument(name: string): Promise<NpmAbbreviatedDoc | null> {
+    const now = Date.now();
+    for (const [n, e] of this.npmDocs) if (now - e.at > NPM_DOC_MEMORY_MS) this.npmDocs.delete(n);
+    const hit = this.npmDocs.get(name);
+    if (hit) return hit.doc;
+    if (!this.rateLimiter.consume("fixpath-registry")) return Promise.resolve(null);
+    const doc = (async (): Promise<NpmAbbreviatedDoc | null> => {
+      try {
+        const res = await fetchWithTimeout(
+          `https://registry.npmjs.org/${encodeURIComponent(name)}`,
+          { headers: { Accept: "application/vnd.npm.install-v1+json" } },
+          TIMEOUT_MS,
+        );
+        if (!res.ok) return null;
+        return (await res.json()) as NpmAbbreviatedDoc;
+      } catch {
+        return null;
+      }
+    })();
+    this.npmDocs.set(name, { at: now, doc });
+    void doc.then((d) => {
+      if (d === null) this.npmDocs.delete(name);
+    });
+    while (this.npmDocs.size > NPM_DOCS_KEPT) this.npmDocs.delete(this.npmDocs.keys().next().value!);
+    return doc;
   }
 
   /**
@@ -195,15 +270,9 @@ export class FixPathSources {
     const key = `fixpath:v${CACHE_VERSION}:npm-facts:${name}`;
     const hit = this.cache.get<PackageReleaseFacts>(key);
     if (hit) return hit;
-    if (!this.rateLimiter.consume("fixpath-registry")) return null;
-    try {
-      const res = await fetchWithTimeout(
-        `https://registry.npmjs.org/${encodeURIComponent(name)}`,
-        { headers: { Accept: "application/vnd.npm.install-v1+json" } },
-        TIMEOUT_MS,
-      );
-      if (!res.ok) return null;
-      const doc = (await res.json()) as { versions?: Record<string, { deprecated?: unknown }>; "dist-tags"?: { latest?: string } };
+    const doc = await this.npmDocument(name);
+    if (!doc) return null;
+    {
       const entries = Object.entries(doc.versions ?? {});
       const deprecated = (v: { deprecated?: unknown } | undefined) => typeof v?.deprecated === "string" && v.deprecated.trim() !== "";
       const latest = doc["dist-tags"]?.latest ?? null;
@@ -215,8 +284,6 @@ export class FixPathSources {
       };
       this.cache.set(key, facts, "npm", VERSIONS_TTL);
       return facts;
-    } catch {
-      return null;
     }
   }
 
@@ -310,11 +377,26 @@ function sparseIndexUrl(name: string): string {
 // Analysis
 // ---------------------------------------------------------------------------
 
-export type FixTargetResult = CleanTarget;
+export type FixTargetResult = CleanTarget & {
+  /**
+   * True when the package's advisories could not be read (OSV /v1/query
+   * failed) but the registry could: `target` is then only the smallest
+   * installable release at or above the highest per-advisory fix, which is
+   * deprecated, yanked or unpublished (`floorWithdrawn` says which). It is
+   * NOT checked against the package's other advisories; callers report the
+   * fix as checked against the installed version's advisories only.
+   */
+  advisoriesUnread?: boolean;
+};
 
 /**
- * The minimal clean target for one installed copy, or null when the
- * advisories could not be read.
+ * The minimal clean target for one installed copy, or null when neither the
+ * advisories nor anything that changes the answer could be read.
+ *
+ * Advisories unreadable, registry readable (audit H5: OSV /v1/query down):
+ * a deprecated or yanked release is still never the target. lodash 4.17.20
+ * went to 4.18.0 ("Bad release") because the whole check was skipped; the
+ * registry facts alone move it to 4.18.1, flagged `advisoriesUnread`.
  *
  * With no per-advisory fix at all (advisories that give only `last_affected`,
  * audit A6), and the installed version known, the registry is asked for the
@@ -334,7 +416,7 @@ export async function cleanFixTarget(
     sources.packageAdvisories(ecosystem, name),
     sources.releaseFacts(ecosystem, name),
   ]);
-  if (!advisories) return null;
+  if (!advisories) return perAdvisoryFixes.length > 0 && facts ? registryOnlyTarget(ecosystem, perAdvisoryFixes, facts) : null;
   const published = facts?.versions ?? null;
   if (perAdvisoryFixes.length > 0) {
     const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published });
@@ -348,6 +430,19 @@ export async function cleanFixTarget(
 }
 
 /**
+ * With no advisory list: the smallest installable release at or above the
+ * highest per-advisory fix, only when that fix itself is withdrawn or not
+ * published (otherwise the unchecked answer stands as it is). Null when
+ * nothing changes or no installable release qualifies.
+ */
+function registryOnlyTarget(ecosystem: OsvEcosystem, fixes: string[], facts: PackageReleaseFacts): FixTargetResult | null {
+  if (facts.versions.length === 0) return null;
+  const clean = smallestCleanVersion({ ecosystem, fixes, advisories: [], published: facts.versions });
+  if (!clean || clean.target === null || clean.target === clean.floor) return null;
+  return { ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true };
+}
+
+/**
  * Verified targets for many installed copies at once, within a time budget:
  * the copies that could not be checked in time (or offline) are simply
  * absent from the result, and the caller says so. Keyed by `key`.
@@ -357,8 +452,8 @@ export async function verifyFixTargets(
   items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string }>,
   budgetMs: number,
   concurrency = 12,
-): Promise<Map<string, CleanTarget>> {
-  const out = new Map<string, CleanTarget>();
+): Promise<Map<string, FixTargetResult>> {
+  const out = new Map<string, FixTargetResult>();
   const todo = items.filter((i) => i.fixes.length > 0 || i.installed);
   if (!sources || todo.length === 0) return out;
   const deadline = Date.now() + budgetMs;
@@ -383,7 +478,10 @@ export async function verifyFixTargets(
 }
 
 /** One clause for a target that is not the highest per-advisory fix, or null when it is. */
-export function targetNote(clean: CleanTarget): string | null {
+export function targetNote(clean: FixTargetResult): string | null {
+  if (clean.advisoriesUnread) {
+    return `${clean.target} is the smallest installable release at or above ${clean.floor}, the highest per-advisory fix, which ${clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}; not checked against the package's other advisories (OSV.dev did not answer)`;
+  }
   if (clean.noAdvisoryFix) {
     return `no advisory names a fixed version (they give only a last affected one); ${clean.target} is the first published release above the installed version that no known advisory affects`;
   }

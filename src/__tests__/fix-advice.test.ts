@@ -178,10 +178,13 @@ describe("A4: a parent that will not move", () => {
     expect(step.reasons.join(" ")).toMatch(/left-pad is deprecated/);
   });
 
-  it("a parent with a newer release keeps waiting on upstream", async () => {
+  // Readiness audit H1 (2026-10-16): a newer parent release is a move, not "waiting on upstream".
+  it("a parent with a newer release that drops the dependency: upgrade the parent", async () => {
     pinnedParent({ latest: "1.1.0", versions: { "1.0.0": { dependencies: { minimist: "1.2.5" } }, "1.1.0": {} } });
     const { step } = await minimistStep();
-    expect(step.action).toBe("waiting_on_upstream");
+    expect(step.action).toBe("upgrade_parent");
+    expect(step.parentUpgrades).toMatchObject([{ parent: "left-pad", from: "1.0.0", to: "1.1.0", requirement: null }]);
+    expect(step.reasons.join(" ")).toMatch(/left-pad 1\.1\.0 is the smallest left-pad release that no longer depends on minimist: upgrade left-pad to 1\.1\.0/);
   });
 });
 
