@@ -95,6 +95,103 @@ function compareLocal(a: Array<number | string>, b: Array<number | string>): num
 }
 
 // ---------------------------------------------------------------------------
+// Composer (Packagist)
+// ---------------------------------------------------------------------------
+
+/**
+ * A Composer version as `VersionParser::normalize` reads it: an optional `v`,
+ * up to four (here: any number of) numeric parts padded with zeros, then a
+ * stability suffix. OSV's Packagist ranges use two-part bounds
+ * (`introduced: "6.4"`, symfony/process GHSA-r39x-jcww-82v6), which
+ * MAJOR.MINOR.PATCH could not read: compared as "equal" to everything, the
+ * 5.4 line's fix 5.4.51 counted as inside [6.4, 6.4.33) and the target jumped
+ * to 8.0.5 (readiness audit H2, 2026-10-16). `1.2` is `1.2.0.0`.
+ */
+interface ComposerVersion {
+  release: number[];
+  /** dev=0 < alpha=1 < beta=2 < RC=3 < stable=4 < patch=5. */
+  stability: number;
+  stabilityNum: number[];
+  /** A trailing `-dev` (`1.0.0-beta2-dev`): below the same version without it. */
+  dev: boolean;
+}
+
+const COMPOSER =
+  /^v?(\d+(?:\.\d+)*)(?:[._-]?(stable|beta|b|alpha|a|rc|patch|pl|p)(?:[._-]?(\d+(?:\.\d+)*))?)?(?:[._-]?(dev))?(?:\+[0-9a-z.-]+)?$/i;
+
+const COMPOSER_RANK: Record<string, number> = { alpha: 1, a: 1, beta: 2, b: 2, rc: 3, stable: 4, patch: 5, pl: 5, p: 5 };
+
+export function parseComposerVersion(version: string): ComposerVersion | null {
+  const m = COMPOSER.exec(version.trim());
+  if (!m) return null;
+  const token = m[2]?.toLowerCase();
+  const devOnly = !token && m[4] !== undefined;
+  return {
+    release: m[1].split(".").map(Number),
+    stability: devOnly ? 0 : token ? COMPOSER_RANK[token] : 4,
+    stabilityNum: m[3] ? m[3].split(".").map(Number) : [],
+    dev: !devOnly && m[4] !== undefined,
+  };
+}
+
+function comparePadded(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
+export function compareComposer(a: ComposerVersion, b: ComposerVersion): number {
+  return (
+    comparePadded(a.release, b.release) ||
+    Math.sign(a.stability - b.stability) ||
+    comparePadded(a.stabilityNum, b.stabilityNum) ||
+    (a.dev === b.dev ? 0 : a.dev ? -1 : 1)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Gem::Version (RubyGems)
+// ---------------------------------------------------------------------------
+
+/** Gem::Version::ANCHORED_VERSION_PATTERN. */
+const GEM = /^[0-9]+(?:\.[0-9a-zA-Z]+)*(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+/**
+ * Gem::Version's canonical segments: `-` reads as `.pre.`, the text splits
+ * into runs of digits and letters, and trailing zeros of the release part
+ * and of the prerelease part are dropped, so `3.0` equals `3.0.0` (OSV's
+ * RubyGems bounds are two-part: rack GHSA-6xw4-3v39-52mm `introduced: "3.0"`).
+ */
+export function parseGemVersion(version: string): Array<number | string> | null {
+  const v = version.trim();
+  if (!GEM.test(v)) return null;
+  const segments = (v.replace(/-/g, ".pre.").match(/[0-9]+|[a-z]+/gi) ?? []).map((s) => (/^\d/.test(s) ? Number(s) : s));
+  const firstString = segments.findIndex((s) => typeof s === "string");
+  const cut = firstString < 0 ? segments.length : firstString;
+  const trim = (part: Array<number | string>) => {
+    let end = part.length;
+    while (end > 0 && part[end - 1] === 0) end--;
+    return part.slice(0, end);
+  };
+  return [...trim(segments.slice(0, cut)), ...trim(segments.slice(cut))];
+}
+
+/** Gem::Version#<=>: a missing segment is 0, a letter run sorts below a number. */
+export function compareGem(a: Array<number | string>, b: Array<number | string>): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x === y) continue;
+    if (typeof x !== typeof y) return typeof x === "string" ? -1 : 1;
+    return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -111,9 +208,26 @@ export function isComparable(version: string, ecosystem: OsvEcosystem | string):
     case "npm":
     case "crates.io":
       return parseSemverPrecedence(version) !== null;
+    case "Packagist":
+      return parseComposerVersion(version) !== null;
+    case "RubyGems":
+      return parseGemVersion(version) !== null;
     default:
       return parseSemver(version) !== null;
   }
+}
+
+/** Whether a readable version is a prerelease in Composer's or Gem::Version's own terms; null for other ecosystems or unreadable text. */
+export function isComposerOrGemPrerelease(version: string, ecosystem: OsvEcosystem | string): boolean | null {
+  if (ecosystem === "Packagist") {
+    const c = parseComposerVersion(version);
+    return c ? c.stability < 4 || c.dev : null;
+  }
+  if (ecosystem === "RubyGems") {
+    const g = parseGemVersion(version);
+    return g ? g.some((s) => typeof s === "string") : null;
+  }
+  return null;
 }
 
 /**
@@ -135,6 +249,16 @@ export function compareVersions(a: string, b: string, ecosystem: OsvEcosystem | 
     case "npm":
     case "crates.io":
       return compareVersionPrecedence(a, b) ?? compareSemver(a, b);
+    case "Packagist": {
+      const ca = parseComposerVersion(a);
+      const cb = parseComposerVersion(b);
+      return ca && cb ? compareComposer(ca, cb) : 0;
+    }
+    case "RubyGems": {
+      const ga = parseGemVersion(a);
+      const gb = parseGemVersion(b);
+      return ga && gb ? compareGem(ga, gb) : 0;
+    }
     default:
       return compareSemver(a, b);
   }
