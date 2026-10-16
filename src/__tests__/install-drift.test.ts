@@ -208,6 +208,24 @@ describe("resolution — the lockfile version and the installed version side by 
     expect(li.getAuditDeps().filter((d) => d.name === "hono")).toHaveLength(1);
   });
 
+  // Readiness audit L1 (2026-10-16): @upstash/* publish `"version": "v2.0.7"`,
+  // and navcal was told "node_modules has v2.0.7, not the lockfile's 2.0.7 —
+  // run npm ci". A leading `v` is the same version, as the 4DA app reads it.
+  it("a leading v in the installed package.json is not drift", () => {
+    const dir = project("4.13.5", "v4.13.5");
+    const { li } = liveWithOsv({});
+    li.initFromDependencyGroups([{ dir, language: "javascript", deps: ["hono"], devDeps: [] }]);
+    expect(li.getInstallDrift()).toEqual([]);
+    expect(li.getAuditDeps().filter((d) => d.name === "hono")).toHaveLength(1);
+  });
+
+  it("a v-prefixed installed copy that really differs is still drift", () => {
+    const dir = project("4.13.5", "v4.13.1");
+    const { li } = liveWithOsv({});
+    li.initFromDependencyGroups([{ dir, language: "javascript", deps: ["hono"], devDeps: [] }]);
+    expect(li.getInstallDrift()).toMatchObject([{ package: "hono", lockfileVersion: "4.13.5", installedVersion: "4.13.1" }]);
+  });
+
   it("never compares node_modules against a manifest's version floor", () => {
     const dir = path.join(root, `manifest-only-${++seq}`);
     fs.mkdirSync(dir);

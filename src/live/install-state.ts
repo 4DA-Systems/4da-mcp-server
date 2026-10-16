@@ -146,8 +146,12 @@ export function checkInstallState(
     if (!dep.isDirect || dep.ecosystem !== "npm" || !dep.version) return dep;
     const manifest = findInstalledManifest(dir, dep.name, chain);
     if (manifest) signatures.set(manifest, fileSignature(manifest));
-    const installedVersion = manifest ? readManifestVersion(manifest) : null;
-    if (installedVersion && installedVersion !== dep.version) {
+    // A leading `v` is not part of the version: @upstash/* publish "v2.0.7",
+    // which read as drift from the lockfile's 2.0.7 (audit L1), and would have
+    // gone to OSV as "v2.0.7". The 4DA app drops it the same way.
+    const raw = manifest ? readManifestVersion(manifest) : null;
+    const installedVersion = raw ? raw.trim().replace(/^v(?=\d)/, "") : null;
+    if (installedVersion && installedVersion !== dep.version.replace(/^v(?=\d)/, "")) {
       drift.push({
         package: dep.name,
         dir,
