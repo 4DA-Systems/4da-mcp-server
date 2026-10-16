@@ -137,16 +137,16 @@ export function resolvePython(cwd: string): VersionSource {
     } catch { /* unreadable */ }
   }
 
-  const refused: LockfileProblem[] = [];
+  const collected: LockfileProblem[] = [];
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
-    const pins = readRequirementsFile(file, new Set(), cwd, refused);
+    const pins = readRequirementsFile(file, new Set(), cwd, collected);
     if (pins === null) continue;
     for (const { name, version } of pins) take(name, version, dev);
     sources.push(file);
   }
-  // One problem per refused file, however many requirement files name it.
-  const problems = [...new Map(refused.map((p) => [p.file.toLowerCase(), p])).values()];
+  // One problem per file, however many requirement files name it.
+  const problems = [...new Map(collected.map((p) => [p.file.toLowerCase(), p])).values()];
 
   if (sources.length === 0) return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
   const read = found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1) });
@@ -165,14 +165,14 @@ export function resolvePython(cwd: string): VersionSource {
  * makes an SMB connection that sends the user's NTLM hash) used to be read,
  * and every `NAME==VALUE` line in it went to OSV.dev and back to the agent.
  * Such an include is skipped; absolute and UNC ones before any fs call.
- * Skipped is not silent: each one goes to `refused` (audit M4), which the
+ * Skipped is not silent: each one goes to `problems` (audit M4), which the
  * scan reports as a file whose pins were not checked.
  */
 export function readRequirementsFile(
   file: string,
   visited: Set<string> = new Set(),
   root: string = path.dirname(path.resolve(file)),
-  refused: LockfileProblem[] = [],
+  problems: LockfileProblem[] = [],
 ): Array<{ name: string; version: string }> | null {
   const key = path.resolve(file).toLowerCase();
   if (visited.has(key)) return [];
@@ -185,14 +185,22 @@ export function readRequirementsFile(
   }
   const dir = path.dirname(file);
   const out = parseRequirements(content);
+  const overlong = overlongRequirementLines(content);
+  if (overlong > 0) {
+    problems.push({
+      file: path.resolve(file),
+      skipped: overlong,
+      error: `${overlong === 1 ? "1 line" : `${overlong} lines`} longer than ${MAX_REQUIREMENT_LINE} characters (not requirement syntax) ${overlong === 1 ? "was" : "were"} skipped, so any pin on ${overlong === 1 ? "it was" : "them was"} not checked`,
+    });
+  }
   const constraints = new Map<string, string>();
   for (const { option, target } of requirementOptions(content)) {
     const included = confinedInclude(dir, target, root);
     if (included === null) {
-      refused.push(refusedInclude(file, option, target));
+      problems.push(refusedInclude(file, option, target));
       continue;
     }
-    if (option === "r") out.push(...(readRequirementsFile(included, visited, root, refused) ?? []));
+    if (option === "r") out.push(...(readRequirementsFile(included, visited, root, problems) ?? []));
     else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {
@@ -249,12 +257,38 @@ export function confinedInclude(dir: string, target: string, root: string): stri
 /** Longer lines are not requirements; capping them keeps the regexes below linear in the file size. */
 const MAX_REQUIREMENT_LINE = 4096;
 
-/** Logical lines (backslash continuations joined), with over-long lines dropped. */
+/**
+ * Logical lines (backslash continuations joined, `--hash` options dropped),
+ * with over-long lines left out. The cap used to apply with the hashes in:
+ * a `pip-compile --generate-hashes` entry with many wheels (aiohttp 3.8.0:
+ * 72 files, 5.7 KB) was dropped silently and never scanned. A hash is not
+ * part of the pin, so it goes before the cap; the split is on whitespace,
+ * which stays linear on a hostile line.
+ */
 function requirementLines(content: string): string[] {
+  return logicalRequirementLines(content).filter((line) => line.length <= MAX_REQUIREMENT_LINE);
+}
+
+function logicalRequirementLines(content: string): string[] {
   return content
     .replace(/\\\r?\n/g, " ")
     .split(/\r?\n/)
-    .filter((line) => line.length <= MAX_REQUIREMENT_LINE);
+    .map((line) => (line.includes("--hash") ? withoutHashes(line) : line));
+}
+
+function withoutHashes(line: string): string {
+  const tokens = line.split(/[ \t]+/);
+  const kept: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === "--hash") i++; // `--hash sha256:...`: the value is the next token
+    else if (!tokens[i].startsWith("--hash=") && !tokens[i].startsWith("--hash:")) kept.push(tokens[i]);
+  }
+  return kept.join(" ");
+}
+
+/** Lines left out for length that are not comments: what a read missed (audit L5's class). */
+function overlongRequirementLines(content: string): number {
+  return logicalRequirementLines(content).filter((line) => line.length > MAX_REQUIREMENT_LINE && !line.trimStart().startsWith("#")).length;
 }
 
 function safeRead(file: string): string {

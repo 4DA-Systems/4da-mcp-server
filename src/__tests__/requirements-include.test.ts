@@ -125,3 +125,37 @@ describe("a refused include is named in the coverage, never silent (M4)", () => 
     }
   });
 });
+/**
+ * Found while fixing L5 (2026-10-17): the 4096-character cap applied to the
+ * logical line AFTER backslash continuations were joined, so a
+ * `pip-compile --generate-hashes` entry with many wheels was dropped
+ * silently. aiohttp 3.8.0 (72 files) and pillow 10.0.0 (56) joined to 5.7 KB
+ * and 4.4 KB: neither was scanned, and the scan reported nothing missing.
+ * `--hash` options are not part of a pin and are dropped before the cap; a
+ * line still past it is counted as a partial read.
+ */
+describe("hashed requirements keep every pin (pip-compile --generate-hashes)", () => {
+  const hashes = (n: number) => Array.from({ length: n }, (_, i) => `    --hash=sha256:${i.toString(16).padStart(64, "0")}`).join(" \\\n");
+
+  it("a pin with 72 hashes is read", () => {
+    const content = `aiohttp==3.8.0 \\\n${hashes(72)}\n    # via -r requirements.in\nrequests==2.19.0 \\\n${hashes(2)}\n`;
+    expect(parseRequirements(content)).toEqual([
+      { name: "aiohttp", version: "3.8.0" },
+      { name: "requests", version: "2.19.0" },
+    ]);
+  });
+
+  it("the `--hash sha256:...` spelling is dropped too", () => {
+    const content = `pillow==10.0.0 ${Array.from({ length: 60 }, (_, i) => `--hash sha256:${i.toString(16).padStart(64, "0")}`).join(" ")}\n`;
+    expect(parseRequirements(content)).toEqual([{ name: "pillow", version: "10.0.0" }]);
+  });
+
+  it("a line that is still too long is named as a partial read, not dropped silently", () => {
+    write("proj/requirements.txt", `${"a".repeat(5000)}==1.0\nrequests==2.0.0\n# ${"c".repeat(5000)}\n`);
+    const read = resolveVersionSource(proj, "PyPI");
+    expect(read.instances.map((i) => i.name)).toEqual(["requests"]);
+    expect(read.problems).toEqual([
+      { file: path.join(proj, "requirements.txt"), skipped: 1, error: expect.stringMatching(/1 line longer than 4096 characters/) },
+    ]);
+  });
+});
