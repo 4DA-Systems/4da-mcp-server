@@ -75,9 +75,16 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
 }
 
 /** The line an answer over an unreadable lockfile leads with, in the scan's NOT CHECKED form. */
-function unreadableGapLine(problems: Array<{ file: string; error: string }>): string {
-  const files = problems.slice(0, 3).map((p) => `${p.file} (${p.error})`).join("; ");
-  return `NOT CHECKED: ${problems.length} lockfile${problems.length === 1 ? "" : "s"} could not be read, so the dependencies ${problems.length === 1 ? "it pins" : "they pin"} were not checked: ${files}${problems.length > 3 ? "; ..." : ""}. This is not a complete result.`;
+function unreadableGapLine(problems: Array<{ file: string; error: string; skipped?: number }>): string {
+  const listed = (ps: typeof problems) => `${ps.slice(0, 3).map((p) => `${p.file} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
+  const unreadable = problems.filter((p) => !p.skipped);
+  const partial = problems.filter((p) => p.skipped);
+  const parts: string[] = [];
+  if (unreadable.length > 0) {
+    parts.push(`${unreadable.length} lockfile${unreadable.length === 1 ? "" : "s"} could not be read, so the dependencies ${unreadable.length === 1 ? "it pins" : "they pin"} were not checked: ${listed(unreadable)}`);
+  }
+  if (partial.length > 0) parts.push(`${partial.length} lockfile${partial.length === 1 ? " was" : "s were"} read with entries skipped: ${listed(partial)}`);
+  return `NOT CHECKED: ${parts.join("; ")}. This is not a complete result.`;
 }
 
 /** One entry per distinct advisory of each installed copy: the group's most severe record. */

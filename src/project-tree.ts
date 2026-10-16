@@ -256,15 +256,25 @@ export function scanProjectTree(
   };
 }
 
-/** One note for lockfiles present but unreadable (conflict markers, invalid JSON), or none. */
-export function unreadableNotes(problems: Array<{ file: string; error: string }>): string[] {
-  if (problems.length === 0) return [];
-  return [
-    `UNREADABLE: ${problems.length} lockfile${problems.length === 1 ? "" : "s"} could not be read and ${problems.length === 1 ? "its" : "their"} dependencies were not checked: ${problems
-      .slice(0, 3)
-      .map((p) => `${p.file} (${p.error})`)
-      .join("; ")}${problems.length > 3 ? "; ..." : ""}.`,
-  ];
+/**
+ * Notes for lockfiles present but unreadable (conflict markers, invalid
+ * JSON), and for lockfiles read with entries skipped (`skipped`: a yarn.lock
+ * line past the length cap, audit L5), or none.
+ */
+export function unreadableNotes(problems: Array<{ file: string; error: string; skipped?: number }>): string[] {
+  const listed = (ps: typeof problems) => `${ps.slice(0, 3).map((p) => `${p.file} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
+  const unreadable = problems.filter((p) => !p.skipped);
+  const partial = problems.filter((p) => p.skipped);
+  const notes: string[] = [];
+  if (unreadable.length > 0) {
+    notes.push(
+      `UNREADABLE: ${unreadable.length} lockfile${unreadable.length === 1 ? "" : "s"} could not be read and ${unreadable.length === 1 ? "its" : "their"} dependencies were not checked: ${listed(unreadable)}.`,
+    );
+  }
+  if (partial.length > 0) {
+    notes.push(`PARTIAL: ${partial.length} lockfile${partial.length === 1 ? " was" : "s were"} read with entries skipped: ${listed(partial)}.`);
+  }
+  return notes;
 }
 
 /** What a scan left out on purpose or cannot read: ecosystems it does not cover, and test fixtures. */

@@ -45,6 +45,11 @@ export interface LockfileProblem {
   file: string;
   /** Why, in words ("merge-conflict markers", "invalid JSON: ..."). */
   error: string;
+  /**
+   * Set when the file WAS read except for this many entries (a yarn.lock line
+   * past the length cap): a partial read, not an unreadable file.
+   */
+  skipped?: number;
 }
 
 export type SourceKind = "lockfile" | "manifest" | "declared_ranges";
