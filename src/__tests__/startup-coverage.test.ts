@@ -68,3 +68,30 @@ describe.skipIf(!fs.existsSync(serverEntry))("coverage notes when the server sta
     }
   }, 60_000);
 });
+
+/** Readiness audit L6: the same, through the built server. */
+describe.skipIf(!fs.existsSync(serverEntry))("resources/list and the startup line, through the built server (L6)", () => {
+  it("standalone: resources/list has no desktop-only tool schema", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-l6-"));
+    try {
+      const { resources, tools } = await stdioSession(dir, []);
+      const schemas = resources.map((r) => r.uri).filter((u) => u.startsWith("4da://schema/"));
+      expect(schemas.sort()).toEqual(tools.map((t) => `4da://schema/${t}`).sort());
+      expect(schemas).not.toContain("4da://schema/knowledge_gaps");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+  }, 60_000);
+
+  it("a refused database: the startup line does not claim 16 working tools", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-l6-"));
+    try {
+      const { stderr, results } = await stdioSession(dir, [["get_context", {}]], { FOURDA_DB_PATH: "./data/missing.db" });
+      expect(resultText(results[0])).toMatch(/FOURDA_DB_PATH/);
+      expect(stderr).not.toMatch(/started — 16 tools,/);
+      expect(stderr).toMatch(/no tool can run until the database problem above is fixed/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+  }, 60_000);
+});

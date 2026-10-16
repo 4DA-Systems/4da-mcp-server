@@ -54,6 +54,7 @@ import {
   getSlimToolList,
   listResources,
   readResource,
+  startupToolsLine,
   toolEntry,
   unknownPromptError,
   unknownToolError,
@@ -361,9 +362,10 @@ export function buildServer(): Server {
 
   // Resources: every tool's full schema (lazy loading), and the category
   // manifest. An unknown URI is a resource-not-found protocol error.
-  server.setRequestHandler("resources/list", async () => ({ resources: listResources() }));
+  // Filtered as tools/list is: standalone mode advertised the 5 desktop-only schemas (audit L6).
+  server.setRequestHandler("resources/list", async () => ({ resources: listResources(isStandaloneMode() ? true : undefined) }));
 
-  server.setRequestHandler("resources/read", async (request) => readResource(request.params.uri));
+  server.setRequestHandler("resources/read", async (request) => readResource(request.params.uri, isStandaloneMode() ? true : undefined));
 
   // Prompts: user-invoked workflows (surfaced as slash commands by some hosts).
   server.setRequestHandler("prompts/list", async () => ({ prompts: listPrompts() }));
@@ -608,9 +610,8 @@ async function main() {
     process.exit(0);
   });
 
-  const toolCount = getSlimToolList(validation.standalone ? true : undefined).length;
-  const toolLabel = validation.standalone ? "standalone tools" : "tools";
-  console.error(`4DA MCP Server v${SERVER_VERSION} started — ${toolCount} ${toolLabel}, stdio transport`);
+  // What this start will serve: with the database refused, every call returns that error (audit L6).
+  console.error(`4DA MCP Server v${SERVER_VERSION} started — ${startupToolsLine(validation, Boolean(sqlite.driver), DATABASE_FREE_TOOLS.size)}, stdio transport`);
   console.error("  Use --http for Streamable HTTP, --setup to configure editors, --doctor to check health");
 }
 
