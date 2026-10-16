@@ -13,7 +13,7 @@
  */
 
 import type { OsvVulnerability } from "./types.js";
-import { compareVersions, isComparable, parsePep440, samePackageName } from "./version-compare.js";
+import { compareVersions, isComparable, isComposerOrGemPrerelease, parsePep440, samePackageName } from "./version-compare.js";
 import { parseSemverPrecedence } from "./semver-precedence.js";
 import { isMaintenanceNotice } from "./maintenance.js";
 
@@ -130,6 +130,9 @@ export function isPrereleaseVersion(version: string, ecosystem: string): boolean
     const p = parsePep440(version);
     return p ? p.pre !== null || p.dev !== null : false;
   }
+  // Gem prereleases are letter segments (`4.2.0.beta3`), not `-` suffixes.
+  const own = isComposerOrGemPrerelease(version, ecosystem);
+  if (own !== null) return own;
   const p = parseSemverPrecedence(version.replace(/^v(?=\d)/, ""));
   return p ? p.prerelease.length > 0 : false;
 }
