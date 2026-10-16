@@ -38,6 +38,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { groupAdvisories } from "../live/advisory-groups.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { FixPathSources } from "../live/fix-paths.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
@@ -612,19 +613,7 @@ function osvDep(item: CheckItem, version: string): ResolvedDependency {
  * of an alias group is its most severe, so merging never softens a verdict.
  */
 export function refs(entries: VulnerabilityEntry[] | undefined): AdvisoryRef[] {
-  const rank: Record<string, number> = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
-  const groups: Array<{ ids: Set<string>; best: VulnerabilityEntry }> = [];
-  for (const v of entries ?? []) {
-    const ids = [v.vulnId, ...(v.aliases ?? [])];
-    const group = groups.find((g) => ids.some((id) => g.ids.has(id)));
-    if (!group) {
-      groups.push({ ids: new Set(ids), best: v });
-      continue;
-    }
-    for (const id of ids) group.ids.add(id);
-    if ((rank[v.severity] ?? 0) > (rank[group.best.severity] ?? 0)) group.best = v;
-  }
-  return groups.map(({ best: v }) => ({ id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v) }));
+  return groupAdvisories(entries).map(({ best: v }) => ({ id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v) }));
 }
 
 const instanceKey = (eco: string, name: string, version: string) => `${eco}\0${eco === "PyPI" ? normalizePypi(name) : name}\0${version}`;
