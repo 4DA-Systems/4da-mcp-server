@@ -300,3 +300,43 @@ describe("dependency_health — advisories, not OSV records (M1)", () => {
     expect(result.vulnerabilitySummary).toEqual({ critical: 1, high: 0, medium: 2, low: 0 });
   });
 });
+
+/**
+ * Readiness audit M5 (2026-10-16): with a merge-conflicted or invalid-JSON
+ * package-lock.json, the score was 32/100, built from package.json's pins
+ * alone while the lockfile's tree went unchecked. A lockfile (or include)
+ * that could not be read withholds the score and the counts, as an OSV gap
+ * does, and the answer leads with what was not checked.
+ */
+describe("dependency_health — an unreadable lockfile withholds the score (M5)", () => {
+  const conflicted = (body: string): LiveIntelligence => {
+    const dir = fs.mkdtempSync(path.join(root, "m5-"));
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "repro", dependencies: { lodash: "4.17.20" } }));
+    fs.writeFileSync(path.join(dir, "package-lock.json"), body);
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    process.env.FOURDA_OFFLINE = "true";
+    li.initFromDependencyGroups([{ dir, language: "javascript", deps: ["lodash"], devDeps: [] }]);
+    li.fetchRegistryHealth = async () => [];
+    (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = makeScan([
+      makeEntry({ package: "lodash", currentVersion: "4.17.20", vulnId: "GHSA-lodash", severity: "high" }),
+    ]);
+    return li;
+  };
+
+  it.each([
+    ["merge-conflict markers", `{\n<<<<<<< HEAD\n  "lockfileVersion": 3,\n=======\n  "lockfileVersion": 2,\n>>>>>>> branch\n}\n`, /merge-conflict/],
+    ["invalid JSON", "{\n  not json\n", /invalid JSON/],
+  ])("%s: no score, no counts, NOT CHECKED first", async (_label, body, reason) => {
+    const result = await executeDependencyHealth(noDb, {}, conflicted(body));
+    expect(result.healthScore).toBeNull();
+    expect(result.healthScoreBasis).toBeUndefined();
+    expect(result.vulnerableCount).toBeNull();
+    expect(result.vulnerabilitySummary).toBeNull();
+    expect(result.summary).toMatch(/^NOT CHECKED: /);
+    expect(result.summary).toMatch(/package-lock\.json/);
+    expect(result.summary).toMatch(reason);
+    expect(result.summary).toMatch(/Health score withheld/);
+    expect(result.summary).toMatch(/at least 1 vulnerable package/);
+  });
+});

@@ -74,6 +74,12 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
   });
 }
 
+/** The line an answer over an unreadable lockfile leads with, in the scan's NOT CHECKED form. */
+function unreadableGapLine(problems: Array<{ file: string; error: string }>): string {
+  const files = problems.slice(0, 3).map((p) => `${p.file} (${p.error})`).join("; ");
+  return `NOT CHECKED: ${problems.length} lockfile${problems.length === 1 ? "" : "s"} could not be read, so the dependencies ${problems.length === 1 ? "it pins" : "they pin"} were not checked: ${files}${problems.length > 3 ? "; ..." : ""}. This is not a complete result.`;
+}
+
 /** One entry per distinct advisory of each installed copy: the group's most severe record. */
 function advisoriesPerCopy(rows: VulnerabilityEntry[]): VulnerabilityEntry[] {
   const byCopy = new Map<string, VulnerabilityEntry[]>();
@@ -171,6 +177,13 @@ export async function executeDependencyHealth(
     expectedTotal: scopeTotal,
     notLoaded: `the OSV.dev scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
   });
+  // A lockfile (or requirements include) that could not be read is a gap of
+  // the same kind: what it pins was never sent to OSV. 6.2.5 scored a
+  // merge-conflicted package-lock.json 32/100 from package.json's pins alone
+  // (audit M5). The score and the counts are withheld, as for an OSV gap.
+  const unread = liveIntel.getLockfileProblems();
+  const readGap = unread.length > 0 ? unreadableGapLine(unread) : null;
+  const withheld = coverage !== null || readGap !== null;
   // ecosystem_filter narrows the vulnerability counts too, not only the registry rows.
   const allVulns = (vulnResult?.vulnerabilities ?? []).filter((v) => !params.ecosystem_filter || v.ecosystem === params.ecosystem_filter);
   const activeVulns = allVulns.filter(isActionableVulnerability);
@@ -270,10 +283,10 @@ export async function executeDependencyHealth(
   const outdatedPenalty = Math.min(30, Math.round((stalenessWeight / denominator) * 60));
 
   const deprecatedPenalty = Math.min(deprecated * 8, 15);
-  const healthScore = coverage ? null : Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
+  const healthScore = withheld ? null : Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
 
   // Severity breakdown over the actionable set, matching the count above.
-  const vulnSummary = vulnResult && !coverage ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
+  const vulnSummary = vulnResult && !withheld ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
   if (vulnSummary) {
     for (const v of activeAdvisories) {
       if (v.severity in vulnSummary) vulnSummary[v.severity as keyof typeof vulnSummary]++;
@@ -293,7 +306,7 @@ export async function executeDependencyHealth(
   );
   if (vulnResult) {
     const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive)`;
-    parts.push(coverage ? `at least ${found}, in the checked part` : found);
+    parts.push(withheld ? `at least ${found}, in the checked part` : found);
   }
   if (deprecated > 0) parts.push(`${deprecated} deprecated (direct)`);
   if (outdated > 0) parts.push(`${outdated} outdated (direct)`);
@@ -301,7 +314,7 @@ export async function executeDependencyHealth(
     parts.push(`${drifted} installed at a different version than the lockfile pins (see installedVersion; vulnerability_scan lists install_drift)`);
   }
   // "All healthy" is a claim about CVEs too; it needs a scan behind it.
-  if (vulnResult && !coverage && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
+  if (vulnResult && !withheld && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
     parts.push("all healthy");
   }
   const hidden = advisoryCount - activeAdvisories.length;
@@ -312,7 +325,7 @@ export async function executeDependencyHealth(
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
-  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...unreadableNotes(liveIntel.getLockfileProblems())]) parts.push(note.replace(/[.]$/, ""));
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...(readGap ? [] : unreadableNotes(unread))]) parts.push(note.replace(/[.]$/, ""));
 
   return {
     scannedAt: new Date().toISOString(),
@@ -320,7 +333,7 @@ export async function executeDependencyHealth(
     ecosystemsScanned: ecosystems,
     totalDeps: total,
     treeDeps,
-    vulnerableDirectCount: coverage ? null : vulnerableDirect,
+    vulnerableDirectCount: withheld ? null : vulnerableDirect,
     ...(healthScore !== null
       ? {
           healthScoreBasis: {
@@ -333,14 +346,14 @@ export async function executeDependencyHealth(
       : {}),
     outdatedCount: outdated,
     deprecatedCount: deprecated,
-    vulnerableCount: coverage ? null : vulnerable,
+    vulnerableCount: withheld ? null : vulnerable,
     advisoryCount,
     healthScore,
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     dependencies: limited,
     vulnerabilitySummary: vulnSummary,
-    summary: coverage
-      ? `${coverage.note} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
+    summary: withheld
+      ? `${[coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
       : `Health: ${healthScore}/100 (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
     scanDurationMs: Date.now() - start,
     cached: false,
