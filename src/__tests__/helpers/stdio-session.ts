@@ -95,6 +95,10 @@ export async function stdioSession(
     const gone = child.exitCode !== null ? Promise.resolve() : new Promise((resolve) => child.once("exit", resolve));
     child.kill();
     await gone;
-    fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    try {
+      fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      // Windows can hold a just-exited child's files for a moment; left for the OS temp cleaner.
+    }
   }
 }

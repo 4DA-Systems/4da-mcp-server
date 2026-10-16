@@ -22,6 +22,18 @@ const write = (rel: string, content: string) => {
   fs.writeFileSync(path.join(scratch, rel), content);
 };
 
+/** A spawned server's first call opens a fresh database; on a loaded Windows host (Defender scanning the new files) that has taken 40 s. */
+const SPAWN_TIMEOUT_MS = 180_000;
+
+/** Windows can hold a just-exited child's directory for a moment: cleanup must never fail the run. */
+const removeQuietly = (dir: string) => {
+  try {
+    removeQuietly(dir);
+  } catch {
+    // left for the OS temp cleaner
+  }
+};
+
 const CALLS: Array<[string, Record<string, unknown>]> = [
   ["vulnerability_scan", {}],
   ["dependency_health", {}],
@@ -40,7 +52,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("coverage notes when the server sta
   });
 
   afterAll(() => {
-    fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    removeQuietly(scratch);
   });
 
   it("a Maven project: every tool says NOT COVERED and names pom.xml and build.gradle", async () => {
@@ -56,7 +68,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("coverage notes when the server sta
     const health = JSON.parse(resultText(results[1])) as { healthScore: unknown; vulnerableCount: unknown };
     expect(health.healthScore).toBeNull();
     expect(health.vulnerableCount).toBeNull();
-  }, 60_000);
+  }, SPAWN_TIMEOUT_MS);
 
   it("only test-fixture lockfiles: every tool says they were not scanned", async () => {
     const { results } = await stdioSession(path.join(scratch, "fixtures-only"), CALLS);
@@ -66,7 +78,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("coverage notes when the server sta
       expect(t).toMatch(/include_test_fixtures/);
       expect(t).not.toMatch(/none of an unsupported one either/);
     }
-  }, 60_000);
+  }, SPAWN_TIMEOUT_MS);
 });
 
 /** Readiness audit L6: the same, through the built server. */
@@ -79,9 +91,9 @@ describe.skipIf(!fs.existsSync(serverEntry))("resources/list and the startup lin
       expect(schemas.sort()).toEqual(tools.map((t) => `4da://schema/${t}`).sort());
       expect(schemas).not.toContain("4da://schema/knowledge_gaps");
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      removeQuietly(dir);
     }
-  }, 60_000);
+  }, SPAWN_TIMEOUT_MS);
 
   it("a refused database: the startup line does not claim 16 working tools", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-l6-"));
@@ -91,7 +103,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("resources/list and the startup lin
       expect(stderr).not.toMatch(/started — 16 tools,/);
       expect(stderr).toMatch(/no tool can run until the database problem above is fixed/);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      removeQuietly(dir);
     }
-  }, 60_000);
+  }, SPAWN_TIMEOUT_MS);
 });
