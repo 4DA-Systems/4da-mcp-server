@@ -42,7 +42,7 @@ import { fileURLToPath } from "node:url";
 import { startHttpServer } from "./http-transport.js";
 import { runSetup } from "./setup.js";
 import { runDoctor } from "./doctor.js";
-import { scanProjectTree, treeResolutionGroups } from "./project-tree.js";
+import { exclusionNotes, scanProjectTree, treeResolutionGroups, type TreeDiscovery } from "./project-tree.js";
 import { IgnoreRules } from "./gitignore.js";
 import { LiveIntelligence } from "./live/index.js";
 import { setLiveIntelligence } from "./live-singleton.js";
@@ -146,15 +146,18 @@ function getDatabase(): FourDADatabase {
       console.error(
         `[4DA] Standalone mode: scanned ${scan.projectPath} (${tree.length} project${tree.length === 1 ? "" : "s"})`
       );
+      // Initialize live intelligence with per-ecosystem resolved versions
+      // (targets carry platform-gated dep info so advisories can be flagged
+      // platform-relevant for the host). Also with NO groups: the walk's
+      // report of what it found but does not read (pom.xml, build.gradle,
+      // test-fixture lockfiles) is what every tool's coverage note is built
+      // from. Started inside spring-petclinic, 6.2.5 kept nothing and said
+      // "none of an unsupported one either" (readiness audit H3).
+      liveIntel.initFromProjectTree(cwd, groups, discovery);
       if (groups.length > 0) {
         console.error(
           `[4DA]   Detected: ${detected.join(", ") || "lockfiles"} | ${scan.dependencies.length} deps, ${scan.devDependencies.length} dev deps at the root`
         );
-
-        // Initialize live intelligence with per-ecosystem resolved versions
-        // (targets carry platform-gated dep info so advisories can be flagged
-        // platform-relevant for the host).
-        liveIntel.initFromProjectTree(cwd, groups, discovery);
 
         if (liveIntel.isEnabled()) {
           console.error(`[4DA]   Live intelligence: enabled (OSV.dev)`);
@@ -165,9 +168,7 @@ function getDatabase(): FourDADatabase {
           console.error(`[4DA]   Vulnerability scan warming in background (OSV.dev).`);
         }
       } else {
-        console.error(
-          `[4DA]   No project manifests found in ${cwd} — tools will return empty results`
-        );
+        console.error(`[4DA]   ${noSupportedProjectNote(cwd, discovery)}`);
       }
     } else {
       // Full 4DA database mode — resolve each dependency's version from its OWN
@@ -257,9 +258,21 @@ function initWithoutDatabase(): void {
   const { entries, discovery } = scanProjectTree(cwd);
   const groups = treeResolutionGroups(entries);
   console.error(`[4DA] No SQLite driver: the dependency tools run without a database (${cwd}).`);
-  if (groups.length === 0) return;
+  // Kept with no groups too: the coverage notes come from the walk (H3).
   liveIntel.initFromProjectTree(cwd, groups, discovery);
+  if (groups.length === 0) {
+    console.error(`[4DA]   ${noSupportedProjectNote(cwd, discovery)}`);
+    return;
+  }
   if (liveIntel.isEnabled()) liveIntel.startVulnerabilityWarmup(cwd);
+}
+
+/** The startup line for a directory with no lockfile this server reads: what it did find, never just "nothing". */
+function noSupportedProjectNote(cwd: string, discovery: TreeDiscovery): string {
+  const notes = exclusionNotes(discovery);
+  return notes.length > 0
+    ? `No lockfile of a supported ecosystem in ${cwd}. ${notes.join(" ")}`
+    : `No project manifests found in ${cwd} — tools will return empty results`;
 }
 
 /** The database for a tool call; null only for a database-free tool when no SQLite driver is usable. */

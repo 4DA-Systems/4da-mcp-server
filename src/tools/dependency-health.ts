@@ -12,7 +12,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
-import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
+import { discoveryNote, exclusionNotes, scanProjectTree, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -73,6 +73,41 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
   });
 }
 
+/**
+ * No dependency was resolved, so there is nothing to score: say what WAS
+ * found (manifests of ecosystems this server does not read, test-fixture
+ * lockfiles, unreadable lockfiles). Started inside spring-petclinic, 6.2.5
+ * said "No project manifests detected" beside a pom.xml (audit H3).
+ */
+function nothingChecked(start: number, liveIntel: LiveIntelligence | null): DependencyHealthResult {
+  const root = liveIntel?.getProjectRoot() ?? process.cwd();
+  const discovery = liveIntel?.getDiscovery() ?? scanProjectTree(root).discovery;
+  const notes = [
+    ...exclusionNotes(discovery),
+    ...unreadableNotes(liveIntel?.getLockfileProblems() ?? []),
+    ...[discoveryNote(discovery)].filter((n): n is string => n !== null),
+  ];
+  return {
+    scannedAt: new Date().toISOString(),
+    projectPath: root,
+    ecosystemsScanned: [],
+    totalDeps: 0,
+    outdatedCount: 0,
+    deprecatedCount: 0,
+    vulnerableCount: null,
+    advisoryCount: 0,
+    healthScore: null,
+    dependencies: [],
+    vulnerabilitySummary: null,
+    summary:
+      notes.length > 0
+        ? `Nothing was checked, so there is no health score; this is not a healthy result. ${notes.join(" ")}`
+        : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, composer.lock), and none of an unsupported one either; no health score.`,
+    scanDurationMs: Date.now() - start,
+    cached: false,
+  };
+}
+
 export async function executeDependencyHealth(
   _db: FourDADatabase | null,
   params: DependencyHealthParams,
@@ -80,28 +115,12 @@ export async function executeDependencyHealth(
 ): Promise<DependencyHealthResult> {
   const start = Date.now();
 
-  if (!liveIntel || !liveIntel.isInitialized()) {
-    return {
-      scannedAt: new Date().toISOString(),
-      projectPath: process.cwd(),
-      ecosystemsScanned: [],
-      totalDeps: 0,
-      outdatedCount: 0,
-      deprecatedCount: 0,
-      vulnerableCount: null,
-      advisoryCount: 0,
-      healthScore: null,
-      dependencies: [],
-      vulnerabilitySummary: null,
-      summary: "Live intelligence not initialized. No project manifests detected.",
-      scanDurationMs: Date.now() - start,
-      cached: false,
-    };
-  }
+  if (!liveIntel || !liveIntel.isInitialized()) return nothingChecked(start, liveIntel);
 
   // A long-lived server must not answer from the versions it read at startup:
   // re-resolve if a lockfile (or node_modules) changed. Stat calls only.
   liveIntel.refreshIfLockfilesChanged();
+  if (liveIntel.getResolvedDeps().length === 0 && liveIntel.getAuditDeps().length === 0) return nothingChecked(start, liveIntel);
 
   // Get resolved deps
   const includeDev = params.include_dev ?? false;
