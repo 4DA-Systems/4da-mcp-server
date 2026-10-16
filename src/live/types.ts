@@ -285,10 +285,11 @@ export interface DependencyHealthResult {
    */
   vulnerableCount: number | null;
   /**
-   * Every advisory row the scan returned, before the platform and maintenance
-   * splits and before alias collapsing. Present so nothing is hidden by the
-   * `vulnerableCount` filter: the difference is platform-inactive packages and
-   * unmaintained-dependency notices.
+   * Distinct advisories the scan returned (records naming each other, such as
+   * a GHSA and its PYSEC twin, are one advisory per installed copy, as in
+   * vulnerability_scan), before the platform and maintenance splits. Present
+   * so nothing is hidden by the `vulnerableCount` filter: the difference is
+   * platform-inactive packages and unmaintained-dependency notices.
    */
   advisoryCount: number;
   /** Null when vulnerability data is missing or incomplete: a score computed without it would read as healthier than it is. */

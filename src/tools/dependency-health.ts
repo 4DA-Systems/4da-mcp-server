@@ -9,7 +9,8 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
-import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo } from "../live/types.js";
+import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo, VulnerabilityEntry } from "../live/types.js";
+import { groupAdvisories } from "../live/advisory-groups.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
 import { discoveryNote, exclusionNotes, scanProjectTree, unreadableNotes } from "../project-tree.js";
@@ -71,6 +72,16 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
     if (records.length === 0) return row;
     return { ...row, installedVersion: [...new Set(records.map((r) => r.installedVersion))].join(", ") };
   });
+}
+
+/** One entry per distinct advisory of each installed copy: the group's most severe record. */
+function advisoriesPerCopy(rows: VulnerabilityEntry[]): VulnerabilityEntry[] {
+  const byCopy = new Map<string, VulnerabilityEntry[]>();
+  for (const v of rows) {
+    const key = `${v.ecosystem}\u0000${v.package}\u0000${v.currentVersion}`;
+    byCopy.set(key, [...(byCopy.get(key) ?? []), v]);
+  }
+  return [...byCopy.values()].flatMap((copy) => groupAdvisories(copy).map((g) => g.best));
 }
 
 /**
@@ -171,7 +182,11 @@ export async function executeDependencyHealth(
     const key = vulnKey(v.ecosystem, v.package);
     vulnMap.set(key, (vulnMap.get(key) || 0) + 1);
   }
-  const advisoryCount = allVulns.length;
+  // Advisories, not OSV records: one issue as GHSA + PYSEC + CVE records is
+  // one advisory, at its worst severity (audit M1: pygoat read 348 beside the
+  // scan's 187). Grouped per installed copy, as vulnerability_scan's rows are.
+  const activeAdvisories = advisoriesPerCopy(activeVulns);
+  const advisoryCount = advisoriesPerCopy(allVulns).length;
 
   // Compute stats
   let outdated = 0;
@@ -237,7 +252,7 @@ export async function executeDependencyHealth(
   // below 100 always has a vulnerable package beside it.
   const sevWeight: Record<string, number> = { critical: 20, high: 10, medium: 4, low: 1 };
   let vulnPenaltyRaw = 0;
-  for (const v of activeVulns) {
+  for (const v of activeAdvisories) {
     const w = sevWeight[v.severity] ?? 2; // "unknown" severity with a real (non-maintenance) advisory
     vulnPenaltyRaw += v.isDirect ? w : w / 3;
   }
@@ -260,7 +275,7 @@ export async function executeDependencyHealth(
   // Severity breakdown over the actionable set, matching the count above.
   const vulnSummary = vulnResult && !coverage ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
   if (vulnSummary) {
-    for (const v of activeVulns) {
+    for (const v of activeAdvisories) {
       if (v.severity in vulnSummary) vulnSummary[v.severity as keyof typeof vulnSummary]++;
     }
   }
@@ -289,7 +304,7 @@ export async function executeDependencyHealth(
   if (vulnResult && !coverage && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
     parts.push("all healthy");
   }
-  const hidden = advisoryCount - activeVulns.length;
+  const hidden = advisoryCount - activeAdvisories.length;
   if (hidden > 0) {
     parts.push(`${hidden} advisor${hidden !== 1 ? "ies" : "y"} not counted (platform-inactive or maintenance notices)`);
   }

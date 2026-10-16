@@ -265,3 +265,38 @@ describe("dependency_health — direct and tree counts are named, the score expl
     expect(result.vulnerableCount).toBe(3);
   });
 });
+
+/**
+ * Readiness audit M1 (2026-10-16): advisoryCount and the per-advisory penalty
+ * counted OSV records, not advisories. One issue published as GHSA, PYSEC and
+ * CVE records was counted two or three times: pygoat read advisoryCount 348
+ * beside the scan's 187, xsv 31 beside 13. Records are grouped per installed
+ * copy by shared ids (groupAdvisories), each group penalised once at its worst
+ * severity, the way vulnerability_scan counts its rows.
+ */
+describe("dependency_health — advisories, not OSV records (M1)", () => {
+  const scan = makeScan([
+    // One django issue as three records naming each other; the PYSEC record is the most severe.
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "GHSA-dj01", aliases: ["CVE-2024-0001", "PYSEC-2024-1"], severity: "high" }),
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "PYSEC-2024-1", aliases: ["CVE-2024-0001"], severity: "critical" }),
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "CVE-2024-0001", aliases: [], severity: "unknown" }),
+    // A second, separate django issue.
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "GHSA-dj02", aliases: ["PYSEC-2024-2"], severity: "medium" }),
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "PYSEC-2024-2", aliases: ["GHSA-dj02"], severity: "medium" }),
+    // The same id on another installed copy is a separate finding, as in the scan.
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "4.2.0", vulnId: "GHSA-dj02", aliases: ["PYSEC-2024-2"], severity: "medium" }),
+  ]);
+
+  it("advisoryCount is distinct advisories per installed copy (3), not records (6)", async () => {
+    const result = await executeDependencyHealth(noDb, {}, makeIntel(scan));
+    expect(result.advisoryCount).toBe(3);
+    expect(result.vulnerableCount).toBe(1);
+  });
+
+  it("each advisory is penalised once, at its group's worst severity", async () => {
+    const result = await executeDependencyHealth(noDb, {}, makeIntel(scan));
+    // critical 20 + medium 4 + medium 4 (all direct); records would give 20+10+2+4+4+4 = 44.
+    expect(result.healthScoreBasis?.vulnerabilities).toBe(28);
+    expect(result.vulnerabilitySummary).toEqual({ critical: 1, high: 0, medium: 2, low: 0 });
+  });
+});
