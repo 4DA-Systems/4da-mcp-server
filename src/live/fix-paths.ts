@@ -412,8 +412,11 @@ export interface RefreshVerdict {
   format: LockfileFormat;
   /** The command, run in the lockfile's directory; for yarn 1 and bun, the manual steps (no command moves one copy in place). */
   command: string;
-  /** Parent requirements that do NOT admit a clean version (why it is waiting on upstream). */
-  blocking: Array<{ parent: string; parentVersion: string | null; requirement: string }>;
+  /**
+   * Parent requirements that do NOT admit a clean version (why it is waiting on upstream).
+   * `bundled`: the copy ships inside that parent's tarball, so neither a refresh nor an override reaches it (audit E8).
+   */
+  blocking: Array<{ parent: string; parentVersion: string | null; requirement: string; bundled?: boolean }>;
   /** The version a refresh resolves to, when the registry's version list was read. */
   resolvesTo: string | null;
 }
@@ -444,6 +447,52 @@ export function refreshCommand(format: LockfileFormat, name: string, installed: 
     case "cargo":
       return `cargo update -p ${name}@${installed} --precise ${target}`;
   }
+}
+
+/**
+ * Whether an override (npm `overrides`, pnpm `pnpm.overrides`, yarn `resolutions`) can reach the copy
+ * these blocking parents hold: never when one of them ships it bundled (rule vectors rv-066..rv-068).
+ */
+export function overrideReaches(blocking: Array<{ bundled?: boolean }>): boolean {
+  return !blocking.some((b) => b.bundled === true);
+}
+
+/**
+ * The command that moves a DIRECT dependency to `target` where the project declares it, run in that
+ * project's directory (audit E8: a direct row named no command). The same text as the 4DA app's
+ * `Manager::direct_command` (rule vectors fc-028..fc-037). Each was checked on 2026-10-15 to keep the
+ * dependency in its own section: npm 10.9.2 `install` (also from a workspace member), pnpm 10.34.6
+ * `up` (`add` at a workspace root needs `-w`), yarn 1.22.22 `upgrade`, yarn 4.9.1 `up`, cargo `add`
+ * (which writes a second `[dependencies]` entry for a dev-dependency unless given `--dev`). Null for
+ * bun, which was not checked.
+ */
+export function directCommand(format: LockfileFormat, name: string, target: string, dev = false): string | null {
+  switch (format) {
+    case "package-lock":
+      return `npm install ${name}@${target}`;
+    case "pnpm":
+      return `pnpm up ${name}@${target}`;
+    case "yarn":
+      return `yarn upgrade ${name}@${target}`;
+    case "yarn-berry":
+      return `yarn up ${name}@${target}`;
+    case "cargo":
+      return `cargo add ${name}@${target}${dev ? " --dev" : ""}`;
+    case "bun":
+      return null;
+  }
+}
+
+/** The direct-upgrade command for the project whose lockfile is `lockfile`; null when none is named for it. */
+export function directCommandFor(lockfile: string, name: string, target: string, dev = false): string | null {
+  let content: string;
+  try {
+    content = fs.readFileSync(lockfile, "utf-8");
+  } catch {
+    return null;
+  }
+  const format = lockfileFormat(lockfile, content);
+  return format ? directCommand(format, name, target, dev) : null;
 }
 
 /** For a lockfile with no in-place refresh command (yarn 1, bun): the steps that move the copy. */
@@ -518,7 +567,7 @@ export async function refreshVerdict(
 
   const blocking: RefreshVerdict["blocking"] = [];
   const block = (r: (typeof reqs)[number]) =>
-    blocking.push({ parent: r.edge.parent, parentVersion: r.edge.parentVersion, requirement: r.text ?? "" });
+    blocking.push({ parent: r.edge.parent, parentVersion: r.edge.parentVersion, requirement: r.text ?? "", ...(r.edge.bundled ? { bundled: true } : {}) });
   for (const r of reqs) if (requirementAdmits(r, target) === false) block(r);
 
   let resolvesTo: string | null = null;

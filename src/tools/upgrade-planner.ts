@@ -97,6 +97,13 @@ interface UpgradeRecommendation {
   /** lockfile_refresh: the command to run, per lockfile directory. */
   refreshCommands?: Array<{ dir: string; command: string }>;
   /**
+   * upgrade_direct: the command that moves the declared dependency to
+   * targetVersion where it is declared, per lockfile directory (npm install,
+   * pnpm up, yarn upgrade / yarn up, cargo add with --dev for a
+   * dev-dependency). Absent for tools no command is named for.
+   */
+  upgradeCommands?: Array<{ dir: string; command: string }>;
+  /**
    * lockfile_refresh: true when not every parent's requirement could be read
    * (none read excludes the target) and the target is semver-compatible with
    * the installed version, so the refresh is inferred rather than read.
@@ -295,7 +302,7 @@ async function executeStandalonePlanner(
     `${ecosystem}\0${name}\0${version ?? "unknown"}`;
   const vulnsByPackage = new Map<
     string,
-    Array<{ severity: string; vulnId: string; summary: string; fixedVersion: string | null; platformActive: boolean }>
+    Array<{ severity: string; vulnId: string; summary: string; fixedVersion: string | null; platformActive: boolean; sourceDirs: string[] }>
   >();
   // "X is unmaintained" (RUSTSEC informational) is not a CVE and has nothing
   // to upgrade to; it was counted as "1 known CVE" on paste, ttf-parser and
@@ -316,6 +323,7 @@ async function executeStandalonePlanner(
         summary: v.summary,
         fixedVersion: v.fixedVersion,
         platformActive: v.platformActive,
+        sourceDirs: v.sourceDirs ?? [],
       });
     }
   }
@@ -461,7 +469,11 @@ async function executeStandalonePlanner(
     };
     recommendations.push(rec);
     if (fixable && !reinstallOnly && action === "upgrade_direct" && vulns) {
-      fixPathInputs.set(rec, { fixes: vulns.map((v) => v.fixedVersion).filter((f): f is string => Boolean(f)), sourceDirs: [] });
+      // The manifest directories that declare it: where its upgrade command runs (audit E8).
+      fixPathInputs.set(rec, {
+        fixes: vulns.map((v) => v.fixedVersion).filter((f): f is string => Boolean(f)),
+        sourceDirs: [...new Set(vulns.flatMap((v) => v.sourceDirs))],
+      });
     } else if (vulnerable && action === "no_fix_available") {
       fixPathInputs.set(rec, { fixes: [], sourceDirs: [] });
     }

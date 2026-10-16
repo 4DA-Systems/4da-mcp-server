@@ -13,7 +13,9 @@
  *                    smallestCleanVersion over every record (the
  *                    vulnerability_scan / upgrade_planner target)
  *   refresh_verdict  refreshRule (refresh-rule.ts), which refreshVerdict applies
- *   fix_command      refreshCommandFor on a directory holding that tool's files
+ *   fix_command      refreshCommandFor on a directory holding that tool's files;
+ *                    directCommandFor for `kind: "direct"` lines (audit E8)
+ *   (refresh_verdict `override`: overrideReaches over the blocking parents)
  *   range_check      parseTarget + checkRange (dependency_check)
  */
 
@@ -22,8 +24,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRanges } from "../../live/osv-ranges.js";
 import { extractFixedVersion } from "../../live/osv-scanner.js";
-import { refreshCommandFor } from "../../live/fix-paths.js";
-import { refreshRule, type RequirementDialect } from "../../live/refresh-rule.js";
+import { directCommandFor, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
+import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
 import { compareVersions, isComparable } from "../../live/version-compare.js";
 import type { OsvVulnerability } from "../../live/types.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../../live/release-metadata.js";
@@ -122,13 +124,20 @@ function checkFixTarget(v: Vector, records: Records): string | null {
 }
 
 function checkRefreshVerdict(v: Vector): string | null {
-  const reqs = ((v.requirements as Array<Record<string, string>> | undefined) ?? []).map((r) => ({
-    parent: r.parent,
-    text: r.text,
+  const reqs = ((v.requirements as Array<Record<string, string | boolean>> | undefined) ?? []).map((r) => ({
+    parent: String(r.parent),
+    text: String(r.text),
     dialect: (r.dialect === "cargo" ? "cargo" : "npm") as RequirementDialect,
+    // A bundled copy's requirement is its owner's exact pin: `text` is the version shipped.
+    bundled: r.bundled === true,
   }));
   const got = refreshRule(str(v, "installed"), str(v, "target"), reqs);
   const wantVia = (v.via as string[] | undefined) ?? [];
+  if (typeof v.override === "boolean") {
+    const blocking = reqs.filter((r) => requirementAdmits(r, str(v, "target")) === false);
+    const offered = str(v, "eco") === "npm" && overrideReaches(blocking);
+    if (offered !== v.override) return `override offered: got ${offered}, want ${v.override}`;
+  }
   const same = got.verdict === v.verdict && got.inferred === v.inferred && JSON.stringify(got.via) === JSON.stringify(wantVia);
   return same
     ? null
@@ -168,7 +177,10 @@ function checkFixCommand(v: Vector): string | null {
     const files = toolFiles(str(v, "tool"), v.workspace_root === true);
     for (const [name, body] of files) fs.writeFileSync(path.join(dir, name), body);
     const lockfile = files.length > 0 ? path.join(dir, files[0][0]) : path.join(dir, "none");
-    const got = refreshCommandFor(lockfile, str(v, "pkg"), str(v, "installed"), str(v, "target"));
+    const got =
+      v.kind === "direct"
+        ? directCommandFor(lockfile, str(v, "pkg"), str(v, "target"), v.dev === true)
+        : refreshCommandFor(lockfile, str(v, "pkg"), str(v, "installed"), str(v, "target"));
     const want = optStr(v, "command");
     return got === want ? null : `command: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
   } finally {

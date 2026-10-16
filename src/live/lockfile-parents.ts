@@ -26,6 +26,12 @@ export interface ParentEdge {
   range: string | null;
   /** True when the parent is the project itself or a workspace member (then the package is direct there). */
   local: boolean;
+  /**
+   * True when the copy ships inside `parent`'s tarball (package-lock `inBundle`): `range` is then the
+   * exact version shipped. No refresh moves it and no override reaches it (both checked with npm
+   * 10.9.2, 2026-10-15); only a new `parent` release, or replacing `parent`, does (audit E8).
+   */
+  bundled?: boolean;
 }
 
 export interface LockfileParents {
@@ -83,6 +89,7 @@ interface LockEntry {
   name?: string;
   version?: string;
   link?: boolean;
+  inBundle?: boolean;
   requires?: Record<string, string>;
   dependencies?: Record<string, string> | Record<string, LockEntry>;
   optionalDependencies?: Record<string, string>;
@@ -101,6 +108,37 @@ function resolveInstallPath(packages: Record<string, LockEntry>, from: string, n
   }
 }
 
+/**
+ * The package a bundled copy at install path `at` ships inside: the nearest enclosing entry that is
+ * not itself `inBundle`. A level the lockfile does not list is passed over. Null when none is found.
+ */
+function bundleOwner(packages: Record<string, LockEntry>, at: string): string | null {
+  let dir = at;
+  for (;;) {
+    const cut = dir.lastIndexOf("/node_modules/");
+    if (cut < 0) return null;
+    dir = dir.slice(0, cut);
+    const entry = packages[dir];
+    if (entry && !entry.inBundle) return dir;
+  }
+}
+
+/** A key that installs a DEPENDENCY (under some `node_modules/`), not the root or a workspace member's folder. */
+function isDependencyKey(key: string): boolean {
+  return key.startsWith("node_modules/") || key.includes("/node_modules/");
+}
+
+/**
+ * Whether the entry at `key` is a copy bundled inside a DEPENDENCY's tarball. A project's or workspace
+ * member's own `bundleDependencies` also set `inBundle` (Arborist's bundler can be the root), but those
+ * copies sit in the user's tree, where `npm update` and overrides reach them like any other.
+ */
+function bundledInDependency(packages: Record<string, LockEntry>, key: string): boolean {
+  if (!packages[key]?.inBundle) return false;
+  const owner = bundleOwner(packages, key);
+  return owner !== null && isDependencyKey(owner);
+}
+
 export function packageLockParents(
   lock: { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry>; name?: string },
   name: string,
@@ -109,6 +147,17 @@ export function packageLockParents(
   const edges: ParentEdge[] = [];
   if (lock.packages && Object.keys(lock.packages).length > 0) {
     const packages = lock.packages;
+    // A bundled copy hangs off its bundle owner, pinned to the version shipped: the ranges the
+    // bundle's own packages declare say nothing about what a refresh can reach (audit E8:
+    // NodeGoat's debug 4.1.1 inside fsevents read "npm update debug" from needle's ^4.1.0).
+    const owners = new Set<string>();
+    for (const [key, entry] of Object.entries(packages)) {
+      if (entry?.version !== version || packageNameFromNodeModulesPath(key) !== name || !bundledInDependency(packages, key)) continue;
+      const owner = bundleOwner(packages, key);
+      if (!owner || owners.has(owner)) continue;
+      owners.add(owner);
+      edges.push({ parent: packageNameFromNodeModulesPath(owner), parentVersion: packages[owner]?.version ?? null, range: version, local: false, bundled: true });
+    }
     for (const [key, entry] of Object.entries(packages)) {
       if (!entry || entry.link) continue;
       for (const field of DEP_FIELDS) {
@@ -116,7 +165,7 @@ export function packageLockParents(
         const range = declared?.[name];
         if (typeof range !== "string") continue;
         const at = resolveInstallPath(packages, key, name);
-        if (!at || packages[at]?.version !== version) continue;
+        if (!at || packages[at]?.version !== version || bundledInDependency(packages, at)) continue;
         const local = !key.startsWith("node_modules/") && !key.includes("/node_modules/");
         edges.push({
           parent: local ? entry.name ?? (key || lock.name || ".") : packageNameFromNodeModulesPath(key),

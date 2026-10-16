@@ -11,7 +11,7 @@
  */
 
 import type { LiveIntelligence } from "../live/index.js";
-import { cleanFixTarget, refreshVerdict, type FixPathSources, type RefreshVerdict } from "../live/fix-paths.js";
+import { cleanFixTarget, directCommandFor, overrideReaches, refreshVerdict, type FixPathSources, type RefreshVerdict } from "../live/fix-paths.js";
 import type { LockfileFormat } from "../live/lockfile-parents.js";
 import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
@@ -36,6 +36,9 @@ export interface FixPathStep {
   refreshCommands?: Array<{ dir: string; command: string }>;
   /** lockfile_refresh: true when not every parent's requirement could be read and the verdict comes from semver compatibility. */
   refreshInferred?: boolean;
+  /** upgrade_direct: the command that moves the declared dependency to targetVersion, per lockfile directory. */
+  upgradeCommands?: Array<{ dir: string; command: string }>;
+  isDev?: boolean;
 }
 
 export interface FixPathInput {
@@ -117,6 +120,7 @@ async function verifyOne(
     step.breaking = step.scope === "direct" && step.upgradeType === "major";
     step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
     if (step.scope === "transitive" && step.currentVersion) await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
+    withUpgradeCommands(input, liveIntel);
     return true;
   }
   if (!clean) return false;
@@ -158,7 +162,21 @@ async function verifyOne(
   if (step.scope === "transitive" && step.action === "waiting_on_upstream" && step.currentVersion) {
     await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
   }
+  withUpgradeCommands(input, liveIntel);
   return true;
+}
+
+/** upgrade_direct: name the command that moves the declared dependency, per lockfile the project holds (audit E8). */
+function withUpgradeCommands(input: FixPathInput, liveIntel: Pick<LiveIntelligence, "lockfileFor" | "getProjectRoot">): void {
+  const { step } = input;
+  if (step.action !== "upgrade_direct" || step.scope !== "direct" || !step.targetVersion) return;
+  const root = liveIntel.getProjectRoot() ?? process.cwd();
+  const commands = [...new Set(input.sourceDirs)].flatMap((dir) => {
+    const lockfile = liveIntel.lockfileFor(dir, step.ecosystem as OsvEcosystem);
+    const command = lockfile ? directCommandFor(lockfile, step.package, step.targetVersion!, step.isDev === true) : null;
+    return command ? [{ dir: relativeDir(dir, root), command }] : [];
+  });
+  if (commands.length > 0) step.upgradeCommands = commands;
 }
 
 async function refreshOrUpstream(
@@ -227,8 +245,23 @@ async function refreshOrUpstream(
   });
   const named = blocking
     .slice(0, 3)
-    .map((b) => `${b.parent}${b.parentVersion ? ` ${b.parentVersion}` : ""} requires "${b.requirement}"`)
+    .map((b) =>
+      b.bundled
+        ? `${b.parent}${b.parentVersion ? ` ${b.parentVersion}` : ""} ships it bundled at ${b.requirement}`
+        : `${b.parent}${b.parentVersion ? ` ${b.parentVersion}` : ""} requires "${b.requirement}"`,
+    )
     .join(", ");
+  const more = blocking.length > 3 ? ` and ${blocking.length - 3} more` : "";
+  // A bundled copy ships inside its owner's tarball: no lockfile refresh and no override reaches it
+  // (npm 10.9.2, checked 2026-10-15), so the only moves are a new owner release or replacing the owner.
+  if (!overrideReaches(blocking)) {
+    const owners = [...new Set(blocking.filter((b) => b.bundled).map((b) => b.parent))];
+    step.action = "waiting_on_upstream";
+    replaceReason(
+      `Transitive dependency, waiting on upstream: ${named}${more}. A bundled copy ships inside its owner's package, so neither a lockfile refresh nor an override can move it to ${target}: ${owners.join(", ")} must release a version that ships ${step.package} >= ${target}, or be replaced`,
+    );
+    return;
+  }
   // A parent that will not move (deprecated, or already at its latest
   // release) makes "waiting on upstream" a dead end (A4, request 2.88.2):
   // the step is then an override of the transitive, or replacing the parent.
@@ -237,12 +270,12 @@ async function refreshOrUpstream(
     step.action = "override_or_replace";
     const formats = [...new Set(verdicts.map((v) => v.verdict.format))];
     replaceReason(
-      `Transitive dependency: ${named}${blocking.length > 3 ? ` and ${blocking.length - 3} more` : ""}, and ${stuck.join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace the parent`,
+      `Transitive dependency: ${named}${more}, and ${stuck.join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace the parent`,
     );
     return;
   }
   replaceReason(
-    `Transitive dependency, waiting on upstream: ${named}${blocking.length > 3 ? ` and ${blocking.length - 3} more` : ""}, so a refresh cannot reach a clean version; the fix arrives with a parent release that widens it`,
+    `Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version; the fix arrives with a parent release that widens it`,
   );
 }
 
