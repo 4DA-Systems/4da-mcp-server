@@ -375,22 +375,25 @@ export class OsvScanner {
    * unknown is never clean.
    */
   private async rateFromAliases(entries: VulnerabilityEntry[]): Promise<{ vulns: VulnerabilityEntry[]; report: AliasSeverityReport | null }> {
-    const ownIds = new Set(entries.map((e) => e.vulnId));
-    const wanted = new Map<string, string>(); // record id -> GHSA alias
+    // A GHSA alias that is itself one of this scan's records is graded already: no fetch.
+    const known = new Map<string, VulnerabilityEntry["severity"]>();
+    for (const e of entries) if (/^GHSA-/i.test(e.vulnId) && e.severity !== "unknown") known.set(e.vulnId, e.severity);
+    const wanted = new Map<string, string[]>(); // record id -> every GHSA alias it names
     for (const e of entries) {
       if (e.severity !== "unknown" || e.severityFrom || wanted.has(e.vulnId) || isMaintenanceNotice(e)) continue;
-      const ghsa = e.aliases.find((a) => /^GHSA-/i.test(a) && !ownIds.has(a));
-      if (ghsa) wanted.set(e.vulnId, ghsa);
+      const ghsas = [...new Set(e.aliases.filter((a) => /^GHSA-/i.test(a) && a !== e.vulnId))];
+      if (ghsas.length > 0) wanted.set(e.vulnId, ghsas);
     }
     if (wanted.size === 0) return { vulns: entries, report: null };
 
-    const aliases = [...new Set(wanted.values())];
-    const asked = aliases.slice(0, MAX_ALIAS_LOOKUPS);
+    // The cap and the budget count distinct GHSA ids.
+    const toRead = [...new Set([...wanted.values()].flat())].filter((id) => !known.has(id)).sort();
+    const asked = toRead.slice(0, MAX_ALIAS_LOOKUPS);
     let records = new Map<string, OsvVulnerability>();
-    let reason: string | null = aliases.length > asked.length ? `more than ${MAX_ALIAS_LOOKUPS} aliases to read; the rest were not asked for` : null;
-    if (this.source.network && process.env.FOURDA_OFFLINE === "true") {
-      reason = "live lookups are disabled (FOURDA_OFFLINE=true)";
-    } else {
+    const reasons: string[] = toRead.length > asked.length ? [`more than ${MAX_ALIAS_LOOKUPS} aliases to read; the rest were not asked for`] : [];
+    if (asked.length > 0 && this.source.network && process.env.FOURDA_OFFLINE === "true") {
+      reasons.push("live lookups are disabled (FOURDA_OFFLINE=true)");
+    } else if (asked.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), this.aliasBudgetMs);
@@ -398,30 +401,35 @@ export class OsvScanner {
       try {
         // Fetches past the deadline keep running and fill the detail cache for the next call.
         const answer = await Promise.race([this.source.details(asked).catch(() => new Map<string, OsvVulnerability>()), deadline]);
-        if (answer === null) reason = `the alias records did not arrive within ${this.aliasBudgetMs / 1000} s`;
+        if (answer === null) reasons.push(`the alias records did not arrive within ${this.aliasBudgetMs / 1000} s`);
         else records = answer;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
     }
+    const read = new Map<string, VulnerabilityEntry["severity"]>(known);
+    for (const [id, record] of records) read.set(id, deriveSeverity(record).severity);
 
-    const grades = new Map<string, VulnerabilityEntry["severity"]>();
-    for (const [id, record] of records) grades.set(id, deriveSeverity(record).severity);
-    const unresolved: string[] = [];
+    const unresolved = new Set<string>();
+    const ungraded: string[] = [];
     let ratedCount = 0;
     const vulns = entries.map((e) => {
-      const ghsa = wanted.get(e.vulnId);
-      if (!ghsa) return e;
-      const grade = grades.get(ghsa);
-      if (!grade || grade === "unknown") {
-        if (!unresolved.includes(e.vulnId)) unresolved.push(e.vulnId);
+      const ghsas = wanted.get(e.vulnId);
+      if (!ghsas) return e;
+      const graded = gradeFromAliases(ghsas, read);
+      for (const c of graded.consulted) if (c.grade === "unreadable") unresolved.add(c.id);
+      if (graded.severity === "unknown") {
+        if (!ungraded.includes(e.vulnId)) ungraded.push(e.vulnId);
         return e;
       }
       ratedCount++;
-      return { ...e, severity: grade, severityFrom: ghsa };
+      return { ...e, severity: graded.severity, severityFrom: graded.from! };
     });
-    if (unresolved.length > 0 && reason === null) reason = "the alias record could not be read, or is unrated itself";
-    return { vulns, report: { rated: ratedCount, unresolved, reason: unresolved.length > 0 ? reason : null } };
+    if (unresolved.size > 0 && reasons.length === 0) reasons.push("an alias record could not be read");
+    return {
+      vulns,
+      report: { rated: ratedCount, unresolved: [...unresolved].sort(), ungraded, reason: unresolved.size > 0 || ungraded.length > 0 ? reasons.join("; ") || "the aliases are unrated themselves" : null },
+    };
   }
 
   private async batchQuery(
@@ -526,6 +534,30 @@ function mapVulnerability(
     installDriftOf: dep.installDriftOf,
     installFix: dep.installFix,
   };
+}
+
+const GRADE_RANK: Record<string, number> = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
+
+/**
+ * The shared rule for an unrated record (the 4DA app implements it
+ * identically): the HIGHEST grade among every GHSA alias that could be read;
+ * unknown when none could. `from` names the alias that gave it, the
+ * lexicographically smallest id on a tie. An alias that could not be read
+ * never lowers the grade; it is reported (`consulted`, grade "unreadable").
+ * Umbrella records name several: RUSTSEC-2020-0014 lists 8 GHSAs, so taking
+ * the first made the grade depend on alias order.
+ */
+export function gradeFromAliases(
+  ghsas: string[],
+  read: ReadonlyMap<string, VulnerabilityEntry["severity"]>,
+): { severity: VulnerabilityEntry["severity"]; from: string | null; consulted: Array<{ id: string; grade: VulnerabilityEntry["severity"] | "unreadable" }> } {
+  const consulted = [...new Set(ghsas)].sort().map((id) => ({ id, grade: read.get(id) ?? ("unreadable" as const) }));
+  let best: { id: string; grade: VulnerabilityEntry["severity"] } | null = null;
+  for (const c of consulted) {
+    if (c.grade === "unreadable" || c.grade === "unknown") continue;
+    if (!best || GRADE_RANK[c.grade] > GRADE_RANK[best.grade]) best = { id: c.id, grade: c.grade };
+  }
+  return { severity: best?.grade ?? "unknown", from: best?.id ?? null, consulted };
 }
 
 /**

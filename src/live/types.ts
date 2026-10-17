@@ -191,9 +191,11 @@ export interface VulnerabilityScanResult {
 export interface AliasSeverityReport {
   /** Records whose severity came from their GHSA alias. */
   rated: number;
-  /** Record ids that name a GHSA alias and are still unknown. */
+  /** GHSA alias ids that could not be read (cap, time budget, no answer): they never lower a grade. */
   unresolved: string[];
-  /** Why `unresolved` is not empty; null when it is. */
+  /** Record ids that name a GHSA alias and are still unknown: no alias of theirs could be read or graded. */
+  ungraded: string[];
+  /** Why `unresolved` or `ungraded` is not empty; null when both are. */
   reason: string | null;
 }
 

@@ -105,7 +105,7 @@ describe("every tool grades GO-2024-3333 HIGH, per GHSA-w32m-9786-jp63", () => {
     const row = scan.vulnerabilities.find((v: { vuln_id: string }) => v.vuln_id === "GO-2024-3333");
     expect(row).toMatchObject({ advisory_severity: "high", severity_from: "GHSA-w32m-9786-jp63" });
     expect(scan.advisory_by_severity.unknown).toBe(0);
-    expect(scan._meta.alias_severity).toEqual({ rated_from_alias: 1, unresolved: [] });
+    expect(scan._meta.alias_severity).toEqual({ rated_from_alias: 1, unresolved: [], ungraded: [] });
     const concise = (await executeVulnerabilityScan(null, { project_path: project }, live())) as Record<string, any>;
     expect(concise.vulnerable_packages[0]).toMatchObject({ package: "golang.org/x/net", severity_from: "GHSA-w32m-9786-jp63" });
   });
@@ -116,7 +116,7 @@ describe("every tool grades GO-2024-3333 HIGH, per GHSA-w32m-9786-jp63", () => {
     li.fetchRegistryHealth = async () => [];
     const health = await executeDependencyHealth(noDb, {}, li);
     expect(health.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
-    expect(health.aliasSeverity).toEqual({ rated: 1, unresolved: [], reason: null });
+    expect(health.aliasSeverity).toEqual({ rated: 1, unresolved: [], ungraded: [], reason: null });
   });
 
   it("no answer for the alias: unknown everywhere, listed as unresolved, and dependency_check says review", async () => {
@@ -124,7 +124,8 @@ describe("every tool grades GO-2024-3333 HIGH, per GHSA-w32m-9786-jp63", () => {
     const out = await executeDependencyCheck(noDb, { items: [{ ecosystem: "Go", package: "golang.org/x/net", to: "v0.20.0" }] }, live(), { now: NOW });
     expect(out.results[0].verdict).toBe("review");
     const scan = (await executeVulnerabilityScan(null, { project_path: project, response_format: "detailed" }, live())) as Record<string, any>;
-    expect(scan._meta.alias_severity.unresolved).toEqual(["GO-2024-3333"]);
+    expect(scan._meta.alias_severity.unresolved).toEqual(["GHSA-w32m-9786-jp63"]);
+    expect(scan._meta.alias_severity.ungraded).toEqual(["GO-2024-3333"]);
     expect(scan._meta.alias_severity.note).toMatch(/Unknown is not clean/);
   });
 });
@@ -153,7 +154,7 @@ describe("the scanner's alias lookup: the source, the budget, the cap", () => {
     const result = await scanner(source).scan([dep("example.com/a")], "x");
     expect(details).toHaveBeenCalledTimes(1); // the record itself, not the alias
     expect(result.vulnerabilities[0].severity).toBe("unknown");
-    expect(result.aliasSeverity).toEqual({ rated: 0, unresolved: ["GO-1"], reason: expect.stringMatching(/FOURDA_OFFLINE/) });
+    expect(result.aliasSeverity).toEqual({ rated: 0, unresolved: ["GHSA-aaaa-bbbb-cccc"], ungraded: ["GO-1"], reason: expect.stringMatching(/FOURDA_OFFLINE/) });
   });
 
   it("past the time budget the records stay unknown, said so", async () => {
@@ -165,7 +166,7 @@ describe("the scanner's alias lookup: the source, the budget, the cap", () => {
     };
     const result = await scanner(source, 50).scan([dep("example.com/a")], "x");
     expect(result.vulnerabilities[0].severity).toBe("unknown");
-    expect(result.aliasSeverity).toEqual({ rated: 0, unresolved: ["GO-1"], reason: expect.stringMatching(/did not arrive within 0.05 s/) });
+    expect(result.aliasSeverity).toEqual({ rated: 0, unresolved: ["GHSA-aaaa-bbbb-cccc"], ungraded: ["GO-1"], reason: expect.stringMatching(/did not arrive within 0.05 s/) });
   });
 
   it(`at most ${MAX_ALIAS_LOOKUPS} aliases are read; the rest are listed as unresolved, not dropped`, async () => {
@@ -184,6 +185,79 @@ describe("the scanner's alias lookup: the source, the budget, the cap", () => {
     expect(asked[1]).toHaveLength(MAX_ALIAS_LOOKUPS);
     expect(result.aliasSeverity?.rated).toBe(MAX_ALIAS_LOOKUPS);
     expect(result.aliasSeverity?.unresolved).toHaveLength(10);
+    expect(result.aliasSeverity?.ungraded).toHaveLength(10);
     expect(result.aliasSeverity?.reason).toMatch(new RegExp(`more than ${MAX_ALIAS_LOOKUPS} aliases`));
+  });
+});
+
+/**
+ * Umbrella records name several GHSAs (RUSTSEC-2020-0014 lists 8; the first
+ * fix took the FIRST one, so the grade depended on alias order). The shared
+ * rule, which the 4DA app implements identically: the highest grade among
+ * every GHSA alias that could be read; on a tie the smallest id; an alias
+ * that could not be read never lowers the grade and is listed as unresolved.
+ */
+describe("an unrated record with several GHSA aliases takes the highest readable grade", () => {
+  const sev = (label: string) => ({ database_specific: { severity: label } });
+  const aliasRecords: Record<string, object> = {
+    "GHSA-aaaa-0000-0001": sev("MODERATE"),
+    "GHSA-bbbb-0000-0002": sev("CRITICAL"),
+    "GHSA-cccc-0000-0003": sev("HIGH"),
+    "GHSA-dddd-0000-0004": sev("HIGH"),
+  };
+  const run = async (aliases: string[], readable = (_id: string) => true) => {
+    const source: AdvisorySource = {
+      network: false,
+      query: async () => ({ ids: [["RUSTSEC-2099-0001"]], failure: null }),
+      details: async (ids) =>
+        new Map(
+          ids.flatMap((id): Array<[string, OsvVulnerability]> =>
+            id === "RUSTSEC-2099-0001"
+              ? [[id, { id, aliases, summary: "umbrella" } as unknown as OsvVulnerability]]
+              : readable(id) && aliasRecords[id] ? [[id, { id, ...aliasRecords[id] } as unknown as OsvVulnerability]] : [],
+          ),
+        ),
+    };
+    const s = new OsvScanner(new LiveCache(new Database(":memory:")), new RateLimiter(DEFAULT_RATE_LIMITS), source);
+    const d = { name: "x", version: "1.0.0", ecosystem: "crates.io", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] } as ResolvedDependency;
+    return s.scan([d], "x");
+  };
+
+  it.each([
+    [["GHSA-aaaa-0000-0001", "GHSA-bbbb-0000-0002", "GHSA-cccc-0000-0003"]],
+    [["GHSA-cccc-0000-0003", "GHSA-aaaa-0000-0001", "GHSA-bbbb-0000-0002"]],
+    [["CVE-2099-1", "GHSA-bbbb-0000-0002", "GHSA-cccc-0000-0003", "GHSA-aaaa-0000-0001"]],
+  ])("medium / critical / high gives critical, whatever the order (%j)", async (aliases) => {
+    const r = await run(aliases);
+    expect(r.vulnerabilities[0]).toMatchObject({ severity: "critical", severityFrom: "GHSA-bbbb-0000-0002" });
+    expect(r.aliasSeverity).toEqual({ rated: 1, unresolved: [], ungraded: [], reason: null });
+  });
+
+  it("a tie goes to the smallest GHSA id", async () => {
+    for (const aliases of [["GHSA-dddd-0000-0004", "GHSA-cccc-0000-0003"], ["GHSA-cccc-0000-0003", "GHSA-dddd-0000-0004"]]) {
+      expect((await run(aliases)).vulnerabilities[0]).toMatchObject({ severity: "high", severityFrom: "GHSA-cccc-0000-0003" });
+    }
+  });
+
+  it("an unreadable alias does not lower the grade, and is listed as unresolved", async () => {
+    const r = await run(["GHSA-bbbb-0000-0002", "GHSA-cccc-0000-0003"], (id) => id !== "GHSA-bbbb-0000-0002");
+    expect(r.vulnerabilities[0]).toMatchObject({ severity: "high", severityFrom: "GHSA-cccc-0000-0003" });
+    expect(r.aliasSeverity).toEqual({ rated: 1, unresolved: ["GHSA-bbbb-0000-0002"], ungraded: [], reason: expect.stringMatching(/could not be read/) });
+  });
+
+  it("gradeFromAliases: the rule on its own, with every alias consulted", async () => {
+    const { gradeFromAliases } = await import("../live/osv-scanner.js");
+    const read = new Map([["GHSA-b", "critical"], ["GHSA-c", "high"], ["GHSA-u", "unknown"]] as const);
+    expect(gradeFromAliases(["GHSA-c", "GHSA-x", "GHSA-b", "GHSA-u"], read)).toEqual({
+      severity: "critical",
+      from: "GHSA-b",
+      consulted: [
+        { id: "GHSA-b", grade: "critical" },
+        { id: "GHSA-c", grade: "high" },
+        { id: "GHSA-u", grade: "unknown" },
+        { id: "GHSA-x", grade: "unreadable" },
+      ],
+    });
+    expect(gradeFromAliases(["GHSA-x"], read)).toMatchObject({ severity: "unknown", from: null });
   });
 });
