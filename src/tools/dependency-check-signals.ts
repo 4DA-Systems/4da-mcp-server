@@ -12,6 +12,7 @@
 
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
+import { excludedReleases } from "../live/withdrawn-releases.js";
 
 export type Verdict = "proceed" | "wait" | "review" | "avoid" | "unknown";
 export type SignalEffect = Verdict | "info";
@@ -325,12 +326,33 @@ export function newDependenciesSignal(
   };
 }
 
-export function withdrawnSignal(item: CheckItem, to: ReleaseRecord): Signal {
+/**
+ * Yanked, unpublished, retracted: avoid. npm deprecated: avoid when the 4DA rule withdraws it (a
+ * later, non-deprecated stable release exists on its caret line, lodash 4.18.0 "Bad release"),
+ * and when the notice is this release's alone ("Critical bug in 1.0.3"); review when the rule
+ * keeps it and the same notice is on other releases (glob 10.5.0, one of 160 "Old versions of
+ * glob are not supported"): a "please upgrade" notice, not a withdrawn release, and possibly
+ * the only fix on its line (FX-H5, withdrawn-releases.ts). Without the index: every deprecation avoids.
+ */
+export function withdrawnSignal(item: CheckItem, to: ReleaseRecord, index?: PackageReleaseIndex): Signal {
   if (to.withdrawn) {
     return { id: "yanked_or_deprecated", value: { [to.withdrawn]: true }, effect: "avoid", evidence: `${item.to} was ${to.withdrawn} from the registry.` };
   }
   if (to.deprecated) {
-    return { id: "yanked_or_deprecated", value: { deprecated: to.deprecated }, effect: "avoid", evidence: `${item.to} is deprecated: "${to.deprecated}".` };
+    const value = { deprecated: to.deprecated };
+    // The same notice on other releases too: a "please upgrade" notice about the line or the package.
+    const shared = index ? Object.values(index.releases).filter((r) => r.version !== to.version && r.deprecated === to.deprecated).length : 0;
+    if (index && item.ecosystem === "npm" && shared > 0 && !excludedReleases(index).has(to.version)) {
+      return {
+        id: "yanked_or_deprecated",
+        value: { ...value, withdrawn: false },
+        effect: "review",
+        evidence:
+          `${item.to} is deprecated: "${to.deprecated}". The same notice is on ${shared} other release${shared === 1 ? "" : "s"} and no later release on its line is free of one, ` +
+          `so it is a notice about the line, not a withdrawn release; tell the user it is deprecated.`,
+      };
+    }
+    return { id: "yanked_or_deprecated", value, effect: "avoid", evidence: `${item.to} is deprecated: "${to.deprecated}".` };
   }
   return { id: "yanked_or_deprecated", value: null, effect: "proceed", evidence: `${item.to} is neither yanked nor deprecated.` };
 }

@@ -104,6 +104,12 @@ interface UpgradeRecommendation {
    * affected by an advisory the installed version predates).
    */
   fixPathChecked?: "all_advisories" | "installed_advisories_only";
+  /**
+   * Releases the registry withdrew (crates.io/PyPI yanked; npm deprecated with a later clean
+   * release on its line) that targetVersion steps over, or, with no target, the only releases
+   * that fixed it: "no installable fix", not "no fix published". The reasons say why (FX-H5).
+   */
+  withheld?: string[];
   /** lockfile_refresh: the command to run, per lockfile directory. */
   refreshCommands?: Array<{ dir: string; command: string }>;
   /**

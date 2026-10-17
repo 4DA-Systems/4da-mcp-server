@@ -295,7 +295,7 @@ export async function executeDependencyCheck(
       publishTrustSignal(item, to, base),
       installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
       newDependenciesSignal(item, to, base, p.introduced, createdForItem),
-      withdrawnSignal(item, to),
+      withdrawnSignal(item, to, index!),
       upgradeTypeSignal(item),
     ];
     const decided = decide(signals);
@@ -315,10 +315,13 @@ function withAlternatives(reason: string, item: Resolved, unsafe: boolean): stri
     const ids = rc.affecting_all ?? [];
     const all = ids.length ? `: ${ids.slice(0, 3).join(", ")}${ids.length > 3 ? ` and ${ids.length - 3} more` : ""} affect every one` : "";
     const outside = rc.newest_safe_outside_range ? ` Newest safe release outside it: ${rc.newest_safe_outside_range}.` : "";
-    return `${reason} | No release ${where} is free of known advisories${all}.${outside}`;
+    const withheld = rc.withheld_note ? ` ${rc.withheld_note}.` : "";
+    return `${reason} | No release ${where} is free of known advisories${all}.${withheld}${outside}`;
   }
   const upgrade = rc.smallest_safe_upgrade && rc.smallest_safe_upgrade !== rc.smallest_safe_in_range ? `, smallest above ${item.from} ${rc.smallest_safe_upgrade}` : "";
-  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.`;
+  // FX-H5: a withdrawn release the pick steps over is named, in the registry's words.
+  const withheld = rc.withheld_note ? ` ${rc.withheld_note}.` : "";
+  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}`;
   if (rc.basis === "same_line" && !unsafe) return reason;
   return `${reason} | ${safe}`;
 }

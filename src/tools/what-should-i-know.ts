@@ -26,7 +26,7 @@ import type { VulnerabilityScanResult } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { maxVersion } from "../live/version-compare.js";
-import { targetNote, verifyFixTargets } from "../live/fix-paths.js";
+import { rowFix, targetNote, verifyFixTargets, withheldText } from "../live/fix-paths.js";
 import { installDriftAdvisories } from "./install-drift-notes.js";
 import { getLiveIntelligence } from "../live-singleton.js";
 import { createRelevanceScorer } from "./recall.js";
@@ -313,6 +313,14 @@ export async function executeWhatShouldIKnow(
       })),
     TARGET_CHECK_BUDGET_MS,
   );
+  // Each advisory's own fix as the registry still offers it: never a yanked or deprecated release (FX-H5).
+  for (const dep of taskDependencies) {
+    const clean = verified.get(`${dep.ecosystem}\0${dep.package}`);
+    for (const v of clean ? dep.vulnerabilities : []) {
+      const fix = rowFix(v.fixed_version, clean, dep.ecosystem);
+      if (fix.withheld.length > 0) Object.assign(v, { fixed_version: fix.fixed, withheld: fix.withheld, withheld_note: fix.note });
+    }
+  }
   for (const dep of taskDependencies) {
     if (dep.vulnerabilities.length === 0) continue;
     const rank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, unknown: 0 };
@@ -321,7 +329,9 @@ export async function executeWhatShouldIKnow(
     const unfixed = dep.vulnerabilities.length - fixes.length;
     const clean = verified.get(`${dep.ecosystem}\0${dep.package}`);
     const smallest = clean ? clean.target : fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null;
-    const note = clean ? targetNote(clean) : null;
+    const note = clean ? targetNote(clean, dep.ecosystem) : null;
+    // Every release that fixes it was withdrawn by the registry (FX-H5): never "no fixed release published".
+    const withheld = clean && !clean.target ? withheldText(clean, dep.ecosystem) : null;
     const n = dep.vulnerabilities.length;
     advisories.push({
       title: `${dep.package} ${dep.installed.join("/")}: ${n} confirmed vulnerabilit${n !== 1 ? "ies" : "y"}, highest ${top.severity}`,
@@ -332,7 +342,9 @@ export async function executeWhatShouldIKnow(
           ? `Upgrade ${dep.package} to ${smallest} (the smallest version that fixes all ${n}${note ? `; ${note}` : ""})`
           : smallest
             ? `Upgrade ${dep.package} to ${smallest} fixes ${fixes.length}; Review ${dep.package}: ${unfixed} have no fixed release`
-            : clean && fixes.length > 0
+            : withheld
+              ? `Review ${dep.package}: ${withheld}`
+              : clean && fixes.length > 0
               ? `Review ${dep.package}: no published version clears every advisory (${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")})`
               : `Review ${dep.package}: no fixed release published`,
       url: null,

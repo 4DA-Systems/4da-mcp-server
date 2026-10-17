@@ -316,7 +316,7 @@ describe("H5: a deprecated release is never the target, even when the advisory l
     project({ lodash: "4.17.20" }, {}, {});
     const scanned = await scan();
     expect(scanned.vulnerable_packages[0]).toMatchObject({ package: "lodash", fixed_version: "4.18.1", fix_checked: "installed_advisories_only" });
-    expect(scanned.recommendations[0]).toMatch(/^Upgrade lodash 4\.17\.20 → 4\.18\.1 .*4\.18\.0, the highest per-advisory fix, which is deprecated or yanked on the registry.*not checked against the package's other advisories/);
+    expect(scanned.recommendations[0]).toMatch(/^Upgrade lodash 4\.17\.20 → 4\.18\.1 .*4\.18\.0 is deprecated on npm \("Bad release\. Please use lodash@4\.17\.21 instead\."\); 4\.18\.1 is the smallest installable release past it; not checked against the package's other advisories/);
     expect(JSON.stringify(scanned)).not.toMatch(/→ 4\.18\.0/);
     const { step } = await plan();
     expect(step("lodash")).toMatchObject({ targetVersion: "4.18.1", fixPathChecked: "installed_advisories_only", upgradeCommands: [{ dir: ".", command: "npm install lodash@4.18.1 --save-exact" }] });
