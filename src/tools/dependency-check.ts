@@ -211,6 +211,7 @@ export async function executeDependencyCheck(
     .filter((i) => !i.unresolved)
     .flatMap((item) => [item.to, item.from].filter((v): v is string => Boolean(v)).map((version) => osvDep(item, version)));
   const scan = await liveIntel.queryAdvisories(osvDeps);
+  // Unrated (Go) records carry their GHSA alias's grade from the scanner, as in every tool (severityFrom).
   const byInstance = new Map<string, VulnerabilityEntry[]>();
   for (const v of scan.vulnerabilities) {
     const key = instanceKey(v.ecosystem, v.package, v.currentVersion);
@@ -613,7 +614,9 @@ function osvDep(item: CheckItem, version: string): ResolvedDependency {
  * of an alias group is its most severe, so merging never softens a verdict.
  */
 export function refs(entries: VulnerabilityEntry[] | undefined): AdvisoryRef[] {
-  return groupAdvisories(entries).map(({ best: v }) => ({ id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v) }));
+  return groupAdvisories(entries).map(({ best: v }) => {
+    return { id: v.vulnId, severity: v.severity, summary: v.summary, maintenance: isMaintenanceNotice(v), ...(v.severityFrom ? { severityFrom: v.severityFrom } : {}) };
+  });
 }
 
 const instanceKey = (eco: string, name: string, version: string) => `${eco}\0${eco === "PyPI" ? normalizePypi(name) : name}\0${version}`;

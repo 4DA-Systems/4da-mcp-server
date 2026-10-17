@@ -312,22 +312,32 @@ export function yarnBlockVersion(block: string): string | null {
  * v1: `"@scope/pkg@^1.0.0", "@scope/pkg@^1.1.0":` then `  version "1.2.3"`.
  * berry: `"@scope/pkg@npm:^1.0.0":` then `  version: 1.2.3`.
  * Workspace, link, portal, file, exec and patch entries do not name a registry version.
+ * Returns how many entries were skipped because a line of theirs is longer
+ * than MAX_LOCKFILE_LINE, so the caller can say the read was partial (audit
+ * L5: the skip was silent).
  */
 export function readYarnLock(
   content: string,
   versions: Map<string, string>,
   instances?: InstanceSet,
   specs?: Map<string, string>,
-): void {
+): number {
+  let skipped = 0;
   for (const block of content.split(/\r?\n(?=\S)/)) {
     const firstLine = block.split(/\r?\n/)[0];
-    if (firstLine.length > MAX_LOCKFILE_LINE) continue;
+    if (firstLine.length > MAX_LOCKFILE_LINE) {
+      skipped++;
+      continue;
+    }
     const header = /^"?(@?[^@\s"]+)@/.exec(firstLine);
     if (!header || header[1].startsWith("__")) continue;
     if (/@(?:workspace|link|portal|file|exec|patch):/.test(firstLine)) continue;
     const raw = yarnBlockVersion(block);
     const version = raw ? exactVersion(raw) : null;
-    if (!version) continue;
+    if (!version) {
+      if (block.split(/\r?\n/).some((line) => line.length > MAX_LOCKFILE_LINE)) skipped++;
+      continue;
+    }
     const name = yarnPackageName(block, firstLine, header[1]);
     // One block per resolved version. Blocks are sorted by spec, so the first
     // block of a name can be an old nested copy; `specs` lets the caller pick
@@ -340,4 +350,5 @@ export function readYarnLock(
       }
     }
   }
+  return skipped;
 }

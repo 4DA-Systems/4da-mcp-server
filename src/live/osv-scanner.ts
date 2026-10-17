@@ -12,9 +12,11 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
-import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
+import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
+import { isMaintenanceNotice } from "./maintenance.js";
 import type {
+  AliasSeverityReport,
   ResolvedDependency,
   OsvVulnerability,
   VulnerabilityEntry,
@@ -39,6 +41,10 @@ const HYDRATE_CONCURRENCY = 24;
 /** querybatch chunks (1,000 dependencies each) sent at once. */
 const BATCH_CONCURRENCY = 4;
 const DETAIL_RETRY_DELAY_MS = 750;
+/** GHSA alias records read per scan to rate records that carry no severity (rateFromAliases). */
+export const MAX_ALIAS_LOOKUPS = 50;
+/** The whole alias lookup's time budget per scan; past it the records stay unknown, said so. */
+export const ALIAS_BUDGET_MS = 5_000;
 
 /**
  * Detail fetches in flight, shared by every scanner in the process. The
@@ -251,8 +257,10 @@ export class OsvScanner {
   private cache: LiveCache;
   private rateLimiter: RateLimiter;
   private source: AdvisorySource;
+  private aliasBudgetMs: number;
 
-  constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource) {
+  constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource, options: { aliasBudgetMs?: number } = {}) {
+    this.aliasBudgetMs = options.aliasBudgetMs ?? ALIAS_BUDGET_MS;
     this.cache = cache;
     this.rateLimiter = rateLimiter;
     this.source = source ?? new OsvHttpSource(cache, rateLimiter);
@@ -316,7 +324,8 @@ export class OsvScanner {
     // placeholders npm publishes after taking a malicious package down; the
     // malware advisory covering every version does not apply to them (the
     // desktop app's osv::matching::is_npm_security_holding; audit A5).
-    const allVulns = [...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v));
+    const rated = await this.rateFromAliases([...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v)));
+    const allVulns = rated.vulns;
     const vulnerablePackages = new Set(allVulns.map((v) => v.package));
     const platformInactiveVulnerable = new Set(
       allVulns.filter((v) => !v.platformActive).map((v) => v.package),
@@ -344,6 +353,82 @@ export class OsvScanner {
       unchecked: unchecked.length,
       uncheckedReason: offline ? (failure ?? "OSV.dev could not be queried") : null,
       staleAnswers,
+      ...(rated.report ? { aliasSeverity: rated.report } : {}),
+    };
+  }
+
+  /**
+   * A severity for records that carry none, from their GHSA alias: one
+   * advisory, one grade, in every tool. Go's vulnerability database rates
+   * nothing: GO-2024-3333 (golang.org/x/net) has no severity, its alias
+   * GHSA-w32m-9786-jp63 is HIGH, and OSV returns only the GO record for the
+   * module (the GHSA names golang.org/x/net/html). dependency_check said
+   * `avoid` while vulnerability_scan graded the same record unknown (review
+   * of 6.2.5 M6, 2026-10-18). The two records name each other, so the
+   * alias's rating applies; it is read by the same rule as any record and
+   * the entry says where it came from (`severityFrom`).
+   *
+   * Through this scanner's own source: a pinned source answers from its
+   * records, never the network; with live lookups off nothing is fetched.
+   * At most MAX_ALIAS_LOOKUPS aliases, within ALIAS_BUDGET_MS in total.
+   * Anything not rated stays unknown and is listed as unresolved, with why;
+   * unknown is never clean.
+   */
+  private async rateFromAliases(entries: VulnerabilityEntry[]): Promise<{ vulns: VulnerabilityEntry[]; report: AliasSeverityReport | null }> {
+    // A GHSA alias that is itself one of this scan's records is graded already: no fetch.
+    const known = new Map<string, VulnerabilityEntry["severity"]>();
+    for (const e of entries) if (/^GHSA-/i.test(e.vulnId) && e.severity !== "unknown") known.set(e.vulnId, e.severity);
+    const wanted = new Map<string, string[]>(); // record id -> every GHSA alias it names
+    for (const e of entries) {
+      if (e.severity !== "unknown" || e.severityFrom || wanted.has(e.vulnId) || isMaintenanceNotice(e)) continue;
+      const ghsas = [...new Set(e.aliases.filter((a) => /^GHSA-/i.test(a) && a !== e.vulnId))];
+      if (ghsas.length > 0) wanted.set(e.vulnId, ghsas);
+    }
+    if (wanted.size === 0) return { vulns: entries, report: null };
+
+    // The cap and the budget count distinct GHSA ids.
+    const toRead = [...new Set([...wanted.values()].flat())].filter((id) => !known.has(id)).sort();
+    const asked = toRead.slice(0, MAX_ALIAS_LOOKUPS);
+    let records = new Map<string, OsvVulnerability>();
+    const reasons: string[] = toRead.length > asked.length ? [`more than ${MAX_ALIAS_LOOKUPS} aliases to read; the rest were not asked for`] : [];
+    if (asked.length > 0 && this.source.network && process.env.FOURDA_OFFLINE === "true") {
+      reasons.push("live lookups are disabled (FOURDA_OFFLINE=true)");
+    } else if (asked.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), this.aliasBudgetMs);
+      });
+      try {
+        // Fetches past the deadline keep running and fill the detail cache for the next call.
+        const answer = await Promise.race([this.source.details(asked).catch(() => new Map<string, OsvVulnerability>()), deadline]);
+        if (answer === null) reasons.push(`the alias records did not arrive within ${this.aliasBudgetMs / 1000} s`);
+        else records = answer;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+    const read = new Map<string, VulnerabilityEntry["severity"]>(known);
+    for (const [id, record] of records) read.set(id, deriveSeverity(record).severity);
+
+    const unresolved = new Set<string>();
+    const ungraded: string[] = [];
+    let ratedCount = 0;
+    const vulns = entries.map((e) => {
+      const ghsas = wanted.get(e.vulnId);
+      if (!ghsas) return e;
+      const graded = gradeFromAliases(ghsas, read);
+      for (const c of graded.consulted) if (c.grade === "unreadable") unresolved.add(c.id);
+      if (graded.severity === "unknown") {
+        if (!ungraded.includes(e.vulnId)) ungraded.push(e.vulnId);
+        return e;
+      }
+      ratedCount++;
+      return { ...e, severity: graded.severity, severityFrom: graded.from! };
+    });
+    if (unresolved.size > 0 && reasons.length === 0) reasons.push("an alias record could not be read");
+    return {
+      vulns,
+      report: { rated: ratedCount, unresolved: [...unresolved].sort(), ungraded, reason: unresolved.size > 0 || ungraded.length > 0 ? reasons.join("; ") || "the aliases are unrated themselves" : null },
     };
   }
 
@@ -451,13 +536,37 @@ function mapVulnerability(
   };
 }
 
+const GRADE_RANK: Record<string, number> = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
+
+/**
+ * The shared rule for an unrated record (the 4DA app implements it
+ * identically): the HIGHEST grade among every GHSA alias that could be read;
+ * unknown when none could. `from` names the alias that gave it, the
+ * lexicographically smallest id on a tie. An alias that could not be read
+ * never lowers the grade; it is reported (`consulted`, grade "unreadable").
+ * Umbrella records name several: RUSTSEC-2020-0014 lists 8 GHSAs, so taking
+ * the first made the grade depend on alias order.
+ */
+export function gradeFromAliases(
+  ghsas: string[],
+  read: ReadonlyMap<string, VulnerabilityEntry["severity"]>,
+): { severity: VulnerabilityEntry["severity"]; from: string | null; consulted: Array<{ id: string; grade: VulnerabilityEntry["severity"] | "unreadable" }> } {
+  const consulted = [...new Set(ghsas)].sort().map((id) => ({ id, grade: read.get(id) ?? ("unreadable" as const) }));
+  let best: { id: string; grade: VulnerabilityEntry["severity"] } | null = null;
+  for (const c of consulted) {
+    if (c.grade === "unreadable" || c.grade === "unknown") continue;
+    if (!best || GRADE_RANK[c.grade] > GRADE_RANK[best.grade]) best = { id: c.id, grade: c.grade };
+  }
+  return { severity: best?.grade ?? "unknown", from: best?.id ?? null, consulted };
+}
+
 /**
  * Derive a severity bucket honestly: a CVSS base score (numeric or computed
  * from a vector) wins; otherwise the GitHub-advisory label; otherwise unknown.
  * Never fabricates a default bucket — an advisory with no severity signal is
  * reported as `unknown`, not silently labeled "medium".
  */
-function deriveSeverity(vuln: Partial<OsvVulnerability>): {
+export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   severity: VulnerabilityEntry["severity"];
   cvssScore: number | null;
 } {
@@ -561,7 +670,7 @@ export function extractFixedVersion(
   // the introduced side only; "0" (since inception) orders below everything.
   const containing = intervals.find(
     (i) =>
-      cmp(installedVersion, i.introduced) >= 0 &&
+      compareToLowerBound(installedVersion, i.introduced, ecosystem) >= 0 &&
       (i.fixed !== null
         ? cmp(installedVersion, i.fixed) < 0
         : i.lastAffected === null || cmp(installedVersion, i.lastAffected) <= 0),

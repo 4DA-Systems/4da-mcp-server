@@ -43,6 +43,8 @@ export interface AdvisoryRef {
   summary: string;
   /** Unmaintained-crate notice rather than an exploitable vulnerability. */
   maintenance: boolean;
+  /** The GHSA alias `severity` was read from, when this record carries none of its own (Go). */
+  severityFrom?: string;
 }
 
 export type AdvisoryFacts =
@@ -139,7 +141,7 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal 
 }
 
 function fmt(a: AdvisoryRef): string {
-  return `${a.id} (${a.maintenance ? "unmaintained notice" : a.severity})`;
+  return `${a.id} (${a.maintenance ? "unmaintained notice" : a.severityFrom ? `${a.severity}, per ${a.severityFrom}` : a.severity})`;
 }
 
 /** At most three named in prose; the full id list is in the signal's `value`. */

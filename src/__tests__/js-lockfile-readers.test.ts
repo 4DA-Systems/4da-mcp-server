@@ -265,3 +265,79 @@ describe("readPnpmLock: this repository's own lockfile", () => {
     expect(badKeys(versions)).toEqual([]);
   });
 });
+
+/**
+ * Readiness audit L5 (2026-10-16): yarn.lock entries on lines over 4 KB are
+ * skipped (the B-10 cap keeps the patterns linear), but silently: the scan
+ * read as complete. The skip is now counted and named in the coverage.
+ */
+describe("readYarnLock: entries past the line cap are counted, never silent (L5)", () => {
+  const long = `"${Array.from({ length: 1200 }, () => "x@^1").join(", ")}":\n  version "1.0.0"\n`;
+  const lodash = `lodash@^4:\n  version "4.17.20"\n`;
+
+  it("returns how many entries it skipped", () => {
+    const versions = new Map<string, string>();
+    expect(readYarnLock(`# yarn lockfile v1\n\n${long}\n${lodash}`, versions)).toBe(1);
+    expect([...versions]).toEqual([["lodash", "4.17.20"]]);
+    expect(readYarnLock(`# yarn lockfile v1\n\n${lodash}`, new Map())).toBe(0);
+  });
+
+  it("resolveVersionSource names yarn.lock and the count as a partial read", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-long-"));
+    try {
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ dependencies: { lodash: "^4" } }));
+      fs.writeFileSync(path.join(dir, "yarn.lock"), `# yarn lockfile v1\n\n${long}\n${lodash}`);
+      const read = resolveVersionSource(dir, "npm");
+      expect(read.instances.map((i) => i.name)).toEqual(["lodash"]);
+      expect(read.problems).toEqual([{ file: path.join(dir, "yarn.lock"), skipped: 1, ecosystem: "npm", error: expect.stringMatching(/1 entry on a line longer than 4096 characters/) }]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an all-skipped yarn.lock is still named, even when it is short", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-long-"));
+    try {
+      fs.writeFileSync(path.join(dir, "yarn.lock"), `# yarn lockfile v1\n\n${long}`);
+      const read = resolveVersionSource(dir, "npm");
+      expect(read.problems?.[0]).toMatchObject({ file: path.join(dir, "yarn.lock"), skipped: 1 });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+describe("the scan's coverage says a partial yarn.lock is partial, not unreadable (L5)", () => {
+  it("vulnerability_scan names yarn.lock, the skipped count and PARTIAL", async () => {
+    const { LiveIntelligence } = await import("../live/index.js");
+    const { executeVulnerabilityScan } = await import("../tools/vulnerability-scan.js");
+    const Database = (await import("better-sqlite3")).default;
+    const { vi } = await import("vitest");
+    const long = `"${Array.from({ length: 1200 }, () => "x@^1").join(", ")}":\n  version "1.0.0"\n`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-long-scan-"));
+    const prior = process.env.FOURDA_OFFLINE;
+    delete process.env.FOURDA_OFFLINE;
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/v1/querybatch")) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: unknown[] };
+        return new Response(JSON.stringify({ results: queries.map(() => ({})) }), { status: 200 });
+      }
+      throw new TypeError(`fetch failed (${String(input)})`);
+    });
+    try {
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ dependencies: { lodash: "^4" } }));
+      fs.writeFileSync(path.join(dir, "yarn.lock"), `# yarn lockfile v1\n\n${long}\nlodash@^4:\n  version "4.17.20"\n`);
+      const result = (await executeVulnerabilityScan(null, { project_path: dir }, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
+      expect(result.total_dependencies_scanned).toBe(1);
+      expect(result.coverage.note).toMatch(/PARTIAL: 1 lockfile was read with entries skipped: yarn\.lock \(1 entry on a line longer than 4096 characters/);
+      expect(result.coverage.note).not.toMatch(/UNREADABLE/);
+      // A partial read is not an unreadable lockfile (review of L5): its own key.
+      expect(result.coverage.partial_lockfiles).toEqual([{ path: "yarn.lock", skipped_entries: 1, reason: expect.stringMatching(/1 entry on a line longer/) }]);
+      expect(result.coverage.unreadable_lockfiles).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      if (prior === undefined) delete process.env.FOURDA_OFFLINE;
+      else process.env.FOURDA_OFFLINE = prior;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -281,13 +281,15 @@ export function getToolSchemaDocument(toolName: string): object | null {
 /**
  * Get list of schema resources for ListResources
  */
-export function getSchemaResources(): Array<{
+export function getSchemaResources(standaloneOnly?: boolean): Array<{
   uri: string;
   name: string;
   description: string;
   mimeType: string;
 }> {
-  return Object.entries(TOOL_REGISTRY).map(([name]) => ({
+  return Object.entries(TOOL_REGISTRY)
+    .filter(([, info]) => standaloneOnly == null || info.standalone === standaloneOnly)
+    .map(([name]) => ({
     uri: `4da://schema/${name}`,
     name: `${name} schema`,
     description: `Full JSON Schema for the ${name} tool`,
@@ -303,11 +305,13 @@ export function hasToolSchema(toolName: string): boolean {
 /**
  * MCP Resources: every tool's full schema, and the category manifest.
  * `4da://skills` was advertised until 6.2.5, but it read a file nothing ever
- * wrote, so every read failed (audit 2026-10-12 B-15).
+ * wrote, so every read failed (audit 2026-10-12 B-15). `standaloneOnly` is
+ * tools/list's filter: in standalone mode the 5 desktop-only schemas were
+ * advertised beside a tool list that leaves them out (audit L6).
  */
-export function listResources(): Array<{ uri: string; name: string; description: string; mimeType: string }> {
+export function listResources(standaloneOnly?: boolean): Array<{ uri: string; name: string; description: string; mimeType: string }> {
   return [
-    ...getSchemaResources(),
+    ...getSchemaResources(standaloneOnly),
     {
       uri: "4da://categories",
       name: "Tool categories",
@@ -318,9 +322,9 @@ export function listResources(): Array<{ uri: string; name: string; description:
 }
 
 /** `resources/read`: the resource, or a resource-not-found protocol error naming the URI. */
-export function readResource(uri: string): { contents: Array<{ uri: string; mimeType: string; text: string }> } {
+export function readResource(uri: string, standaloneOnly?: boolean): { contents: Array<{ uri: string; mimeType: string; text: string }> } {
   const json = (value: object) => ({ contents: [{ uri, mimeType: "application/json", text: JSON.stringify(value, null, 2) }] });
-  if (uri === "4da://categories") return json(getCategoryManifest());
+  if (uri === "4da://categories") return json(getCategoryManifest(standaloneOnly));
   const match = /^4da:\/\/schema\/(.+)$/.exec(uri);
   const document = match ? getToolSchemaDocument(match[1]) : null;
   if (!document) throw new ResourceNotFoundError(uri, `Resource not found: ${uri}`);
@@ -337,10 +341,11 @@ export function unknownPromptError(name: string): ProtocolError {
   return new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown prompt: ${name}`);
 }
 
-/** Get tool names grouped by category */
-export function getToolsByCategory(): Record<ToolCategory, string[]> {
+/** Get tool names grouped by category (only the standalone ones, or only the desktop ones, when asked). */
+export function getToolsByCategory(standaloneOnly?: boolean): Record<ToolCategory, string[]> {
   const result: Record<string, string[]> = {};
   for (const [name, entry] of Object.entries(TOOL_REGISTRY)) {
+    if (standaloneOnly != null && entry.standalone !== standaloneOnly) continue;
     if (!result[entry.category]) {
       result[entry.category] = [];
     }
@@ -350,12 +355,12 @@ export function getToolsByCategory(): Record<ToolCategory, string[]> {
 }
 
 /** Structured category manifest for the 4da://categories resource */
-export function getCategoryManifest(): {
+export function getCategoryManifest(standaloneOnly?: boolean): {
   version: string;
   total_tools: number;
   categories: Record<ToolCategory, { tools: string[]; count: number }>;
 } {
-  const grouped = getToolsByCategory();
+  const grouped = getToolsByCategory(standaloneOnly);
   const categories = {} as Record<ToolCategory, { tools: string[]; count: number }>;
 
   for (const [cat, tools] of Object.entries(grouped)) {
@@ -364,9 +369,25 @@ export function getCategoryManifest(): {
 
   return {
     version: "1.0.0",
-    total_tools: Object.keys(TOOL_REGISTRY).length,
+    total_tools: Object.values(grouped).reduce((n, tools) => n + tools.length, 0),
     categories,
   };
+}
+
+/**
+ * The tool count the startup line states, for what this start will serve.
+ * With FOURDA_DB_PATH refused or the database unreadable, every call returns
+ * that error, so "16 tools" (6.2.5) was not true (audit L6); with no SQLite
+ * driver only the dependency tools run.
+ */
+export function startupToolsLine(validation: { valid: boolean; standalone?: boolean }, hasSqliteDriver: boolean, databaseFreeTools = 0): string {
+  const standalone = validation.standalone === true;
+  if (!hasSqliteDriver) return `${databaseFreeTools} dependency tools run without a database (every other tool returns the driver problem above)`;
+  if (validation.valid || standalone) {
+    const count = getSlimToolList(standalone ? true : undefined).length;
+    return `${count} ${standalone ? "standalone tools" : "tools"}`;
+  }
+  return `no tool can run until the database problem above is fixed (${getSlimToolList().length} tools are listed; each call returns that error)`;
 }
 
 /** Find tools matching any of the given tags */

@@ -27,7 +27,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readBunLock } from "./bun-lockfile.js";
-import { readPnpmLock, readYarnLock } from "./js-lockfile-readers.js";
+import { MAX_LOCKFILE_LINE, readPnpmLock, readYarnLock } from "./js-lockfile-readers.js";
 import { requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
 import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
@@ -80,8 +80,9 @@ export function resolveVersionSource(cwd: string, ecosystem: OsvEcosystem): Vers
     const file = (LOCKFILES[ecosystem] ?? []).map((n) => path.join(cwd, n)).find((f) => fs.existsSync(f));
     if (file) thrown = { file, error: describeParseError(file, error) ?? "could not be parsed" };
   }
-  const problems = thrown ? [thrown] : unreadLockfiles(cwd, ecosystem, read);
-  return problems.length > 0 ? { ...read, problems } : read;
+  // The reader's own problems (a refused requirements include, M4) and the lockfiles it could not read.
+  const problems = [...(read.problems ?? []), ...(thrown ? [thrown] : unreadLockfiles(cwd, ecosystem, read))];
+  return problems.length > 0 ? { ...read, problems: problems.map((p) => ({ ...p, ecosystem })) } : read;
 }
 
 function readVersionSource(cwd: string, ecosystem: OsvEcosystem): VersionSource {
@@ -103,6 +104,28 @@ function readVersionSource(cwd: string, ecosystem: OsvEcosystem): VersionSource 
   }
 }
 
+/**
+ * yarn.lock entries skipped because a line of theirs is past the reader's
+ * length cap (B-10 keeps the patterns linear). Said, so the read is never
+ * taken for complete (audit L5).
+ */
+function yarnSkippedProblem(file: string, skipped: number): LockfileProblem {
+  const entries = skipped === 1 ? "1 entry" : `${skipped} entries`;
+  return {
+    file,
+    skipped,
+    error: `${entries} on a line longer than ${MAX_LOCKFILE_LINE} characters (not lockfile syntax) ${skipped === 1 ? "was" : "were"} skipped, so ${skipped === 1 ? "its version was" : "their versions were"} not checked`,
+  };
+}
+
+function yarnSkips(file: string): number {
+  try {
+    return readYarnLock(fs.readFileSync(file, "utf-8"), new Map());
+  } catch {
+    return 0;
+  }
+}
+
 /** Lines git writes into a file it could not merge. */
 const CONFLICT_MARKER = /^(?:<{7}|>{7})(?: |$)|^={7}$/m;
 
@@ -119,6 +142,12 @@ function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSour
     const file = path.join(cwd, name);
     if (readFiles.has(path.resolve(file))) break; // everything after it ranks lower
     if (!fs.existsSync(file)) continue;
+    // A yarn.lock whose entries were all skipped for length: named with the count, even when the file is short (L5).
+    const skipped = name === "yarn.lock" ? yarnSkips(file) : 0;
+    if (skipped > 0) {
+      problems.push(yarnSkippedProblem(file, skipped));
+      continue;
+    }
     const error = describeParseError(file, null);
     if (error) problems.push({ file, error });
   }
@@ -211,13 +240,16 @@ function resolveNpm(cwd: string): VersionSource {
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const specs = new Map<string, string>();
-      readYarnLock(fs.readFileSync(yarnLockPath, "utf-8"), versions, instances, specs);
+      const skipped = readYarnLock(fs.readFileSync(yarnLockPath, "utf-8"), versions, instances, specs);
       // The copy a direct dependency resolves to is the one its package.json range names.
       for (const [name, range] of manifestRanges(cwd)) {
         const version = specs.get(`${name}@${range}`);
         if (version) versions.set(name, version);
       }
-      if (versions.size > 0) return found(versions, instances, yarnLockPath, "lockfile");
+      if (versions.size > 0) {
+        const read = found(versions, instances, yarnLockPath, "lockfile");
+        return skipped > 0 ? { ...read, problems: [yarnSkippedProblem(yarnLockPath, skipped)] } : read;
+      }
     } catch { /* fall through */ }
   }
 

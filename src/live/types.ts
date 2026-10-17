@@ -128,6 +128,12 @@ export interface VulnerabilityEntry {
   aliases: string[];
   severity: "critical" | "high" | "medium" | "low" | "unknown";
   cvssScore: number | null;
+  /**
+   * Set when `severity` is not this record's own: it rates nothing (Go's
+   * records) and names a GHSA alias, whose rating it took (osv-scanner.ts
+   * rateFromAliases). The alias's id.
+   */
+  severityFrom?: string;
   summary: string;
   fixedVersion: string | null;
   published: string;
@@ -178,6 +184,19 @@ export interface VulnerabilityScanResult {
   uncheckedReason?: string | null;
   /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
   staleAnswers?: number;
+  /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
+  aliasSeverity?: AliasSeverityReport;
+}
+
+export interface AliasSeverityReport {
+  /** Records whose severity came from their GHSA alias. */
+  rated: number;
+  /** GHSA alias ids that could not be read (cap, time budget, no answer): they never lower a grade. */
+  unresolved: string[];
+  /** Record ids that name a GHSA alias and are still unknown: no alias of theirs could be read or graded. */
+  ungraded: string[];
+  /** Why `unresolved` or `ungraded` is not empty; null when both are. */
+  reason: string | null;
 }
 
 /** How much of a dependency set OSV actually answered for. */
@@ -285,14 +304,29 @@ export interface DependencyHealthResult {
    */
   vulnerableCount: number | null;
   /**
-   * Every advisory row the scan returned, before the platform and maintenance
-   * splits and before alias collapsing. Present so nothing is hidden by the
-   * `vulnerableCount` filter: the difference is platform-inactive packages and
-   * unmaintained-dependency notices.
+   * Distinct advisories the scan returned (records naming each other, such as
+   * a GHSA and its PYSEC twin, are one advisory per installed copy, as in
+   * vulnerability_scan), before the platform and maintenance splits. Present
+   * so nothing is hidden by the `vulnerableCount` filter: the difference is
+   * platform-inactive packages and unmaintained-dependency notices.
    */
   advisoryCount: number;
   /** Null when vulnerability data is missing or incomplete: a score computed without it would read as healthier than it is. */
   healthScore: number | null;
+  /**
+   * Why `healthScore` is null: OSV gave no answer for some dependencies, a
+   * lockfile could not be read, or nothing was resolved at all. Absent when
+   * there is a score.
+   */
+  withheldReason?: "vulnerability_data_incomplete" | "lockfile_unreadable" | "nothing_checked";
+  /**
+   * Present when the score is over the checked part only: a lockfile read with
+   * entries skipped (PARTIAL) or a requirements include refused (REFUSED).
+   * The counts are lower bounds; `notes` say what is missing.
+   */
+  scoreCoverage?: { complete: false; basis: "checked_part"; notes: string[] };
+  /** Records graded from a GHSA alias, and those still unknown, as in vulnerability_scan's `_meta.alias_severity`. */
+  aliasSeverity?: AliasSeverityReport;
   /** Present when the vulnerability check is incomplete: what was not checked and why. */
   vulnerabilityCoverage?: VulnerabilityCoverage;
   dependencies: RegistryPackageInfo[];

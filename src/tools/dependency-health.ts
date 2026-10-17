@@ -9,10 +9,11 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
-import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo } from "../live/types.js";
+import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo, VulnerabilityEntry } from "../live/types.js";
+import { groupAdvisories } from "../live/advisory-groups.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
-import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
+import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -73,6 +74,52 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
   });
 }
 
+/** One entry per distinct advisory of each installed copy: the group's most severe record. */
+function advisoriesPerCopy(rows: VulnerabilityEntry[]): VulnerabilityEntry[] {
+  const byCopy = new Map<string, VulnerabilityEntry[]>();
+  for (const v of rows) {
+    const key = `${v.ecosystem}\u0000${v.package}\u0000${v.currentVersion}`;
+    byCopy.set(key, [...(byCopy.get(key) ?? []), v]);
+  }
+  return [...byCopy.values()].flatMap((copy) => groupAdvisories(copy).map((g) => g.best));
+}
+
+/**
+ * No dependency was resolved, so there is nothing to score: say what WAS
+ * found (manifests of ecosystems this server does not read, test-fixture
+ * lockfiles, unreadable lockfiles). Started inside spring-petclinic, 6.2.5
+ * said "No project manifests detected" beside a pom.xml (audit H3).
+ */
+function nothingChecked(start: number, liveIntel: LiveIntelligence | null): DependencyHealthResult {
+  const root = liveIntel?.getProjectRoot() ?? process.cwd();
+  const discovery = liveIntel?.getDiscovery() ?? discoveryFor(root);
+  const notes = [
+    ...exclusionNotes(discovery),
+    ...lockfileProblemNotes(liveIntel?.getLockfileProblems() ?? []),
+    ...[discoveryNote(discovery)].filter((n): n is string => n !== null),
+  ];
+  return {
+    scannedAt: new Date().toISOString(),
+    projectPath: root,
+    ecosystemsScanned: [],
+    totalDeps: 0,
+    outdatedCount: 0,
+    deprecatedCount: 0,
+    vulnerableCount: null,
+    advisoryCount: 0,
+    healthScore: null,
+    withheldReason: "nothing_checked",
+    dependencies: [],
+    vulnerabilitySummary: null,
+    summary:
+      notes.length > 0
+        ? `Nothing was checked, so there is no health score; this is not a healthy result. ${notes.join(" ")}`
+        : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, composer.lock), and none of an unsupported one either; no health score.`,
+    scanDurationMs: Date.now() - start,
+    cached: false,
+  };
+}
+
 export async function executeDependencyHealth(
   _db: FourDADatabase | null,
   params: DependencyHealthParams,
@@ -80,28 +127,12 @@ export async function executeDependencyHealth(
 ): Promise<DependencyHealthResult> {
   const start = Date.now();
 
-  if (!liveIntel || !liveIntel.isInitialized()) {
-    return {
-      scannedAt: new Date().toISOString(),
-      projectPath: process.cwd(),
-      ecosystemsScanned: [],
-      totalDeps: 0,
-      outdatedCount: 0,
-      deprecatedCount: 0,
-      vulnerableCount: null,
-      advisoryCount: 0,
-      healthScore: null,
-      dependencies: [],
-      vulnerabilitySummary: null,
-      summary: "Live intelligence not initialized. No project manifests detected.",
-      scanDurationMs: Date.now() - start,
-      cached: false,
-    };
-  }
+  if (!liveIntel || !liveIntel.isInitialized()) return nothingChecked(start, liveIntel);
 
   // A long-lived server must not answer from the versions it read at startup:
   // re-resolve if a lockfile (or node_modules) changed. Stat calls only.
   liveIntel.refreshIfLockfilesChanged();
+  if (liveIntel.getResolvedDeps().length === 0 && liveIntel.getAuditDeps().length === 0) return nothingChecked(start, liveIntel);
 
   // Get resolved deps
   const includeDev = params.include_dev ?? false;
@@ -141,8 +172,28 @@ export async function executeDependencyHealth(
     expectedTotal: scopeTotal,
     notLoaded: `the OSV.dev scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
   });
-  // ecosystem_filter narrows the vulnerability counts too, not only the registry rows.
-  const allVulns = (vulnResult?.vulnerabilities ?? []).filter((v) => !params.ecosystem_filter || v.ecosystem === params.ecosystem_filter);
+  // A lockfile that could not be read is a gap of the same kind: nothing it
+  // pins was sent to OSV. 6.2.5 scored a merge-conflicted package-lock.json
+  // 32/100 from package.json's pins alone (audit M5); the score and the
+  // counts are withheld, as for an OSV gap. A file read with entries skipped
+  // (PARTIAL) or a requirements include refused by policy (REFUSED) loses
+  // only what it names: the checked part is scored, marked partial
+  // (scoreCoverage), so a refusal that is permanent by design does not
+  // withhold the score forever. ecosystem_filter narrows these too.
+  const problems = liveIntel.getLockfileProblems().filter((p) => !params.ecosystem_filter || !p.ecosystem || p.ecosystem === params.ecosystem_filter);
+  const { unreadable, partial: partialReads, refused } = splitLockfileProblems(problems);
+  const readGap = unreadable.length > 0 ? `NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")} This is not a complete result.` : null;
+  const withheld = coverage !== null || readGap !== null;
+  const partialNotes = lockfileProblemNotes([...partialReads, ...refused]);
+  const scorePartial = !withheld && partialNotes.length > 0;
+  // One population for every count: the stored scan can be vulnerability_scan's,
+  // which includes direct devDependencies by default, while the registry rows
+  // leave them out without include_dev. navcal read "4 direct" vulnerable, 3 of
+  // them devDependencies, beside "25 devDependencies left out" (audit L2).
+  // The same predicate scanVulnerabilities scopes by. ecosystem_filter narrows
+  // the vulnerability counts too, not only the registry rows.
+  const inScope = (v: { isDirect: boolean; isDev: boolean }) => includeDev || !(v.isDirect && v.isDev);
+  const allVulns = (vulnResult?.vulnerabilities ?? []).filter((v) => inScope(v) && (!params.ecosystem_filter || v.ecosystem === params.ecosystem_filter));
   const activeVulns = allVulns.filter(isActionableVulnerability);
   // Keyed by (ecosystem, name): a bare name let an npm advisory mark a
   // same-named crate as vulnerable, and counted the two as one package.
@@ -152,7 +203,11 @@ export async function executeDependencyHealth(
     const key = vulnKey(v.ecosystem, v.package);
     vulnMap.set(key, (vulnMap.get(key) || 0) + 1);
   }
-  const advisoryCount = allVulns.length;
+  // Advisories, not OSV records: one issue as GHSA + PYSEC + CVE records is
+  // one advisory, at its worst severity (audit M1: pygoat read 348 beside the
+  // scan's 187). Grouped per installed copy, as vulnerability_scan's rows are.
+  const activeAdvisories = advisoriesPerCopy(activeVulns);
+  const advisoryCount = advisoriesPerCopy(allVulns).length;
 
   // Compute stats
   let outdated = 0;
@@ -171,7 +226,14 @@ export async function executeDependencyHealth(
   // Of those, the ones a manifest declares (fixable by a direct bump).
   const vulnerableDirect = new Set(activeVulns.filter((v) => v.isDirect).map((v) => vulnKey(v.ecosystem, v.package))).size;
   // The tree the vulnerability counts range over (every installed copy OSV was asked about).
-  const treeDeps = vulnResult?.totalScanned ?? 0;
+  // A wider (devDependency-inclusive) scan counts exactly the direct devDependencies more than this scope.
+  // Counted as the scan counts: copies with a version.
+  const versioned = liveIntel.getAuditDeps().filter((d) => d.version !== null);
+  const directDev = versioned.filter((d) => d.isDirect && d.isDev).length;
+  const runtimeScope = versioned.length - directDev;
+  const scannedAll = vulnResult?.totalScanned ?? 0;
+  const treeDeps = !includeDev && directDev > 0 && scannedAll === versioned.length ? runtimeScope : scannedAll;
+  const devScope = directDev > 0 ? (includeDev ? "; devDependencies included" : "; devDependencies left out") : "";
   // Direct devDependencies left out of the registry rows (include_dev: true adds them).
   const devExcluded = includeDev
     ? 0
@@ -218,7 +280,7 @@ export async function executeDependencyHealth(
   // below 100 always has a vulnerable package beside it.
   const sevWeight: Record<string, number> = { critical: 20, high: 10, medium: 4, low: 1 };
   let vulnPenaltyRaw = 0;
-  for (const v of activeVulns) {
+  for (const v of activeAdvisories) {
     const w = sevWeight[v.severity] ?? 2; // "unknown" severity with a real (non-maintenance) advisory
     vulnPenaltyRaw += v.isDirect ? w : w / 3;
   }
@@ -236,12 +298,12 @@ export async function executeDependencyHealth(
   const outdatedPenalty = Math.min(30, Math.round((stalenessWeight / denominator) * 60));
 
   const deprecatedPenalty = Math.min(deprecated * 8, 15);
-  const healthScore = coverage ? null : Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
+  const healthScore = withheld ? null : Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
 
   // Severity breakdown over the actionable set, matching the count above.
-  const vulnSummary = vulnResult && !coverage ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
+  const vulnSummary = vulnResult && !withheld ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
   if (vulnSummary) {
-    for (const v of activeVulns) {
+    for (const v of activeAdvisories) {
       if (v.severity in vulnSummary) vulnSummary[v.severity as keyof typeof vulnSummary]++;
     }
   }
@@ -258,8 +320,8 @@ export async function executeDependencyHealth(
       (devExcluded > 0 ? ` (${plural(devExcluded, "devDependency", "devDependencies")} left out; include_dev: true adds them)` : ""),
   );
   if (vulnResult) {
-    const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive)`;
-    parts.push(coverage ? `at least ${found}, in the checked part` : found);
+    const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive${devScope})`;
+    parts.push(withheld || scorePartial ? `at least ${found}, in the checked part` : found);
   }
   if (deprecated > 0) parts.push(`${deprecated} deprecated (direct)`);
   if (outdated > 0) parts.push(`${outdated} outdated (direct)`);
@@ -267,10 +329,10 @@ export async function executeDependencyHealth(
     parts.push(`${drifted} installed at a different version than the lockfile pins (see installedVersion; vulnerability_scan lists install_drift)`);
   }
   // "All healthy" is a claim about CVEs too; it needs a scan behind it.
-  if (vulnResult && !coverage && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
+  if (vulnResult && !withheld && !scorePartial && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
     parts.push("all healthy");
   }
-  const hidden = advisoryCount - activeVulns.length;
+  const hidden = advisoryCount - activeAdvisories.length;
   if (hidden > 0) {
     parts.push(`${hidden} advisor${hidden !== 1 ? "ies" : "y"} not counted (platform-inactive or maintenance notices)`);
   }
@@ -278,7 +340,7 @@ export async function executeDependencyHealth(
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
-  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...unreadableNotes(liveIntel.getLockfileProblems())]) parts.push(note.replace(/[.]$/, ""));
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes]) parts.push(note.replace(/[.]$/, ""));
 
   return {
     scannedAt: new Date().toISOString(),
@@ -286,7 +348,7 @@ export async function executeDependencyHealth(
     ecosystemsScanned: ecosystems,
     totalDeps: total,
     treeDeps,
-    vulnerableDirectCount: coverage ? null : vulnerableDirect,
+    vulnerableDirectCount: withheld ? null : vulnerableDirect,
     ...(healthScore !== null
       ? {
           healthScoreBasis: {
@@ -299,15 +361,18 @@ export async function executeDependencyHealth(
       : {}),
     outdatedCount: outdated,
     deprecatedCount: deprecated,
-    vulnerableCount: coverage ? null : vulnerable,
+    vulnerableCount: withheld ? null : vulnerable,
     advisoryCount,
     healthScore,
+    ...(withheld ? { withheldReason: coverage ? ("vulnerability_data_incomplete" as const) : ("lockfile_unreadable" as const) } : {}),
+    ...(scorePartial ? { scoreCoverage: { complete: false as const, basis: "checked_part" as const, notes: partialNotes } } : {}),
+    ...(vulnResult?.aliasSeverity ? { aliasSeverity: vulnResult.aliasSeverity } : {}),
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     dependencies: limited,
     vulnerabilitySummary: vulnSummary,
-    summary: coverage
-      ? `${coverage.note} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
-      : `Health: ${healthScore}/100 (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
+    summary: withheld
+      ? `${[coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
+      : `Health: ${healthScore}/100${scorePartial ? " over the checked part only (see scoreCoverage)" : ""} (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };
