@@ -123,12 +123,12 @@ function project(direct: Record<string, string>, devDirect: Record<string, strin
   fs.writeFileSync(path.join(dir, "package-lock.json"), JSON.stringify({ name: "x", lockfileVersion: 3, packages }));
 }
 
-async function plan(params: Record<string, unknown> = {}, prepare?: (li: LiveIntelligence) => void) {
+async function plan(params: Record<string, unknown> = {}, prepare?: (li: LiveIntelligence) => void | Promise<void>) {
   const li = new LiveIntelligence(new Database(":memory:"));
   const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
   const { entries, discovery } = scanProjectTree(dir);
   li.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
-  prepare?.(li);
+  await prepare?.(li);
   const result = (await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50, ...params }, li)) as Record<string, any>;
   const step = (name: string, version?: string) =>
     result.recommendations.find((s: { package: string; currentVersion: string }) => s.package === name && (!version || s.currentVersion === version));
@@ -171,7 +171,10 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     const ptr = step("path-to-regexp");
     expect(ptr).toMatchObject({ action: "upgrade_parent", targetVersion: "0.1.13", fixPathChecked: "all_advisories" });
     expect(ptr.parentUpgrades).toEqual([
-      { parent: "express", from: "4.16.4", to: "4.22.0", requirement: "~0.1.12", resolvesTo: "0.1.13", lever: { name: "express", version: "4.16.4", to: "4.22.0" }, command: "npm install express@4.22.0" },
+      {
+        parent: "express", from: "4.16.4", to: "4.22.0", breaking: false, requirement: "~0.1.12", resolvesTo: "0.1.13",
+        levers: [{ name: "express", version: "4.16.4", to: "4.22.0", breaking: false, commands: [{ dir: ".", command: "npm install express@4.22.0 --save-exact" }] }],
+      },
     ]);
     const text = ptr.reasons.join(" ");
     expect(text).not.toMatch(/waiting on upstream/);
@@ -185,7 +188,7 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     const { step } = await plan();
     const express = step("express");
     expect(express).toMatchObject({ action: "upgrade_direct", targetVersion: "4.22.0", upgradeType: "minor" });
-    expect(express.upgradeCommands).toEqual([{ dir: ".", command: "npm install express@4.22.0" }]);
+    expect(express.upgradeCommands).toEqual([{ dir: ".", command: "npm install express@4.22.0 --save-exact" }]);
     expect(express.reasons.join(" ")).toMatch(/4\.22\.0, not 4\.20\.0: express 4\.20\.0 still requires a vulnerable path-to-regexp/);
   });
 
@@ -219,8 +222,8 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     expect(bson.action).toBe("upgrade_parent");
     expect(bson.parentUpgrades).toEqual([
       {
-        parent: "mongodb-core", from: "2.1.20", to: "3.1.0", requirement: "^1.1.0", resolvesTo: "1.1.6",
-        lever: { name: "mongodb", version: "2.2.36", to: "3.1.0" }, command: "npm install mongodb@3.1.0",
+        parent: "mongodb-core", from: "2.1.20", to: "3.1.0", breaking: true, requirement: "^1.1.0", resolvesTo: "1.1.6",
+        levers: [{ name: "mongodb", version: "2.2.36", to: "3.1.0", breaking: true, commands: [{ dir: ".", command: "npm install mongodb@3.1.0 --save-exact" }] }],
       },
     ]);
     expect(bson.reasons.join(" ")).toMatch(/mongodb-core arrives through mongodb 2\.2\.36, a direct dependency: mongodb 3\.1\.0 is the smallest mongodb release that brings in mongodb-core 3\.1\.0/);
@@ -250,7 +253,7 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     });
     const ptr = step("path-to-regexp");
     expect(ptr.action).toBe("upgrade_parent");
-    expect(ptr.parentUpgrades).toEqual([{ parent: "express", from: "4.16.4", to: null, latest: "5.1.0", lever: { name: "express", version: "4.16.4", to: null } }]);
+    expect(ptr.parentUpgrades).toEqual([{ parent: "express", from: "4.16.4", to: null, breaking: false, latest: "5.1.0", levers: [{ name: "express", version: "4.16.4", to: null, breaking: false }] }]);
     expect(ptr.reasons.join(" ")).toMatch(/upgrade express \(express 5\.1\.0 is its newest release; check that it admits path-to-regexp >= 0\.1\.13\)/);
   });
 
@@ -278,7 +281,8 @@ describe("H4: dev-only vulnerable packages are in the plan by default, labelled"
   it("matches vulnerability_scan's default: direct and transitive dev-only rows, isDev: true", async () => {
     devProject();
     const { result, step } = await plan();
-    expect(step("vitest")).toMatchObject({ isDev: true, scope: "direct", targetVersion: "3.2.5", risk: "critical" });
+    // Ranked by the grade vulnerability_scan presents: a dev-only critical is high (review finding 6).
+    expect(step("vitest")).toMatchObject({ isDev: true, scope: "direct", targetVersion: "3.2.5", risk: "high" });
     expect(step("esbuild")).toMatchObject({ isDev: true, scope: "transitive" });
     expect(result.summary).toMatch(/2 dev-only \(isDev\)/);
     const scanned = await scan();
@@ -299,7 +303,8 @@ describe("H4: dev-only vulnerable packages are in the plan by default, labelled"
     devProject();
     const { result } = await plan({ include_dev: false });
     expect(result.recommendations).toEqual([]);
-    expect(result.summary).toMatch(/include_dev: false left out 1 devDependency and 1 dev-only vulnerable transitive copy/);
+    // A plan-only run at runtime scope never scanned vitest: it is counted as unchecked, not as vulnerable (review finding 10).
+    expect(result.summary).toMatch(/include_dev: false left out 1 devDependency not checked for vulnerabilities and 1 dev-only vulnerable transitive copy/);
   });
 });
 
@@ -314,7 +319,7 @@ describe("H5: a deprecated release is never the target, even when the advisory l
     expect(scanned.recommendations[0]).toMatch(/^Upgrade lodash 4\.17\.20 → 4\.18\.1 .*4\.18\.0, the highest per-advisory fix, which is deprecated or yanked on the registry.*not checked against the package's other advisories/);
     expect(JSON.stringify(scanned)).not.toMatch(/→ 4\.18\.0/);
     const { step } = await plan();
-    expect(step("lodash")).toMatchObject({ targetVersion: "4.18.1", fixPathChecked: "installed_advisories_only", upgradeCommands: [{ dir: ".", command: "npm install lodash@4.18.1" }] });
+    expect(step("lodash")).toMatchObject({ targetVersion: "4.18.1", fixPathChecked: "installed_advisories_only", upgradeCommands: [{ dir: ".", command: "npm install lodash@4.18.1 --save-exact" }] });
   });
 });
 
@@ -370,5 +375,213 @@ describe("L7: an npm parent's requirement comes from dependencies and optionalDe
     const sources = li.getFixPathSources()!;
     expect(await sources.parentRequirements("npm", "plugin", "1.0.0", "react")).toEqual([]);
     expect(await sources.parentRequirements("npm", "plugin", "1.0.0", "lodash")).toEqual(["^4.17.0"]);
+  });
+});
+
+/**
+ * Independent review of the H1 parent-upgrade advice (2026-10-17, head 682f729): each case is
+ * one of the reviewer's scenarios (scratchpad review-x/scen.test.ts), failing on 682f729.
+ */
+describe("readiness review 2026-10-17: parent-upgrade advice", () => {
+  const leafOnly = (fix: string, versions: string[]) => {
+    ADVISORIES.leaf = [adv("GHSA-leaf-0000-0001", "leaf", fixedIn(fix))];
+    NPM.leaf = { latest: versions[versions.length - 1], versions: Object.fromEntries(versions.map((v) => [v, {}])) };
+  };
+  const commandsIn = (step: unknown) => JSON.stringify(step).match(/npm install [^"`]+/g) ?? [];
+
+  it("1: a parent the lockfile walk cannot tie to a declaration names no lever and no command (never `npm install <transitive>`)", async () => {
+    leafOnly("1.1.0", ["1.0.0", "1.1.0"]);
+    NPM.mid = { latest: "2.0.1", versions: { "2.0.0": { dependencies: { leaf: "1.0.0" } }, "2.0.1": { dependencies: { leaf: "^1.1.0" } } } };
+    const tree: Record<string, LockEntry> = { mid: { version: "2.0.0", dependencies: { leaf: "1.0.0" } }, leaf: { version: "1.0.0" } };
+    const topDeps: Record<string, string> = {};
+    for (let i = 0; i < 45; i++) {
+      tree[`t${i}`] = { version: "1.0.0", dependencies: { mid: "2.0.0" } };
+      topDeps[`t${i}`] = "1.0.0";
+    }
+    tree.top = { version: "1.0.0", dependencies: topDeps };
+    project({ top: "1.0.0" }, {}, tree);
+    const { step } = await plan();
+    const leaf = step("leaf");
+    expect(leaf.action).toBe("upgrade_parent");
+    expect(leaf.parentUpgrades).toMatchObject([{ parent: "mid", to: "2.0.1", levers: [] }]);
+    expect(leaf.parentUpgrades[0].leverUnknown).toMatch(/walk up the lockfile stopped after 40 entries/);
+    expect(commandsIn(leaf)).toEqual([]);
+    expect(leaf.reasons.join(" ")).toMatch(/could not be worked out .*so no command is named: bump the one that does to a release that brings in mid >= 2\.0\.1/);
+  });
+
+  it("2a: a transitive parent release is clear of its own advisories, and its lever agrees with the parent's own row (mid 2.1.0 is CRITICAL; 2.5.0 via top 1.2.0)", async () => {
+    leafOnly("1.1.0", ["1.0.0", "1.1.0"]);
+    ADVISORIES.mid = [adv("GHSA-mid0-0000-0001", "mid", fixedIn("2.5.0"), [], "CRITICAL")];
+    NPM.mid = { latest: "2.5.0", versions: { "2.0.0": { dependencies: { leaf: "1.0.0" } }, "2.1.0": { dependencies: { leaf: "^1.1.0" } }, "2.5.0": { dependencies: { leaf: "^1.1.0" } } } };
+    NPM.top = { latest: "1.2.0", versions: { "1.0.0": { dependencies: { mid: "2.0.0" } }, "1.1.0": { dependencies: { mid: "2.1.0" } }, "1.2.0": { dependencies: { mid: "2.5.0" } } } };
+    project({ top: "1.0.0" }, {}, { top: { version: "1.0.0", dependencies: { mid: "2.0.0" } }, mid: { version: "2.0.0", dependencies: { leaf: "1.0.0" } }, leaf: { version: "1.0.0" } });
+    const { step } = await plan();
+    expect(step("leaf").parentUpgrades).toMatchObject([{ parent: "mid", to: "2.5.0", levers: [{ name: "top", to: "1.2.0", commands: [{ command: "npm install top@1.2.0 --save-exact" }] }] }]);
+    expect(step("mid").parentUpgrades).toMatchObject([{ parent: "top", to: "1.2.0", levers: [{ name: "top", to: "1.2.0", commands: [{ command: "npm install top@1.2.0 --save-exact" }] }] }]);
+    expect(step("leaf").reasons.join(" ")).toMatch(/mid 2\.5\.0 is the smallest mid release whose requirement "\^1\.1\.0" admits leaf 1\.1\.0.*, and no advisory of mid affects it/);
+  });
+
+  it("2b: a direct parent's release agrees with its own row (express's own advisory is fixed in 4.22.3: both rows say 4.22.3)", async () => {
+    expressProject();
+    ADVISORIES.express.push(adv("GHSA-expr-0000-0002", "express", fixedIn("4.22.3"), [], "HIGH"));
+    const { step } = await plan();
+    const ptr = step("path-to-regexp");
+    expect(step("express")).toMatchObject({ targetVersion: "4.22.3", upgradeCommands: [{ command: "npm install express@4.22.3 --save-exact" }] });
+    expect(ptr.parentUpgrades).toMatchObject([{ parent: "express", to: "4.22.3", levers: [{ to: "4.22.3", commands: [{ command: "npm install express@4.22.3 --save-exact" }] }] }]);
+    expect(new Set([...commandsIn(ptr), ...commandsIn(step("express"))])).toEqual(new Set(["npm install express@4.22.3 --save-exact"]));
+  });
+
+  it("3: a new requirement that still admits the installed copy names the refresh too (npm 10.9.2 keeps the copy on install)", async () => {
+    leafOnly("1.0.5", ["1.0.0", "1.0.5"]);
+    NPM.par = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.0.0" } } } };
+    project({ par: "1.0.0" }, {}, { par: { version: "1.0.0", dependencies: { leaf: "1.0.0" } }, leaf: { version: "1.0.0" } });
+    const { step } = await plan();
+    const leaf = step("leaf");
+    expect(leaf.parentUpgrades).toMatchObject([{ parent: "par", to: "1.1.0", refreshCommands: [{ dir: ".", command: "npm update leaf" }] }]);
+    expect(leaf.reasons.join(" ")).toMatch(/leaf 1\.0\.0 still satisfies "\^1\.0\.0", and an install keeps a copy that satisfies it, so then run `npm update leaf`/);
+    expect(leaf.reasons.join(" ")).not.toMatch(/a refresh then resolves/);
+  });
+
+  it("4: commands keep the declared operator (express declared ~4.16.4), on the direct row and on the lever", async () => {
+    expressProject();
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "x", dependencies: { express: "~4.16.4" } }));
+    const { step } = await plan();
+    expect(step("express").upgradeCommands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"' }]);
+    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"' }]);
+  });
+
+  it("4: a spec whose operator cannot be carried names no command (>=)", async () => {
+    expressProject();
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "x", dependencies: { express: ">=4.16.0" } }));
+    const { step } = await plan();
+    expect(step("express").upgradeCommands).toBeUndefined();
+    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toBeUndefined();
+  });
+
+  it("5: a parent reached through two declared dependencies names both; one that cannot move makes it an override", async () => {
+    leafOnly("1.1.0", ["1.0.0", "1.1.0"]);
+    NPM.mid = { latest: "2.1.0", versions: { "2.0.0": { dependencies: { leaf: "1.0.0" } }, "2.1.0": { dependencies: { leaf: "^1.1.0" } } } };
+    NPM.a = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { mid: "2.0.0" } }, "1.1.0": { dependencies: { mid: "2.1.0" } } } };
+    NPM.b = { latest: "1.0.0", versions: { "1.0.0": { dependencies: { mid: "2.0.0" } } } };
+    const tree = { a: { version: "1.0.0", dependencies: { mid: "2.0.0" } }, b: { version: "1.0.0", dependencies: { mid: "2.0.0" } }, mid: { version: "2.0.0", dependencies: { leaf: "1.0.0" } }, leaf: { version: "1.0.0" } };
+    project({ a: "1.0.0", b: "1.0.0" }, {}, tree);
+    const stuck = (await plan()).step("leaf");
+    expect(stuck.action).toBe("override_or_replace");
+    expect(stuck.reasons.join(" ")).toMatch(/mid arrives through b 1\.0\.0, and b 1\.0\.0 is already its latest release/);
+
+    NPM.b = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { mid: "2.0.0" } }, "1.1.0": { dependencies: { mid: "2.1.0" } } } };
+    const both = (await plan()).step("leaf");
+    expect(both.action).toBe("upgrade_parent");
+    expect(both.parentUpgrades[0].levers.map((l: { name: string; to: string }) => `${l.name}@${l.to}`)).toEqual(["a@1.1.0", "b@1.1.0"]);
+    expect(both.reasons.join(" ")).toMatch(/mid arrives through a 1\.0\.0 and b 1\.0\.0, direct dependencies, each of which must move/);
+  });
+
+  it("6: ranks by the scan's scope-adjusted grade: dev-only criticals never push a runtime high out of max_recommendations", async () => {
+    for (const [n, sev] of [["d1", "CRITICAL"], ["d2", "CRITICAL"], ["r1", "HIGH"]] as const) {
+      ADVISORIES[n] = [adv(`GHSA-${n}00-0000-0001`, n, fixedIn("1.1.0"), [], sev)];
+      NPM[n] = { latest: "1.1.0", versions: { "1.0.0": {}, "1.1.0": {} } };
+    }
+    project({ r1: "1.0.0" }, { d1: "1.0.0", d2: "1.0.0" }, {});
+    const { result } = await plan({ max_recommendations: 2 });
+    expect(result.recommendations.map((r: { package: string; risk: string }) => `${r.package}:${r.risk}`)).toEqual(["r1:high", "d1:high"]);
+  });
+
+  it("7: a lever a workspace member declares, which the tree walk cannot tie to a manifest, is declined (no root-directory command)", async () => {
+    leafOnly("1.1.0", ["1.0.0", "1.1.0"]);
+    NPM.par = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.1.0" } } } };
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"] }));
+    fs.mkdirSync(path.join(dir, "packages", "app"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "packages", "app", "package.json"), JSON.stringify({ name: "app", version: "1.0.0", dependencies: { par: "^1.0.0" } }));
+    fs.writeFileSync(
+      path.join(dir, "package-lock.json"),
+      JSON.stringify({
+        name: "root",
+        lockfileVersion: 3,
+        packages: {
+          "": { name: "root", workspaces: ["packages/*"] },
+          "packages/app": { name: "app", version: "1.0.0", dependencies: { par: "^1.0.0" } },
+          "node_modules/app": { resolved: "packages/app", link: true },
+          "node_modules/par": { version: "1.0.0", dependencies: { leaf: "1.0.0" } },
+          "node_modules/leaf": { version: "1.0.0" },
+        },
+      }),
+    );
+    // The member's manifest is not one this server's tree walk reads as declaring par (par resolves
+    // as non-direct), so the lever is declined: no command in the lockfile's directory, which
+    // would run `npm install par@...` at the root and add par there (review findings 1 and 7).
+    const { step } = await plan();
+    const upgrade = step("leaf").parentUpgrades[0];
+    expect(upgrade).toMatchObject({ parent: "par", to: "1.1.0", levers: [] });
+    expect(upgrade.leverUnknown).toMatch(/no manifest this plan read declares par 1\.0\.0/);
+    expect(commandsIn(step("leaf"))).toEqual([]);
+  });
+
+  it("8: a parent move across a major is flagged (mongodb 2.2.36 -> 3.1.0)", async () => {
+    ADVISORIES.bson = [adv("GHSA-4jwp-vfvf-657p", "bson", fixedIn("1.1.4"))];
+    NPM.bson = { latest: "1.1.6", versions: { "1.0.9": {}, "1.1.0": {}, "1.1.4": {}, "1.1.6": {} } };
+    NPM.mongodb = { latest: "3.1.0", versions: { "2.2.36": { dependencies: { bson: "~1.0.4" } }, "3.1.0": { dependencies: { bson: "^1.1.0" } } } };
+    project({ mongodb: "2.2.36" }, {}, { mongodb: { version: "2.2.36", dependencies: { bson: "~1.0.4" } }, bson: { version: "1.0.9" } });
+    const { step } = await plan();
+    expect(step("bson").parentUpgrades).toMatchObject([{ parent: "mongodb", to: "3.1.0", breaking: true, levers: [{ name: "mongodb", to: "3.1.0", breaking: true }] }]);
+  });
+
+  it("9: a step whose lookups outlive the budget is never written to afterwards; reconcile is bounded too", async () => {
+    expressProject();
+    const li = new LiveIntelligence(new Database(":memory:"));
+    const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
+    const { entries, discovery } = scanProjectTree(dir);
+    li.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
+    const sources = li.getFixPathSources()!;
+    const slow = sources.packageAdvisories.bind(sources);
+    sources.packageAdvisories = async (...a: Parameters<typeof slow>) => {
+      await new Promise((r) => setTimeout(r, 300));
+      return slow(...a);
+    };
+    const { verifyFixPaths, reconcileDirectTargets } = await import("../tools/upgrade-planner-fixpaths.js");
+    const step = {
+      package: "path-to-regexp", ecosystem: "npm", currentVersion: "0.1.7", targetVersion: "0.1.13", upgradeType: "patch" as const,
+      reasons: ["2 known vulnerabilities", "Transitive dependency — not declared in your manifest"], breaking: false, scope: "transitive" as const, action: "waiting_on_upstream",
+    };
+    const before = JSON.stringify({ ...step, fixPathChecked: "installed_advisories_only" });
+    expect(await verifyFixPaths([{ step, fixes: ["0.1.13"], sourceDirs: [dir] }], li, 50)).toBe(1);
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(JSON.stringify(step)).toBe(before);
+
+    const row = { package: "express", ecosystem: "npm", currentVersion: "4.16.4", targetVersion: "4.20.0", upgradeType: "minor" as const, reasons: [] as string[], breaking: false, scope: "direct" as const, action: "upgrade_direct" };
+    const pinned = { ...step, action: "upgrade_parent", parentUpgrades: [{ parent: "express", from: "4.16.4", to: "4.22.0", breaking: false, levers: [{ name: "express", version: "4.16.4", to: "4.22.0", breaking: false }] }] };
+    await reconcileDirectTargets([row, pinned], [{ step: row, fixes: ["4.20.0"], sourceDirs: [dir] }], li, 20);
+    expect(row.targetVersion).toBe("4.20.0");
+    expect(row.reasons.join(" ")).toMatch(/could not be checked against express's own advisories in time/);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(row.targetVersion).toBe("4.20.0");
+  });
+
+  it("10: a parent that moves the package into peerDependencies still installs it: not 'no longer depends on'", async () => {
+    leafOnly("1.1.0", ["1.0.0", "1.1.0"]);
+    NPM.par = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { peerDependencies: { leaf: "^1.1.0" } } } };
+    project({ par: "1.0.0" }, {}, { par: { version: "1.0.0", dependencies: { leaf: "1.0.0" } }, leaf: { version: "1.0.0" } });
+    const { step } = await plan();
+    const leaf = step("leaf");
+    expect(leaf.parentUpgrades).toMatchObject([{ parent: "par", to: "1.1.0", requirement: "^1.1.0", peer: true }]);
+    expect(leaf.reasons.join(" ")).toMatch(/whose peer requirement "\^1\.1\.0" admits leaf 1\.1\.0 \(npm 7\+ installs a missing peer\)/);
+    expect(leaf.reasons.join(" ")).not.toMatch(/no longer depends on/);
+  });
+
+  it("10: include_dev: false counts only the vulnerable devDependencies it left out, and the override summary names every reason", async () => {
+    ADVISORIES.vitest = [adv("GHSA-9crc-q9x8-hgqq", "vitest", fixedIn("3.2.5"), [], "CRITICAL")];
+    NPM.vitest = { latest: "3.2.5", versions: { "3.2.4": {}, "3.2.5": {} } };
+    NPM.prettier = { latest: "3.6.0", versions: { "3.5.0": {}, "3.6.0": {} } };
+    project({}, { vitest: "3.2.4", prettier: "3.5.0" }, {});
+    const { result } = await plan({ include_dev: false }, async (li) => {
+      await li.scanVulnerabilities(dir, { includeDev: true });
+    });
+    expect(result.summary).toMatch(/include_dev: false left out 1 vulnerable devDependency \(the default, true, plans them\)/);
+
+    ADVISORIES.minimist = [adv("GHSA-xvch-5gv4-984h", "minimist", fixedIn("1.2.6"))];
+    NPM.minimist = { latest: "1.2.8", versions: { "1.2.5": {}, "1.2.6": {}, "1.2.8": {} } };
+    NPM["left-pad"] = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { minimist: "1.2.5" } }, "1.1.0": { dependencies: { minimist: "1.2.5" } } } };
+    project({ "left-pad": "1.0.0" }, {}, { "left-pad": { version: "1.0.0", dependencies: { minimist: "1.2.5" } }, minimist: { version: "1.2.5" } });
+    const blocked = await plan();
+    expect(blocked.result.summary).toMatch(/blocked by a parent that will not move \(deprecated, already its latest release, or no release admits a clean version\)/);
   });
 });

@@ -14,7 +14,8 @@
  *                    vulnerability_scan / upgrade_planner target)
  *   refresh_verdict  refreshRule (refresh-rule.ts), which refreshVerdict applies
  *   fix_command      refreshCommandFor on a directory holding that tool's files;
- *                    directCommandFor for `kind: "direct"` lines (audit E8)
+ *                    directFix for `kind: "direct"` lines (audit E8), on a project
+ *                    built from the vector as the Rust runner's check_direct builds it
  *   (refresh_verdict `override`: overrideReaches over the blocking parents)
  *   range_check      parseTarget + checkRange (dependency_check)
  */
@@ -24,7 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRanges } from "../../live/osv-ranges.js";
 import { extractFixedVersion } from "../../live/osv-scanner.js";
-import { directCommandFor, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
+import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
 import { compareVersions, isComparable } from "../../live/version-compare.js";
 import type { OsvVulnerability } from "../../live/types.js";
@@ -176,16 +177,40 @@ function checkFixCommand(v: Vector): string | null {
   try {
     const files = toolFiles(str(v, "tool"), v.workspace_root === true);
     for (const [name, body] of files) fs.writeFileSync(path.join(dir, name), body);
+    if (v.kind === "direct") return checkDirect(v, dir);
     const lockfile = files.length > 0 ? path.join(dir, files[0][0]) : path.join(dir, "none");
-    const got =
-      v.kind === "direct"
-        ? directCommandFor(lockfile, str(v, "pkg"), str(v, "target"), v.dev === true)
-        : refreshCommandFor(lockfile, str(v, "pkg"), str(v, "installed"), str(v, "target"));
+    const got = refreshCommandFor(lockfile, str(v, "pkg"), str(v, "installed"), str(v, "target"));
     const want = optStr(v, "command");
     return got === want ? null : `command: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * `kind: "direct"` (audit E8): the fix for a DECLARED dependency, read by directFix from a project
+ * built out of the vector, as the Rust runner's check_direct does: its declared npm spec
+ * (`declared`), Cargo.toml (`manifest`), go.mod (`go_mod`) or requirements.txt
+ * (`requirements`). `member: true` puts the manifest at packages/app, below the lockfile. A
+ * command is checked against `command`, an instruction against `instruction`.
+ */
+function checkDirect(v: Vector, root: string): string | null {
+  const pkg = str(v, "pkg");
+  const project = v.member === true ? path.join(root, "packages", "app") : root;
+  fs.mkdirSync(project, { recursive: true });
+  const declared = optStr(v, "declared");
+  if (declared !== null) fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ dependencies: { [pkg]: declared } }));
+  for (const [field, file] of [["manifest", "Cargo.toml"], ["go_mod", "go.mod"], ["requirements", "requirements.txt"]] as const) {
+    const body = optStr(v, field);
+    if (body !== null) fs.writeFileSync(path.join(project, file), body);
+  }
+  const fix = directFix(project, str(v, "eco"), pkg, str(v, "installed"), str(v, "target"));
+  const command = fix && "command" in fix ? fix.command : null;
+  const instruction = fix && "instruction" in fix ? fix.instruction : null;
+  const [wantC, wantI] = [optStr(v, "command"), optStr(v, "instruction")];
+  return command === wantC && instruction === wantI
+    ? null
+    : `direct: got ${JSON.stringify(fix)}, want command ${JSON.stringify(wantC)} / instruction ${JSON.stringify(wantI)}`;
 }
 
 function checkRangeCheck(v: Vector, records: Records): string | null {

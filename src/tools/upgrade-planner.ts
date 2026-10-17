@@ -36,6 +36,7 @@ import { relativeDir } from "./vulnerability-scan-format.js";
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { reconcileDirectTargets, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
+import { presentedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
@@ -112,6 +113,8 @@ interface UpgradeRecommendation {
    * dev-dependency). Absent for tools no command is named for.
    */
   upgradeCommands?: Array<{ dir: string; command: string }>;
+  /** upgrade_direct: a manifest edit where no single verified command makes it (a workspace-inherited crate, a requirements.txt pin). */
+  upgradeInstructions?: Array<{ dir: string; instruction: string }>;
   /**
    * lockfile_refresh: true when not every parent's requirement could be read
    * (none read excludes the target) and the target is semver-compatible with
@@ -208,6 +211,16 @@ function planOrder(a: UpgradeRecommendation, b: UpgradeRecommendation): number {
   return 0;
 }
 
+/**
+ * The grade a row ranks by: the scope-adjusted severity vulnerability_scan presents (transitive
+ * caps critical at high; dev-only drops one level), never below medium for a vulnerable package.
+ * Ranking on the raw grade let dev-only criticals push a runtime high out of max_recommendations
+ * (readiness review 2026-10-17, finding 6).
+ */
+function riskOf(entries: VulnerabilityEntry[]): UpgradeRecommendation["risk"] {
+  return severityToRisk(entries.map((v) => presentedSeverity(v)));
+}
+
 function severityToRisk(severities: string[]): UpgradeRecommendation["risk"] {
   if (severities.includes("critical")) return "critical";
   if (severities.includes("high")) return "high";
@@ -283,7 +296,7 @@ async function executeStandalonePlanner(
   const named = (name: string, ecosystem: string) => !only || namesPackage(only, name, ecosystem);
   let deps = liveIntel.getResolvedDeps();
   if (only) deps = deps.filter((d) => named(d.name, d.ecosystem));
-  const devDirectLeftOut = includeDev ? 0 : deps.filter((d) => d.isDev).length;
+  const devDirect = includeDev ? [] : deps.filter((d) => d.isDev);
   if (!includeDev) deps = deps.filter((d) => !d.isDev);
   const drift = liveIntel.getInstallDrift();
   const root = liveIntel.getProjectRoot() ?? process.cwd();
@@ -295,6 +308,14 @@ async function executeStandalonePlanner(
   // ensureVulnerabilities rescans at the wider scope when needed.
   const vulnResult =
     (await liveIntel.ensureVulnerabilities(root, PLANNER_SCAN_TIMEOUT_MS, { includeDev })) ?? liveIntel.getVulnerabilities();
+  // include_dev: false: the summary counts the vulnerable devDependencies it left out, when the
+  // scan read them; otherwise how many it did not check (readiness review 2026-10-17, finding 10).
+  const devScanned = devDirect.length > 0 && liveIntel.lastScanIncludesDev();
+  const devVulnerable = new Set(
+    (vulnResult?.vulnerabilities ?? []).filter((v) => v.isDirect && v.isDev && !isMaintenanceNotice(v)).map((v) => `${v.ecosystem}\0${v.package}\0${v.currentVersion}`),
+  );
+  const devDirectLeftOut = devScanned ? devDirect.filter((d) => devVulnerable.has(`${d.ecosystem}\0${d.name}\0${d.version}`)).length : 0;
+  const devDirectUnchecked = devScanned ? 0 : devDirect.length;
 
   // Registry rows (freshness, deprecation) for direct deps. By default a devDependency gets one
   // only when it is vulnerable: fetching every dev tool's registry document (typescript,
@@ -372,7 +393,7 @@ async function executeStandalonePlanner(
         risk = "low";
         reasons.push("Affected code is gated behind a target not active on this platform");
       } else {
-        risk = severityToRisk(vulns.filter((v) => v.platformActive).map((v) => v.severity));
+        risk = riskOf(vulns.filter((v) => v.platformActive));
       }
 
       // The smallest version that fixes every fixable advisory: each
@@ -431,7 +452,7 @@ async function executeStandalonePlanner(
         reasons.push(
           `The installed ${installed} has ${installedGroups.length} known CVE${installedGroups.length !== 1 ? "s" : ""} (${installedGroups.map((g) => g.best.vulnId).join(", ")})`,
         );
-        risk = higherRisk(risk, severityToRisk(installedVulns.map((v) => v.severity)));
+        risk = higherRisk(risk, riskOf(installedVulns));
       }
     }
 
@@ -541,7 +562,7 @@ async function executeStandalonePlanner(
         currentVersion: first.currentVersion,
         targetVersion: target,
         upgradeType: upgradeTypeBetween(first.currentVersion, target),
-        risk: platformActive ? severityToRisk(entries.filter((e) => e.platformActive).map((e) => e.severity)) : "low",
+        risk: platformActive ? riskOf(entries.filter((e) => e.platformActive)) : "low",
         reasons,
         breaking: false,
         isDev: entries.every((e) => e.isDev),
@@ -616,16 +637,17 @@ async function executeStandalonePlanner(
   if (lockfileRefreshes > 0) parts.push(`${lockfileRefreshes} transitive, fixed by a lockfile refresh (every parent already admits a clean version)`);
   if (parentUpgradeSteps > 0) parts.push(`${parentUpgradeSteps} transitive, fixed by upgrading the parent that pins it (parentUpgrades names the release)`);
   if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream`);
-  if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated or already latest): override the version or replace the parent`);
+  if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated, already its latest release, or no release admits a clean version): override the version or replace the parent`);
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
   if (noFix > 0) parts.push(`${noFix} vulnerable with no fixed release yet`);
   if (inactive > 0) parts.push(`${inactive} vulnerable only in code not built on this host`);
   const criticalCount = limited.filter((r) => r.risk === "critical").length;
   if (criticalCount > 0) parts.push(`${criticalCount} critical`);
   if (devOnly > 0) parts.push(`${devOnly} dev-only (isDev)`);
-  if (devDirectLeftOut + devTransitiveLeftOut > 0) {
+  if (devDirectLeftOut + devTransitiveLeftOut + devDirectUnchecked > 0) {
     const left: string[] = [];
-    if (devDirectLeftOut > 0) left.push(`${devDirectLeftOut} devDependenc${devDirectLeftOut !== 1 ? "ies" : "y"}`);
+    if (devDirectLeftOut > 0) left.push(`${devDirectLeftOut} vulnerable devDependenc${devDirectLeftOut !== 1 ? "ies" : "y"}`);
+    if (devDirectUnchecked > 0) left.push(`${devDirectUnchecked} devDependenc${devDirectUnchecked !== 1 ? "ies" : "y"} not checked for vulnerabilities`);
     if (devTransitiveLeftOut > 0) left.push(`${devTransitiveLeftOut} dev-only vulnerable transitive cop${devTransitiveLeftOut !== 1 ? "ies" : "y"}`);
     parts.push(`include_dev: false left out ${left.join(" and ")} (the default, true, plans them)`);
   }
