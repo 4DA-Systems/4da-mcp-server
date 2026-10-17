@@ -50,6 +50,10 @@ export interface LockfileProblem {
    * past the length cap): a partial read, not an unreadable file.
    */
   skipped?: number;
+  /** Set for a requirements include refused because it points outside the project (B-11): a policy, not damage. */
+  refused?: true;
+  /** The ecosystem whose resolution reported it (stamped by resolveVersionSource), for ecosystem_filter. */
+  ecosystem?: string;
 }
 
 export type SourceKind = "lockfile" | "manifest" | "declared_ranges";

@@ -256,25 +256,67 @@ export function scanProjectTree(
   };
 }
 
+const walkedDiscovery = new Map<string, TreeDiscovery>();
+
 /**
- * Notes for lockfiles present but unreadable (conflict markers, invalid
- * JSON), and for lockfiles read with entries skipped (`skipped`: a yarn.lock
- * line past the length cap, audit L5), or none.
+ * The walk's report for `root`, taken once per process. For answers that
+ * had no walk recorded and must not claim "nothing here" unchecked (H3):
+ * vulnerability_scan's "nothing found" message and dependency_health's
+ * nothing-checked answer. Re-walking on every call cost a full tree walk per
+ * call (review of H3, 2026-10-18).
  */
-export function unreadableNotes(problems: Array<{ file: string; error: string; skipped?: number }>): string[] {
-  const listed = (ps: typeof problems) => `${ps.slice(0, 3).map((p) => `${p.file} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
-  const unreadable = problems.filter((p) => !p.skipped);
-  const partial = problems.filter((p) => p.skipped);
+export function discoveryFor(root: string): TreeDiscovery {
+  const key = path.resolve(root).toLowerCase();
+  let found = walkedDiscovery.get(key);
+  if (!found) {
+    found = scanProjectTree(root).discovery;
+    walkedDiscovery.set(key, found);
+  }
+  return found;
+}
+
+/** A lockfile problem as the notes read it (lockfile-types.ts LockfileProblem). */
+export type LockfileProblemLike = { file: string; error: string; skipped?: number; refused?: true };
+
+/**
+ * The three kinds, kept apart: a file that could not be read (UNREADABLE),
+ * one read with entries skipped (`skipped`, PARTIAL: a yarn.lock or
+ * requirements line past the length cap, audit L5), and a requirements
+ * include refused because it points outside the project (`refused`, B-11).
+ */
+export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[] } {
+  return {
+    unreadable: problems.filter((p) => !p.skipped && !p.refused),
+    partial: problems.filter((p) => Boolean(p.skipped) && !p.refused),
+    refused: problems.filter((p) => p.refused === true),
+  };
+}
+
+/**
+ * One wording for every tool (vulnerability_scan, dependency_health,
+ * upgrade_planner). `show` renders a path (the scan shows it relative).
+ */
+export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (file: string) => string = (f) => f): string[] {
+  const listed = (ps: LockfileProblemLike[]) => `${ps.slice(0, 3).map((p) => `${show(p.file)} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
+  const { unreadable, partial, refused } = splitLockfileProblems(problems);
   const notes: string[] = [];
   if (unreadable.length > 0) {
     notes.push(
-      `UNREADABLE: ${unreadable.length} lockfile${unreadable.length === 1 ? "" : "s"} could not be read and ${unreadable.length === 1 ? "its" : "their"} dependencies were not checked: ${listed(unreadable)}.`,
+      `UNREADABLE: ${unreadable.length} lockfile${unreadable.length === 1 ? "" : "s"} could not be read, so ${unreadable.length === 1 ? "its" : "their"} dependencies were not checked: ${listed(unreadable)}.`,
     );
   }
   if (partial.length > 0) {
     notes.push(`PARTIAL: ${partial.length} lockfile${partial.length === 1 ? " was" : "s were"} read with entries skipped: ${listed(partial)}.`);
   }
+  if (refused.length > 0) {
+    notes.push(`REFUSED: ${refused.length} requirements include${refused.length === 1 ? " was" : "s were"} not read: ${listed(refused)}.`);
+  }
   return notes;
+}
+
+/** Kept for its importers (upgrade_planner): lockfileProblemNotes. */
+export function unreadableNotes(problems: LockfileProblemLike[]): string[] {
+  return lockfileProblemNotes(problems);
 }
 
 /** What a scan left out on purpose or cannot read: ecosystems it does not cover, and test fixtures. */

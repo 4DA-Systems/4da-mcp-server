@@ -289,7 +289,7 @@ describe("readYarnLock: entries past the line cap are counted, never silent (L5)
       fs.writeFileSync(path.join(dir, "yarn.lock"), `# yarn lockfile v1\n\n${long}\n${lodash}`);
       const read = resolveVersionSource(dir, "npm");
       expect(read.instances.map((i) => i.name)).toEqual(["lodash"]);
-      expect(read.problems).toEqual([{ file: path.join(dir, "yarn.lock"), skipped: 1, error: expect.stringMatching(/1 entry on a line longer than 4096 characters/) }]);
+      expect(read.problems).toEqual([{ file: path.join(dir, "yarn.lock"), skipped: 1, ecosystem: "npm", error: expect.stringMatching(/1 entry on a line longer than 4096 characters/) }]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -330,7 +330,9 @@ describe("the scan's coverage says a partial yarn.lock is partial, not unreadabl
       expect(result.total_dependencies_scanned).toBe(1);
       expect(result.coverage.note).toMatch(/PARTIAL: 1 lockfile was read with entries skipped: yarn\.lock \(1 entry on a line longer than 4096 characters/);
       expect(result.coverage.note).not.toMatch(/UNREADABLE/);
-      expect(result.coverage.unreadable_lockfiles).toEqual([{ path: "yarn.lock", error: expect.any(String), skipped_entries: 1 }]);
+      // A partial read is not an unreadable lockfile (review of L5): its own key.
+      expect(result.coverage.partial_lockfiles).toEqual([{ path: "yarn.lock", skipped_entries: 1, reason: expect.stringMatching(/1 entry on a line longer/) }]);
+      expect(result.coverage.unreadable_lockfiles).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
       if (prior === undefined) delete process.env.FOURDA_OFFLINE;

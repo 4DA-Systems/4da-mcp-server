@@ -13,7 +13,7 @@ import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo, V
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
-import { discoveryNote, exclusionNotes, scanProjectTree, unreadableNotes } from "../project-tree.js";
+import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -74,19 +74,6 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
   });
 }
 
-/** The line an answer over an unreadable lockfile leads with, in the scan's NOT CHECKED form. */
-function unreadableGapLine(problems: Array<{ file: string; error: string; skipped?: number }>): string {
-  const listed = (ps: typeof problems) => `${ps.slice(0, 3).map((p) => `${p.file} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
-  const unreadable = problems.filter((p) => !p.skipped);
-  const partial = problems.filter((p) => p.skipped);
-  const parts: string[] = [];
-  if (unreadable.length > 0) {
-    parts.push(`${unreadable.length} lockfile${unreadable.length === 1 ? "" : "s"} could not be read, so the dependencies ${unreadable.length === 1 ? "it pins" : "they pin"} were not checked: ${listed(unreadable)}`);
-  }
-  if (partial.length > 0) parts.push(`${partial.length} lockfile${partial.length === 1 ? " was" : "s were"} read with entries skipped: ${listed(partial)}`);
-  return `NOT CHECKED: ${parts.join("; ")}. This is not a complete result.`;
-}
-
 /** One entry per distinct advisory of each installed copy: the group's most severe record. */
 function advisoriesPerCopy(rows: VulnerabilityEntry[]): VulnerabilityEntry[] {
   const byCopy = new Map<string, VulnerabilityEntry[]>();
@@ -105,10 +92,10 @@ function advisoriesPerCopy(rows: VulnerabilityEntry[]): VulnerabilityEntry[] {
  */
 function nothingChecked(start: number, liveIntel: LiveIntelligence | null): DependencyHealthResult {
   const root = liveIntel?.getProjectRoot() ?? process.cwd();
-  const discovery = liveIntel?.getDiscovery() ?? scanProjectTree(root).discovery;
+  const discovery = liveIntel?.getDiscovery() ?? discoveryFor(root);
   const notes = [
     ...exclusionNotes(discovery),
-    ...unreadableNotes(liveIntel?.getLockfileProblems() ?? []),
+    ...lockfileProblemNotes(liveIntel?.getLockfileProblems() ?? []),
     ...[discoveryNote(discovery)].filter((n): n is string => n !== null),
   ];
   return {
@@ -121,6 +108,7 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null): Depe
     vulnerableCount: null,
     advisoryCount: 0,
     healthScore: null,
+    withheldReason: "nothing_checked",
     dependencies: [],
     vulnerabilitySummary: null,
     summary:
@@ -184,13 +172,20 @@ export async function executeDependencyHealth(
     expectedTotal: scopeTotal,
     notLoaded: `the OSV.dev scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
   });
-  // A lockfile (or requirements include) that could not be read is a gap of
-  // the same kind: what it pins was never sent to OSV. 6.2.5 scored a
-  // merge-conflicted package-lock.json 32/100 from package.json's pins alone
-  // (audit M5). The score and the counts are withheld, as for an OSV gap.
-  const unread = liveIntel.getLockfileProblems();
-  const readGap = unread.length > 0 ? unreadableGapLine(unread) : null;
+  // A lockfile that could not be read is a gap of the same kind: nothing it
+  // pins was sent to OSV. 6.2.5 scored a merge-conflicted package-lock.json
+  // 32/100 from package.json's pins alone (audit M5); the score and the
+  // counts are withheld, as for an OSV gap. A file read with entries skipped
+  // (PARTIAL) or a requirements include refused by policy (REFUSED) loses
+  // only what it names: the checked part is scored, marked partial
+  // (scoreCoverage), so a refusal that is permanent by design does not
+  // withhold the score forever. ecosystem_filter narrows these too.
+  const problems = liveIntel.getLockfileProblems().filter((p) => !params.ecosystem_filter || !p.ecosystem || p.ecosystem === params.ecosystem_filter);
+  const { unreadable, partial: partialReads, refused } = splitLockfileProblems(problems);
+  const readGap = unreadable.length > 0 ? `NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")} This is not a complete result.` : null;
   const withheld = coverage !== null || readGap !== null;
+  const partialNotes = lockfileProblemNotes([...partialReads, ...refused]);
+  const scorePartial = !withheld && partialNotes.length > 0;
   // One population for every count: the stored scan can be vulnerability_scan's,
   // which includes direct devDependencies by default, while the registry rows
   // leave them out without include_dev. navcal read "4 direct" vulnerable, 3 of
@@ -326,7 +321,7 @@ export async function executeDependencyHealth(
   );
   if (vulnResult) {
     const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive${devScope})`;
-    parts.push(withheld ? `at least ${found}, in the checked part` : found);
+    parts.push(withheld || scorePartial ? `at least ${found}, in the checked part` : found);
   }
   if (deprecated > 0) parts.push(`${deprecated} deprecated (direct)`);
   if (outdated > 0) parts.push(`${outdated} outdated (direct)`);
@@ -334,7 +329,7 @@ export async function executeDependencyHealth(
     parts.push(`${drifted} installed at a different version than the lockfile pins (see installedVersion; vulnerability_scan lists install_drift)`);
   }
   // "All healthy" is a claim about CVEs too; it needs a scan behind it.
-  if (vulnResult && !withheld && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
+  if (vulnResult && !withheld && !scorePartial && vulnerable === 0 && deprecated === 0 && outdated === 0 && drifted === 0) {
     parts.push("all healthy");
   }
   const hidden = advisoryCount - activeAdvisories.length;
@@ -345,7 +340,7 @@ export async function executeDependencyHealth(
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
-  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...(readGap ? [] : unreadableNotes(unread))]) parts.push(note.replace(/[.]$/, ""));
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes]) parts.push(note.replace(/[.]$/, ""));
 
   return {
     scannedAt: new Date().toISOString(),
@@ -369,12 +364,15 @@ export async function executeDependencyHealth(
     vulnerableCount: withheld ? null : vulnerable,
     advisoryCount,
     healthScore,
+    ...(withheld ? { withheldReason: coverage ? ("vulnerability_data_incomplete" as const) : ("lockfile_unreadable" as const) } : {}),
+    ...(scorePartial ? { scoreCoverage: { complete: false as const, basis: "checked_part" as const, notes: partialNotes } } : {}),
+    ...(vulnResult?.aliasSeverity ? { aliasSeverity: vulnResult.aliasSeverity } : {}),
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     dependencies: limited,
     vulnerabilitySummary: vulnSummary,
     summary: withheld
       ? `${[coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
-      : `Health: ${healthScore}/100 (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
+      : `Health: ${healthScore}/100${scorePartial ? " over the checked part only (see scoreCoverage)" : ""} (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };

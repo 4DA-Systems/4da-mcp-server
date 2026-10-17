@@ -155,7 +155,44 @@ describe("hashed requirements keep every pin (pip-compile --generate-hashes)", (
     const read = resolveVersionSource(proj, "PyPI");
     expect(read.instances.map((i) => i.name)).toEqual(["requests"]);
     expect(read.problems).toEqual([
-      { file: path.join(proj, "requirements.txt"), skipped: 1, error: expect.stringMatching(/1 line longer than 4096 characters/) },
+      { file: path.join(proj, "requirements.txt"), skipped: 1, ecosystem: "PyPI", error: expect.stringMatching(/1 line longer than 4096 characters/) },
     ]);
+  });
+});
+describe("the scan names a refused include REFUSED, under its own key (review of M4)", () => {
+  it("refused_includes, not unreadable_lockfiles", async () => {
+    write("outside.txt", "django==3.2.0\n");
+    write("proj/requirements.txt", "requests==2.19.0\n-r ../outside.txt\n");
+    const priorOffline = process.env.FOURDA_OFFLINE;
+    delete process.env.FOURDA_OFFLINE;
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/v1/querybatch")) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: unknown[] };
+        return new Response(JSON.stringify({ results: queries.map(() => ({})) }), { status: 200 });
+      }
+      throw new TypeError(`fetch failed (${String(input)})`);
+    });
+    try {
+      const result = (await executeVulnerabilityScan(null, { project_path: proj }, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
+      expect(result.coverage.note).toMatch(/REFUSED: 1 requirements include was not read: .*outside\.txt/);
+      expect(result.coverage.note).not.toMatch(/UNREADABLE/);
+      expect(result.coverage.refused_includes).toEqual([{ path: expect.stringMatching(/outside\.txt$/), reason: expect.stringMatching(/outside the project/) }]);
+      expect(result.coverage.unreadable_lockfiles).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      if (priorOffline === undefined) delete process.env.FOURDA_OFFLINE;
+      else process.env.FOURDA_OFFLINE = priorOffline;
+    }
+  });
+});
+
+describe("the H3 walk is taken once per root (review of H3)", () => {
+  it("discoveryFor returns the same report without walking again", async () => {
+    const { discoveryFor } = await import("../project-tree.js");
+    write("proj/pom.xml", "<project/>");
+    const first = discoveryFor(proj);
+    fs.writeFileSync(path.join(proj, "build.gradle"), "");
+    expect(discoveryFor(proj)).toBe(first);
+    expect(first.notCovered?.map((n) => n.path)).toEqual(["pom.xml"]);
   });
 });

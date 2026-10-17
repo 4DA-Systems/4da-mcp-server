@@ -398,3 +398,63 @@ describe("dependency_health — one population for the registry rows and the vul
     expect(result.summary).toContain("2 vulnerable packages in the full tree of 2 installed (2 direct, 0 transitive; devDependencies included)");
   });
 });
+/**
+ * Review of M5/M4/L5 (2026-10-18): a withheld score says why in a field;
+ * ecosystem_filter narrows the lockfile problems too; a refused include or a
+ * partial read scores the checked part, marked partial, instead of
+ * withholding forever (a refusal is permanent by design); and the wording is
+ * the scan's (UNREADABLE / PARTIAL / REFUSED).
+ */
+describe("dependency_health — why a score is withheld, and what a partial one rests on", () => {
+  const intel = (files: Record<string, string>, groups: Array<{ language: string; deps: string[] }>) => {
+    const dir = fs.mkdtempSync(path.join(root, "r3-"));
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
+    }
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    process.env.FOURDA_OFFLINE = "true";
+    li.initFromDependencyGroups(groups.map((g) => ({ dir, devDeps: [], ...g })));
+    li.fetchRegistryHealth = async () => [];
+    (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = makeScan([makeEntry({ package: "requests", ecosystem: "PyPI", currentVersion: "2.19.0", vulnId: "GHSA-req", severity: "high" })]);
+    return { li, dir };
+  };
+  const conflicted = `{\n<<<<<<< HEAD\n  "lockfileVersion": 3,\n=======\n  "lockfileVersion": 2,\n>>>>>>> branch\n}\n`;
+
+  it("an unreadable lockfile: withheldReason lockfile_unreadable", async () => {
+    const { li } = intel({ "package.json": JSON.stringify({ dependencies: { lodash: "4.17.20" } }), "package-lock.json": conflicted }, [{ language: "javascript", deps: ["lodash"] }]);
+    const r = await executeDependencyHealth(noDb, {}, li);
+    expect(r.healthScore).toBeNull();
+    expect(r.withheldReason).toBe("lockfile_unreadable");
+    expect(r.summary).toMatch(/^NOT CHECKED: UNREADABLE: 1 lockfile could not be read/);
+  });
+
+  it("ecosystem_filter: an npm lockfile problem does not withhold a PyPI-only answer", async () => {
+    const { li } = intel(
+      { "package.json": JSON.stringify({ dependencies: { lodash: "4.17.20" } }), "package-lock.json": conflicted, "requirements.txt": "requests==2.19.0\n" },
+      [{ language: "javascript", deps: ["lodash"] }, { language: "python", deps: ["requests"] }],
+    );
+    const r = await executeDependencyHealth(noDb, { ecosystem_filter: "PyPI" }, li);
+    expect(r.healthScore).not.toBeNull();
+    expect(r.withheldReason).toBeUndefined();
+    expect(r.summary).not.toMatch(/package-lock/);
+  });
+
+  it("a refused include: the checked part is scored, marked partial, worded REFUSED", async () => {
+    const { li } = intel({ "requirements.txt": "requests==2.19.0\n-r ../base.txt\n" }, [{ language: "python", deps: ["requests"] }]);
+    const r = await executeDependencyHealth(noDb, {}, li);
+    expect(r.healthScore).not.toBeNull();
+    expect(r.withheldReason).toBeUndefined();
+    expect(r.scoreCoverage).toEqual({ complete: false, basis: "checked_part", notes: [expect.stringMatching(/^REFUSED: 1 requirements include was not read: .*base\.txt/)] });
+    expect(r.summary).toMatch(/^Health: \d+\/100 over the checked part only \(see scoreCoverage\)/);
+    expect(r.summary).toMatch(/at least 1 vulnerable package/);
+    expect(r.summary).not.toMatch(/UNREADABLE|all healthy/);
+  });
+
+  it("nothing resolved: withheldReason nothing_checked", async () => {
+    const empty = new LiveIntelligence(new Database(":memory:"));
+    empty.initFromProjectTree(fs.mkdtempSync(path.join(root, "r3-empty-")), [], null);
+    expect((await executeDependencyHealth(noDb, {}, empty)).withheldReason).toBe("nothing_checked");
+  });
+});

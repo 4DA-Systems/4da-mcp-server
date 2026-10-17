@@ -222,7 +222,8 @@ function refusedInclude(from: string, option: "r" | "c", target: string): Lockfi
   const absolute = /^[\\/]/.test(target) || /^[A-Za-z]:/.test(target) || path.isAbsolute(target);
   return {
     file: absolute ? target : path.resolve(path.dirname(from), target),
-    error: `refused: \`-${option} ${target}\` in ${path.basename(from)} points outside the project directory, and includes outside it are never read, so the ${option === "r" ? "pins" : "constraints"} in it were not checked`,
+    refused: true,
+    error: `\`-${option} ${target}\` in ${path.basename(from)} points outside the project directory, and includes outside it are never read, so the ${option === "r" ? "pins" : "constraints"} in it were not checked`,
   };
 }
 

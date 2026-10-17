@@ -14,7 +14,9 @@ import { fetchWithTimeout } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
 import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
+import { isMaintenanceNotice } from "./maintenance.js";
 import type {
+  AliasSeverityReport,
   ResolvedDependency,
   OsvVulnerability,
   VulnerabilityEntry,
@@ -39,6 +41,10 @@ const HYDRATE_CONCURRENCY = 24;
 /** querybatch chunks (1,000 dependencies each) sent at once. */
 const BATCH_CONCURRENCY = 4;
 const DETAIL_RETRY_DELAY_MS = 750;
+/** GHSA alias records read per scan to rate records that carry no severity (rateFromAliases). */
+export const MAX_ALIAS_LOOKUPS = 50;
+/** The whole alias lookup's time budget per scan; past it the records stay unknown, said so. */
+export const ALIAS_BUDGET_MS = 5_000;
 
 /**
  * Detail fetches in flight, shared by every scanner in the process. The
@@ -251,8 +257,10 @@ export class OsvScanner {
   private cache: LiveCache;
   private rateLimiter: RateLimiter;
   private source: AdvisorySource;
+  private aliasBudgetMs: number;
 
-  constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource) {
+  constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource, options: { aliasBudgetMs?: number } = {}) {
+    this.aliasBudgetMs = options.aliasBudgetMs ?? ALIAS_BUDGET_MS;
     this.cache = cache;
     this.rateLimiter = rateLimiter;
     this.source = source ?? new OsvHttpSource(cache, rateLimiter);
@@ -316,7 +324,8 @@ export class OsvScanner {
     // placeholders npm publishes after taking a malicious package down; the
     // malware advisory covering every version does not apply to them (the
     // desktop app's osv::matching::is_npm_security_holding; audit A5).
-    const allVulns = [...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v));
+    const rated = await this.rateFromAliases([...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v)));
+    const allVulns = rated.vulns;
     const vulnerablePackages = new Set(allVulns.map((v) => v.package));
     const platformInactiveVulnerable = new Set(
       allVulns.filter((v) => !v.platformActive).map((v) => v.package),
@@ -344,7 +353,75 @@ export class OsvScanner {
       unchecked: unchecked.length,
       uncheckedReason: offline ? (failure ?? "OSV.dev could not be queried") : null,
       staleAnswers,
+      ...(rated.report ? { aliasSeverity: rated.report } : {}),
     };
+  }
+
+  /**
+   * A severity for records that carry none, from their GHSA alias: one
+   * advisory, one grade, in every tool. Go's vulnerability database rates
+   * nothing: GO-2024-3333 (golang.org/x/net) has no severity, its alias
+   * GHSA-w32m-9786-jp63 is HIGH, and OSV returns only the GO record for the
+   * module (the GHSA names golang.org/x/net/html). dependency_check said
+   * `avoid` while vulnerability_scan graded the same record unknown (review
+   * of 6.2.5 M6, 2026-10-18). The two records name each other, so the
+   * alias's rating applies; it is read by the same rule as any record and
+   * the entry says where it came from (`severityFrom`).
+   *
+   * Through this scanner's own source: a pinned source answers from its
+   * records, never the network; with live lookups off nothing is fetched.
+   * At most MAX_ALIAS_LOOKUPS aliases, within ALIAS_BUDGET_MS in total.
+   * Anything not rated stays unknown and is listed as unresolved, with why;
+   * unknown is never clean.
+   */
+  private async rateFromAliases(entries: VulnerabilityEntry[]): Promise<{ vulns: VulnerabilityEntry[]; report: AliasSeverityReport | null }> {
+    const ownIds = new Set(entries.map((e) => e.vulnId));
+    const wanted = new Map<string, string>(); // record id -> GHSA alias
+    for (const e of entries) {
+      if (e.severity !== "unknown" || e.severityFrom || wanted.has(e.vulnId) || isMaintenanceNotice(e)) continue;
+      const ghsa = e.aliases.find((a) => /^GHSA-/i.test(a) && !ownIds.has(a));
+      if (ghsa) wanted.set(e.vulnId, ghsa);
+    }
+    if (wanted.size === 0) return { vulns: entries, report: null };
+
+    const aliases = [...new Set(wanted.values())];
+    const asked = aliases.slice(0, MAX_ALIAS_LOOKUPS);
+    let records = new Map<string, OsvVulnerability>();
+    let reason: string | null = aliases.length > asked.length ? `more than ${MAX_ALIAS_LOOKUPS} aliases to read; the rest were not asked for` : null;
+    if (this.source.network && process.env.FOURDA_OFFLINE === "true") {
+      reason = "live lookups are disabled (FOURDA_OFFLINE=true)";
+    } else {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), this.aliasBudgetMs);
+      });
+      try {
+        // Fetches past the deadline keep running and fill the detail cache for the next call.
+        const answer = await Promise.race([this.source.details(asked).catch(() => new Map<string, OsvVulnerability>()), deadline]);
+        if (answer === null) reason = `the alias records did not arrive within ${this.aliasBudgetMs / 1000} s`;
+        else records = answer;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+
+    const grades = new Map<string, VulnerabilityEntry["severity"]>();
+    for (const [id, record] of records) grades.set(id, deriveSeverity(record).severity);
+    const unresolved: string[] = [];
+    let ratedCount = 0;
+    const vulns = entries.map((e) => {
+      const ghsa = wanted.get(e.vulnId);
+      if (!ghsa) return e;
+      const grade = grades.get(ghsa);
+      if (!grade || grade === "unknown") {
+        if (!unresolved.includes(e.vulnId)) unresolved.push(e.vulnId);
+        return e;
+      }
+      ratedCount++;
+      return { ...e, severity: grade, severityFrom: ghsa };
+    });
+    if (unresolved.length > 0 && reason === null) reason = "the alias record could not be read, or is unrated itself";
+    return { vulns, report: { rated: ratedCount, unresolved, reason: unresolved.length > 0 ? reason : null } };
   }
 
   private async batchQuery(
