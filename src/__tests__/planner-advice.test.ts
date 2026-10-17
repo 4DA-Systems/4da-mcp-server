@@ -429,8 +429,30 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expect(step("express")).toMatchObject({ targetVersion: "4.22.3", upgradeCommands: [{ command: "npm install express@4.22.3 --save-exact" }] });
     expect(ptr.parentUpgrades).toMatchObject([{ parent: "express", to: "4.22.3", levers: [{ to: "4.22.3", commands: [{ command: "npm install express@4.22.3 --save-exact" }] }] }]);
     expect(new Set([...commandsIn(ptr), ...commandsIn(step("express"))])).toEqual(new Set(["npm install express@4.22.3 --save-exact"]));
+    expect(ptr.reasons.join(" ")).not.toMatch(/upgrade express to 4\.22\.0/);
   });
 
+  it("2c: a lever below its own row's raised target follows it, in data and in text (qs needs express 4.22.3; path-to-regexp's 4.22.0 lifts)", async () => {
+    expressProject();
+    ADVISORIES.qs = [adv("GHSA-6rw7-vpxm-498p", "qs", fixedIn("6.16.0"))];
+    NPM.qs = { latest: "6.16.1", versions: { "6.5.2": {}, "6.11.0": {}, "6.15.1": {}, "6.16.0": {}, "6.16.1": {} } };
+    const deps = (ptr: string, qs: string) => ({ dependencies: { "path-to-regexp": ptr, qs } });
+    NPM.express.versions = {
+      "4.16.4": deps("0.1.7", "6.5.2"), "4.20.0": deps("0.1.10", "6.11.0"), "4.22.0": deps("~0.1.12", "~6.15.1"), "4.22.3": deps("~0.1.13", "~6.16.0"), "5.1.0": deps("^8.0.0", "^6.16.0"),
+    };
+    project({ express: "4.16.4" }, {}, {
+      express: { version: "4.16.4", dependencies: { "path-to-regexp": "0.1.7", qs: "6.5.2" } },
+      "path-to-regexp": { version: "0.1.7" },
+      qs: { version: "6.5.2" },
+    });
+    const { step } = await plan();
+    expect(step("express")).toMatchObject({ targetVersion: "4.22.3", upgradeCommands: [{ command: "npm install express@4.22.3 --save-exact" }] });
+    const ptr = step("path-to-regexp");
+    expect(ptr.parentUpgrades).toMatchObject([{ parent: "express", to: "4.22.3", requirement: "~0.1.13", levers: [{ to: "4.22.3", commands: [{ command: "npm install express@4.22.3 --save-exact" }] }] }]);
+    expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.3, not 4\.22\.0: express's own row targets 4\.22\.3/);
+    expect(ptr.reasons.join(" ")).not.toMatch(/upgrade express to 4\.22\.0/);
+    expect(new Set([...commandsIn(ptr), ...commandsIn(step("qs")), ...commandsIn(step("express"))])).toEqual(new Set(["npm install express@4.22.3 --save-exact"]));
+  });
   it("3: a new requirement that still admits the installed copy names the refresh too (npm 10.9.2 keeps the copy on install)", async () => {
     leafOnly("1.0.5", ["1.0.0", "1.0.5"]);
     NPM.par = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.0.0" } } } };

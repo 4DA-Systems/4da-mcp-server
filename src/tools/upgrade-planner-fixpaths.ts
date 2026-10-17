@@ -970,11 +970,15 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
       const at = isMajor(lever.to!, target) ? null : (LEVER_ADMITS.get(lever)?.(target) ?? null);
       if (!at) continue;
       const before = lever.to!;
+      const oldCommands = commandText(lever);
       lever.to = target;
       lever.breaking = isMajor(lever.version, target);
       delete lever.commands;
       delete lever.instructions;
       Object.assign(lever, declaredFixes(liveIntel, s.ecosystem, lever.name, lever.version, target, declaredDirs(liveIntel, s.ecosystem, lever.name, lever.version)));
+      // The step's own sentence names the lifted release too, never the one it replaced.
+      const moved = `upgrade ${lever.name} to ${target}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}`;
+      step.reasons = step.reasons.map((r) => r.split(`upgrade ${lever.name} to ${before}${isMajor(lever.version, before) ? " (a major upgrade)" : ""}${oldCommands}`).join(moved));
       if (upgrade.parent === lever.name && upgrade.from === lever.version) {
         upgrade.to = target;
         upgrade.breaking = lever.breaking;
@@ -982,7 +986,7 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
         if (at.resolvesTo !== undefined) upgrade.resolvesTo = at.resolvesTo;
       }
       step.reasons.push(
-        `${lever.name} ${target}, not ${before}: ${lever.name}'s own row targets ${target} for its own advisories, and ${target} also brings the fix in, so one bump serves both rows${commandText(lever)}`,
+        `${lever.name} ${target}, not ${before}: ${lever.name}'s own row targets ${target}, and ${target} also brings the fix in, so one bump serves both rows${commandText(lever)}`,
       );
     }
   }
