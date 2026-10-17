@@ -686,7 +686,22 @@ export function extractFixedVersion(
   return above.reduce((min, v) => (cmp(v, min) < 0 ? v : min), above[0]);
 }
 
-/** An npm `-security` placeholder matched by a malicious-package (MAL-) advisory: not installed malware. */
-export function isNpmSecurityHolding(v: Pick<VulnerabilityEntry, "vulnId" | "ecosystem" | "currentVersion">): boolean {
-  return v.vulnId.startsWith("MAL-") && v.ecosystem === "npm" && v.currentVersion.trim().endsWith("-security");
+/**
+ * npm's security holding placeholder: after a malicious package is taken down,
+ * npm republishes the name as an empty `0.0.<n>-security` release ("security
+ * holding package"). It has no code, so NO advisory applies to it, whichever
+ * database's id flags the name: crossenv 0.0.2-security under
+ * GHSA-c2m4-w5hm-vqjw read as installed malware when only MAL- ids were held
+ * (4DA audit L4, 2026-10-16). Only npm's own shape counts: a publisher's
+ * `1.0.0-security` prerelease is real code and stays affected. The same rule
+ * as the app's `fourda_depengine::matching::is_npm_security_holding`
+ * (shared vectors `holding.jsonl`).
+ */
+export function isSecurityHoldingRelease(ecosystem: string, version: string): boolean {
+  return ecosystem.trim().toLowerCase() === "npm" && /^0\.0\.\d+-security$/.test(version.trim());
+}
+
+/** A finding on an npm security holding placeholder (any advisory id): not installed code. */
+export function isNpmSecurityHolding(v: Pick<VulnerabilityEntry, "ecosystem" | "currentVersion">): boolean {
+  return isSecurityHoldingRelease(v.ecosystem, v.currentVersion);
 }

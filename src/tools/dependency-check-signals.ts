@@ -113,30 +113,39 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal 
   const fromIds = new Set(facts.from.map((a) => a.id));
   const toIds = new Set(facts.to.map((a) => a.id));
   const fixed = facts.from.filter((a) => !toIds.has(a.id) && !a.maintenance);
-  const value = { affecting_to: facts.to.map((a) => a.id), fixed_by_this_change: fixed.map((a) => a.id) };
+  // An unmaintained-package notice names no exploitable vulnerability: it is
+  // reported in its own field and never moves the verdict (audit L3, the
+  // same split as vulnerability_scan's `maintenance_notices`).
+  const notices = facts.to.filter((a) => a.maintenance);
+  const value = {
+    affecting_to: facts.to.filter((a) => !a.maintenance).map((a) => a.id),
+    fixed_by_this_change: fixed.map((a) => a.id),
+    ...(notices.length > 0 ? { maintenance_notices: notices.map((a) => a.id) } : {}),
+  };
+  const noticeNote =
+    notices.length > 0
+      ? ` Unmaintained-package notice${notices.length > 1 ? "s" : ""} ${notices.map((a) => a.id).join(", ")} ${notices.length > 1 ? "apply" : "applies"} to ${item.to}${notices.every((a) => fromIds.has(a.id)) ? ` (already on ${item.from})` : ""}: no exploitable vulnerability, listed in maintenance_notices.`
+      : "";
   const fixedNote = fixed.length > 0 ? ` This change fixes ${list(fixed)} affecting ${item.from}.` : "";
 
   const serious = facts.to.filter((a) => !a.maintenance && (a.severity === "critical" || a.severity === "high"));
   if (serious.length > 0) {
-    return { id: "advisories", value, effect: "avoid", evidence: `${item.to} is affected by ${list(serious)}.${fixedNote}` };
+    return { id: "advisories", value, effect: "avoid", evidence: `${item.to} is affected by ${list(serious)}.${fixedNote}${noticeNote}` };
   }
   const other = facts.to.filter((a) => !a.maintenance);
-  const newNotices = facts.to.filter((a) => a.maintenance && !fromIds.has(a.id));
-  if (other.length > 0 || newNotices.length > 0) {
+  if (other.length > 0) {
     return {
       id: "advisories",
       value,
       effect: "review",
-      evidence: `${item.to} is affected by ${list([...other, ...newNotices])}.${fixedNote}`,
+      evidence: `${item.to} is affected by ${list(other)}.${fixedNote}${noticeNote}`,
     };
   }
-  // Only maintenance notices that `from` already carries can remain here.
-  const carried = facts.to.length > 0 ? ` (maintenance notice${facts.to.length > 1 ? "s" : ""} ${facts.to.map((a) => a.id).join(", ")} already apply to ${item.from})` : "";
   return {
     id: "advisories",
     value,
     effect: "proceed",
-    evidence: `No known advisory affects ${item.to}${carried}.${fixedNote}`,
+    evidence: `No known vulnerability affects ${item.to}.${fixedNote}${noticeNote}`,
   };
 }
 

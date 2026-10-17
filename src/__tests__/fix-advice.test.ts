@@ -40,6 +40,10 @@ const ADVISORIES: Record<string, OsvVulnerability[]> = {
   minimist: [adv("GHSA-minimist", "minimist", [{ introduced: "0" }, { fixed: "1.2.6" }])],
   fs: [{ id: "MAL-2023-0001", summary: "Malicious code in fs", affected: [{ package: { name: "fs", ecosystem: "npm" }, ranges: range([{ introduced: "0" }]) }] }],
   jest: [adv("GHSA-jest", "jest", [{ introduced: "0" }, { fixed: "30.0.0" }])],
+  // GHSA-c2m4-w5hm-vqjw, "crossenv is malware": introduced 0, last_affected 1.0.1.
+  crossenv: [adv("GHSA-c2m4-w5hm-vqjw", "crossenv", [{ introduced: "0" }, { last_affected: "1.0.1" }])],
+  // A publisher's own `-security` prerelease is code, not npm's placeholder.
+  "own-sec": [adv("GHSA-own-sec", "own-sec", [{ introduced: "0" }, { fixed: "1.0.1" }])],
 };
 
 /** npm abbreviated documents: versions (with a deprecation message where set) and the latest tag. */
@@ -134,6 +138,18 @@ describe("fix targets", () => {
     project({}, {}, { fs: { version: "0.0.1-security" } });
     const result = await scan();
     expect(result.total_vulnerable_packages).toBe(0);
+  });
+
+  it("L4: the placeholder holds under ANY advisory id, not only MAL- (crossenv 0.0.2-security, GHSA-c2m4)", async () => {
+    project({}, {}, { crossenv: { version: "0.0.2-security" } });
+    expect((await scan()).total_vulnerable_packages).toBe(0);
+    project({}, {}, { crossenv: { version: "1.0.1" } });
+    expect((await scan()).total_vulnerable_packages).toBe(1);
+  });
+
+  it("L4: only npm's 0.0.<n>-security shape is a placeholder; a publisher's 1.0.0-security stays affected", async () => {
+    project({}, {}, { "own-sec": { version: "1.0.0-security" } });
+    expect((await scan()).total_vulnerable_packages).toBe(1);
   });
 
   it("A8: direct devDependencies are scanned by default and labelled dev; include_dev: false leaves them out", async () => {

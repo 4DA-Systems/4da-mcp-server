@@ -146,6 +146,8 @@ interface ItemResult {
   reason: string;
   signals: Signal[];
   range_check?: RangeCheck;
+  /** Unmaintained-package notices on `to`: reported, never part of the verdict (audit L3). */
+  maintenance_notices?: string[];
 }
 
 /** A validated request item. */
@@ -259,6 +261,10 @@ export async function executeDependencyCheck(
 
   const results: ItemResult[] = plans.map((p) => {
     const extra = p.item.rangeCheck ? { range_check: p.item.rangeCheck } : {};
+    const noticesOf = (s: Signal) => {
+      const ids = (s.value as { maintenance_notices?: string[] } | null)?.maintenance_notices;
+      return ids && ids.length > 0 ? { maintenance_notices: ids } : {};
+    };
     if (p.blocked) {
       // No release metadata: only the advisory lookup can still speak, and
       // only a negative finding is worth more than "unknown".
@@ -271,6 +277,7 @@ export async function executeDependencyCheck(
         reason: withAlternatives(negative ? `advisories: ${advisories.evidence} | ${p.blocked}` : p.blocked, p.item, negative),
         signals: [advisories],
         ...extra,
+        ...noticesOf(advisories),
       };
     }
     const { item, index } = p;
@@ -293,7 +300,7 @@ export async function executeDependencyCheck(
     ];
     const decided = decide(signals);
     const unsafe = decided.verdict === "avoid" || decided.verdict === "review";
-    return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, unsafe), signals, ...extra };
+    return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, unsafe), signals, ...extra, ...noticesOf(advisories) };
   });
 
   return finish(checkedAt, results, { offline: scan.offline, osvCached: scan.cached });

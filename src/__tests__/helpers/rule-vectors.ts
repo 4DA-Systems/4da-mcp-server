@@ -18,13 +18,15 @@
  *                    built from the vector as the Rust runner's check_direct builds it
  *   (refresh_verdict `override`: overrideReaches over the blocking parents)
  *   range_check      parseTarget + checkRange (dependency_check)
+ *   holding          isSecurityHoldingRelease (osv-scanner.ts): npm's `0.0.<n>-security`
+ *                    placeholder, which no advisory applies to (audit L4)
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRanges } from "../../live/osv-ranges.js";
-import { extractFixedVersion } from "../../live/osv-scanner.js";
+import { extractFixedVersion, isSecurityHoldingRelease } from "../../live/osv-scanner.js";
 import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
 import { compareVersions, isComparable } from "../../live/version-compare.js";
@@ -32,7 +34,7 @@ import type { OsvVulnerability } from "../../live/types.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../../live/release-metadata.js";
 import { checkRange, parseTarget } from "../../tools/dependency-check-versions.js";
 
-export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check"] as const;
+export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding"] as const;
 export type VectorFile = (typeof VECTOR_FILES)[number];
 
 /** One vector line: every line has `id`, `rule` and `source`; the rest depends on the file. */
@@ -248,6 +250,13 @@ function checkRangeCheck(v: Vector, records: Records): string | null {
 }
 
 /** Run one vector; null = the engine agrees. A thrown error (unreadable input) counts as a disagreement. */
+/** `holding.jsonl`: whether a release is npm's security holding placeholder (any advisory id). */
+function checkHolding(v: Vector): string | null {
+  const got = isSecurityHoldingRelease(String(v.eco), String(v.version));
+  const want = v.holding === true;
+  return got === want ? null : `holding: got ${got}, want ${want}`;
+}
+
 export function checkVector(file: VectorFile, v: Vector, records: Records): string | null {
   try {
     switch (file) {
@@ -263,6 +272,8 @@ export function checkVector(file: VectorFile, v: Vector, records: Records): stri
         return checkFixCommand(v);
       case "range_check":
         return checkRangeCheck(v, records);
+      case "holding":
+        return checkHolding(v);
     }
   } catch (e) {
     return `error: ${(e as Error).message}`;
