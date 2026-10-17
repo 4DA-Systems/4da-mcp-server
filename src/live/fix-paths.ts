@@ -33,7 +33,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
-import { cargoReqAdmits } from "./range-satisfies.js";
+import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
@@ -47,7 +47,7 @@ const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
 /** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 6;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
@@ -75,7 +75,25 @@ export interface CratesSparse {
   reqs: Record<string, Record<string, CrateDepReq[]>>;
 }
 
+/** npm's abbreviated document: per version, the fields fix paths read. */
+interface NpmAbbreviatedDoc {
+  versions?: Record<
+    string,
+    { deprecated?: unknown; dependencies?: Record<string, string>; optionalDependencies?: Record<string, string>; peerDependencies?: Record<string, string> }
+  >;
+  "dist-tags"?: { latest?: string };
+}
+
+/** How long, and how many, npm documents are kept in memory between the lookups of one plan. */
+const NPM_DOC_MEMORY_MS = 120_000;
+const NPM_DOCS_KEPT = 16;
+
+/** Per published release of a parent: its requirements on one package, and whether it declares it only as a peer. */
+export type RequirementHistory = Record<string, { reqs: string[]; peer: boolean }>;
+
 export class FixPathSources {
+  private npmDocs = new Map<string, { at: number; doc: Promise<NpmAbbreviatedDoc | null> }>();
+
   constructor(
     private cache: LiveCache,
     private rateLimiter: RateLimiter,
@@ -157,13 +175,81 @@ export class FixPathSources {
         );
         if (!res.ok) return null;
         const doc = (await res.json()) as Record<string, Record<string, string> | undefined>;
-        deps = { ...doc.peerDependencies, ...doc.optionalDependencies, ...doc.dependencies };
+        // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
+        // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
+        deps = { ...doc.optionalDependencies, ...doc.dependencies };
         this.cache.set(key, deps, "npm", VERSION_DEPS_TTL);
       } catch {
         return null;
       }
     }
     return typeof deps[dep] === "string" ? [deps[dep]] : [];
+  }
+
+  /**
+   * What every published release of `parent` requires of `dep`, from the
+   * registry: version -> requirements (`reqs: []` when that release does not
+   * depend on it). npm reads dependencies and optionalDependencies of the
+   * abbreviated document (as `parentRequirements`), and, when neither holds
+   * it, peerDependencies, flagged `peer`: npm 7+ installs a missing peer, so
+   * moving a package into peerDependencies is not dropping it (readiness
+   * review 2026-10-17, finding 10). crates.io: the sparse index. Null when
+   * unknown or unsupported. Used to find the smallest parent release that
+   * admits a clean version (audit H1).
+   */
+  async requirementHistory(ecosystem: OsvEcosystem, parent: string, dep: string): Promise<RequirementHistory | null> {
+    if (ecosystem === "crates.io") {
+      const sparse = await this.cratesSparse(parent);
+      if (!sparse) return null;
+      return Object.fromEntries(Object.entries(sparse.reqs).map(([v, deps]) => [v, { reqs: (deps[dep] ?? []).map((d) => d.req), peer: false }]));
+    }
+    if (ecosystem !== "npm") return null;
+    const key = `fixpath:v${CACHE_VERSION}:npm-requirement-history:${parent}:${dep}`;
+    const hit = this.cache.get<RequirementHistory>(key);
+    if (hit) return hit;
+    const doc = await this.npmDocument(parent);
+    if (!doc) return null;
+    const out: RequirementHistory = {};
+    for (const [version, m] of Object.entries(doc.versions ?? {})) {
+      const req = m?.dependencies?.[dep] ?? m?.optionalDependencies?.[dep];
+      const peer = m?.peerDependencies?.[dep];
+      out[version] =
+        typeof req === "string" ? { reqs: [req], peer: false } : typeof peer === "string" ? { reqs: [peer], peer: true } : { reqs: [], peer: false };
+    }
+    this.cache.set(key, out, "npm", VERSIONS_TTL);
+    return out;
+  }
+
+  /**
+   * One npm abbreviated document per package, shared by the release facts and the requirement
+   * history of a plan (a parent's document was downloaded twice: NodeGoat's mongodb, ~600
+   * releases). Kept in memory for a short while, at most a few at a time; a failure is not kept.
+   */
+  private npmDocument(name: string): Promise<NpmAbbreviatedDoc | null> {
+    const now = Date.now();
+    for (const [n, e] of this.npmDocs) if (now - e.at > NPM_DOC_MEMORY_MS) this.npmDocs.delete(n);
+    const hit = this.npmDocs.get(name);
+    if (hit) return hit.doc;
+    if (!this.rateLimiter.consume("fixpath-registry")) return Promise.resolve(null);
+    const doc = (async (): Promise<NpmAbbreviatedDoc | null> => {
+      try {
+        const res = await fetchWithTimeout(
+          `https://registry.npmjs.org/${encodeURIComponent(name)}`,
+          { headers: { Accept: "application/vnd.npm.install-v1+json" } },
+          TIMEOUT_MS,
+        );
+        if (!res.ok) return null;
+        return (await res.json()) as NpmAbbreviatedDoc;
+      } catch {
+        return null;
+      }
+    })();
+    this.npmDocs.set(name, { at: now, doc });
+    void doc.then((d) => {
+      if (d === null) this.npmDocs.delete(name);
+    });
+    while (this.npmDocs.size > NPM_DOCS_KEPT) this.npmDocs.delete(this.npmDocs.keys().next().value!);
+    return doc;
   }
 
   /**
@@ -195,15 +281,9 @@ export class FixPathSources {
     const key = `fixpath:v${CACHE_VERSION}:npm-facts:${name}`;
     const hit = this.cache.get<PackageReleaseFacts>(key);
     if (hit) return hit;
-    if (!this.rateLimiter.consume("fixpath-registry")) return null;
-    try {
-      const res = await fetchWithTimeout(
-        `https://registry.npmjs.org/${encodeURIComponent(name)}`,
-        { headers: { Accept: "application/vnd.npm.install-v1+json" } },
-        TIMEOUT_MS,
-      );
-      if (!res.ok) return null;
-      const doc = (await res.json()) as { versions?: Record<string, { deprecated?: unknown }>; "dist-tags"?: { latest?: string } };
+    const doc = await this.npmDocument(name);
+    if (!doc) return null;
+    {
       const entries = Object.entries(doc.versions ?? {});
       const deprecated = (v: { deprecated?: unknown } | undefined) => typeof v?.deprecated === "string" && v.deprecated.trim() !== "";
       const latest = doc["dist-tags"]?.latest ?? null;
@@ -215,8 +295,6 @@ export class FixPathSources {
       };
       this.cache.set(key, facts, "npm", VERSIONS_TTL);
       return facts;
-    } catch {
-      return null;
     }
   }
 
@@ -310,11 +388,26 @@ function sparseIndexUrl(name: string): string {
 // Analysis
 // ---------------------------------------------------------------------------
 
-export type FixTargetResult = CleanTarget;
+export type FixTargetResult = CleanTarget & {
+  /**
+   * True when the package's advisories could not be read (OSV /v1/query
+   * failed) but the registry could: `target` is then only the smallest
+   * installable release at or above the highest per-advisory fix, which is
+   * deprecated, yanked or unpublished (`floorWithdrawn` says which). It is
+   * NOT checked against the package's other advisories; callers report the
+   * fix as checked against the installed version's advisories only.
+   */
+  advisoriesUnread?: boolean;
+};
 
 /**
- * The minimal clean target for one installed copy, or null when the
- * advisories could not be read.
+ * The minimal clean target for one installed copy, or null when neither the
+ * advisories nor anything that changes the answer could be read.
+ *
+ * Advisories unreadable, registry readable (audit H5: OSV /v1/query down):
+ * a deprecated or yanked release is still never the target. lodash 4.17.20
+ * went to 4.18.0 ("Bad release") because the whole check was skipped; the
+ * registry facts alone move it to 4.18.1, flagged `advisoriesUnread`.
  *
  * With no per-advisory fix at all (advisories that give only `last_affected`,
  * audit A6), and the installed version known, the registry is asked for the
@@ -334,7 +427,7 @@ export async function cleanFixTarget(
     sources.packageAdvisories(ecosystem, name),
     sources.releaseFacts(ecosystem, name),
   ]);
-  if (!advisories) return null;
+  if (!advisories) return perAdvisoryFixes.length > 0 && facts ? registryOnlyTarget(ecosystem, perAdvisoryFixes, facts) : null;
   const published = facts?.versions ?? null;
   if (perAdvisoryFixes.length > 0) {
     const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published });
@@ -348,6 +441,19 @@ export async function cleanFixTarget(
 }
 
 /**
+ * With no advisory list: the smallest installable release at or above the
+ * highest per-advisory fix, only when that fix itself is withdrawn or not
+ * published (otherwise the unchecked answer stands as it is). Null when
+ * nothing changes or no installable release qualifies.
+ */
+function registryOnlyTarget(ecosystem: OsvEcosystem, fixes: string[], facts: PackageReleaseFacts): FixTargetResult | null {
+  if (facts.versions.length === 0) return null;
+  const clean = smallestCleanVersion({ ecosystem, fixes, advisories: [], published: facts.versions });
+  if (!clean || clean.target === null || clean.target === clean.floor) return null;
+  return { ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true };
+}
+
+/**
  * Verified targets for many installed copies at once, within a time budget:
  * the copies that could not be checked in time (or offline) are simply
  * absent from the result, and the caller says so. Keyed by `key`.
@@ -357,8 +463,8 @@ export async function verifyFixTargets(
   items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string }>,
   budgetMs: number,
   concurrency = 12,
-): Promise<Map<string, CleanTarget>> {
-  const out = new Map<string, CleanTarget>();
+): Promise<Map<string, FixTargetResult>> {
+  const out = new Map<string, FixTargetResult>();
   const todo = items.filter((i) => i.fixes.length > 0 || i.installed);
   if (!sources || todo.length === 0) return out;
   const deadline = Date.now() + budgetMs;
@@ -383,7 +489,10 @@ export async function verifyFixTargets(
 }
 
 /** One clause for a target that is not the highest per-advisory fix, or null when it is. */
-export function targetNote(clean: CleanTarget): string | null {
+export function targetNote(clean: FixTargetResult): string | null {
+  if (clean.advisoriesUnread) {
+    return `${clean.target} is the smallest installable release at or above ${clean.floor}, the highest per-advisory fix, which ${clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}; not checked against the package's other advisories (OSV.dev did not answer)`;
+  }
   if (clean.noAdvisoryFix) {
     return `no advisory names a fixed version (they give only a last affected one); ${clean.target} is the first published release above the installed version that no known advisory affects`;
   }
@@ -457,42 +566,311 @@ export function overrideReaches(blocking: Array<{ bundled?: boolean }>): boolean
   return !blocking.some((b) => b.bundled === true);
 }
 
+// ---------------------------------------------------------------------------
+// Direct upgrades: the command that moves a DECLARED dependency, keeping how it is declared
+// ---------------------------------------------------------------------------
+
 /**
- * The command that moves a DIRECT dependency to `target` where the project declares it, run in that
- * project's directory (audit E8: a direct row named no command). The same text as the 4DA app's
- * `Manager::direct_command` (rule vectors fc-028..fc-037). Each was checked on 2026-10-15 to keep the
- * dependency in its own section: npm 10.9.2 `install` (also from a workspace member), pnpm 10.34.6
- * `up` (`add` at a workspace root needs `-w`), yarn 1.22.22 `upgrade`, yarn 4.9.1 `up`, cargo `add`
- * (which writes a second `[dependencies]` entry for a dev-dependency unless given `--dev`). Null for
- * bun, which was not checked.
+ * How a DIRECT dependency moves to its fix target, worded for the tool and the manifest that
+ * declares it: a port of the 4DA app's `osv/direct_upgrade.rs` (rule vectors fc-028..fc-053),
+ * read from the declaring project's own manifest. A command is named only where it was run
+ * against the tool (2026-10-15/16: npm 10.9.2, pnpm 10.34.6, yarn 1.22.22, yarn 4.9.1, cargo
+ * 1.95, go 1.24) and moved the dependency while keeping it as declared. Plain `npm install x@v`
+ * wrote `^v` over an exact pin and over `~` (readiness review 2026-10-17, finding 4).
+ *
+ * Null, and the plan keeps its plain "bump it where it is declared", for anything this cannot
+ * read with certainty: a dependency declared in two sections; a declared spec that does not
+ * admit the installed copy; `>=`, `||`, x-range, tag, git, `workspace:` or alias specs; a git,
+ * path or alternate-registry crate; a yarn workspace member (`yarn up` is project-wide); a Go
+ * `replace`; hashed or pip-compiled requirements; bun or an unknown tool.
  */
-export function directCommand(format: LockfileFormat, name: string, target: string, dev = false): string | null {
-  switch (format) {
-    case "package-lock":
-      return `npm install ${name}@${target}`;
-    case "pnpm":
-      return `pnpm up ${name}@${target}`;
-    case "yarn":
-      return `yarn upgrade ${name}@${target}`;
-    case "yarn-berry":
-      return `yarn up ${name}@${target}`;
-    case "cargo":
-      return `cargo add ${name}@${target}${dev ? " --dev" : ""}`;
-    case "bun":
-      return null;
+export type DirectFix = { command: string } | { instruction: string };
+
+type NpmManager = "npm" | "pnpm" | "yarn1" | "yarn-berry";
+
+/** How far up from a project directory a workspace lockfile is looked for (the app's MAX_LOCKFILE_ASCENT). */
+const MAX_LOCKFILE_ASCENT = 6;
+
+/** The npm-family tool whose lockfile holds the project at `dir`, nearest directory first (yarn, pnpm, npm, as the app). */
+function npmManager(dir: string): NpmManager | null {
+  let here = path.resolve(dir);
+  for (let i = 0; i <= MAX_LOCKFILE_ASCENT; i++) {
+    if (fs.existsSync(path.join(here, "yarn.lock"))) {
+      let berry = false;
+      try {
+        berry = fs.readFileSync(path.join(here, "yarn.lock"), "utf-8").split("\n").slice(0, 12).some((l) => l.startsWith("__metadata:"));
+      } catch {
+        berry = false;
+      }
+      return berry ? "yarn-berry" : "yarn1";
+    }
+    if (fs.existsSync(path.join(here, "pnpm-lock.yaml"))) return "pnpm";
+    if (fs.existsSync(path.join(here, "package-lock.json"))) return "npm";
+    const up = path.dirname(here);
+    if (up === here) break;
+    here = up;
   }
+  return null;
 }
 
-/** The direct-upgrade command for the project whose lockfile is `lockfile`; null when none is named for it. */
-export function directCommandFor(lockfile: string, name: string, target: string, dev = false): string | null {
-  let content: string;
+function readText(file: string): string | null {
   try {
-    content = fs.readFileSync(lockfile, "utf-8");
+    return fs.readFileSync(file, "utf-8");
   } catch {
     return null;
   }
-  const format = lockfileFormat(lockfile, content);
-  return format ? directCommand(format, name, target, dev) : null;
+}
+
+/** The spec `name` is declared with, when exactly one of dependencies / devDependencies / optionalDependencies holds it. */
+export function npmDeclared(packageJson: string, name: string): string | null {
+  let pkg: Record<string, Record<string, unknown> | undefined>;
+  try {
+    pkg = JSON.parse(packageJson);
+  } catch {
+    return null;
+  }
+  const found = ["dependencies", "devDependencies", "optionalDependencies"]
+    .map((s) => pkg?.[s]?.[name])
+    .filter((v): v is string => typeof v === "string");
+  return found.length === 1 ? found[0] : null;
+}
+
+const FULL_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/** The operator a declared npm spec carries: "" for an exact pin, "^" or "~"; null for anything else. */
+function npmOperator(declared: string): "" | "^" | "~" | null {
+  const d = declared.trim();
+  const digits = (s: string) => {
+    const parts = s.split(".");
+    return parts.length >= 1 && parts.length <= 3 && parts.every((p) => /^\d+$/.test(p));
+  };
+  if (d.startsWith("^")) return digits(d.slice(1)) ? "^" : null;
+  if (d.startsWith("~")) return digits(d.slice(1)) ? "~" : null;
+  const exact = (d.startsWith("=") ? d.slice(1) : d).replace(/^v+/, "");
+  return FULL_SEMVER.test(exact) ? "" : null;
+}
+
+/** The command that moves a declared npm-family dependency, keeping its operator (quoted: `^` is cmd.exe's escape). */
+export function npmDirectCommand(manager: NpmManager, declared: string, name: string, target: string): string | null {
+  const op = npmOperator(declared);
+  if (op === null) return null;
+  const spec = op === "" ? `${name}@${target}` : `"${name}@${op}${target}"`;
+  switch (manager) {
+    case "npm":
+      return op === "" ? `npm install ${spec} --save-exact` : `npm install ${spec}`;
+    case "pnpm":
+      return `pnpm up ${spec}`;
+    case "yarn1":
+      return `yarn upgrade ${spec}`;
+    case "yarn-berry":
+      return `yarn up ${spec}`;
+  }
+}
+
+interface CargoDecl {
+  kind: "normal" | "dev" | "build";
+  target: string | null;
+  key: string;
+  req: string | null;
+  workspace: boolean;
+  otherSource: boolean;
+}
+
+const unquote = (s: string) => s.trim().replace(/^["']+|["']+$/g, "");
+const crateKey = (name: string) => name.trim().toLowerCase().replace(/_/g, "-");
+
+/** `[dependencies]`, `[dev-dependencies.foo]`, `[target.'cfg(unix)'.build-dependencies]`, ... */
+function cargoTable(header: string): { kind: CargoDecl["kind"]; target: string | null; key: string | null } | null {
+  const inner = header.replace(/^\[+/, "").replace(/\]+$/, "").trim();
+  let target: string | null = null;
+  let rest = inner;
+  if (inner.startsWith("target.")) {
+    const after = inner.slice("target.".length);
+    if (after.startsWith("'") || after.startsWith('"')) {
+      const q = after.slice(1);
+      const close = q.search(/['"]/);
+      if (close < 0) return null;
+      target = q.slice(0, close);
+      rest = q.slice(close + 1).replace(/^\.+/, "");
+    } else {
+      const dot = after.indexOf(".");
+      if (dot < 0) return null;
+      target = after.slice(0, dot);
+      rest = after.slice(dot + 1);
+    }
+  }
+  const dot = rest.indexOf(".");
+  const section = dot < 0 ? rest : rest.slice(0, dot);
+  const key = dot < 0 ? null : unquote(rest.slice(dot + 1));
+  const kind = section === "dependencies" ? "normal" : section === "dev-dependencies" ? "dev" : section === "build-dependencies" ? "build" : null;
+  return kind ? { kind, target, key } : null;
+}
+
+/** Every declaration of `crate` in a Cargo.toml (by crate name, so a renamed dependency is found through `package = ...`). */
+export function cargoDeclarations(manifest: string, crate: string): CargoDecl[] {
+  const want = crateKey(crate);
+  type Fields = { req: string | null; pkg: string | null; workspace: boolean; otherSource: boolean };
+  const found: Array<{ kind: CargoDecl["kind"]; target: string | null; key: string; f: Fields }> = [];
+  let table: ReturnType<typeof cargoTable> = null;
+  const set = (f: Fields, field: string, value: string) => {
+    if (field === "version") f.req = unquote(value);
+    else if (field === "package") f.pkg = unquote(value);
+    else if (field === "workspace") f.workspace ||= value.trim() === "true";
+    else if (field === "git" || field === "path" || field === "registry") f.otherSource = true;
+  };
+  for (const raw of manifest.split("\n")) {
+    const line = (raw.split("#")[0] ?? "").trim();
+    if (line.startsWith("[")) {
+      table = cargoTable(line);
+      continue;
+    }
+    const eq = line.indexOf("=");
+    if (!table || eq < 0) continue;
+    const k = unquote(line.slice(0, eq));
+    const v = line.slice(eq + 1);
+    let key: string;
+    let field: string | null;
+    if (table.key !== null) {
+      key = table.key;
+      field = k;
+    } else {
+      const dot = k.indexOf(".");
+      if (dot >= 0) {
+        key = unquote(k.slice(0, dot));
+        field = k.slice(dot + 1).trim();
+      } else {
+        key = k;
+        field = null;
+      }
+    }
+    let slot = found.find((d) => d.kind === table!.kind && d.target === table!.target && d.key === key);
+    if (!slot) {
+      slot = { kind: table.kind, target: table.target, key, f: { req: null, pkg: null, workspace: false, otherSource: false } };
+      found.push(slot);
+    }
+    if (field !== null) set(slot.f, field, v);
+    else if (v.trimStart().startsWith("{")) {
+      const body = v.trim().replace(/^\{/, "").replace(/\}$/, "");
+      for (const kv of body.split(",")) {
+        const at = kv.indexOf("=");
+        if (at >= 0) set(slot.f, kv.slice(0, at).trim(), kv.slice(at + 1).trim());
+      }
+    } else slot.f.req = unquote(v);
+  }
+  return found
+    .filter((d) => crateKey(d.f.pkg ?? d.key) === want)
+    .map((d) => ({ kind: d.kind, target: d.target, key: d.key, req: d.f.req, workspace: d.f.workspace, otherSource: d.f.otherSource }));
+}
+
+/** The fix for one Cargo declaration. */
+function cargoDirect(decl: CargoDecl, crate: string, target: string): DirectFix | null {
+  if (decl.otherSource) return null;
+  if (decl.workspace) {
+    return {
+      instruction: `bump ${crate} to ${target} in the workspace root's [workspace.dependencies] (it is inherited here; \`cargo add\` in this crate would replace the inheritance with a local pin)`,
+    };
+  }
+  const r = decl.req?.trim() ?? "";
+  const op = r.startsWith("=") ? "=" : r.startsWith("~") ? "~" : r.startsWith("^") ? "^" : /^\d/.test(r) ? "" : null;
+  if (op === null) return null;
+  let cmd = `cargo add ${op === "" ? `${crate}@${target}` : `"${crate}@${op}${target}"`}`;
+  if (decl.kind === "dev") cmd += " --dev";
+  if (decl.kind === "build") cmd += " --build";
+  // Double quotes: cmd.exe keeps single quotes as part of the argument.
+  if (decl.target) cmd += ` --target "${decl.target}"`;
+  if (crateKey(decl.key) !== crateKey(crate)) cmd += ` --rename ${decl.key}`;
+  return { command: cmd };
+}
+
+/** `go get <module>@v<target>` when go.mod requires the module directly at `installed` and no `replace` points it elsewhere. */
+export function goDirectCommand(goMod: string, module: string, installed: string, target: string): string | null {
+  const v = (s: string) => (s.startsWith("v") ? s : `v${s}`);
+  let inRequire = false;
+  let inReplace = false;
+  let requiredAt: string | null = null;
+  for (const raw of goMod.split("\n")) {
+    const line = raw.trim();
+    if (line === "require (") inRequire = true;
+    else if (line === "replace (") inReplace = true;
+    else if (line === ")") inRequire = inReplace = false;
+    const replaced = inReplace ? line : line.startsWith("replace ") ? line.slice("replace ".length) : null;
+    if (replaced !== null && replaced.split(/\s+/)[0] === module) return null;
+    const entry = inRequire ? line : line.startsWith("require ") ? line.slice("require ".length) : null;
+    if (entry !== null && !entry.includes("// indirect")) {
+      const parts = entry.split(/\s+/);
+      if (parts[0] === module) requiredAt = parts[1] ?? null;
+    }
+  }
+  return requiredAt !== null && requiredAt === v(installed) ? `go get ${module}@${v(target)}` : null;
+}
+
+/** The edit of the requirements line that pins the package with `==` at `installed` (markers, extras kept). */
+export function pypiDirectInstruction(requirements: string, file: string, name: string, installed: string, target: string): string | null {
+  const lines = requirements.split("\n");
+  if (lines.slice(0, 8).some((l) => l.includes("autogenerated by pip-compile"))) return null;
+  const norm = (s: string) => s.toLowerCase().replace(/[_.]/g, "-");
+  const want = norm(name);
+  for (const [i, raw] of lines.entries()) {
+    const line = raw.trim();
+    const at = line.indexOf("==");
+    if (at < 0) continue;
+    const head = line.slice(0, at);
+    const rest = line.slice(at + 2);
+    if (norm((head.split("[")[0] ?? head).trim()) !== want) continue;
+    const endAt = rest.search(/[;\\#\s]/);
+    const end = endAt < 0 ? rest.length : endAt;
+    const version = rest.slice(0, end);
+    const tail = rest.slice(end);
+    const continued = line.endsWith("\\") || line.includes("--hash") || (lines[i + 1]?.trimStart().startsWith("--hash") ?? false);
+    if (continued || version !== installed) continue;
+    return `change \`${line}\` to \`${head}==${target}${tail}\` in ${file}`;
+  }
+  return null;
+}
+
+/**
+ * The fix for `name` at `installed`, declared in the project at `projectDir`, read from its own
+ * manifest; null when it cannot be named with certainty (see DirectFix).
+ */
+export function directFix(projectDir: string, ecosystem: string, name: string, installed: string, target: string): DirectFix | null {
+  const read = (file: string) => readText(path.join(projectDir, file));
+  switch (ecosystem) {
+    case "npm": {
+      const manager = npmManager(projectDir);
+      if (!manager) return null;
+      // yarn's up / upgrade act on the whole workspace: from a member they rewrite siblings too.
+      if ((manager === "yarn1" || manager === "yarn-berry") && !fs.existsSync(path.join(projectDir, "yarn.lock"))) return null;
+      const json = read("package.json");
+      const declared = json === null ? null : npmDeclared(json, name);
+      if (declared === null || npmRangeAdmits(declared, installed) !== true) return null;
+      const command = npmDirectCommand(manager, declared, name, target);
+      return command ? { command } : null;
+    }
+    case "crates.io": {
+      const manifest = read("Cargo.toml");
+      if (manifest === null) return null;
+      const decls = cargoDeclarations(manifest, name);
+      if (decls.length !== 1) return null;
+      const [only] = decls;
+      const admits = only.req !== null ? cargoReqAdmits(only.req, installed) === true : only.workspace;
+      return admits ? cargoDirect(only, name, target) : null;
+    }
+    case "Go": {
+      const goMod = read("go.mod");
+      const command = goMod === null ? null : goDirectCommand(goMod, name, installed, target);
+      return command ? { command } : null;
+    }
+    case "PyPI": {
+      for (const file of ["requirements.txt", "requirements-dev.txt", "requirements/base.txt"]) {
+        const body = read(file);
+        const instruction = body === null ? null : pypiDirectInstruction(body, file, name, installed, target);
+        if (instruction) return { instruction };
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
 }
 
 /** For a lockfile with no in-place refresh command (yarn 1, bun): the steps that move the copy. */

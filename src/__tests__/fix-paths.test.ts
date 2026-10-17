@@ -23,7 +23,7 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion } from "../live/osv-ranges.js";
 import { extractFixedVersion } from "../live/osv-scanner.js";
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
-import { cargoPrecisePrerequisites, directCommand, manualRefreshSteps, overrideReaches, refreshCommand, refreshCommandFor, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
+import { cargoPrecisePrerequisites, npmDirectCommand, manualRefreshSteps, overrideReaches, refreshCommand, refreshCommandFor, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
 import { bunParents, cargoParents, packageLockParents, pnpmParents, yarnParents } from "../live/lockfile-parents.js";
 import type { FourDADatabase } from "../db.js";
 import type { OsvVulnerability, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
@@ -263,16 +263,17 @@ describe("bundled copies (audit E8: NodeGoat, 2026-10-12)", () => {
   });
 });
 
-describe("directCommand (audit E8; 4DA rule vectors fc-028..fc-037)", () => {
-  it("moves a declared dependency where it is declared, per tool", () => {
-    expect(directCommand("package-lock", "minimist", "1.2.8")).toBe("npm install minimist@1.2.8");
-    expect(directCommand("package-lock", "@babel/traverse", "7.23.2", true)).toBe("npm install @babel/traverse@7.23.2");
-    expect(directCommand("pnpm", "minimist", "1.2.8")).toBe("pnpm up minimist@1.2.8");
-    expect(directCommand("yarn", "minimist", "1.2.8")).toBe("yarn upgrade minimist@1.2.8");
-    expect(directCommand("yarn-berry", "minimist", "1.2.8")).toBe("yarn up minimist@1.2.8");
-    expect(directCommand("cargo", "serde", "1.0.200")).toBe("cargo add serde@1.0.200");
-    expect(directCommand("cargo", "itoa", "1.0.11", true)).toBe("cargo add itoa@1.0.11 --dev");
-    expect(directCommand("bun", "minimist", "1.2.8")).toBeNull();
+// The full rule set is the 4DA vectors fc-028..fc-053 (direct-fix-vectors.test.ts); these are the operator rules alone.
+describe("npmDirectCommand keeps the declared operator (readiness review 2026-10-17, finding 4)", () => {
+  it("an exact pin stays exact, ^ and ~ are kept and quoted, anything else names nothing", () => {
+    expect(npmDirectCommand("npm", "1.2.5", "minimist", "1.2.8")).toBe("npm install minimist@1.2.8 --save-exact");
+    expect(npmDirectCommand("npm", "^7.20.5", "@babel/traverse", "7.23.2")).toBe('npm install "@babel/traverse@^7.23.2"');
+    expect(npmDirectCommand("pnpm", "~2.1.1", "ms", "2.1.3")).toBe('pnpm up "ms@~2.1.3"');
+    expect(npmDirectCommand("yarn1", "7.5.0", "semver", "7.5.4")).toBe("yarn upgrade semver@7.5.4");
+    expect(npmDirectCommand("yarn-berry", "^1.2.5", "minimist", "1.2.8")).toBe('yarn up "minimist@^1.2.8"');
+    for (const spec of [">=1.2.0", "1.x", "^1 || ^2", "latest", "workspace:*", "github:a/b", "npm:other@^1.0.0"]) {
+      expect(npmDirectCommand("npm", spec, "minimist", "1.2.8")).toBeNull();
+    }
   });
 });
 
@@ -554,7 +555,8 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const li = intel(directDir, "javascript", ["minimist"], entriesFor(MINIMIST, "minimist", "npm", "1.2.5", directDir).map((e) => ({ ...e, isDirect: true })));
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const step = plan.recommendations.find((s: { package: string }) => s.package === "minimist");
-    expect(step).toMatchObject({ action: "upgrade_direct", targetVersion: "1.2.6", upgradeCommands: [{ command: "npm install minimist@1.2.6" }] });
+    // Declared "1.2.5" (an exact pin): plain `npm install minimist@1.2.6` would write ^1.2.6 (fc-028).
+    expect(step).toMatchObject({ action: "upgrade_direct", targetVersion: "1.2.6", upgradeCommands: [{ command: "npm install minimist@1.2.6 --save-exact" }] });
   });
 
   it("pnpm: when no parent's requirement can be read, a semver-compatible target is an inferred refresh, and says so (AD-055 ¶1)", async () => {
