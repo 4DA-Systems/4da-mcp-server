@@ -13,7 +13,7 @@
  */
 
 import type { OsvVulnerability } from "./types.js";
-import { compareVersions, isComparable, isComposerOrGemPrerelease, parsePep440, samePackageName } from "./version-compare.js";
+import { compareToLowerBound, compareVersions, isComparable, isComposerOrGemPrerelease, parsePep440, samePackageName } from "./version-compare.js";
 import { parseSemverPrecedence } from "./semver-precedence.js";
 import { isMaintenanceNotice } from "./maintenance.js";
 
@@ -119,7 +119,7 @@ export function advisoryAffects(advisory: AdvisoryRanges, version: string, ecosy
   }
   return advisory.spans.some(
     (s) =>
-      cmp(version, s.introduced) >= 0 &&
+      compareToLowerBound(version, s.introduced, ecosystem) >= 0 &&
       (s.fixed !== null ? cmp(version, s.fixed) < 0 : s.lastAffected !== null ? cmp(version, s.lastAffected) <= 0 : true),
   );
 }

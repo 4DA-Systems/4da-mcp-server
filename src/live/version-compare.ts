@@ -117,7 +117,7 @@ interface ComposerVersion {
 }
 
 const COMPOSER =
-  /^v?(\d+(?:\.\d+)*)(?:[._-]?(stable|beta|b|alpha|a|rc|patch|pl|p)(?:[._-]?(\d+(?:\.\d+)*))?)?(?:[._-]?(dev))?(?:\+[0-9a-z.-]+)?$/i;
+  /^v?(\d+(?:\.\d+){0,3})(?:[._-]?(stable|beta|b|alpha|a|rc|patch|pl|p)((?:[.-]?\d+)*))?(?:[.-]?(dev))?(?:\+[0-9a-z.-]+)?$/i;
 
 const COMPOSER_RANK: Record<string, number> = { alpha: 1, a: 1, beta: 2, b: 2, rc: 3, stable: 4, patch: 5, pl: 5, p: 5 };
 
@@ -129,7 +129,7 @@ export function parseComposerVersion(version: string): ComposerVersion | null {
   return {
     release: m[1].split(".").map(Number),
     stability: devOnly ? 0 : token ? COMPOSER_RANK[token] : 4,
-    stabilityNum: m[3] ? m[3].split(".").map(Number) : [],
+    stabilityNum: m[3] ? m[3].split(/[.-]/).filter(Boolean).map(Number) : [],
     dev: !devOnly && m[4] !== undefined,
   };
 }
@@ -144,12 +144,13 @@ function comparePadded(a: number[], b: number[]): number {
 }
 
 export function compareComposer(a: ComposerVersion, b: ComposerVersion): number {
-  return (
-    comparePadded(a.release, b.release) ||
-    Math.sign(a.stability - b.stability) ||
-    comparePadded(a.stabilityNum, b.stabilityNum) ||
-    (a.dev === b.dev ? 0 : a.dev ? -1 : 1)
-  );
+  const byRelease = comparePadded(a.release, b.release) || Math.sign(a.stability - b.stability);
+  if (byRelease !== 0) return byRelease;
+  // A bare tag sorts below a numbered one: `beta` < `beta0` (composer/semver, by version_compare).
+  const bareA = a.stabilityNum.length === 0;
+  const bareB = b.stabilityNum.length === 0;
+  if (bareA !== bareB) return bareA ? -1 : 1;
+  return comparePadded(a.stabilityNum, b.stabilityNum) || (a.dev === b.dev ? 0 : a.dev ? -1 : 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +263,26 @@ export function compareVersions(a: string, b: string, ecosystem: OsvEcosystem | 
     default:
       return compareSemver(a, b);
   }
+}
+
+/**
+ * `version` against an advisory window's LOWER bound (`introduced`). As
+ * Composer reads a constraint, a Packagist bound with no stability suffix
+ * opens at that release's dev stability (`>=8.0` is `>= 8.0.0.0-dev`), so the
+ * line's own prereleases are inside it: GHSA-r39x-jcww-82v6 opens at `8.0`
+ * and lists v8.0.0-BETA1 and v8.0.0-RC1 as affected. Compared as a plain
+ * version they fell below it (review of 6.2.5 H2, 2026-10-18). The upper
+ * bound keeps the plain order on purpose: a prerelease of the fix release
+ * (8.0.5-RC1) stays affected, the safe reading (Composer would exclude it).
+ * Every other ecosystem: compareVersions.
+ */
+export function compareToLowerBound(version: string, bound: string, ecosystem: OsvEcosystem | string): number {
+  if (ecosystem === "Packagist" && bound !== "0") {
+    const v = parseComposerVersion(version);
+    const b = parseComposerVersion(bound);
+    if (v && b && b.stability === 4 && !/stable/i.test(bound)) return compareComposer(v, { ...b, stability: 0, stabilityNum: [], dev: false });
+  }
+  return compareVersions(version, bound, ecosystem);
 }
 
 /** Highest of `versions` in this ecosystem's order, or null when empty. */

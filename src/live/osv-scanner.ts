@@ -12,7 +12,7 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
-import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
+import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
 import type {
   ResolvedDependency,
@@ -561,7 +561,7 @@ export function extractFixedVersion(
   // the introduced side only; "0" (since inception) orders below everything.
   const containing = intervals.find(
     (i) =>
-      cmp(installedVersion, i.introduced) >= 0 &&
+      compareToLowerBound(installedVersion, i.introduced, ecosystem) >= 0 &&
       (i.fixed !== null
         ? cmp(installedVersion, i.fixed) < 0
         : i.lastAffected === null || cmp(installedVersion, i.lastAffected) <= 0),

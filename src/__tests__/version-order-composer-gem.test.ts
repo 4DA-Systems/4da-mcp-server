@@ -149,3 +149,61 @@ describe("same-line fix targets (OSV records pinned 2026-10-16)", () => {
     expect(t?.stillAffectedBy).toEqual([]);
   });
 });
+
+/**
+ * Review of 6.2.5 H2 (2026-10-18). GHSA-r39x-jcww-82v6 opens its windows at
+ * two-part bounds (`introduced: "8.0"`) and lists the line's prereleases
+ * (v8.0.0-BETA1, v8.0.0-RC1) as affected. A record with the list is judged
+ * by it (OSV schema: in `versions` OR in a range); one without must still be
+ * right, so a Packagist lower bound with no stability opens at that
+ * release's dev stability, as Composer reads `>=8.0` (`>= 8.0.0.0-dev`,
+ * checked with composer/semver 3.4.3). Record pinned 2026-10-18.
+ */
+describe("Packagist prereleases inside a two-part window (GHSA-r39x-jcww-82v6)", () => {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(import.meta.dirname, "fixtures", "version-order", "osv-GHSA-r39x-jcww-82v6.json"), "utf8"),
+  ) as OsvVulnerability;
+  const withList = advisoryRanges(record, "symfony/process", "Packagist")!;
+  const rangesOnly = { ...withList, versions: [] };
+
+  it.each(["v8.0.0-RC1", "8.0.0-RC1", "8.0.0-BETA1", "v6.4.0-BETA1", "6.4.0-RC1", "7.4.0-RC1", "8.0.0", "6.4.32"])("%s is affected, with and without the versions list", (v) => {
+    expect(advisoryAffects(withList, v, "Packagist")).toBe(true);
+    expect(advisoryAffects(rangesOnly, v, "Packagist")).toBe(true);
+  });
+
+  it.each(["8.0.5", "6.4.33", "6.3.9-RC1", "5.4.51"])("%s is not", (v) => {
+    expect(advisoryAffects(withList, v, "Packagist")).toBe(false);
+    expect(advisoryAffects(rangesOnly, v, "Packagist")).toBe(false);
+  });
+
+  it("a prerelease of the fix release stays affected (the safe reading of `fixed`)", () => {
+    expect(advisoryAffects(rangesOnly, "8.0.5-RC1", "Packagist")).toBe(true);
+  });
+
+  it("the pinned advisory source reports it too", async () => {
+    const { PinnedRecordsSource } = await import("../live/pinned-advisories.js");
+    const source = new PinnedRecordsSource([record]);
+    expect(source.affecting("Packagist", "symfony/process", "8.0.0-RC1")).toEqual(["GHSA-r39x-jcww-82v6"]);
+    const bare = { ...record, affected: record.affected!.map((a) => ({ ...a, versions: [] })) } as OsvVulnerability;
+    expect(new PinnedRecordsSource([bare]).affecting("Packagist", "symfony/process", "6.4.0-BETA1")).toEqual(["GHSA-r39x-jcww-82v6"]);
+  });
+});
+
+describe("Composer's grammar and tag order (composer/semver 3.4.3)", () => {
+  it.each([
+    ["1.0.0-beta", "1.0.0-beta0", -1],
+    ["1.0.0-beta0", "1.0.0-beta1", -1],
+    ["1.0.0-RC", "1.0.0-RC1", -1],
+    ["1.0.0-alpha1.2", "1.0.0-alpha1.10", -1],
+    ["1.0.0-beta-2", "1.0.0-beta2", 0],
+  ] as const)("%s vs %s = %d", (a, b, want) => {
+    expect(compareVersions(a, b, "Packagist")).toBe(want);
+    expect(compareVersions(b, a, "Packagist")).toBe(-want || 0);
+  });
+
+  it("refuses what Composer refuses: five numeric parts, `_` before a tag number", () => {
+    expect(isComparable("1.2.3.4.5", "Packagist")).toBe(false);
+    expect(isComparable("1.0.0-beta_1", "Packagist")).toBe(false);
+    expect(isComparable("1.0.0_beta1", "Packagist")).toBe(true);
+  });
+});
