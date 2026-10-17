@@ -11,7 +11,9 @@
  *   osv_range        advisoryRanges + advisoryAffects (osv-ranges.ts)
  *   fix_target       extractFixedVersion per affecting advisory, then
  *                    smallestCleanVersion over every record (the
- *                    vulnerability_scan / upgrade_planner target)
+ *                    vulnerability_scan / upgrade_planner target), with the
+ *                    line's `published` / `excluded` registry state; its
+ *                    `withheld` is checked where the line states it (FX-H5)
  *   refresh_verdict  refreshRule (refresh-rule.ts), which refreshVerdict applies
  *   fix_command      refreshCommandFor on a directory holding that tool's files;
  *                    directFix for `kind: "direct"` lines (audit E8), on a project
@@ -114,14 +116,28 @@ function checkFixTarget(v: Vector, records: Records): string | null {
     .filter((_, i) => advisoryAffects(advisories[i], installed, eco))
     .map((id) => extractFixedVersion(records.get(id).affected, name, eco, installed))
     .filter((f): f is string => f !== null);
-  const clean = smallestCleanVersion({ ecosystem: eco, fixes, advisories, published: null });
+  // FX-H5: the registry state written into the line, as given (the app rule's output on the
+  // `source` date). `published` is what this server's registry readers list; `excluded` is never
+  // a target. Lines without them run on the advisory data alone, as before.
+  const published = strings(v, "published");
+  const clean = smallestCleanVersion({ ecosystem: eco, fixes, advisories, published: published.length > 0 ? published : null, excluded: strings(v, "excluded") });
   const target = clean?.target ?? null;
   const clears = clean !== null && clean.target !== null && clean.stillAffectedBy.length === 0;
   const wantTarget = optStr(v, "target");
   if (!sameVersion(target, wantTarget, eco)) return `target: got ${target}, want ${wantTarget}`;
   // `clears` is only meaningful for a target.
   if (wantTarget !== null && clears !== v.clears) return `clears: got ${clears}, want ${v.clears}`;
+  // `withheld` is checked only on lines that state it.
+  const withheld = clean?.withheld ?? [];
+  if (Array.isArray(v.withheld) && JSON.stringify(withheld) !== JSON.stringify(strings(v, "withheld"))) {
+    return `withheld: got ${JSON.stringify(withheld)}, want ${JSON.stringify(v.withheld)}`;
+  }
   return null;
+}
+
+/** A string-array field of a vector line (absent reads as empty). */
+function strings(v: Vector, key: string): string[] {
+  return Array.isArray(v[key]) ? (v[key] as unknown[]).filter((s): s is string => typeof s === "string") : [];
 }
 
 function checkRefreshVerdict(v: Vector): string | null {

@@ -56,6 +56,11 @@ export interface PackageReleaseIndex {
   /** When the package itself was first published, or null. */
   createdAt: string | null;
   releases: Record<string, ReleaseRecord>;
+  /**
+   * npm: the `latest` dist-tag. A package whose latest release is deprecated
+   * withdraws no deprecated release (withdrawn-releases.ts). Absent elsewhere.
+   */
+  latest?: string | null;
 }
 
 /** The outcome of one registry read: data, a definite "no such package", or "could not reach it". */

@@ -28,7 +28,7 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { escapeModulePath } from "./go-registry.js";
-import { advisoryRanges, advisoryAffects, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
+import { advisoryRanges, advisoryAffects, installableFix, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
@@ -37,6 +37,7 @@ import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
+import { isNpmDeprecated, npmExcludedVersions, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
 const TIMEOUT_MS = 15_000;
@@ -47,14 +48,20 @@ const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
 /** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
-  /** Published, installable versions: not yanked, not deprecated (npm), not withdrawn. */
+  /** Published, installable versions: every release except the `withdrawn` ones. */
   versions: string[];
-  /** Versions the registry marks deprecated (npm) or yanked (crates.io): never a fix target. */
+  /**
+   * Releases the registry withdrew, never a fix target (withdrawn-releases.ts, the 4DA app's
+   * rule): yanked (crates.io; PyPI: every file), and npm `deprecated` only where a later,
+   * non-deprecated stable release exists on the same caret line and `latest` is not deprecated.
+   */
   withdrawn: string[];
+  /** Per withdrawn release, the registry's words ("4.18.0 is deprecated on npm ("Bad release...")"). */
+  withdrawnWhy: Record<string, string>;
   /** The registry's latest release (npm `latest` tag; crates.io the highest non-yanked), or null. */
   latest: string | null;
   /** The package-level deprecation of the newest release (npm), or null. */
@@ -143,7 +150,7 @@ export class FixPathSources {
       case "crates.io":
         return (await this.cratesSparse(name))?.versions ?? null;
       case "PyPI":
-        return this.pypiVersions(name);
+        return (await this.pypiFacts(name))?.versions ?? null;
       case "Go":
         return this.goVersions(name);
       default:
@@ -259,23 +266,33 @@ export class FixPathSources {
    */
   async releaseFacts(ecosystem: OsvEcosystem, name: string): Promise<PackageReleaseFacts | null> {
     if (ecosystem === "npm") return this.npmFacts(name);
+    const highest = (versions: string[]) =>
+      versions.filter((v) => !isPrereleaseVersion(v, ecosystem)).sort((a, b) => compareVersions(a, b, ecosystem)).pop() ?? null;
     if (ecosystem === "crates.io") {
       const sparse = await this.cratesSparse(name);
       if (!sparse) return null;
-      const latest = sparse.versions.filter((v) => !isPrereleaseVersion(v, ecosystem)).sort((a, b) => compareVersions(a, b, ecosystem)).pop() ?? null;
-      return { versions: sparse.versions, withdrawn: sparse.yanked ?? [], latest, deprecatedLatest: null };
+      const yanked = sparse.yanked ?? [];
+      const withdrawnWhy = Object.fromEntries(yanked.map((v) => [v, withdrawalText("crates.io", v)]));
+      return { versions: sparse.versions, withdrawn: yanked, withdrawnWhy, latest: highest(sparse.versions), deprecatedLatest: null };
     }
+    if (ecosystem === "PyPI") {
+      const facts = await this.pypiFacts(name);
+      return facts ? { ...facts, latest: highest(facts.versions), deprecatedLatest: null } : null;
+    }
+    // Go: `retract` lives in the newest version's go.mod, which is not read (as in the 4DA app).
     const versions = await this.publishedVersions(ecosystem, name);
     if (!versions) return null;
-    const latest = versions.filter((v) => !isPrereleaseVersion(v, ecosystem)).sort((a, b) => compareVersions(a, b, ecosystem)).pop() ?? null;
-    return { versions, withdrawn: [], latest, deprecatedLatest: null };
+    return { versions, withdrawn: [], withdrawnWhy: {}, latest: highest(versions), deprecatedLatest: null };
   }
 
   /**
    * npm's abbreviated document: versions without READMEs, with each
-   * version's `deprecated` message. A deprecated release is never offered as
-   * a fix target: lodash 4.18.0 ("Bad release. Please use lodash@4.17.21
+   * version's `deprecated` message. A withdrawn release is never offered as a
+   * fix target: lodash 4.18.0 ("Bad release. Please use lodash@4.17.21
    * instead.") was recommended by vulnerability_scan (audit B-8, 2026-10-12).
+   * Withdrawn means the app's rule (withdrawn-releases.ts): a deprecated
+   * release with a later clean one on its caret line. A whole-major notice
+   * (glob, tar 6.x) withdraws nothing, or glob 10.4.5 is sent to 12.0.0.
    */
   private async npmFacts(name: string): Promise<PackageReleaseFacts | null> {
     const key = `fixpath:v${CACHE_VERSION}:npm-facts:${name}`;
@@ -283,19 +300,20 @@ export class FixPathSources {
     if (hit) return hit;
     const doc = await this.npmDocument(name);
     if (!doc) return null;
-    {
-      const entries = Object.entries(doc.versions ?? {});
-      const deprecated = (v: { deprecated?: unknown } | undefined) => typeof v?.deprecated === "string" && v.deprecated.trim() !== "";
-      const latest = doc["dist-tags"]?.latest ?? null;
-      const facts: PackageReleaseFacts = {
-        versions: entries.filter(([, v]) => !deprecated(v)).map(([version]) => version),
-        withdrawn: entries.filter(([, v]) => deprecated(v)).map(([version]) => version),
-        latest,
-        deprecatedLatest: latest && deprecated(doc.versions?.[latest]) ? String(doc.versions?.[latest]?.deprecated) : null,
-      };
-      this.cache.set(key, facts, "npm", VERSIONS_TTL);
-      return facts;
-    }
+    const versions = doc.versions ?? {};
+    const latest = doc["dist-tags"]?.latest ?? null;
+    const withdrawn = npmExcludedVersions(Object.fromEntries(Object.entries(versions).map(([v, m]) => [v, m?.deprecated])), latest);
+    const out = new Set(withdrawn);
+    const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? (versions[v].deprecated as string) : null);
+    const facts: PackageReleaseFacts = {
+      versions: Object.keys(versions).filter((v) => !out.has(v)),
+      withdrawn,
+      withdrawnWhy: Object.fromEntries(withdrawn.map((v) => [v, withdrawalText("npm", v, message(v))])),
+      latest,
+      deprecatedLatest: latest && isNpmDeprecated(versions[latest]?.deprecated) ? (message(latest) ?? "deprecated") : null,
+    };
+    this.cache.set(key, facts, "npm", VERSIONS_TTL);
+    return facts;
   }
 
   /** A crate's sparse-index record: versions and per-version dependency requirements. */
@@ -336,21 +354,31 @@ export class FixPathSources {
     }
   }
 
-  private async pypiVersions(name: string): Promise<string[] | null> {
-    const key = `fixpath:v${CACHE_VERSION}:pypi-versions:${name}`;
-    const hit = this.cache.get<string[]>(key);
+  /**
+   * PyPI's JSON API: every release with files; one whose every file is yanked is withdrawn
+   * (PEP 592, the app's `parse_pypi`). A release with no files cannot be installed and is not listed.
+   */
+  private async pypiFacts(name: string): Promise<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string> } | null> {
+    const key = `fixpath:v${CACHE_VERSION}:pypi-facts:${name}`;
+    const hit = this.cache.get<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string> }>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
       const res = await fetchWithTimeout(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, {}, TIMEOUT_MS);
       if (!res.ok) return null;
-      const doc = (await res.json()) as { releases?: Record<string, Array<{ yanked?: boolean }>> };
-      // A release with files, not all of them yanked.
-      const versions = Object.entries(doc.releases ?? {})
-        .filter(([, files]) => files.length > 0 && files.some((f) => !f.yanked))
-        .map(([v]) => v);
-      this.cache.set(key, versions, "pypi", VERSIONS_TTL);
-      return versions;
+      const doc = (await res.json()) as { releases?: Record<string, Array<{ yanked?: boolean; yanked_reason?: string | null }>> };
+      const out = { versions: [] as string[], withdrawn: [] as string[], withdrawnWhy: {} as Record<string, string> };
+      for (const [version, files] of Object.entries(doc.releases ?? {})) {
+        if (!Array.isArray(files) || files.length === 0) continue;
+        if (files.every((f) => f.yanked === true)) {
+          out.withdrawn.push(version);
+          out.withdrawnWhy[version] = withdrawalText("PyPI", version, files.find((f) => f.yanked_reason)?.yanked_reason ?? null);
+        } else {
+          out.versions.push(version);
+        }
+      }
+      this.cache.set(key, out, "pypi", VERSIONS_TTL);
+      return out;
     } catch {
       return null;
     }
@@ -398,6 +426,18 @@ export type FixTargetResult = CleanTarget & {
    * fix as checked against the installed version's advisories only.
    */
   advisoriesUnread?: boolean;
+  /**
+   * True when the package's registry could not be read: withdrawn (yanked, deprecated) releases
+   * were not checked, and the target comes from the advisory data alone, as before FX-H5.
+   */
+  registryUnread?: boolean;
+  /** The registry's words for each `withheld` release and each withdrawn line fix. */
+  withheldWhy?: Record<string, string>;
+  /**
+   * Per-advisory fixes the registry withdrew, keyed by that fix: the release to take instead
+   * (`fix: null` when none past it is known) and the withdrawn ones passed (installableFix).
+   */
+  lineFixes?: Record<string, { fix: string | null; withheld: string[] }>;
 };
 
 /**
@@ -428,16 +468,52 @@ export async function cleanFixTarget(
     sources.releaseFacts(ecosystem, name),
   ]);
   if (!advisories) return perAdvisoryFixes.length > 0 && facts ? registryOnlyTarget(ecosystem, perAdvisoryFixes, facts) : null;
-  const published = facts?.versions ?? null;
+  // Every release the registry lists, the withdrawn ones included so the result can name them;
+  // `excluded` keeps them from ever being the target (FX-H5).
+  const published = facts ? [...facts.versions, ...facts.withdrawn] : null;
+  const excluded = facts?.withdrawn ?? [];
   if (perAdvisoryFixes.length > 0) {
-    const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published });
-    return clean && facts?.withdrawn.includes(clean.floor) ? { ...clean, floorWithdrawn: true } : clean;
+    const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published, excluded });
+    if (!clean) return null;
+    return withRegistryFacts({ ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}) }, ecosystem, perAdvisoryFixes, advisories, facts);
   }
   // Only a registry list can show a release past a last_affected bound.
   if (!published || published.length === 0) return null;
-  const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published });
+  const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published, excluded });
   if (!clean || clean.target === null || clean.target === installed || clean.stillAffectedBy.length > 0) return null;
-  return { ...clean, noAdvisoryFix: true };
+  return withRegistryFacts({ ...clean, noAdvisoryFix: true }, ecosystem, [], advisories, facts);
+}
+
+/**
+ * The registry side of a target: that the registry was not read (so withdrawn releases were
+ * not checked), or the words for each withdrawn release and the installable fix for each
+ * per-advisory fix the registry withdrew (the app's `installable_fix`: the lowest allowed
+ * release above it that the advisories fixed at it do not affect).
+ */
+function withRegistryFacts(
+  clean: FixTargetResult,
+  ecosystem: OsvEcosystem,
+  fixes: string[],
+  advisories: AdvisoryRanges[],
+  facts: PackageReleaseFacts | null,
+): FixTargetResult {
+  // Only the registries whose withdrawals are read (as in the app: Go `retract` and the RubyGems /
+  // Packagist readers are not); for the rest there was nothing to check, so nothing to say.
+  if (!facts) return WITHDRAWALS_READ.has(ecosystem) ? { ...clean, registryUnread: true } : clean;
+  const lineFixes: NonNullable<FixTargetResult["lineFixes"]> = {};
+  const published = [...facts.versions, ...facts.withdrawn];
+  for (const fix of new Set(fixes)) {
+    if (!facts.withdrawn.includes(fix)) continue;
+    const fixedHere = advisories.filter((a) => a.spans.some((s) => s.fixed !== null && compareVersions(s.fixed, fix, ecosystem) === 0));
+    lineFixes[fix] = installableFix({ ecosystem, fix, advisories: fixedHere, published, excluded: facts.withdrawn });
+  }
+  const named = new Set([...clean.withheld, ...Object.values(lineFixes).flatMap((l) => l.withheld)]);
+  const withheldWhy = Object.fromEntries([...named].map((v) => [v, facts.withdrawnWhy[v] ?? withdrawalText(ecosystem, v)]));
+  return {
+    ...clean,
+    ...(named.size > 0 ? { withheldWhy } : {}),
+    ...(Object.keys(lineFixes).length > 0 ? { lineFixes } : {}),
+  };
 }
 
 /**
@@ -448,9 +524,19 @@ export async function cleanFixTarget(
  */
 function registryOnlyTarget(ecosystem: OsvEcosystem, fixes: string[], facts: PackageReleaseFacts): FixTargetResult | null {
   if (facts.versions.length === 0) return null;
-  const clean = smallestCleanVersion({ ecosystem, fixes, advisories: [], published: facts.versions });
-  if (!clean || clean.target === null || clean.target === clean.floor) return null;
-  return { ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true };
+  const published = [...facts.versions, ...facts.withdrawn];
+  const clean = smallestCleanVersion({ ecosystem, fixes, advisories: [], published, excluded: facts.withdrawn });
+  if (!clean || (clean.target !== null && clean.target === clean.floor)) return null;
+  if (clean.target === null && clean.withheld.length === 0) return null;
+  return withRegistryFacts({ ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true }, ecosystem, fixes, [], facts);
+}
+
+/** The ecosystems whose registry withdrawals (yanked, deprecated) are read. */
+const WITHDRAWALS_READ: ReadonlySet<string> = new Set(["npm", "crates.io", "PyPI"]);
+
+/** `withheldNote` for a checked target: the withdrawn releases passed, in plain words; null when none. */
+export function withheldText(clean: FixTargetResult, ecosystem: string): string | null {
+  return withheldNote(clean.withheld, clean.target, clean.withheldWhy ?? {}, ecosystem, clean.stillAffectedBy.length === 0);
 }
 
 /**
@@ -488,24 +574,62 @@ export async function verifyFixTargets(
   return out;
 }
 
-/** One clause for a target that is not the highest per-advisory fix, or null when it is. */
-export function targetNote(clean: FixTargetResult): string | null {
+/** Said whenever the registry could not be read: withdrawn releases are then not ruled out, never silently. */
+export const REGISTRY_UNREAD_NOTE = "the registry could not be read, so whether it yanked or deprecated this release was not checked";
+
+/**
+ * One clause for a target that is not the highest per-advisory fix, or null when it is.
+ * Withdrawn releases passed on the way are named in the registry's own words (FX-H5).
+ */
+export function targetNote(clean: FixTargetResult, ecosystem = ""): string | null {
+  const withheld = withheldText(clean, ecosystem);
   if (clean.advisoriesUnread) {
-    return `${clean.target} is the smallest installable release at or above ${clean.floor}, the highest per-advisory fix, which ${clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}; not checked against the package's other advisories (OSV.dev did not answer)`;
-  }
-  if (clean.noAdvisoryFix) {
-    return `no advisory names a fixed version (they give only a last affected one); ${clean.target} is the first published release above the installed version that no known advisory affects`;
+    const unchecked = "not checked against the package's other advisories (OSV.dev did not answer)";
+    // Not "clean": nothing but the installed version's advisories was checked.
+    if (withheld && clean.target) return `${withheld.replace(/ is the smallest clean release$/, " is the smallest installable release past it")}; ${unchecked}`;
+    if (withheld) return `${withheld}; ${unchecked}`;
+    return `${clean.target} is the smallest installable release at or above ${clean.floor}, the highest per-advisory fix, which ${clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}; ${unchecked}`;
   }
   const parts: string[] = [];
-  if (clean.target && clean.target !== clean.floor) {
-    parts.push(
-      `${clean.target} is the smallest version clear of every advisory a release fixes; ${clean.floor}, the highest per-advisory fix, ${clean.floorAffectedBy.length > 0 ? `is itself affected by ${clean.floorAffectedBy.join(", ")}` : clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}`,
-    );
+  if (clean.noAdvisoryFix) {
+    parts.push(`no advisory names a fixed version (they give only a last affected one); ${clean.target} is the first published release above the installed version that no known advisory affects`);
+    if (withheld) parts.push(withheld);
+  } else if (clean.target === null) {
+    if (withheld) parts.push(withheld);
+  } else if (clean.target !== clean.floor) {
+    if (clean.floorAffectedBy.length > 0) {
+      parts.push(`${clean.target} is the smallest version clear of every advisory a release fixes; ${clean.floor}, the highest per-advisory fix, is itself affected by ${clean.floorAffectedBy.join(", ")}`);
+      if (withheld) parts.push(withheld);
+    } else if (withheld) {
+      parts.push(withheld);
+    } else {
+      parts.push(`${clean.target} is the smallest version clear of every advisory a release fixes; ${clean.floor}, the highest per-advisory fix, ${clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}`);
+    }
   }
   if (clean.target && clean.stillAffectedBy.length > 0) {
     parts.push(`${clean.stillAffectedBy.join(", ")} also affect${clean.stillAffectedBy.length === 1 ? "s" : ""} it and every newer release (no fix published)`);
   }
+  if (clean.registryUnread) parts.push(REGISTRY_UNREAD_NOTE);
   return parts.length > 0 ? parts.join("; ") : null;
+}
+
+/**
+ * A finding's own fix as the registry still offers it (the app's `installable_fix`): the
+ * advisory's fixed version, or, when the registry withdrew it, the release to take instead
+ * (null: none past it is known), with the withdrawn ones and the plain-words note.
+ */
+export function rowFix(
+  fixed: string | null,
+  clean: FixTargetResult | undefined,
+  ecosystem: string,
+): { fixed: string | null; withheld: string[]; note: string | null } {
+  const line = fixed && clean?.lineFixes?.[fixed];
+  if (!fixed || !line) return { fixed, withheld: [], note: null };
+  const said = sayWithdrawn(line.withheld, clean.withheldWhy ?? {}, ecosystem);
+  const note = line.fix
+    ? `${said}; ${line.fix} is the smallest release past it that fixes this advisory`
+    : `No installable fix for this advisory: ${said}, and no later release is known to fix it`;
+  return { fixed: line.fix, withheld: line.withheld, note };
 }
 
 export interface RefreshVerdict {

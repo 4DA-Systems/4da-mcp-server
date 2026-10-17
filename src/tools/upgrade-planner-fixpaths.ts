@@ -36,6 +36,8 @@ import {
   overrideReaches,
   refreshCommandFor,
   refreshVerdict,
+  REGISTRY_UNREAD_NOTE,
+  withheldText,
   type FixPathSources,
   type FixTargetResult,
   type PackageReleaseFacts,
@@ -133,6 +135,11 @@ export interface FixPathStep {
   upgradeInstructions?: Array<{ dir: string; instruction: string }>;
   /** upgrade_parent / override_or_replace: the releases of the blocking parents that admit a clean version. */
   parentUpgrades?: ParentUpgrade[];
+  /**
+   * Releases the registry withdrew (yanked, deprecated) that the target steps over; with no
+   * target, the only releases that fixed it (FX-H5). The reasons say which and why.
+   */
+  withheld?: string[];
   isDev?: boolean;
 }
 
@@ -226,6 +233,16 @@ async function withTimeout<T>(work: Promise<T>, ms: number, late: T): Promise<T>
   }
 }
 
+/** Every release that fixes the package was withdrawn by its registry: nothing to upgrade to (FX-H5). */
+function noInstallableFix(step: FixPathStep): void {
+  step.targetVersion = null;
+  step.upgradeType = "unknown";
+  step.breaking = false;
+  step.action = "no_fix_available";
+  delete step.upgradeCommands;
+  delete step.upgradeInstructions;
+}
+
 function setTarget(step: FixPathStep, target: string): void {
   step.targetVersion = target;
   const d = step.currentVersion ? computeSemverDistance(step.currentVersion, target) : null;
@@ -244,6 +261,11 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     step.reasons.push(
       `No advisory names a fixed version (they give only a last affected one); ${clean.target} is the first published release above ${step.currentVersion} that no known advisory affects`,
     );
+    const passed = withheldText(clean, ecosystem);
+    if (passed) {
+      step.withheld = clean.withheld;
+      step.reasons.push(passed);
+    }
     setTarget(step, clean.target);
     step.breaking = step.scope === "direct" && step.upgradeType === "major";
     step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
@@ -252,20 +274,36 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     return "verified";
   }
   if (!clean) return "failed";
-  if (clean.advisoriesUnread && clean.target) {
+  const withheld = withheldText(clean, ecosystem);
+  if (clean.withheld.length > 0) step.withheld = clean.withheld;
+  if (clean.advisoriesUnread && (clean.target || withheld)) {
     // H5: OSV did not list the advisories, the registry answered. The highest per-advisory fix
     // is withdrawn (lodash 4.18.0, "Bad release"), so it is never the target; the step still
     // counts as checked against the installed version's advisories only.
     step.reasons.push(
-      `${clean.target} is the smallest installable release at or above ${clean.floor}, the highest per-advisory fix, which ${clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}; the package's other advisories could not be read`,
+      withheld
+        ? `${withheld}; the package's other advisories could not be read`
+        : `${clean.target} is the smallest installable release at or above ${clean.floor}, the highest per-advisory fix, which ${clean.floorWithdrawn ? "is deprecated or yanked on the registry" : "is not a published release"}; the package's other advisories could not be read`,
     );
-    setTarget(step, clean.target);
-    if (step.latestVersion === step.targetVersion) delete step.latestVersion;
+    if (clean.target) {
+      setTarget(step, clean.target);
+      if (step.latestVersion === step.targetVersion) delete step.latestVersion;
+    } else {
+      noInstallableFix(step);
+    }
     withUpgradeCommands(input, liveIntel);
     return "unverified";
   }
   step.fixPathChecked = "all_advisories";
+  // FX-H5: the registry could not be read, so the target is the advisory data's alone. Said, never silent.
+  if (clean.registryUnread) step.reasons.push(`The ${step.package} registry could not be read: ${REGISTRY_UNREAD_NOTE.replace(/^the registry could not be read, so /, "")}`);
 
+  if (clean.target === null && withheld) {
+    // Every release that fixes it was withdrawn: "no installable fix", never "no fix published" (the app's Upgrade Plan).
+    step.reasons.push(withheld);
+    noInstallableFix(step);
+    return "verified";
+  }
   if (clean.target === null) {
     step.reasons.push(
       `No published version clears every known advisory: ${clean.floor}, the highest per-advisory fix, is still affected by ${clean.stillAffectedBy.join(", ")}`,
@@ -283,14 +321,18 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   }
   rewriteNoFixReason(input, clean);
   if (clean.target !== clean.floor) {
-    const why = clean.floorAffectedBy.length > 0
-      ? `is itself affected by ${clean.floorAffectedBy.join(", ")}`
-      : clean.floorWithdrawn
-        ? "is deprecated or yanked on the registry"
-        : "is not a published release";
-    step.reasons.push(
-      `${clean.target} is the smallest ${clean.basis === "registry" ? "published " : ""}version clear of every advisory a release fixes (${clean.floor}, the highest per-advisory fix, ${why})`,
-    );
+    if (clean.floorAffectedBy.length > 0 || !withheld) {
+      const why = clean.floorAffectedBy.length > 0
+        ? `is itself affected by ${clean.floorAffectedBy.join(", ")}`
+        : clean.floorWithdrawn
+          ? "is deprecated or yanked on the registry"
+          : "is not a published release";
+      step.reasons.push(
+        `${clean.target} is the smallest ${clean.basis === "registry" ? "published " : ""}version clear of every advisory a release fixes (${clean.floor}, the highest per-advisory fix, ${why})`,
+      );
+    }
+    // The withdrawn releases passed, in the registry's words: "4.18.0 is deprecated on npm (...); 4.18.1 is the smallest clean release".
+    if (withheld) step.reasons.push(withheld);
   }
   if (step.targetVersion !== clean.target) setTarget(step, clean.target);
   if (step.latestVersion === step.targetVersion) delete step.latestVersion;

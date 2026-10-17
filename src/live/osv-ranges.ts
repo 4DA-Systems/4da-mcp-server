@@ -166,6 +166,22 @@ export interface CleanTarget {
    * reported instead.
    */
   unfixable: string[];
+  /**
+   * Releases the registry withdrew (yanked, deprecated: `excluded`) that the
+   * target would otherwise have been: each one at or above the floor and
+   * below the target (every one, when there is no target) that the advisories
+   * the target is judged against do not affect. Ascending. With no target, a
+   * non-empty list means a fix WAS published and then withdrawn: "no
+   * installable fix", not "no fix published" (4DA FX-H5 `WalkOutcome.withheld`).
+   */
+  withheld: string[];
+}
+
+/** Whether `version` is one of `listed`, as a version (build metadata ignored), not only as a string. */
+export function isListedVersion(listed: readonly string[], version: string, ecosystem: string): boolean {
+  if (listed.includes(version)) return true;
+  if (!isComparable(version, ecosystem)) return false;
+  return listed.some((l) => isComparable(l, ecosystem) && compareVersions(l, version, ecosystem) === 0);
 }
 
 /**
@@ -177,12 +193,18 @@ export interface CleanTarget {
  * name. An advisory that affects the newest candidate has no fixed release
  * and does not disqualify a target (it is listed in `unfixable`). Null when
  * `fixes` is empty.
+ *
+ * `excluded`: releases the registry withdrew (withdrawn-releases.ts). They
+ * stay in the pool so the result can say it passed one (`withheld`), but are
+ * never the target, exactly as a prerelease is not; an advisory whose every
+ * way out is withdrawn then has none, like an unfixed one (FX-H5).
  */
 export function smallestCleanVersion(input: {
   ecosystem: string;
   fixes: string[];
   advisories: AdvisoryRanges[];
   published: string[] | null;
+  excluded?: readonly string[];
 }): CleanTarget | null {
   const { ecosystem } = input;
   const fixes = input.fixes.filter((f) => isComparable(f, ecosystem));
@@ -190,24 +212,77 @@ export function smallestCleanVersion(input: {
   const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
   const floor = fixes.reduce((max, v) => (cmp(v, max) > 0 ? v : max), fixes[0]);
   const allowPre = isPrereleaseVersion(floor, ecosystem);
+  const excluded = input.excluded ?? [];
+  const withdrawn = (v: string) => excluded.length > 0 && isListedVersion(excluded, v, ecosystem);
 
   const fromRegistry = input.published !== null && input.published.length > 0;
   const pool = fromRegistry
     ? input.published!
     : [floor, ...input.advisories.flatMap((a) => a.spans.map((s) => s.fixed).filter((f): f is string => f !== null))];
-  const candidates = [...new Set(pool)]
+  const releases = [...new Set(pool)]
     .filter((v) => isComparable(v, ecosystem) && cmp(v, floor) >= 0 && (allowPre || !isPrereleaseVersion(v, ecosystem)))
     .sort(cmp);
+  const candidates = releases.filter((v) => !withdrawn(v));
   const basis = fromRegistry ? "registry" : "advisory_fixes";
   const newest = candidates[candidates.length - 1];
   const unfixable = newest ? input.advisories.filter((a) => advisoryAffects(a, newest, ecosystem)) : [];
   const fixable = input.advisories.filter((a) => !unfixable.includes(a));
   const unfixableIds = [...new Set(unfixable.map((a) => a.id))];
   const affecting = (v: string) => [...new Set(input.advisories.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))];
+  const clear = (judged: AdvisoryRanges[]) => (v: string) => !judged.some((a) => advisoryAffects(a, v, ecosystem));
+  // The withdrawn releases that would have been the target: clean against `judged`, below `target`.
+  const passed = (judged: AdvisoryRanges[], target: string | null) =>
+    releases.filter((v) => withdrawn(v) && (target === null || cmp(v, target) < 0) && clear(judged)(v));
   // Clean against everything if any candidate is; otherwise against every advisory a release fixes.
-  for (const pool of [input.advisories, fixable]) {
-    const candidate = candidates.find((v) => !pool.some((a) => advisoryAffects(a, v, ecosystem)));
-    if (candidate) return { target: candidate, basis, floor, floorAffectedBy: affecting(floor), stillAffectedBy: affecting(candidate), unfixable: unfixableIds };
+  for (const judged of [input.advisories, fixable]) {
+    const candidate = candidates.find(clear(judged));
+    if (candidate) {
+      return {
+        target: candidate,
+        basis,
+        floor,
+        floorAffectedBy: affecting(floor),
+        stillAffectedBy: affecting(candidate),
+        unfixable: unfixableIds,
+        withheld: passed(judged, candidate),
+      };
+    }
   }
-  return { target: null, basis, floor, floorAffectedBy: affecting(floor), stillAffectedBy: affecting(floor), unfixable: unfixableIds };
+  return {
+    target: null,
+    basis,
+    floor,
+    floorAffectedBy: affecting(floor),
+    stillAffectedBy: affecting(floor),
+    unfixable: unfixableIds,
+    withheld: passed(fixable, null),
+  };
+}
+
+/**
+ * One advisory's own fix as a release the registry still offers (4DA
+ * `installable_fix`): `fix` itself, or, when the registry withdrew it, the
+ * lowest published release above it that is not withdrawn and that
+ * `advisories` (the ones that fix at `fix`) do not affect. `fix: null` with
+ * `withheld` set: the fix was published and withdrawn, and no installable
+ * release past it is known.
+ */
+export function installableFix(input: {
+  ecosystem: string;
+  fix: string;
+  advisories: AdvisoryRanges[];
+  published: string[] | null;
+  excluded: readonly string[];
+}): { fix: string | null; withheld: string[] } {
+  const { ecosystem, fix } = input;
+  if (!isListedVersion(input.excluded, fix, ecosystem)) return { fix, withheld: [] };
+  const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
+  const allowPre = isPrereleaseVersion(fix, ecosystem);
+  const above = [...new Set(input.published ?? [])]
+    .filter((v) => isComparable(v, ecosystem) && cmp(v, fix) > 0 && (allowPre || !isPrereleaseVersion(v, ecosystem)))
+    .filter((v) => !input.advisories.some((a) => advisoryAffects(a, v, ecosystem)))
+    .sort(cmp);
+  const next = above.find((v) => !isListedVersion(input.excluded, v, ecosystem)) ?? null;
+  const skipped = above.filter((v) => isListedVersion(input.excluded, v, ecosystem) && (next === null || cmp(v, next) < 0));
+  return { fix: next, withheld: [fix, ...skipped.filter((v) => v !== fix)] };
 }
