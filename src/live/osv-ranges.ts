@@ -167,6 +167,10 @@ export interface CleanReleases {
   remains: (version: string) => string[];
   /** The malicious advisories that affect `version`: an installed copy they affect names no release at all. */
   maliciousAt: (version: string) => string[];
+  /** The non-malicious advisories that affect `version` but not the installed version (a move would bring them in); empty without `installed`. */
+  introducedAt: (version: string) => string[];
+  /** `clean`, except that advisories the installed version does not have are ignored: whether only those block `version`. */
+  cleanButIntroduced: (version: string) => boolean;
 }
 
 /**
@@ -207,6 +211,13 @@ export function cleanReleases(advisories: readonly AdvisoryRanges[], ecosystem: 
     newest,
     remains: (v) => [...new Set(unfixedAdv.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))],
     maliciousAt: (v) => [...new Set(malicious.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))],
+    introducedAt: (v) =>
+      installed ? [...new Set(benign.filter((a) => advisoryAffects(a, v, ecosystem) && !advisoryAffects(a, installed, ecosystem)).map((a) => a.id))] : [],
+    cleanButIntroduced: (v) =>
+      !!installed &&
+      unreadable.length === 0 &&
+      notMalicious(v) &&
+      benign.every((a) => !advisoryAffects(a, v, ecosystem) || unfixedAdv.includes(a) || !advisoryAffects(a, installed, ecosystem)),
   };
 }
 

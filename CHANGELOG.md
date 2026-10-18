@@ -224,7 +224,9 @@ shared with the app are pinned by the shared vectors.
   parent or lever release, or a newest-release offer. An advisory with no
   published fix is skipped only when the installed version already has it.
   When nothing qualifies, no release is named and the answer says "every
-  fixing release brings in <id>".
+  fixing release brings in <id>". A parent or lever whose only admitting
+  release carries such an advisory reports the outcome `introduces` (shared
+  vector pr-010), not "no release admits".
   dependency_health adds `latestSafeVersion` and `latestStableNote` and
   measures `versionsBehind` to the safe release; what_should_i_know's `latest`
   adds `registry_latest` and `note`.

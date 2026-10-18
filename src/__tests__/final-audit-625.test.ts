@@ -18,6 +18,7 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
+import { checkParentRelease } from "./helpers/parent-release-vectors.js";
 
 const noDb = null as unknown as FourDADatabase;
 
@@ -807,5 +808,68 @@ describe("the malware predicate matches fourda_depengine::is_malware exactly (4D
     }
     expect(isMalware("GHSA-x", ["MALWARE-NOTE"])).toBe(false);
     expect(isMalware("GHSA-x", [], ["CWE-5060"])).toBe(false);
+  });
+});
+
+// pr-010 (4DA #994, parity decision 2): a parent move never brings in an advisory the installed
+// parent lacks. The only admitting par release carries GHSA-synt-0000-0002, which par 1.0.0 does
+// not have: the row names no release (outcome "introduces"). When the installed par has it too
+// (no fix published), it is skipped as unfixed and par 1.1.0 is named.
+describe("pr-010: a parent move never introduces an advisory", () => {
+  const line = (parentAdvisoryRanges: Array<Record<string, string>>, expectRow: Record<string, unknown>, parentTarget: string | null) => ({
+    id: "pr-010-local",
+    eco: "npm",
+    tool: "npm",
+    parent: {
+      name: "par", installed: "1.0.0", declared: "1.0.0", lever: "direct", latest: "1.1.0", deprecated: false,
+      releases: ["1.0.0", "1.1.0"], advisories: [{ id: "GHSA-synt-0000-0002", ranges: parentAdvisoryRanges }], own_target: parentTarget,
+    },
+    rows: [{
+      pkg: "leaf", installed: "1.0.0", target: "1.1.0", releases: ["1.0.0", "1.1.0"],
+      advisories: [{ id: "GHSA-synt-0000-0001", ranges: [{ introduced: "0", fixed: "1.1.0" }] }],
+      requires: { "1.0.0": "1.0.0", "1.1.0": "^1.1.0" },
+    }],
+    expect: { parent_target: parentTarget, rows: [expectRow] },
+  });
+  const none = { requirement: null, peer: false, resolves_to: null, command: null, refresh: null };
+
+  it("names no release when every admitting release brings in a new advisory", async () => {
+    const v = line([{ introduced: "1.1.0" }], { pkg: "leaf", outcome: "introduces", smallest: null, to: null, breaking: false, ...none }, null);
+    expect(await checkParentRelease(v)).toBeNull();
+  });
+
+  it("still names the release when the installed parent already has that unfixed advisory", async () => {
+    const v = line([{ introduced: "0" }], { pkg: "leaf", outcome: "introduces", smallest: null, to: null, breaking: false, ...none }, null);
+    // The contrast: this expectation must NOT hold, the advisory is unfixed and already installed.
+    expect(await checkParentRelease(v)).toMatch(/"outcome":"release"/);
+  });
+});
+
+// The same rule for a lever (the parent arrives through a declared dependency): lev 1.1.0 is the
+// only lev release that brings in a par that admits a clean leaf, and it carries an advisory the
+// installed lev 1.0.0 does not have, so no release is named.
+describe("pr-010 for a lever: a lever move never introduces an advisory", () => {
+  const graph = (levRanges: Array<Record<string, string>>, release: unknown) => ({
+    id: "lever-introduces", eco: "npm", mode: "graph",
+    nodes: [["lev", "1.0.0", true], ["par", "1.0.0", false], ["leaf", "1.0.0", false]],
+    edges: [["lev", "1.0.0", "par", "1.0.0"], ["par", "1.0.0", "leaf", "1.0.0"]],
+    advisories: [
+      { id: "GHSA-synt-0000-0001", package: "leaf", ranges: [{ introduced: "0", fixed: "1.1.0" }] },
+      { id: "GHSA-synt-0000-0003", package: "lev", ranges: levRanges },
+    ],
+    registry: {
+      lev: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": { dependencies: { par: "1.0.0" } }, "1.1.0": { dependencies: { par: "^1.1.0" } } } },
+      par: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.1.0" } } } },
+      leaf: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": {}, "1.1.0": {} } },
+    },
+    expect: { rows: [], copies: [{ pkg: "leaf", installed: "1.0.0", target: "1.1.0", links: [{ parent: "par", release, levers: [], lever_unknown: false }] }] },
+  });
+
+  it("names no lever release when it brings in a new advisory", async () => {
+    expect(await checkParentRelease(graph([{ introduced: "1.1.0" }], "introduces"))).toBeNull();
+  });
+
+  it("names the lever release when the installed lever already has that unfixed advisory", async () => {
+    expect(await checkParentRelease(graph([{ introduced: "0" }], "introduces"))).toMatch(/"release":\{"to":"1\.1\.0"/);
   });
 });

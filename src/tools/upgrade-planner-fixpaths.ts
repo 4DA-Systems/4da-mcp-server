@@ -697,7 +697,7 @@ interface MoveContext {
 }
 
 /** The 4DA app's ParentStanding names, for what a parent cannot do (parent_release vectors). */
-export type StuckOutcome = "deprecated" | "latest" | "none_admits";
+export type StuckOutcome = "deprecated" | "latest" | "none_admits" | "introduces";
 
 type Standing =
   | { kind: "stuck"; text: string; outcome?: StuckOutcome }
@@ -725,18 +725,18 @@ async function ownClean(
   name: string,
   facts: PackageReleaseFacts,
   installed?: string,
-): Promise<{ clean: (v: string) => boolean; read: boolean; any: boolean; newest: string | null; unreadable: string[]; remains: (v: string) => string[]; maliciousAt: (v: string) => string[] }> {
+): Promise<{ clean: (v: string) => boolean; read: boolean; any: boolean; newest: string | null; unreadable: string[]; remains: (v: string) => string[]; maliciousAt: (v: string) => string[]; introducedAt: (v: string) => string[]; cleanButIntroduced: (v: string) => boolean }> {
   let pending = ctx.advisories.get(name);
   if (!pending) {
     pending = ctx.sources.packageAdvisories(ctx.ecosystem, name).catch(() => null);
     ctx.advisories.set(name, pending);
   }
   const advisories = await pending;
-  if (!advisories) return { clean: () => true, read: false, any: false, newest: newestOf(facts.versions, ctx.ecosystem), unreadable: [], remains: () => [], maliciousAt: () => [] };
+  if (!advisories) return { clean: () => true, read: false, any: false, newest: newestOf(facts.versions, ctx.ecosystem), unreadable: [], remains: () => [], maliciousAt: () => [], introducedAt: () => [], cleanButIntroduced: () => false };
   // The one clean-release predicate (#981): malware never skipped, unreadable ranges unknown, a
   // genuinely unfixed advisory skipped and said (osv-ranges.ts cleanReleases).
   const view = cleanReleases(advisories, ctx.ecosystem, facts.versions, installed);
-  return { clean: view.clean, read: true, any: advisories.some((a) => !a.maintenance), newest: view.newest, unreadable: view.unreadable, remains: view.remains, maliciousAt: view.maliciousAt };
+  return { clean: view.clean, read: true, any: advisories.some((a) => !a.maintenance), newest: view.newest, unreadable: view.unreadable, remains: view.remains, maliciousAt: view.maliciousAt, introducedAt: view.introducedAt, cleanButIntroduced: view.cleanButIntroduced };
 }
 
 /** The project directories whose manifests declare `name` at `version` (the resolution's direct rows). */
@@ -939,6 +939,13 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
 
   const found = smallestAdmitting(ctx, facts, from, history, dialect, own.clean);
   if (!found) {
+    // Parity decision 2 (pr-010): a release would admit the fix but brings in an advisory the
+    // installed parent does not have. No release is named, and the reason says which.
+    const blocked = smallestAdmitting(ctx, facts, from, history, dialect, (v) => !own.clean(v) && own.cleanButIntroduced(v));
+    if (blocked) {
+      const ids = own.introducedAt(blocked.version);
+      return goesAway(ctx, b, parent, from, route, `${deprecated}${introducesText(ids).replace(/, so no release is named$/, "")}`, "introduces");
+    }
     const clause = own.any ? ` both admits a clean ${pkg} (>= ${target}) and is clear of ${parent}'s own advisories` : ` admits a clean ${pkg} (>= ${target})`;
     return goesAway(ctx, b, parent, from, route, `${deprecated}no ${parent} release up to ${newest ?? "its latest"}${clause}`, "none_admits");
   }
@@ -1213,9 +1220,9 @@ async function throughRelease(
     return { kind: "stuck", outcome: atLatest ? "latest" : "none_admits", text: atLatest ? `${lever.name} ${lever.version} is already its latest release` : `no ${lever.name} release above ${lever.version} is clear of ${lever.name}'s own advisories` };
   }
   const parentReleases = parentFacts.versions.filter((v) => !isPrereleaseVersion(v, ctx.ecosystem));
-  const brought = (v: string): { brings: string; keepsParent: boolean } | null => {
+  const brought = (v: string, leverOk: (v: string) => boolean = own.clean): { brings: string; keepsParent: boolean } | null => {
     const entry = history[v];
-    if (!entry || entry.reqs.length !== 1 || !own.clean(v)) return null;
+    if (!entry || entry.reqs.length !== 1 || !leverOk(v)) return null;
     const req = { parent: lever.name, text: entry.reqs[0], dialect };
     const brings = parentReleases.filter((p) => requirementAdmits(req, p) === true).sort((a, b) => compareVersions(b, a, ctx.ecosystem))[0];
     if (!brings || compareVersions(brings, parentFrom, ctx.ecosystem) <= 0 || !parentClean(brings)) return null;
@@ -1229,6 +1236,12 @@ async function throughRelease(
   for (const version of candidates) {
     const hit = brought(version);
     if (hit) return { kind: "found", version, ...hit, admitsAt: (v) => brought(v) };
+  }
+  // Parity decision 2 (pr-010), for a lever: a release that would bring the fix in, blocked only
+  // by an advisory the installed lever does not have, is not offered, and the reason says which.
+  const blocked = candidates.find((v) => !own.clean(v) && own.cleanButIntroduced(v) && brought(v, own.cleanButIntroduced));
+  if (blocked) {
+    return { kind: "stuck", outcome: "introduces", text: `${lever.name}: ${introducesText(own.introducedAt(blocked)).replace(/, so no release is named$/, "")}` };
   }
   const deprecated = facts.deprecatedLatest ? `${lever.name} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
   return { kind: "stuck", outcome: "none_admits", text: `${deprecated}no ${lever.name} release up to ${newest ?? "its latest"} brings in a ${parent} that admits a clean ${ctx.pkg}` };
