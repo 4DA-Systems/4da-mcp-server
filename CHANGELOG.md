@@ -241,8 +241,9 @@ shared with the app are pinned by the shared vectors.
   "already its latest release" wording.
 - **One malware predicate** (the 4DA lead): a MAL- id, a MAL- alias, CWE-506
   in `database_specific.cwe_ids`, or GitHub's fixed advisory title ("Malicious
-  Package in ..." / "Malicious code in ..." at the start); no other summary
-  wording. GitHub's GHSA-c2m4-w5hm-vqjw ("crossenv is malware") has no MAL- id
+  Package in ..." / "Malicious code in ..." at the start, after leading
+  whitespace; ids and CWEs trimmed, any case: the app's is_malware exactly); no
+  other summary wording. GitHub's GHSA-c2m4-w5hm-vqjw ("crossenv is malware") has no MAL- id
   and is malware by CWE-506; GHSA-28f8-hqmc-7ph8 ("Malicious Package in
   ember-power-timepicker") has neither, and is malware by its title. It decides the offered release, the clean-release rule, parent
   standing and the placeholder note, and an installed malicious copy is

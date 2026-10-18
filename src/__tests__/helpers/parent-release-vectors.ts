@@ -30,11 +30,13 @@ type Json = Record<string, any>;
 type Window = { introduced: string; fixed?: string; last_affected?: string };
 
 /** `{id, ranges: [{introduced, fixed | last_affected}]}` as an OSV record for `name`. */
-function record(id: string, name: string, ranges: Window[], ecosystem = "npm"): OsvVulnerability {
+function record(id: string, name: string, ranges: Window[], ecosystem = "npm", extra: Json = {}): OsvVulnerability {
+  // A line's optional aliases, cwe_ids and summary reach the malware predicate as OSV gives them.
   return {
     id,
-    summary: `${name} advisory ${id}`,
-    database_specific: { severity: "HIGH" },
+    summary: typeof extra.summary === "string" ? extra.summary : `${name} advisory ${id}`,
+    ...(Array.isArray(extra.aliases) ? { aliases: extra.aliases } : {}),
+    database_specific: { severity: "HIGH", ...(Array.isArray(extra.cwe_ids) ? { cwe_ids: extra.cwe_ids } : {}) },
     affected: [
       {
         package: { name, ecosystem },
@@ -156,10 +158,10 @@ function cargoWorld(v: Json, dir: string): World {
       })))
       .join("\n"),
   };
-  const osv: Record<string, OsvVulnerability[]> = { [p.name]: (p.advisories as Json[]).map((a) => record(a.id, p.name, a.ranges, "crates.io")) };
+  const osv: Record<string, OsvVulnerability[]> = { [p.name]: (p.advisories as Json[]).map((a) => record(a.id, p.name, a.ranges, "crates.io", a)) };
   for (const r of rows) {
     crates[r.pkg] = [...new Set([r.installed, ...(r.releases as string[])])].map((ver) => index(ver, [])).join("\n");
-    osv[r.pkg] = (r.advisories as Json[]).map((a) => record(a.id, r.pkg, a.ranges, "crates.io"));
+    osv[r.pkg] = (r.advisories as Json[]).map((a) => record(a.id, r.pkg, a.ranges, "crates.io", a));
   }
   return { registry: {}, osv, crates, ecosystem: "crates.io" };
 }
@@ -180,12 +182,12 @@ async function checkRows(v: Json, dir: string): Promise<string | null> {
     }
     versions[ver] = { dependencies: deps, ...(Object.keys(peers).length > 0 ? { peerDependencies: peers } : {}), ...(p.deprecated && ver === p.latest ? { deprecated: "deprecated" } : {}) };
   }
-  const world: World = { registry: { [p.name]: { "dist-tags": { latest: p.latest ?? highest(all) }, versions } }, osv: { [p.name]: (p.advisories as Json[]).map((a) => record(a.id, p.name, a.ranges)) } };
+  const world: World = { registry: { [p.name]: { "dist-tags": { latest: p.latest ?? highest(all) }, versions } }, osv: { [p.name]: (p.advisories as Json[]).map((a) => record(a.id, p.name, a.ranges, "npm", a)) } };
   const entries: Record<string, Json> = { [p.name]: { version: p.installed, dependencies: Object.fromEntries((v.rows as Json[]).map((r) => [r.pkg, versions[p.installed].dependencies[r.pkg] ?? r.installed])) } };
   for (const r of v.rows as Json[]) {
     const rel = [...new Set([r.installed, ...(r.releases as string[])])];
     world.registry[r.pkg] = { "dist-tags": { latest: highest(rel) }, versions: Object.fromEntries(rel.map((x) => [x, {}])) };
-    world.osv[r.pkg] = (r.advisories as Json[]).map((a) => record(a.id, r.pkg, a.ranges));
+    world.osv[r.pkg] = (r.advisories as Json[]).map((a) => record(a.id, r.pkg, a.ranges, "npm", a));
     entries[r.pkg] = { version: r.installed };
   }
   writeProject(dir, p.lever === "direct" ? { [p.name]: p.declared } : {}, entries);
@@ -238,7 +240,7 @@ async function checkGraph(v: Json, dir: string): Promise<string | null> {
   const declared = Object.fromEntries(nodes.filter((n) => n[2]).map((n) => [n[0], n[1]]));
   writeProject(dir, declared, entries);
   const world: World = { registry: v.registry, osv: {} };
-  for (const a of v.advisories as Json[]) (world.osv[a.package] ??= []).push(record(a.id, a.package, a.ranges));
+  for (const a of v.advisories as Json[]) (world.osv[a.package] ??= []).push(record(a.id, a.package, a.ranges, "npm", a));
   const result = await withWorld(world, () => planIn(dir));
   const recs = result.recommendations as Json[];
   for (const row of v.expect.rows as Json[]) {

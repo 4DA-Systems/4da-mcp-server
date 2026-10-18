@@ -774,3 +774,38 @@ describe("decision 3: a row's only fix across a major raises the row, flagged, w
     expect(step("par").reasons).toContain("the only release of par that fixes child is 2.0.0, a major upgrade");
   });
 });
+
+describe("the malware predicate matches fourda_depengine::is_malware exactly (4DA #992, b18f364f5)", () => {
+  const fixture = (id: string) =>
+    JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, "$1")), "fixtures", "osv", `${id}.json`), "utf8")) as OsvVulnerability;
+
+  it("the pinned malware cases", async () => {
+    const { isMalware, cweIdsOf } = await import("../live/malware.js");
+    for (const id of ["GHSA-c2m4-w5hm-vqjw", "GHSA-28f8-hqmc-7ph8"]) {
+      const r = fixture(id);
+      expect(isMalware(r.id, r.aliases ?? [], cweIdsOf(r), r.summary ?? ""), id).toBe(true);
+    }
+    // Trimmed, case-insensitive ids and CWEs; the summary trimStart-ed before the anchored match.
+    expect(isMalware(" mal-2026-1 ")).toBe(true);
+    expect(isMalware("GHSA-x", [" Mal-2026-2"])).toBe(true);
+    expect(isMalware("GHSA-x", [], [" cwe-506 "])).toBe(true);
+    expect(isMalware("GHSA-x", [], [], "   Malicious Package in bar")).toBe(true);
+    expect(isMalware("GHSA-x", [], [], "MALICIOUS CODE IN baz")).toBe(true);
+  });
+
+  it("the pinned not-malware cases", async () => {
+    const { isMalware } = await import("../live/malware.js");
+    for (const summary of [
+      "Malicious-looking prose",
+      "Malicious packages can exploit foo",
+      "Malicious input in bar causes a crash",
+      "foo: Malicious Package in bar",
+      "Malicious Packagein baz",
+      "Prototype pollution allows malicious code in qux",
+    ]) {
+      expect(isMalware("GHSA-x", [], [], summary), summary).toBe(false);
+    }
+    expect(isMalware("GHSA-x", ["MALWARE-NOTE"])).toBe(false);
+    expect(isMalware("GHSA-x", [], ["CWE-5060"])).toBe(false);
+  });
+});
