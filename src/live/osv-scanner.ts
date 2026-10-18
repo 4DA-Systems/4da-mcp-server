@@ -16,6 +16,7 @@ import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "
 import { collectAffectedSpans } from "./osv-ranges.js";
 import { isMaintenanceNotice } from "./maintenance.js";
 import { gradeAliasGroups } from "./advisory-groups.js";
+import { cweIdsOf, isMalware } from "./malware.js";
 import type {
   AliasSeverityReport,
   ResolvedDependency,
@@ -280,7 +281,7 @@ export class OsvScanner {
     const cachedVulns: VulnerabilityEntry[] = [];
 
     for (const dep of scannable) {
-      const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
+      const cacheKey = `osv:v2:${dep.ecosystem}:${dep.name}:${dep.version}`;
       const cached = network ? this.cache.get<VulnerabilityEntry[]>(cacheKey) : null;
       if (cached !== null) {
         cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
@@ -311,7 +312,7 @@ export class OsvScanner {
     let staleAnswers = 0;
     const unchecked: ResolvedDependency[] = [];
     for (const dep of unanswered) {
-      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
+      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v2:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
       if (stale) {
         staleAnswers++;
         cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
@@ -459,7 +460,7 @@ export class OsvScanner {
       // and dropping a real advisory is worse than keeping an un-enriched one.
       const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
       const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
-      rows.push([`osv:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      rows.push([`osv:v2:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
@@ -509,7 +510,11 @@ function mapVulnerability(
   vuln: Partial<OsvVulnerability> & { id: string },
   dep: ResolvedDependency,
 ): VulnerabilityEntry {
-  const { severity, cvssScore } = deriveSeverity(vuln);
+  const graded = deriveSeverity(vuln);
+  const malware = isMalware(vuln.id, vuln.aliases || [], cweIdsOf(vuln));
+  // An installed malicious copy is critical in every tool, whatever the record grades (the 4DA lead, 2026-10-18).
+  const severity = malware ? "critical" : graded.severity;
+  const cvssScore = graded.cvssScore;
   const fixedVersion = extractFixedVersion(vuln.affected, dep.name, dep.ecosystem, dep.version);
 
   return {
@@ -523,6 +528,7 @@ function mapVulnerability(
     aliases: vuln.aliases || [],
     severity,
     cvssScore,
+    ...(malware ? { malware: true } : {}),
     summary: vuln.summary || vuln.details?.slice(0, 200) || vuln.id,
     fixedVersion,
     published: vuln.published || vuln.modified || "",

@@ -324,6 +324,8 @@ export async function executeWhatShouldIKnow(
         ecosystem: d.ecosystem as OsvEcosystem,
         name: d.package,
         fixes: d.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f)),
+        // The installed copy: a target never brings in an advisory it does not have.
+        ...(d.installed.length === 1 ? { installed: d.installed[0] } : {}),
       })),
     TARGET_CHECK_BUDGET_MS,
   );

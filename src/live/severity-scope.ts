@@ -24,6 +24,7 @@
  */
 
 import type { VulnerabilityEntry } from "./types.js";
+import { isMalware } from "./malware.js";
 
 export type SeverityTier = VulnerabilityEntry["severity"];
 
@@ -121,10 +122,10 @@ export function countBySeverity<T>(entries: T[], tierOf: (entry: T) => SeverityT
  * malicious-package record (MAL-) at least high. A dev-only medium ranks low, as the scan presents
  * it; the planner kept it at medium (final release audit, finding 2 and the 4DA severity parity).
  */
-export function rankedSeverity(v: ScopedEntry & { vulnId?: string }): Exclude<SeverityTier, "unknown"> {
-  const malware = /^MAL-/i.test(v.vulnId ?? "");
-  let base = v.severity === "unknown" ? (malware ? "high" : "medium") : v.severity;
-  if (malware && SEVERITY_RANK[base] < SEVERITY_RANK.high) base = "high";
+export function rankedSeverity(v: ScopedEntry & { vulnId?: string; aliases?: string[]; malware?: boolean }): Exclude<SeverityTier, "unknown"> {
+  // An installed malicious copy is critical (the 4DA lead, 2026-10-18), whatever its own grade.
+  if (v.malware === true || isMalware(v.vulnId ?? "", v.aliases ?? [])) return "critical";
+  const base = v.severity === "unknown" ? "medium" : v.severity;
   const tier = presentedSeverity({ ...v, severity: base });
   return tier === "unknown" ? "medium" : tier;
 }

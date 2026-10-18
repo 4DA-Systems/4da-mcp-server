@@ -169,11 +169,14 @@ const scan = async (params: Record<string, unknown> = {}) =>
 // H1: no tool offers a known-affected release
 // ---------------------------------------------------------------------------
 
-/** crossenv: npm's placeholder 0.0.2-security; 1.0.0 and 1.0.1 are the malware (GHSA-c2m4-w5hm-vqjw, last_affected 1.0.1). */
+/**
+ * crossenv: npm's placeholder 0.0.2-security; 1.0.0 and 1.0.1 are the malware. The REAL record,
+ * api.osv.dev/v1/vulns/GHSA-c2m4-w5hm-vqjw read 2026-10-18 (fixtures/osv/): aliases only
+ * CVE-2017-16074, no MAL- id; it is malware by database_specific.cwe_ids ["CWE-506"].
+ */
+const CROSSENV = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, "$1")), "fixtures", "osv", "GHSA-c2m4-w5hm-vqjw.json"), "utf8")) as OsvVulnerability;
 function crossenvProject() {
-  ADVISORIES.crossenv = [
-    adv("GHSA-c2m4-w5hm-vqjw", "crossenv", [{ introduced: "0" }, { last_affected: "1.0.1" }], { severity: "HIGH", summary: "crossenv is malware", aliases: ["CVE-2017-16074"] }),
-  ];
+  ADVISORIES.crossenv = [CROSSENV];
   NPM.crossenv = { latest: "0.0.2-security", versions: { "0.0.1-security": {}, "1.0.0": {}, "1.0.1": {}, "0.0.2-security": {} } };
   project({ crossenv: "0.0.2-security" }, {});
 }
@@ -415,8 +418,9 @@ describe("M3: the root's and every workspace member's devDependencies are declar
     const row = step("minimist");
     expect(row.reasons.join(" ")).not.toMatch(/not declared in your manifest/);
     expect(row.reasons.join(" ")).toMatch(/Declared by workspace member packages\/a\/package\.json \(devDependencies "\^1\.2\.5"\)/);
-    expect(row).toMatchObject({ action: "upgrade_direct", scope: "direct", upgradeCommands: [{ dir: "packages/a", command: 'npm install "minimist@^1.2.6"' }] });
-    expect(JSON.stringify(row)).not.toMatch(/npm update minimist/);
+    // ^1.2.5 admits 1.2.6: the in-range refresh, run in the member's directory (npm 10.9.2 moves a
+    // member's own copy there, on lockfiles npm wrote; the 4DA app's rule).
+    expect(row).toMatchObject({ action: "upgrade_direct", scope: "direct", upgradeCommands: [{ dir: "packages/a", command: "npm update minimist", refresh: true }] });
   });
 });
 
@@ -663,10 +667,91 @@ describe("directFix: a declaration that admits the target is refreshed in range,
     expect(await fixIn({}, "npm", "ms", "2.1.1", "2.1.3")).toEqual({ command: "npm update ms", refresh: true });
   });
 
-  it("an npm workspace member keeps the install in its directory (npm update does not move it); a workspace-inherited crate is never refreshed", async () => {
+  it("an npm workspace member is refreshed in its own directory; a workspace-inherited crate is never refreshed", async () => {
     const files = { "package.json": JSON.stringify({ name: "root", workspaces: ["packages/*"] }), "package-lock.json": "{}", "packages/a/package.json": pkg };
-    expect(await fixIn(files, "npm", "ms", "2.1.1", "2.1.3", "packages/a")).toEqual({ command: 'npm install "ms@^2.1.3"' });
+    expect(await fixIn(files, "npm", "ms", "2.1.1", "2.1.3", "packages/a")).toEqual({ command: "npm update ms", refresh: true });
     const crate = await fixIn({ "Cargo.toml": "[dependencies]\ntokio.workspace = true\n" }, "crates.io", "tokio", "1.38.0", "1.38.2");
     expect(crate && "instruction" in crate).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The 4DA lead's three decisions (2026-10-18)
+// ---------------------------------------------------------------------------
+
+describe("decision 1: one malware predicate (MAL- id or alias, or CWE-506)", () => {
+  it("the real crossenv record is malware by CWE-506, and summary wording alone is not", async () => {
+    const { isMalware, cweIdsOf } = await import("../live/malware.js");
+    expect(cweIdsOf(CROSSENV)).toEqual(["CWE-506"]);
+    expect(isMalware(CROSSENV.id, CROSSENV.aliases, cweIdsOf(CROSSENV))).toBe(true);
+    expect(isMalware("GHSA-xxxx-0000-0001", ["MAL-2026-1"])).toBe(true);
+    expect(isMalware("MAL-2026-2307")).toBe(true);
+    expect(isMalware("GHSA-xxxx-0000-0002", ["CVE-2026-1"], [])).toBe(false);
+    const { advisoryRanges } = await import("../live/osv-ranges.js");
+    expect(advisoryRanges(CROSSENV, "crossenv", "npm")?.malware).toBe(true);
+    const wording = adv("GHSA-word-0000-0001", "w", fixedIn("1.1.0"), { summary: "a malicious regex can hang the parser" });
+    expect(advisoryRanges(wording, "w", "npm")?.malware).toBeUndefined();
+  });
+
+  it("an installed malicious copy is critical in the scan, and its row names no release", async () => {
+    ADVISORIES.evilpkg = [adv("GHSA-evil-0000-0001", "evilpkg", [{ introduced: "0" }], { severity: "LOW", aliases: ["MAL-2026-0100"] })];
+    NPM.evilpkg = { latest: "1.1.0", versions: { "1.0.0": {}, "1.1.0": {} } };
+    project({ evilpkg: "1.0.0" }, {});
+    const s = await scan({ response_format: "detailed" });
+    expect(s.vulnerabilities[0]).toMatchObject({ advisory_severity: "critical" });
+    const { step } = await plan();
+    expect(step("evilpkg")).toMatchObject({ targetVersion: null, action: "remove_dependency", risk: "critical" });
+    expect(step("evilpkg").reasons.join(" ")).toContain("evilpkg is flagged malicious (GHSA-evil-0000-0001): remove or replace evilpkg");
+  });
+});
+
+describe("decision 2: no release that brings in an advisory the installed version does not have", () => {
+  it("a fix target: every fixing release brings in an unfixed advisory: no target, and why", async () => {
+    ADVISORIES.intro = [
+      adv("GHSA-intr-0000-0001", "intro", fixedIn("2.0.0"), { severity: "HIGH" }),
+      adv("GHSA-intr-0000-0002", "intro", [{ introduced: "2.0.0" }], { severity: "MODERATE" }),
+    ];
+    NPM.intro = { latest: "2.1.0", versions: { "1.0.0": {}, "2.0.0": {}, "2.1.0": {} } };
+    project({ intro: "1.0.0" }, {});
+    const { step } = await plan();
+    expect(step("intro").targetVersion).toBeNull();
+    expect(step("intro").upgradeCommands).toBeUndefined();
+    expect(step("intro").reasons.join(" ")).toContain("every fixing release brings in GHSA-intr-0000-0002");
+  });
+
+  it("an unfixed advisory the installed version already has is still skipped, and named", async () => {
+    ADVISORIES.keep = [
+      adv("GHSA-keep-0000-0001", "keep", fixedIn("1.1.0"), { severity: "HIGH" }),
+      adv("GHSA-keep-0000-0002", "keep", [{ introduced: "0" }], { severity: "MODERATE" }),
+    ];
+    NPM.keep = { latest: "1.2.0", versions: { "1.0.0": {}, "1.1.0": {}, "1.2.0": {} } };
+    project({ keep: "1.0.0" }, {});
+    const { step } = await plan();
+    expect(step("keep").targetVersion).toBe("1.1.0");
+    expect(step("keep").reasons.join(" ")).toMatch(/1\.1\.0 remains affected by GHSA-keep-0000-0002 \(no fix published\)/);
+  });
+
+  it("a parent release that brings in an advisory of the parent's own is never named", async () => {
+    ADVISORIES.leaf = [adv("GHSA-leaf-0000-0001", "leaf", fixedIn("1.1.0"), { severity: "HIGH" })];
+    // par 1.1.0 and later carry an advisory par 1.0.0 does not have, with no fix.
+    ADVISORIES.par = [adv("GHSA-par-0000-0010", "par", [{ introduced: "1.1.0" }], { severity: "MODERATE" })];
+    NPM.leaf = { latest: "1.1.0", versions: { "1.0.0": {}, "1.1.0": {} } };
+    NPM.par = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.1.0" } } } };
+    project({ par: "1.0.0" }, {}, { par: { version: "1.0.0", dependencies: { leaf: "1.0.0" } }, leaf: { version: "1.0.0" } });
+    const { step } = await plan();
+    expect(JSON.stringify(step("leaf").parentUpgrades ?? [])).not.toContain('"to":"1.1.0"');
+  });
+});
+
+describe("decision 3: a row's only fix across a major raises the row, flagged, with the reason", () => {
+  it("the parent's own row is raised to the major release, breaking, and says why", async () => {
+    ADVISORIES.child = [adv("GHSA-chld-0000-0001", "child", fixedIn("2.0.0"), { severity: "HIGH" })];
+    ADVISORIES.par = [adv("GHSA-par0-0000-0001", "par", fixedIn("1.0.1"), { severity: "HIGH" })];
+    NPM.child = { latest: "2.0.0", versions: { "1.0.0": {}, "2.0.0": {} } };
+    NPM.par = { latest: "2.0.0", versions: { "1.0.0": { dependencies: { child: "^1.0.0" } }, "1.0.1": { dependencies: { child: "^1.0.0" } }, "2.0.0": { dependencies: { child: "^2.0.0" } } } };
+    project({ par: "1.0.0" }, {}, { par: { version: "1.0.0", dependencies: { child: "^1.0.0" } }, child: { version: "1.0.0" } });
+    const { step } = await plan();
+    expect(step("par")).toMatchObject({ targetVersion: "2.0.0", breaking: true });
+    expect(step("par").reasons).toContain("the only release of par that fixes child is 2.0.0, a major upgrade");
   });
 });

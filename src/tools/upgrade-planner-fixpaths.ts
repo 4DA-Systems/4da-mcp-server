@@ -37,6 +37,7 @@ import {
   refreshCommandFor,
   refreshVerdict,
   REGISTRY_UNREAD_NOTE,
+  introducesText,
   malwareText,
   unreadableText,
   withheldText,
@@ -343,6 +344,12 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     noInstallableFix(step);
     return "verified";
   }
+  if (clean.target === null && clean.introduces && clean.introduces.length > 0) {
+    // Never introduce an advisory: no release, no command, and why.
+    step.reasons.push(`No release is named: ${introducesText(clean.introduces)}`);
+    noInstallableFix(step);
+    return "verified";
+  }
   if (clean.target === null && clean.unreadable && clean.unreadable.length > 0) {
     // #981 (b): unknown, never skipped silently: no release, no command.
     step.reasons.push(`No release is named: ${unreadableText(clean.unreadable)}`);
@@ -639,7 +646,7 @@ function memberUpgrade(input: FixPathInput, lockfiles: Array<{ dir: string; lock
   step.action = "upgrade_direct";
   step.breaking = step.upgradeType === "major";
   const where = members.map((m) => `${relativeDir(m.dir, root)}/package.json (${m.section}${m.range ? ` "${m.range}"` : ""})`).join(", ");
-  const text = `Declared by workspace member${members.length === 1 ? "" : "s"} ${where}, not by the project root: upgrade it to ${target} where it is declared, in that member's directory (\`npm update\` at the root does not move a member's own dependency)`;
+  const text = `Declared by workspace member${members.length === 1 ? "" : "s"} ${where}, not by the project root: move it to ${target} where it is declared, in that member's directory`;
   const at = step.reasons.findIndex((r) => TRANSITIVE_REASON.test(r));
   if (at >= 0) step.reasons[at] = text;
   else step.reasons.push(text);
@@ -717,6 +724,7 @@ async function ownClean(
   ctx: MoveContext,
   name: string,
   facts: PackageReleaseFacts,
+  installed?: string,
 ): Promise<{ clean: (v: string) => boolean; read: boolean; any: boolean; newest: string | null; unreadable: string[]; remains: (v: string) => string[]; maliciousAt: (v: string) => string[] }> {
   let pending = ctx.advisories.get(name);
   if (!pending) {
@@ -727,7 +735,7 @@ async function ownClean(
   if (!advisories) return { clean: () => true, read: false, any: false, newest: newestOf(facts.versions, ctx.ecosystem), unreadable: [], remains: () => [], maliciousAt: () => [] };
   // The one clean-release predicate (#981): malware never skipped, unreadable ranges unknown, a
   // genuinely unfixed advisory skipped and said (osv-ranges.ts cleanReleases).
-  const view = cleanReleases(advisories, ctx.ecosystem, facts.versions);
+  const view = cleanReleases(advisories, ctx.ecosystem, facts.versions, installed);
   return { clean: view.clean, read: true, any: advisories.some((a) => !a.maintenance), newest: view.newest, unreadable: view.unreadable, remains: view.remains, maliciousAt: view.maliciousAt };
 }
 
@@ -820,7 +828,7 @@ async function dropRelease(ctx: MoveContext, lever: { name: string; version: str
     ctx.sources.requirementHistory(ctx.ecosystem, lever.name, ctx.pkg).catch(() => null),
   ]);
   if (!facts || !viaParent || !direct) return null;
-  const own = await ownClean(ctx, lever.name, facts);
+  const own = await ownClean(ctx, lever.name, facts, lever.version);
   if (own.unreadable.length > 0) return null;
   const drops = (v: string) => {
     const p = viaParent[v];
@@ -886,7 +894,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   // A deprecated package is not stuck by that alone: its releases are judged like any other's.
   const deprecated = facts.deprecatedLatest ? `${parent} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
   const route = findRoute(ctx, b.lockfile, parent, from);
-  const own = await ownClean(ctx, parent, facts);
+  const own = await ownClean(ctx, parent, facts, from);
   if (own.unreadable.length > 0) return { kind: "unknown", undecided: true, text: `${parent}'s own advisories cannot be judged: ${unreadableText(own.unreadable)}` };
   if (own.maliciousAt(from).length > 0) return { kind: "malicious", text: malwareText(parent, own.maliciousAt(from)) };
   const newest = own.newest;
@@ -1050,7 +1058,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   for (const { l, hop } of hops) {
     if (!hop) {
       const f = await sources.releaseFacts(ecosystem, l.name).catch(() => null);
-      newestOfLever.set(l.name, f ? (await ownClean(ctx, l.name, f)).newest : null);
+      newestOfLever.set(l.name, f ? (await ownClean(ctx, l.name, f, l.version)).newest : null);
     }
   }
   const many = route.levers.length + route.more > 1;
@@ -1196,7 +1204,7 @@ async function throughRelease(
     ctx.sources.requirementHistory(ctx.ecosystem, lever.name, parent).catch(() => null),
   ]);
   if (!facts || !history) return null;
-  const own = await ownClean(ctx, lever.name, facts);
+  const own = await ownClean(ctx, lever.name, facts, lever.version);
   if (own.unreadable.length > 0) return null; // #981 (b): unknown, never a release named
   if (own.maliciousAt(lever.version).length > 0) return { kind: "malicious", text: malwareText(lever.name, own.maliciousAt(lever.version)) };
   const newest = own.newest;
@@ -1349,7 +1357,7 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
           ? await Promise.all([sources.packageAdvisories(d.eco as OsvEcosystem, d.name).catch(() => null), sources.releaseFacts(d.eco as OsvEcosystem, d.name).catch(() => null)])
           : [null, null];
         // The one clean-release predicate (#981), over the dependency's own release list.
-        return [key(d.eco, d.name, d.version), advisories ? cleanReleases(advisories, d.eco, facts?.versions ?? []) : null] as const;
+        return [key(d.eco, d.name, d.version), advisories ? cleanReleases(advisories, d.eco, facts?.versions ?? [], d.version) : null] as const;
       }),
     ),
     budgetMs,
@@ -1407,6 +1415,11 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
       own.reasons.push(
         `${release}, not ${old}: one release of ${own.package} for every row that names it (${why}); no advisory of ${own.package} affects ${release}${isMajor(old, release) ? `, a major upgrade from ${old}` : ""}`,
       );
+      // A row's only fix across a major raises the row, flagged, never silently (the 4DA lead, 2026-10-18).
+      if (isMajor(old, release)) {
+        const children = [...new Set(d.uses.filter((u) => u.lever.to === release && isMajor(d.version, release)).map((u) => u.step.package))];
+        if (children.length > 0) own.reasons.push(`the only release of ${own.package} that fixes ${children.join(", ")} is ${release}, a major upgrade`);
+      }
       if (!fixRow(own) && cmp(old, release) > 0) own.latestVersion = old;
       setTarget(own, release);
       if (own.latestVersion === own.targetVersion) delete own.latestVersion;

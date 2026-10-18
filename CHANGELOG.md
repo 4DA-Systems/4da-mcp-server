@@ -218,13 +218,18 @@ shared with the app are pinned by the shared vectors.
   passes the advisory check dependency_check decides `proceed` by, and the
   registry's withdrawals. A placeholder whose newer releases are all malware is
   `remove_dependency` ("remove it"); otherwise the newest release that is
-  neither affected nor withdrawn is offered, or `hold_current` when none is. An
-  upgrade never brings in an advisory the installed version does not have.
+  neither affected nor withdrawn is offered, or `hold_current` when none is.
+- **No release brings in an advisory the installed version does not have**,
+  fixed or not (the 4DA lead's rule for both engines): not a fix target, a
+  parent or lever release, or a newest-release offer. An advisory with no
+  published fix is skipped only when the installed version already has it.
+  When nothing qualifies, no release is named and the answer says "every
+  fixing release brings in <id>".
   dependency_health adds `latestSafeVersion` and `latestStableNote` and
   measures `versionsBehind` to the safe release; what_should_i_know's `latest`
   adds `registry_latest` and `note`.
 - **One clean-release rule everywhere, with the app** (#981). A malicious
-  advisory (MAL- id or alias, or a malicious-package record) is never skipped:
+  advisory is never skipped:
   a release it affects is never clean, never a target and never "newest", and
   an installed copy it affects names no release ("... is flagged malicious:
   remove or replace ..."). An advisory whose ranges cannot be read leaves the
@@ -234,6 +239,13 @@ shared with the app are pinned by the shared vectors.
   lever's newest release is the highest stable, non-withdrawn release no
   malicious advisory affects, not its `latest` tag, which decides only the
   "already its latest release" wording.
+- **One malware predicate** (the 4DA lead): a MAL- id, a MAL- alias, or
+  CWE-506 in `database_specific.cwe_ids`; no summary wording. GitHub's
+  GHSA-c2m4-w5hm-vqjw ("crossenv is malware") has no MAL- id and is malware by
+  CWE-506. It decides the offered release, the clean-release rule, parent
+  standing and the placeholder note, and an installed malicious copy is
+  critical in every tool. Scan rows carry `malware`; the advisory cache key
+  moved so rows cached without it are not reused.
 - **One grade per advisory, in every tool** (M2). vulnerability_scan kept the
   grade of the record with the most detail; the other tools kept the most
   severe. An alias group now takes the most severe own grade of its records,
@@ -251,9 +263,8 @@ shared with the app are pinned by the shared vectors.
   dependencies, optionalDependencies and peerDependencies, so a dev-only
   transitive had "no declared dependency above" it; navcal's @vitest/mocker
   and tinypool now name vitest. A workspace member's own dependency
-  (packages/a devDependencies minimist ^1.2.5) is declared there and moves in
-  the member's directory: `npm update` at the root does not move it (npm
-  10.9.2).
+  (packages/a devDependencies minimist ^1.2.5) is declared there, and its
+  command runs in the member's directory.
 - **One release per dependency across all rows** (M4). NodeGoat named
   express-session 1.18.1, 1.18.2 and 1.19.0 on three rows (1.18.1 still pins a
   vulnerable on-headers); xsv crossbeam-channel 0.4.4 and 0.5.0. Each
@@ -304,12 +315,16 @@ shared with the app are pinned by the shared vectors.
   <crate>@<installed> --precise <target>`. Any readable range qualifies,
   `>=` and `||` included. A row of refreshes reads "Fixable now with a lockfile
   refresh (the declared range already admits the fix)"; a refresh among other
-  commands is labelled. An npm workspace member keeps the install in its
-  directory (`npm update` does not move a member's own dependency), and a
-  workspace-inherited, git, path or registry crate is never refreshed this way.
+  commands is labelled. An npm workspace member is refreshed in its own
+  directory, and a workspace-inherited, git, path or registry crate is never
+  refreshed this way.
 - The shared rule vectors `severity` (sv-001..sv-019) and `parent_release`
-  (pr-001..pr-008, with the graph lines run through the whole planner) run in
-  the TypeScript runner.
+  (pr-001..pr-008, with the graph lines run through the whole planner, and
+  Cargo lines) run in the TypeScript runner.
+- **A row's only fix across a major raises the row**, flagged `breaking`,
+  with the reason "the only release of <parent> that fixes <child> is <ver>, a
+  major upgrade" (the 4DA lead): xsv's crossbeam-channel row goes to 0.5.0,
+  the only release whose requirement admits a clean crossbeam-utils.
 - **API:** new actions `upgrade_parent_unverified`, `remove_dependency` and
   `hold_current`; `parentUpgrades[].goesAway` and `smallest`;
   `levers[].smallest`, `floor` and `brings`; `upgradeCommands[].refresh` and

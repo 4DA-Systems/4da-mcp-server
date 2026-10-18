@@ -90,7 +90,7 @@ describe("cache writes", () => {
     expect(single).not.toHaveBeenCalled();
     expect(many).toHaveBeenCalledTimes(2);
     // Every row is readable afterwards: a second scan is served from the cache.
-    expect(cache.get(`osv:npm:pkg-7:1.0.0`)).toHaveLength(1);
+    expect(cache.get(`osv:v2:npm:pkg-7:1.0.0`)).toHaveLength(1);
     expect(cache.get(`osv:detail:GHSA-pkg-7`)).toMatchObject({ id: "GHSA-pkg-7" });
   });
 

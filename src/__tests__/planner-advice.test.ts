@@ -540,7 +540,8 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     // root manifest (review findings 1 and 7).
     const { step } = await plan();
     const upgrade = step("leaf").parentUpgrades[0];
-    expect(upgrade).toMatchObject({ parent: "par", to: "1.1.0", levers: [{ name: "par", to: "1.1.0", commands: [{ dir: "packages/app", command: 'npm install "par@^1.1.0"' }] }] });
+    // "^1.0.0" admits 1.1.0: the in-range refresh, run in the member's directory.
+    expect(upgrade).toMatchObject({ parent: "par", to: "1.1.0", levers: [{ name: "par", to: "1.1.0", commands: [{ dir: "packages/app", command: "npm update par", refresh: true }] }] });
     expect(upgrade.levers[0].commands.every((c: { dir: string }) => c.dir === "packages/app")).toBe(true);
   });
 

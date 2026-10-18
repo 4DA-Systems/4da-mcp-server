@@ -9,6 +9,7 @@
  */
 
 import { isMaintenanceNotice } from "./maintenance.js";
+import { isMalware } from "./malware.js";
 import type { VulnerabilityEntry } from "./types.js";
 
 const RANK: Record<string, number> = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
@@ -48,6 +49,8 @@ export interface GradedRecord {
   own: VulnerabilityEntry["severity"];
   aliases: readonly string[];
   maintenance: boolean;
+  /** The record's CWE ids (`database_specific.cwe_ids`), for the malware predicate. */
+  cweIds?: readonly string[];
 }
 
 /** The grade of one alias group, and where it came from. */
@@ -97,16 +100,17 @@ export function gradeGroup(records: readonly GradedRecord[], aliasGrades: Readon
       inheritedFrom = best.id;
     }
   }
-  const urgency: GroupGrade["urgency"] =
-    severity === "critical" || severity === "high" || severity === "medium"
+  // A malicious-package record (malware.ts) is critical (the 4DA lead, 2026-10-18; sv-010 read high).
+  const malicious = records.some((r) => isMalware(r.id, r.aliases, r.cweIds ?? []));
+  const urgency: GroupGrade["urgency"] = malicious
+    ? "critical"
+    : severity === "critical" || severity === "high" || severity === "medium"
       ? severity
       : severity === "low"
-        ? records.some((r) => /^MAL-/i.test(r.id)) ? "high" : "watch"
-        : records.some((r) => /^MAL-/i.test(r.id))
-          ? "high"
-          : records.every((r) => r.maintenance)
-            ? "watch"
-            : "medium";
+        ? "watch"
+        : records.every((r) => r.maintenance)
+          ? "watch"
+          : "medium";
   return { severity, inheritedFrom, ownFrom: own?.id ?? null, urgency };
 }
 

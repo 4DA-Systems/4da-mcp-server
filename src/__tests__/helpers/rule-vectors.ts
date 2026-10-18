@@ -32,6 +32,7 @@ import { deriveSeverity, extractFixedVersion, isSecurityHoldingRelease } from ".
 import { gradeGroup } from "../../live/advisory-groups.js";
 import { checkParentRelease } from "./parent-release-vectors.js";
 import { isMaintenanceNotice } from "../../live/maintenance.js";
+import { cweIdsOf } from "../../live/malware.js";
 import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
 import { compareVersions, isComparable } from "../../live/version-compare.js";
@@ -286,7 +287,7 @@ function checkSeverity(v: Vector): string | null {
   const fixed = optStr(v, "fixed_version");
   const aliasGrades = new Map(Object.entries((v.aliases_available ?? {}) as Record<string, OsvVulnerability["id"] | null>)) as Map<string, "critical" | "high" | "medium" | "low" | "unknown" | null>;
   const grade = gradeGroup(
-    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: fixed === null && isMaintenanceNotice({ summary: r.summary ?? "" }) })),
+    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: fixed === null && isMaintenanceNotice({ summary: r.summary ?? "" }), cweIds: cweIdsOf(r) })),
     aliasGrades,
   );
   const want = v.expect as { severity: string | null; severity_from: string | null; urgency: string };

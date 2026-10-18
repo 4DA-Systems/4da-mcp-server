@@ -49,7 +49,7 @@ const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
 /** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 8;
+const CACHE_VERSION = 9;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
@@ -500,14 +500,14 @@ export async function cleanFixTarget(
   const excluded = facts?.withdrawn ?? [];
   const malware = advisories.filter((a) => a.malware).map((a) => a.id);
   if (perAdvisoryFixes.length > 0) {
-    const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published, excluded });
+    const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published, excluded, installed });
     if (!clean) return null;
     if (malware.length > 0) Object.assign(clean, { malware });
     return withRegistryFacts({ ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}) }, ecosystem, perAdvisoryFixes, advisories, facts);
   }
   // Only a registry list can show a release past a last_affected bound.
   if (!published || published.length === 0) return null;
-  const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published, excluded });
+  const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published, excluded, installed });
   if (!clean || clean.target === null || clean.target === installed || clean.stillAffectedBy.length > 0) return null;
   return withRegistryFacts({ ...clean, noAdvisoryFix: true }, ecosystem, [], advisories, facts);
 }
@@ -564,6 +564,11 @@ function registryOnlyTarget(ecosystem: OsvEcosystem, fixes: string[], facts: Pac
 /** #981 (b): an advisory whose ranges cannot be read leaves the release unknown, never skipped silently. */
 export function unreadableText(ids: string[]): string {
   return `the affected ranges of ${ids.join(", ")} cannot be read, so whether any release clears ${ids.length === 1 ? "it" : "them"} is unknown: no release is named`;
+}
+
+/** The 4DA lead's rule (2026-10-18): no release is offered that brings in an advisory the installed version does not have. */
+export function introducesText(ids: string[]): string {
+  return `every fixing release brings in ${ids.join(", ")}, which the installed version does not have, so no release is named`;
 }
 
 /** #981 round 3: an installed copy a malicious advisory affects names no release; the advice is to remove or replace it. */
@@ -657,6 +662,7 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
     parts.push(`${clean.target} ${remainsText(clean.stillAffectedBy)}: ${clean.stillAffectedBy.length === 1 ? "it affects" : "they affect"} every newer release too`);
   }
   if (clean.target === null && clean.unreadable && clean.unreadable.length > 0) parts.push(unreadableText(clean.unreadable));
+  if (clean.target === null && clean.introduces && clean.introduces.length > 0) parts.push(introducesText(clean.introduces));
   if (clean.registryUnread) parts.push(REGISTRY_UNREAD_NOTE);
   if (clean.targetNotice) parts.push(clean.targetNotice);
   return parts.length > 0 ? parts.join("; ") : null;
@@ -1042,11 +1048,11 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       const json = read("package.json");
       const declared = json === null ? null : npmDeclared(json, name);
       if (declared === null || npmRangeAdmits(declared, installed) !== true) return null;
-      // Not for an npm workspace member: npm 10.9.2 left a member's own dependency in place for
-      // `npm update` run at the root and in the member (checked 2026-10-18), and moved it with the
-      // install below, run in the member's directory.
-      const npmMember = manager === "npm" && !fs.existsSync(path.join(projectDir, "package-lock.json")) && !fs.existsSync(path.join(projectDir, "npm-shrinkwrap.json"));
-      if (!npmMember && npmRangeAdmits(declared, target) === true) return { command: npmDirectRefresh(manager, name), refresh: true };
+      // In an npm workspace member too, run in the member's directory: on lockfiles npm wrote,
+      // `npm update ms` there moved a member's own ^2.1.1 copy (hoisted and nested layouts, npm
+      // 10.9.2, 2026-10-18). An earlier "it does not move" came from a hand-edited fixture lockfile
+      // that carried 1.2.8's integrity under version 1.2.5.
+      if (npmRangeAdmits(declared, target) === true) return { command: npmDirectRefresh(manager, name), refresh: true };
       const command = npmDirectCommand(manager, declared, name, target);
       return command ? { command } : null;
     }

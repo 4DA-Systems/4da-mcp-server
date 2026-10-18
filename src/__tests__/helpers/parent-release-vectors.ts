@@ -30,14 +30,14 @@ type Json = Record<string, any>;
 type Window = { introduced: string; fixed?: string; last_affected?: string };
 
 /** `{id, ranges: [{introduced, fixed | last_affected}]}` as an OSV record for `name`. */
-function record(id: string, name: string, ranges: Window[]): OsvVulnerability {
+function record(id: string, name: string, ranges: Window[], ecosystem = "npm"): OsvVulnerability {
   return {
     id,
     summary: `${name} advisory ${id}`,
     database_specific: { severity: "HIGH" },
     affected: [
       {
-        package: { name, ecosystem: "npm" },
+        package: { name, ecosystem },
         ranges: ranges.map((w) => ({
           type: "SEMVER",
           events: [{ introduced: w.introduced }, ...(w.fixed ? [{ fixed: w.fixed }] : []), ...(w.last_affected ? [{ last_affected: w.last_affected }] : [])],
@@ -52,6 +52,9 @@ interface World {
   registry: Record<string, Json>;
   /** package -> OSV records */
   osv: Record<string, OsvVulnerability[]>;
+  /** crate -> sparse index lines (index.crates.io) */
+  crates?: Record<string, string>;
+  ecosystem?: string;
 }
 
 async function withWorld<T>(world: World, run: () => Promise<T>): Promise<T> {
@@ -67,8 +70,9 @@ async function withWorld<T>(world: World, run: () => Promise<T>): Promise<T> {
         results: queries.map((q) => ({
           vulns: (world.osv[q.package.name] ?? [])
             .filter((v) => {
-              const r = advisoryRanges(v, q.package.name, "npm");
-              return r !== null && advisoryAffects(r, q.version, "npm");
+              const eco = world.ecosystem ?? "npm";
+              const r = advisoryRanges(v, q.package.name, eco);
+              return r !== null && advisoryAffects(r, q.version, eco);
             })
             .map((v) => ({ id: v.id })),
         })),
@@ -83,6 +87,8 @@ async function withWorld<T>(world: World, run: () => Promise<T>): Promise<T> {
       const q = JSON.parse(String(init?.body)) as { package: { name: string } };
       return json({ vulns: world.osv[q.package.name] ?? [] });
     }
+    const crate = /^https:\/\/index\.crates\.io\/.*\/([^/]+)$/.exec(url);
+    if (crate) return world.crates?.[crate[1]] !== undefined ? new Response(world.crates[crate[1]], { status: 200 }) : new Response("", { status: 404 });
     const npm = /^https:\/\/registry\.npmjs\.org\/([^/]+)(?:\/(.+))?$/.exec(url);
     if (npm) {
       const name = decodeURIComponent(npm[1]);
@@ -128,7 +134,38 @@ function outcomeOf(step: Json, parent: string) {
 // Per-row lines
 // ---------------------------------------------------------------------------
 
+/** A Cargo project for a per-row line: the parent declared as written, the copies locked under it, the sparse index. */
+function cargoWorld(v: Json, dir: string): World {
+  const p = v.parent;
+  const rows = v.rows as Json[];
+  const reg = 'source = "registry+https://github.com/rust-lang/crates.io-index"';
+  fs.writeFileSync(path.join(dir, "Cargo.toml"), `[package]\nname = "vector"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n${p.lever === "direct" ? `${p.name} = "${p.declared}"\n` : ""}`);
+  const pkgs = [
+    `[[package]]\nname = "vector"\nversion = "0.1.0"\ndependencies = [\n ${JSON.stringify(p.name)},\n]`,
+    `[[package]]\nname = "${p.name}"\nversion = "${p.installed}"\n${reg}\ndependencies = [\n${rows.map((r) => ` ${JSON.stringify(r.pkg)},`).join("\n")}\n]`,
+    ...rows.map((r) => `[[package]]\nname = "${r.pkg}"\nversion = "${r.installed}"\n${reg}`),
+  ];
+  fs.writeFileSync(path.join(dir, "Cargo.lock"), `version = 3\n\n${pkgs.join("\n\n")}\n`);
+  const index = (vers: string, deps: Array<{ name: string; req: string }>) => JSON.stringify({ name: "", vers, yanked: false, deps: deps.map((d) => ({ ...d, kind: "normal", optional: false })) });
+  const parentVersions = [...new Set([p.installed, ...(p.releases as string[])])];
+  const crates: Record<string, string> = {
+    [p.name]: parentVersions
+      .map((ver) => index(ver, rows.flatMap((r) => {
+        const req = r.requires?.[ver];
+        return typeof req === "string" ? [{ name: r.pkg, req }] : [];
+      })))
+      .join("\n"),
+  };
+  const osv: Record<string, OsvVulnerability[]> = { [p.name]: (p.advisories as Json[]).map((a) => record(a.id, p.name, a.ranges, "crates.io")) };
+  for (const r of rows) {
+    crates[r.pkg] = [...new Set([r.installed, ...(r.releases as string[])])].map((ver) => index(ver, [])).join("\n");
+    osv[r.pkg] = (r.advisories as Json[]).map((a) => record(a.id, r.pkg, a.ranges, "crates.io"));
+  }
+  return { registry: {}, osv, crates, ecosystem: "crates.io" };
+}
+
 async function checkRows(v: Json, dir: string): Promise<string | null> {
+  if (v.tool === "cargo") return compareRows(v, await withWorld(cargoWorld(v, dir), () => planIn(dir)));
   const p = v.parent;
   const versions: Record<string, Json> = {};
   const all = [...new Set([p.installed, ...(p.releases as string[]), ...(p.latest ? [p.latest] : [])])];
@@ -152,7 +189,12 @@ async function checkRows(v: Json, dir: string): Promise<string | null> {
     entries[r.pkg] = { version: r.installed };
   }
   writeProject(dir, p.lever === "direct" ? { [p.name]: p.declared } : {}, entries);
-  const result = await withWorld(world, () => planIn(dir));
+  return compareRows(v, await withWorld(world, () => planIn(dir)));
+}
+
+/** The planned rows against a per-row line's expectations. */
+function compareRows(v: Json, result: Json): string | null {
+  const p = v.parent;
   const recs = result.recommendations as Json[];
   const own = recs.find((r) => r.package === p.name && r.scope === "direct" && (r.reasons as string[]).some((x) => /known vulnerabilit/.test(x)));
   const parentTarget = own?.targetVersion ?? null;

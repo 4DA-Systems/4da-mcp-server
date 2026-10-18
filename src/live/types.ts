@@ -109,8 +109,8 @@ export interface OsvVulnerability {
     versions?: string[];
   }>;
   references?: Array<{ type: string; url: string }>;
-  /** GitHub-advisory severity label: LOW | MODERATE | HIGH | CRITICAL. */
-  database_specific?: { severity?: string };
+  /** GitHub-advisory severity label: LOW | MODERATE | HIGH | CRITICAL; `cwe_ids` (CWE-506 = malicious code). */
+  database_specific?: { severity?: string; cwe_ids?: string[] };
   /** Set (to an RFC3339 timestamp) when the advisory has been withdrawn/retracted. */
   withdrawn?: string;
   published?: string;
@@ -134,6 +134,8 @@ export interface VulnerabilityEntry {
    * rateFromAliases). The alias's id.
    */
   severityFrom?: string;
+  /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
+  malware?: boolean;
   summary: string;
   fixedVersion: string | null;
   published: string;
