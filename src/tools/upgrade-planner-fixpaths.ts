@@ -941,9 +941,10 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   if (!found) {
     // Parity decision 2 (pr-010): a release would admit the fix but brings in an advisory the
     // installed parent does not have. No release is named, and the reason says which.
-    const blocked = smallestAdmitting(ctx, facts, from, history, dialect, (v) => !own.clean(v) && own.cleanButIntroduced(v));
-    if (blocked) {
-      const ids = own.introducedAt(blocked.version);
+    const blocked = admittingReleases(ctx, facts, from, history, dialect, (v) => !own.clean(v) && own.cleanButIntroduced(v), true);
+    if (blocked.length > 0) {
+      // #994 review: the union over every blocked admitting release, sorted.
+      const ids = [...new Set(blocked.flatMap((x) => own.introducedAt(x.version)))].sort();
       return goesAway(ctx, b, parent, from, route, `${deprecated}${introducesText(ids).replace(/, so no release is named$/, "")}`, "introduces");
     }
     const clause = own.any ? ` both admits a clean ${pkg} (>= ${target}) and is clear of ${parent}'s own advisories` : ` admits a clean ${pkg} (>= ${target})`;
@@ -1171,6 +1172,20 @@ function smallestAdmitting(
   dialect: RequirementDialect,
   ownClean: (version: string) => boolean,
 ): { version: string; requirement: string | null; peer: boolean; resolvesTo: string | null; keepsInstalled: boolean } | null {
+  return admittingReleases(ctx, facts, from, history, dialect, ownClean, false)[0] ?? null;
+}
+
+/** The installable releases of a parent above `from` that pass `ownClean` and admit a clean version, smallest first; only the first unless `all`. */
+function admittingReleases(
+  ctx: MoveContext,
+  facts: PackageReleaseFacts,
+  from: string,
+  history: RequirementHistory,
+  dialect: RequirementDialect,
+  ownClean: (version: string) => boolean,
+  all: boolean,
+): Array<{ version: string; requirement: string | null; peer: boolean; resolvesTo: string | null; keepsInstalled: boolean }> {
+  const found: Array<{ version: string; requirement: string | null; peer: boolean; resolvesTo: string | null; keepsInstalled: boolean }> = [];
   const candidates = facts.versions
     .filter((v) => !isPrereleaseVersion(v, ctx.ecosystem) && compareVersions(v, from, ctx.ecosystem) > 0)
     .sort((a, b) => compareVersions(a, b, ctx.ecosystem));
@@ -1178,9 +1193,11 @@ function smallestAdmitting(
     const entry = history[version];
     if (entry === undefined || !ownClean(version)) continue;
     const ok = admitsClean(ctx, entry.reqs, dialect);
-    if (ok) return { version, requirement: entry.reqs[0] ?? null, peer: entry.peer, ...ok };
+    if (!ok) continue;
+    found.push({ version, requirement: entry.reqs[0] ?? null, peer: entry.peer, ...ok });
+    if (!all) break;
   }
-  return null;
+  return found;
 }
 
 type ThroughHop =
@@ -1239,9 +1256,10 @@ async function throughRelease(
   }
   // Parity decision 2 (pr-010), for a lever: a release that would bring the fix in, blocked only
   // by an advisory the installed lever does not have, is not offered, and the reason says which.
-  const blocked = candidates.find((v) => !own.clean(v) && own.cleanButIntroduced(v) && brought(v, own.cleanButIntroduced));
-  if (blocked) {
-    return { kind: "stuck", outcome: "introduces", text: `${lever.name}: ${introducesText(own.introducedAt(blocked)).replace(/, so no release is named$/, "")}` };
+  const blocked = candidates.filter((v) => !own.clean(v) && own.cleanButIntroduced(v) && brought(v, own.cleanButIntroduced));
+  if (blocked.length > 0) {
+    const ids = [...new Set(blocked.flatMap((v) => own.introducedAt(v)))].sort();
+    return { kind: "stuck", outcome: "introduces", text: `${lever.name}: ${introducesText(ids).replace(/, so no release is named$/, "")}` };
   }
   const deprecated = facts.deprecatedLatest ? `${lever.name} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
   return { kind: "stuck", outcome: "none_admits", text: `${deprecated}no ${lever.name} release up to ${newest ?? "its latest"} brings in a ${parent} that admits a clean ${ctx.pkg}` };

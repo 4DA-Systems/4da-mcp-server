@@ -370,7 +370,16 @@ export function smallestCleanVersion(input: {
       };
     }
   }
-  const introduces = [...new Set(introduced.map((a) => a.id))];
+  // #994 review: the ids are the UNION, over every candidate blocked only by advisories the
+  // installed version lacks, of those advisories (sorted), not the smallest such release's alone.
+  const lacks = (a: AdvisoryRanges) => !a.malware && !has(a);
+  const blockedOnlyByNew = candidates.filter(
+    (v) =>
+      input.advisories.every((a) => !advisoryAffects(a, v, ecosystem) || unfixable.includes(a) || lacks(a)) &&
+      input.advisories.some((a) => lacks(a) && advisoryAffects(a, v, ecosystem)),
+  );
+  const unionIds = new Set(blockedOnlyByNew.flatMap((v) => input.advisories.filter((a) => lacks(a) && advisoryAffects(a, v, ecosystem)).map((a) => a.id)));
+  const introduces = [...(unionIds.size > 0 ? unionIds : new Set(introduced.map((a) => a.id)))].sort();
   return {
     ...(introduces.length > 0 ? { introduces } : {}),
     target: null,

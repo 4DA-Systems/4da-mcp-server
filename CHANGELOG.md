@@ -224,9 +224,10 @@ shared with the app are pinned by the shared vectors.
   parent or lever release, or a newest-release offer. An advisory with no
   published fix is skipped only when the installed version already has it.
   When nothing qualifies, no release is named and the answer says "every
-  fixing release brings in <id>". A parent or lever whose only admitting
-  release carries such an advisory reports the outcome `introduces` (shared
-  vector pr-010), not "no release admits".
+  fixing release brings in <ids>", naming every such advisory across all the
+  releases blocked this way, sorted, not only the smallest one's. A parent or
+  lever whose only admitting release carries such an advisory reports the
+  outcome `introduces` (shared vector pr-010), not "no release admits".
   dependency_health adds `latestSafeVersion` and `latestStableNote` and
   measures `versionsBehind` to the safe release; what_should_i_know's `latest`
   adds `registry_latest` and `note`.
@@ -324,12 +325,18 @@ shared with the app are pinned by the shared vectors.
   directory, and a workspace-inherited, git, path or registry crate is never
   refreshed this way.
 - The shared rule vectors `severity` (sv-001..sv-019) and `parent_release`
-  (pr-001..pr-008, with the graph lines run through the whole planner, and
+  (pr-001..pr-010, with the graph lines run through the whole planner, and
   Cargo lines) run in the TypeScript runner.
 - **A row's only fix across a major raises the row**, flagged `breaking`,
   with the reason "the only release of <parent> that fixes <child> is <ver>, a
   major upgrade" (the 4DA lead): xsv's crossbeam-channel row goes to 0.5.0,
   the only release whose requirement admits a clean crossbeam-utils.
+- **Known difference from the desktop app:** the app's live path raises a
+  row across a major only for npm. For Cargo the app holds the rule in its
+  shared vector (pr-009) but not yet on live data, because a live Cargo raise
+  needs per-version dependency data it does not read yet. Until that lands,
+  this server and the app can give different answers for a live Cargo row
+  whose only fix is across a major.
 - **API:** new actions `upgrade_parent_unverified`, `remove_dependency` and
   `hold_current`; `parentUpgrades[].goesAway` and `smallest`;
   `levers[].smallest`, `floor` and `brings`; `upgradeCommands[].refresh` and

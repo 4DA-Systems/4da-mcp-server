@@ -18,7 +18,9 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
-import { checkParentRelease } from "./helpers/parent-release-vectors.js";
+import { checkParentRelease, planParentReleaseLine } from "./helpers/parent-release-vectors.js";
+import { smallestCleanVersion } from "../live/osv-ranges.js";
+import { introducesText } from "../live/fix-paths.js";
 
 const noDb = null as unknown as FourDADatabase;
 
@@ -871,5 +873,75 @@ describe("pr-010 for a lever: a lever move never introduces an advisory", () => 
 
   it("names the lever release when the installed lever already has that unfixed advisory", async () => {
     expect(await checkParentRelease(graph([{ introduced: "0" }], "introduces"))).toMatch(/"release":\{"to":"1\.1\.0"/);
+  });
+});
+
+// The #994 review: "every fixing release brings in <ids>" names the UNION, sorted, of the
+// advisories the installed version lacks over EVERY candidate blocked that way, not only the
+// smallest one's. Two blocked candidates: 1.1.0 carries GHSA-synt-0000-0005 (fixed in 1.2.0),
+// 1.2.0 carries GHSA-synt-0000-0004 (no fix). The installed 1.0.0 has neither.
+describe("introduces names the union over every blocked candidate (#994 review)", () => {
+  const span = (introduced: string, fixed: string | null = null) => ({ introduced, fixed, lastAffected: null });
+  const both = "every fixing release brings in GHSA-synt-0000-0004, GHSA-synt-0000-0005, which the installed version does not have";
+
+  it("fix-target walk: the copy's own target", () => {
+    const clean = smallestCleanVersion({
+      ecosystem: "npm",
+      fixes: ["1.1.0"],
+      advisories: [
+        { id: "GHSA-synt-0000-0001", spans: [span("0", "1.1.0")], versions: [] },
+        { id: "GHSA-synt-0000-0005", spans: [span("1.1.0", "1.2.0")], versions: [] },
+        { id: "GHSA-synt-0000-0004", spans: [span("1.2.0")], versions: [] },
+      ],
+      published: ["1.0.0", "1.1.0", "1.2.0"],
+      installed: "1.0.0",
+    });
+    expect(clean?.target).toBeNull();
+    expect(clean?.introduces).toEqual(["GHSA-synt-0000-0004", "GHSA-synt-0000-0005"]);
+    expect(introducesText(clean!.introduces!)).toContain(both);
+  });
+
+  const parentAdvisories = [
+    { id: "GHSA-synt-0000-0005", ranges: [{ introduced: "1.1.0", fixed: "1.2.0" }] },
+    { id: "GHSA-synt-0000-0004", ranges: [{ introduced: "1.2.0" }] },
+  ];
+
+  it("parent: both blocked admitting releases' advisories are named", async () => {
+    const v = {
+      id: "introduces-union", eco: "npm", tool: "npm",
+      parent: { name: "par", installed: "1.0.0", declared: "1.0.0", lever: "direct", latest: "1.2.0", deprecated: false, releases: ["1.0.0", "1.1.0", "1.2.0"], advisories: parentAdvisories, own_target: null },
+      rows: [{
+        pkg: "leaf", installed: "1.0.0", target: "1.1.0", releases: ["1.0.0", "1.1.0"],
+        advisories: [{ id: "GHSA-synt-0000-0001", ranges: [{ introduced: "0", fixed: "1.1.0" }] }],
+        requires: { "1.0.0": "1.0.0", "1.1.0": "^1.1.0", "1.2.0": "^1.1.0" },
+      }],
+      expect: { parent_target: null, rows: [{ pkg: "leaf", outcome: "introduces", smallest: null, to: null, breaking: false, requirement: null, peer: false, resolves_to: null, command: null, refresh: null }] },
+    };
+    expect(await checkParentRelease(v)).toBeNull();
+    const result = await planParentReleaseLine(v);
+    const leaf = (result.recommendations as Array<Record<string, unknown>>).find((r) => r.package === "leaf");
+    expect(JSON.stringify(leaf)).toContain(both);
+  });
+
+  it("lever: both blocked lever releases' advisories are named", async () => {
+    const v = {
+      id: "introduces-union-lever", eco: "npm", mode: "graph",
+      nodes: [["lev", "1.0.0", true], ["par", "1.0.0", false], ["leaf", "1.0.0", false]],
+      edges: [["lev", "1.0.0", "par", "1.0.0"], ["par", "1.0.0", "leaf", "1.0.0"]],
+      advisories: [
+        { id: "GHSA-synt-0000-0001", package: "leaf", ranges: [{ introduced: "0", fixed: "1.1.0" }] },
+        ...parentAdvisories.map((a) => ({ ...a, package: "lev" })),
+      ],
+      registry: {
+        lev: { "dist-tags": { latest: "1.2.0" }, versions: { "1.0.0": { dependencies: { par: "1.0.0" } }, "1.1.0": { dependencies: { par: "^1.1.0" } }, "1.2.0": { dependencies: { par: "^1.1.0" } } } },
+        par: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.1.0" } } } },
+        leaf: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": {}, "1.1.0": {} } },
+      },
+      expect: { rows: [], copies: [{ pkg: "leaf", installed: "1.0.0", target: "1.1.0", links: [{ parent: "par", release: "introduces", levers: [], lever_unknown: false }] }] },
+    };
+    expect(await checkParentRelease(v)).toBeNull();
+    const result = await planParentReleaseLine(v);
+    const leaf = (result.recommendations as Array<Record<string, unknown>>).find((r) => r.package === "leaf");
+    expect(JSON.stringify(leaf)).toContain(both);
   });
 });

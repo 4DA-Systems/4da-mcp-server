@@ -126,7 +126,7 @@ function checkFixTarget(v: Vector, records: Records): string | null {
   // `source` date). `published` is what this server's registry readers list; `excluded` is never
   // a target. Lines without them run on the advisory data alone, as before.
   const published = strings(v, "published");
-  const clean = smallestCleanVersion({ ecosystem: eco, fixes, advisories, published: published.length > 0 ? published : null, excluded: strings(v, "excluded") });
+  const clean = smallestCleanVersion({ ecosystem: eco, fixes, advisories, published: published.length > 0 ? published : null, excluded: strings(v, "excluded"), installed });
   const target = clean?.target ?? null;
   const clears = clean !== null && clean.target !== null && clean.stillAffectedBy.length === 0;
   const wantTarget = optStr(v, "target");
@@ -137,6 +137,10 @@ function checkFixTarget(v: Vector, records: Records): string | null {
   const withheld = clean?.withheld ?? [];
   if (Array.isArray(v.withheld) && JSON.stringify(withheld) !== JSON.stringify(strings(v, "withheld"))) {
     return `withheld: got ${JSON.stringify(withheld)}, want ${JSON.stringify(v.withheld)}`;
+  }
+  // Decision 2 (the 4DA lead, 2026-10-18): lines that state `introduces` pin the union, sorted.
+  if (Array.isArray(v.introduces) && JSON.stringify(clean?.introduces ?? []) !== JSON.stringify(strings(v, "introduces"))) {
+    return `introduces: got ${JSON.stringify(clean?.introduces ?? [])}, want ${JSON.stringify(v.introduces)}`;
   }
   return null;
 }

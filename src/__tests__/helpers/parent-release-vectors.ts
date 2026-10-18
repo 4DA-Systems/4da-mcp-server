@@ -167,7 +167,12 @@ function cargoWorld(v: Json, dir: string): World {
 }
 
 async function checkRows(v: Json, dir: string): Promise<string | null> {
-  if (v.tool === "cargo") return compareRows(v, await withWorld(cargoWorld(v, dir), () => planIn(dir)));
+  return compareRows(v, await planRows(v, dir));
+}
+
+/** The planner's result for a per-row line's world (for tests that read the reason text too). */
+async function planRows(v: Json, dir: string): Promise<Json> {
+  if (v.tool === "cargo") return withWorld(cargoWorld(v, dir), () => planIn(dir));
   const p = v.parent;
   const versions: Record<string, Json> = {};
   const all = [...new Set([p.installed, ...(p.releases as string[]), ...(p.latest ? [p.latest] : [])])];
@@ -191,7 +196,7 @@ async function checkRows(v: Json, dir: string): Promise<string | null> {
     entries[r.pkg] = { version: r.installed };
   }
   writeProject(dir, p.lever === "direct" ? { [p.name]: p.declared } : {}, entries);
-  return compareRows(v, await withWorld(world, () => planIn(dir)));
+  return withWorld(world, () => planIn(dir));
 }
 
 /** The planned rows against a per-row line's expectations. */
@@ -229,7 +234,7 @@ function compareRows(v: Json, result: Json): string | null {
 // Graph lines
 // ---------------------------------------------------------------------------
 
-async function checkGraph(v: Json, dir: string): Promise<string | null> {
+async function checkGraph(v: Json, dir: string, seen?: (result: Json) => void): Promise<string | null> {
   const nodes = v.nodes as Array<[string, string, boolean]>;
   const edges = v.edges as Array<[string, string, string, string]>;
   const entries: Record<string, Json> = {};
@@ -242,6 +247,7 @@ async function checkGraph(v: Json, dir: string): Promise<string | null> {
   const world: World = { registry: v.registry, osv: {} };
   for (const a of v.advisories as Json[]) (world.osv[a.package] ??= []).push(record(a.id, a.package, a.ranges, "npm", a));
   const result = await withWorld(world, () => planIn(dir));
+  seen?.(result);
   const recs = result.recommendations as Json[];
   for (const row of v.expect.rows as Json[]) {
     const rec = recs.find((x) => x.package === row.pkg && x.currentVersion === row.installed);
@@ -269,6 +275,19 @@ async function checkGraph(v: Json, dir: string): Promise<string | null> {
     }
   }
   return null;
+}
+
+/** A per-row or graph line's planner result, run in a fresh project (the recommendations, with their reasons). */
+export async function planParentReleaseLine(v: Json): Promise<Json> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "parent-release-vector-"));
+  try {
+    if (v.mode !== "graph") return await planRows(v, dir);
+    let captured: Json = null;
+    await checkGraph(v, dir, (r) => (captured = r));
+    return captured;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 export async function checkParentRelease(v: Json): Promise<string | null> {
