@@ -139,7 +139,7 @@ interface UpgradeRecommendation {
    * pnpm up, yarn upgrade / yarn up, cargo add with --dev for a
    * dev-dependency). Absent for tools no command is named for.
    */
-  upgradeCommands?: Array<{ dir: string; command: string }>;
+  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true }>;
   /** upgrade_direct: a manifest edit where no single verified command makes it (a workspace-inherited crate, a requirements.txt pin). */
   upgradeInstructions?: Array<{ dir: string; instruction: string }>;
   /**
@@ -552,12 +552,15 @@ async function executeStandalonePlanner(
       package: dep.name,
       ecosystem: dep.ecosystem,
       currentVersion: dep.currentVersion,
-      targetVersion: reinstallOnly ? dep.currentVersion : targetVersion,
+      // A vulnerable row with no fix names no release (its newest is affected too): the parent_release
+      // vectors' own_target is null there (pr-006, request 2.88.0), and verifyFixPaths names one only
+      // when a release past a last_affected bound is clean.
+      targetVersion: reinstallOnly ? dep.currentVersion : action === "no_fix_available" ? null : targetVersion,
       ...(latestStable && latestStable !== targetVersion ? { latestVersion: latestStable } : {}),
-      upgradeType,
+      upgradeType: action === "no_fix_available" ? "unknown" : upgradeType,
       risk,
       reasons,
-      breaking: upgradeType === "major",
+      breaking: action !== "no_fix_available" && upgradeType === "major",
       isDev: dep.isDev,
       scope: "direct",
       action,

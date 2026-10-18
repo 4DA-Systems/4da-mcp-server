@@ -77,8 +77,8 @@ describe.skipIf(!present && !required)("shared rule vectors (4DA)", () => {
 
   describe.each(VECTOR_FILES.map((f) => [f] as const))("%s", (file) => {
     const list = vectors.get(file)!;
-    it.each(list.map((v) => [v.id, v] as const))("%s", (id, v) => {
-      const why = checkVector(file, v, records);
+    it.each(list.map((v) => [v.id, v] as const))("%s", async (id, v) => {
+      const why = await checkVector(file, v, records);
       const t = tally.get(file)!;
       if (skips.has(id)) {
         if (why !== null) t.skipped++;

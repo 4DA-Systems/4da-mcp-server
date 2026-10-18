@@ -30,6 +30,7 @@ import * as path from "node:path";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRanges } from "../../live/osv-ranges.js";
 import { deriveSeverity, extractFixedVersion, isSecurityHoldingRelease } from "../../live/osv-scanner.js";
 import { gradeGroup } from "../../live/advisory-groups.js";
+import { checkParentRelease } from "./parent-release-vectors.js";
 import { isMaintenanceNotice } from "../../live/maintenance.js";
 import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
@@ -38,7 +39,7 @@ import type { OsvVulnerability } from "../../live/types.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../../live/release-metadata.js";
 import { checkRange, parseTarget } from "../../tools/dependency-check-versions.js";
 
-export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding", "severity"] as const;
+export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding", "severity", "parent_release"] as const;
 export type VectorFile = (typeof VECTOR_FILES)[number];
 
 /** One vector line: every line has `id`, `rule` and `source`; the rest depends on the file. */
@@ -293,7 +294,9 @@ function checkSeverity(v: Vector): string | null {
   return JSON.stringify(got) === JSON.stringify({ severity: want.severity, severity_from: want.severity_from, urgency: want.urgency }) ? null : `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
 }
 
-export function checkVector(file: VectorFile, v: Vector, records: Records): string | null {
+export function checkVector(file: VectorFile, v: Vector, records: Records): string | null | Promise<string | null> {
+  // parent_release lines run the whole planner (async): parent-release-vectors.ts.
+  if (file === "parent_release") return checkParentRelease(v);
   try {
     switch (file) {
       case "version_order":

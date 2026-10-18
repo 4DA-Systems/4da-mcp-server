@@ -72,13 +72,15 @@ export interface ParentLever {
   /** True when `to` crosses a major version (a 0.x minor counts). */
   breaking: boolean;
   /** The command that moves it to `to`, per declaring project directory (the declared operator kept). */
-  commands?: Array<{ dir: string; command: string }>;
+  commands?: Array<{ dir: string; command: string; refresh?: true }>;
   /** A manifest edit, where no single verified command makes it (a workspace-inherited crate, a requirements pin). */
   instructions?: Array<{ dir: string; instruction: string }>;
-  /** Through a transitive parent: the lever's OWN smallest release that brings the fix in (`to` may be higher: one release per dependency). */
+  /** Set only when `to` was lifted above it (one release per dependency): the lever's OWN smallest release that brings the fix in. */
   smallest?: string;
   /** Through a transitive parent: the parent's smallest release that admits a clean copy, which the lever must bring in at least. */
   floor?: string;
+  /** Through a transitive parent: the parent release `to` brings in. */
+  brings?: string;
 }
 
 /**
@@ -101,6 +103,8 @@ export interface ParentUpgrade {
   resolvesTo?: string | null;
   /** When `to` is null: the parent's newest release, which may or may not admit a clean version. */
   latest?: string;
+  /** Set only when `to` was lifted above it (one release per dependency): the parent's own smallest release that admits a clean copy. */
+  smallest?: string;
   /**
    * The parent will not move (no release admits a clean version, or it is already its newest), but
    * every declared dependency it arrives through has a release that no longer brings it in: the
@@ -143,7 +147,7 @@ export interface FixPathStep {
   /** lockfile_refresh: true when not every parent's requirement could be read and the verdict comes from semver compatibility. */
   refreshInferred?: boolean;
   /** upgrade_direct: the command that moves the declared dependency to targetVersion, per declaring project directory. */
-  upgradeCommands?: Array<{ dir: string; command: string }>;
+  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true }>;
   /** upgrade_direct: a manifest edit where no single verified command makes it. */
   upgradeInstructions?: Array<{ dir: string; instruction: string }>;
   /** upgrade_parent / override_or_replace: the releases of the blocking parents that admit a clean version. */
@@ -232,6 +236,8 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
 function commit(step: FixPathStep, draft: FixPathStep): void {
   for (const key of Object.keys(step) as Array<keyof FixPathStep>) if (!(key in draft)) delete step[key];
   Object.assign(step, draft);
+  const standings = STANDINGS.get(draft);
+  if (standings) STANDINGS.set(step, standings);
 }
 
 async function withTimeout<T>(work: Promise<T>, ms: number, late: T): Promise<T> {
@@ -424,16 +430,12 @@ function declaredFixes(
   dirs: string[],
 ): Pick<ParentLever, "commands" | "instructions"> {
   const root = liveIntel.getProjectRoot() ?? process.cwd();
-  const commands: Array<{ dir: string; command: string }> = [];
+  const commands: Array<{ dir: string; command: string; refresh?: true }> = [];
   const instructions: Array<{ dir: string; instruction: string }> = [];
   for (const dir of [...new Set(dirs)]) {
     const fix = directFix(dir, ecosystem, name, installed, target);
-    if (fix && "command" in fix) commands.push({ dir: relativeDir(dir, root), command: fix.command });
-    else if (fix && "inRange" in fix) {
-      // The declaration already admits the target: a lockfile refresh reaches it, the manifest stays.
-      // No command until the in-range refresh of a declared dependency is verified per tool.
-      instructions.push({ dir: relativeDir(dir, root), instruction: `the declared range "${fix.declared}" already admits ${target}: refresh the lockfile within that range instead of changing the manifest` });
-    } else if (fix) instructions.push({ dir: relativeDir(dir, root), instruction: fix.instruction });
+    if (fix && "command" in fix) commands.push({ dir: relativeDir(dir, root), command: fix.command, ...(fix.refresh ? { refresh: true as const } : {}) });
+    else if (fix) instructions.push({ dir: relativeDir(dir, root), instruction: fix.instruction });
   }
   return { ...(commands.length > 0 ? { commands } : {}), ...(instructions.length > 0 ? { instructions } : {}) };
 }
@@ -447,7 +449,16 @@ function withUpgradeCommands(input: FixPathInput, liveIntel: Pick<LiveIntelligen
   delete step.upgradeInstructions;
   if (fixes.commands) step.upgradeCommands = fixes.commands;
   if (fixes.instructions) step.upgradeInstructions = fixes.instructions;
+  // Every fix on the row an in-range refresh: said in the app's words, not as a bump.
+  step.reasons = step.reasons.filter((r) => !r.startsWith(REFRESH_ROW) && !r.endsWith(REFRESH_LABEL));
+  const cmds = fixes.commands ?? [];
+  const list = (cs: typeof cmds) => cs.map((c) => `\`${c.command}\`${cmds.length > 1 ? ` in ${c.dir}` : ""}`).join("; ");
+  if (cmds.length > 0 && cmds.every((c) => c.refresh) && !fixes.instructions) step.reasons.push(`${REFRESH_ROW}: ${list(cmds)}`);
+  else if (cmds.some((c) => c.refresh)) step.reasons.push(`${list(cmds.filter((c) => c.refresh))}${REFRESH_LABEL}`);
 }
+
+/** A row whose every fix is an in-range refresh (the app's wording). */
+const REFRESH_ROW = "Fixable now with a lockfile refresh (the declared range already admits the fix)";
 
 type Blocking = RefreshVerdict["blocking"][number] & { lockfile: string; format: LockfileFormat };
 
@@ -551,6 +562,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   };
   const considered = blocking.filter((b) => b.parentVersion !== null).slice(0, MAX_PARENTS);
   const standings = await Promise.all(considered.map((b) => parentStanding(ctx, b)));
+  STANDINGS.set(step, considered.map((b, i) => ({ parent: b.parent, from: b.parentVersion!, standing: standings[i] })));
   const malicious = standings.filter((s): s is Extract<Standing, { kind: "malicious" }> => s.kind === "malicious");
   if (malicious.length > 0) {
     // #981 round 3: a parent or lever flagged malicious: no release is named, no command given.
@@ -634,6 +646,31 @@ function memberUpgrade(input: FixPathInput, lockfiles: Array<{ dir: string; lock
   return true;
 }
 
+/** Per step: what each blocking parent could do (the parent_release vector runner reads it). */
+const STANDINGS = new WeakMap<FixPathStep, Array<{ parent: string; from: string; standing: Standing }>>();
+
+/**
+ * Each blocking parent of a planned step, in the app's ParentStanding terms: a release (the parent
+ * upgrade), or deprecated / latest / none_admits / unread / undecided / malicious.
+ */
+export function parentOutcomes(step: FixPathStep): Array<{ parent: string; from: string; outcome: string; upgrade?: ParentUpgrade }> {
+  return (STANDINGS.get(step) ?? []).map(({ parent, from, standing }) => ({
+    parent,
+    from,
+    outcome:
+      standing.kind === "move"
+        ? "release"
+        : standing.kind === "stuck"
+          ? (standing.outcome ?? "none_admits")
+          : standing.kind === "malicious"
+            ? "malicious"
+            : standing.undecided
+              ? "undecided"
+              : "unread",
+    ...(standing.kind === "move" ? { upgrade: standing.upgrade } : {}),
+  }));
+}
+
 interface MoveContext {
   sources: FixPathSources;
   intel: Intel;
@@ -652,10 +689,13 @@ interface MoveContext {
   advisories: Map<string, Promise<AdvisoryRanges[] | null>>;
 }
 
+/** The 4DA app's ParentStanding names, for what a parent cannot do (parent_release vectors). */
+export type StuckOutcome = "deprecated" | "latest" | "none_admits";
+
 type Standing =
-  | { kind: "stuck"; text: string }
+  | { kind: "stuck"; text: string; outcome?: StuckOutcome }
   | { kind: "move"; upgrade: ParentUpgrade; text: string }
-  | { kind: "unknown"; text?: string }
+  | { kind: "unknown"; text?: string; undecided?: boolean }
   /** The installed parent or lever is flagged malicious: the row names no release (#981 round 3). */
   | { kind: "malicious"; text: string };
 
@@ -719,8 +759,11 @@ function isMajor(from: string, to: string): boolean {
 function commandText(lever: ParentLever): string {
   const cmds = lever.commands ?? [];
   if (cmds.length === 0) return "";
-  return ` (${cmds.map((c) => `\`${c.command}\`${cmds.length > 1 ? ` in ${c.dir}` : ""}`).join("; ")})`;
+  return ` (${cmds.map((c) => `\`${c.command}\`${cmds.length > 1 ? ` in ${c.dir}` : ""}${c.refresh ? REFRESH_LABEL : ""}`).join("; ")})`;
 }
+
+/** A refresh among a row's fixes (the declaration already admits the target), in the app's words. */
+const REFRESH_LABEL = " (a lockfile refresh: the declared range already admits it)";
 
 /** The refresh that moves `name` from `installed` inside the ranges, in the lockfile's directory. */
 function refreshFor(ctx: MoveContext, b: Blocking, name: string, installed: string, target: string): { dir: string; command: string } {
@@ -796,11 +839,11 @@ async function dropRelease(ctx: MoveContext, lever: { name: string; version: str
  * still need not be overridden when every declared dependency it arrives through has a release
  * that drops it from the path (dropRelease): the step names that release instead.
  */
-async function goesAway(ctx: MoveContext, b: Blocking, parent: string, from: string, route: Route, stuckText: string): Promise<Standing> {
-  if (route.kind !== "through" || route.more > 0 || !route.levers.every((l) => l.adjacent)) return { kind: "stuck", text: stuckText };
+async function goesAway(ctx: MoveContext, b: Blocking, parent: string, from: string, route: Route, stuckText: string, outcome: StuckOutcome): Promise<Standing> {
+  if (route.kind !== "through" || route.more > 0 || !route.levers.every((l) => l.adjacent)) return { kind: "stuck", text: stuckText, outcome };
   const dialect: RequirementDialect = b.format === "cargo" ? "cargo" : "npm";
   const found = await Promise.all(route.levers.map((l) => dropRelease(ctx, l, parent, dialect)));
-  if (found.some((f) => f === null)) return { kind: "stuck", text: stuckText };
+  if (found.some((f) => f === null)) return { kind: "stuck", text: stuckText, outcome };
   const upgrade: ParentUpgrade = { parent, from, to: null, breaking: false, requirement: null, goesAway: true, levers: [] };
   const hops = route.levers.map((l, i) => ({ l, drop: found[i]! }));
   const render = (lifts: ReadonlyMap<string, string>): string | null => {
@@ -844,13 +887,23 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   const deprecated = facts.deprecatedLatest ? `${parent} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
   const route = findRoute(ctx, b.lockfile, parent, from);
   const own = await ownClean(ctx, parent, facts);
-  if (own.unreadable.length > 0) return { kind: "unknown", text: `${parent}'s own advisories cannot be judged: ${unreadableText(own.unreadable)}` };
+  if (own.unreadable.length > 0) return { kind: "unknown", undecided: true, text: `${parent}'s own advisories cannot be judged: ${unreadableText(own.unreadable)}` };
   if (own.maliciousAt(from).length > 0) return { kind: "malicious", text: malwareText(parent, own.maliciousAt(from)) };
   const newest = own.newest;
+  // The app's `standing` order (parent_release vectors): a package whose latest release is
+  // deprecated is retired whole (Standing::Deprecated, pr-006); the installed parent at or above
+  // its latest release (the `latest` tag, else its highest) can move nowhere (Standing::Latest).
+  // The withdrawal rule (8a) withdraws none of a retired package's releases; that decides the
+  // copy's own targets, not this move.
+  if (facts.deprecatedLatest) {
+    return goesAway(ctx, b, parent, from, route, `${parent} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}")`, "deprecated");
+  }
+  const latestOf = facts.latest ?? newestOf(facts.versions, ecosystem);
+  if (latestOf && compareVersions(from, latestOf, ecosystem) >= 0) {
+    return goesAway(ctx, b, parent, from, route, `${parent} ${from} is already its latest release`, "latest");
+  }
   if (!newest || compareVersions(from, newest, ecosystem) >= 0) {
-    // The `latest` tag only decides the wording (#981).
-    const atLatest = !facts.latest || compareVersions(from, facts.latest, ecosystem) >= 0;
-    return goesAway(ctx, b, parent, from, route, `${deprecated}${atLatest ? `${parent} ${from} is already its latest release` : `no ${parent} release above ${from} is clear of ${parent}'s own advisories`}`);
+    return goesAway(ctx, b, parent, from, route, `no ${parent} release above ${from} is clear of ${parent}'s own advisories`, "none_admits");
   }
 
   const dialect: RequirementDialect = b.format === "cargo" ? "cargo" : "npm";
@@ -879,7 +932,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   const found = smallestAdmitting(ctx, facts, from, history, dialect, own.clean);
   if (!found) {
     const clause = own.any ? ` both admits a clean ${pkg} (>= ${target}) and is clear of ${parent}'s own advisories` : ` admits a clean ${pkg} (>= ${target})`;
-    return goesAway(ctx, b, parent, from, route, `${deprecated}no ${parent} release up to ${newest ?? "its latest"}${clause}`);
+    return goesAway(ctx, b, parent, from, route, `${deprecated}no ${parent} release up to ${newest ?? "its latest"}${clause}`, "none_admits");
   }
   const requirementClause =
     found.requirement === null
@@ -957,6 +1010,8 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       LEVER_ADMITS.set(lever, (x) => pkgAt(x));
       upgrade.levers = [lever];
       setParentAt(v);
+      if (v !== found.version) upgrade.smallest = found.version;
+      else delete upgrade.smallest;
       const refreshes = refreshAt(v);
       if (refreshes.length > 0) upgrade.refreshCommands = refreshes;
       else delete upgrade.refreshCommands;
@@ -985,7 +1040,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
     if (hop?.kind === "stuck") {
       // The lever cannot bring in a fixed parent; it may still drop the parent from the path.
       const drop = await dropRelease(ctx, l, parent, dialect);
-      if (!drop) return { kind: "stuck", text: `${parent} arrives through ${l.name} ${l.version}, and ${hop.text}` };
+      if (!drop) return { kind: "stuck", text: `${parent} arrives through ${l.name} ${l.version}, and ${hop.text}`, outcome: hop.outcome };
       hops.push({ l, hop: { kind: "found", version: drop.version, brings: null, keepsParent: false, admitsAt: (v) => (drop.drops(v) ? { brings: null, keepsParent: false } : null) } });
       continue;
     }
@@ -1020,8 +1075,8 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
         version: l.version,
         to: v,
         breaking: isMajor(l.version, v),
-        smallest: hop.version,
-        ...(at.brings !== null ? { floor: found.version } : {}),
+        ...(v !== hop.version ? { smallest: hop.version } : {}),
+        ...(at.brings !== null ? { floor: found.version, brings: at.brings } : {}),
         ...declaredFixes(ctx.intel, ecosystem, l.name, l.version, v, l.dirs),
       };
       LEVER_ADMITS.set(lever, hop.admitsAt as (version: string) => { requirement?: string | null; resolvesTo?: string | null } | null);
@@ -1115,7 +1170,7 @@ function smallestAdmitting(
 
 type ThroughHop =
   | { kind: "found"; version: string; brings: string | null; keepsParent: boolean; admitsAt: (version: string) => object | null }
-  | { kind: "stuck"; text: string }
+  | { kind: "stuck"; text: string; outcome: StuckOutcome }
   | { kind: "malicious"; text: string };
 
 /**
@@ -1147,7 +1202,7 @@ async function throughRelease(
   const newest = own.newest;
   if (!newest || compareVersions(lever.version, newest, ctx.ecosystem) >= 0) {
     const atLatest = !facts.latest || compareVersions(lever.version, facts.latest, ctx.ecosystem) >= 0;
-    return { kind: "stuck", text: atLatest ? `${lever.name} ${lever.version} is already its latest release` : `no ${lever.name} release above ${lever.version} is clear of ${lever.name}'s own advisories` };
+    return { kind: "stuck", outcome: atLatest ? "latest" : "none_admits", text: atLatest ? `${lever.name} ${lever.version} is already its latest release` : `no ${lever.name} release above ${lever.version} is clear of ${lever.name}'s own advisories` };
   }
   const parentReleases = parentFacts.versions.filter((v) => !isPrereleaseVersion(v, ctx.ecosystem));
   const brought = (v: string): { brings: string; keepsParent: boolean } | null => {
@@ -1168,7 +1223,7 @@ async function throughRelease(
     if (hit) return { kind: "found", version, ...hit, admitsAt: (v) => brought(v) };
   }
   const deprecated = facts.deprecatedLatest ? `${lever.name} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
-  return { kind: "stuck", text: `${deprecated}no ${lever.name} release up to ${newest ?? "its latest"} brings in a ${parent} that admits a clean ${ctx.pkg}` };
+  return { kind: "stuck", outcome: "none_admits", text: `${deprecated}no ${lever.name} release up to ${newest ?? "its latest"} brings in a ${parent} that admits a clean ${ctx.pkg}` };
 }
 
 
@@ -1310,7 +1365,9 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
     const eco = d.eco;
     const cmp = (a: string, b: string) => compareVersions(a, b, eco);
     const needs = [...d.uses.map((u) => u.lever.to!), ...(own && fixRow(own) ? [own.targetVersion!] : [])];
-    const candidates = [...new Set([...needs, ...(own ? [own.targetVersion!] : [])])].sort((a, b) => cmp(b, a));
+    // The releases its rows NEED: each lever's, and its own row's when that row is a fix (the app's
+    // row_target). A freshness row's newest release is not a need: it follows the release chosen.
+    const candidates = [...new Set(needs)].sort((a, b) => cmp(b, a));
     const majorNeed = needs.filter((n) => isMajor(d.version, n));
     const minimum = needs.reduce((m, n) => (cmp(n, m) > 0 ? n : m), needs[0]);
     const advisories = advisoriesOf.get(k);
@@ -1350,6 +1407,7 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
       own.reasons.push(
         `${release}, not ${old}: one release of ${own.package} for every row that names it (${why}); no advisory of ${own.package} affects ${release}${isMajor(old, release) ? `, a major upgrade from ${old}` : ""}`,
       );
+      if (!fixRow(own) && cmp(old, release) > 0) own.latestVersion = old;
       setTarget(own, release);
       if (own.latestVersion === own.targetVersion) delete own.latestVersion;
       const input = inputs.find((i) => i.step === own) ?? { step: own, fixes: [], sourceDirs: declaredDirs(liveIntel, eco, own.package, own.currentVersion!) };

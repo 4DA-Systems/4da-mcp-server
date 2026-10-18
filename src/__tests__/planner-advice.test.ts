@@ -223,7 +223,7 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     expect(bson.parentUpgrades).toEqual([
       {
         parent: "mongodb-core", from: "2.1.20", to: "3.1.0", breaking: true, requirement: "^1.1.0", resolvesTo: "1.1.6",
-        levers: [{ name: "mongodb", version: "2.2.36", to: "3.1.0", breaking: true, smallest: "3.1.0", floor: "3.1.0", commands: [{ dir: ".", command: "npm install mongodb@3.1.0 --save-exact" }] }],
+        levers: [{ name: "mongodb", version: "2.2.36", to: "3.1.0", breaking: true, floor: "3.1.0", brings: "3.1.0", commands: [{ dir: ".", command: "npm install mongodb@3.1.0 --save-exact" }] }],
       },
     ]);
     expect(bson.reasons.join(" ")).toMatch(/mongodb-core arrives through mongodb 2\.2\.36, a direct dependency: mongodb 3\.1\.0 is the smallest mongodb release that brings in mongodb-core 3\.1\.0/);
@@ -476,12 +476,15 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"' }]);
   });
 
-  it("4: a spec whose operator cannot be carried names no command (>=)", async () => {
+  it("4: a spec whose operator cannot be carried names no bump; one that admits the target is refreshed in range (>=)", async () => {
     expressProject();
+    // ">=4.16.0" admits the target: the in-range refresh, which carries no operator (4DA
+    // fix/c2-direct-refresh, verified live 2026-10-18). "<5" with an exact-pin style would name nothing.
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "x", dependencies: { express: ">=4.16.0" } }));
     const { step } = await plan();
-    expect(step("express").upgradeCommands).toBeUndefined();
-    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toBeUndefined();
+    expect(step("express").upgradeCommands).toEqual([{ dir: ".", command: "npm update express", refresh: true }]);
+    expect(step("express").reasons.join(" ")).toContain("Fixable now with a lockfile refresh (the declared range already admits the fix): `npm update express`");
+    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: "npm update express", refresh: true }]);
   });
 
   it("5: a parent reached through two declared dependencies names both; one that cannot move makes it an override", async () => {

@@ -758,26 +758,34 @@ export function overrideReaches(blocking: Array<{ bundled?: boolean }>): boolean
  * `replace`; hashed or pip-compiled requirements; bun or an unknown tool.
  */
 export type DirectFix =
-  | { command: string }
-  | { instruction: string }
+  | { command: string; refresh?: false }
   /**
-   * The declared range ALREADY admits the target (navcal: sharp, next and vite under `^`): the
-   * minimal advice is the tool's in-range lockfile refresh, which leaves the manifest untouched,
-   * not a bump of the declaration. The refresh command for a declared dependency is named only once
-   * it has been verified against each tool (the 4DA app's osv::direct_upgrade, shared fix_command
-   * vectors to come), so this names none: `declared` is the range that admits it.
+   * The declaration ALREADY admits the target (navcal: sharp, next and vite under `^`): the minimal
+   * advice is the tool's in-range lockfile refresh, which leaves the manifest untouched, not a bump
+   * of the declaration (the 4DA app's DirectFix::Refresh). Each was run on a project declaring
+   * `ms ^2.1.1` locked at 2.1.1 (2026-10-18): it moved the lock to 2.1.3 and left package.json
+   * unchanged; plain `pnpm update ms` rewrote `^2.1.1` to `^2.1.3`, hence `--no-save`. Cargo:
+   * `itoa = "1.0.5"` locked 1.0.11 with Cargo.toml unchanged. Any readable range qualifies,
+   * `>=` and `||` included: no operator needs carrying.
    */
-  | { inRange: true; declared: string };
+  | { command: string; refresh: true }
+  | { instruction: string };
 
 type NpmManager = "npm" | "pnpm" | "yarn1" | "yarn-berry";
 
-/**
- * Whether a declaration that already admits the target gets the in-range branch (`inRange`, no
- * command) instead of a bump command. Off until the shared fix_command vectors for it land: today's
- * vectors fc-029..fc-041 still pin the bump command for such declarations, and the vectors are the
- * contract. Turning it on is this one line, with the new vectors.
- */
-export const IN_RANGE_REFRESH = false;
+/** The verified in-range refresh of a DECLARED npm-family dependency (DirectFix refresh). */
+function npmDirectRefresh(manager: NpmManager, name: string): string {
+  switch (manager) {
+    case "npm":
+      return `npm update ${name}`;
+    case "pnpm":
+      return `pnpm update ${name} --no-save`;
+    case "yarn1":
+      return `yarn upgrade ${name}`;
+    case "yarn-berry":
+      return `yarn up -R ${name}`;
+  }
+}
 
 /** How far up from a project directory a workspace lockfile is looked for (the app's MAX_LOCKFILE_ASCENT). */
 const MAX_LOCKFILE_ASCENT = 6;
@@ -1034,7 +1042,11 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       const json = read("package.json");
       const declared = json === null ? null : npmDeclared(json, name);
       if (declared === null || npmRangeAdmits(declared, installed) !== true) return null;
-      if (IN_RANGE_REFRESH && npmRangeAdmits(declared, target) === true && npmOperator(declared) !== "") return { inRange: true, declared };
+      // Not for an npm workspace member: npm 10.9.2 left a member's own dependency in place for
+      // `npm update` run at the root and in the member (checked 2026-10-18), and moved it with the
+      // install below, run in the member's directory.
+      const npmMember = manager === "npm" && !fs.existsSync(path.join(projectDir, "package-lock.json")) && !fs.existsSync(path.join(projectDir, "npm-shrinkwrap.json"));
+      if (!npmMember && npmRangeAdmits(declared, target) === true) return { command: npmDirectRefresh(manager, name), refresh: true };
       const command = npmDirectCommand(manager, declared, name, target);
       return command ? { command } : null;
     }
@@ -1045,8 +1057,9 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       if (decls.length !== 1) return null;
       const [only] = decls;
       const admits = only.req !== null ? cargoReqAdmits(only.req, installed) === true : only.workspace;
-      if (IN_RANGE_REFRESH && admits && only.req !== null && !only.workspace && !only.otherSource && !only.req.trim().startsWith("=") && cargoReqAdmits(only.req, target) === true) {
-        return { inRange: true, declared: only.req };
+      // A workspace-inherited, git, path or alternate-registry entry is never refreshed this way.
+      if (admits && only.req !== null && !only.workspace && !only.otherSource && cargoReqAdmits(only.req, target) === true) {
+        return { command: `cargo update -p ${name}@${installed} --precise ${target}`, refresh: true };
       }
       return admits ? cargoDirect(only, name, target) : null;
     }

@@ -83,7 +83,8 @@ no direct dependencies reports 0, not 1.
   (see the readiness section below).
 - `vulnerability_scan` includes direct devDependencies by default, labelled
   `is_dev` and graded one level down, as the desktop app does (audit A8);
-  `include_dev: false` restores the runtime-only scan.
+  `include_dev: false` leaves out every dev-only copy (see the final audit
+  section below).
 - `dependency_check` counts a vulnerability once across its alias records
   (GHSA + RUSTSEC), keeping the most severe grade. tokio 1.18.0's "6
   advisories" are 3, all moderate or low, so its `review` verdict was right
@@ -126,16 +127,19 @@ the shared rule vectors, which both engines run.
   `upgrade_parent`, not "waiting on upstream"** (H1). `parentUpgrades` names
   the smallest parent release whose own requirement admits a clean version,
   and every declared dependency it arrives through (`levers`). That release is
-  clear of the parent's own advisories, and a dependency gets the same release
-  on every row: NodeGoat's express goes to 4.22.3, on its own row and as the
+  clear of the parent's own advisories (one with no published fix is named
+  instead: "remains affected by ... (no fix published)"), and a dependency gets
+  the same release on every row: NodeGoat's express goes to 4.22.3, on its own row and as the
   lever for path-to-regexp. When the parent's new requirement still admits the
   installed copy, the step names the refresh to run after the install, because
   npm keeps the copy (`refreshCommands`). A parent the lockfile cannot tie to a
-  declared dependency gets no command (`leverUnknown`), and a move across a
-  major is flagged `breaking`.
+  declared dependency gets no command (`leverUnknown`) and is
+  `upgrade_parent_unverified`, not counted as fixed; a move across a major is
+  flagged `breaking`.
 - **A direct bump is raised to the release that also clears the vulnerable
-  transitives it pins**, never across a major, and never onto a release its own
-  advisories affect: express 4.20.0 goes to 4.22.3.
+  transitives it pins**, never onto a release its own advisories affect, and
+  across a major only when a row's only fix is across it (then `breaking`):
+  express 4.20.0 goes to 4.22.3.
 - **Commands keep how a dependency is declared** (E8, with the app): an exact
   npm pin gets `--save-exact`, and `^`/`~` are kept and quoted (`npm install
   "x@~1.2.6"`, also pnpm, yarn 1 and yarn berry; Cargo `cargo add` with
@@ -155,8 +159,8 @@ the shared rule vectors, which both engines run.
 
 **Severity**
 
-- **One grade per advisory in every tool** (M6). A record with no severity of
-  its own takes the highest grade among all of its GHSA aliases: GO-2024-3333
+- **One grade per advisory in every tool** (M6). An alias group no record of
+  which grades it takes the highest grade among all of its GHSA aliases: GO-2024-3333
   is high, through GHSA-w32m-9786-jp63, in dependency_check,
   vulnerability_scan, dependency_health and upgrade_planner alike.
   `severity_from` names the alias the grade came from, and an alias that could
@@ -170,7 +174,7 @@ the shared rule vectors, which both engines run.
   (H3).
 - dependency_health counts advisories, not OSV records, so its counts match
   vulnerability_scan's (pygoat 187, not 348). It counts the same population in
-  its registry and vulnerable figures and says whether devDependencies are
+  its registry and vulnerable figures and says whether dev-only copies are
   included (L2).
 - **An unreadable lockfile withholds the health score**, with
   `withheldReason` (M5). A refused requirements include, or a yarn.lock or
@@ -197,6 +201,94 @@ the shared rule vectors, which both engines run.
 - In standalone mode, `resources/list` lists only the tools it serves, and the
   startup line no longer claims working tools when the database is refused
   (L6).
+
+### Found in the final release audit (2026-10-18)
+
+A last audit of the release candidate found 1 high, 5 medium and 7 low
+findings; the 4DA app's review of the same rules added three more. Each fix
+was checked live on NodeGoat, pygoat, xsv, navcal and victauri, and the rules
+shared with the app are pinned by the shared vectors.
+
+- **No tool offers a release an advisory affects** (H1). upgrade_planner sent
+  crossenv 0.0.2-security, npm's placeholder for removed malware, to 1.0.1, the
+  malware itself (GHSA-c2m4-w5hm-vqjw, last_affected 1.0.1); cross-env.js,
+  mongose, babelcli, d3.js, jquery.js, ffmepg, nodesass and nodefabric the
+  same. Every release a tool offers (the planner's newest-release target,
+  dependency_health's `latestStableVersion`, what_should_i_know's `latest`) now
+  passes the advisory check dependency_check decides `proceed` by, and the
+  registry's withdrawals. A placeholder whose newer releases are all malware is
+  `remove_dependency` ("remove it"); otherwise the newest release that is
+  neither affected nor withdrawn is offered, or `hold_current` when none is. An
+  upgrade never brings in an advisory the installed version does not have.
+  dependency_health adds `latestSafeVersion` and `latestStableNote` and
+  measures `versionsBehind` to the safe release; what_should_i_know's `latest`
+  adds `registry_latest` and `note`.
+- **One clean-release rule everywhere, with the app** (#981). A malicious
+  advisory (MAL- id or alias, or a malicious-package record) is never skipped:
+  a release it affects is never clean, never a target and never "newest", and
+  an installed copy it affects names no release ("... is flagged malicious:
+  remove or replace ..."). An advisory whose ranges cannot be read leaves the
+  decision undecided: no release, no command, and the reason. An advisory with
+  no published fix never blocks a move that fixes the rest, and the named
+  release says it "remains affected by ... (no fix published)". A parent's or
+  lever's newest release is the highest stable, non-withdrawn release no
+  malicious advisory affects, not its `latest` tag, which decides only the
+  "already its latest release" wording.
+- **One grade per advisory, in every tool** (M2). vulnerability_scan kept the
+  grade of the record with the most detail; the other tools kept the most
+  severe. An alias group now takes the most severe own grade of its records,
+  each read by its curated label first and its CVSS band second (as the app
+  does: on the conformance corpus the label follows a CVSS v4 score neither
+  engine computes); a grade inherited from a GHSA alias applies only when no
+  record of the group has one. CVE-2026-4277 (GHSA-pwjp-ccjc-ghwg LOW,
+  PYSEC-2026-52 CVSS 9.8) is critical everywhere, and `severity_from` names the
+  record or alias the grade came from. dependency_health's
+  `vulnerabilitySummary` adds `unknown`, so it equals vulnerability_scan's
+  `advisory_by_severity`. upgrade_planner ranks by the scan's scope-adjusted
+  grade: a dev-only medium is low, an ungraded advisory medium, a MAL- record
+  high. The shared severity vectors run in the TypeScript runner.
+- **devDependencies are declarations** (M3). The lever walk read only
+  dependencies, optionalDependencies and peerDependencies, so a dev-only
+  transitive had "no declared dependency above" it; navcal's @vitest/mocker
+  and tinypool now name vitest. A workspace member's own dependency
+  (packages/a devDependencies minimist ^1.2.5) is declared there and moves in
+  the member's directory: `npm update` at the root does not move it (npm
+  10.9.2).
+- **One release per dependency across all rows** (M4). NodeGoat named
+  express-session 1.18.1, 1.18.2 and 1.19.0 on three rows (1.18.1 still pins a
+  vulnerable on-headers); xsv crossbeam-channel 0.4.4 and 0.5.0. Each
+  dependency now gets the highest release its rows need that crosses no
+  further major and that its own advisories leave clean, on every row, with one
+  command, and the requirement, `resolvesTo` and refresh are recomputed at that
+  release. A lever records its own `smallest` release and the parent's `floor`.
+- **A declared bump that drops the package from the path comes before an
+  override** (M5). xsv's memoffset 0.2.1 and lock_api 0.1.3 go away with
+  crossbeam-channel, which no longer depends on crossbeam-epoch or
+  parking_lot: the step says "goes away" and names the command, instead of
+  pointing `[patch.crates-io]` at a fork (`goesAway`).
+- **`include_dev: false` means one thing** (M6): every dev-only copy (every
+  path to it is a dev one) is left out, in vulnerability_scan,
+  dependency_health and upgrade_planner, and each states the same population
+  ("N dev-only copies left out"; the scan's `dev_scope`). NodeGoat: 34
+  vulnerable packages in all three, where health said 82 and the planner
+  dropped 90 copies.
+- Smaller fixes: with OSV's per-package query and the registry both down, the
+  target says the withdrawal check did not run (7a); a lifted parent release
+  whose requirement no longer admits the installed copy names no refresh, and
+  none is named while another parent keeps the copy below the target (7b); a
+  parent upgrade whose levers name no release is `upgrade_parent_unverified`,
+  not "fixed by upgrading the parent" (7c); "admits" is said only of a
+  requirement that admits the target (7d); Go versions keep their `v` in
+  every target field (7e); a target with a whole-line npm deprecation notice
+  (glob 10.5.0) stays the target and says it is deprecated, as
+  dependency_check's `review` does (7f); a pin in a file included with `-r` is
+  declared, and its edit names that file (7g).
+- Parent and lever candidates follow the fix-target withdrawal rule: a package
+  retired whole is judged by its releases, and is not stuck only because it is
+  deprecated (8a).
+- **API:** new actions `upgrade_parent_unverified`, `remove_dependency` and
+  `hold_current`; `parentUpgrades[].goesAway`; `levers[].smallest` and
+  `floor`; local lockfile edges carry `dir` and `section`.
 
 ### Security: the working directory is never trusted (audit B-3/B-4/B-5/B-11)
 

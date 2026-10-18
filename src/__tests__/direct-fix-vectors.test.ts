@@ -29,7 +29,7 @@ describe("direct-upgrade commands: 4DA rule vectors fc-028..fc-053", () => {
     expect(lines.every((v) => v.kind === "direct")).toBe(true);
   });
 
-  it.each(lines.map((v) => [v.id, v] as const))("%s", (_id, v) => {
-    expect(checkVector("fix_command", v, new Records(here))).toBeNull();
+  it.each(lines.map((v) => [v.id, v] as const))("%s", async (_id, v) => {
+    expect(await checkVector("fix_command", v, new Records(here))).toBeNull();
   });
 });

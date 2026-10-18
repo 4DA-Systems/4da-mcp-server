@@ -363,16 +363,16 @@ describe("8a/8b: parent candidates and newest", () => {
     expect(text).not.toMatch(/up to 1\.2\.0/);
   });
 
-  it("8a: a package retired whole (latest deprecated) is not stuck by that alone", async () => {
+  it("8a: a package retired whole (latest deprecated) is the app's Deprecated standing, said, never a release (pr-006)", async () => {
     ADVISORIES.leaf = [adv("GHSA-leaf-0000-0001", "leaf", fixedIn("1.1.0"), { severity: "HIGH" })];
     NPM.leaf = { latest: "1.1.0", versions: { "1.0.0": {}, "1.1.0": {} } };
     NPM.par = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { deprecated: "retired", dependencies: { leaf: "^1.1.0" } } } };
     project({ par: "1.0.0" }, {}, { par: { version: "1.0.0", dependencies: { leaf: "1.0.0" } }, leaf: { version: "1.0.0" } });
     const { step } = await plan();
     const leaf = step("leaf");
-    expect(leaf.action).toBe("upgrade_parent");
-    expect(leaf.parentUpgrades[0]).toMatchObject({ parent: "par", to: "1.1.0" });
-    expect(leaf.reasons.join(" ")).toMatch(/par is deprecated: "retired"/);
+    expect(leaf.action).toBe("override_or_replace");
+    expect(leaf.parentUpgrades ?? []).toEqual([]);
+    expect(leaf.reasons.join(" ")).toContain('par is deprecated ("retired")');
   });
 });
 
@@ -461,11 +461,14 @@ describe("M4/7b: one release per dependency across every row", () => {
     const own = step("express-session");
     releases.add(own.targetVersion);
     for (const c of own.upgradeCommands ?? []) commands.add(c.command);
-    expect([...releases]).toEqual(["1.19.0"]);
-    expect([...commands]).toEqual(["npm install express-session@1.19.0 --save-exact"]);
-    // The lifted release's requirement, not the smallest one's.
-    expect(step("on-headers").parentUpgrades[0]).toMatchObject({ requirement: "~1.1.0", resolvesTo: "1.1.0" });
-    expect(step("on-headers").reasons.join(" ")).not.toMatch(/upgrade express-session to 1\.18\.2/);
+    // The highest release a row NEEDS (on-headers: 1.18.2); its own freshness row follows it, the
+    // newest release kept as latestVersion (the app's row_target: a freshness target is not a need).
+    expect([...releases]).toEqual(["1.18.2"]);
+    expect([...commands]).toEqual(["npm install express-session@1.18.2 --save-exact"]);
+    expect(own).toMatchObject({ targetVersion: "1.18.2", latestVersion: "1.19.0" });
+    // The cookie row is lifted from 1.18.1 to 1.18.2, with the requirement at 1.18.2.
+    expect(step("cookie").parentUpgrades[0]).toMatchObject({ to: "1.18.2", smallest: "1.18.1", requirement: "0.7.2" });
+    expect(step("cookie").reasons.join(" ")).not.toMatch(/upgrade express-session to 1\.18\.1/);
   });
 
   it("7b: a lifted release whose requirement no longer admits the installed copy drops the refresh", async () => {
@@ -622,5 +625,45 @@ describe("L: the smaller findings", () => {
     project({}, { devmed: "1.0.0" });
     const { step } = await plan();
     expect(step("devmed").risk).toBe("low");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A declaration that already admits the target: the in-range refresh (4DA fix/c2-direct-refresh)
+// ---------------------------------------------------------------------------
+
+describe("directFix: a declaration that admits the target is refreshed in range, the manifest untouched", () => {
+  async function fixIn(files: Record<string, string>, eco: string, name: string, installed: string, target: string, sub = "") {
+    for (const [f, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      fs.writeFileSync(path.join(dir, f), body);
+    }
+    const { directFix } = await import("../live/fix-paths.js");
+    return directFix(path.join(dir, sub), eco, name, installed, target);
+  }
+  const pkg = JSON.stringify({ name: "t", dependencies: { ms: "^2.1.1" } });
+
+  it("npm, pnpm, yarn 1, yarn berry and Cargo name the verified refresh", async () => {
+    expect(await fixIn({ "package.json": pkg, "package-lock.json": "{}" }, "npm", "ms", "2.1.1", "2.1.3")).toEqual({ command: "npm update ms", refresh: true });
+    fs.rmSync(path.join(dir, "package-lock.json"));
+    expect(await fixIn({ "pnpm-lock.yaml": "lockfileVersion: '9.0'\n" }, "npm", "ms", "2.1.1", "2.1.3")).toEqual({ command: "pnpm update ms --no-save", refresh: true });
+    fs.rmSync(path.join(dir, "pnpm-lock.yaml"));
+    expect(await fixIn({ "yarn.lock": "# yarn lockfile v1\n" }, "npm", "ms", "2.1.1", "2.1.3")).toEqual({ command: "yarn upgrade ms", refresh: true });
+    fs.writeFileSync(path.join(dir, "yarn.lock"), "__metadata:\n  version: 8\n");
+    expect(await fixIn({}, "npm", "ms", "2.1.1", "2.1.3")).toEqual({ command: "yarn up -R ms", refresh: true });
+    expect(await fixIn({ "Cargo.toml": '[dependencies]\nitoa = "1.0.5"\n' }, "crates.io", "itoa", "1.0.5", "1.0.11")).toEqual({ command: "cargo update -p itoa@1.0.5 --precise 1.0.11", refresh: true });
+  });
+
+  it("a range that excludes the target keeps the bump; >= and || are refreshed", async () => {
+    expect(await fixIn({ "package.json": pkg, "package-lock.json": "{}" }, "npm", "ms", "2.1.1", "3.0.0")).toEqual({ command: 'npm install "ms@^3.0.0"' });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ dependencies: { ms: ">=2.0.0" } }));
+    expect(await fixIn({}, "npm", "ms", "2.1.1", "2.1.3")).toEqual({ command: "npm update ms", refresh: true });
+  });
+
+  it("an npm workspace member keeps the install in its directory (npm update does not move it); a workspace-inherited crate is never refreshed", async () => {
+    const files = { "package.json": JSON.stringify({ name: "root", workspaces: ["packages/*"] }), "package-lock.json": "{}", "packages/a/package.json": pkg };
+    expect(await fixIn(files, "npm", "ms", "2.1.1", "2.1.3", "packages/a")).toEqual({ command: 'npm install "ms@^2.1.3"' });
+    const crate = await fixIn({ "Cargo.toml": "[dependencies]\ntokio.workspace = true\n" }, "crates.io", "tokio", "1.38.0", "1.38.2");
+    expect(crate && "instruction" in crate).toBe(true);
   });
 });
