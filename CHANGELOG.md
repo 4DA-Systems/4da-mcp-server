@@ -330,7 +330,8 @@ shared with the app are pinned by the shared vectors.
   <pkg>`, `pnpm update <pkg> --no-save` (plain `pnpm update` rewrote the
   range), `yarn upgrade <pkg>`, `yarn up -R <pkg>`, `cargo update -p
   <crate>@<installed> --precise <target>`. Only an npm range bounded below the
-  next major (`^`, `~`) is refreshed: a refresh installs the newest release in
+  next major (`^`, `~`, also on a prerelease base such as `^2.0.0-rc.4`) is
+  refreshed: a refresh installs the newest release in
   range, so a `>=`, `||`, `*` or x-range could jump a major, and names nothing
   (shared vector fc-059). A Cargo requirement is refreshed with `--precise`,
   which pins the exact target. A row of refreshes reads "Fixable now with a lockfile

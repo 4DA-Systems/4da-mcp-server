@@ -673,6 +673,21 @@ describe("directFix: a declaration that admits the target is refreshed in range,
     }
   });
 
+  it("a ^ or ~ on a prerelease base is bounded (the 4DA lead, 2026-10-19); >= on one is not; an exact prerelease pin stays exact", async () => {
+    const declare = (name: string, declared: string) =>
+      fixIn({ "package.json": JSON.stringify({ dependencies: { [name]: declared } }), "package-lock.json": "{}" }, "npm", name, "0.0.0", "0.0.0").then(() => undefined);
+    await declare("async", "^2.0.0-rc.4");
+    // NodeGoat: async 2.6.1 declared "^2.0.0-rc.4", fix 2.6.4.
+    expect(await fixIn({}, "npm", "async", "2.6.1", "2.6.4")).toEqual({ command: "npm update async", refresh: true });
+    await declare("beta", "~1.2.3-beta.1");
+    expect(await fixIn({}, "npm", "beta", "1.2.4", "1.2.5")).toEqual({ command: "npm update beta", refresh: true });
+    await declare("async", ">=2.0.0-rc.4");
+    expect(await fixIn({}, "npm", "async", "2.6.1", "2.6.4")).toBeNull();
+    // An exact prerelease pin is an exact pin: the install keeps it exact.
+    await declare("pre", "1.2.3-beta.1");
+    expect(await fixIn({}, "npm", "pre", "1.2.3-beta.1", "1.2.3")).toEqual({ command: "npm install pre@1.2.3 --save-exact" });
+  });
+
   it("an npm workspace member is refreshed in its own directory; a workspace-inherited crate is never refreshed", async () => {
     const files = { "package.json": JSON.stringify({ name: "root", workspaces: ["packages/*"] }), "package-lock.json": "{}", "packages/a/package.json": pkg };
     expect(await fixIn(files, "npm", "ms", "2.1.1", "2.1.3", "packages/a")).toEqual({ command: "npm update ms", refresh: true });

@@ -844,6 +844,7 @@ export function npmDeclared(packageJson: string, name: string): string | null {
   return found.length === 1 ? found[0] : null;
 }
 
+const PRERELEASE_BASE = /^\d+\.\d+\.\d+-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/;
 const FULL_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 /** The operator a declared npm spec carries: "" for an exact pin, "^" or "~"; null for anything else. */
@@ -853,8 +854,11 @@ function npmOperator(declared: string): "" | "^" | "~" | null {
     const parts = s.split(".");
     return parts.length >= 1 && parts.length <= 3 && parts.every((p) => /^\d+$/.test(p));
   };
-  if (d.startsWith("^")) return digits(d.slice(1)) ? "^" : null;
-  if (d.startsWith("~")) return digits(d.slice(1)) ? "~" : null;
+  // The 4DA lead (2026-10-19): a `^` or `~` on a PRERELEASE base (`^2.0.0-rc.4`, `~1.2.3-beta.1`)
+  // is bounded too: a full X.Y.Z with prerelease identifiers, no build metadata.
+  const base = (s: string) => digits(s) || PRERELEASE_BASE.test(s);
+  if (d.startsWith("^")) return base(d.slice(1)) ? "^" : null;
+  if (d.startsWith("~")) return base(d.slice(1)) ? "~" : null;
   const exact = (d.startsWith("=") ? d.slice(1) : d).replace(/^v+/, "");
   return FULL_SEMVER.test(exact) ? "" : null;
 }
