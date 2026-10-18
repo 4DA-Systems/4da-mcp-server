@@ -252,7 +252,7 @@ describe("bundled copies (audit E8: NodeGoat, 2026-10-12)", () => {
         "node_modules/tiny-dep": { version: "2.0.1", inBundle: true },
       },
     };
-    expect(packageLockParents(own, "left-pad", "1.3.0")).toEqual([{ parent: "app", parentVersion: null, range: "^1.3.0", local: true }]);
+    expect(packageLockParents(own, "left-pad", "1.3.0")).toEqual([{ parent: "app", parentVersion: null, range: "^1.3.0", local: true, dir: ".", section: "dependencies" }]);
     expect(packageLockParents(own, "tiny-dep", "2.0.1")).toEqual([{ parent: "left-pad", parentVersion: "1.3.0", range: "^2.0.0", local: false }]);
   });
 

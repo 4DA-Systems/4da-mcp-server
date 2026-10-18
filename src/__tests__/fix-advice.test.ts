@@ -190,7 +190,17 @@ describe("A4: a parent that will not move", () => {
   });
 
   it("deprecated: says so", async () => {
+    // Retired as a whole (latest deprecated), so the withdrawal rule withdraws none of its releases
+    // (final audit 8a): 1.3.0 drops minimist and is the move, said to be deprecated.
     pinnedParent({ latest: "1.3.0", versions: { "1.0.0": { dependencies: { minimist: "1.2.5" } }, "1.3.0": { deprecated: "use String.prototype.padStart()" } } });
+    const { step } = await minimistStep();
+    expect(step.action).toBe("upgrade_parent");
+    expect(step.reasons.join(" ")).toMatch(/left-pad 1\.3\.0 is the smallest left-pad release that no longer depends on minimist/);
+    expect(step.reasons.join(" ")).toMatch(/left-pad is deprecated/);
+  });
+
+  it("deprecated, and no release admits a clean version: override, and says it is deprecated", async () => {
+    pinnedParent({ latest: "1.3.0", versions: { "1.0.0": { dependencies: { minimist: "1.2.5" } }, "1.3.0": { deprecated: "use String.prototype.padStart()", dependencies: { minimist: "1.2.5" } } } });
     const { step } = await minimistStep();
     expect(step.action).toBe("override_or_replace");
     expect(step.reasons.join(" ")).toMatch(/left-pad is deprecated/);

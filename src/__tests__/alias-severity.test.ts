@@ -115,7 +115,7 @@ describe("every tool grades GO-2024-3333 HIGH, per GHSA-w32m-9786-jp63", () => {
     li.initFromDependencyGroups([{ dir: project, language: "go", deps: ["golang.org/x/net"], devDeps: [] }]);
     li.fetchRegistryHealth = async () => [];
     const health = await executeDependencyHealth(noDb, {}, li);
-    expect(health.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
+    expect(health.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0, unknown: 0 });
     expect(health.aliasSeverity).toEqual({ rated: 1, unresolved: [], ungraded: [], reason: null });
   });
 

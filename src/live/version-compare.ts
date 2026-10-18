@@ -198,6 +198,17 @@ export function compareGem(a: Array<number | string>, b: Array<number | string>)
 
 const stripGoV = (v: string) => v.replace(/^v(?=\d)/, "");
 
+/**
+ * A version as the ecosystem itself writes it, for output. Go module versions always carry a `v`
+ * (go.mod, `go get`), while OSV's Go ranges and the proxy list read here do not: targetVersion
+ * 0.60.0 sat beside currentVersion v0.60.0's line (final release audit of 6.2.5, 7e). Every other
+ * ecosystem is returned as it is.
+ */
+export function inEcosystemForm<T extends string | null | undefined>(ecosystem: string, version: T): T {
+  if (ecosystem !== "Go" || typeof version !== "string" || !/^\d/.test(version)) return version;
+  return `v${version}` as T;
+}
+
 /** Whether `version` is readable for this ecosystem's ordering. */
 export function isComparable(version: string, ecosystem: OsvEcosystem | string): boolean {
   if (version === "0") return true;

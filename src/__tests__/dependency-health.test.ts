@@ -116,7 +116,7 @@ describe("dependency_health — vulnerable means the actionable set", () => {
   it("breaks severity down over the same set", async () => {
     const result = await executeDependencyHealth(noDb, {}, makeIntel(scan));
 
-    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
+    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0, unknown: 0 });
   });
 
   it("keys a vulnerable package by ecosystem and name, not name alone", async () => {
@@ -297,7 +297,7 @@ describe("dependency_health — advisories, not OSV records (M1)", () => {
     const result = await executeDependencyHealth(noDb, {}, makeIntel(scan));
     // critical 20 + medium 4 + medium 4 (all direct); records would give 20+10+2+4+4+4 = 44.
     expect(result.healthScoreBasis?.vulnerabilities).toBe(28);
-    expect(result.vulnerabilitySummary).toEqual({ critical: 1, high: 0, medium: 2, low: 0 });
+    expect(result.vulnerabilitySummary).toEqual({ critical: 1, high: 0, medium: 2, low: 0, unknown: 0 });
   });
 });
 
@@ -386,8 +386,8 @@ describe("dependency_health — one population for the registry rows and the vul
     expect(result.vulnerableCount).toBe(1);
     expect(result.vulnerableDirectCount).toBe(1);
     expect(result.treeDeps).toBe(1);
-    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
-    expect(result.summary).toContain("1 vulnerable package in the full tree of 1 installed (1 direct, 0 transitive; devDependencies left out)");
+    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0, unknown: 0 });
+    expect(result.summary).toContain("1 vulnerable package in the full tree of 1 installed (1 direct, 0 transitive; 1 dev-only copy left out)");
   });
 
   it("with include_dev, both populations include them", async () => {
@@ -395,7 +395,7 @@ describe("dependency_health — one population for the registry rows and the vul
     expect(result.vulnerableCount).toBe(2);
     expect(result.vulnerableDirectCount).toBe(2);
     expect(result.treeDeps).toBe(2);
-    expect(result.summary).toContain("2 vulnerable packages in the full tree of 2 installed (2 direct, 0 transitive; devDependencies included)");
+    expect(result.summary).toContain("2 vulnerable packages in the full tree of 2 installed (2 direct, 0 transitive; dev-only copies included)");
   });
 });
 /**

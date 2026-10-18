@@ -301,7 +301,7 @@ function safeRead(file: string): string {
 }
 
 /** `-r file` / `--requirement=file` / `-c file` / `--constraint file` lines (local paths only). */
-function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
+export function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
   const out: Array<{ option: "r" | "c"; target: string }> = [];
   for (const raw of requirementLines(content)) {
     const m = /^\s*(?:-(r|c)|--(requirement|constraint))(?:\s*=\s*|\s+)(\S+)/.exec(raw);

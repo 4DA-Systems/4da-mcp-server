@@ -18,7 +18,7 @@ import {
   cargoWorkspaceDeps,
   parseGoModDirectDeps,
   parsePyprojectDependencies,
-  parseRequirementNames,
+  requirementNamesWithIncludes,
 } from "./project-manifests.js";
 
 // =============================================================================
@@ -283,7 +283,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   if (fs.existsSync(requirementsPath)) {
     langSet.add("python");
     try {
-      parseRequirementNames(fs.readFileSync(requirementsPath, "utf-8")).forEach((d) => pyDeps.add(d));
+      // Included files (`-r sub/inner.txt`) declare their pins too (audit 7g).
+      requirementNamesWithIncludes(requirementsPath, cwd).forEach((d) => pyDeps.add(d));
     } catch {
       // Skip
     }

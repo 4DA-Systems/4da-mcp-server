@@ -15,6 +15,7 @@ import { cvssBaseScore } from "./cvss.js";
 import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
 import { isMaintenanceNotice } from "./maintenance.js";
+import { gradeAliasGroups } from "./advisory-groups.js";
 import type {
   AliasSeverityReport,
   ResolvedDependency,
@@ -325,7 +326,8 @@ export class OsvScanner {
     // malware advisory covering every version does not apply to them (the
     // desktop app's osv::matching::is_npm_security_holding; audit A5).
     const rated = await this.rateFromAliases([...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v)));
-    const allVulns = rated.vulns;
+    // One severity per advisory: every record of an alias group carries the group's most severe grade.
+    const allVulns = gradeAliasGroups(rated.vulns);
     const vulnerablePackages = new Set(allVulns.map((v) => v.package));
     const platformInactiveVulnerable = new Set(
       allVulns.filter((v) => !v.platformActive).map((v) => v.package),
@@ -570,12 +572,13 @@ export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   severity: VulnerabilityEntry["severity"];
   cvssScore: number | null;
 } {
+  // The curated label first, the CVSS band second (the rule shared with the 4DA app, 2026-10-18,
+  // severity vectors sv-015..sv-017): on the pinned corpus 123 of 3,923 records disagree, all GHSA,
+  // 113 beside a CVSS v4 vector neither engine scores and the label follows. A CVSS 0.0 goes by its label.
   const cvssScore = extractCvssScore(vuln.severity);
-  if (cvssScore !== null) return { severity: cvssToSeverity(cvssScore), cvssScore };
-
   const label = labelToSeverity(vuln.database_specific?.severity);
-  if (label !== "unknown") return { severity: label, cvssScore: null };
-
+  if (label !== "unknown") return { severity: label, cvssScore };
+  if (cvssScore !== null) return { severity: cvssToSeverity(cvssScore), cvssScore };
   return { severity: "unknown", cvssScore: null };
 }
 

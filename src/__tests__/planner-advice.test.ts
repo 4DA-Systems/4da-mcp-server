@@ -189,7 +189,7 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     const express = step("express");
     expect(express).toMatchObject({ action: "upgrade_direct", targetVersion: "4.22.0", upgradeType: "minor" });
     expect(express.upgradeCommands).toEqual([{ dir: ".", command: "npm install express@4.22.0 --save-exact" }]);
-    expect(express.reasons.join(" ")).toMatch(/4\.22\.0, not 4\.20\.0: express 4\.20\.0 still requires a vulnerable path-to-regexp/);
+    expect(express.reasons.join(" ")).toMatch(/4\.22\.0, not 4\.20\.0: one release of express for every row that names it \(express 4\.20\.0 still requires a vulnerable path-to-regexp\)/);
   });
 
   it("a transitive parent: names the direct dependency it arrives through, and that dependency's release", async () => {
@@ -223,7 +223,7 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     expect(bson.parentUpgrades).toEqual([
       {
         parent: "mongodb-core", from: "2.1.20", to: "3.1.0", breaking: true, requirement: "^1.1.0", resolvesTo: "1.1.6",
-        levers: [{ name: "mongodb", version: "2.2.36", to: "3.1.0", breaking: true, commands: [{ dir: ".", command: "npm install mongodb@3.1.0 --save-exact" }] }],
+        levers: [{ name: "mongodb", version: "2.2.36", to: "3.1.0", breaking: true, smallest: "3.1.0", floor: "3.1.0", commands: [{ dir: ".", command: "npm install mongodb@3.1.0 --save-exact" }] }],
       },
     ]);
     expect(bson.reasons.join(" ")).toMatch(/mongodb-core arrives through mongodb 2\.2\.36, a direct dependency: mongodb 3\.1\.0 is the smallest mongodb release that brings in mongodb-core 3\.1\.0/);
@@ -252,7 +252,8 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
       li.getFixPathSources()!.requirementHistory = async () => null;
     });
     const ptr = step("path-to-regexp");
-    expect(ptr.action).toBe("upgrade_parent");
+    // A check, not a fix: no lever release was verified (final audit 7c).
+    expect(ptr.action).toBe("upgrade_parent_unverified");
     expect(ptr.parentUpgrades).toEqual([{ parent: "express", from: "4.16.4", to: null, breaking: false, latest: "5.1.0", levers: [{ name: "express", version: "4.16.4", to: null, breaking: false }] }]);
     expect(ptr.reasons.join(" ")).toMatch(/upgrade express \(express 5\.1\.0 is its newest release; check that it admits path-to-regexp >= 0\.1\.13\)/);
   });
@@ -304,7 +305,10 @@ describe("H4: dev-only vulnerable packages are in the plan by default, labelled"
     const { result } = await plan({ include_dev: false });
     expect(result.recommendations).toEqual([]);
     // A plan-only run at runtime scope never scanned vitest: it is counted as unchecked, not as vulnerable (review finding 10).
-    expect(result.summary).toMatch(/include_dev: false left out 1 devDependency not checked for vulnerabilities and 1 dev-only vulnerable transitive copy/);
+    // One population across tools (final audit, finding 6): the runtime scan leaves every dev-only
+    // copy out, so esbuild is not scanned at all, and the summary says how many copies that is.
+    expect(result.summary).toMatch(/include_dev: false left out 1 devDependency not checked for vulnerabilities/);
+    expect(result.summary).toMatch(/Planned over 0 vulnerable packages \(0 installed copies\) in the full tree of 0 installed \(2 dev-only copies left out\)/);
   });
 });
 
@@ -402,7 +406,7 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     project({ top: "1.0.0" }, {}, tree);
     const { step } = await plan();
     const leaf = step("leaf");
-    expect(leaf.action).toBe("upgrade_parent");
+    expect(leaf.action).toBe("upgrade_parent_unverified");
     expect(leaf.parentUpgrades).toMatchObject([{ parent: "mid", to: "2.0.1", levers: [] }]);
     expect(leaf.parentUpgrades[0].leverUnknown).toMatch(/walk up the lockfile stopped after 40 entries/);
     expect(commandsIn(leaf)).toEqual([]);
@@ -449,7 +453,7 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expect(step("express")).toMatchObject({ targetVersion: "4.22.3", upgradeCommands: [{ command: "npm install express@4.22.3 --save-exact" }] });
     const ptr = step("path-to-regexp");
     expect(ptr.parentUpgrades).toMatchObject([{ parent: "express", to: "4.22.3", requirement: "~0.1.13", levers: [{ to: "4.22.3", commands: [{ command: "npm install express@4.22.3 --save-exact" }] }] }]);
-    expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.3, not 4\.22\.0: express's own row targets 4\.22\.3/);
+    expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.3, not 4\.22\.0: one release of express for every row that names it, its own row included/);
     expect(ptr.reasons.join(" ")).not.toMatch(/upgrade express to 4\.22\.0/);
     expect(new Set([...commandsIn(ptr), ...commandsIn(step("qs")), ...commandsIn(step("express"))])).toEqual(new Set(["npm install express@4.22.3 --save-exact"]));
   });
@@ -508,7 +512,7 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expect(result.recommendations.map((r: { package: string; risk: string }) => `${r.package}:${r.risk}`)).toEqual(["r1:high", "d1:high"]);
   });
 
-  it("7: a lever a workspace member declares, which the tree walk cannot tie to a manifest, is declined (no root-directory command)", async () => {
+  it("7: a lever a workspace member declares moves where it is declared: the member's directory, never a root-directory command", async () => {
     leafOnly("1.1.0", ["1.0.0", "1.1.0"]);
     NPM.par = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.1.0" } } } };
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"] }));
@@ -528,14 +532,13 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
         },
       }),
     );
-    // The member's manifest is not one this server's tree walk reads as declaring par (par resolves
-    // as non-direct), so the lever is declined: no command in the lockfile's directory, which
-    // would run `npm install par@...` at the root and add par there (review findings 1 and 7).
+    // The lockfile shows packages/app declaring par (final audit, finding 3): the lever is par, and its
+    // command runs in packages/app, never at the root, where `npm install par@...` would add par to the
+    // root manifest (review findings 1 and 7).
     const { step } = await plan();
     const upgrade = step("leaf").parentUpgrades[0];
-    expect(upgrade).toMatchObject({ parent: "par", to: "1.1.0", levers: [] });
-    expect(upgrade.leverUnknown).toMatch(/no manifest this plan read declares par 1\.0\.0/);
-    expect(commandsIn(step("leaf"))).toEqual([]);
+    expect(upgrade).toMatchObject({ parent: "par", to: "1.1.0", levers: [{ name: "par", to: "1.1.0", commands: [{ dir: "packages/app", command: 'npm install "par@^1.1.0"' }] }] });
+    expect(upgrade.levers[0].commands.every((c: { dir: string }) => c.dir === "packages/app")).toBe(true);
   });
 
   it("8: a parent move across a major is flagged (mongodb 2.2.36 -> 3.1.0)", async () => {

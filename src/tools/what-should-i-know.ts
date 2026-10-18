@@ -25,7 +25,8 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { VulnerabilityScanResult } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { presentedSeverity } from "../live/severity-scope.js";
-import { maxVersion } from "../live/version-compare.js";
+import { compareVersions, inEcosystemForm, maxVersion } from "../live/version-compare.js";
+import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { rowFix, targetNote, verifyFixTargets, withheldText } from "../live/fix-paths.js";
 import { installDriftAdvisories } from "./install-drift-notes.js";
 import { getLiveIntelligence } from "../live-singleton.js";
@@ -99,7 +100,17 @@ interface TaskDependency {
    * For a "latest" task: the newest stable release on the registry and whether
    * the installed version is already on its major line (caret line below 1.0).
    */
-  latest?: { version: string | null; installed_line: string | null; latest_line: string | null; on_latest_major: boolean | null };
+  latest?: {
+    /** The newest release offered: the registry's latest stable, unless an advisory affects it or the registry withdrew it (then the newest that is neither; null when none). */
+    version: string | null;
+    installed_line: string | null;
+    latest_line: string | null;
+    on_latest_major: boolean | null;
+    /** Present when `version` is not the registry's latest stable: that release, which is not offered. */
+    registry_latest?: string | null;
+    /** Why the registry's latest is not offered, or that it could not be checked. */
+    note?: string;
+  };
   vulnerabilities: ReturnType<typeof advisoriesFor>;
   /** Registry releases newer than the installed version that the 4DA feed recorded (desktop app only). */
   newer_releases: ReturnType<typeof releasesFor>;
@@ -178,6 +189,9 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
       | "getFixPathSources"
     >
   >;
+
+/** The newest release a "latest" task is offered, after the advisory and withdrawal check. */
+type LatestFact = { version: string | null; registry_latest?: string | null; note?: string };
 
 /** How long a briefing spends checking its upgrade targets against every advisory (cached). */
 const TARGET_CHECK_BUDGET_MS = 5_000;
@@ -321,6 +335,8 @@ export async function executeWhatShouldIKnow(
       if (fix.withheld.length > 0) Object.assign(v, { fixed_version: fix.fixed, withheld: fix.withheld, withheld_note: fix.note });
     }
   }
+  // Go module versions carry their `v`, as the installed ones do (audit 7e).
+  for (const dep of taskDependencies) for (const v of dep.vulnerabilities) v.fixed_version = inEcosystemForm(dep.ecosystem, v.fixed_version);
   for (const dep of taskDependencies) {
     if (dep.vulnerabilities.length === 0) continue;
     const rank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, unknown: 0 };
@@ -328,7 +344,7 @@ export async function executeWhatShouldIKnow(
     const fixes = dep.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f));
     const unfixed = dep.vulnerabilities.length - fixes.length;
     const clean = verified.get(`${dep.ecosystem}\0${dep.package}`);
-    const smallest = clean ? clean.target : fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null;
+    const smallest = inEcosystemForm(dep.ecosystem, clean ? clean.target : fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null);
     const note = clean ? targetNote(clean, dep.ecosystem) : null;
     // Every release that fixes it was withdrawn by the registry (FX-H5): never "no fixed release published".
     const withheld = clean && !clean.target ? withheldText(clean, dep.ecosystem) : null;
@@ -477,7 +493,7 @@ async function latestVersions(
   liveIntel: BriefingLiveIntel | null,
   packages: TaskPackage[],
   deps: ResolvedDependency[],
-): Promise<Map<string, string | null> | null> {
+): Promise<Map<string, LatestFact> | null> {
   if (!liveIntel?.fetchRegistryHealth || !liveIntel.isEnabled() || packages.length === 0) return null;
   const wanted: ResolvedDependency[] = [];
   for (const pkg of packages) {
@@ -494,8 +510,26 @@ async function latestVersions(
       }),
     ]);
     if (!infos) return null;
-    const out = new Map<string, string | null>();
-    for (const info of infos) out.set(`${info.ecosystem}\0${info.name}`, info.latestStableVersion ?? null);
+    // The newest release is checked as dependency_check checks one (offered-release.ts): a
+    // known-affected or withdrawn latest is not offered, and the briefing says why.
+    const sources = liveIntel.getFixPathSources?.() ?? null;
+    const newer = infos.filter((i) => i.latestStableVersion && i.currentVersion && compareVersions(i.latestStableVersion, i.currentVersion, i.ecosystem) > 0);
+    const vets = await vetOfferedReleases(
+      sources,
+      newer.map((i) => ({ key: `${i.ecosystem}\0${i.name}`, ecosystem: i.ecosystem, name: i.name, installed: i.currentVersion, offered: i.latestStableVersion! })),
+      TARGET_CHECK_BUDGET_MS,
+    );
+    const out = new Map<string, LatestFact>();
+    for (const info of infos) {
+      const key = `${info.ecosystem}\0${info.name}`;
+      const registry = info.latestStableVersion ?? null;
+      const vet = vets.get(key);
+      if (!sources || !newer.includes(info)) out.set(key, { version: registry });
+      else if (!vet) out.set(key, { version: registry, note: uncheckedOfferNote(info.name, registry!) });
+      else if (!vet.note) out.set(key, { version: registry });
+      else if (!vet.checked) out.set(key, { version: registry, note: vet.note });
+      else out.set(key, { version: vet.safe, registry_latest: registry, note: vet.note });
+    }
     return out;
   } catch {
     return null;
@@ -508,7 +542,7 @@ function describePackage(
   db: FourDADatabase,
   pkg: TaskPackage,
   vulns: VulnerabilityScanResult["vulnerabilities"],
-  latestByPackage: Map<string, string | null> | null = null,
+  latestByPackage: Map<string, LatestFact> | null = null,
 ): TaskDependency {
   // 0.x minors count as majors (caret rules: 0.12 -> 0.13 is breaking), the
   // same reading as upgrade_impact and dependency_check.
@@ -518,7 +552,8 @@ function describePackage(
   let majors: number | null = distances.length > 0 ? Math.max(...distances) : null;
   let latest: TaskDependency["latest"];
   if (latestByPackage) {
-    const version = latestByPackage.get(`${pkg.ecosystem}\0${pkg.name}`) ?? null;
+    const fact = latestByPackage.get(`${pkg.ecosystem}\0${pkg.name}`) ?? { version: null };
+    const version = fact.version;
     const newest = pkg.installed.length > 0 ? maxVersion(pkg.installed, pkg.ecosystem) : null;
     const installedLine = caretLine(newest);
     const latestLine = caretLine(version);
@@ -527,6 +562,8 @@ function describePackage(
       installed_line: installedLine,
       latest_line: latestLine,
       on_latest_major: installedLine && latestLine ? installedLine === latestLine : null,
+      ...(fact.registry_latest !== undefined ? { registry_latest: fact.registry_latest } : {}),
+      ...(fact.note ? { note: fact.note } : {}),
     };
     if (pkg.requested_to === null && newest && version) majors = majorsCrossed(newest, version);
   }

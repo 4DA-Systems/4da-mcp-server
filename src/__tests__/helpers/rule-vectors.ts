@@ -28,7 +28,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRanges } from "../../live/osv-ranges.js";
-import { extractFixedVersion, isSecurityHoldingRelease } from "../../live/osv-scanner.js";
+import { deriveSeverity, extractFixedVersion, isSecurityHoldingRelease } from "../../live/osv-scanner.js";
+import { gradeGroup } from "../../live/advisory-groups.js";
+import { isMaintenanceNotice } from "../../live/maintenance.js";
 import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
 import { compareVersions, isComparable } from "../../live/version-compare.js";
@@ -36,7 +38,7 @@ import type { OsvVulnerability } from "../../live/types.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../../live/release-metadata.js";
 import { checkRange, parseTarget } from "../../tools/dependency-check-versions.js";
 
-export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding"] as const;
+export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding", "severity"] as const;
 export type VectorFile = (typeof VECTOR_FILES)[number];
 
 /** One vector line: every line has `id`, `rule` and `source`; the rest depends on the file. */
@@ -273,6 +275,24 @@ function checkHolding(v: Vector): string | null {
   return got === want ? null : `holding: got ${got}, want ${want}`;
 }
 
+/**
+ * One alias group's grade (severity.jsonl): each record's own grade through the scanner's
+ * deriveSeverity (label first, CVSS band second), the group through the shared gradeGroup, the
+ * GHSA aliases the mirror holds as given.
+ */
+function checkSeverity(v: Vector): string | null {
+  const raw = (Array.isArray(v.records) ? v.records : [v.record]) as OsvVulnerability[];
+  const fixed = optStr(v, "fixed_version");
+  const aliasGrades = new Map(Object.entries((v.aliases_available ?? {}) as Record<string, OsvVulnerability["id"] | null>)) as Map<string, "critical" | "high" | "medium" | "low" | "unknown" | null>;
+  const grade = gradeGroup(
+    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: fixed === null && isMaintenanceNotice({ summary: r.summary ?? "" }) })),
+    aliasGrades,
+  );
+  const want = v.expect as { severity: string | null; severity_from: string | null; urgency: string };
+  const got = { severity: grade.severity, severity_from: grade.inheritedFrom, urgency: grade.urgency };
+  return JSON.stringify(got) === JSON.stringify({ severity: want.severity, severity_from: want.severity_from, urgency: want.urgency }) ? null : `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
+}
+
 export function checkVector(file: VectorFile, v: Vector, records: Records): string | null {
   try {
     switch (file) {
@@ -290,6 +310,8 @@ export function checkVector(file: VectorFile, v: Vector, records: Records): stri
         return checkRangeCheck(v, records);
       case "holding":
         return checkHolding(v);
+      case "severity":
+        return checkSeverity(v);
     }
   } catch (e) {
     return `error: ${(e as Error).message}`;

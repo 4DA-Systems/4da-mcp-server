@@ -31,6 +31,7 @@ import { groupIsStale, resolveGroup, type GroupResolution, type ResolutionGroup 
 import { mapEcosystem } from "./version-resolver.js";
 import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
+import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem } from "./lockfile-types.js";
 import type {
   InstallDriftRecord,
@@ -310,10 +311,10 @@ export class LiveIntelligence {
   /**
    * Run vulnerability scan (returns cached if fresh, fetches otherwise).
    *
-   * Without `includeDev`, only DIRECT devDependencies are left out (the
-   * documented contract). A transitive stays in whatever its scope: an
-   * unknown scope must not be hidden, and a known dev-only one is graded
-   * down by the shared severity rule, not dropped.
+   * Without `includeDev`, every dev-only copy is left out (severity-scope.ts
+   * isDevOnlyCopy: a direct devDependency, or a transitive whose every path
+   * is a dev one), the population dependency_health and upgrade_planner leave
+   * out too. A copy of unknown scope stays: it must not be hidden.
    */
   async scanVulnerabilities(
     projectPath: string,
@@ -323,12 +324,10 @@ export class LiveIntelligence {
       return emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: LOOKUPS_DISABLED });
     }
 
-    const scoped = options?.includeDev
-      ? this.auditDeps
-      : this.auditDeps.filter((d) => !(d.isDirect && d.isDev));
     // Read at scan time, not init time: the app rewrites its inventory on
     // every rescan, and the freshest determination is the one to grade by.
-    const deps = applyInstanceDevScope(this.db, scoped);
+    const scoped = applyInstanceDevScope(this.db, this.auditDeps);
+    const deps = options?.includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));
 
     if (deps.length === 0) {
       return emptyVulnResult(projectPath, false);

@@ -16,7 +16,7 @@
  */
 
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
-import { advisoryAffects, isPrereleaseVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoriesAffecting, isPrereleaseVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { compareVersions, parsePep440 } from "../live/version-compare.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
@@ -229,8 +229,8 @@ export function checkRange(input: {
   const admitted = installable.filter((v) => rangeAdmits(ecosystem, range, v) === true);
   const stable = admitted.filter((v) => !isPrereleaseIn(ecosystem, v));
   const candidates = (stable.length > 0 ? stable : admitted).sort((a, b) => compareIn(ecosystem, a, b));
-  const real = input.advisories.filter((a) => !a.maintenance);
-  const affecting = (v: string) => real.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id);
+  // The same predicate every tool runs on a release it offers (osv-ranges.ts advisoriesAffecting).
+  const affecting = (v: string) => advisoriesAffecting(input.advisories, v, ecosystem);
   const safe = candidates.filter((v) => affecting(v).length === 0);
   const out: RangeCheck = {
     range,

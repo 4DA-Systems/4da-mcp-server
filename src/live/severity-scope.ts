@@ -33,6 +33,19 @@ export interface DependencyScope {
   devScopeKnown: boolean;
 }
 
+/**
+ * Dev-only: EVERY installed path to this copy goes through dev dependencies (vulnerability_scan's
+ * `is_dev` with a known scope: a direct devDependency, or a transitive the lockfile marks dev).
+ * The one population `include_dev: false` leaves out, in vulnerability_scan, dependency_health and
+ * upgrade_planner alike. The three meant three things: health left out only direct
+ * devDependencies yet said "devDependencies left out" (NodeGoat: 82 vulnerable packages where 34
+ * are runtime), the scan kept 225 dev-only rows, and the planner dropped all 90 dev-only copies
+ * (final release audit of 6.2.5, finding 6).
+ */
+export function isDevOnlyCopy(d: { isDev: boolean; devScopeKnown?: boolean }): boolean {
+  return d.isDev === true && d.devScopeKnown === true;
+}
+
 const ONE_LEVEL_DOWN: Record<SeverityTier, SeverityTier> = {
   critical: "high",
   high: "medium",
@@ -100,4 +113,18 @@ export function countBySeverity<T>(entries: T[], tierOf: (entry: T) => SeverityT
   const counts: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   for (const entry of entries) counts[tierOf(entry)]++;
   return counts;
+}
+
+/**
+ * The tier a finding RANKS by (the 4DA app's base urgency, severity vectors sv-004/sv-010/sv-019),
+ * then the scope rule, as presentedSeverity applies it: an ungraded advisory ranks medium, a
+ * malicious-package record (MAL-) at least high. A dev-only medium ranks low, as the scan presents
+ * it; the planner kept it at medium (final release audit, finding 2 and the 4DA severity parity).
+ */
+export function rankedSeverity(v: ScopedEntry & { vulnId?: string }): Exclude<SeverityTier, "unknown"> {
+  const malware = /^MAL-/i.test(v.vulnId ?? "");
+  let base = v.severity === "unknown" ? (malware ? "high" : "medium") : v.severity;
+  if (malware && SEVERITY_RANK[base] < SEVERITY_RANK.high) base = "high";
+  const tier = presentedSeverity({ ...v, severity: base });
+  return tier === "unknown" ? "medium" : tier;
 }

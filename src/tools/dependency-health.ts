@@ -15,6 +15,10 @@ import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
 import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
+import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
+import { computeSemverDistance } from "../live/semver-utils.js";
+import { isDevOnlyCopy } from "../live/severity-scope.js";
+import { compareVersions } from "../live/version-compare.js";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -71,6 +75,39 @@ function withInstalledVersions(rows: RegistryPackageInfo[], drift: InstallDriftR
     const records = driftFor(drift, row.name, row.currentVersion);
     if (records.length === 0) return row;
     return { ...row, installedVersion: [...new Set(records.map((r) => r.installedVersion))].join(", ") };
+  });
+}
+
+/** Time spent checking the newest releases the rows offer against their advisories. */
+const OFFER_CHECK_BUDGET_MS = 10_000;
+
+/**
+ * Each row whose latest stable release is newer than the installed one: that release checked
+ * against the package's advisories and the registry's withdrawals. A known-affected or withdrawn
+ * one is not offered: `latestSafeVersion` names the newest release that is neither, and
+ * `versionsBehind` is measured to it (so it is not "outdated" when nothing newer is safe).
+ */
+async function vetLatest(liveIntel: LiveIntelligence, rows: RegistryPackageInfo[]): Promise<RegistryPackageInfo[]> {
+  const offered = (r: RegistryPackageInfo) => {
+    const latest = r.latestStableVersion || r.latestVersion;
+    return latest && r.currentVersion && compareVersions(latest, r.currentVersion, r.ecosystem) > 0 ? latest : null;
+  };
+  const key = (r: RegistryPackageInfo) => `${r.ecosystem}\u0000${r.name}\u0000${r.currentVersion}`;
+  const sources = liveIntel.getFixPathSources();
+  const vets = await vetOfferedReleases(
+    sources,
+    rows.filter((r) => offered(r) !== null).map((r) => ({ key: key(r), ecosystem: r.ecosystem, name: r.name, installed: r.currentVersion, offered: offered(r)! })),
+    OFFER_CHECK_BUDGET_MS,
+  );
+  return rows.map((r) => {
+    const latest = offered(r);
+    if (!latest || !sources) return r;
+    const vet = vets.get(key(r));
+    if (!vet) return { ...r, latestStableNote: uncheckedOfferNote(r.name, latest) };
+    if (!vet.note) return r;
+    if (!vet.checked) return { ...r, latestStableNote: vet.note };
+    const versionsBehind = vet.safe && r.currentVersion ? computeSemverDistance(r.currentVersion, vet.safe) : null;
+    return { ...r, latestSafeVersion: vet.safe, latestStableNote: vet.note, versionsBehind };
   });
 }
 
@@ -146,10 +183,11 @@ export async function executeDependencyHealth(
 
   const ecosystems = [...new Set(deps.map((d) => d.ecosystem))];
 
-  // Fetch registry health for all deps
-  const registryData = withInstalledVersions(
-    await liveIntel.fetchRegistryHealth(deps),
-    liveIntel.getInstallDrift(),
+  // Fetch registry health for all deps. The newest release a row offers is checked as
+  // dependency_check checks one (offered-release.ts): crossenv's latest stable is the malware.
+  const registryData = await vetLatest(
+    liveIntel,
+    withInstalledVersions(await liveIntel.fetchRegistryHealth(deps), liveIntel.getInstallDrift()),
   );
 
   // Merge vulnerability data. "Vulnerable" means the actionable set — built
@@ -166,7 +204,7 @@ export async function executeDependencyHealth(
   // What OSV did NOT answer for. A score or a vulnerable count computed
   // without it reads as healthier than the project is (6.2.4 scored 75/100
   // with 10,568 dependencies unchecked), so both are withheld.
-  const scopeTotal = liveIntel.getAuditDeps().filter((d) => includeDev || !(d.isDirect && d.isDev)).length;
+  const scopeTotal = liveIntel.getAuditDeps().filter((d) => includeDev || !isDevOnlyCopy(d)).length;
   const coverage = vulnerabilityCoverage(vulnResult, {
     enabled: liveIntel.isEnabled(),
     expectedTotal: scopeTotal,
@@ -190,9 +228,10 @@ export async function executeDependencyHealth(
   // which includes direct devDependencies by default, while the registry rows
   // leave them out without include_dev. navcal read "4 direct" vulnerable, 3 of
   // them devDependencies, beside "25 devDependencies left out" (audit L2).
-  // The same predicate scanVulnerabilities scopes by. ecosystem_filter narrows
-  // the vulnerability counts too, not only the registry rows.
-  const inScope = (v: { isDirect: boolean; isDev: boolean }) => includeDev || !(v.isDirect && v.isDev);
+  // The same predicate scanVulnerabilities scopes by: without include_dev every dev-only copy is
+  // left out (isDevOnlyCopy), not only direct devDependencies (final audit, finding 6).
+  // ecosystem_filter narrows the vulnerability counts too, not only the registry rows.
+  const inScope = (v: { isDirect: boolean; isDev: boolean; devScopeKnown?: boolean }) => includeDev || !isDevOnlyCopy(v);
   const allVulns = (vulnResult?.vulnerabilities ?? []).filter((v) => inScope(v) && (!params.ecosystem_filter || v.ecosystem === params.ecosystem_filter));
   const activeVulns = allVulns.filter(isActionableVulnerability);
   // Keyed by (ecosystem, name): a bare name let an npm advisory mark a
@@ -226,14 +265,14 @@ export async function executeDependencyHealth(
   // Of those, the ones a manifest declares (fixable by a direct bump).
   const vulnerableDirect = new Set(activeVulns.filter((v) => v.isDirect).map((v) => vulnKey(v.ecosystem, v.package))).size;
   // The tree the vulnerability counts range over (every installed copy OSV was asked about).
-  // A wider (devDependency-inclusive) scan counts exactly the direct devDependencies more than this scope.
+  // A wider (dev-inclusive) scan counts exactly the dev-only copies more than this scope.
   // Counted as the scan counts: copies with a version.
   const versioned = liveIntel.getAuditDeps().filter((d) => d.version !== null);
-  const directDev = versioned.filter((d) => d.isDirect && d.isDev).length;
-  const runtimeScope = versioned.length - directDev;
+  const devOnly = versioned.filter((d) => isDevOnlyCopy(d)).length;
+  const runtimeScope = versioned.length - devOnly;
   const scannedAll = vulnResult?.totalScanned ?? 0;
-  const treeDeps = !includeDev && directDev > 0 && scannedAll === versioned.length ? runtimeScope : scannedAll;
-  const devScope = directDev > 0 ? (includeDev ? "; devDependencies included" : "; devDependencies left out") : "";
+  const treeDeps = !includeDev && devOnly > 0 && scannedAll === versioned.length ? runtimeScope : scannedAll;
+  const devScope = devOnly > 0 ? (includeDev ? "; dev-only copies included" : `; ${devOnly.toLocaleString("en-US")} dev-only cop${devOnly === 1 ? "y" : "ies"} left out`) : "";
   // Direct devDependencies left out of the registry rows (include_dev: true adds them).
   const devExcluded = includeDev
     ? 0
@@ -301,7 +340,7 @@ export async function executeDependencyHealth(
   const healthScore = withheld ? null : Math.max(0, 100 - vulnPenalty - deprecatedPenalty - outdatedPenalty);
 
   // Severity breakdown over the actionable set, matching the count above.
-  const vulnSummary = vulnResult && !withheld ? { critical: 0, high: 0, medium: 0, low: 0 } : null;
+  const vulnSummary = vulnResult && !withheld ? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 } : null;
   if (vulnSummary) {
     for (const v of activeAdvisories) {
       if (v.severity in vulnSummary) vulnSummary[v.severity as keyof typeof vulnSummary]++;
@@ -324,6 +363,13 @@ export async function executeDependencyHealth(
     parts.push(withheld || scorePartial ? `at least ${found}, in the checked part` : found);
   }
   if (deprecated > 0) parts.push(`${deprecated} deprecated (direct)`);
+  const unsafeLatest = registryData.filter((d) => d.latestSafeVersion !== undefined);
+  if (unsafeLatest.length > 0) {
+    const none = unsafeLatest.filter((d) => d.latestSafeVersion === null).length;
+    parts.push(
+      `${plural(unsafeLatest.length, "direct dependency whose", "direct dependencies whose")} latest release is affected by an advisory or withdrawn, so it is not offered (latestSafeVersion and latestStableNote say what is${none > 0 ? `; for ${none}, no newer release is safe` : ""})`,
+    );
+  }
   if (outdated > 0) parts.push(`${outdated} outdated (direct)`);
   if (drifted > 0) {
     parts.push(`${drifted} installed at a different version than the lockfile pins (see installedVersion; vulnerability_scan lists install_drift)`);

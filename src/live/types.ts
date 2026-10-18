@@ -264,6 +264,14 @@ export interface RegistryPackageInfo {
    * workspaces are listed comma-separated.
    */
   installedVersion?: string;
+  /**
+   * dependency_health: present when `latestStableVersion` is NOT offered as an upgrade: an advisory
+   * affects it or the registry withdrew it. The newest release above `currentVersion` that is
+   * neither (null when none), which `versionsBehind` is then measured to.
+   */
+  latestSafeVersion?: string | null;
+  /** dependency_health: why `latestStableVersion` is not offered, or that it could not be checked. */
+  latestStableNote?: string;
 }
 
 export interface SemverDistance {
@@ -330,8 +338,12 @@ export interface DependencyHealthResult {
   /** Present when the vulnerability check is incomplete: what was not checked and why. */
   vulnerabilityCoverage?: VulnerabilityCoverage;
   dependencies: RegistryPackageInfo[];
-  /** Advisories (not packages) on the full tree by severity, over the same actionable set. */
-  vulnerabilitySummary: { critical: number; high: number; medium: number; low: number } | null;
+  /**
+   * Advisories (not packages) on the full tree by their own grade, over the same actionable set: the
+   * same counts as vulnerability_scan's `advisory_by_severity` for the same scope. `unknown` counts the
+   * ungraded ones, which were left out of every bucket before (pygoat: 186 counted of 187).
+   */
+  vulnerabilitySummary: { critical: number; high: number; medium: number; low: number; unknown: number } | null;
   summary: string;
   scanDurationMs: number;
   cached: boolean;

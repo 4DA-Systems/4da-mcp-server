@@ -32,6 +32,13 @@ export interface ParentEdge {
    * 10.9.2, 2026-10-15); only a new `parent` release, or replacing `parent`, does (audit E8).
    */
   bundled?: boolean;
+  /**
+   * For a local edge: the declaring manifest's directory relative to the lockfile's ("." for the
+   * project itself, "packages/a" for a workspace member), when the lockfile names it.
+   */
+  dir?: string;
+  /** For a local edge: the manifest section that declares it. */
+  section?: "dependencies" | "devDependencies" | "optionalDependencies" | "peerDependencies";
 }
 
 export interface LockfileParents {
@@ -40,6 +47,13 @@ export interface LockfileParents {
 }
 
 const DEP_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
+/**
+ * The project's own manifest and each workspace member's also declare devDependencies, which a
+ * dependency's lockfile entry never carries. Leaving them out read a dev-only transitive's lever
+ * as "no declared dependency above" (navcal: @vitest/mocker and tinypool arrive through the
+ * devDependency vitest) and a member's devDependency as undeclared (final release audit, finding 3).
+ */
+const LOCAL_DEP_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
 
 /** The lockfile format of a path, or null for a file this module does not read. */
 export function lockfileFormat(file: string, content: string): LockfileFormat | null {
@@ -94,6 +108,7 @@ interface LockEntry {
   dependencies?: Record<string, string> | Record<string, LockEntry>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
 }
 
 /** Node's lookup from install path `from`: its own node_modules, then each ancestor's, then the root's. */
@@ -160,18 +175,19 @@ export function packageLockParents(
     }
     for (const [key, entry] of Object.entries(packages)) {
       if (!entry || entry.link) continue;
-      for (const field of DEP_FIELDS) {
+      const local = !key.startsWith("node_modules/") && !key.includes("/node_modules/");
+      for (const field of local ? LOCAL_DEP_FIELDS : DEP_FIELDS) {
         const declared = entry[field] as Record<string, string> | undefined;
         const range = declared?.[name];
         if (typeof range !== "string") continue;
         const at = resolveInstallPath(packages, key, name);
         if (!at || packages[at]?.version !== version || bundledInDependency(packages, at)) continue;
-        const local = !key.startsWith("node_modules/") && !key.includes("/node_modules/");
         edges.push({
           parent: local ? entry.name ?? (key || lock.name || ".") : packageNameFromNodeModulesPath(key),
           parentVersion: local ? null : entry.version ?? null,
           range,
           local,
+          ...(local ? { dir: key === "" ? "." : key, section: field } : {}),
         });
         break;
       }
@@ -290,7 +306,7 @@ export function pnpmParents(content: string, name: string, version: string): Par
       pendingDep = m ? m[1] ?? m[2] ?? m[3] : null;
       importerSpecifier = null;
       if (pendingDep && m?.[4]) {
-        if (isTarget(pendingDep, m[4])) add({ parent: importer, parentVersion: null, range: null, local: true });
+        if (isTarget(pendingDep, m[4])) add({ parent: importer, parentVersion: null, range: null, local: true, dir: importer });
         pendingDep = null;
       }
     } else if (indent === depIndent + 4 && pendingDep) {
@@ -298,7 +314,7 @@ export function pnpmParents(content: string, name: string, version: string): Par
       if (spec) importerSpecifier = spec[1].replace(/^['"]|['"]$/g, "");
       const ver = /^version:\s*(.+)$/.exec(text);
       if (ver) {
-        if (isTarget(pendingDep, ver[1])) add({ parent: importer, parentVersion: null, range: importerSpecifier, local: true });
+        if (isTarget(pendingDep, ver[1])) add({ parent: importer, parentVersion: null, range: importerSpecifier, local: true, dir: importer });
         pendingDep = null;
       }
     }

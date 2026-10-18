@@ -26,9 +26,9 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
-import { isMaintenanceNotice } from "../live/maintenance.js";
+import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
-import { compareVersions, maxVersion, namesPackage } from "../live/version-compare.js";
+import { compareVersions, inEcosystemForm, maxVersion, namesPackage } from "../live/version-compare.js";
 import { formatAppPlan, readAppPlan, type AppPlanResult } from "./app-plan.js";
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
@@ -36,9 +36,10 @@ import { relativeDir } from "./vulnerability-scan-format.js";
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { reconcileDirectTargets, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
-import { presentedSeverity } from "../live/severity-scope.js";
+import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
+import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 
 export interface UpgradePlannerParams {
@@ -91,9 +92,29 @@ interface UpgradeRecommendation {
    * latest release, or no release up to the latest admits one): force the version (npm `overrides`, pnpm
    * `pnpm.overrides`, yarn `resolutions`, Cargo `[patch]`) or replace the parent;
    * `no_fix_available` = vulnerable with no fixed release to move to;
-   * `not_built_on_this_host` = every advisory is against code this host never compiles.
+   * `not_built_on_this_host` = every advisory is against code this host never compiles;
+   * `upgrade_parent_unverified` = transitive, a parent release that admits a clean version exists,
+   * but no release of the declared dependency that brings it in was verified (every lever's `to`
+   * is null): `parentUpgrades` says what to check; nothing is counted as fixed;
+   * `remove_dependency` = the installed version is npm's security placeholder and every newer
+   * release is known-affected (crossenv: 1.0.0 and 1.0.1 are malware): remove the dependency;
+   * `hold_current` = no advisory affects the installed version, and every newer release is
+   * known-affected or withdrawn: stay on it (the reasons say why).
+   * Every release a row offers, the newest one included, is checked against the package's
+   * advisories and the registry's withdrawals, as dependency_check checks one.
    */
-  action: "upgrade_direct" | "lockfile_refresh" | "upgrade_parent" | "waiting_on_upstream" | "override_or_replace" | "reinstall" | "no_fix_available" | "not_built_on_this_host";
+  action:
+    | "upgrade_direct"
+    | "lockfile_refresh"
+    | "upgrade_parent"
+    | "upgrade_parent_unverified"
+    | "waiting_on_upstream"
+    | "override_or_replace"
+    | "reinstall"
+    | "no_fix_available"
+    | "not_built_on_this_host"
+    | "remove_dependency"
+    | "hold_current";
   /** upgrade_parent / override_or_replace: the parent release that admits a clean version, per blocking parent that can move. */
   parentUpgrades?: ParentUpgrade[];
   /**
@@ -164,6 +185,16 @@ interface UpgradePlanResult {
   projectScope?: string | null;
 }
 
+/** Time the plan spends checking the newer releases its rows offer against their advisories. */
+const OFFER_CHECK_BUDGET_MS = 10_000;
+
+/** The newer release a registry row would offer (its latest stable), or null when it offers none. */
+function offeredUpgrade(dep: { ecosystem: string; currentVersion: string | null; latestStableVersion: string | null; latestVersion: string | null }): string | null {
+  const latest = dep.latestStableVersion || dep.latestVersion;
+  if (!latest || !dep.currentVersion) return null;
+  return compareVersions(latest, dep.currentVersion, dep.ecosystem) > 0 ? latest : null;
+}
+
 /** How long a plan waits for its own OSV scan before answering CVE-blind (the scan keeps running). */
 const PLANNER_SCAN_TIMEOUT_MS = 60_000;
 
@@ -219,18 +250,15 @@ function planOrder(a: UpgradeRecommendation, b: UpgradeRecommendation): number {
 
 /**
  * The grade a row ranks by: the scope-adjusted severity vulnerability_scan presents (transitive
- * caps critical at high; dev-only drops one level), never below medium for a vulnerable package.
- * Ranking on the raw grade let dev-only criticals push a runtime high out of max_recommendations
- * (readiness review 2026-10-17, finding 6).
+ * caps critical at high; dev-only drops one level), over the 4DA app's base urgency (an ungraded
+ * advisory medium, a MAL- record high: severity-scope.ts rankedSeverity). A dev-only medium is low,
+ * as the scan presents it; it used to stay medium. Ranking on the raw grade let dev-only criticals
+ * push a runtime high out of max_recommendations (readiness review 2026-10-17, finding 6).
  */
 function riskOf(entries: VulnerabilityEntry[]): UpgradeRecommendation["risk"] {
-  return severityToRisk(entries.map((v) => presentedSeverity(v)));
-}
-
-function severityToRisk(severities: string[]): UpgradeRecommendation["risk"] {
-  if (severities.includes("critical")) return "critical";
-  if (severities.includes("high")) return "high";
-  return "medium";
+  const tiers = entries.map((v) => rankedSeverity(v));
+  for (const t of ["critical", "high", "medium"] as const) if (tiers.includes(t)) return t;
+  return "low";
 }
 
 /** Distance between the installed and target versions (patch/minor/major), or unknown. */
@@ -333,11 +361,21 @@ async function executeStandalonePlanner(
   const devFreshnessSkipped = deps.length - registryDeps.length;
   // Fetch registry data (live lookups for direct deps; cached where fresh)
   const registryData = await liveIntel.fetchRegistryHealth(registryDeps);
+  // Every newer release a row offers is checked as dependency_check checks one (offered-release.ts):
+  // crossenv 0.0.2-security was sent to 1.0.1, the malware itself (final release audit of 6.2.5).
+  const offerSources = liveIntel.getFixPathSources();
+  const offers = await vetOfferedReleases(
+    offerSources,
+    registryData
+      .filter((d) => offeredUpgrade(d) !== null)
+      .map((d) => ({ key: `${d.ecosystem}\0${d.name}\0${d.currentVersion ?? "unknown"}`, ecosystem: d.ecosystem, name: d.name, installed: d.currentVersion, offered: offeredUpgrade(d)! })),
+    OFFER_CHECK_BUDGET_MS,
+  );
   // Complete vulnerability data only: a partial scan (OSV.dev unreachable or
   // rate limited for some dependencies) ranks what it found and says the rest
   // is unchecked; it never claims the plan is CVE-aware (6.2.4 said
   // vulnerabilityDataAvailable: true over 10,568 unchecked dependencies).
-  const scopeTotal = liveIntel.getAuditDeps().filter((d) => includeDev || !(d.isDirect && d.isDev)).length;
+  const scopeTotal = liveIntel.getAuditDeps().filter((d) => includeDev || !isDevOnlyCopy(d)).length;
   const coverage = vulnerabilityCoverage(vulnResult, {
     enabled: liveIntel.isEnabled(),
     expectedTotal: scopeTotal,
@@ -380,7 +418,14 @@ async function executeStandalonePlanner(
     directPackages.add(instanceKey(dep.ecosystem, dep.name, dep.currentVersion));
     const reasons: string[] = [];
     let risk: UpgradeRecommendation["risk"] = "low";
-    const latestStable = dep.latestStableVersion || dep.latestVersion;
+    const registryLatest = dep.latestStableVersion || dep.latestVersion;
+    // The newest release this row may offer: the registry's latest, unless an advisory affects it or
+    // the registry withdrew it; then the newest release above the installed one that is neither.
+    const offered = offeredUpgrade(dep);
+    const vet = offered ? offers.get(instanceKey(dep.ecosystem, dep.name, dep.currentVersion)) : undefined;
+    const offerNote = offered ? (vet ? vet.note : offerSources ? uncheckedOfferNote(dep.name, offered) : null) : null;
+    const latestStable = vet?.checked && vet.note ? vet.safe : registryLatest;
+    const noSafeUpgrade = Boolean(offered && vet?.checked && vet.note && vet.safe === null);
     let targetVersion = latestStable;
     let platformActive = true;
     let fixable = false;
@@ -418,9 +463,10 @@ async function executeStandalonePlanner(
       reasons.push(dep.deprecationMessage ? `Deprecated: ${dep.deprecationMessage}` : "Package is deprecated");
     }
 
-    // Check version distance
-    if (dep.versionsBehind) {
-      const d = dep.versionsBehind;
+    // Check version distance: to the release this row may offer, not to a known-affected latest.
+    const behind = latestStable === registryLatest ? dep.versionsBehind : latestStable && dep.currentVersion ? computeSemverDistance(dep.currentVersion, latestStable) : null;
+    if (behind && behind.label !== "up-to-date") {
+      const d = behind;
       if (d.label === "major" && d.major === 0) {
         // A 0.x bump: breaking under caret rules, though the major number is unchanged.
         const n = d.minor > 0 ? d.minor : d.patch;
@@ -462,8 +508,12 @@ async function executeStandalonePlanner(
       }
     }
 
+    // Every newer release is known-affected or withdrawn: the row says so (crossenv: remove it).
+    if (noSafeUpgrade && offerNote) reasons.push(offerNote);
     // Skip if no upgrade needed (no vuln, not deprecated, not behind, no drift => no reasons)
     if (reasons.length === 0) continue;
+    // The newer release it would have offered was replaced or could not be checked: said, never silent.
+    if (offerNote && !noSafeUpgrade) reasons.push(offerNote);
     if (dep.declaredRange) {
       reasons.push(`No lockfile: ${dep.currentVersion} is the floor of the declared range "${dep.declaredRange}", not an installed version`);
     }
@@ -490,9 +540,13 @@ async function executeStandalonePlanner(
         ? "not_built_on_this_host"
         : vulnerable && !fixable
           ? "no_fix_available"
-          : targetVersion
-            ? "upgrade_direct"
-            : "no_fix_available";
+          : !vulnerable && noSafeUpgrade
+            ? vet?.holding
+              ? "remove_dependency"
+              : "hold_current"
+            : targetVersion
+              ? "upgrade_direct"
+              : "no_fix_available";
 
     const rec: UpgradeRecommendation = {
       package: dep.name,
@@ -539,7 +593,7 @@ async function executeStandalonePlanner(
       if (isMaintenanceNotice(v)) continue;
       if (directPackages.has(instanceKey(v.ecosystem, v.package, v.currentVersion))) continue;
       const key = instanceKey(v.ecosystem, v.package, v.currentVersion);
-      if (!includeDev && v.isDev && v.devScopeKnown) {
+      if (!includeDev && isDevOnlyCopy(v)) {
         devSkipped.add(key);
         continue;
       }
@@ -618,6 +672,11 @@ async function executeStandalonePlanner(
   // newer release clears (express 4.20.0 still pins path-to-regexp 0.1.10; audit H1).
   await reconcileDirectTargets(limited, verifiedInputs, liveIntel);
   limited.sort(planOrder);
+  // Go module versions carry their `v` in every field, as currentVersion does (audit 7e).
+  for (const r of limited) {
+    r.targetVersion = inEcosystemForm(r.ecosystem, r.targetVersion);
+    if (r.latestVersion !== undefined) r.latestVersion = inEcosystemForm(r.ecosystem, r.latestVersion);
+  }
   const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct");
   const quickWins = upgrades.filter((r) => !r.breaking).length;
   const breakingChanges = upgrades.filter((r) => r.breaking).length;
@@ -629,6 +688,9 @@ async function executeStandalonePlanner(
   const reinstalls = limited.filter((r) => r.action === "reinstall").length;
   const noFix = limited.filter((r) => r.action === "no_fix_available").length;
   const inactive = limited.filter((r) => r.action === "not_built_on_this_host").length;
+  const unverifiedParents = limited.filter((r) => r.action === "upgrade_parent_unverified").length;
+  const removals = limited.filter((r) => r.action === "remove_dependency").length;
+  const holds = limited.filter((r) => r.action === "hold_current").length;
 
   // Summary
   const parts: string[] = [];
@@ -642,7 +704,14 @@ async function executeStandalonePlanner(
   if (reinstalls > 0) parts.push(`${reinstalls} need only a reinstall (node_modules behind the lockfile)`);
   if (lockfileRefreshes > 0) parts.push(`${lockfileRefreshes} transitive, fixed by a lockfile refresh (every parent already admits a clean version)`);
   if (parentUpgradeSteps > 0) parts.push(`${parentUpgradeSteps} transitive, fixed by upgrading the parent that pins it (parentUpgrades names the release)`);
+  if (unverifiedParents > 0) {
+    parts.push(
+      `${unverifiedParents} transitive, a parent release that admits a clean version exists but no release of the declared dependency that brings it in was verified (parentUpgrades says what to check; not counted as fixed)`,
+    );
+  }
   if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream`);
+  if (removals > 0) parts.push(`${removals} to remove: npm's security placeholder, every newer release known-affected (malware)`);
+  if (holds > 0) parts.push(`${holds} to keep where ${holds === 1 ? "it is" : "they are"}: every newer release is known-affected or withdrawn`);
   if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated, already its latest release, or no release admits a clean version): override the version or replace the parent`);
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
   if (noFix > 0) parts.push(`${noFix} vulnerable with no fixed release yet`);
@@ -650,6 +719,8 @@ async function executeStandalonePlanner(
   const criticalCount = limited.filter((r) => r.risk === "critical").length;
   if (criticalCount > 0) parts.push(`${criticalCount} critical`);
   if (devOnly > 0) parts.push(`${devOnly} dev-only (isDev)`);
+  // The population, worded as dependency_health and vulnerability_scan word it (finding 6).
+  if (vulnResult) parts.push(populationNote(vulnResult.vulnerabilities, liveIntel.getAuditDeps(), includeDev, named));
   if (devDirectLeftOut + devTransitiveLeftOut + devDirectUnchecked > 0) {
     const left: string[] = [];
     if (devDirectLeftOut > 0) left.push(`${devDirectLeftOut} vulnerable devDependenc${devDirectLeftOut !== 1 ? "ies" : "y"}`);
@@ -687,6 +758,27 @@ async function executeStandalonePlanner(
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
   };
+}
+
+/**
+ * "Planned over N vulnerable packages (M installed copies) in the full tree of T installed
+ * (K dev-only copies left out)": the same population, counted the same way, as
+ * dependency_health's vulnerableCount and vulnerability_scan's total_vulnerable_packages.
+ */
+function populationNote(
+  vulns: VulnerabilityEntry[],
+  tree: Array<{ name: string; ecosystem: string; version: string | null; isDev: boolean; devScopeKnown?: boolean }>,
+  includeDev: boolean,
+  named: (name: string, ecosystem: string) => boolean,
+): string {
+  const active = vulns.filter((v) => isActionableVulnerability(v) && (includeDev || !isDevOnlyCopy(v)) && named(v.package, v.ecosystem));
+  const packages = new Set(active.map((v) => `${v.ecosystem}\0${v.package}`)).size;
+  const copies = new Set(active.map((v) => `${v.ecosystem}\0${v.package}\0${v.currentVersion}`)).size;
+  const versioned = tree.filter((d) => d.version !== null);
+  const devOnly = versioned.filter((d) => isDevOnlyCopy(d)).length;
+  const total = includeDev ? versioned.length : versioned.length - devOnly;
+  const dev = devOnly > 0 ? (includeDev ? "; dev-only copies included" : `; ${devOnly.toLocaleString("en-US")} dev-only cop${devOnly === 1 ? "y" : "ies"} left out`) : "";
+  return `Planned over ${packages} vulnerable package${packages !== 1 ? "s" : ""} (${copies} installed cop${copies !== 1 ? "ies" : "y"}) in the full tree of ${total.toLocaleString("en-US")} installed${dev ? ` (${dev.slice(2)})` : ""}`;
 }
 
 /** "N known vulnerabilities (ids)", one per alias group. */

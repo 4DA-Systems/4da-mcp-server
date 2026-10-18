@@ -28,14 +28,15 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { escapeModulePath } from "./go-registry.js";
-import { advisoryRanges, advisoryAffects, installableFix, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
+import { advisoryRanges, advisoryAffects, installableFix, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
+import { confinedInclude, requirementOptions } from "./lockfile-parsers-pygo.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
-import { compareVersions } from "./version-compare.js";
+import { compareVersions, maxVersion } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
@@ -48,7 +49,7 @@ const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
 /** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 7;
+const CACHE_VERSION = 8;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
@@ -66,6 +67,13 @@ export interface PackageReleaseFacts {
   latest: string | null;
   /** The package-level deprecation of the newest release (npm), or null. */
   deprecatedLatest: string | null;
+  /**
+   * npm: releases that carry a `deprecated` message the withdrawal rule does NOT withdraw (a
+   * notice on a whole line, such as glob's "Old versions of glob are not supported"), with the
+   * message. Still candidates; a tool that offers one says it is deprecated (final release audit
+   * of 6.2.5: the plan targeted glob 10.5.0 while dependency_check said review on it).
+   */
+  lineNotices?: Record<string, string>;
 }
 
 export interface CrateDepReq {
@@ -305,12 +313,14 @@ export class FixPathSources {
     const withdrawn = npmExcludedVersions(Object.fromEntries(Object.entries(versions).map(([v, m]) => [v, m?.deprecated])), latest);
     const out = new Set(withdrawn);
     const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? (versions[v].deprecated as string) : null);
+    const noticed = Object.keys(versions).filter((v) => !out.has(v) && isNpmDeprecated(versions[v]?.deprecated));
     const facts: PackageReleaseFacts = {
       versions: Object.keys(versions).filter((v) => !out.has(v)),
       withdrawn,
       withdrawnWhy: Object.fromEntries(withdrawn.map((v) => [v, withdrawalText("npm", v, message(v))])),
       latest,
       deprecatedLatest: latest && isNpmDeprecated(versions[latest]?.deprecated) ? (message(latest) ?? "deprecated") : null,
+      ...(noticed.length > 0 ? { lineNotices: Object.fromEntries(noticed.map((v) => [v, message(v) ?? "deprecated"])) } : {}),
     };
     this.cache.set(key, facts, "npm", VERSIONS_TTL);
     return facts;
@@ -438,6 +448,15 @@ export type FixTargetResult = CleanTarget & {
    * (`fix: null` when none past it is known) and the withdrawn ones passed (installableFix).
    */
   lineFixes?: Record<string, { fix: string | null; withheld: string[] }>;
+  /**
+   * npm: the target carries a deprecation notice the withdrawal rule keeps (one on its whole line,
+   * no later release on the line free of it: glob 10.5.0, "Old versions of glob are not
+   * supported"). It stays the target, the smallest fix without a major upgrade, and every tool
+   * says it is deprecated, as dependency_check does with `review` (final release audit 7f).
+   */
+  targetNotice?: string;
+  /** The package's malware advisories (#981 rule a): a release one affects is never the target. */
+  malware?: string[];
 };
 
 /**
@@ -467,14 +486,23 @@ export async function cleanFixTarget(
     sources.packageAdvisories(ecosystem, name),
     sources.releaseFacts(ecosystem, name),
   ]);
+  if (!advisories && !facts && perAdvisoryFixes.length > 0 && WITHDRAWALS_READ.has(ecosystem)) {
+    // Neither OSV's list nor the registry answered: the highest per-advisory fix stands, checked
+    // against the installed version's advisories only, and the answer says the withdrawal check
+    // did not run (lodash 4.18.0, "Bad release", went out with no word of it: final audit 7a).
+    const floor = maxVersion(perAdvisoryFixes, ecosystem) ?? perAdvisoryFixes[0];
+    return { target: floor, basis: "advisory_fixes", floor, floorAffectedBy: [], stillAffectedBy: [], unfixable: [], withheld: [], advisoriesUnread: true, registryUnread: true };
+  }
   if (!advisories) return perAdvisoryFixes.length > 0 && facts ? registryOnlyTarget(ecosystem, perAdvisoryFixes, facts) : null;
   // Every release the registry lists, the withdrawn ones included so the result can name them;
   // `excluded` keeps them from ever being the target (FX-H5).
   const published = facts ? [...facts.versions, ...facts.withdrawn] : null;
   const excluded = facts?.withdrawn ?? [];
+  const malware = advisories.filter((a) => a.malware).map((a) => a.id);
   if (perAdvisoryFixes.length > 0) {
     const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published, excluded });
     if (!clean) return null;
+    if (malware.length > 0) Object.assign(clean, { malware });
     return withRegistryFacts({ ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}) }, ecosystem, perAdvisoryFixes, advisories, facts);
   }
   // Only a registry list can show a release past a last_affected bound.
@@ -509,10 +537,12 @@ function withRegistryFacts(
   }
   const named = new Set([...clean.withheld, ...Object.values(lineFixes).flatMap((l) => l.withheld)]);
   const withheldWhy = Object.fromEntries([...named].map((v) => [v, facts.withdrawnWhy[v] ?? withdrawalText(ecosystem, v)]));
+  const notice = clean.target ? facts.lineNotices?.[clean.target] : undefined;
   return {
     ...clean,
     ...(named.size > 0 ? { withheldWhy } : {}),
     ...(Object.keys(lineFixes).length > 0 ? { lineFixes } : {}),
+    ...(notice ? { targetNotice: lineNoticeText(clean.target!, notice) } : {}),
   };
 }
 
@@ -529,6 +559,22 @@ function registryOnlyTarget(ecosystem: OsvEcosystem, fixes: string[], facts: Pac
   if (!clean || (clean.target !== null && clean.target === clean.floor)) return null;
   if (clean.target === null && clean.withheld.length === 0) return null;
   return withRegistryFacts({ ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true }, ecosystem, fixes, [], facts);
+}
+
+/** #981 (b): an advisory whose ranges cannot be read leaves the release unknown, never skipped silently. */
+export function unreadableText(ids: string[]): string {
+  return `the affected ranges of ${ids.join(", ")} cannot be read, so whether any release clears ${ids.length === 1 ? "it" : "them"} is unknown: no release is named`;
+}
+
+/** #981 round 3: an installed copy a malicious advisory affects names no release; the advice is to remove or replace it. */
+export function malwareText(name: string, ids: string[]): string {
+  return `${name} is flagged malicious (${ids.join(", ")}): remove or replace ${name}`;
+}
+
+/** The words for a target that carries a line-wide deprecation notice (FixTargetResult.targetNotice). */
+export function lineNoticeText(version: string, message: string): string {
+  const quoted = message.length > 120 ? `${message.slice(0, 117)}...` : message;
+  return `${version} is deprecated on npm ("${quoted}"), a notice on its whole line rather than a withdrawn release (no later release on the line is free of it), so it stays the smallest fix without a major upgrade; dependency_check says review for it: tell the user it is deprecated`;
 }
 
 /** The ecosystems whose registry withdrawals (yanked, deprecated) are read. */
@@ -585,6 +631,7 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
   const withheld = withheldText(clean, ecosystem);
   if (clean.advisoriesUnread) {
     const unchecked = "not checked against the package's other advisories (OSV.dev did not answer)";
+    if (clean.registryUnread) return `${clean.target} is the highest per-advisory fix, ${unchecked}; ${REGISTRY_UNREAD_NOTE}`;
     // Not "clean": nothing but the installed version's advisories was checked.
     if (withheld && clean.target) return `${withheld.replace(/ is the smallest clean release$/, " is the smallest installable release past it")}; ${unchecked}`;
     if (withheld) return `${withheld}; ${unchecked}`;
@@ -607,9 +654,11 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
     }
   }
   if (clean.target && clean.stillAffectedBy.length > 0) {
-    parts.push(`${clean.stillAffectedBy.join(", ")} also affect${clean.stillAffectedBy.length === 1 ? "s" : ""} it and every newer release (no fix published)`);
+    parts.push(`${clean.target} ${remainsText(clean.stillAffectedBy)}: ${clean.stillAffectedBy.length === 1 ? "it affects" : "they affect"} every newer release too`);
   }
+  if (clean.target === null && clean.unreadable && clean.unreadable.length > 0) parts.push(unreadableText(clean.unreadable));
   if (clean.registryUnread) parts.push(REGISTRY_UNREAD_NOTE);
+  if (clean.targetNotice) parts.push(clean.targetNotice);
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
@@ -708,9 +757,27 @@ export function overrideReaches(blocking: Array<{ bundled?: boolean }>): boolean
  * path or alternate-registry crate; a yarn workspace member (`yarn up` is project-wide); a Go
  * `replace`; hashed or pip-compiled requirements; bun or an unknown tool.
  */
-export type DirectFix = { command: string } | { instruction: string };
+export type DirectFix =
+  | { command: string }
+  | { instruction: string }
+  /**
+   * The declared range ALREADY admits the target (navcal: sharp, next and vite under `^`): the
+   * minimal advice is the tool's in-range lockfile refresh, which leaves the manifest untouched,
+   * not a bump of the declaration. The refresh command for a declared dependency is named only once
+   * it has been verified against each tool (the 4DA app's osv::direct_upgrade, shared fix_command
+   * vectors to come), so this names none: `declared` is the range that admits it.
+   */
+  | { inRange: true; declared: string };
 
 type NpmManager = "npm" | "pnpm" | "yarn1" | "yarn-berry";
+
+/**
+ * Whether a declaration that already admits the target gets the in-range branch (`inRange`, no
+ * command) instead of a bump command. Off until the shared fix_command vectors for it land: today's
+ * vectors fc-029..fc-041 still pin the bump command for such declarations, and the vectors are the
+ * contract. Turning it on is this one line, with the new vectors.
+ */
+export const IN_RANGE_REFRESH = false;
 
 /** How far up from a project directory a workspace lockfile is looked for (the app's MAX_LOCKFILE_ASCENT). */
 const MAX_LOCKFILE_ASCENT = 6;
@@ -967,6 +1034,7 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       const json = read("package.json");
       const declared = json === null ? null : npmDeclared(json, name);
       if (declared === null || npmRangeAdmits(declared, installed) !== true) return null;
+      if (IN_RANGE_REFRESH && npmRangeAdmits(declared, target) === true && npmOperator(declared) !== "") return { inRange: true, declared };
       const command = npmDirectCommand(manager, declared, name, target);
       return command ? { command } : null;
     }
@@ -977,6 +1045,9 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       if (decls.length !== 1) return null;
       const [only] = decls;
       const admits = only.req !== null ? cargoReqAdmits(only.req, installed) === true : only.workspace;
+      if (IN_RANGE_REFRESH && admits && only.req !== null && !only.workspace && !only.otherSource && !only.req.trim().startsWith("=") && cargoReqAdmits(only.req, target) === true) {
+        return { inRange: true, declared: only.req };
+      }
       return admits ? cargoDirect(only, name, target) : null;
     }
     case "Go": {
@@ -985,10 +1056,18 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       return command ? { command } : null;
     }
     case "PyPI": {
-      for (const file of ["requirements.txt", "requirements-dev.txt", "requirements/base.txt"]) {
-        const body = read(file);
-        const instruction = body === null ? null : pypiDirectInstruction(body, file, name, installed, target);
+      // A pin in a file included with `-r` is declared too, and edited there (audit 7g).
+      const files = ["requirements.txt", "requirements-dev.txt", "requirements/base.txt"];
+      for (let i = 0; i < files.length && i < 16; i++) {
+        const body = read(files[i]);
+        if (body === null) continue;
+        const instruction = pypiDirectInstruction(body, files[i], name, installed, target);
         if (instruction) return { instruction };
+        for (const { option, target: inc } of requirementOptions(body)) {
+          const included = option === "r" ? confinedInclude(path.dirname(path.join(projectDir, files[i])), inc, projectDir) : null;
+          const rel = included ? path.relative(projectDir, included).replace(/\\/g, "/") : null;
+          if (rel && !files.includes(rel)) files.push(rel);
+        }
       }
       return null;
     }

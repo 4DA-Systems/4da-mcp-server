@@ -16,7 +16,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { normalizePythonName, parseGoMod } from "./live/lockfile-parsers-pygo.js";
+import { confinedInclude, normalizePythonName, parseGoMod, requirementOptions } from "./live/lockfile-parsers-pygo.js";
 
 /** The body of a TOML table (`[name]`) up to the next table header, or null. */
 export function tomlTable(content: string, name: string): string | null {
@@ -120,6 +120,31 @@ export function parseRequirementNames(content: string): string[] {
     if (!line || line.startsWith("-")) continue;
     const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(line);
     if (m) names.push(normalizePythonName(m[1]));
+  }
+  return [...new Set(names)];
+}
+
+/**
+ * Requirement names from a requirements file and every file it includes with `-r` (confined to
+ * `root`, as the version reader confines them): an included file's pins are declared too. A pin
+ * in `-r sub/inner.txt` read as "Transitive dependency, not declared in your manifest" (final
+ * release audit of 6.2.5, 7g: jinja2==2.10).
+ */
+export function requirementNamesWithIncludes(file: string, root: string = path.dirname(path.resolve(file)), visited: Set<string> = new Set()): string[] {
+  const key = path.resolve(file).toLowerCase();
+  if (visited.has(key)) return [];
+  visited.add(key);
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf-8");
+  } catch {
+    return [];
+  }
+  const names = parseRequirementNames(content);
+  for (const { option, target } of requirementOptions(content)) {
+    if (option !== "r") continue;
+    const included = confinedInclude(path.dirname(file), target, root);
+    if (included) names.push(...requirementNamesWithIncludes(included, root, visited));
   }
   return [...new Set(names)];
 }
