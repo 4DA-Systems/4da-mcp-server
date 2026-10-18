@@ -257,10 +257,18 @@ shared with the app are pinned by the shared vectors.
 - **One release per dependency across all rows** (M4). NodeGoat named
   express-session 1.18.1, 1.18.2 and 1.19.0 on three rows (1.18.1 still pins a
   vulnerable on-headers); xsv crossbeam-channel 0.4.4 and 0.5.0. Each
-  dependency now gets the highest release its rows need that crosses no
-  further major and that its own advisories leave clean, on every row, with one
-  command, and the requirement, `resolvesTo` and refresh are recomputed at that
-  release. A lever records its own `smallest` release and the parent's `floor`.
+  dependency now gets the highest release its rows NEED (each lever's release,
+  and its own row's target when that row is a fix) that crosses no further
+  major and that its own advisories leave clean, on every row, with one
+  command; a freshness row follows that release and keeps the newest as
+  `latestVersion` (express-session 1.18.2 everywhere). The requirement,
+  `resolvesTo` and refresh are recomputed at that release. A release lifted
+  above its own smallest one records it (`smallest`); a lever through a
+  transitive parent records the parent's smallest admitting release (`floor`)
+  and the one it brings in (`brings`): NodeGoat's send copy reads "express
+  4.21.0 is the smallest express release that brings in a serve-static that
+  admits it, and express 4.22.3, the release express's own upgrade moves to,
+  also brings in serve-static 1.16.3".
 - **A declared bump that drops the package from the path comes before an
   override** (M5). xsv's memoffset 0.2.1 and lock_api 0.1.3 go away with
   crossbeam-channel, which no longer depends on crossbeam-epoch or
@@ -283,12 +291,30 @@ shared with the app are pinned by the shared vectors.
   (glob 10.5.0) stays the target and says it is deprecated, as
   dependency_check's `review` does (7f); a pin in a file included with `-r` is
   declared, and its edit names that file (7g).
-- Parent and lever candidates follow the fix-target withdrawal rule: a package
-  retired whole is judged by its releases, and is not stuck only because it is
-  deprecated (8a).
+- Parent and lever candidates follow the fix-target withdrawal rule (8a), and a
+  parent stands as the app's does: deprecated (its latest release is), then
+  already its latest release (the `latest` tag), then the walk. A vulnerable
+  row with no fix names no release.
+- **A declaration that already admits the fix is refreshed, not bumped** (with
+  the app). navcal's sharp, next and vite rows named `npm install "pkg@^x"` for
+  a `^` range that already admitted the target. The step is now the tool's
+  in-range refresh, each run live with the manifest left unchanged: `npm update
+  <pkg>`, `pnpm update <pkg> --no-save` (plain `pnpm update` rewrote the
+  range), `yarn upgrade <pkg>`, `yarn up -R <pkg>`, `cargo update -p
+  <crate>@<installed> --precise <target>`. Any readable range qualifies,
+  `>=` and `||` included. A row of refreshes reads "Fixable now with a lockfile
+  refresh (the declared range already admits the fix)"; a refresh among other
+  commands is labelled. An npm workspace member keeps the install in its
+  directory (`npm update` does not move a member's own dependency), and a
+  workspace-inherited, git, path or registry crate is never refreshed this way.
+- The shared rule vectors `severity` (sv-001..sv-019) and `parent_release`
+  (pr-001..pr-008, with the graph lines run through the whole planner) run in
+  the TypeScript runner.
 - **API:** new actions `upgrade_parent_unverified`, `remove_dependency` and
-  `hold_current`; `parentUpgrades[].goesAway`; `levers[].smallest` and
-  `floor`; local lockfile edges carry `dir` and `section`.
+  `hold_current`; `parentUpgrades[].goesAway` and `smallest`;
+  `levers[].smallest`, `floor` and `brings`; `upgradeCommands[].refresh` and
+  `levers[].commands[].refresh`; local lockfile edges carry `dir` and
+  `section`.
 
 ### Security: the working directory is never trusted (audit B-3/B-4/B-5/B-11)
 

@@ -473,13 +473,16 @@ describe("M4/7b: one release per dependency across every row", () => {
 
   it("7b: a lifted release whose requirement no longer admits the installed copy drops the refresh", async () => {
     ADVISORIES["path-to-regexp"] = [adv("GHSA-rhx6-c78j-4q9w", "path-to-regexp", fixedIn("0.1.13"), { severity: "HIGH" })];
-    ADVISORIES.express = [adv("GHSA-expr-0000-0001", "express", fixedIn("4.22.3"), { severity: "MODERATE" })];
+    // qs needs express 4.22.3 (NodeGoat's shape), so path-to-regexp's 4.22.0 is lifted to it.
+    ADVISORIES.qs = [adv("GHSA-qs00-0000-0001", "qs", fixedIn("6.16.0"), { severity: "HIGH" })];
     NPM["path-to-regexp"] = { latest: "0.1.13", versions: { "0.1.12": {}, "0.1.13": {} } };
-    NPM.express = { latest: "4.22.3", versions: { "4.21.2": { dependencies: { "path-to-regexp": "0.1.12" } }, "4.22.0": { dependencies: { "path-to-regexp": "~0.1.12" } }, "4.22.3": { dependencies: { "path-to-regexp": "~0.1.13" } } } };
-    project({ express: "4.21.2" }, {}, { express: { version: "4.21.2", dependencies: { "path-to-regexp": "0.1.12" } }, "path-to-regexp": { version: "0.1.12" } });
+    NPM.qs = { latest: "6.16.0", versions: { "6.5.2": {}, "6.15.1": {}, "6.16.0": {} } };
+    const deps = (ptr: string, qs: string) => ({ dependencies: { "path-to-regexp": ptr, qs } });
+    NPM.express = { latest: "4.22.3", versions: { "4.21.2": deps("0.1.12", "6.5.2"), "4.22.0": deps("~0.1.12", "~6.15.1"), "4.22.3": deps("~0.1.13", "~6.16.0") } };
+    project({ express: "4.21.2" }, {}, { express: { version: "4.21.2", ...deps("0.1.12", "6.5.2") }, "path-to-regexp": { version: "0.1.12" }, qs: { version: "6.5.2" } });
     const { step } = await plan();
     const ptr = step("path-to-regexp");
-    expect(ptr.parentUpgrades[0]).toMatchObject({ parent: "express", to: "4.22.3", requirement: "~0.1.13" });
+    expect(ptr.parentUpgrades[0]).toMatchObject({ parent: "express", to: "4.22.3", smallest: "4.22.0", requirement: "~0.1.13" });
     expect(ptr.parentUpgrades[0].refreshCommands).toBeUndefined();
     expect(JSON.stringify(ptr)).not.toMatch(/npm update path-to-regexp/);
   });
