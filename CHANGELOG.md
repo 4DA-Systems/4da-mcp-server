@@ -342,6 +342,9 @@ shared with the app are pinned by the shared vectors.
 - The shared rule vectors `severity` (sv-001..sv-022) and `parent_release`
   (pr-001..pr-012, with the graph lines run through the whole planner, and
   Cargo lines) run in the TypeScript runner.
+- The conformance pin moves to 4DA 629decd7e (#972, #976, #981, #986, #992,
+  #993, #994, #998): every shared vector line (424, nine files) and the
+  corpus suite pass at it.
 - **A row's only fix across a major raises the row**, flagged `breaking`,
   with the reason "the only release of <parent> that fixes <child> is <ver>, a
   major upgrade" (the 4DA lead): xsv's crossbeam-channel row goes to 0.5.0,
