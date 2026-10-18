@@ -693,6 +693,25 @@ describe("decision 1: one malware predicate (MAL- id or alias, or CWE-506)", () 
     expect(advisoryRanges(wording, "w", "npm")?.malware).toBeUndefined();
   });
 
+  it("GitHub's title template counts: the real GHSA-28f8-hqmc-7ph8 (no MAL- id, no CWE) is malware", async () => {
+    // api.osv.dev/v1/vulns/GHSA-28f8-hqmc-7ph8, read 2026-10-18: "Malicious Package in ember-power-timepicker",
+    // reviewed CRITICAL, aliases absent, cwe_ids [].
+    const ember = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, "$1")), "fixtures", "osv", "GHSA-28f8-hqmc-7ph8.json"), "utf8")) as OsvVulnerability;
+    const { isMalware, cweIdsOf } = await import("../live/malware.js");
+    expect(cweIdsOf(ember)).toEqual([]);
+    expect(isMalware(ember.id, ember.aliases ?? [], cweIdsOf(ember), ember.summary)).toBe(true);
+    const { advisoryRanges } = await import("../live/osv-ranges.js");
+    expect(advisoryRanges(ember, "ember-power-timepicker", "npm")?.malware).toBe(true);
+    expect(isMalware("GHSA-x", [], [], "malicious code in lodash")).toBe(true);
+  });
+
+  it("a summary that only mentions malicious mid-sentence is not malware", async () => {
+    const { isMalware } = await import("../live/malware.js");
+    expect(isMalware("GHSA-y", [], [], "Prototype pollution lets a malicious payload overwrite Object")).toBe(false);
+    expect(isMalware("GHSA-y", [], [], "A Malicious Package in the registry could be installed")).toBe(false);
+    expect(isMalware("GHSA-y", [], [], "crossenv is malware")).toBe(false);
+  });
+
   it("an installed malicious copy is critical in the scan, and its row names no release", async () => {
     ADVISORIES.evilpkg = [adv("GHSA-evil-0000-0001", "evilpkg", [{ introduced: "0" }], { severity: "LOW", aliases: ["MAL-2026-0100"] })];
     NPM.evilpkg = { latest: "1.1.0", versions: { "1.0.0": {}, "1.1.0": {} } };

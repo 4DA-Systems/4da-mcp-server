@@ -99,7 +99,7 @@ export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecos
   if (vuln.withdrawn) return null;
   const informational = (vuln.database_specific as { informational?: unknown } | undefined)?.informational;
   // THE malware predicate (malware.ts): a MAL- id or alias, or CWE-506; never summary wording.
-  const malware = isMalware(vuln.id, vuln.aliases ?? [], cweIdsOf(vuln));
+  const malware = isMalware(vuln.id, vuln.aliases ?? [], cweIdsOf(vuln), vuln.summary ?? "");
   return {
     id: vuln.id,
     spans: collectAffectedSpans(vuln.affected, packageName, ecosystem),

@@ -49,8 +49,9 @@ export interface GradedRecord {
   own: VulnerabilityEntry["severity"];
   aliases: readonly string[];
   maintenance: boolean;
-  /** The record's CWE ids (`database_specific.cwe_ids`), for the malware predicate. */
+  /** The record's CWE ids (`database_specific.cwe_ids`) and summary, for the malware predicate. */
   cweIds?: readonly string[];
+  summary?: string;
 }
 
 /** The grade of one alias group, and where it came from. */
@@ -101,7 +102,7 @@ export function gradeGroup(records: readonly GradedRecord[], aliasGrades: Readon
     }
   }
   // A malicious-package record (malware.ts) is critical (the 4DA lead, 2026-10-18; sv-010 read high).
-  const malicious = records.some((r) => isMalware(r.id, r.aliases, r.cweIds ?? []));
+  const malicious = records.some((r) => isMalware(r.id, r.aliases, r.cweIds ?? [], r.summary ?? ""));
   const urgency: GroupGrade["urgency"] = malicious
     ? "critical"
     : severity === "critical" || severity === "high" || severity === "medium"

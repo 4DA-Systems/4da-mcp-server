@@ -511,7 +511,7 @@ function mapVulnerability(
   dep: ResolvedDependency,
 ): VulnerabilityEntry {
   const graded = deriveSeverity(vuln);
-  const malware = isMalware(vuln.id, vuln.aliases || [], cweIdsOf(vuln));
+  const malware = isMalware(vuln.id, vuln.aliases || [], cweIdsOf(vuln), vuln.summary ?? "");
   // An installed malicious copy is critical in every tool, whatever the record grades (the 4DA lead, 2026-10-18).
   const severity = malware ? "critical" : graded.severity;
   const cvssScore = graded.cvssScore;
