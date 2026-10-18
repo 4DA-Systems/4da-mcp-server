@@ -82,6 +82,12 @@ export interface ParentLever {
   floor?: string;
   /** Through a transitive parent: the parent release `to` brings in. */
   brings?: string;
+  /**
+   * Set when this lever names no release although the parent's release is known (the app's
+   * per-lever ParentStanding, pr-011): it is flagged malicious, every release that would bring the
+   * fix in brings in an advisory it lacks, none does, or it is already at its latest release.
+   */
+  outcome?: "malicious" | StuckOutcome;
 }
 
 /**
@@ -344,6 +350,13 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     noInstallableFix(step);
     return "verified";
   }
+  if (clean.target === null && clean.maliciousLanding && clean.maliciousLanding.length > 0) {
+    // #994 review: a malicious landing is reported as malware, never as "brings in MAL-x".
+    step.reasons.push(`No release is named: ${malwareText(step.package, clean.maliciousLanding)}`);
+    if (clean.introduces && clean.introduces.length > 0) step.reasons.push(`It also cannot move: ${introducesText(clean.introduces)}`);
+    noInstallableFix(step);
+    return "verified";
+  }
   if (clean.target === null && clean.introduces && clean.introduces.length > 0) {
     // Never introduce an advisory: no release, no command, and why.
     step.reasons.push(`No release is named: ${introducesText(clean.introduces)}`);
@@ -553,7 +566,8 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
 
   // What each blocking parent can do: move to a release that admits a clean version (H1), or
   // nothing (deprecated, already latest, no release admits one: A4), or unknown.
-  const clean = (v: string) => !advisories || !advisories.some((a) => advisoryAffects(a, v, ecosystem));
+  // A maintenance notice never makes a copy unclean (#994 review).
+  const clean = (v: string) => !advisories || !advisories.some((a) => !a.maintenance && advisoryAffects(a, v, ecosystem));
   const releases = (published ?? []).filter((v) => !isPrereleaseVersion(v, ecosystem));
   const ctx: MoveContext = {
     sources,
@@ -592,6 +606,18 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     const others = moves.length > 0 ? `. The other parents can move: ${moves.map((m) => m.text).join("; ")}` : "";
     replaceReason(
       `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace the parent${others}`,
+    );
+    return;
+  }
+  const held = moves.flatMap((m) => m.upgrade.levers.filter((l) => l.outcome !== undefined));
+  if (held.length > 0) {
+    // The parent's release is named, but a declared dependency it arrives through names none of
+    // its own (pr-011): the step is an override of the transitive, or replacing that dependency,
+    // the app's "replace <lever>, or force <pkg> >= <target> with <override>".
+    step.action = "override_or_replace";
+    const formats = [...new Set(verdicts.map((v) => v.verdict.format))];
+    replaceReason(
+      `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
     );
     return;
   }
@@ -1049,22 +1075,30 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   }
 
   // The parent is transitive: each declared dependency it arrives through must bring in a fixed release.
-  const hops: Array<{ l: (typeof route.levers)[number]; hop: Extract<ThroughHop, { kind: "found" }> | null }> = [];
+  // The app's per-lever standing (pr-011): the parent's release stays named; a lever that cannot
+  // bring it in carries its own outcome and names no release of its own.
+  const hops: Array<{ l: (typeof route.levers)[number]; hop: Extract<ThroughHop, { kind: "found" }> | null; held?: Exclude<ThroughHop, { kind: "found" }> }> = [];
   for (const l of route.levers) {
     const hop = l.adjacent ? await throughRelease(ctx, l, parent, from, facts, history, dialect, own.clean) : null;
-    if (hop?.kind === "malicious") return { kind: "malicious", text: hop.text };
+    if (hop?.kind === "malicious") {
+      hops.push({ l, hop: null, held: hop });
+      continue;
+    }
     if (hop?.kind === "stuck") {
       // The lever cannot bring in a fixed parent; it may still drop the parent from the path.
       const drop = await dropRelease(ctx, l, parent, dialect);
-      if (!drop) return { kind: "stuck", text: `${parent} arrives through ${l.name} ${l.version}, and ${hop.text}`, outcome: hop.outcome };
+      if (!drop) {
+        hops.push({ l, hop: null, held: hop });
+        continue;
+      }
       hops.push({ l, hop: { kind: "found", version: drop.version, brings: null, keepsParent: false, admitsAt: (v) => (drop.drops(v) ? { brings: null, keepsParent: false } : null) } });
       continue;
     }
     hops.push({ l, hop });
   }
   const newestOfLever = new Map<string, string | null>();
-  for (const { l, hop } of hops) {
-    if (!hop) {
+  for (const { l, hop, held } of hops) {
+    if (!hop && !held) {
       const f = await sources.releaseFacts(ecosystem, l.name).catch(() => null);
       newestOfLever.set(l.name, f ? (await ownClean(ctx, l.name, f, l.version)).newest : null);
     }
@@ -1076,7 +1110,18 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
     const levers: ParentLever[] = [];
     const refreshes: Array<{ dir: string; command: string }> = [];
     let brought: string | null = null;
-    for (const { l, hop } of hops) {
+    for (const { l, hop, held } of hops) {
+      if (held) {
+        levers.push({ name: l.name, version: l.version, to: null, breaking: false, outcome: held.kind === "malicious" ? "malicious" : held.outcome });
+        leverTexts.push(
+          held.kind === "malicious"
+            ? `${held.text}; no ${l.name} upgrade is named`
+            : held.outcome === "introduces"
+              ? held.text
+              : `${held.text}: replace ${l.name}`,
+        );
+        continue;
+      }
       if (!hop) {
         levers.push({ name: l.name, version: l.version, to: null, breaking: false });
         const latest = newestOfLever.get(l.name) ?? null;
@@ -1259,7 +1304,7 @@ async function throughRelease(
   const blocked = candidates.filter((v) => !own.clean(v) && own.cleanButIntroduced(v) && brought(v, own.cleanButIntroduced));
   if (blocked.length > 0) {
     const ids = [...new Set(blocked.flatMap((v) => own.introducedAt(v)))].sort();
-    return { kind: "stuck", outcome: "introduces", text: `${lever.name}: ${introducesText(ids).replace(/, so no release is named$/, "")}` };
+    return { kind: "stuck", outcome: "introduces", text: `no ${lever.name} release is named: ${introducesText(ids).replace(/, so no release is named$/, "")}` };
   }
   const deprecated = facts.deprecatedLatest ? `${lever.name} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
   return { kind: "stuck", outcome: "none_admits", text: `${deprecated}no ${lever.name} release up to ${newest ?? "its latest"} brings in a ${parent} that admits a clean ${ctx.pkg}` };

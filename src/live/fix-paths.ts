@@ -427,6 +427,8 @@ function sparseIndexUrl(name: string): string {
 // ---------------------------------------------------------------------------
 
 export type FixTargetResult = CleanTarget & {
+  /** No target and a malicious landing: "<pkg> is flagged malicious (<id>): remove or replace <pkg>" (#994 review). */
+  landingNote?: string;
   /**
    * True when the package's advisories could not be read (OSV /v1/query
    * failed) but the registry could: `target` is then only the smallest
@@ -503,6 +505,7 @@ export async function cleanFixTarget(
     const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published, excluded, installed });
     if (!clean) return null;
     if (malware.length > 0) Object.assign(clean, { malware });
+    if (clean.target === null && clean.maliciousLanding) Object.assign(clean, { landingNote: malwareText(name, clean.maliciousLanding) });
     return withRegistryFacts({ ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}) }, ecosystem, perAdvisoryFixes, advisories, facts);
   }
   // Only a registry list can show a release past a last_affected bound.
@@ -662,6 +665,7 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
     parts.push(`${clean.target} ${remainsText(clean.stillAffectedBy)}: ${clean.stillAffectedBy.length === 1 ? "it affects" : "they affect"} every newer release too`);
   }
   if (clean.target === null && clean.unreadable && clean.unreadable.length > 0) parts.push(unreadableText(clean.unreadable));
+  if (clean.target === null && clean.landingNote) parts.push(clean.landingNote);
   if (clean.target === null && clean.introduces && clean.introduces.length > 0) parts.push(introducesText(clean.introduces));
   if (clean.registryUnread) parts.push(REGISTRY_UNREAD_NOTE);
   if (clean.targetNotice) parts.push(clean.targetNotice);
@@ -1052,7 +1056,12 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       // `npm update ms` there moved a member's own ^2.1.1 copy (hoisted and nested layouts, npm
       // 10.9.2, 2026-10-18). An earlier "it does not move" came from a hand-edited fixture lockfile
       // that carried 1.2.8's integrity under version 1.2.5.
-      if (npmRangeAdmits(declared, target) === true) return { command: npmDirectRefresh(manager, name), refresh: true };
+      // Only a range bounded below the next major (`^`, `~`) is refreshed: a refresh installs the
+      // NEWEST release in range, so a `>=` / `||` / `*` / x-range could jump a major or land on a
+      // withdrawn or held release, and names nothing (fc-059, the app's npm_direct_fix).
+      const op = npmOperator(declared);
+      const bounded = op === "^" || op === "~";
+      if (bounded && npmRangeAdmits(declared, target) === true) return { command: npmDirectRefresh(manager, name), refresh: true };
       const command = npmDirectCommand(manager, declared, name, target);
       return command ? { command } : null;
     }
@@ -1145,7 +1154,8 @@ export async function refreshVerdict(
   if (!parents || parents.edges.length === 0) return null;
   const isCargo = parents.format === "cargo";
   const dialect: RequirementDialect = isCargo ? "cargo" : "npm";
-  const clean = (v: string) => !advisories || !advisories.some((a) => advisoryAffects(a, v, ecosystem));
+  // A maintenance notice never makes a copy unclean (#994 review).
+  const clean = (v: string) => !advisories || !advisories.some((a) => !a.maintenance && advisoryAffects(a, v, ecosystem));
   const releases = (published ?? []).filter((v) => !isPrereleaseVersion(v, ecosystem));
 
   const edgeReqs = await Promise.all(parents.edges.map((edge) => requirementsOf(sources, ecosystem, edge, name)));

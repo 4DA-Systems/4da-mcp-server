@@ -249,7 +249,7 @@ async function checkGraph(v: Json, dir: string, seen?: (result: Json) => void): 
   const result = await withWorld(world, () => planIn(dir));
   seen?.(result);
   const recs = result.recommendations as Json[];
-  for (const row of v.expect.rows as Json[]) {
+  for (const row of (v.expect.rows ?? []) as Json[]) {
     const rec = recs.find((x) => x.package === row.pkg && x.currentVersion === row.installed);
     if ((rec?.targetVersion ?? null) !== row.to) return `${row.pkg} row: got ${rec?.targetVersion ?? null}, want ${row.to}`;
   }
@@ -268,7 +268,7 @@ async function checkGraph(v: Json, dir: string, seen?: (result: Json) => void): 
       const got = {
         parent: want.parent,
         release: releaseOf(o),
-        levers: direct || !u ? [] : u.levers.map((l) => ({ name: l.name, release: { to: l.to, smallest: l.smallest ?? null, floor: l.floor ?? null, brings: l.brings ?? null } })),
+        levers: direct || !u ? [] : u.levers.map((l) => ({ name: l.name, release: l.outcome ?? { to: l.to, smallest: l.smallest ?? null, floor: l.floor ?? null, brings: l.brings ?? null } })),
         lever_unknown: Boolean(u?.leverUnknown),
       };
       if (JSON.stringify(got) !== JSON.stringify(want)) return `${copy.pkg}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;

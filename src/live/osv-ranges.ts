@@ -281,6 +281,12 @@ export interface CleanTarget {
   unreadable?: string[];
   /** No target: every fixing release brings in these advisories, which the installed version does not have. */
   introduces?: string[];
+  /**
+   * No target, and malware advisories (the malware predicate) affect releases a fix could land
+   * on: reported as malware ("<pkg> is flagged malicious (<id>): remove or replace <pkg>"), never
+   * as "brings in MAL-x" (#994 review). Sorted.
+   */
+  maliciousLanding?: string[];
 }
 
 /** Whether `version` is one of `listed`, as a version (build metadata ignored), not only as a string. */
@@ -318,6 +324,9 @@ export function smallestCleanVersion(input: {
    */
   installed?: string | null;
 }): CleanTarget | null {
+  // #994 review (both engines): a maintenance notice (unmaintained / deprecated package) never
+  // blocks a target, never makes a release unclean, and never "introduces": it is not judged here.
+  input = { ...input, advisories: input.advisories.filter((a) => !a.maintenance) };
   const { ecosystem } = input;
   const fixes = input.fixes.filter((f) => isComparable(f, ecosystem));
   if (fixes.length === 0) return null;
@@ -380,8 +389,10 @@ export function smallestCleanVersion(input: {
   );
   const unionIds = new Set(blockedOnlyByNew.flatMap((v) => input.advisories.filter((a) => lacks(a) && advisoryAffects(a, v, ecosystem)).map((a) => a.id)));
   const introduces = [...(unionIds.size > 0 ? unionIds : new Set(introduced.map((a) => a.id)))].sort();
+  const maliciousLanding = [...new Set(input.advisories.filter((a) => a.malware && candidates.some((v) => advisoryAffects(a, v, ecosystem))).map((a) => a.id))].sort();
   return {
     ...(introduces.length > 0 ? { introduces } : {}),
+    ...(maliciousLanding.length > 0 ? { maliciousLanding } : {}),
     target: null,
     basis,
     floor,
@@ -413,7 +424,7 @@ export function installableFix(input: {
   const allowPre = isPrereleaseVersion(fix, ecosystem);
   const above = [...new Set(input.published ?? [])]
     .filter((v) => isComparable(v, ecosystem) && cmp(v, fix) > 0 && (allowPre || !isPrereleaseVersion(v, ecosystem)))
-    .filter((v) => !input.advisories.some((a) => advisoryAffects(a, v, ecosystem)))
+    .filter((v) => !input.advisories.some((a) => !a.maintenance && advisoryAffects(a, v, ecosystem)))
     .sort(cmp);
   const next = above.find((v) => !isListedVersion(input.excluded, v, ecosystem)) ?? null;
   const skipped = above.filter((v) => isListedVersion(input.excluded, v, ecosystem) && (next === null || cmp(v, next) < 0));

@@ -263,7 +263,7 @@ describe("bundled copies (audit E8: NodeGoat, 2026-10-12)", () => {
   });
 });
 
-// The full rule set is the 4DA vectors fc-028..fc-053 (direct-fix-vectors.test.ts); these are the operator rules alone.
+// The full rule set is the 4DA corpus fix_command vectors (fc-028..fc-061, run by rule-vectors.test.ts); these are the operator rules alone.
 describe("npmDirectCommand keeps the declared operator (readiness review 2026-10-17, finding 4)", () => {
   it("an exact pin stays exact, ^ and ~ are kept and quoted, anything else names nothing", () => {
     expect(npmDirectCommand("npm", "1.2.5", "minimist", "1.2.8")).toBe("npm install minimist@1.2.8 --save-exact");

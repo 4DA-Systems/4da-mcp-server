@@ -228,6 +228,17 @@ shared with the app are pinned by the shared vectors.
   releases blocked this way, sorted, not only the smallest one's. A parent or
   lever whose only admitting release carries such an advisory reports the
   outcome `introduces` (shared vector pr-010), not "no release admits".
+- **A maintenance notice never blocks a release** (both engines, the #994
+  review). An unmaintained or deprecated-package notice (the maintenance
+  predicate: OSV `informational`, or unmaintained wording) never makes a
+  release unclean, never leaves a row with no fix, and never produces
+  `introduces`. The copy's own fix-target walk and the clean-copy checks
+  behind parent moves and refreshes counted them before; a release affected
+  only by a notice is now the target.
+- **A fix that lands on malware says so.** When every release a fix could land
+  on is flagged malicious, the row names no release and reads "<pkg> is
+  flagged malicious (<id>): remove or replace <pkg>", not "still affected by
+  MAL-x".
   dependency_health adds `latestSafeVersion` and `latestStableNote` and
   measures `versionsBehind` to the safe release; what_should_i_know's `latest`
   adds `registry_latest` and `note`.
@@ -318,14 +329,17 @@ shared with the app are pinned by the shared vectors.
   in-range refresh, each run live with the manifest left unchanged: `npm update
   <pkg>`, `pnpm update <pkg> --no-save` (plain `pnpm update` rewrote the
   range), `yarn upgrade <pkg>`, `yarn up -R <pkg>`, `cargo update -p
-  <crate>@<installed> --precise <target>`. Any readable range qualifies,
-  `>=` and `||` included. A row of refreshes reads "Fixable now with a lockfile
+  <crate>@<installed> --precise <target>`. Only an npm range bounded below the
+  next major (`^`, `~`) is refreshed: a refresh installs the newest release in
+  range, so a `>=`, `||`, `*` or x-range could jump a major, and names nothing
+  (shared vector fc-059). A Cargo requirement is refreshed with `--precise`,
+  which pins the exact target. A row of refreshes reads "Fixable now with a lockfile
   refresh (the declared range already admits the fix)"; a refresh among other
   commands is labelled. An npm workspace member is refreshed in its own
   directory, and a workspace-inherited, git, path or registry crate is never
   refreshed this way.
-- The shared rule vectors `severity` (sv-001..sv-019) and `parent_release`
-  (pr-001..pr-010, with the graph lines run through the whole planner, and
+- The shared rule vectors `severity` (sv-001..sv-022) and `parent_release`
+  (pr-001..pr-012, with the graph lines run through the whole planner, and
   Cargo lines) run in the TypeScript runner.
 - **A row's only fix across a major raises the row**, flagged `breaking`,
   with the reason "the only release of <parent> that fixes <child> is <ver>, a
@@ -337,9 +351,17 @@ shared with the app are pinned by the shared vectors.
   needs per-version dependency data it does not read yet. Until that lands,
   this server and the app can give different answers for a live Cargo row
   whose only fix is across a major.
+- **A lever that cannot move no longer hides its parent's release** (with the
+  app, shared vector pr-011). When a parent arrives through a declared
+  dependency that names no release (it is flagged malicious, every release
+  that would bring the fix in brings in an advisory it lacks, none does, or it
+  is at its latest), the parent's release is still named and that lever
+  carries `levers[].outcome` with its own reason ("no <lever> release is
+  named: ...", "replace <lever>"). The step stays `override_or_replace`,
+  with the override that forces the copy.
 - **API:** new actions `upgrade_parent_unverified`, `remove_dependency` and
   `hold_current`; `parentUpgrades[].goesAway` and `smallest`;
-  `levers[].smallest`, `floor` and `brings`; `upgradeCommands[].refresh` and
+  `levers[].smallest`, `floor`, `brings` and `outcome`; `upgradeCommands[].refresh` and
   `levers[].commands[].refresh`; local lockfile edges carry `dir` and
   `section`.
 

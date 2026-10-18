@@ -476,15 +476,15 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"' }]);
   });
 
-  it("4: a spec whose operator cannot be carried names no bump; one that admits the target is refreshed in range (>=)", async () => {
+  it("4: a spec whose operator cannot be carried names no bump, and an unbounded range that admits the target is not refreshed (>=, fc-059)", async () => {
     expressProject();
-    // ">=4.16.0" admits the target: the in-range refresh, which carries no operator (4DA
-    // fix/c2-direct-refresh, verified live 2026-10-18). "<5" with an exact-pin style would name nothing.
+    // ">=4.16.0" admits the target, but a refresh installs the NEWEST release in range, which an
+    // unbounded range lets jump a major: no command is named (shared vector fc-059, #993 review S3).
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "x", dependencies: { express: ">=4.16.0" } }));
     const { step } = await plan();
-    expect(step("express").upgradeCommands).toEqual([{ dir: ".", command: "npm update express", refresh: true }]);
-    expect(step("express").reasons.join(" ")).toContain("Fixable now with a lockfile refresh (the declared range already admits the fix): `npm update express`");
-    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: "npm update express", refresh: true }]);
+    expect(step("express").upgradeCommands).toBeUndefined();
+    expect(step("express").reasons.join(" ")).not.toContain("Fixable now with a lockfile refresh");
+    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toBeUndefined();
   });
 
   it("5: a parent reached through two declared dependencies names both; one that cannot move makes it an override", async () => {
@@ -496,7 +496,9 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     project({ a: "1.0.0", b: "1.0.0" }, {}, tree);
     const stuck = (await plan()).step("leaf");
     expect(stuck.action).toBe("override_or_replace");
-    expect(stuck.reasons.join(" ")).toMatch(/mid arrives through b 1\.0\.0, and b 1\.0\.0 is already its latest release/);
+    // The app's per-lever standing (pr-011): mid's release stays named, b carries its own outcome.
+    expect(stuck.reasons.join(" ")).toMatch(/upgrade a to 1\.1\.0 .*; b 1\.0\.0 is already its latest release: replace b\. Force leaf to 1\.1\.0: npm: add "overrides"/);
+    expect(stuck.parentUpgrades[0].levers.map((l: { name: string; to: string | null; outcome?: string }) => `${l.name}@${l.to}:${l.outcome ?? ""}`)).toEqual(["a@1.1.0:", "b@null:latest"]);
 
     NPM.b = { latest: "1.1.0", versions: { "1.0.0": { dependencies: { mid: "2.0.0" } }, "1.1.0": { dependencies: { mid: "2.1.0" } } } };
     const both = (await plan()).step("leaf");

@@ -664,10 +664,13 @@ describe("directFix: a declaration that admits the target is refreshed in range,
     expect(await fixIn({ "Cargo.toml": '[dependencies]\nitoa = "1.0.5"\n' }, "crates.io", "itoa", "1.0.5", "1.0.11")).toEqual({ command: "cargo update -p itoa@1.0.5 --precise 1.0.11", refresh: true });
   });
 
-  it("a range that excludes the target keeps the bump; >= and || are refreshed", async () => {
+  it("a range that excludes the target keeps the bump; an unbounded range (>=, ||, *, x-range) names nothing (fc-059)", async () => {
     expect(await fixIn({ "package.json": pkg, "package-lock.json": "{}" }, "npm", "ms", "2.1.1", "3.0.0")).toEqual({ command: 'npm install "ms@^3.0.0"' });
-    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ dependencies: { ms: ">=2.0.0" } }));
-    expect(await fixIn({}, "npm", "ms", "2.1.1", "2.1.3")).toEqual({ command: "npm update ms", refresh: true });
+    // A refresh installs the NEWEST release in range: unbounded above, it could jump a major.
+    for (const declared of [">=2.0.0", "^2.0.0 || ^3.0.0", "*", "2.x"]) {
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ dependencies: { ms: declared } }));
+      expect(await fixIn({}, "npm", "ms", "2.1.1", "2.1.3")).toBeNull();
+    }
   });
 
   it("an npm workspace member is refreshed in its own directory; a workspace-inherited crate is never refreshed", async () => {
@@ -864,7 +867,7 @@ describe("pr-010 for a lever: a lever move never introduces an advisory", () => 
       par: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.1.0" } } } },
       leaf: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": {}, "1.1.0": {} } },
     },
-    expect: { rows: [], copies: [{ pkg: "leaf", installed: "1.0.0", target: "1.1.0", links: [{ parent: "par", release, levers: [], lever_unknown: false }] }] },
+    expect: { rows: [], copies: [{ pkg: "leaf", installed: "1.0.0", target: "1.1.0", links: [{ parent: "par", release: { to: "1.1.0", smallest: null, floor: null, brings: null }, levers: [{ name: "lev", release }], lever_unknown: false }] }] },
   });
 
   it("names no lever release when it brings in a new advisory", async () => {
@@ -872,7 +875,7 @@ describe("pr-010 for a lever: a lever move never introduces an advisory", () => 
   });
 
   it("names the lever release when the installed lever already has that unfixed advisory", async () => {
-    expect(await checkParentRelease(graph([{ introduced: "0" }], "introduces"))).toMatch(/"release":\{"to":"1\.1\.0"/);
+    expect(await checkParentRelease(graph([{ introduced: "0" }], "introduces"))).toMatch(/"levers":\[\{"name":"lev","release":\{"to":"1\.1\.0"/);
   });
 });
 
@@ -937,11 +940,81 @@ describe("introduces names the union over every blocked candidate (#994 review)"
         par: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": { dependencies: { leaf: "1.0.0" } }, "1.1.0": { dependencies: { leaf: "^1.1.0" } } } },
         leaf: { "dist-tags": { latest: "1.1.0" }, versions: { "1.0.0": {}, "1.1.0": {} } },
       },
-      expect: { rows: [], copies: [{ pkg: "leaf", installed: "1.0.0", target: "1.1.0", links: [{ parent: "par", release: "introduces", levers: [], lever_unknown: false }] }] },
+      expect: { rows: [], copies: [{ pkg: "leaf", installed: "1.0.0", target: "1.1.0", links: [{ parent: "par", release: { to: "1.1.0", smallest: null, floor: null, brings: null }, levers: [{ name: "lev", release: "introduces" }], lever_unknown: false }] }] },
     };
     expect(await checkParentRelease(v)).toBeNull();
     const result = await planParentReleaseLine(v);
     const leaf = (result.recommendations as Array<Record<string, unknown>>).find((r) => r.package === "leaf");
     expect(JSON.stringify(leaf)).toContain(both);
+  });
+});
+
+// #994 review, decision for both engines: an informational / maintenance record (an unmaintained
+// or deprecated-package notice: AdvisoryRanges.maintenance, set by isMaintenanceNotice or OSV's
+// `informational`) never blocks a fix target, never makes a release "not clean", and never
+// produces `introduces`, on any offering path. A MALICIOUS landing is reported as malware
+// ("<pkg> is flagged malicious (<id>): remove or replace <pkg>"), never as "brings in MAL-x".
+describe("maintenance notices never block a release; a malicious landing is reported as malware (#994 review)", () => {
+  const span = (introduced: string, fixed: string | null = null) => ({ introduced, fixed, lastAffected: null });
+  const fixA = { id: "GHSA-synt-0000-0021", spans: [span("0", "1.1.0")], versions: [] as string[] };
+  const notice = (introduced: string) => ({ id: "RUSTSEC-0000-0099", spans: [span(introduced)], versions: [] as string[], maintenance: true });
+
+  it("fix-target walk: a release affected only by a maintenance notice is still the target, said nowhere as remaining", () => {
+    for (const introduced of ["0", "1.1.0"]) {
+      const clean = smallestCleanVersion({ ecosystem: "npm", fixes: ["1.1.0"], advisories: [fixA, notice(introduced)], published: ["1.0.0", "1.1.0"], installed: "1.0.0" });
+      expect(clean?.target).toBe("1.1.0");
+      expect(clean?.stillAffectedBy).toEqual([]);
+      expect(clean?.unfixable).toEqual([]);
+      expect(clean?.introduces).toBeUndefined();
+    }
+  });
+
+  const rowsLine = (leafAdvisories: unknown[], parAdvisories: unknown[] = []) => ({
+    id: "maintenance-local", eco: "npm", tool: "npm",
+    parent: { name: "par", installed: "1.0.0", declared: "1.0.0", lever: "direct", latest: "1.1.0", deprecated: false, releases: ["1.0.0", "1.1.0"], advisories: parAdvisories, own_target: null },
+    rows: [{ pkg: "leaf", installed: "1.0.0", target: "1.1.0", releases: ["1.0.0", "1.1.0"], advisories: leafAdvisories, requires: { "1.0.0": "1.0.0", "1.1.0": "^1.1.0" } }],
+    expect: { parent_target: null, rows: [] },
+  });
+  const leafFix = { id: "GHSA-synt-0000-0021", ranges: [{ introduced: "0", fixed: "1.1.0" }] };
+  const unmaintained = (pkg: string) => ({ id: "GHSA-synt-0000-0099", summary: `${pkg} is unmaintained`, ranges: [{ introduced: "1.1.0" }] });
+  const leafStep = async (v: unknown) =>
+    ((await planParentReleaseLine(v)).recommendations as Array<Record<string, unknown>>).find((r) => r.package === "leaf")!;
+
+  it("planner: a notice the installed copy lacks names the target and no `introduces`", async () => {
+    const step = await leafStep(rowsLine([leafFix, unmaintained("leaf")]));
+    expect(step.targetVersion).toBe("1.1.0");
+    expect(JSON.stringify(step)).not.toMatch(/brings in|No clean fix|no installable fix|remains affected/);
+  });
+
+  it("parent standing: a notice on the parent's release the installed parent lacks does not block the move", async () => {
+    const v = rowsLine([leafFix], [unmaintained("par")]);
+    const step = await leafStep(v);
+    expect(JSON.stringify(step)).not.toMatch(/brings in GHSA-synt-0000-0099/);
+    expect(await checkParentRelease({ ...v, expect: { parent_target: null, rows: [{ pkg: "leaf", outcome: "release", smallest: "1.1.0", to: "1.1.0", breaking: false, requirement: "^1.1.0", peer: false, resolves_to: "1.1.0", command: 'npm install par@1.1.0 --save-exact', refresh: null }] } })).toBeNull();
+  });
+
+  it("newest-release offer: a release affected only by a notice is offered as it is", async () => {
+    const { vetOfferedRelease } = await import("../live/offered-release.js");
+    const sources = {
+      packageAdvisories: async () => [notice("1.1.0")],
+      releaseFacts: async () => ({ versions: ["1.0.0", "1.1.0"], withdrawn: [], withdrawnWhy: {}, latest: "1.1.0", deprecatedLatest: null }),
+    } as unknown as Parameters<typeof vetOfferedRelease>[0];
+    const r = await vetOfferedRelease(sources, "npm", "leaf", "1.0.0", "1.1.0");
+    expect(r.safe).toBe("1.1.0");
+    expect(r.affectedBy).toEqual([]);
+    expect(r.note).toBeNull();
+  });
+
+  it("fix-target walk: a malicious landing is reported as malware, never as brings in MAL-x", async () => {
+    const step = await leafStep(rowsLine([leafFix, { id: "MAL-2026-0001", ranges: [{ introduced: "1.1.0" }] }]));
+    expect(step.targetVersion ?? null).toBeNull();
+    const text = JSON.stringify(step);
+    expect(text).toContain("leaf is flagged malicious (MAL-2026-0001): remove or replace leaf");
+    expect(text).not.toMatch(/brings in MAL-/);
+  });
+
+  it("parent and lever: a malicious landing is reported as malware, never as brings in MAL-x", async () => {
+    const parStep = await leafStep(rowsLine([leafFix], [{ id: "MAL-2026-0002", ranges: [{ introduced: "1.1.0" }] }]));
+    expect(JSON.stringify(parStep)).not.toMatch(/brings in MAL-/);
   });
 });
