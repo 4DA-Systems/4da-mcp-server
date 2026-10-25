@@ -27,6 +27,7 @@ import {
   cargoTreeInvocation,
   _resetCargoPlatformCache,
 } from "../live/cargo-platform.js";
+import { serverDataDir } from "../db.js";
 import { platformFilterNote } from "../tools/vulnerability-scan.js";
 import type { VulnerabilityEntry } from "../live/types.js";
 
@@ -104,7 +105,21 @@ describe("cargoTreeInvocation", () => {
 
   it("runs cargo from a server-owned directory outside the scanned project", () => {
     expect(isInside(project, inv.cwd)).toBe(false);
-    expect(isInside(os.tmpdir(), inv.cwd)).toBe(true);
+    expect(isInside(serverDataDir(), inv.cwd)).toBe(true);
+  });
+
+  // Audit 6.2.5 C-2: cargo reads .cargo/config.toml from its cwd and every
+  // parent. A fixed name under the shared temp directory let another local
+  // account plant a config (build.rustc-wrapper) that ran code as this user.
+  it("never runs cargo from the shared temp directory", () => {
+    expect(inv.cwd).not.toBe(path.join(os.tmpdir(), "4da-mcp-cargo-resolve"));
+    const saved = process.env.FOURDA_MCP_HOME;
+    try {
+      delete process.env.FOURDA_MCP_HOME;
+      expect(isInside(os.tmpdir(), cargoTreeInvocation(project).cwd)).toBe(false);
+    } finally {
+      process.env.FOURDA_MCP_HOME = saved;
+    }
   });
 
   it("names the project only through --manifest-path", () => {
