@@ -342,9 +342,13 @@ shared with the app are pinned by the shared vectors.
 - The shared rule vectors `severity` (sv-001..sv-022) and `parent_release`
   (pr-001..pr-012, with the graph lines run through the whole planner, and
   Cargo lines) run in the TypeScript runner.
-- The conformance pin moves to 4DA 629decd7e (#972, #976, #981, #986, #992,
-  #993, #994, #998): every shared vector line (424, nine files) and the
-  corpus suite pass at it.
+- The conformance pin moves to 4DA 517071c0c (#972, #976, #981, #986, #992,
+  #993, #994, #998, #1008): every shared vector line (431, nine files) and the
+  corpus suite pass at it. #1008's new lines hold the Rust engine to this
+  server's rules: a malware landing is named as malware (ft-070, ft-072), a
+  maintenance notice never blocks a target and is never one, even at its own
+  fixed bound (ft-071, ft-073, ring RUSTSEC-2025-0010), and a notice with a
+  published fix is still not graded from an alias (sv-023).
 - **A row's only fix across a major raises the row**, flagged `breaking`,
   with the reason "the only release of <parent> that fixes <child> is <ver>, a
   major upgrade" (the 4DA lead): xsv's crossbeam-channel row goes to 0.5.0,

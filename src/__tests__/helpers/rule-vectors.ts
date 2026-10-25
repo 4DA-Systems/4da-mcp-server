@@ -117,9 +117,12 @@ function checkFixTarget(v: Vector, records: Records): string | null {
   const [eco, name, installed] = [str(v, "eco"), str(v, "name"), str(v, "installed")];
   const ids = (v.record_ids as string[] | undefined) ?? [];
   const advisories = ids.map((id) => records.ranges(id, eco, name));
-  // Each advisory that affects the copy contributes its own fix, as the scan reports it.
+  // Each advisory that affects the copy contributes its own fix, as the scan reports it. A
+  // maintenance notice contributes none: every tool drops notices before it collects fixes
+  // (vulnerability_scan, upgrade_planner, what_should_i_know), so a notice's own fixed bound is
+  // never a target (ft-073, ring RUSTSEC-2025-0010; the Rust runner filters the same way).
   const fixes = ids
-    .filter((_, i) => advisoryAffects(advisories[i], installed, eco))
+    .filter((_, i) => !advisories[i].maintenance && advisoryAffects(advisories[i], installed, eco))
     .map((id) => extractFixedVersion(records.get(id).affected, name, eco, installed))
     .filter((f): f is string => f !== null);
   // FX-H5: the registry state written into the line, as given (the app rule's output on the
@@ -288,10 +291,10 @@ function checkHolding(v: Vector): string | null {
  */
 function checkSeverity(v: Vector): string | null {
   const raw = (Array.isArray(v.records) ? v.records : [v.record]) as OsvVulnerability[];
-  const fixed = optStr(v, "fixed_version");
+  // A notice is a notice with a published fix too, as gradeAliasGroups reads it (sv-023).
   const aliasGrades = new Map(Object.entries((v.aliases_available ?? {}) as Record<string, OsvVulnerability["id"] | null>)) as Map<string, "critical" | "high" | "medium" | "low" | "unknown" | null>;
   const grade = gradeGroup(
-    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: fixed === null && isMaintenanceNotice({ summary: r.summary ?? "" }), cweIds: cweIdsOf(r), summary: r.summary ?? "" })),
+    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: isMaintenanceNotice({ summary: r.summary ?? "" }), cweIds: cweIdsOf(r), summary: r.summary ?? "" })),
     aliasGrades,
   );
   const want = v.expect as { severity: string | null; severity_from: string | null; urgency: string };
