@@ -31,7 +31,7 @@ import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRan
 import { deriveSeverity, extractFixedVersion, isSecurityHoldingRelease } from "../../live/osv-scanner.js";
 import { gradeGroup } from "../../live/advisory-groups.js";
 import { checkParentRelease } from "./parent-release-vectors.js";
-import { isMaintenanceNotice } from "../../live/maintenance.js";
+import { isMaintenanceRecord } from "../../live/maintenance.js";
 import { cweIdsOf } from "../../live/malware.js";
 import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
@@ -291,10 +291,11 @@ function checkHolding(v: Vector): string | null {
  */
 function checkSeverity(v: Vector): string | null {
   const raw = (Array.isArray(v.records) ? v.records : [v.record]) as OsvVulnerability[];
-  // A notice is a notice with a published fix too, as gradeAliasGroups reads it (sv-023).
+  // A notice is a notice with a published fix too, as gradeAliasGroups reads it (sv-023), by the
+  // shared predicate (sv-024/sv-025): evaluated for the package of the record's FIRST affected entry.
   const aliasGrades = new Map(Object.entries((v.aliases_available ?? {}) as Record<string, OsvVulnerability["id"] | null>)) as Map<string, "critical" | "high" | "medium" | "low" | "unknown" | null>;
   const grade = gradeGroup(
-    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: isMaintenanceNotice({ summary: r.summary ?? "" }), cweIds: cweIdsOf(r), summary: r.summary ?? "" })),
+    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: isMaintenanceRecord(r, r.affected?.[0]?.package?.name ?? "", r.affected?.[0]?.package?.ecosystem ?? ""), cweIds: cweIdsOf(r), summary: r.summary ?? "" })),
     aliasGrades,
   );
   const want = v.expect as { severity: string | null; severity_from: string | null; urgency: string };

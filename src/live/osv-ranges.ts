@@ -15,7 +15,7 @@
 import type { OsvVulnerability } from "./types.js";
 import { compareToLowerBound, compareVersions, isComparable, isComposerOrGemPrerelease, parsePep440, samePackageName } from "./version-compare.js";
 import { parseSemverPrecedence } from "./semver-precedence.js";
-import { isMaintenanceNotice } from "./maintenance.js";
+import { isMaintenanceRecord } from "./maintenance.js";
 import { cweIdsOf, isMalware } from "./malware.js";
 
 /**
@@ -97,14 +97,13 @@ function listedVersions(affected: OsvVulnerability["affected"] | undefined, pack
 /** One advisory's ranges for one package; null when the advisory is withdrawn. */
 export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecosystem: string): AdvisoryRanges | null {
   if (vuln.withdrawn) return null;
-  const informational = (vuln.database_specific as { informational?: unknown } | undefined)?.informational;
   // THE malware predicate (malware.ts): a MAL- id or alias, or CWE-506; never summary wording.
   const malware = isMalware(vuln.id, vuln.aliases ?? [], cweIdsOf(vuln), vuln.summary ?? "");
   return {
     id: vuln.id,
     spans: collectAffectedSpans(vuln.affected, packageName, ecosystem),
     versions: listedVersions(vuln.affected, packageName, ecosystem),
-    maintenance: isMaintenanceNotice({ summary: vuln.summary ?? "" }) || informational === "unmaintained" || informational === "notice",
+    maintenance: isMaintenanceRecord(vuln, packageName, ecosystem),
     ...(malware ? { malware: true } : {}),
   };
 }

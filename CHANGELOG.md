@@ -342,13 +342,21 @@ shared with the app are pinned by the shared vectors.
 - The shared rule vectors `severity` (sv-001..sv-022) and `parent_release`
   (pr-001..pr-012, with the graph lines run through the whole planner, and
   Cargo lines) run in the TypeScript runner.
-- The conformance pin moves to 4DA 517071c0c (#972, #976, #981, #986, #992,
-  #993, #994, #998, #1008): every shared vector line (431, nine files) and the
-  corpus suite pass at it. #1008's new lines hold the Rust engine to this
+- The conformance pin moves to 4DA 9450d1613 (#972, #976, #981, #986, #992,
+  #993, #994, #998, #1008, #1025): every shared vector line (435, nine files)
+  and the corpus suite pass at it. #1008's new lines hold the Rust engine to this
   server's rules: a malware landing is named as malware (ft-070, ft-072), a
   maintenance notice never blocks a target and is never one, even at its own
   fixed bound (ft-071, ft-073, ring RUSTSEC-2025-0010), and a notice with a
   published fix is still not graded from an alias (sv-023).
+- **An unmaintained-crate notice is a notice wherever RustSec puts the flag.**
+  RustSec writes `informational` on each `affected[]` entry, never on the
+  record, so RUSTSEC-2018-0017 (`tempdir` crate has been deprecated), net2 and
+  structopt were graded vulnerabilities. A record is now a notice for a package
+  when its summary says unmaintained, or `informational` is `unmaintained` or
+  `notice` on the record or on that package's affected entry; `unsound` stays
+  a vulnerability (smallvec). The same predicate as the 4DA app (#1025),
+  pinned by ft-074, ft-075, sv-024 and sv-025.
 - **A row's only fix across a major raises the row**, flagged `breaking`,
   with the reason "the only release of <parent> that fixes <child> is <ver>, a
   major upgrade" (the 4DA lead): xsv's crossbeam-channel row goes to 0.5.0,

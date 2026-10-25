@@ -14,7 +14,7 @@ import { fetchWithTimeout } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
 import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
-import { isMaintenanceNotice } from "./maintenance.js";
+import { isMaintenanceNotice, isMaintenanceRecord } from "./maintenance.js";
 import { gradeAliasGroups } from "./advisory-groups.js";
 import { cweIdsOf, isMalware } from "./malware.js";
 import type {
@@ -529,6 +529,7 @@ function mapVulnerability(
     severity,
     cvssScore,
     ...(malware ? { malware: true } : {}),
+    ...(isMaintenanceRecord(vuln, dep.name, dep.ecosystem) ? { maintenance: true as const } : {}),
     summary: vuln.summary || vuln.details?.slice(0, 200) || vuln.id,
     fixedVersion,
     published: vuln.published || vuln.modified || "",

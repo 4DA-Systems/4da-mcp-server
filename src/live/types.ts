@@ -107,10 +107,12 @@ export interface OsvVulnerability {
     }>;
     /** Versions listed explicitly, in addition to (or instead of) the ranges. */
     versions?: string[];
+    /** RustSec puts `informational` (unmaintained | unsound | notice) here, per package. */
+    database_specific?: { informational?: string };
   }>;
   references?: Array<{ type: string; url: string }>;
   /** GitHub-advisory severity label: LOW | MODERATE | HIGH | CRITICAL; `cwe_ids` (CWE-506 = malicious code). */
-  database_specific?: { severity?: string; cwe_ids?: string[] };
+  database_specific?: { severity?: string; cwe_ids?: string[]; informational?: string };
   /** Set (to an RFC3339 timestamp) when the advisory has been withdrawn/retracted. */
   withdrawn?: string;
   published?: string;
@@ -136,6 +138,12 @@ export interface VulnerabilityEntry {
   severityFrom?: string;
   /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
   malware?: boolean;
+  /**
+   * A maintenance notice by the record's `informational` field for this package
+   * (maintenance.ts isMaintenanceRecord). Absent on entries cached before 6.2.5,
+   * which fall back to the summary wording.
+   */
+  maintenance?: true;
   summary: string;
   fixedVersion: string | null;
   published: string;
