@@ -222,7 +222,17 @@ export async function executeDependencyHealth(
   const { unreadable, partial: partialReads, refused } = splitLockfileProblems(problems);
   const readGap = unreadable.length > 0 ? `NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")} This is not a complete result.` : null;
   const withheld = coverage !== null || readGap !== null;
-  const partialNotes = lockfileProblemNotes([...partialReads, ...refused]);
+  // Direct dependencies whose registry did not answer: their outdated and deprecated state is
+  // unknown, not current. Under a registry outage the score counted them neither and the summary
+  // said every one was "checked against its registry" (audit 6.2.5 B-7: 58/100, true 37).
+  const registryFailed = registryData.filter((d) => d.fetchError);
+  const registryNote =
+    registryFailed.length > 0
+      ? [
+          `PARTIAL: ${registryFailed.length} of ${registryData.length} direct dependenc${registryData.length === 1 ? "y" : "ies"} could not be checked against ${registryFailed.length === 1 ? "its registry" : "their registries"} (${String(registryFailed[0].fetchError).slice(0, 120)}); whether ${registryFailed.length === 1 ? "it is" : "they are"} outdated or deprecated is unknown, not current.`,
+        ]
+      : [];
+  const partialNotes = [...lockfileProblemNotes([...partialReads, ...refused]), ...registryNote];
   const scorePartial = !withheld && partialNotes.length > 0;
   // One population for every count: the stored scan can be vulnerability_scan's,
   // which includes direct devDependencies by default, while the registry rows
@@ -355,7 +365,7 @@ export async function executeDependencyHealth(
   const parts: string[] = [];
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   parts.push(
-    `${plural(total, "direct dependency", "direct dependencies")} checked against ${total === 1 ? "its registry" : "their registries"}` +
+    `${registryFailed.length > 0 ? `${total - registryFailed.length} of ` : ""}${plural(total, "direct dependency", "direct dependencies")} checked against ${total === 1 ? "its registry" : "their registries"}` +
       (devExcluded > 0 ? ` (${plural(devExcluded, "devDependency", "devDependencies")} left out; include_dev: true adds them)` : ""),
   );
   if (vulnResult) {

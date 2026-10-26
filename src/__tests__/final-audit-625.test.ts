@@ -1104,3 +1104,18 @@ describe("F-1: the scan's fallback target", () => {
     expect(out.fix_targets["netmask@1.0.6"].checked).toBe("installed_advisories_only");
   });
 });
+
+// Audit 6.2.5 B-7: under a registry outage dependency_health scored outdated and deprecated as 0
+// and said every direct dependency was "checked against its registry".
+describe("B-7: a registry that does not answer leaves the health score partial", () => {
+  it("says how many were not checked and marks the score partial", async () => {
+    ADVISORIES.widget = [];
+    NPM.widget = { latest: "2.0.0", versions: { "1.0.0": {}, "2.0.0": {} } };
+    project({ widget: "1.0.0" }, {});
+    REGISTRY_DOWN = true;
+    const h = await health();
+    expect(h.summary).toMatch(/0 of 1 direct dependency checked against its registry/);
+    expect(h.summary).toMatch(/PARTIAL: 1 of 1 direct dependency could not be checked/);
+    expect(h.scoreCoverage).toMatchObject({ complete: false });
+  });
+});
