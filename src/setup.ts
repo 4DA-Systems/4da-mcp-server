@@ -33,6 +33,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import jsonc from "jsonc-parser";
 import type { JSONPath, ParseError } from "jsonc-parser";
 
@@ -414,10 +415,26 @@ export function runSetup(dryRun = false, ctx: SetupContext = currentContext(), l
   log("  Run: npx @4da/mcp-server --doctor  to verify everything works.\n");
 }
 
+/**
+ * True when `argv1` (the script node was started with) is this module. On
+ * macOS and Linux npm installs the `4da-mcp-setup` bin as a symlink named
+ * just that, so matching the name against "setup.js" was false and the command
+ * exited 0 having done nothing (audit 6.2.5 E-2). Resolving both sides covers the
+ * symlink, `node dist/setup.js`, `pnpm run setup` and the Windows .cmd shim.
+ */
+export function isEntryPoint(argv1: string | undefined, moduleUrl: string): boolean {
+  if (!argv1) return false;
+  try {
+    const a = realpathSync(argv1);
+    const b = realpathSync(fileURLToPath(moduleUrl));
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  } catch {
+    return false;
+  }
+}
+
 // Run directly if invoked as a script (bin entry or pnpm run setup)
-const isDirectRun =
-  process.argv[1]?.endsWith("setup.js") || process.argv[1]?.endsWith("setup.ts");
-if (isDirectRun) {
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   const dryRun = process.argv.includes("--dry-run");
   runSetup(dryRun);
 }
