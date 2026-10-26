@@ -214,11 +214,14 @@ shared with the app are pinned by the shared vectors.
   malware itself (GHSA-c2m4-w5hm-vqjw, last_affected 1.0.1); cross-env.js,
   mongose, babelcli, d3.js, jquery.js, ffmepg, nodesass and nodefabric the
   same. Every release a tool offers (the planner's newest-release target,
-  dependency_health's `latestStableVersion`, what_should_i_know's `latest`) now
+  dependency_health's `latestSafeVersion`, what_should_i_know's `latest`) now
   passes the advisory check dependency_check decides `proceed` by, and the
   registry's withdrawals. A placeholder whose newer releases are all malware is
   `remove_dependency` ("remove it"); otherwise the newest release that is
   neither affected nor withdrawn is offered, or `hold_current` when none is.
+  dependency_health's `latestStableVersion` stays the registry's newest stable
+  release as published; when that release is affected or withdrawn,
+  `latestStableNote` says so and `latestSafeVersion` names the one offered.
 - **No release brings in an advisory the installed version does not have**,
   fixed or not (the 4DA lead's rule for both engines): not a fix target, a
   parent or lever release, or a newest-release offer. An advisory with no
