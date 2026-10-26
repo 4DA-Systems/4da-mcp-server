@@ -58,7 +58,7 @@ export function collectAffectedSpans(
   for (const a of affected ?? []) {
     // Names compare the registry's way: PEP 503 for PyPI (`Jinja2` is
     // `jinja2`), `-`/`_` folding for crates.
-    if (a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
+    if (!a.package || a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
     for (const range of a.ranges || []) {
       if (range.type === "GIT") continue;
       let open: AffectedSpan | null = null;
@@ -88,7 +88,7 @@ export function collectAffectedSpans(
 function listedVersions(affected: OsvVulnerability["affected"] | undefined, packageName: string, ecosystem: string): string[] {
   const out: string[] = [];
   for (const a of affected ?? []) {
-    if (a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
+    if (!a.package || a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
     out.push(...(a.versions ?? []));
   }
   return out;

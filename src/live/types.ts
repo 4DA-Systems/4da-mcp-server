@@ -100,7 +100,8 @@ export interface OsvVulnerability {
   aliases?: string[];
   severity?: Array<{ type: string; score: string }>;
   affected?: Array<{
-    package: { name: string; ecosystem: string };
+    /** Optional in the OSV schema: an entry with only GIT ranges has no package (EEF-CVE-2026-56812). */
+    package?: { name: string; ecosystem: string };
     ranges: Array<{
       type: string;
       events: Array<{ introduced?: string; fixed?: string; last_affected?: string; limit?: string }>;

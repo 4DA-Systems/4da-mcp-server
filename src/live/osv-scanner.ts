@@ -304,8 +304,12 @@ export class OsvScanner {
         unanswered = outcome.unanswered;
         failure = outcome.failure;
       } catch (error) {
+        // The source layer turns network failures into `outcome.failure`; an
+        // exception here is a fault in this server, not an OSV outage, and
+        // telling the agent to retry would not help (audit 6.2.5 D-2).
         unanswered = uncached;
-        failure = error instanceof Error ? `OSV.dev could not be queried (${error.message.slice(0, 120)})` : "OSV.dev could not be queried";
+        const detail = error instanceof Error ? error.message.slice(0, 120) : String(error).slice(0, 120);
+        failure = `an internal error in this server stopped the vulnerability lookup (${detail}); retrying will not help, please report it at https://github.com/4DA-Systems/4da-mcp-server/issues`;
       }
     }
 

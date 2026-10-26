@@ -33,7 +33,7 @@ function nameKey(ecosystem: string, name: string): string {
 /** Explicitly listed versions for one package of one record. */
 function listedVersions(vuln: OsvVulnerability, name: string, ecosystem: string): string[] {
   return (vuln.affected ?? [])
-    .filter((a) => a.package.ecosystem === ecosystem && samePackageName(a.package.name, name, ecosystem))
+    .filter((a) => a.package?.ecosystem === ecosystem && samePackageName(a.package.name, name, ecosystem))
     .flatMap((a) => a.versions ?? []);
 }
 
@@ -45,7 +45,9 @@ export class PinnedRecordsSource implements AdvisorySource {
   constructor(records: Iterable<OsvVulnerability>) {
     for (const record of records) {
       this.byId.set(record.id, record);
-      const keys = new Set((record.affected ?? []).map((a) => `${a.package.ecosystem}\0${nameKey(a.package.ecosystem, a.package.name)}`));
+      const keys = new Set(
+        (record.affected ?? []).flatMap((a) => (a.package ? [`${a.package.ecosystem}\0${nameKey(a.package.ecosystem, a.package.name)}`] : [])),
+      );
       for (const key of keys) {
         const list = this.byPackage.get(key);
         if (list) list.push(record);
