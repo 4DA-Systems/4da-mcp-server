@@ -46,6 +46,7 @@ import {
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { OsvEcosystem, ResolvedDependency } from "../live/types.js";
+import { exclusionNotes } from "../project-tree.js";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import {
   getRelevantWisdom,
@@ -187,6 +188,7 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
       | "getHeadlines"
       | "fetchRegistryHealth"
       | "getFixPathSources"
+      | "getDiscovery"
     >
   >;
 
@@ -399,8 +401,15 @@ export async function executeWhatShouldIKnow(
   // ── 4. Judge-accepted reading about the task's packages ───────────────
   const relatedReading = judgedReadingFor(db, packages);
 
+  // Manifests of ecosystems this server does not read (pom.xml, build.gradle, *.csproj): a
+  // dependency the task names there was never checked, so the task cannot be "safe" on the
+  // scan's word (audit 6.2.5 D-5: an upgrade of jackson-databind in WebGoat's pom.xml
+  // came back safe_to_delegate).
+  const notCovered = exclusionNotes(liveIntel?.getDiscovery?.() ?? null).filter((n) => n.startsWith("NOT COVERED"));
+
   const finalize = (relevantWisdom: WisdomEntry[], wisdomMode: WisdomRecallMode): WhatShouldIKnowResult => {
     const delegation = assessDelegation({
+      notCovered,
       scanStatus,
       advisories,
       taskDependencies,
@@ -421,7 +430,7 @@ export async function executeWhatShouldIKnow(
       delegation_assessment: delegation,
       scan_status: scanStatus,
       scan: scanBlock,
-      summary: summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level),
+      summary: summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered),
       wisdom_recall_mode: wisdomMode,
       _meta: { untrusted_text: UNTRUSTED },
     };
@@ -632,6 +641,7 @@ async function conflictsFor(db: FourDADatabase, packages: TaskPackage[]) {
 }
 
 function assessDelegation(input: {
+  notCovered: string[];
   scanStatus: ScanStatus;
   advisories: Advisory[];
   taskDependencies: TaskDependency[];
@@ -661,6 +671,9 @@ function assessDelegation(input: {
     return { level: "unknown", reason: `${SCAN_UNAVAILABLE_REASON}${scanStatus === "disabled" ? " (live intelligence is disabled)" : ""}.` };
   }
   const reasons: string[] = [];
+  if (input.notCovered.length > 0) {
+    reasons.push("the project has manifests of ecosystems this server does not read, so a dependency the task names there was not checked at all");
+  }
   if (confirmed.length > 0) reasons.push(`${confirmed.length} confirmed vulnerabilit${confirmed.length !== 1 ? "ies" : "y"} in the packages this task touches`);
   const crossing = taskDependencies.filter((d) => (d.majors_crossed ?? 0) > 0);
   if (crossing.length > 0) reasons.push(`the upgrade crosses ${crossing.map((d) => `${d.majors_crossed} major version${d.majors_crossed !== 1 ? "s" : ""} of ${d.package}`).join(", ")} (check upgrade_impact for breaking changes)`);
@@ -679,8 +692,10 @@ function summarize(
   wisdom: WisdomEntry[],
   scanStatus: ScanStatus,
   level: DelegationLevel,
+  notCovered: string[] = [],
 ): string {
   const parts: string[] = [];
+  for (const note of notCovered) parts.push(note.replace(/[.]$/, ""));
   parts.push(
     deps.length > 0
       ? `Task touches ${deps.map((d) => `${d.package}${d.installed.length ? ` ${d.installed.join("/")}` : ""}`).join(", ")}`
