@@ -66,7 +66,8 @@ import {
   type Signal,
   type Verdict,
 } from "./dependency-check-signals.js";
-import { checkRange, compareIn, isPrereleaseIn, lineOf, parseTarget, rangeAdmits, type RangeCheck, type Target } from "./dependency-check-versions.js";
+import { checkRange, compareIn, isPrereleaseIn, lineOf, ownSafeInRange, parseTarget, rangeAdmits, type RangeCheck, type Target } from "./dependency-check-versions.js";
+import { HeldJudge, heldRangeCandidates } from "./dependency-check-held.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
@@ -94,7 +95,7 @@ export const dependencyCheckTool = {
     "Is this dependency version safe to write? Call BEFORE you write any version into a manifest or lockfile: adding, pinning, upgrading, bumping or downgrading a package, or choosing a version (npm, crates.io, PyPI, Go). Pass the exact version you intend to write, or the constraint you were given (\"7.x\", \"^1.20\", \"~=3.1\", \"v1\") to get the smallest and newest safe release in it. Write only a version that came back `proceed`. Your memory of which release is safe is out of date; this reads the registry and OSV.dev now.",
     "",
     "Per item: `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason`, `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release.",
-    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`.",
+    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm: a dependency `to` exact-pins, or narrowly ranges with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones.",
     "- release_age: under 3 days -> wait, unless `to` fixes an advisory affecting `from`, or every release on its line past the hold has an advisory and no safe one is past it (then proceed; tell the user its age).",
     "- yanked_or_deprecated: yanked, unpublished, retracted (Go) or deprecated -> avoid.",
     "- publish_trust (npm, crates.io): trusted publisher / provenance dropped -> review. install_script_added (npm): new install script -> review. new_dependencies (npm, crates.io): a new runtime dependency under 30 days old -> review. Not applicable elsewhere, and said so.",
@@ -196,7 +197,7 @@ export async function executeDependencyCheck(
     fixSources,
     requested.filter((r) => r.target.kind === "range" || r.target.kind === "exact_or_series"),
   );
-  const items = requested.map((r) => resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now));
+  let items = requested.map((r) => resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now));
 
   // Go dates come from per-version .info: read them for versions chosen from the list
   // (a constraint, "latest", or `v2.0.0` listed as `v2.0.0+incompatible`).
@@ -208,6 +209,31 @@ export async function executeDependencyCheck(
     for (const [key, lookup] of await fetchIndexes(goRedo, sources, new Set())) indexes.set(key, lookup);
     await settleGoPicks(goRedo, indexes, sources.Go, now);
   }
+
+  // npm: what a release installs at a fixed version comes with it (audit 6.2.5 D-4: express 4.20.0
+  // exact-pins an affected qs). Judge `to` and, for a constraint, the smallest and newest safe
+  // releases in it, then pick again among the releases that hold nothing affected.
+  const held = new HeldJudge(fixSources, (deps) => liveIntel.queryAdvisories(deps));
+  const isNpm = (i: Resolved) => i.ecosystem === "npm" && !i.unresolved;
+  await held.judge(
+    items.filter(isNpm).map((item) => {
+      const lookup = indexes.get(lookupKey(item));
+      const advisories = advisoryLists.get(lookupKey(item));
+      const ownSafe = item.rangeCheck && lookup?.status === "ok" && advisories
+        ? ownSafeInRange({ ecosystem: "npm", index: lookup.data, range: item.rangeCheck.range, advisories })
+        : [];
+      return { pkg: item.package, versions: [item.to, ...heldRangeCandidates(ownSafe, (v) => !item.from || compareIn("npm", v, item.from) > 0)] };
+    }),
+  );
+  items = items.map((item, i) => {
+    if (!isNpm(item) || item.rangeCheck?.basis !== "requested") return item;
+    const filter = held.rangeFilter(item.package);
+    const r = requested[i];
+    return filter ? resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter) : item;
+  });
+  // The pick may have moved to a release judged only through its range: judge it too (normally a no-op).
+  await held.judge(items.filter(isNpm).map((item) => ({ pkg: item.package, versions: [item.to] })));
+  const heldAt = (item: CheckItem) => (item.ecosystem === "npm" ? held.at(item.package, item.to) : undefined);
 
   const osvDeps: ResolvedDependency[] = items
     .filter((i) => !i.unresolved)
@@ -232,18 +258,32 @@ export async function executeDependencyCheck(
           from: item.from ? refs(byInstance.get(instanceKey(item.ecosystem, item.package, item.from))) : [],
         };
 
-  // An exact `to` an advisory affects: the safe releases on its own line.
+  // An exact `to` an advisory affects (its own, or one it holds): the safe releases on its own line.
   const affectedExact = items.filter(
-    (i) => !i.unresolved && !i.rangeCheck && advisoriesFor(i).available && hasRealAdvisory(advisoriesFor(i)),
+    (i) =>
+      !i.unresolved &&
+      !i.rangeCheck &&
+      ((advisoriesFor(i).available && hasRealAdvisory(advisoriesFor(i))) || (i.ecosystem === "npm" && held.affected(i.package, i.to))),
   );
   const moreLists = await packageAdvisoryLists(fixSources, affectedExact.filter((i) => !advisoryLists.has(lookupKey(i))));
   for (const [k, v] of moreLists) advisoryLists.set(k, v);
-  for (const item of affectedExact) {
+  const lines = affectedExact.flatMap((item) => {
     const lookup = indexes.get(lookupKey(item))!;
     const advisories = advisoryLists.get(lookupKey(item));
     const line = lineOf(item.ecosystem, item.to);
-    if (lookup.status !== "ok" || !advisories || !line) continue;
-    item.rangeCheck = checkRange({ ecosystem: item.ecosystem, index: lookup.data, range: line, basis: "same_line", advisories, from: item.from });
+    return lookup.status === "ok" && advisories && line ? [{ item, index: lookup.data, advisories, line }] : [];
+  });
+  await held.judge(
+    lines
+      .filter((l) => l.item.ecosystem === "npm")
+      .map((l) => ({
+        pkg: l.item.package,
+        versions: heldRangeCandidates(ownSafeInRange({ ecosystem: "npm", index: l.index, range: l.line, advisories: l.advisories }), (v) => !l.item.from || compareIn("npm", v, l.item.from) > 0),
+      })),
+  );
+  for (const { item, index, advisories, line } of lines) {
+    const filter = item.ecosystem === "npm" ? held.rangeFilter(item.package) : undefined;
+    item.rangeCheck = checkRange({ ecosystem: item.ecosystem, index, range: line, basis: "same_line", advisories, from: item.from, ...(filter ? { held: filter } : {}) });
   }
 
   const holdWaivers = await findHoldWaivers(items, indexes, advisoryLists, fixSources, sources.Go, advisoriesFor, now);
@@ -273,7 +313,7 @@ export async function executeDependencyCheck(
       // No release metadata: only the advisory lookup can still speak, and
       // only a negative finding is worth more than "unknown".
       if (p.item.unresolved) return { ...head(p.item), verdict: "unknown" as const, reason: p.blocked, signals: [], ...extra };
-      const advisories = advisoriesSignal(p.item, advisoriesFor(p.item));
+      const advisories = advisoriesSignal(p.item, advisoriesFor(p.item), heldAt(p.item));
       const negative = advisories.effect === "avoid" || advisories.effect === "review";
       return {
         ...head(p.item),
@@ -287,7 +327,7 @@ export async function executeDependencyCheck(
     const { item, index } = p;
     const to = index!.releases[item.to];
     const base = selectBaseline(index!, item);
-    const advisories = advisoriesSignal(item, advisoriesFor(item));
+    const advisories = advisoriesSignal(item, advisoriesFor(item), heldAt(item));
     const createdForItem = new Map<string, CreatedAtFact>();
     for (const name of p.introduced ?? []) {
       const fact = created.get(`${item.ecosystem}\0${name}`);
@@ -325,7 +365,9 @@ function withAlternatives(reason: string, item: Resolved, unsafe: boolean): stri
   const upgrade = rc.smallest_safe_upgrade && rc.smallest_safe_upgrade !== rc.smallest_safe_in_range ? `, smallest above ${item.from} ${rc.smallest_safe_upgrade}` : "";
   // FX-H5: a withdrawn release the pick steps over is named, in the registry's words.
   const withheld = rc.withheld_note ? ` ${rc.withheld_note}.` : "";
-  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}`;
+  // audit 6.2.5 D-4: releases passed over for what they hold are counted, never dropped silently.
+  const heldOut = rc.held_excluded ? ` ${rc.held_excluded} release${rc.held_excluded === 1 ? "" : "s"} clear of ${item.package}'s own advisories left out: ${rc.held_note}.` : "";
+  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}${heldOut}`;
   if (rc.basis === "same_line" && !unsafe) return reason;
   return `${reason} | ${safe}`;
 }
@@ -354,6 +396,7 @@ function resolveTarget(
   lookup: RegistryLookup<PackageReleaseIndex>,
   advisories: AdvisoryRanges[] | null | undefined,
   now: Date,
+  held?: { unsafe: (version: string) => boolean; note: string },
 ): Resolved {
   const base = provisional(r);
   if (lookup.status !== "ok") return base;
@@ -386,7 +429,7 @@ function resolveTarget(
     // Without the advisory list no release can be called safe; judge the newest one on its own advisories.
     return { ...base, to: newestOf(r.ecosystem, admitted)!, requested: r.raw };
   }
-  const rangeCheck = checkRange({ ecosystem: r.ecosystem, index, range, basis: "requested", advisories, from: r.from });
+  const rangeCheck = checkRange({ ecosystem: r.ecosystem, index, range, basis: "requested", advisories, from: r.from, ...(held ? { held } : {}) });
   const safe = rangeCheck.safe_versions;
   const settled = (v: string) => {
     const at = index.releases[v]?.publishedAt;

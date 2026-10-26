@@ -189,6 +189,7 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
       | "fetchRegistryHealth"
       | "getFixPathSources"
       | "getDiscovery"
+      | "queryAdvisories"
     >
   >;
 
@@ -331,6 +332,9 @@ export async function executeWhatShouldIKnow(
         ...(d.installed.length === 1 ? { installed: d.installed[0] } : {}),
       })),
     TARGET_CHECK_BUDGET_MS,
+    undefined,
+    // npm: what a target installs at a fixed version counts too (audit 6.2.5 D-4).
+    liveIntel?.queryAdvisories ? { heldQuery: (deps) => liveIntel!.queryAdvisories!(deps) } : {},
   );
   // Each advisory's own fix as the registry still offers it: never a yanked or deprecated release (FX-H5).
   for (const dep of taskDependencies) {

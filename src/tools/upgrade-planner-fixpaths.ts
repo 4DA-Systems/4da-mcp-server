@@ -32,6 +32,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import {
   cleanFixTarget,
   directFix,
+  heldNote,
   manualRefreshSteps,
   overrideReaches,
   refreshCommandFor,
@@ -63,6 +64,7 @@ import { requirementAdmits, type RequirementDialect } from "../live/refresh-rule
 import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
+import { withHeldTargets } from "../live/held-targets.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 
 /** One dependency the project declares that moves a blocking parent. */
@@ -178,7 +180,11 @@ export interface FixPathInput {
   unfixed?: Array<{ id: string; ids: string[] }>;
 }
 
-type Intel = Pick<LiveIntelligence, "getFixPathSources" | "lockfileFor" | "getProjectRoot" | "getResolvedDeps">;
+type Intel = Pick<LiveIntelligence, "getFixPathSources" | "lockfileFor" | "getProjectRoot" | "getResolvedDeps"> &
+  Partial<Pick<LiveIntelligence, "queryAdvisories">>;
+
+/** Time one npm step may spend judging what its target holds at a fixed version (audit 6.2.5 D-4). */
+const HELD_BUDGET_MS = 5_000;
 
 /** Total time the plan spends verifying fix paths before answering with what it has. */
 const FIX_PATH_BUDGET_MS = 25_000;
@@ -283,7 +289,18 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   // #981 round 3: an installed copy flagged malicious names no release at all: remove or replace it.
   const own = step.currentVersion ? await sources.packageAdvisories(ecosystem, step.package).catch(() => null) : null;
   const malicious = own ? cleanReleases(own, ecosystem, []).maliciousAt(step.currentVersion!) : [];
-  const clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion);
+  let clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion);
+  // npm: a target that exact-pins (or narrowly ranges) an affected dependency installs it: express
+  // 4.20.0 and qs 6.11.0 (audit 6.2.5 D-4). The same check vulnerability_scan runs on its targets,
+  // here on a direct row only, the release the plan tells the agent to install. A transitive row's
+  // release is moved by its parents' levers, and the shared rule vector pr-007 keeps the app's
+  // answer for it (serve-static 1.16.0, though it exact-pins send 0.18.0).
+  if (clean?.target && ecosystem === "npm" && step.scope === "direct" && liveIntel.queryAdvisories) {
+    const query = liveIntel.queryAdvisories.bind(liveIntel);
+    const held = await withHeldTargets(sources, query, [{ key: "step", name: step.package, installed: step.currentVersion, clean }], Date.now() + HELD_BUDGET_MS);
+    clean = held.get("step") ?? clean;
+  }
+  const heldUnclean = clean ? Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined : false;
   if (malicious.length > 0) {
     step.reasons.push(malwareText(step.package, malicious));
     // A malware record with a fixed release (MAL-2023-462: fsevents 1.2.9-1.2.10, clean from
@@ -317,12 +334,14 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
       step.withheld = clean.withheld;
       step.reasons.push(passed);
     }
+    const heldWords = heldNote(clean);
+    if (heldWords) step.reasons.push(heldWords);
     setTarget(step, clean.target);
     step.breaking = step.scope === "direct" && step.upgradeType === "major";
     step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
     if (step.scope === "transitive" && step.currentVersion) await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
     withUpgradeCommands(input, liveIntel);
-    return "verified";
+    return heldUnclean ? "unverified" : "verified";
   }
   if (!clean) return "failed";
   const withheld = withheldText(clean, ecosystem);
@@ -392,7 +411,8 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     );
   }
   rewriteNoFixReason(input, clean);
-  if (clean.target !== clean.floor) {
+  // The advisory-side reasons are about the release the advisories pointed at; a held step follows them.
+  if ((clean.heldFrom ?? clean.target) !== clean.floor) {
     if (clean.floorAffectedBy.length > 0 || !withheld) {
       const why = clean.floorAffectedBy.length > 0
         ? `is itself affected by ${clean.floorAffectedBy.join(", ")}`
@@ -400,12 +420,14 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
           ? "is deprecated or yanked on the registry"
           : "is not a published release";
       step.reasons.push(
-        `${clean.target} is the smallest ${clean.basis === "registry" ? "published " : ""}version clear of every advisory a release fixes (${clean.floor}, the highest per-advisory fix, ${why})`,
+        `${clean.heldFrom ?? clean.target} is the smallest ${clean.basis === "registry" ? "published " : ""}version clear of every advisory a release fixes (${clean.floor}, the highest per-advisory fix, ${why})`,
       );
     }
     // The withdrawn releases passed, in the registry's words: "4.18.0 is deprecated on npm (...); 4.18.1 is the smallest clean release".
     if (withheld) step.reasons.push(withheld);
   }
+  const heldWords = heldNote(clean);
+  if (heldWords) step.reasons.push(heldWords);
   if (step.targetVersion !== clean.target) setTarget(step, clean.target);
   if (step.latestVersion === step.targetVersion) delete step.latestVersion;
   // A deprecation notice on the target's whole line: still the target, and said (audit 7f).
@@ -415,7 +437,8 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
   }
   withUpgradeCommands(input, liveIntel);
-  return "verified";
+  // Held dependencies affected with no clean release found, or not checked: never "all_advisories".
+  return heldUnclean ? "unverified" : "verified";
 }
 
 /**

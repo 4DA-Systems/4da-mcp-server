@@ -189,7 +189,8 @@ describe("H1: a parent release that admits a clean version is named, not 'waitin
     const express = step("express");
     expect(express).toMatchObject({ action: "upgrade_direct", targetVersion: "4.22.0", upgradeType: "minor" });
     expect(express.upgradeCommands).toEqual([{ dir: ".", command: "npm install express@4.22.0 --save-exact" }]);
-    expect(express.reasons.join(" ")).toMatch(/4\.22\.0, not 4\.20\.0: one release of express for every row that names it \(express 4\.20\.0 still requires a vulnerable path-to-regexp\)/);
+    // The direct row's own check now sees it (audit 6.2.5 D-4): 4.20.0 exact-pins the affected path-to-regexp.
+    expect(express.reasons.join(" ")).toMatch(/4\.20\.0 exact-pins path-to-regexp 0\.1\.10 \(GHSA-[^)]*\).*so 4\.22\.0, the smallest later release on its line whose own advisories and held dependencies are clean/);
   });
 
   it("a transitive parent: names the direct dependency it arrives through, and that dependency's release", async () => {

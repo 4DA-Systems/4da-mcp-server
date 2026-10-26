@@ -40,6 +40,8 @@ import { refreshRule, requirementAdmits, type ParentRequirement, type Requiremen
 import { compareVersions, maxVersion } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
+import { heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
+import { withHeldTargets } from "./held-targets.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
 const TIMEOUT_MS = 15_000;
@@ -49,8 +51,8 @@ const VERSIONS_TTL = 6 * 3600;
 const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
-/** Bump when the shape of anything this module caches changes. */
-const CACHE_VERSION = 9;
+/** Bump when the shape of anything this module caches changes (10: npm facts carry `heldSpecs`, audit 6.2.5 D-4). */
+const CACHE_VERSION = 10;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
@@ -75,6 +77,12 @@ export interface PackageReleaseFacts {
    * of 6.2.5: the plan targeted glob 10.5.0 while dependency_check said review on it).
    */
   lineNotices?: Record<string, string>;
+  /**
+   * npm: per release, the dependencies it holds (exact pins and narrow ranges, held-dependencies.ts):
+   * name -> spec. A release that holds none is absent. Its advisories come with the release
+   * (audit 6.2.5 D-4: express 4.20.0 exact-pins qs 6.11.0).
+   */
+  heldSpecs?: Record<string, Record<string, string>>;
 }
 
 export interface CrateDepReq {
@@ -315,6 +323,11 @@ export class FixPathSources {
     const out = new Set(withdrawn);
     const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? (versions[v].deprecated as string) : null);
     const noticed = Object.keys(versions).filter((v) => !out.has(v) && isNpmDeprecated(versions[v]?.deprecated));
+    const heldSpecs: Record<string, Record<string, string>> = {};
+    for (const [v, m] of Object.entries(versions)) {
+      const held = heldSpecsOf(m?.dependencies, m?.optionalDependencies);
+      if (Object.keys(held).length > 0) heldSpecs[v] = held;
+    }
     const facts: PackageReleaseFacts = {
       versions: Object.keys(versions).filter((v) => !out.has(v)),
       withdrawn,
@@ -322,6 +335,7 @@ export class FixPathSources {
       latest,
       deprecatedLatest: latest && isNpmDeprecated(versions[latest]?.deprecated) ? (message(latest) ?? "deprecated") : null,
       ...(noticed.length > 0 ? { lineNotices: Object.fromEntries(noticed.map((v) => [v, message(v) ?? "deprecated"])) } : {}),
+      heldSpecs,
     };
     this.cache.set(key, facts, "npm", VERSIONS_TTL);
     return facts;
@@ -460,7 +474,49 @@ export type FixTargetResult = CleanTarget & {
   targetNotice?: string;
   /** The package's malware advisories (#981 rule a): a release one affects is never the target. */
   malware?: string[];
+  /**
+   * npm (audit 6.2.5 D-4): the release the package's own advisories pointed at, passed because a
+   * dependency it holds (an exact pin, or a narrow range whose newest release is affected) brings
+   * an advisory in; `heldPast` names each release passed and why. `target` is then the smallest
+   * later release on that line whose own advisories AND held dependencies are clean.
+   */
+  heldFrom?: string;
+  heldPast?: Array<{ version: string; affected: HeldDependency[] }>;
+  /** The target holds an affected dependency and no later release searched (`searched`) clears it: not a clean fix. */
+  heldBlocked?: { affected: HeldDependency[]; searched: string[] };
+  /** Whether the target's held dependencies are affected could not be checked, and why: not a clean fix either. */
+  heldUnchecked?: string;
 };
+
+/**
+ * Whether a checked target may be reported as checked against every advisory (fix_checked
+ * `all_advisories`): its own advisories were read, and, for npm, what it installs at a fixed
+ * version was judged clean (audit 6.2.5 D-4).
+ */
+export function targetCheckedAll(clean: FixTargetResult): boolean {
+  return !clean.advisoriesUnread && !clean.heldBlocked && clean.heldUnchecked === undefined;
+}
+
+/** The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked), or null when there is nothing to say. */
+export function heldNote(clean: FixTargetResult): string | null {
+  if (clean.heldFrom && clean.heldPast && clean.heldPast.length > 0 && clean.target) {
+    const [first, ...rest] = clean.heldPast;
+    const names = [...new Set(rest.flatMap((p) => p.affected.map((d) => d.name)))];
+    const later = rest.length === 0
+      ? ""
+      : `; ${rest.length === 1 ? rest[0].version : `${rest.length} later releases (${rest[0].version} to ${rest[rest.length - 1].version})`} still bring${rest.length === 1 ? "s" : ""} in an affected ${names.join(", ")}`;
+    return `${heldText(first.version, first.affected)}${later}; so ${clean.target}, the smallest later release on its line whose own advisories and held dependencies are clean`;
+  }
+  if (clean.heldBlocked && clean.target) {
+    const last = clean.heldBlocked.searched[clean.heldBlocked.searched.length - 1];
+    const upTo = last && last !== clean.target ? `up to ${last} ` : "";
+    return `${heldText(clean.target, clean.heldBlocked.affected)}; no release on its line ${upTo}that its own advisories leave clean clears ${clean.heldBlocked.affected.length === 1 ? "it" : "them"}, so ${clean.target} is NOT a clean fix: confirm a release with dependency_check before pinning it`;
+  }
+  if (clean.heldUnchecked !== undefined && clean.target) {
+    return `whether the dependencies ${clean.target} exact-pins or narrowly ranges are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
+  }
+  return null;
+}
 
 /**
  * The minimal clean target for one installed copy, or null when neither the
@@ -604,6 +660,7 @@ export async function verifyFixTargets(
   items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string }>,
   budgetMs: number,
   concurrency = 12,
+  options: { heldQuery?: AdvisoryQuery } = {},
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
   const todo = items.filter((i) => i.fixes.length > 0 || i.installed);
@@ -626,8 +683,19 @@ export async function verifyFixTargets(
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, todo.length) }, worker));
+  if (options.heldQuery) {
+    // npm: what each target installs at a fixed version, in one advisory lookup for all of them
+    // (audit 6.2.5 D-4). It gets at least HELD_FLOOR_MS even when the targets used the budget up:
+    // without it a cold scan would downgrade every npm target that holds a dependency.
+    const npm = todo.filter((i) => i.ecosystem === "npm" && out.has(i.key)).map((i) => ({ key: i.key, name: i.name, installed: i.installed, clean: out.get(i.key)! }));
+    const held = await withHeldTargets(sources, options.heldQuery, npm, Math.max(deadline, Date.now() + HELD_FLOOR_MS));
+    for (const [key, clean] of held) out.set(key, clean);
+  }
   return out;
 }
+
+/** The least time the held-dependency check of a scan's npm targets gets (verifyFixTargets). */
+const HELD_FLOOR_MS = 3_000;
 
 /** Said whenever the registry could not be read: withdrawn releases are then not ruled out, never silently. */
 export const REGISTRY_UNREAD_NOTE = "the registry could not be read, so whether it yanked or deprecated this release was not checked";
@@ -637,6 +705,17 @@ export const REGISTRY_UNREAD_NOTE = "the registry could not be read, so whether 
  * Withdrawn releases passed on the way are named in the registry's own words (FX-H5).
  */
 export function targetNote(clean: FixTargetResult, ecosystem = ""): string | null {
+  if (clean.heldFrom) {
+    // The advisory-side reasoning is about the release the advisories pointed at; the held step follows it.
+    const { heldFrom, heldPast: _past, targetNotice, ...rest } = clean;
+    const base = targetNote({ ...rest, target: heldFrom }, ecosystem);
+    return [base, heldNote(clean), targetNotice ?? null].filter((p): p is string => Boolean(p)).join("; ") || null;
+  }
+  const held = heldNote(clean);
+  if (held) {
+    const { heldBlocked: _b, heldUnchecked: _u, ...rest } = clean;
+    return [targetNote(rest, ecosystem), held].filter((p): p is string => Boolean(p)).join("; ");
+  }
   const withheld = withheldText(clean, ecosystem);
   if (clean.advisoriesUnread) {
     const unchecked = "not checked against the package's other advisories (OSV.dev did not answer)";

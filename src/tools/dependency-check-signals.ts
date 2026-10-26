@@ -13,6 +13,7 @@
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
 import { excludedReleases } from "../live/withdrawn-releases.js";
+import { heldSeverity, heldText, type HeldCheck } from "../live/held-dependencies.js";
 
 export type Verdict = "proceed" | "wait" | "review" | "avoid" | "unknown";
 export type SignalEffect = Verdict | "info";
@@ -107,7 +108,42 @@ export function introducedDependencies(to: ReleaseRecord, base: ReleaseRecord | 
   return to.dependencies.filter((d) => !before.has(d)).sort();
 }
 
-export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
+/**
+ * The advisories signal, with what `to` holds (npm, audit 6.2.5 D-4): a dependency it exact-pins
+ * or narrowly ranges that an advisory affects is installed with it, so it counts as one of `to`'s
+ * own, graded the same way (critical/high: avoid, else review). A held check that could not run
+ * never lets the signal say proceed.
+ */
+export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: HeldCheck): Signal {
+  const own = ownAdvisoriesSignal(item, facts);
+  if (!held || (held.status === "checked" && held.affected.length === 0)) return own;
+  if (held.status === "unchecked") {
+    const note = `Whether the dependencies ${item.to} exact-pins or narrowly ranges have known advisories was not checked (${held.reason}).`;
+    return {
+      ...own,
+      value: own.value === null ? { held_dependencies_unchecked: held.reason } : { ...(own.value as object), held_dependencies_unchecked: held.reason },
+      effect: own.effect === "avoid" || own.effect === "review" ? own.effect : "unknown",
+      evidence: `${own.evidence} ${note}`,
+    };
+  }
+  const severity = heldSeverity(held.affected);
+  const heldEffect: SignalEffect = severity === "critical" || severity === "high" ? "avoid" : "review";
+  const effect = own.effect === "avoid" || heldEffect === "avoid" ? "avoid" : "review";
+  const affected = held.affected.map((d) => ({ package: d.name, spec: d.spec, installs: d.version, advisories: d.ids, severity: d.severity }));
+  const heldNote = `${heldText(item.to, held.affected)}: installing ${item.to} installs ${held.affected.length === 1 ? "it" : "them"}.`;
+  return {
+    id: "advisories",
+    value: own.value === null ? { held_dependencies_affected: affected } : { ...(own.value as object), held_dependencies_affected: affected },
+    effect,
+    // "No known vulnerability affects X." is about X's own advisories; say what it holds instead.
+    evidence:
+      own.effect === "proceed"
+        ? `${own.evidence.replace(`No known vulnerability affects ${item.to}.`, `No advisory of ${item.package} itself affects ${item.to}, but ${heldNote}`)}`
+        : `${own.evidence} ${heldNote}`,
+  };
+}
+
+function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
   if (!facts.available) {
     return { id: "advisories", value: null, evidence: `OSV.dev could not be reached: ${facts.detail}`, effect: "unknown" };
   }
