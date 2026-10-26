@@ -17,6 +17,7 @@ import type { FourDADatabase } from "../db.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { presentedSeverity } from "../live/severity-scope.js";
+import { collapseAliases } from "./vulnerability-scan-format.js";
 import { compareVersions } from "../live/version-compare.js";
 
 /** A dependency the task names, with every installed copy. */
@@ -224,8 +225,10 @@ export function caretLine(version: string | null): string | null {
 /** Actionable advisories on the installed copies of one package, highest presented severity first. */
 export function advisoriesFor(pkg: TaskPackage, vulns: VulnerabilityEntry[]) {
   const rank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, unknown: 0 };
-  return vulns
-    .filter((v) => v.package === pkg.name && v.ecosystem === pkg.ecosystem && isActionableVulnerability(v))
+  // One row per advisory, as vulnerability_scan counts them: the aliases of one advisory (GHSA,
+  // PYSEC, CVE records) were each a row, so django read 96 confirmed vulnerabilities where the scan,
+  // health and planner said 51 (audit 6.2.5 D-7).
+  return collapseAliases(vulns.filter((v) => v.package === pkg.name && v.ecosystem === pkg.ecosystem && isActionableVulnerability(v)))
     .map((v) => ({
       id: v.vulnId,
       installed: v.currentVersion,
