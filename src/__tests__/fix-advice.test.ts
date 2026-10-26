@@ -40,6 +40,10 @@ const ADVISORIES: Record<string, OsvVulnerability[]> = {
   minimist: [adv("GHSA-minimist", "minimist", [{ introduced: "0" }, { fixed: "1.2.6" }])],
   fs: [{ id: "MAL-2023-0001", summary: "Malicious code in fs", affected: [{ package: { name: "fs", ecosystem: "npm" }, ranges: range([{ introduced: "0" }]) }] }],
   jest: [adv("GHSA-jest", "jest", [{ introduced: "0" }, { fixed: "30.0.0" }])],
+  // GHSA-c2m4-w5hm-vqjw, "crossenv is malware": introduced 0, last_affected 1.0.1.
+  crossenv: [adv("GHSA-c2m4-w5hm-vqjw", "crossenv", [{ introduced: "0" }, { last_affected: "1.0.1" }])],
+  // A publisher's own `-security` prerelease is code, not npm's placeholder.
+  "own-sec": [adv("GHSA-own-sec", "own-sec", [{ introduced: "0" }, { fixed: "1.0.1" }])],
 };
 
 /** npm abbreviated documents: versions (with a deprecation message where set) and the latest tag. */
@@ -119,7 +123,9 @@ describe("fix targets", () => {
     project({ lodash: "4.17.15" });
     const result = await scan();
     expect(result.vulnerable_packages[0]).toMatchObject({ package: "lodash", fixed_version: "4.18.1", fix_checked: "all_advisories" });
-    expect(result.recommendations[0]).toMatch(/Upgrade lodash 4\.17\.15 → 4\.18\.1 .*4\.18\.0, the highest per-advisory fix, is deprecated or yanked/);
+    // FX-H5: the withdrawn release is named in the registry's words.
+    expect(result.recommendations[0]).toMatch(/Upgrade lodash 4\.17\.15 → 4\.18\.1 .*4\.18\.0 is deprecated on npm \("Bad release\. Please use lodash@4\.17\.21 instead\."\); 4\.18\.1 is the smallest clean release/);
+    expect(result.vulnerable_packages[0]).toMatchObject({ withheld: ["4.18.0"] });
   });
 
   it("A6: an advisory with only last_affected gets the first clean release above it", async () => {
@@ -134,6 +140,18 @@ describe("fix targets", () => {
     project({}, {}, { fs: { version: "0.0.1-security" } });
     const result = await scan();
     expect(result.total_vulnerable_packages).toBe(0);
+  });
+
+  it("L4: the placeholder holds under ANY advisory id, not only MAL- (crossenv 0.0.2-security, GHSA-c2m4)", async () => {
+    project({}, {}, { crossenv: { version: "0.0.2-security" } });
+    expect((await scan()).total_vulnerable_packages).toBe(0);
+    project({}, {}, { crossenv: { version: "1.0.1" } });
+    expect((await scan()).total_vulnerable_packages).toBe(1);
+  });
+
+  it("L4: only npm's 0.0.<n>-security shape is a placeholder; a publisher's 1.0.0-security stays affected", async () => {
+    project({}, {}, { "own-sec": { version: "1.0.0-security" } });
+    expect((await scan()).total_vulnerable_packages).toBe(1);
   });
 
   it("A8: direct devDependencies are scanned by default and labelled dev; include_dev: false leaves them out", async () => {
@@ -172,16 +190,27 @@ describe("A4: a parent that will not move", () => {
   });
 
   it("deprecated: says so", async () => {
+    // Retired as a whole (latest deprecated): the app's Standing::Deprecated (parent_release pr-006).
     pinnedParent({ latest: "1.3.0", versions: { "1.0.0": { dependencies: { minimist: "1.2.5" } }, "1.3.0": { deprecated: "use String.prototype.padStart()" } } });
     const { step } = await minimistStep();
     expect(step.action).toBe("override_or_replace");
     expect(step.reasons.join(" ")).toMatch(/left-pad is deprecated/);
   });
 
-  it("a parent with a newer release keeps waiting on upstream", async () => {
+  it("deprecated, and no release admits a clean version: override, and says it is deprecated", async () => {
+    pinnedParent({ latest: "1.3.0", versions: { "1.0.0": { dependencies: { minimist: "1.2.5" } }, "1.3.0": { deprecated: "use String.prototype.padStart()", dependencies: { minimist: "1.2.5" } } } });
+    const { step } = await minimistStep();
+    expect(step.action).toBe("override_or_replace");
+    expect(step.reasons.join(" ")).toMatch(/left-pad is deprecated/);
+  });
+
+  // Readiness audit H1 (2026-10-16): a newer parent release is a move, not "waiting on upstream".
+  it("a parent with a newer release that drops the dependency: upgrade the parent", async () => {
     pinnedParent({ latest: "1.1.0", versions: { "1.0.0": { dependencies: { minimist: "1.2.5" } }, "1.1.0": {} } });
     const { step } = await minimistStep();
-    expect(step.action).toBe("waiting_on_upstream");
+    expect(step.action).toBe("upgrade_parent");
+    expect(step.parentUpgrades).toMatchObject([{ parent: "left-pad", from: "1.0.0", to: "1.1.0", requirement: null }]);
+    expect(step.reasons.join(" ")).toMatch(/left-pad 1\.1\.0 is the smallest left-pad release that no longer depends on minimist: upgrade left-pad to 1\.1\.0/);
   });
 });
 

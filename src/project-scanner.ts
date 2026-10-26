@@ -18,7 +18,7 @@ import {
   cargoWorkspaceDeps,
   parseGoModDirectDeps,
   parsePyprojectDependencies,
-  parseRequirementNames,
+  requirementNamesWithIncludes,
 } from "./project-manifests.js";
 
 // =============================================================================
@@ -231,7 +231,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       const rustDevDeps: string[] = [];
       parseTOMLDependencies(content, "[dependencies]", rustDeps, fwSet, RUST_FRAMEWORK_MAP);
       parseTOMLDependencies(content, "[dev-dependencies]", rustDevDeps, fwSet, RUST_FRAMEWORK_MAP);
-      parseTOMLDependencies(content, "[build-dependencies]", rustDevDeps, fwSet, RUST_FRAMEWORK_MAP);
+      // build-dependencies run at build time on every machine that builds the crate: normal, not dev (audit 6.2.5 F-3).
+      parseTOMLDependencies(content, "[build-dependencies]", rustDeps, fwSet, RUST_FRAMEWORK_MAP);
       // Platform-gated deps: [target.'cfg(...)'.dependencies] / [target.<triple>.dependencies].
       // Previously skipped entirely (e.g. windows-sys, winreg, libc were invisible).
       parseTargetDependencies(content, rustDeps, rustDevDeps, result.depTargets, fwSet, RUST_FRAMEWORK_MAP);
@@ -283,7 +284,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   if (fs.existsSync(requirementsPath)) {
     langSet.add("python");
     try {
-      parseRequirementNames(fs.readFileSync(requirementsPath, "utf-8")).forEach((d) => pyDeps.add(d));
+      // Included files (`-r sub/inner.txt`) declare their pins too (audit 7g).
+      requirementNamesWithIncludes(requirementsPath, cwd).forEach((d) => pyDeps.add(d));
     } catch {
       // Skip
     }
@@ -425,7 +427,7 @@ function parseTargetDependencies(
   let m: RegExpExecArray | null;
   while ((m = headerRegex.exec(content)) !== null) {
     const spec = m[1].trim().replace(/^['"]|['"]$/g, ""); // strip surrounding quotes
-    const isDev = m[2] !== "dependencies";
+    const isDev = m[2] === "dev-dependencies"; // build-dependencies are normal (audit 6.2.5 F-3)
     // Body runs from the end of this header line to the next section header.
     const rest = content.slice(m.index + m[0].length);
     const nextHeader = rest.search(/^\[/m);

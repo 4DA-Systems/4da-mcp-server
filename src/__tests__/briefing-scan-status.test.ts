@@ -242,6 +242,19 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     expect(result.delegation_assessment.level).toBe("safe_to_delegate");
   });
 
+  // Audit 6.2.5 D-5: "upgrade jackson-databind" in WebGoat (pom.xml) came back
+  // safe_to_delegate. A clean scan of the part this server reads says nothing
+  // about a Maven, Gradle or .NET manifest it cannot read.
+  it("a clean scan of a project with unread manifests is never safe_to_delegate, and says NOT COVERED", async () => {
+    const discovery = { notCoveredCount: 1, notCovered: [{ path: "pom.xml", ecosystem: "Maven" }] } as unknown as ReturnType<NonNullable<BriefingLiveIntel["getDiscovery"]>>;
+    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(scanOf([]), { getDiscovery: () => discovery }));
+
+    expect(result.scan_status).toBe("ready");
+    expect(result.delegation_assessment.level).toBe("review_needed");
+    expect(result.delegation_assessment.reason).toMatch(/does not read/);
+    expect(result.summary).toMatch(/NOT COVERED: 1 manifest\/lockfile .*\(Maven\): pom\.xml/);
+  });
+
   it("disabled live intelligence reports scan_status disabled and delegation unknown", async () => {
     const offline = await executeWhatShouldIKnow(
       db,

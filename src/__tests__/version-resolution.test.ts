@@ -207,7 +207,7 @@ describe("OsvScanner full-tree batching", () => {
       platformActive: true,
     }));
     for (const dep of deps) {
-      cache.set(`osv:${dep.ecosystem}:${dep.name}:${dep.version}`, [], "osv", 3600);
+      cache.set(`osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`, [], "osv", 3600);
     }
 
     const result = await scanner.scan(deps, root);

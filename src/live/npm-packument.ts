@@ -47,12 +47,13 @@ interface NpmVersionDoc {
   hasInstallScript?: boolean;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  deprecated?: string;
+  deprecated?: string | boolean;
 }
 
 export interface NpmPackument {
   versions?: Record<string, NpmVersionDoc>;
   time?: Record<string, unknown>;
+  "dist-tags"?: { latest?: string };
 }
 
 export class NpmPackumentReader implements ReleaseMetadataSource {
@@ -62,7 +63,8 @@ export class NpmPackumentReader implements ReleaseMetadataSource {
   ) {}
 
   async getReleases(name: string): Promise<RegistryLookup<PackageReleaseIndex>> {
-    const key = `npm-packument:${name}`;
+    // v2: the projection carries `latest` (FX-H5); a v1 row revalidated by a 304 would lack it.
+    const key = `npm-packument:v2:${name}`;
     const cached = this.cache.getStale<CachedPackument>(key)?.data ?? null;
     if (cached && Date.now() - cached.fetchedAtMs < FRESH_MS) {
       return { status: "ok", data: cached.index };
@@ -131,7 +133,8 @@ export function projectPackument(name: string, doc: NpmPackument): PackageReleas
       trust,
       trustEvidence,
       installScripts: installScriptsOf(v),
-      deprecated: typeof v.deprecated === "string" && v.deprecated.length > 0 ? v.deprecated : null,
+      // `deprecated: true` (no message) counts too, as in the 4DA app.
+      deprecated: typeof v.deprecated === "string" && v.deprecated.length > 0 ? v.deprecated : v.deprecated === true ? "deprecated" : null,
       withdrawn: null,
       dependencies: [
         ...new Set([...Object.keys(v.dependencies ?? {}), ...Object.keys(v.optionalDependencies ?? {})]),
@@ -168,6 +171,7 @@ export function projectPackument(name: string, doc: NpmPackument): PackageReleas
     name,
     createdAt: typeof time.created === "string" ? time.created : null,
     releases,
+    latest: typeof doc["dist-tags"]?.latest === "string" ? doc["dist-tags"].latest : null,
   };
 }
 

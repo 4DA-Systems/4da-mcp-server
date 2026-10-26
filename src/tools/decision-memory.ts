@@ -8,6 +8,7 @@
 
 import type { FourDADatabase } from "../db.js";
 import { writeMeta, writerOf } from "../memory-store.js";
+import { STORED_TEXT_UNTRUSTED } from "./agent-memory.js";
 import { executeCheckDecisionAlignment } from "./decision-enforcement.js";
 
 // ============================================================================
@@ -257,6 +258,7 @@ export function executeDecisionMemory(
         .all(...sqlParams) as DecisionRow[];
 
       return {
+        _meta: { untrusted_text: STORED_TEXT_UNTRUSTED },
         decisions: rows.map(parseDecisionRow),
         count: rows.length,
       };

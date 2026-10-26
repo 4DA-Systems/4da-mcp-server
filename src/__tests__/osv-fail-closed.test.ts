@@ -24,6 +24,7 @@ import { LiveIntelligence } from "../live/index.js";
 import { OsvHttpSource, OsvScanner } from "../live/osv-scanner.js";
 import { DEFAULT_RATE_LIMITS, RateLimiter } from "../live/rate-limiter.js";
 import type { ResolvedDependency } from "../live/types.js";
+import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
@@ -124,11 +125,31 @@ describe("OSV scanner: no answer is never an empty answer", () => {
     // An answer from two hours ago, past its 1 h life.
     db.prepare(
       "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '-2 hours'), datetime('now', '-1 hours'))",
-    ).run("osv:npm:lodash:4.17.15");
+    ).run("osv:v3:npm:lodash:4.17.15");
     stubOsv(() => "throw");
     const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15"), dep("minimist", "1.2.0")], "/proj");
     expect(result.staleAnswers).toBe(1);
     expect(result.unchecked).toBe(1);
+  });
+
+  // Audit 6.2.5 B-2: with every dependency answered, some only from an expired cache because
+  // OSV failed, dependency_check said `proceed` and the scan "0 vulnerable" with no coverage note.
+  it("an all-stale answer is never a current all-clear: coverage says STALE, with the age", async () => {
+    const db = new Database(":memory:");
+    const cache = new LiveCache(db);
+    const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
+    db.prepare(
+      "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '-2 hours'), datetime('now', '-1 hours'))",
+    ).run("osv:v3:npm:lodash:4.17.15");
+    stubOsv(() => "throw");
+    const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15")], "/proj");
+    expect(result.unchecked).toBe(0);
+    expect(result.offline).toBe(false);
+    expect(result.staleAnswers).toBe(1);
+    expect(result.staleOldestFetchedAt).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+    const coverage = vulnerabilityCoverage(result, { enabled: true });
+    expect(coverage).toMatchObject({ complete: false, unchecked_dependencies: 0, stale_dependencies: 1 });
+    expect(coverage!.note).toMatch(/^STALE: .*expired cached answer \(the oldest fetched .* UTC\).*not a current all-clear/);
   });
 });
 
@@ -238,5 +259,69 @@ describe("tools over a blocked OSV.dev", () => {
     expect(result.summary).toBeUndefined();
     expect(result.total_vulnerable_packages).toBe(1);
     expect(result.coverage).toBeUndefined();
+  });
+});
+
+// Audit 6.2.5 B-8: a 200 `{}` for an advisory detail crashed vulnerability_scan ("Cannot read
+// properties of undefined (reading 'length')") and the bad record was cached for 24 h.
+describe("OSV advisory detail: only the record asked for is an answer", () => {
+  it("a 200 {} detail leaves the advisory listed (ungraded) and is not cached", async () => {
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/querybatch")) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: unknown[] };
+        return new Response(JSON.stringify({ results: queries.map(() => ({ vulns: [{ id: "GHSA-empty-detail" }] })) }), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+    const db = new Database(":memory:");
+    const cache = new LiveCache(db);
+    const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
+    const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15")], "/proj");
+    expect(result.vulnerabilities.map((v) => v.vulnId)).toEqual(["GHSA-empty-detail"]);
+    expect(result.vulnerabilities[0].severity).toBe("unknown");
+    expect(cache.get("osv:detail:GHSA-empty-detail")).toBeNull();
+  });
+});
+
+// Audit 6.2.5 B-3: rows are trusted until their own expires_at. Written under a clock a year
+// ahead (or read after the clock went back), "no advisories" stayed live for a year.
+describe("a cache row fetched in the future is never an answer", () => {
+  it("is not read, fresh or stale, and is purged at start", () => {
+    const db = new Database(":memory:");
+    new LiveCache(db); // creates the table
+    db.prepare(
+      "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '+365 days'), datetime('now', '+365 days', '+3600 seconds'))",
+    ).run("osv:v3:npm:lodash:4.17.15");
+    db.prepare(
+      "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now'), datetime('now', '+3600 seconds'))",
+    ).run("osv:v3:npm:left-pad:1.3.0");
+    const cache = new LiveCache(db);
+    expect(cache.get("osv:v3:npm:lodash:4.17.15")).toBeNull();
+    expect(cache.getStale("osv:v3:npm:lodash:4.17.15")).toBeNull();
+    expect(cache.get("osv:v3:npm:left-pad:1.3.0")).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM live_cache WHERE cache_key = ?").get("osv:v3:npm:lodash:4.17.15")).toEqual({ n: 0 });
+  });
+});
+
+// Audit 6.2.5 B-4: a querybatch whose entries are null was read as "no advisories" for every
+// dependency and cached for an hour, so the next, healthy scan still said clean.
+describe("a malformed querybatch entry is not an answer", () => {
+  it("null entries leave the dependencies unchecked, and nothing is cached", async () => {
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/querybatch")) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: unknown[] };
+        return new Response(JSON.stringify({ results: queries.map(() => null) }), { status: 200 });
+      }
+      throw new TypeError("fetch failed");
+    });
+    const db = new Database(":memory:");
+    const cache = new LiveCache(db);
+    const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
+    const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15"), dep("minimist", "1.2.0")], "/proj");
+    expect(result.unchecked).toBe(2);
+    expect(result.offline).toBe(true);
+    expect(cache.get("osv:v3:npm:lodash:4.17.15")).toBeNull();
   });
 });

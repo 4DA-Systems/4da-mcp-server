@@ -42,6 +42,15 @@ export function closeServerCacheDb(): void {
   serverCache = null;
 }
 
+/**
+ * A row fetched "in the future" was written under a clock that was ahead, or the clock has
+ * since gone back (an RTC reset). Its expires_at came from that clock too, so it could keep a
+ * year-old "no advisories" answer live: scan 0 vulnerable, dependency_check proceed,
+ * what_should_i_know safe_to_delegate (audit 6.2.5 B-3). Such a row is never an answer, fresh or
+ * stale, and is purged at start. Five minutes of skew between processes is tolerated.
+ */
+const SANE_FETCHED_AT = "fetched_at <= datetime('now', '+5 minutes')";
+
 interface CacheRow {
   cache_key: string;
   data: string;
@@ -99,7 +108,7 @@ export class LiveCache {
       return hit && this.live(hit) ? (JSON.parse(hit.data) as T) : null;
     }
     const row = this.db!.prepare(
-      "SELECT data FROM live_cache WHERE cache_key = ? AND expires_at > datetime('now')",
+      `SELECT data FROM live_cache WHERE cache_key = ? AND expires_at > datetime('now') AND ${SANE_FETCHED_AT}`,
     ).get(key) as { data: string } | undefined;
 
     if (!row) return null;
@@ -116,7 +125,7 @@ export class LiveCache {
       return hit ? { data: JSON.parse(hit.data) as T, fetchedAt: hit.fetched_at } : null;
     }
     const row = this.db!.prepare(
-      "SELECT data, fetched_at FROM live_cache WHERE cache_key = ?",
+      `SELECT data, fetched_at FROM live_cache WHERE cache_key = ? AND ${SANE_FETCHED_AT}`,
     ).get(key) as { data: string; fetched_at: string } | undefined;
 
     if (!row) return null;
@@ -168,7 +177,7 @@ export class LiveCache {
       return purged;
     }
     const result = this.db!.prepare(
-      "DELETE FROM live_cache WHERE expires_at <= datetime('now')",
+      `DELETE FROM live_cache WHERE expires_at <= datetime('now') OR NOT (${SANE_FETCHED_AT})`,
     ).run();
     return result.changes;
   }

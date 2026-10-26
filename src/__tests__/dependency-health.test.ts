@@ -116,7 +116,7 @@ describe("dependency_health — vulnerable means the actionable set", () => {
   it("breaks severity down over the same set", async () => {
     const result = await executeDependencyHealth(noDb, {}, makeIntel(scan));
 
-    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
+    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0, unknown: 0 });
   });
 
   it("keys a vulnerable package by ecosystem and name, not name alone", async () => {
@@ -263,5 +263,198 @@ describe("dependency_health — direct and tree counts are named, the score expl
     const mixed = { ...scan, vulnerabilities: [...scan.vulnerabilities, makeEntry({ package: "rsa", ecosystem: "crates.io", currentVersion: "0.9.6", isDirect: false, vulnId: "RUSTSEC-2023-0071" })] };
     const result = await executeDependencyHealth(noDb, { ecosystem_filter: "npm" }, tree(mixed));
     expect(result.vulnerableCount).toBe(3);
+  });
+});
+
+/**
+ * Readiness audit M1 (2026-10-16): advisoryCount and the per-advisory penalty
+ * counted OSV records, not advisories. One issue published as GHSA, PYSEC and
+ * CVE records was counted two or three times: pygoat read advisoryCount 348
+ * beside the scan's 187, xsv 31 beside 13. Records are grouped per installed
+ * copy by shared ids (groupAdvisories), each group penalised once at its worst
+ * severity, the way vulnerability_scan counts its rows.
+ */
+describe("dependency_health — advisories, not OSV records (M1)", () => {
+  const scan = makeScan([
+    // One django issue as three records naming each other; the PYSEC record is the most severe.
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "GHSA-dj01", aliases: ["CVE-2024-0001", "PYSEC-2024-1"], severity: "high" }),
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "PYSEC-2024-1", aliases: ["CVE-2024-0001"], severity: "critical" }),
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "CVE-2024-0001", aliases: [], severity: "unknown" }),
+    // A second, separate django issue.
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "GHSA-dj02", aliases: ["PYSEC-2024-2"], severity: "medium" }),
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "3.2.0", vulnId: "PYSEC-2024-2", aliases: ["GHSA-dj02"], severity: "medium" }),
+    // The same id on another installed copy is a separate finding, as in the scan.
+    makeEntry({ package: "django", ecosystem: "PyPI", currentVersion: "4.2.0", vulnId: "GHSA-dj02", aliases: ["PYSEC-2024-2"], severity: "medium" }),
+  ]);
+
+  it("advisoryCount is distinct advisories per installed copy (3), not records (6)", async () => {
+    const result = await executeDependencyHealth(noDb, {}, makeIntel(scan));
+    expect(result.advisoryCount).toBe(3);
+    expect(result.vulnerableCount).toBe(1);
+  });
+
+  it("each advisory is penalised once, at its group's worst severity", async () => {
+    const result = await executeDependencyHealth(noDb, {}, makeIntel(scan));
+    // critical 20 + medium 4 + medium 4 (all direct); records would give 20+10+2+4+4+4 = 44.
+    expect(result.healthScoreBasis?.vulnerabilities).toBe(28);
+    expect(result.vulnerabilitySummary).toEqual({ critical: 1, high: 0, medium: 2, low: 0, unknown: 0 });
+  });
+});
+
+/**
+ * Readiness audit M5 (2026-10-16): with a merge-conflicted or invalid-JSON
+ * package-lock.json, the score was 32/100, built from package.json's pins
+ * alone while the lockfile's tree went unchecked. A lockfile (or include)
+ * that could not be read withholds the score and the counts, as an OSV gap
+ * does, and the answer leads with what was not checked.
+ */
+describe("dependency_health — an unreadable lockfile withholds the score (M5)", () => {
+  const conflicted = (body: string): LiveIntelligence => {
+    const dir = fs.mkdtempSync(path.join(root, "m5-"));
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "repro", dependencies: { lodash: "4.17.20" } }));
+    fs.writeFileSync(path.join(dir, "package-lock.json"), body);
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    process.env.FOURDA_OFFLINE = "true";
+    li.initFromDependencyGroups([{ dir, language: "javascript", deps: ["lodash"], devDeps: [] }]);
+    li.fetchRegistryHealth = async () => [];
+    (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = makeScan([
+      makeEntry({ package: "lodash", currentVersion: "4.17.20", vulnId: "GHSA-lodash", severity: "high" }),
+    ]);
+    return li;
+  };
+
+  it.each([
+    ["merge-conflict markers", `{\n<<<<<<< HEAD\n  "lockfileVersion": 3,\n=======\n  "lockfileVersion": 2,\n>>>>>>> branch\n}\n`, /merge-conflict/],
+    ["invalid JSON", "{\n  not json\n", /invalid JSON/],
+  ])("%s: no score, no counts, NOT CHECKED first", async (_label, body, reason) => {
+    const result = await executeDependencyHealth(noDb, {}, conflicted(body));
+    expect(result.healthScore).toBeNull();
+    expect(result.healthScoreBasis).toBeUndefined();
+    expect(result.vulnerableCount).toBeNull();
+    expect(result.vulnerabilitySummary).toBeNull();
+    expect(result.summary).toMatch(/^NOT CHECKED: /);
+    expect(result.summary).toMatch(/package-lock\.json/);
+    expect(result.summary).toMatch(reason);
+    expect(result.summary).toMatch(/Health score withheld/);
+    expect(result.summary).toMatch(/at least 1 vulnerable package/);
+  });
+});
+/**
+ * Readiness audit L2 (2026-10-16): navcal's health said "4 direct" vulnerable,
+ * three of them devDependencies (vitest, sharp, vite), beside "18 direct
+ * dependencies checked ... 25 devDependencies left out". dependency_health
+ * reused the stored vulnerability_scan, which includes devDependencies by
+ * default. Without include_dev, both populations now leave direct
+ * devDependencies out, and the summary says which scope it counts.
+ */
+describe("dependency_health — one population for the registry rows and the vulnerable counts (L2)", () => {
+  const withDev = (): LiveIntelligence => {
+    const dir = fs.mkdtempSync(path.join(root, "l2-"));
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "l2", dependencies: { react: "19.2.6" }, devDependencies: { vitest: "3.2.4" } }));
+    fs.writeFileSync(
+      path.join(dir, "package-lock.json"),
+      JSON.stringify({
+        name: "l2",
+        lockfileVersion: 3,
+        packages: {
+          "": { name: "l2", dependencies: { react: "19.2.6" }, devDependencies: { vitest: "3.2.4" } },
+          "node_modules/react": { version: "19.2.6" },
+          "node_modules/vitest": { version: "3.2.4", dev: true },
+        },
+      }),
+    );
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    process.env.FOURDA_OFFLINE = "true";
+    li.initFromDependencyGroups([{ dir, language: "javascript", deps: ["react"], devDeps: ["vitest"] }]);
+    li.fetchRegistryHealth = async () => [];
+    // The stored scan is vulnerability_scan's: devDependencies included.
+    (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = {
+      ...makeScan([
+        makeEntry({}),
+        makeEntry({ package: "vitest", currentVersion: "3.2.4", isDev: true, vulnId: "GHSA-vitest", severity: "critical" }),
+      ]),
+      totalScanned: 2,
+    };
+    (li as unknown as { lastVulnScanIncludesDev: boolean }).lastVulnScanIncludesDev = true;
+    return li;
+  };
+
+  it("without include_dev, a direct devDependency is not counted as vulnerable, direct or penalised", async () => {
+    const result = await executeDependencyHealth(noDb, {}, withDev());
+    expect(result.vulnerableCount).toBe(1);
+    expect(result.vulnerableDirectCount).toBe(1);
+    expect(result.treeDeps).toBe(1);
+    expect(result.vulnerabilitySummary).toEqual({ critical: 0, high: 1, medium: 0, low: 0, unknown: 0 });
+    expect(result.summary).toContain("1 vulnerable package in the full tree of 1 installed (1 direct, 0 transitive; 1 dev-only copy left out)");
+  });
+
+  it("with include_dev, both populations include them", async () => {
+    const result = await executeDependencyHealth(noDb, { include_dev: true }, withDev());
+    expect(result.vulnerableCount).toBe(2);
+    expect(result.vulnerableDirectCount).toBe(2);
+    expect(result.treeDeps).toBe(2);
+    expect(result.summary).toContain("2 vulnerable packages in the full tree of 2 installed (2 direct, 0 transitive; dev-only copies included)");
+  });
+});
+/**
+ * Review of M5/M4/L5 (2026-10-18): a withheld score says why in a field;
+ * ecosystem_filter narrows the lockfile problems too; a refused include or a
+ * partial read scores the checked part, marked partial, instead of
+ * withholding forever (a refusal is permanent by design); and the wording is
+ * the scan's (UNREADABLE / PARTIAL / REFUSED).
+ */
+describe("dependency_health — why a score is withheld, and what a partial one rests on", () => {
+  const intel = (files: Record<string, string>, groups: Array<{ language: string; deps: string[] }>) => {
+    const dir = fs.mkdtempSync(path.join(root, "r3-"));
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
+    }
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    process.env.FOURDA_OFFLINE = "true";
+    li.initFromDependencyGroups(groups.map((g) => ({ dir, devDeps: [], ...g })));
+    li.fetchRegistryHealth = async () => [];
+    (li as unknown as { lastVulnScan: VulnerabilityScanResult }).lastVulnScan = makeScan([makeEntry({ package: "requests", ecosystem: "PyPI", currentVersion: "2.19.0", vulnId: "GHSA-req", severity: "high" })]);
+    return { li, dir };
+  };
+  const conflicted = `{\n<<<<<<< HEAD\n  "lockfileVersion": 3,\n=======\n  "lockfileVersion": 2,\n>>>>>>> branch\n}\n`;
+
+  it("an unreadable lockfile: withheldReason lockfile_unreadable", async () => {
+    const { li } = intel({ "package.json": JSON.stringify({ dependencies: { lodash: "4.17.20" } }), "package-lock.json": conflicted }, [{ language: "javascript", deps: ["lodash"] }]);
+    const r = await executeDependencyHealth(noDb, {}, li);
+    expect(r.healthScore).toBeNull();
+    expect(r.withheldReason).toBe("lockfile_unreadable");
+    expect(r.summary).toMatch(/^NOT CHECKED: UNREADABLE: 1 lockfile could not be read/);
+  });
+
+  it("ecosystem_filter: an npm lockfile problem does not withhold a PyPI-only answer", async () => {
+    const { li } = intel(
+      { "package.json": JSON.stringify({ dependencies: { lodash: "4.17.20" } }), "package-lock.json": conflicted, "requirements.txt": "requests==2.19.0\n" },
+      [{ language: "javascript", deps: ["lodash"] }, { language: "python", deps: ["requests"] }],
+    );
+    const r = await executeDependencyHealth(noDb, { ecosystem_filter: "PyPI" }, li);
+    expect(r.healthScore).not.toBeNull();
+    expect(r.withheldReason).toBeUndefined();
+    expect(r.summary).not.toMatch(/package-lock/);
+  });
+
+  it("a refused include: the checked part is scored, marked partial, worded REFUSED", async () => {
+    const { li } = intel({ "requirements.txt": "requests==2.19.0\n-r ../base.txt\n" }, [{ language: "python", deps: ["requests"] }]);
+    const r = await executeDependencyHealth(noDb, {}, li);
+    expect(r.healthScore).not.toBeNull();
+    expect(r.withheldReason).toBeUndefined();
+    expect(r.scoreCoverage).toEqual({ complete: false, basis: "checked_part", notes: [expect.stringMatching(/^REFUSED: 1 requirements include was not read: .*base\.txt/)] });
+    expect(r.summary).toMatch(/^Health: \d+\/100 over the checked part only \(see scoreCoverage\)/);
+    expect(r.summary).toMatch(/at least 1 vulnerable package/);
+    expect(r.summary).not.toMatch(/UNREADABLE|all healthy/);
+  });
+
+  it("nothing resolved: withheldReason nothing_checked", async () => {
+    const empty = new LiveIntelligence(new Database(":memory:"));
+    empty.initFromProjectTree(fs.mkdtempSync(path.join(root, "r3-empty-")), [], null);
+    expect((await executeDependencyHealth(noDb, {}, empty)).withheldReason).toBe("nothing_checked");
   });
 });

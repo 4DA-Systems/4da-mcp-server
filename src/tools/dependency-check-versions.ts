@@ -16,11 +16,12 @@
  */
 
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
-import { advisoryAffects, isPrereleaseVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoriesAffecting, isPrereleaseVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { compareVersions, parsePep440 } from "../live/version-compare.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
+import { excludedReleases, withheldNote } from "../live/withdrawn-releases.js";
 
 export type Target =
   | { kind: "exact"; version: string }
@@ -197,14 +198,46 @@ export interface RangeCheck {
   newest_safe_outside_range?: string | null;
   /** When `from` is given: the smallest safe release above it (the minimal fixing upgrade). */
   smallest_safe_upgrade?: string | null;
+  /**
+   * Releases in range that no advisory affects but the registry withdrew (yanked; npm
+   * deprecated with a later clean release on its line), below the smallest safe pick (all of
+   * them when none is safe), and why in plain words (FX-H5).
+   */
+  withheld?: string[];
+  withheld_note?: string;
+  /**
+   * npm (audit 6.2.5 D-4): releases left out of the safe ones because a dependency they exact-pin
+   * or narrowly range is affected, or because that could not be checked; and why, in words.
+   */
+  held_excluded?: number;
+  held_note?: string;
+}
+
+/** The installable releases a constraint admits, ascending; prereleases only when it admits nothing else. */
+function rangeCandidates(ecosystem: CheckEcosystem, installable: string[], range: string): { candidates: string[]; stable: string[] } {
+  const admitted = installable.filter((v) => rangeAdmits(ecosystem, range, v) === true);
+  const stable = admitted.filter((v) => !isPrereleaseIn(ecosystem, v));
+  return { candidates: (stable.length > 0 ? stable : admitted).sort((a, b) => compareIn(ecosystem, a, b)), stable };
+}
+
+/**
+ * The releases in range that the package's own advisories leave safe, ascending: what checkRange
+ * would call safe before held dependencies are judged. dependency_check judges the held
+ * dependencies of the smallest and newest of these (audit 6.2.5 D-4).
+ */
+export function ownSafeInRange(input: { ecosystem: CheckEcosystem; index: PackageReleaseIndex; range: string; advisories: AdvisoryRanges[] }): string[] {
+  const excluded = excludedReleases(input.index);
+  const installable = Object.values(input.index.releases).filter((r) => !excluded.has(r.version)).map((r) => r.version);
+  return rangeCandidates(input.ecosystem, installable, input.range).candidates.filter((v) => advisoriesAffecting(input.advisories, v, input.ecosystem).length === 0);
 }
 
 /**
  * The releases a constraint admits, judged against every advisory OSV.dev
- * lists for the package. Withdrawn (yanked / unpublished / retracted) and
- * deprecated releases are not candidates; neither are prereleases, unless
- * the constraint admits nothing else. Maintenance notices do not make a
- * release unsafe.
+ * lists for the package. Withdrawn releases (yanked / unpublished /
+ * retracted, and npm deprecations the 4DA rule withdraws: withdrawn-releases.ts)
+ * are not candidates; neither are prereleases, unless the constraint admits
+ * nothing else. A whole-line npm deprecation notice (glob 10.x, tar 6.x)
+ * withdraws nothing. Maintenance notices do not make a release unsafe.
  */
 export function checkRange(input: {
   ecosystem: CheckEcosystem;
@@ -213,15 +246,20 @@ export function checkRange(input: {
   basis: RangeCheck["basis"];
   advisories: AdvisoryRanges[];
   from?: string;
+  /**
+   * npm: a release whose held dependencies (exact pins, narrow ranges) are affected or could not
+   * be judged is not safe either (audit 6.2.5 D-4), and `heldNote` says why when any is left out.
+   */
+  held?: { unsafe: (version: string) => boolean; note: string };
 }): RangeCheck {
   const { ecosystem, index, range, basis } = input;
-  const installable = Object.values(index.releases).filter((r) => !r.withdrawn && !r.deprecated).map((r) => r.version);
-  const admitted = installable.filter((v) => rangeAdmits(ecosystem, range, v) === true);
-  const stable = admitted.filter((v) => !isPrereleaseIn(ecosystem, v));
-  const candidates = (stable.length > 0 ? stable : admitted).sort((a, b) => compareIn(ecosystem, a, b));
-  const real = input.advisories.filter((a) => !a.maintenance);
-  const affecting = (v: string) => real.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id);
-  const safe = candidates.filter((v) => affecting(v).length === 0);
+  const excluded = excludedReleases(index);
+  const installable = Object.values(index.releases).filter((r) => !excluded.has(r.version)).map((r) => r.version);
+  const { candidates, stable } = rangeCandidates(ecosystem, installable, range);
+  // The same predicate every tool runs on a release it offers (osv-ranges.ts advisoriesAffecting).
+  const affecting = (v: string) => advisoriesAffecting(input.advisories, v, ecosystem);
+  const ownSafe = candidates.filter((v) => affecting(v).length === 0);
+  const safe = input.held ? ownSafe.filter((v) => !input.held!.unsafe(v)) : ownSafe;
   const out: RangeCheck = {
     range,
     basis,
@@ -234,12 +272,32 @@ export function checkRange(input: {
   if (candidates.length > 0 && safe.length === 0) {
     out.affecting_all = [...new Set(candidates.flatMap(affecting))].filter((id) => candidates.every((v) => affecting(v).includes(id))).slice(0, 10);
     const outside = installable
-      .filter((v) => !isPrereleaseIn(ecosystem, v) && affecting(v).length === 0)
+      .filter((v) => !isPrereleaseIn(ecosystem, v) && affecting(v).length === 0 && !input.held?.unsafe(v))
       .sort((a, b) => compareIn(ecosystem, a, b));
     out.newest_safe_outside_range = outside[outside.length - 1] ?? null;
   }
   if (input.from) {
     out.smallest_safe_upgrade = safe.find((v) => compareIn(ecosystem, v, input.from!) > 0) ?? null;
+  }
+  if (input.held && safe.length < ownSafe.length) {
+    out.held_excluded = ownSafe.length - safe.length;
+    out.held_note = input.held.note;
+  }
+  // The withdrawn releases that would otherwise have been the smallest safe pick (FX-H5).
+  const pick = input.from ? out.smallest_safe_upgrade : out.smallest_safe_in_range;
+  const withheld = [...excluded.keys()]
+    .filter(
+      (v) =>
+        rangeAdmits(ecosystem, range, v) === true &&
+        (stable.length === 0 || !isPrereleaseIn(ecosystem, v)) &&
+        (!input.from || compareIn(ecosystem, v, input.from) > 0) &&
+        (!pick || compareIn(ecosystem, v, pick) < 0) &&
+        affecting(v).length === 0,
+    )
+    .sort((a, b) => compareIn(ecosystem, a, b));
+  if (withheld.length > 0) {
+    out.withheld = withheld;
+    out.withheld_note = withheldNote(withheld, pick ?? null, Object.fromEntries(excluded), ecosystem)!;
   }
   return out;
 }

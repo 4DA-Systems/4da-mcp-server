@@ -42,8 +42,8 @@
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { serverDataDir } from "../db.js";
 import { fileSignature } from "./file-signature.js";
 
 /** Rust target triple for the current host, or null for a platform we do not map. */
@@ -139,6 +139,12 @@ function computeActiveCrates(dir: string): Set<string> | null {
  * untrusted input. `CARGO_TARGET_DIR` points at the same scratch directory so
  * cargo's metadata writes never land in the user's tree either.
  *
+ * The scratch directory lives in the server's per-user data directory, not
+ * the system temp directory. On a shared machine `/tmp` is writable by every
+ * user, so a `/tmp/.cargo/config.toml` or a pre-created
+ * `/tmp/4da-mcp-cargo-resolve/.cargo/config.toml` planted by another account
+ * could set `build.rustc-wrapper` and run code as this user (audit 6.2.5 C-2).
+ *
  * Exported for tests.
  */
 export function cargoTreeInvocation(dir: string): {
@@ -146,7 +152,7 @@ export function cargoTreeInvocation(dir: string): {
   cwd: string;
   targetDir: string;
 } {
-  const scratch = path.join(os.tmpdir(), "4da-mcp-cargo-resolve");
+  const scratch = path.join(serverDataDir(), "cargo-resolve");
   return {
     args: [
       "tree",

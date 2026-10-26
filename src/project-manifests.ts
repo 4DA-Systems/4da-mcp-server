@@ -16,7 +16,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { normalizePythonName, parseGoMod } from "./live/lockfile-parsers-pygo.js";
+import { compiledIndirect, compiledRequirements, confinedInclude, normalizePythonName, parseGoMod, requirementOptions } from "./live/lockfile-parsers-pygo.js";
 
 /** The body of a TOML table (`[name]`) up to the next table header, or null. */
 export function tomlTable(content: string, name: string): string | null {
@@ -124,6 +124,34 @@ export function parseRequirementNames(content: string): string[] {
   return [...new Set(names)];
 }
 
+/**
+ * Requirement names from a requirements file and every file it includes with `-r` (confined to
+ * `root`, as the version reader confines them): an included file's pins are declared too. A pin
+ * in `-r sub/inner.txt` read as "Transitive dependency, not declared in your manifest" (final
+ * release audit of 6.2.5, 7g: jinja2==2.10).
+ */
+export function requirementNamesWithIncludes(file: string, root: string = path.dirname(path.resolve(file)), visited: Set<string> = new Set()): string[] {
+  const key = path.resolve(file).toLowerCase();
+  if (visited.has(key)) return [];
+  visited.add(key);
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf-8");
+  } catch {
+    return [];
+  }
+  // A compiled file pins its whole tree: a pin there only because other packages require it
+  // (`# via requests`) is transitive, as go.mod's `// indirect` is (audit 6.2.5 A-4).
+  const compiled = compiledRequirements(content);
+  const names = parseRequirementNames(content).filter((n) => !compiled || !compiledIndirect(compiled, n));
+  for (const { option, target } of requirementOptions(content)) {
+    if (option !== "r") continue;
+    const included = confinedInclude(path.dirname(file), target, root);
+    if (included) names.push(...requirementNamesWithIncludes(included, root, visited));
+  }
+  return [...new Set(names)];
+}
+
 /** Direct Go dependencies: go.mod requirements not marked `// indirect`. */
 export function parseGoModDirectDeps(content: string): string[] {
   return parseGoMod(content)
@@ -155,10 +183,13 @@ export function cargoWorkspaceDeps(root: string, content: string): { deps: strin
       }
       const name = /^name\s*=\s*"([^"]+)"/m.exec(tomlTable(manifest, "package") ?? "")?.[1];
       if (name) memberNames.add(name);
-      for (const dep of tomlKeys(tomlTable(manifest, "dependencies"))) deps.add(dep);
-      for (const section of ["dev-dependencies", "build-dependencies"]) {
-        for (const dep of tomlKeys(tomlTable(manifest, section))) devDeps.add(dep);
+      // build-dependencies run at build time on every machine that builds the crate: they are not
+      // dev-only (the app reads them as normal), and discounting them hid memoffset with
+      // include_dev: false (audit 6.2.5 F-3).
+      for (const section of ["dependencies", "build-dependencies"]) {
+        for (const dep of tomlKeys(tomlTable(manifest, section))) deps.add(dep);
       }
+      for (const dep of tomlKeys(tomlTable(manifest, "dev-dependencies"))) devDeps.add(dep);
     }
   }
 
@@ -169,6 +200,13 @@ export function cargoWorkspaceDeps(root: string, content: string): { deps: strin
 
 /** Member directories for one `members` entry: a path, or a path whose last segment is `*`. */
 function expandMemberGlob(root: string, pattern: string): string[] {
+  // `members = ["../outside/*"]` was followed out of the project: manifests outside it were read
+  // and their dependency names sent to the registries (audit 6.2.5 C-4). Members must resolve inside.
+  const inside = (dir: string) => confinedInclude(root, path.relative(root, dir), root) !== null;
+  return expandMemberGlobUnconfined(root, pattern).filter(inside);
+}
+
+function expandMemberGlobUnconfined(root: string, pattern: string): string[] {
   if (!pattern.includes("*")) return [path.join(root, pattern)];
   const star = pattern.indexOf("*");
   const parent = path.join(root, pattern.slice(0, star));

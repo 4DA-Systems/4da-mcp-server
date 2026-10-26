@@ -94,3 +94,39 @@ describe("server instructions", () => {
     for (const name of named) expect(Object.keys(TOOL_REGISTRY), name).toContain(name);
   });
 });
+
+/**
+ * Readiness audit L6 (2026-10-16): in standalone mode resources/list
+ * advertised the schemas of the 5 desktop-only tools that tools/list leaves
+ * out, and with the database refused the startup banner said "16 tools"
+ * while every call returned the database error.
+ */
+describe("resources and the startup line say what this mode serves (L6)", () => {
+  const DESKTOP = ["get_relevant_content", "get_actionable_signals", "knowledge_gaps", "developer_dna", "record_feedback"];
+
+  it("standalone: the schema resources and the categories list the 11 tools tools/list lists", async () => {
+    const { listResources, readResource } = await import("../schema-registry.js");
+    const uris = listResources(true).map((r) => r.uri);
+    const tools = getSlimToolList(true).map((t) => t.name);
+    expect(uris.filter((u) => u.startsWith("4da://schema/")).sort()).toEqual(tools.map((t) => `4da://schema/${t}`).sort());
+    for (const name of DESKTOP) expect(uris).not.toContain(`4da://schema/${name}`);
+    const manifest = JSON.parse(readResource("4da://categories", true).contents[0].text) as { total_tools: number; categories: Record<string, { tools: string[] }> };
+    expect(manifest.total_tools).toBe(11);
+    expect(Object.values(manifest.categories).flatMap((c) => c.tools)).not.toContain("knowledge_gaps");
+  });
+
+  it("with the desktop database: all 16", async () => {
+    const { listResources } = await import("../schema-registry.js");
+    expect(listResources().filter((r) => r.uri.startsWith("4da://schema/"))).toHaveLength(16);
+  });
+
+  it("the startup line never counts tools a refused database will not run", async () => {
+    const { startupToolsLine } = await import("../schema-registry.js");
+    expect(startupToolsLine({ valid: true, standalone: false }, true)).toBe("16 tools");
+    expect(startupToolsLine({ valid: false, standalone: true }, true)).toBe("11 standalone tools");
+    const refused = startupToolsLine({ valid: false, standalone: false }, true);
+    expect(refused).not.toMatch(/^16 tools$/);
+    expect(refused).toMatch(/no tool can run until the database problem above is fixed/);
+    expect(startupToolsLine({ valid: false, standalone: false }, false, 5)).toMatch(/^5 dependency tools run without a database/);
+  });
+});

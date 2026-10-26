@@ -11,25 +11,36 @@
  *   osv_range        advisoryRanges + advisoryAffects (osv-ranges.ts)
  *   fix_target       extractFixedVersion per affecting advisory, then
  *                    smallestCleanVersion over every record (the
- *                    vulnerability_scan / upgrade_planner target)
+ *                    vulnerability_scan / upgrade_planner target), with the
+ *                    line's `published` / `excluded` registry state; its
+ *                    `withheld` is checked where the line states it (FX-H5)
  *   refresh_verdict  refreshRule (refresh-rule.ts), which refreshVerdict applies
- *   fix_command      refreshCommandFor on a directory holding that tool's files
+ *   fix_command      refreshCommandFor on a directory holding that tool's files;
+ *                    directFix for `kind: "direct"` lines (audit E8), on a project
+ *                    built from the vector as the Rust runner's check_direct builds it
+ *   (refresh_verdict `override`: overrideReaches over the blocking parents)
  *   range_check      parseTarget + checkRange (dependency_check)
+ *   holding          isSecurityHoldingRelease (osv-scanner.ts): npm's `0.0.<n>-security`
+ *                    placeholder, which no advisory applies to (audit L4)
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRanges } from "../../live/osv-ranges.js";
-import { extractFixedVersion } from "../../live/osv-scanner.js";
-import { refreshCommandFor } from "../../live/fix-paths.js";
-import { refreshRule, type RequirementDialect } from "../../live/refresh-rule.js";
+import { deriveSeverity, extractFixedVersion, isSecurityHoldingRelease } from "../../live/osv-scanner.js";
+import { gradeGroup } from "../../live/advisory-groups.js";
+import { checkParentRelease } from "./parent-release-vectors.js";
+import { isMaintenanceRecord } from "../../live/maintenance.js";
+import { cweIdsOf } from "../../live/malware.js";
+import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
+import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
 import { compareVersions, isComparable } from "../../live/version-compare.js";
 import type { OsvVulnerability } from "../../live/types.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../../live/release-metadata.js";
 import { checkRange, parseTarget } from "../../tools/dependency-check-versions.js";
 
-export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check"] as const;
+export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding", "severity", "parent_release"] as const;
 export type VectorFile = (typeof VECTOR_FILES)[number];
 
 /** One vector line: every line has `id`, `rule` and `source`; the rest depends on the file. */
@@ -106,29 +117,57 @@ function checkFixTarget(v: Vector, records: Records): string | null {
   const [eco, name, installed] = [str(v, "eco"), str(v, "name"), str(v, "installed")];
   const ids = (v.record_ids as string[] | undefined) ?? [];
   const advisories = ids.map((id) => records.ranges(id, eco, name));
-  // Each advisory that affects the copy contributes its own fix, as the scan reports it.
+  // Each advisory that affects the copy contributes its own fix, as the scan reports it. A
+  // maintenance notice contributes none: every tool drops notices before it collects fixes
+  // (vulnerability_scan, upgrade_planner, what_should_i_know), so a notice's own fixed bound is
+  // never a target (ft-073, ring RUSTSEC-2025-0010; the Rust runner filters the same way).
   const fixes = ids
-    .filter((_, i) => advisoryAffects(advisories[i], installed, eco))
+    .filter((_, i) => !advisories[i].maintenance && advisoryAffects(advisories[i], installed, eco))
     .map((id) => extractFixedVersion(records.get(id).affected, name, eco, installed))
     .filter((f): f is string => f !== null);
-  const clean = smallestCleanVersion({ ecosystem: eco, fixes, advisories, published: null });
+  // FX-H5: the registry state written into the line, as given (the app rule's output on the
+  // `source` date). `published` is what this server's registry readers list; `excluded` is never
+  // a target. Lines without them run on the advisory data alone, as before.
+  const published = strings(v, "published");
+  const clean = smallestCleanVersion({ ecosystem: eco, fixes, advisories, published: published.length > 0 ? published : null, excluded: strings(v, "excluded"), installed });
   const target = clean?.target ?? null;
   const clears = clean !== null && clean.target !== null && clean.stillAffectedBy.length === 0;
   const wantTarget = optStr(v, "target");
   if (!sameVersion(target, wantTarget, eco)) return `target: got ${target}, want ${wantTarget}`;
   // `clears` is only meaningful for a target.
   if (wantTarget !== null && clears !== v.clears) return `clears: got ${clears}, want ${v.clears}`;
+  // `withheld` is checked only on lines that state it.
+  const withheld = clean?.withheld ?? [];
+  if (Array.isArray(v.withheld) && JSON.stringify(withheld) !== JSON.stringify(strings(v, "withheld"))) {
+    return `withheld: got ${JSON.stringify(withheld)}, want ${JSON.stringify(v.withheld)}`;
+  }
+  // Decision 2 (the 4DA lead, 2026-10-18): lines that state `introduces` pin the union, sorted.
+  if (Array.isArray(v.introduces) && JSON.stringify(clean?.introduces ?? []) !== JSON.stringify(strings(v, "introduces"))) {
+    return `introduces: got ${JSON.stringify(clean?.introduces ?? [])}, want ${JSON.stringify(v.introduces)}`;
+  }
   return null;
 }
 
+/** A string-array field of a vector line (absent reads as empty). */
+function strings(v: Vector, key: string): string[] {
+  return Array.isArray(v[key]) ? (v[key] as unknown[]).filter((s): s is string => typeof s === "string") : [];
+}
+
 function checkRefreshVerdict(v: Vector): string | null {
-  const reqs = ((v.requirements as Array<Record<string, string>> | undefined) ?? []).map((r) => ({
-    parent: r.parent,
-    text: r.text,
+  const reqs = ((v.requirements as Array<Record<string, string | boolean>> | undefined) ?? []).map((r) => ({
+    parent: String(r.parent),
+    text: String(r.text),
     dialect: (r.dialect === "cargo" ? "cargo" : "npm") as RequirementDialect,
+    // A bundled copy's requirement is its owner's exact pin: `text` is the version shipped.
+    bundled: r.bundled === true,
   }));
   const got = refreshRule(str(v, "installed"), str(v, "target"), reqs);
   const wantVia = (v.via as string[] | undefined) ?? [];
+  if (typeof v.override === "boolean") {
+    const blocking = reqs.filter((r) => requirementAdmits(r, str(v, "target")) === false);
+    const offered = str(v, "eco") === "npm" && overrideReaches(blocking);
+    if (offered !== v.override) return `override offered: got ${offered}, want ${v.override}`;
+  }
   const same = got.verdict === v.verdict && got.inferred === v.inferred && JSON.stringify(got.via) === JSON.stringify(wantVia);
   return same
     ? null
@@ -167,6 +206,7 @@ function checkFixCommand(v: Vector): string | null {
   try {
     const files = toolFiles(str(v, "tool"), v.workspace_root === true);
     for (const [name, body] of files) fs.writeFileSync(path.join(dir, name), body);
+    if (v.kind === "direct") return checkDirect(v, dir);
     const lockfile = files.length > 0 ? path.join(dir, files[0][0]) : path.join(dir, "none");
     const got = refreshCommandFor(lockfile, str(v, "pkg"), str(v, "installed"), str(v, "target"));
     const want = optStr(v, "command");
@@ -174,6 +214,32 @@ function checkFixCommand(v: Vector): string | null {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * `kind: "direct"` (audit E8): the fix for a DECLARED dependency, read by directFix from a project
+ * built out of the vector, as the Rust runner's check_direct does: its declared npm spec
+ * (`declared`), Cargo.toml (`manifest`), go.mod (`go_mod`) or requirements.txt
+ * (`requirements`). `member: true` puts the manifest at packages/app, below the lockfile. A
+ * command is checked against `command`, an instruction against `instruction`.
+ */
+function checkDirect(v: Vector, root: string): string | null {
+  const pkg = str(v, "pkg");
+  const project = v.member === true ? path.join(root, "packages", "app") : root;
+  fs.mkdirSync(project, { recursive: true });
+  const declared = optStr(v, "declared");
+  if (declared !== null) fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ dependencies: { [pkg]: declared } }));
+  for (const [field, file] of [["manifest", "Cargo.toml"], ["go_mod", "go.mod"], ["requirements", "requirements.txt"]] as const) {
+    const body = optStr(v, field);
+    if (body !== null) fs.writeFileSync(path.join(project, file), body);
+  }
+  const fix = directFix(project, str(v, "eco"), pkg, str(v, "installed"), str(v, "target"));
+  const command = fix && "command" in fix ? fix.command : null;
+  const instruction = fix && "instruction" in fix ? fix.instruction : null;
+  const [wantC, wantI] = [optStr(v, "command"), optStr(v, "instruction")];
+  return command === wantC && instruction === wantI
+    ? null
+    : `direct: got ${JSON.stringify(fix)}, want command ${JSON.stringify(wantC)} / instruction ${JSON.stringify(wantI)}`;
 }
 
 function checkRangeCheck(v: Vector, records: Records): string | null {
@@ -211,7 +277,35 @@ function checkRangeCheck(v: Vector, records: Records): string | null {
 }
 
 /** Run one vector; null = the engine agrees. A thrown error (unreadable input) counts as a disagreement. */
-export function checkVector(file: VectorFile, v: Vector, records: Records): string | null {
+/** `holding.jsonl`: whether a release is npm's security holding placeholder (any advisory id). */
+function checkHolding(v: Vector): string | null {
+  const got = isSecurityHoldingRelease(String(v.eco), String(v.version));
+  const want = v.holding === true;
+  return got === want ? null : `holding: got ${got}, want ${want}`;
+}
+
+/**
+ * One alias group's grade (severity.jsonl): each record's own grade through the scanner's
+ * deriveSeverity (label first, CVSS band second), the group through the shared gradeGroup, the
+ * GHSA aliases the mirror holds as given.
+ */
+function checkSeverity(v: Vector): string | null {
+  const raw = (Array.isArray(v.records) ? v.records : [v.record]) as OsvVulnerability[];
+  // A notice is a notice with a published fix too, as gradeAliasGroups reads it (sv-023), by the
+  // shared predicate (sv-024/sv-025): evaluated for the package of the record's FIRST affected entry.
+  const aliasGrades = new Map(Object.entries((v.aliases_available ?? {}) as Record<string, OsvVulnerability["id"] | null>)) as Map<string, "critical" | "high" | "medium" | "low" | "unknown" | null>;
+  const grade = gradeGroup(
+    raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: isMaintenanceRecord(r, r.affected?.[0]?.package?.name ?? "", r.affected?.[0]?.package?.ecosystem ?? ""), cweIds: cweIdsOf(r), summary: r.summary ?? "" })),
+    aliasGrades,
+  );
+  const want = v.expect as { severity: string | null; severity_from: string | null; urgency: string };
+  const got = { severity: grade.severity, severity_from: grade.inheritedFrom, urgency: grade.urgency };
+  return JSON.stringify(got) === JSON.stringify({ severity: want.severity, severity_from: want.severity_from, urgency: want.urgency }) ? null : `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
+}
+
+export function checkVector(file: VectorFile, v: Vector, records: Records): string | null | Promise<string | null> {
+  // parent_release lines run the whole planner (async): parent-release-vectors.ts.
+  if (file === "parent_release") return checkParentRelease(v);
   try {
     switch (file) {
       case "version_order":
@@ -226,6 +320,10 @@ export function checkVector(file: VectorFile, v: Vector, records: Records): stri
         return checkFixCommand(v);
       case "range_check":
         return checkRangeCheck(v, records);
+      case "holding":
+        return checkHolding(v);
+      case "severity":
+        return checkSeverity(v);
     }
   } catch (e) {
     return `error: ${(e as Error).message}`;

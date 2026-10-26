@@ -12,6 +12,8 @@
 
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
+import { excludedReleases } from "../live/withdrawn-releases.js";
+import { heldSeverity, heldText, type HeldCheck } from "../live/held-dependencies.js";
 
 export type Verdict = "proceed" | "wait" | "review" | "avoid" | "unknown";
 export type SignalEffect = Verdict | "info";
@@ -43,6 +45,8 @@ export interface AdvisoryRef {
   summary: string;
   /** Unmaintained-crate notice rather than an exploitable vulnerability. */
   maintenance: boolean;
+  /** The GHSA alias `severity` was read from, when this record carries none of its own (Go). */
+  severityFrom?: string;
 }
 
 export type AdvisoryFacts =
@@ -104,42 +108,86 @@ export function introducedDependencies(to: ReleaseRecord, base: ReleaseRecord | 
   return to.dependencies.filter((d) => !before.has(d)).sort();
 }
 
-export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
+/**
+ * The advisories signal, with what `to` holds (npm, audit 6.2.5 D-4): a dependency it exact-pins
+ * or narrowly ranges that an advisory affects is installed with it, so it counts as one of `to`'s
+ * own, graded the same way (critical/high: avoid, else review). A held check that could not run
+ * never lets the signal say proceed.
+ */
+export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: HeldCheck): Signal {
+  const own = ownAdvisoriesSignal(item, facts);
+  if (!held || (held.status === "checked" && held.affected.length === 0)) return own;
+  if (held.status === "unchecked") {
+    const note = `Whether the dependencies ${item.to} exact-pins or narrowly ranges have known advisories was not checked (${held.reason}).`;
+    return {
+      ...own,
+      value: own.value === null ? { held_dependencies_unchecked: held.reason } : { ...(own.value as object), held_dependencies_unchecked: held.reason },
+      effect: own.effect === "avoid" || own.effect === "review" ? own.effect : "unknown",
+      evidence: `${own.evidence} ${note}`,
+    };
+  }
+  const severity = heldSeverity(held.affected);
+  const heldEffect: SignalEffect = severity === "critical" || severity === "high" ? "avoid" : "review";
+  const effect = own.effect === "avoid" || heldEffect === "avoid" ? "avoid" : "review";
+  const affected = held.affected.map((d) => ({ package: d.name, spec: d.spec, installs: d.version, advisories: d.ids, severity: d.severity }));
+  const heldNote = `${heldText(item.to, held.affected)}: installing ${item.to} installs ${held.affected.length === 1 ? "it" : "them"}.`;
+  return {
+    id: "advisories",
+    value: own.value === null ? { held_dependencies_affected: affected } : { ...(own.value as object), held_dependencies_affected: affected },
+    effect,
+    // "No known vulnerability affects X." is about X's own advisories; say what it holds instead.
+    evidence:
+      own.effect === "proceed"
+        ? `${own.evidence.replace(`No known vulnerability affects ${item.to}.`, `No advisory of ${item.package} itself affects ${item.to}, but ${heldNote}`)}`
+        : `${own.evidence} ${heldNote}`,
+  };
+}
+
+function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
   if (!facts.available) {
     return { id: "advisories", value: null, evidence: `OSV.dev could not be reached: ${facts.detail}`, effect: "unknown" };
   }
   const fromIds = new Set(facts.from.map((a) => a.id));
   const toIds = new Set(facts.to.map((a) => a.id));
   const fixed = facts.from.filter((a) => !toIds.has(a.id) && !a.maintenance);
-  const value = { affecting_to: facts.to.map((a) => a.id), fixed_by_this_change: fixed.map((a) => a.id) };
+  // An unmaintained-package notice names no exploitable vulnerability: it is
+  // reported in its own field and never moves the verdict (audit L3, the
+  // same split as vulnerability_scan's `maintenance_notices`).
+  const notices = facts.to.filter((a) => a.maintenance);
+  const value = {
+    affecting_to: facts.to.filter((a) => !a.maintenance).map((a) => a.id),
+    fixed_by_this_change: fixed.map((a) => a.id),
+    ...(notices.length > 0 ? { maintenance_notices: notices.map((a) => a.id) } : {}),
+  };
+  const noticeNote =
+    notices.length > 0
+      ? ` Unmaintained-package notice${notices.length > 1 ? "s" : ""} ${notices.map((a) => a.id).join(", ")} ${notices.length > 1 ? "apply" : "applies"} to ${item.to}${notices.every((a) => fromIds.has(a.id)) ? ` (already on ${item.from})` : ""}: no exploitable vulnerability, listed in maintenance_notices.`
+      : "";
   const fixedNote = fixed.length > 0 ? ` This change fixes ${list(fixed)} affecting ${item.from}.` : "";
 
   const serious = facts.to.filter((a) => !a.maintenance && (a.severity === "critical" || a.severity === "high"));
   if (serious.length > 0) {
-    return { id: "advisories", value, effect: "avoid", evidence: `${item.to} is affected by ${list(serious)}.${fixedNote}` };
+    return { id: "advisories", value, effect: "avoid", evidence: `${item.to} is affected by ${list(serious)}.${fixedNote}${noticeNote}` };
   }
   const other = facts.to.filter((a) => !a.maintenance);
-  const newNotices = facts.to.filter((a) => a.maintenance && !fromIds.has(a.id));
-  if (other.length > 0 || newNotices.length > 0) {
+  if (other.length > 0) {
     return {
       id: "advisories",
       value,
       effect: "review",
-      evidence: `${item.to} is affected by ${list([...other, ...newNotices])}.${fixedNote}`,
+      evidence: `${item.to} is affected by ${list(other)}.${fixedNote}${noticeNote}`,
     };
   }
-  // Only maintenance notices that `from` already carries can remain here.
-  const carried = facts.to.length > 0 ? ` (maintenance notice${facts.to.length > 1 ? "s" : ""} ${facts.to.map((a) => a.id).join(", ")} already apply to ${item.from})` : "";
   return {
     id: "advisories",
     value,
     effect: "proceed",
-    evidence: `No known advisory affects ${item.to}${carried}.${fixedNote}`,
+    evidence: `No known vulnerability affects ${item.to}.${fixedNote}${noticeNote}`,
   };
 }
 
 function fmt(a: AdvisoryRef): string {
-  return `${a.id} (${a.maintenance ? "unmaintained notice" : a.severity})`;
+  return `${a.id} (${a.maintenance ? "unmaintained notice" : a.severityFrom ? `${a.severity}, per ${a.severityFrom}` : a.severity})`;
 }
 
 /** At most three named in prose; the full id list is in the signal's `value`. */
@@ -314,12 +362,33 @@ export function newDependenciesSignal(
   };
 }
 
-export function withdrawnSignal(item: CheckItem, to: ReleaseRecord): Signal {
+/**
+ * Yanked, unpublished, retracted: avoid. npm deprecated: avoid when the 4DA rule withdraws it (a
+ * later, non-deprecated stable release exists on its caret line, lodash 4.18.0 "Bad release"),
+ * and when the notice is this release's alone ("Critical bug in 1.0.3"); review when the rule
+ * keeps it and the same notice is on other releases (glob 10.5.0, one of 160 "Old versions of
+ * glob are not supported"): a "please upgrade" notice, not a withdrawn release, and possibly
+ * the only fix on its line (FX-H5, withdrawn-releases.ts). Without the index: every deprecation avoids.
+ */
+export function withdrawnSignal(item: CheckItem, to: ReleaseRecord, index?: PackageReleaseIndex): Signal {
   if (to.withdrawn) {
     return { id: "yanked_or_deprecated", value: { [to.withdrawn]: true }, effect: "avoid", evidence: `${item.to} was ${to.withdrawn} from the registry.` };
   }
   if (to.deprecated) {
-    return { id: "yanked_or_deprecated", value: { deprecated: to.deprecated }, effect: "avoid", evidence: `${item.to} is deprecated: "${to.deprecated}".` };
+    const value = { deprecated: to.deprecated };
+    // The same notice on other releases too: a "please upgrade" notice about the line or the package.
+    const shared = index ? Object.values(index.releases).filter((r) => r.version !== to.version && r.deprecated === to.deprecated).length : 0;
+    if (index && item.ecosystem === "npm" && shared > 0 && !excludedReleases(index).has(to.version)) {
+      return {
+        id: "yanked_or_deprecated",
+        value: { ...value, withdrawn: false },
+        effect: "review",
+        evidence:
+          `${item.to} is deprecated: "${to.deprecated}". The same notice is on ${shared} other release${shared === 1 ? "" : "s"} and no later release on its line is free of one, ` +
+          `so it is a notice about the line, not a withdrawn release; tell the user it is deprecated.`,
+      };
+    }
+    return { id: "yanked_or_deprecated", value, effect: "avoid", evidence: `${item.to} is deprecated: "${to.deprecated}".` };
   }
   return { id: "yanked_or_deprecated", value: null, effect: "proceed", evidence: `${item.to} is neither yanked nor deprecated.` };
 }
@@ -373,7 +442,14 @@ export function decide(signals: Signal[]): { verdict: Verdict; reason: string } 
       const fixes = signals.find((s) => s.id === "release_age" && /security fix/.test(s.evidence));
       return { verdict, reason: fixes ? fixes.evidence : "No advisory, age, trust, script or new-dependency concern found." };
     }
-    return { verdict, reason: hits.map((s) => `${s.id}: ${s.evidence}`).join(" | ") };
+    // A stronger verdict must not hide what could not be checked: crossenv `latest` (the malware
+    // 1.0.1) read `review` for "major" alone while its advisory lookup had failed (audit 6.2.5 D-10).
+    const unchecked = verdict === "unknown" ? [] : signals.filter((s) => s.effect === "unknown");
+    const reason = hits.map((s) => `${s.id}: ${s.evidence}`).join(" | ");
+    return {
+      verdict,
+      reason: unchecked.length > 0 ? `${reason} | NOT CHECKED: ${unchecked.map((s) => `${s.id}: ${s.evidence}`).join(" | ")}` : reason,
+    };
   }
   return { verdict: "unknown", reason: "No signal could be evaluated." };
 }

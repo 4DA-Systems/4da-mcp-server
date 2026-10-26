@@ -67,6 +67,26 @@ export function isWithin(candidate: string, root: string): boolean {
   return c === r || c.startsWith(`${r}/`);
 }
 
+/**
+ * True when the 4DA app tracks a project at or below `root`: its
+ * `project_dependencies` table has a row there. A desktop-mode server started
+ * in a directory the app never indexed must read that project from disk. The
+ * app's tables say nothing about it, and its plan's "0 steps" for it is not an
+ * answer (audit 6.2.5 D-1: NodeGoat, 83 vulnerable packages, got 0 steps).
+ */
+export function appTracksProject(db: FourDADatabase, root: string): boolean {
+  if (db.isStandalone) return false;
+  try {
+    const rows = db
+      .getRawDb()
+      .prepare("SELECT DISTINCT project_path FROM project_dependencies")
+      .all() as Array<{ project_path: string | null }>;
+    return rows.some((r) => !!r.project_path && isWithin(r.project_path, root));
+  } catch {
+    return false;
+  }
+}
+
 export type ProjectScope =
   | { kind: "project"; path: string; source: "argument" | "server_project" }
   | { kind: "all"; reason: string }

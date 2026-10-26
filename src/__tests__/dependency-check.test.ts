@@ -407,3 +407,17 @@ describe("a breaking version range is review, not proceed", () => {
     expect(r.reason).toContain("run upgrade_impact");
   });
 });
+
+// Audit 6.2.5 D-10: crossenv `latest` (the malware 1.0.1) read `review` with "major" as the only
+// reason while its advisory lookup had failed; the stronger verdict hid what was not checked.
+describe("decide: a stronger verdict never hides an unchecked signal", () => {
+  it("review for a major move still says the advisories were not checked", async () => {
+    const { decide } = await import("../tools/dependency-check-signals.js");
+    const out = decide([
+      { id: "major", effect: "review", evidence: "crosses a major (0.0.2 -> 1.0.1)" },
+      { id: "advisories", effect: "unknown", evidence: "lookup failed or was rate limited" },
+    ] as never);
+    expect(out.verdict).toBe("review");
+    expect(out.reason).toMatch(/NOT CHECKED: advisories: lookup failed/);
+  });
+});

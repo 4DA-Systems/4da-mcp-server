@@ -18,7 +18,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { emptySource, found, InstanceSet, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, type LockfileProblem, type VersionSource } from "./lockfile-types.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -54,7 +54,10 @@ export function requirementFiles(cwd: string): string[] {
   } catch {
     // no requirements/ folder
   }
-  return out;
+  // A symlinked requirements-dev.txt or a junctioned requirements/ folder can point anywhere; only
+  // `-r` includes were confined, so pins from outside the project reached OSV and the output
+  // (audit 6.2.5 C-3). Every file read must resolve inside the project.
+  return out.filter((file) => confinedInclude(cwd, path.relative(cwd, file), cwd) !== null);
 }
 
 /** Above this a .txt is not read to decide whether it is a requirements file. */
@@ -137,16 +140,20 @@ export function resolvePython(cwd: string): VersionSource {
     } catch { /* unreadable */ }
   }
 
+  const collected: LockfileProblem[] = [];
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
-    const pins = readRequirementsFile(file, new Set(), cwd);
+    const pins = readRequirementsFile(file, new Set(), cwd, collected);
     if (pins === null) continue;
     for (const { name, version } of pins) take(name, version, dev);
     sources.push(file);
   }
+  // One problem per file, however many requirement files name it.
+  const problems = [...new Map(collected.map((p) => [p.file.toLowerCase(), p])).values()];
 
-  if (sources.length === 0) return emptySource();
-  return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1) });
+  if (sources.length === 0) return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
+  const read = found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1) });
+  return problems.length > 0 ? { ...read, problems } : read;
 }
 
 /**
@@ -161,11 +168,14 @@ export function resolvePython(cwd: string): VersionSource {
  * makes an SMB connection that sends the user's NTLM hash) used to be read,
  * and every `NAME==VALUE` line in it went to OSV.dev and back to the agent.
  * Such an include is skipped; absolute and UNC ones before any fs call.
+ * Skipped is not silent: each one goes to `problems` (audit M4), which the
+ * scan reports as a file whose pins were not checked.
  */
 export function readRequirementsFile(
   file: string,
   visited: Set<string> = new Set(),
   root: string = path.dirname(path.resolve(file)),
+  problems: LockfileProblem[] = [],
 ): Array<{ name: string; version: string }> | null {
   const key = path.resolve(file).toLowerCase();
   if (visited.has(key)) return [];
@@ -178,11 +188,22 @@ export function readRequirementsFile(
   }
   const dir = path.dirname(file);
   const out = parseRequirements(content);
+  const overlong = overlongRequirementLines(content);
+  if (overlong > 0) {
+    problems.push({
+      file: path.resolve(file),
+      skipped: overlong,
+      error: `${overlong === 1 ? "1 line" : `${overlong} lines`} longer than ${MAX_REQUIREMENT_LINE} characters (not requirement syntax) ${overlong === 1 ? "was" : "were"} skipped, so any pin on ${overlong === 1 ? "it was" : "them was"} not checked`,
+    });
+  }
   const constraints = new Map<string, string>();
   for (const { option, target } of requirementOptions(content)) {
     const included = confinedInclude(dir, target, root);
-    if (included === null) continue;
-    if (option === "r") out.push(...(readRequirementsFile(included, visited, root) ?? []));
+    if (included === null) {
+      problems.push(refusedInclude(file, option, target));
+      continue;
+    }
+    if (option === "r") out.push(...(readRequirementsFile(included, visited, root, problems) ?? []));
     else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {
@@ -193,6 +214,20 @@ export function readRequirementsFile(
     }
   }
   return out;
+}
+
+/**
+ * A refused include as a coverage problem. `file` is the include as it
+ * resolves (an absolute, drive-letter or UNC target as written: it is never
+ * resolved or touched), so the note names the file whose pins went unchecked.
+ */
+function refusedInclude(from: string, option: "r" | "c", target: string): LockfileProblem {
+  const absolute = /^[\\/]/.test(target) || /^[A-Za-z]:/.test(target) || path.isAbsolute(target);
+  return {
+    file: absolute ? target : path.resolve(path.dirname(from), target),
+    refused: true,
+    error: `\`-${option} ${target}\` in ${path.basename(from)} points outside the project directory, and includes outside it are never read, so the ${option === "r" ? "pins" : "constraints"} in it were not checked`,
+  };
 }
 
 /**
@@ -226,12 +261,38 @@ export function confinedInclude(dir: string, target: string, root: string): stri
 /** Longer lines are not requirements; capping them keeps the regexes below linear in the file size. */
 const MAX_REQUIREMENT_LINE = 4096;
 
-/** Logical lines (backslash continuations joined), with over-long lines dropped. */
+/**
+ * Logical lines (backslash continuations joined, `--hash` options dropped),
+ * with over-long lines left out. The cap used to apply with the hashes in:
+ * a `pip-compile --generate-hashes` entry with many wheels (aiohttp 3.8.0:
+ * 72 files, 5.7 KB) was dropped silently and never scanned. A hash is not
+ * part of the pin, so it goes before the cap; the split is on whitespace,
+ * which stays linear on a hostile line.
+ */
 function requirementLines(content: string): string[] {
+  return logicalRequirementLines(content).filter((line) => line.length <= MAX_REQUIREMENT_LINE);
+}
+
+function logicalRequirementLines(content: string): string[] {
   return content
     .replace(/\\\r?\n/g, " ")
     .split(/\r?\n/)
-    .filter((line) => line.length <= MAX_REQUIREMENT_LINE);
+    .map((line) => (line.includes("--hash") ? withoutHashes(line) : line));
+}
+
+function withoutHashes(line: string): string {
+  const tokens = line.split(/[ \t]+/);
+  const kept: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === "--hash") i++; // `--hash sha256:...`: the value is the next token
+    else if (!tokens[i].startsWith("--hash=") && !tokens[i].startsWith("--hash:")) kept.push(tokens[i]);
+  }
+  return kept.join(" ");
+}
+
+/** Lines left out for length that are not comments: what a read missed (audit L5's class). */
+function overlongRequirementLines(content: string): number {
+  return logicalRequirementLines(content).filter((line) => line.length > MAX_REQUIREMENT_LINE && !line.trimStart().startsWith("#")).length;
 }
 
 function safeRead(file: string): string {
@@ -243,7 +304,7 @@ function safeRead(file: string): string {
 }
 
 /** `-r file` / `--requirement=file` / `-c file` / `--constraint file` lines (local paths only). */
-function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
+export function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
   const out: Array<{ option: "r" | "c"; target: string }> = [];
   for (const raw of requirementLines(content)) {
     const m = /^\s*(?:-(r|c)|--(requirement|constraint))(?:\s*=\s*|\s+)(\S+)/.exec(raw);
@@ -251,6 +312,130 @@ function requirementOptions(content: string): Array<{ option: "r" | "c"; target:
     out.push({ option: (m[1] ?? (m[2] === "requirement" ? "r" : "c")) as "r" | "c", target: m[3] });
   }
   return out;
+}
+
+/**
+ * A requirements file a resolver wrote: `uv pip compile` or `pip-compile` output. Its source of
+ * truth is the input it was compiled from (requirements.in, pyproject.toml), and a hand edit of a
+ * pin is reverted by the next compile. Each pin's `# via` annotation says why it is there: an
+ * input (`-r requirements.in`, `name (pyproject.toml)`) or only the packages that require it.
+ * The server read `# via requests` pins as declared and said "change `idna==2.7` to `idna==3.15`
+ * in requirements.txt", which requests 2.19.1 (`idna<2.8`) then refused (audit 6.2.5 A-4).
+ */
+export interface CompiledRequirements {
+  /** The tool its header names; null when only `# via` annotations show it (a `--no-header` compile). */
+  tool: "uv" | "pip-compile" | null;
+  /** The single input file the header's command (else the `# via` annotations) names, as written there; null when none or several. */
+  input: string | null;
+  /** PEP 503 name -> its `# via` entries as written (an entry per required-by package or input). */
+  via: Map<string, string[]>;
+}
+
+/** Header lines searched for the tool and its command (uv writes 2, pip-compile 5 to 7). */
+const COMPILED_HEADER_LINES = 12;
+
+export function compiledRequirements(content: string): CompiledRequirements | null {
+  const lines = content.split(/\r?\n/);
+  const head = lines.slice(0, COMPILED_HEADER_LINES);
+  const tool = head.some((l) => /^#.*autogenerated by uv\b/i.test(l))
+    ? "uv"
+    : head.some((l) => /^#.*autogenerated by pip-compile\b/i.test(l))
+      ? "pip-compile"
+      : null;
+  const via = viaAnnotations(lines);
+  if (tool === null && via.size === 0) return null;
+  return { tool, input: headerInput(head) ?? viaInput(via), via };
+}
+
+/** Whether a `# via` entry is a package that requires the pin (not an input file or `-c` constraint). */
+function viaIsPackage(entry: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?$/.test(entry);
+}
+
+/** The input a `# via` entry names: `-r requirements.in`, or `project (pyproject.toml)`. */
+function viaSource(entry: string): string | null {
+  return /^-r\s+(\S+)$/.exec(entry)?.[1] ?? /^\S+\s+\(([^()\s]+)\)$/.exec(entry)?.[1] ?? null;
+}
+
+/**
+ * Indirect: compiled in only because other packages require it (every `# via` entry is a package).
+ * False for a pin an input names, and for one with no annotation (its reason is unknown).
+ */
+export function compiledIndirect(compiled: CompiledRequirements, name: string): boolean {
+  const entries = (compiled.via.get(normalizePythonName(name)) ?? []).filter((e) => !/^-c\s/.test(e));
+  return entries.length > 0 && entries.every(viaIsPackage);
+}
+
+/** The packages a compiled pin is `# via` (those that require it), PEP 503 normalised. */
+export function compiledRequiredBy(compiled: CompiledRequirements, name: string): string[] {
+  return (compiled.via.get(normalizePythonName(name)) ?? []).filter(viaIsPackage).map((e) => normalizePythonName(e.replace(/\[.*$/, "")));
+}
+
+/**
+ * `# via` annotations per pin, in both styles the tools write: split (pip-tools 6+, uv)
+ *   idna==2.7
+ *       # via requests          or      # via
+ *                                       #   requests
+ *                                       #   -r requirements.in
+ * and pip-tools 5's inline `idna==2.7  # via requests, urllib3`.
+ */
+function viaAnnotations(lines: string[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  let current: string | null = null;
+  let listing = false;
+  const add = (entry: string) => {
+    const e = entry.trim();
+    if (current && e) out.set(current, [...(out.get(current) ?? []), e]);
+  };
+  for (const raw of lines) {
+    if (raw.length > MAX_REQUIREMENT_LINE) continue;
+    const line = raw.trim();
+    if (!line.startsWith("#")) {
+      listing = false;
+      if (line.startsWith("--hash") || line === "" || line.startsWith("-")) continue; // a hash continuation or an option keeps the pin
+      const pin = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?/.exec(line);
+      current = pin ? normalizePythonName(pin[1]) : null;
+      const inline = /\s#\s*via\s+(.+)$/.exec(line);
+      if (current && inline) for (const e of inline[1].split(",")) add(e);
+      continue;
+    }
+    const via = /^#\s*via\b\s*(.*)$/.exec(line);
+    if (via) {
+      listing = via[1].trim() === "";
+      if (!listing) add(via[1]);
+    } else if (listing && /^#\s{2,}\S/.test(line)) {
+      add(line.replace(/^#\s+/, ""));
+    } else {
+      listing = false;
+    }
+  }
+  return out;
+}
+
+/** Input-file names a compile command takes: requirements.in / *.txt, pyproject.toml, setup.cfg, setup.py. */
+const COMPILE_INPUT = /(?:\.in|\.txt|(?:^|\/)pyproject\.toml|(?:^|\/)setup\.cfg|(?:^|\/)setup\.py)$/i;
+/** Options whose value is a file but not the input (output, constraints, overrides). */
+const COMPILE_FILE_OPTIONS = new Set(["-o", "--output-file", "-c", "--constraint", "--constraints", "--override", "--overrides", "-b", "--build-constraint", "--build-constraints"]);
+
+/** The one input file the header's command line names (uv: after "via the following command:"; pip-compile: "by the following command:" / "To update, run:"). */
+function headerInput(head: string[]): string | null {
+  const at = head.findIndex((l) => /following command:|to update, run:/i.test(l));
+  if (at < 0) return null;
+  const command = head.slice(at + 1).map((l) => l.replace(/^#\s*/, "").trim()).find((l) => l.length > 0);
+  if (!command) return null;
+  const tokens = command.split(/\s+/);
+  const inputs = tokens.filter((t, i) => !t.startsWith("-") && COMPILE_INPUT.test(t) && !COMPILE_FILE_OPTIONS.has(tokens[i - 1] ?? ""));
+  return inputs.length === 1 ? inputs[0] : null;
+}
+
+/** The one input the `# via` annotations name (`-r requirements.in`, `(pyproject.toml)`), when they name exactly one. */
+function viaInput(via: Map<string, string[]>): string | null {
+  const sources = new Set<string>();
+  for (const entries of via.values()) for (const e of entries) {
+    const s = viaSource(e);
+    if (s) sources.add(s);
+  }
+  return sources.size === 1 ? [...sources][0] : null;
 }
 
 /** Names a requirements file lists with no exact pin ("flask", "flask>=2"), PEP 503 normalised. */

@@ -12,9 +12,13 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
-import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
+import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
+import { isMaintenanceNotice, isMaintenanceRecord } from "./maintenance.js";
+import { gradeAliasGroups } from "./advisory-groups.js";
+import { cweIdsOf, isMalware } from "./malware.js";
 import type {
+  AliasSeverityReport,
   ResolvedDependency,
   OsvVulnerability,
   VulnerabilityEntry,
@@ -39,6 +43,10 @@ const HYDRATE_CONCURRENCY = 24;
 /** querybatch chunks (1,000 dependencies each) sent at once. */
 const BATCH_CONCURRENCY = 4;
 const DETAIL_RETRY_DELAY_MS = 750;
+/** GHSA alias records read per scan to rate records that carry no severity (rateFromAliases). */
+export const MAX_ALIAS_LOOKUPS = 50;
+/** The whole alias lookup's time budget per scan; past it the records stay unknown, said so. */
+export const ALIAS_BUDGET_MS = 5_000;
 
 /**
  * Detail fetches in flight, shared by every scanner in the process. The
@@ -188,6 +196,11 @@ export class OsvHttpSource implements AdvisorySource {
         if (!Array.isArray(data?.results) || data.results.length !== chunk.length) {
           throw new Error(`OSV.dev answered ${Array.isArray(data?.results) ? data.results.length : "no"} results for ${chunk.length} queries`);
         }
+        // `{}` is OSV's own "nothing found"; null, a string or a non-array `vulns` is not an answer
+        // and was read as clean, then cached for an hour (audit 6.2.5 B-4).
+        if (data.results.some((r) => r === null || typeof r !== "object" || ("vulns" in r && !Array.isArray(r.vulns)))) {
+          throw new Error("OSV.dev answered a malformed result");
+        }
         return chunk.map((_, i) => (data.results[i]?.vulns ?? []).map((v) => v.id));
       } catch (error) {
         lastError = error;
@@ -235,7 +248,13 @@ export class OsvHttpSource implements AdvisorySource {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await fetchWithTimeout(`${OSV_VULN_URL}${encodeURIComponent(id)}`, {}, OSV_TIMEOUT_MS);
-        if (response.ok) return (await response.json()) as OsvVulnerability;
+        if (response.ok) {
+          // Only the record asked for is an answer: a 200 `{}` (or any other record) crashed the
+          // scan downstream and was cached for 24 h (audit 6.2.5 B-8). Anything else is retried.
+          const record = (await response.json()) as OsvVulnerability | null;
+          if (record && typeof record === "object" && record.id === id) return record;
+          throw new Error(`OSV.dev answered a malformed record for ${id}`);
+        }
         // 404 and other client errors are answers, not failures to retry.
         if (response.status !== 429 && response.status < 500) return null;
       } catch {
@@ -251,8 +270,10 @@ export class OsvScanner {
   private cache: LiveCache;
   private rateLimiter: RateLimiter;
   private source: AdvisorySource;
+  private aliasBudgetMs: number;
 
-  constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource) {
+  constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource, options: { aliasBudgetMs?: number } = {}) {
+    this.aliasBudgetMs = options.aliasBudgetMs ?? ALIAS_BUDGET_MS;
     this.cache = cache;
     this.rateLimiter = rateLimiter;
     this.source = source ?? new OsvHttpSource(cache, rateLimiter);
@@ -271,7 +292,7 @@ export class OsvScanner {
     const cachedVulns: VulnerabilityEntry[] = [];
 
     for (const dep of scannable) {
-      const cacheKey = `osv:${dep.ecosystem}:${dep.name}:${dep.version}`;
+      const cacheKey = `osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`;
       const cached = network ? this.cache.get<VulnerabilityEntry[]>(cacheKey) : null;
       if (cached !== null) {
         cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
@@ -294,17 +315,23 @@ export class OsvScanner {
         unanswered = outcome.unanswered;
         failure = outcome.failure;
       } catch (error) {
+        // The source layer turns network failures into `outcome.failure`; an
+        // exception here is a fault in this server, not an OSV outage, and
+        // telling the agent to retry would not help (audit 6.2.5 D-2).
         unanswered = uncached;
-        failure = error instanceof Error ? `OSV.dev could not be queried (${error.message.slice(0, 120)})` : "OSV.dev could not be queried";
+        const detail = error instanceof Error ? error.message.slice(0, 120) : String(error).slice(0, 120);
+        failure = `an internal error in this server stopped the vulnerability lookup (${detail}); retrying will not help, please report it at https://github.com/4DA-Systems/4da-mcp-server/issues`;
       }
     }
 
     let staleAnswers = 0;
+    let staleOldest: string | null = null;
     const unchecked: ResolvedDependency[] = [];
     for (const dep of unanswered) {
-      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
+      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
       if (stale) {
         staleAnswers++;
+        if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
         cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
       } else {
         unchecked.push(dep);
@@ -316,7 +343,9 @@ export class OsvScanner {
     // placeholders npm publishes after taking a malicious package down; the
     // malware advisory covering every version does not apply to them (the
     // desktop app's osv::matching::is_npm_security_holding; audit A5).
-    const allVulns = [...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v));
+    const rated = await this.rateFromAliases([...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v)));
+    // One severity per advisory: every record of an alias group carries the group's most severe grade.
+    const allVulns = gradeAliasGroups(rated.vulns);
     const vulnerablePackages = new Set(allVulns.map((v) => v.package));
     const platformInactiveVulnerable = new Set(
       allVulns.filter((v) => !v.platformActive).map((v) => v.package),
@@ -344,6 +373,84 @@ export class OsvScanner {
       unchecked: unchecked.length,
       uncheckedReason: offline ? (failure ?? "OSV.dev could not be queried") : null,
       staleAnswers,
+      // An expired answer is not a current one: every consumer says so (audit 6.2.5 B-2).
+      ...(staleAnswers > 0 ? { staleReason: failure ?? "OSV.dev could not be queried", staleOldestFetchedAt: staleOldest } : {}),
+      ...(rated.report ? { aliasSeverity: rated.report } : {}),
+    };
+  }
+
+  /**
+   * A severity for records that carry none, from their GHSA alias: one
+   * advisory, one grade, in every tool. Go's vulnerability database rates
+   * nothing: GO-2024-3333 (golang.org/x/net) has no severity, its alias
+   * GHSA-w32m-9786-jp63 is HIGH, and OSV returns only the GO record for the
+   * module (the GHSA names golang.org/x/net/html). dependency_check said
+   * `avoid` while vulnerability_scan graded the same record unknown (review
+   * of 6.2.5 M6, 2026-10-18). The two records name each other, so the
+   * alias's rating applies; it is read by the same rule as any record and
+   * the entry says where it came from (`severityFrom`).
+   *
+   * Through this scanner's own source: a pinned source answers from its
+   * records, never the network; with live lookups off nothing is fetched.
+   * At most MAX_ALIAS_LOOKUPS aliases, within ALIAS_BUDGET_MS in total.
+   * Anything not rated stays unknown and is listed as unresolved, with why;
+   * unknown is never clean.
+   */
+  private async rateFromAliases(entries: VulnerabilityEntry[]): Promise<{ vulns: VulnerabilityEntry[]; report: AliasSeverityReport | null }> {
+    // A GHSA alias that is itself one of this scan's records is graded already: no fetch.
+    const known = new Map<string, VulnerabilityEntry["severity"]>();
+    for (const e of entries) if (/^GHSA-/i.test(e.vulnId) && e.severity !== "unknown") known.set(e.vulnId, e.severity);
+    const wanted = new Map<string, string[]>(); // record id -> every GHSA alias it names
+    for (const e of entries) {
+      if (e.severity !== "unknown" || e.severityFrom || wanted.has(e.vulnId) || isMaintenanceNotice(e)) continue;
+      const ghsas = [...new Set(e.aliases.filter((a) => /^GHSA-/i.test(a) && a !== e.vulnId))];
+      if (ghsas.length > 0) wanted.set(e.vulnId, ghsas);
+    }
+    if (wanted.size === 0) return { vulns: entries, report: null };
+
+    // The cap and the budget count distinct GHSA ids.
+    const toRead = [...new Set([...wanted.values()].flat())].filter((id) => !known.has(id)).sort();
+    const asked = toRead.slice(0, MAX_ALIAS_LOOKUPS);
+    let records = new Map<string, OsvVulnerability>();
+    const reasons: string[] = toRead.length > asked.length ? [`more than ${MAX_ALIAS_LOOKUPS} aliases to read; the rest were not asked for`] : [];
+    if (asked.length > 0 && this.source.network && process.env.FOURDA_OFFLINE === "true") {
+      reasons.push("live lookups are disabled (FOURDA_OFFLINE=true)");
+    } else if (asked.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), this.aliasBudgetMs);
+      });
+      try {
+        // Fetches past the deadline keep running and fill the detail cache for the next call.
+        const answer = await Promise.race([this.source.details(asked).catch(() => new Map<string, OsvVulnerability>()), deadline]);
+        if (answer === null) reasons.push(`the alias records did not arrive within ${this.aliasBudgetMs / 1000} s`);
+        else records = answer;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+    const read = new Map<string, VulnerabilityEntry["severity"]>(known);
+    for (const [id, record] of records) read.set(id, deriveSeverity(record).severity);
+
+    const unresolved = new Set<string>();
+    const ungraded: string[] = [];
+    let ratedCount = 0;
+    const vulns = entries.map((e) => {
+      const ghsas = wanted.get(e.vulnId);
+      if (!ghsas) return e;
+      const graded = gradeFromAliases(ghsas, read);
+      for (const c of graded.consulted) if (c.grade === "unreadable") unresolved.add(c.id);
+      if (graded.severity === "unknown") {
+        if (!ungraded.includes(e.vulnId)) ungraded.push(e.vulnId);
+        return e;
+      }
+      ratedCount++;
+      return { ...e, severity: graded.severity, severityFrom: graded.from! };
+    });
+    if (unresolved.size > 0 && reasons.length === 0) reasons.push("an alias record could not be read");
+    return {
+      vulns,
+      report: { rated: ratedCount, unresolved: [...unresolved].sort(), ungraded, reason: unresolved.size > 0 || ungraded.length > 0 ? reasons.join("; ") || "the aliases are unrated themselves" : null },
     };
   }
 
@@ -372,7 +479,7 @@ export class OsvScanner {
       // and dropping a real advisory is worse than keeping an un-enriched one.
       const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
       const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
-      rows.push([`osv:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      rows.push([`osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
@@ -422,7 +529,11 @@ function mapVulnerability(
   vuln: Partial<OsvVulnerability> & { id: string },
   dep: ResolvedDependency,
 ): VulnerabilityEntry {
-  const { severity, cvssScore } = deriveSeverity(vuln);
+  const graded = deriveSeverity(vuln);
+  const malware = isMalware(vuln.id, vuln.aliases || [], cweIdsOf(vuln), vuln.summary ?? "");
+  // An installed malicious copy is critical in every tool, whatever the record grades (the 4DA lead, 2026-10-18).
+  const severity = malware ? "critical" : graded.severity;
+  const cvssScore = graded.cvssScore;
   const fixedVersion = extractFixedVersion(vuln.affected, dep.name, dep.ecosystem, dep.version);
 
   return {
@@ -436,6 +547,8 @@ function mapVulnerability(
     aliases: vuln.aliases || [],
     severity,
     cvssScore,
+    ...(malware ? { malware: true } : {}),
+    maintenance: isMaintenanceRecord(vuln, dep.name, dep.ecosystem),
     summary: vuln.summary || vuln.details?.slice(0, 200) || vuln.id,
     fixedVersion,
     published: vuln.published || vuln.modified || "",
@@ -451,22 +564,47 @@ function mapVulnerability(
   };
 }
 
+const GRADE_RANK: Record<string, number> = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
+
+/**
+ * The shared rule for an unrated record (the 4DA app implements it
+ * identically): the HIGHEST grade among every GHSA alias that could be read;
+ * unknown when none could. `from` names the alias that gave it, the
+ * lexicographically smallest id on a tie. An alias that could not be read
+ * never lowers the grade; it is reported (`consulted`, grade "unreadable").
+ * Umbrella records name several: RUSTSEC-2020-0014 lists 8 GHSAs, so taking
+ * the first made the grade depend on alias order.
+ */
+export function gradeFromAliases(
+  ghsas: string[],
+  read: ReadonlyMap<string, VulnerabilityEntry["severity"]>,
+): { severity: VulnerabilityEntry["severity"]; from: string | null; consulted: Array<{ id: string; grade: VulnerabilityEntry["severity"] | "unreadable" }> } {
+  const consulted = [...new Set(ghsas)].sort().map((id) => ({ id, grade: read.get(id) ?? ("unreadable" as const) }));
+  let best: { id: string; grade: VulnerabilityEntry["severity"] } | null = null;
+  for (const c of consulted) {
+    if (c.grade === "unreadable" || c.grade === "unknown") continue;
+    if (!best || GRADE_RANK[c.grade] > GRADE_RANK[best.grade]) best = { id: c.id, grade: c.grade };
+  }
+  return { severity: best?.grade ?? "unknown", from: best?.id ?? null, consulted };
+}
+
 /**
  * Derive a severity bucket honestly: a CVSS base score (numeric or computed
  * from a vector) wins; otherwise the GitHub-advisory label; otherwise unknown.
  * Never fabricates a default bucket — an advisory with no severity signal is
  * reported as `unknown`, not silently labeled "medium".
  */
-function deriveSeverity(vuln: Partial<OsvVulnerability>): {
+export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   severity: VulnerabilityEntry["severity"];
   cvssScore: number | null;
 } {
+  // The curated label first, the CVSS band second (the rule shared with the 4DA app, 2026-10-18,
+  // severity vectors sv-015..sv-017): on the pinned corpus 123 of 3,923 records disagree, all GHSA,
+  // 113 beside a CVSS v4 vector neither engine scores and the label follows. A CVSS 0.0 goes by its label.
   const cvssScore = extractCvssScore(vuln.severity);
-  if (cvssScore !== null) return { severity: cvssToSeverity(cvssScore), cvssScore };
-
   const label = labelToSeverity(vuln.database_specific?.severity);
-  if (label !== "unknown") return { severity: label, cvssScore: null };
-
+  if (label !== "unknown") return { severity: label, cvssScore };
+  if (cvssScore !== null) return { severity: cvssToSeverity(cvssScore), cvssScore };
   return { severity: "unknown", cvssScore: null };
 }
 
@@ -561,7 +699,7 @@ export function extractFixedVersion(
   // the introduced side only; "0" (since inception) orders below everything.
   const containing = intervals.find(
     (i) =>
-      cmp(installedVersion, i.introduced) >= 0 &&
+      compareToLowerBound(installedVersion, i.introduced, ecosystem) >= 0 &&
       (i.fixed !== null
         ? cmp(installedVersion, i.fixed) < 0
         : i.lastAffected === null || cmp(installedVersion, i.lastAffected) <= 0),
@@ -577,7 +715,22 @@ export function extractFixedVersion(
   return above.reduce((min, v) => (cmp(v, min) < 0 ? v : min), above[0]);
 }
 
-/** An npm `-security` placeholder matched by a malicious-package (MAL-) advisory: not installed malware. */
-export function isNpmSecurityHolding(v: Pick<VulnerabilityEntry, "vulnId" | "ecosystem" | "currentVersion">): boolean {
-  return v.vulnId.startsWith("MAL-") && v.ecosystem === "npm" && v.currentVersion.trim().endsWith("-security");
+/**
+ * npm's security holding placeholder: after a malicious package is taken down,
+ * npm republishes the name as an empty `0.0.<n>-security` release ("security
+ * holding package"). It has no code, so NO advisory applies to it, whichever
+ * database's id flags the name: crossenv 0.0.2-security under
+ * GHSA-c2m4-w5hm-vqjw read as installed malware when only MAL- ids were held
+ * (4DA audit L4, 2026-10-16). Only npm's own shape counts: a publisher's
+ * `1.0.0-security` prerelease is real code and stays affected. The same rule
+ * as the app's `fourda_depengine::matching::is_npm_security_holding`
+ * (shared vectors `holding.jsonl`).
+ */
+export function isSecurityHoldingRelease(ecosystem: string, version: string): boolean {
+  return ecosystem.trim().toLowerCase() === "npm" && /^0\.0\.\d+-security$/.test(version.trim());
+}
+
+/** A finding on an npm security holding placeholder (any advisory id): not installed code. */
+export function isNpmSecurityHolding(v: Pick<VulnerabilityEntry, "ecosystem" | "currentVersion">): boolean {
+  return isSecurityHoldingRelease(v.ecosystem, v.currentVersion);
 }

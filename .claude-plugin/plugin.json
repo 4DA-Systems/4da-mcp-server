@@ -1,6 +1,6 @@
 {
   "name": "4da",
-  "description": "Upgrade intelligence for your agent: what changes between the version you run and the one you want, which of your files it touches, which vulnerabilities it fixes. Vulnerability scans against your real lockfile tree, ranked upgrade plans, decision memory. Only public package names and versions ever leave your machine.",
+  "description": "Upgrade intelligence for your agent: what changes between the version you run and the one you want, which of your files it touches, which vulnerabilities it fixes. Vulnerability scans against your real lockfile tree, ranked upgrade plans, decision memory. Package names and versions (private ones in your lockfiles included) go to OSV.dev and the package registries (GitHub only if you opt in to release notes); your source code never leaves your machine.",
   "version": "6.2.5",
   "author": {
     "name": "4DA Systems",

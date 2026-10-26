@@ -13,9 +13,10 @@
  */
 
 import type { OsvVulnerability } from "./types.js";
-import { compareVersions, isComparable, parsePep440, samePackageName } from "./version-compare.js";
+import { compareToLowerBound, compareVersions, isComparable, isComposerOrGemPrerelease, parsePep440, samePackageName } from "./version-compare.js";
 import { parseSemverPrecedence } from "./semver-precedence.js";
-import { isMaintenanceNotice } from "./maintenance.js";
+import { isMaintenanceRecord } from "./maintenance.js";
+import { cweIdsOf, isMalware } from "./malware.js";
 
 /**
  * One affected span: [introduced, fixed), or [introduced, lastAffected]
@@ -38,6 +39,8 @@ export interface AdvisoryRanges {
    * before 6.2.
    */
   maintenance?: boolean;
+  /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
+  malware?: boolean;
 }
 
 /**
@@ -55,7 +58,7 @@ export function collectAffectedSpans(
   for (const a of affected ?? []) {
     // Names compare the registry's way: PEP 503 for PyPI (`Jinja2` is
     // `jinja2`), `-`/`_` folding for crates.
-    if (a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
+    if (!a.package || a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
     for (const range of a.ranges || []) {
       if (range.type === "GIT") continue;
       let open: AffectedSpan | null = null;
@@ -85,7 +88,7 @@ export function collectAffectedSpans(
 function listedVersions(affected: OsvVulnerability["affected"] | undefined, packageName: string, ecosystem: string): string[] {
   const out: string[] = [];
   for (const a of affected ?? []) {
-    if (a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
+    if (!a.package || a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
     out.push(...(a.versions ?? []));
   }
   return out;
@@ -94,12 +97,14 @@ function listedVersions(affected: OsvVulnerability["affected"] | undefined, pack
 /** One advisory's ranges for one package; null when the advisory is withdrawn. */
 export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecosystem: string): AdvisoryRanges | null {
   if (vuln.withdrawn) return null;
-  const informational = (vuln.database_specific as { informational?: unknown } | undefined)?.informational;
+  // THE malware predicate (malware.ts): a MAL- id or alias, or CWE-506; never summary wording.
+  const malware = isMalware(vuln.id, vuln.aliases ?? [], cweIdsOf(vuln), vuln.summary ?? "");
   return {
     id: vuln.id,
     spans: collectAffectedSpans(vuln.affected, packageName, ecosystem),
     versions: listedVersions(vuln.affected, packageName, ecosystem),
-    maintenance: isMaintenanceNotice({ summary: vuln.summary ?? "" }) || informational === "unmaintained" || informational === "notice",
+    maintenance: isMaintenanceRecord(vuln, packageName, ecosystem),
+    ...(malware ? { malware: true } : {}),
   };
 }
 
@@ -119,9 +124,105 @@ export function advisoryAffects(advisory: AdvisoryRanges, version: string, ecosy
   }
   return advisory.spans.some(
     (s) =>
-      cmp(version, s.introduced) >= 0 &&
+      compareToLowerBound(version, s.introduced, ecosystem) >= 0 &&
       (s.fixed !== null ? cmp(version, s.fixed) < 0 : s.lastAffected !== null ? cmp(version, s.lastAffected) <= 0 : true),
   );
+}
+
+/**
+ * The advisories (maintenance notices left out) that affect `version`: the predicate dependency_check
+ * decides `proceed` by over a package's advisory list (checkRange), and the one every other tool
+ * runs on a release it offers (offered-release.ts). One predicate, so no tool offers a release
+ * dependency_check would refuse (final release audit of 6.2.5: upgrade_planner offered crossenv
+ * 1.0.1, which GHSA-c2m4-w5hm-vqjw lists as malware).
+ */
+export function advisoriesAffecting(advisories: readonly AdvisoryRanges[], version: string, ecosystem: string): string[] {
+  return [...new Set(advisories.filter((a) => !a.maintenance && advisoryAffects(a, version, ecosystem)).map((a) => a.id))];
+}
+
+/**
+ * Whether an advisory's ranges can decide anything for this package: at least one span or listed
+ * version, and every bound a version this ecosystem orders ("0" is OSV's since-the-beginning).
+ */
+export function readableAdvisory(a: AdvisoryRanges, ecosystem: string): boolean {
+  if (a.spans.length === 0 && a.versions.length === 0) return false;
+  const ok = (v: string | null) => v === null || v === "0" || isComparable(v, ecosystem);
+  return a.spans.every((s) => ok(s.introduced) && ok(s.fixed) && ok(s.lastAffected));
+}
+
+/** Every "clean release" decision, over one package's advisories (CleanReleases). */
+export interface CleanReleases {
+  /** Advisories whose ranges cannot be read: the decision is UNKNOWN, no release is named, and the reason says so. */
+  unreadable: string[];
+  /** Malware advisories: any release one affects is never clean, never a target, never "newest". */
+  malware: string[];
+  /** Genuinely unfixed, non-malware advisories (they affect the highest release too): skipped when choosing. */
+  unfixed: string[];
+  /** No advisory that counts (every readable one but the unfixed) affects `version`. False for all when `unreadable` is not empty. */
+  clean: (version: string) => boolean;
+  /** The highest stable release no malicious advisory affects; null when none (or the decision is unknown). */
+  newest: string | null;
+  /** The unfixed advisories that still affect `version`: its text says "remains affected by <id> (no fix published)". */
+  remains: (version: string) => string[];
+  /** The malicious advisories that affect `version`: an installed copy they affect names no release at all. */
+  maliciousAt: (version: string) => string[];
+  /** The non-malicious advisories that affect `version` but not the installed version (a move would bring them in); empty without `installed`. */
+  introducedAt: (version: string) => string[];
+  /** `clean`, except that advisories the installed version does not have are ignored: whether only those block `version`. */
+  cleanButIntroduced: (version: string) => boolean;
+}
+
+/**
+ * THE predicate for every "clean release" decision a tool makes, the rule of the 4DA #981
+ * re-review (2026-10-18): the newest release, a parent's or lever's own advisories, the child copy,
+ * parent standing, and the release a row offers. Underneath, the advisory-window function
+ * dependency_check decides `proceed` by (advisoryAffects, maintenance notices left out).
+ * (a) A malware advisory (MAL-, or a malicious-package record) is never skipped: a release it
+ *     affects is never clean, never a target, never "newest"; the advice is to remove or replace.
+ * (b) An advisory with no ranges, or ranges that cannot be parsed, makes the decision unknown.
+ * (c) A genuinely unfixed, non-malware advisory (it also affects the highest release) may be
+ *     skipped, and the chosen release says it remains affected.
+ * Skipping ANY advisory that affects the newest release, as before, was wrong for (a) and (b).
+ * `releases` are the candidates (installable; prereleases are left out of "highest").
+ */
+export function cleanReleases(advisories: readonly AdvisoryRanges[], ecosystem: string, releases: readonly string[], installed?: string | null): CleanReleases {
+  const real = advisories.filter((a) => !a.maintenance);
+  const unreadable = [...new Set(real.filter((a) => !readableAdvisory(a, ecosystem)).map((a) => a.id))];
+  const readable = real.filter((a) => readableAdvisory(a, ecosystem));
+  const malware = [...new Set(readable.filter((a) => a.malware).map((a) => a.id))];
+  const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
+  const stable = releases.filter((v) => isComparable(v, ecosystem) && !isPrereleaseVersion(v, ecosystem)).sort(cmp);
+  // #981 round 3: newest = the highest stable, non-withdrawn release no MALICIOUS advisory affects;
+  // usable(v) = no malicious advisory affects v, and every other advisory affecting v also affects
+  // newest (no fix is published for it), so an unfixed advisory never blocks a move that fixes the rest.
+  const malicious = readable.filter((a) => a.malware);
+  const benign = readable.filter((a) => !a.malware);
+  const notMalicious = (v: string) => !malicious.some((a) => advisoryAffects(a, v, ecosystem));
+  const newest = unreadable.length > 0 ? null : ([...stable].reverse().find(notMalicious) ?? null);
+  // Skipped only when the installed version already has it: a move never brings an advisory in.
+  const unfixedAdv = newest ? benign.filter((a) => advisoryAffects(a, newest, ecosystem) && (!installed || advisoryAffects(a, installed, ecosystem))) : [];
+  const clean = (v: string) => unreadable.length === 0 && notMalicious(v) && benign.every((a) => !advisoryAffects(a, v, ecosystem) || unfixedAdv.includes(a));
+  return {
+    unreadable,
+    malware,
+    unfixed: [...new Set(unfixedAdv.map((a) => a.id))],
+    clean,
+    newest,
+    remains: (v) => [...new Set(unfixedAdv.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))],
+    maliciousAt: (v) => [...new Set(malicious.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))],
+    introducedAt: (v) =>
+      installed ? [...new Set(benign.filter((a) => advisoryAffects(a, v, ecosystem) && !advisoryAffects(a, installed, ecosystem)).map((a) => a.id))] : [],
+    cleanButIntroduced: (v) =>
+      !!installed &&
+      unreadable.length === 0 &&
+      notMalicious(v) &&
+      benign.every((a) => !advisoryAffects(a, v, ecosystem) || unfixedAdv.includes(a) || !advisoryAffects(a, installed, ecosystem)),
+  };
+}
+
+/** "remains affected by GHSA-x (no fix published)", or "" when nothing remains. */
+export function remainsText(ids: string[]): string {
+  return ids.length === 0 ? "" : `remains affected by ${ids.join(", ")} (no fix published)`;
 }
 
 /** Whether a version is a prerelease in its ecosystem's own terms. */
@@ -130,6 +231,9 @@ export function isPrereleaseVersion(version: string, ecosystem: string): boolean
     const p = parsePep440(version);
     return p ? p.pre !== null || p.dev !== null : false;
   }
+  // Gem prereleases are letter segments (`4.2.0.beta3`), not `-` suffixes.
+  const own = isComposerOrGemPrerelease(version, ecosystem);
+  if (own !== null) return own;
   const p = parseSemverPrecedence(version.replace(/^v(?=\d)/, ""));
   return p ? p.prerelease.length > 0 : false;
 }
@@ -163,6 +267,32 @@ export interface CleanTarget {
    * reported instead.
    */
   unfixable: string[];
+  /**
+   * Releases the registry withdrew (yanked, deprecated: `excluded`) that the
+   * target would otherwise have been: each one at or above the floor and
+   * below the target (every one, when there is no target) that the advisories
+   * the target is judged against do not affect. Ascending. With no target, a
+   * non-empty list means a fix WAS published and then withdrawn: "no
+   * installable fix", not "no fix published" (4DA FX-H5 `WalkOutcome.withheld`).
+   */
+  withheld: string[];
+  /** Advisories whose ranges cannot be read: no target is named, and the reason says so (#981 rule b). */
+  unreadable?: string[];
+  /** No target: every fixing release brings in these advisories, which the installed version does not have. */
+  introduces?: string[];
+  /**
+   * No target, and malware advisories (the malware predicate) affect releases a fix could land
+   * on: reported as malware ("<pkg> is flagged malicious (<id>): remove or replace <pkg>"), never
+   * as "brings in MAL-x" (#994 review). Sorted.
+   */
+  maliciousLanding?: string[];
+}
+
+/** Whether `version` is one of `listed`, as a version (build metadata ignored), not only as a string. */
+export function isListedVersion(listed: readonly string[], version: string, ecosystem: string): boolean {
+  if (listed.includes(version)) return true;
+  if (!isComparable(version, ecosystem)) return false;
+  return listed.some((l) => isComparable(l, ecosystem) && compareVersions(l, version, ecosystem) === 0);
 }
 
 /**
@@ -174,37 +304,131 @@ export interface CleanTarget {
  * name. An advisory that affects the newest candidate has no fixed release
  * and does not disqualify a target (it is listed in `unfixable`). Null when
  * `fixes` is empty.
+ *
+ * `excluded`: releases the registry withdrew (withdrawn-releases.ts). They
+ * stay in the pool so the result can say it passed one (`withheld`), but are
+ * never the target, exactly as a prerelease is not; an advisory whose every
+ * way out is withdrawn then has none, like an unfixed one (FX-H5).
  */
 export function smallestCleanVersion(input: {
   ecosystem: string;
   fixes: string[];
   advisories: AdvisoryRanges[];
   published: string[] | null;
+  excluded?: readonly string[];
+  /**
+   * The installed version. An advisory no release fixes may be skipped only when the installed
+   * version already has it: a target never brings in an advisory, fixed or not, that the installed
+   * version does not have (the 4DA lead, 2026-10-18). Without it, as before (vectors that name none).
+   */
+  installed?: string | null;
 }): CleanTarget | null {
+  // #994 review (both engines): a maintenance notice (unmaintained / deprecated package) never
+  // blocks a target, never makes a release unclean, and never "introduces": it is not judged here.
+  input = { ...input, advisories: input.advisories.filter((a) => !a.maintenance) };
   const { ecosystem } = input;
   const fixes = input.fixes.filter((f) => isComparable(f, ecosystem));
   if (fixes.length === 0) return null;
   const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
   const floor = fixes.reduce((max, v) => (cmp(v, max) > 0 ? v : max), fixes[0]);
   const allowPre = isPrereleaseVersion(floor, ecosystem);
+  const excluded = input.excluded ?? [];
+  const withdrawn = (v: string) => excluded.length > 0 && isListedVersion(excluded, v, ecosystem);
 
   const fromRegistry = input.published !== null && input.published.length > 0;
   const pool = fromRegistry
     ? input.published!
     : [floor, ...input.advisories.flatMap((a) => a.spans.map((s) => s.fixed).filter((f): f is string => f !== null))];
-  const candidates = [...new Set(pool)]
+  const releases = [...new Set(pool)]
     .filter((v) => isComparable(v, ecosystem) && cmp(v, floor) >= 0 && (allowPre || !isPrereleaseVersion(v, ecosystem)))
     .sort(cmp);
+  const candidates = releases.filter((v) => !withdrawn(v));
   const basis = fromRegistry ? "registry" : "advisory_fixes";
   const newest = candidates[candidates.length - 1];
-  const unfixable = newest ? input.advisories.filter((a) => advisoryAffects(a, newest, ecosystem)) : [];
+  // The #981 rule (cleanReleases): an advisory whose ranges cannot be read leaves the decision
+  // unknown, no release named; a malware advisory is never "unfixable", so a release it affects is
+  // never the target.
+  const unreadable = [...new Set(input.advisories.filter((a) => !a.maintenance && !readableAdvisory(a, ecosystem)).map((a) => a.id))];
+  if (unreadable.length > 0) {
+    return { target: null, basis, floor, floorAffectedBy: unreadable, stillAffectedBy: unreadable, unfixable: [], withheld: [], unreadable };
+  }
+  const has = (a: AdvisoryRanges) => !input.installed || advisoryAffects(a, input.installed, ecosystem);
+  const unfixable = newest ? input.advisories.filter((a) => !a.malware && advisoryAffects(a, newest, ecosystem) && has(a)) : [];
+  // Unfixed, and the installed version does not have it: every fixing release would bring it in.
+  const introduced = newest ? input.advisories.filter((a) => !a.malware && advisoryAffects(a, newest, ecosystem) && !has(a)) : [];
   const fixable = input.advisories.filter((a) => !unfixable.includes(a));
   const unfixableIds = [...new Set(unfixable.map((a) => a.id))];
   const affecting = (v: string) => [...new Set(input.advisories.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))];
+  const clear = (judged: AdvisoryRanges[]) => (v: string) => !judged.some((a) => advisoryAffects(a, v, ecosystem));
+  // The withdrawn releases that would have been the target: clean against `judged`, below `target`.
+  const passed = (judged: AdvisoryRanges[], target: string | null) =>
+    releases.filter((v) => withdrawn(v) && (target === null || cmp(v, target) < 0) && clear(judged)(v));
   // Clean against everything if any candidate is; otherwise against every advisory a release fixes.
-  for (const pool of [input.advisories, fixable]) {
-    const candidate = candidates.find((v) => !pool.some((a) => advisoryAffects(a, v, ecosystem)));
-    if (candidate) return { target: candidate, basis, floor, floorAffectedBy: affecting(floor), stillAffectedBy: affecting(candidate), unfixable: unfixableIds };
+  for (const judged of [input.advisories, fixable]) {
+    // A prerelease fix event (docker/distribution v2.8.2-beta.1) lets prereleases in, but a clean
+    // stable release still comes first: v2.8.2+incompatible, not the beta (audit 6.2.5 A-7).
+    const candidate =
+      (allowPre ? candidates.find((v) => !isPrereleaseVersion(v, ecosystem) && clear(judged)(v)) : undefined) ?? candidates.find(clear(judged));
+    if (candidate) {
+      return {
+        target: candidate,
+        basis,
+        floor,
+        floorAffectedBy: affecting(floor),
+        stillAffectedBy: affecting(candidate),
+        unfixable: unfixableIds,
+        withheld: passed(judged, candidate),
+      };
+    }
   }
-  return { target: null, basis, floor, floorAffectedBy: affecting(floor), stillAffectedBy: affecting(floor), unfixable: unfixableIds };
+  // #994 review: the ids are the UNION, over every candidate blocked only by advisories the
+  // installed version lacks, of those advisories (sorted), not the smallest such release's alone.
+  const lacks = (a: AdvisoryRanges) => !a.malware && !has(a);
+  const blockedOnlyByNew = candidates.filter(
+    (v) =>
+      input.advisories.every((a) => !advisoryAffects(a, v, ecosystem) || unfixable.includes(a) || lacks(a)) &&
+      input.advisories.some((a) => lacks(a) && advisoryAffects(a, v, ecosystem)),
+  );
+  const unionIds = new Set(blockedOnlyByNew.flatMap((v) => input.advisories.filter((a) => lacks(a) && advisoryAffects(a, v, ecosystem)).map((a) => a.id)));
+  const introduces = [...(unionIds.size > 0 ? unionIds : new Set(introduced.map((a) => a.id)))].sort();
+  const maliciousLanding = [...new Set(input.advisories.filter((a) => a.malware && candidates.some((v) => advisoryAffects(a, v, ecosystem))).map((a) => a.id))].sort();
+  return {
+    ...(introduces.length > 0 ? { introduces } : {}),
+    ...(maliciousLanding.length > 0 ? { maliciousLanding } : {}),
+    target: null,
+    basis,
+    floor,
+    floorAffectedBy: affecting(floor),
+    stillAffectedBy: affecting(floor),
+    unfixable: unfixableIds,
+    withheld: passed(fixable, null),
+  };
+}
+
+/**
+ * One advisory's own fix as a release the registry still offers (4DA
+ * `installable_fix`): `fix` itself, or, when the registry withdrew it, the
+ * lowest published release above it that is not withdrawn and that
+ * `advisories` (the ones that fix at `fix`) do not affect. `fix: null` with
+ * `withheld` set: the fix was published and withdrawn, and no installable
+ * release past it is known.
+ */
+export function installableFix(input: {
+  ecosystem: string;
+  fix: string;
+  advisories: AdvisoryRanges[];
+  published: string[] | null;
+  excluded: readonly string[];
+}): { fix: string | null; withheld: string[] } {
+  const { ecosystem, fix } = input;
+  if (!isListedVersion(input.excluded, fix, ecosystem)) return { fix, withheld: [] };
+  const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
+  const allowPre = isPrereleaseVersion(fix, ecosystem);
+  const above = [...new Set(input.published ?? [])]
+    .filter((v) => isComparable(v, ecosystem) && cmp(v, fix) > 0 && (allowPre || !isPrereleaseVersion(v, ecosystem)))
+    .filter((v) => !input.advisories.some((a) => !a.maintenance && advisoryAffects(a, v, ecosystem)))
+    .sort(cmp);
+  const next = above.find((v) => !isListedVersion(input.excluded, v, ecosystem)) ?? null;
+  const skipped = above.filter((v) => isListedVersion(input.excluded, v, ecosystem) && (next === null || cmp(v, next) < 0));
+  return { fix: next, withheld: [fix, ...skipped.filter((v) => v !== fix)] };
 }

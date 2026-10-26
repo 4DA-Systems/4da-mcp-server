@@ -52,7 +52,8 @@ if (!/^\d+\.\d+\.\d+$/.test(next)) {
 
 // The changelog entry is written by hand, before this runs; here it gets its date.
 const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-const heading = new RegExp(`^## ${next.replaceAll(".", "\.")} — (unreleased|\d{4}-\d{2}-\d{2})$`, "m");
+// Escapes doubled: in a template literal "\." is just "." and "\d" is "d" (audit 6.2.5 E-10).
+const heading = new RegExp(`^## ${next.replaceAll(".", "\\.")} — (unreleased|\\d{4}-\\d{2}-\\d{2})$`, "m");
 if (!heading.test(changelog)) {
   console.error(`CHANGELOG.md has no "## ${next} — unreleased" entry. Write it first.`);
   process.exit(1);

@@ -15,7 +15,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const MAX_MANIFESTS = 20;
+/** Manifests read per call: the root, the pinning directories and workspace members. */
+const MAX_MANIFESTS = 64;
 const MAX_MANIFEST_BYTES = 512 * 1024;
 
 function escapeRegex(text: string): string {
@@ -62,10 +63,76 @@ export function cargoFeaturesInManifest(content: string, crate: string): string[
   return [...out];
 }
 
+function readManifest(dir: string): string | null {
+  const manifest = path.join(dir, "Cargo.toml");
+  try {
+    if (fs.statSync(manifest).size > MAX_MANIFEST_BYTES) return null;
+    return fs.readFileSync(manifest, "utf8");
+  } catch {
+    return null; // No manifest there, or unreadable: nothing to add.
+  }
+}
+
+/** The body of the `[workspace]` table (up to the next table header), or null. */
+function workspaceTable(content: string): string | null {
+  const m = /^[ \t]*\[workspace\][ \t]*(?:#.*)?$/m.exec(content);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const next = content.slice(start).search(/^[ \t]*\[/m);
+  return next === -1 ? content.slice(start) : content.slice(start, start + next);
+}
+
+/** `key = [ ... ]` of a table body, as strings (TOML arrays may span lines). */
+function arrayIn(body: string, key: string): string[] {
+  const m = new RegExp(String.raw`(?<![\w-])${key}\s*=\s*\[([^\]]*)\]`).exec(body);
+  return m ? stringsOf(m[1].replace(/#[^\n]*/g, "")) : [];
+}
+
+/** One path segment glob (`*`, `?`) as a regex. */
+function segmentRegex(glob: string): RegExp {
+  return new RegExp(`^${glob.split("").map((c) => (c === "*" ? "[^/\\\\]*" : c === "?" ? "[^/\\\\]" : escapeRegex(c))).join("")}$`);
+}
+
+/** Directories a member pattern names under `wsRoot`: plain paths and `*` / `?` globs per segment (Cargo's glob members). */
+function expandMember(wsRoot: string, pattern: string): string[] {
+  let dirs = [wsRoot];
+  for (const segment of pattern.split(/[\\/]+/).filter((s) => s && s !== ".")) {
+    if (!/[*?]/.test(segment)) {
+      dirs = dirs.map((d) => path.join(d, segment));
+      continue;
+    }
+    const re = segmentRegex(segment);
+    dirs = dirs.flatMap((d) => {
+      try {
+        return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && re.test(e.name)).map((e) => path.join(d, e.name));
+      } catch {
+        return [];
+      }
+    });
+  }
+  return dirs;
+}
+
+/**
+ * The member directories a workspace manifest at `wsRoot` declares: `[workspace] members`
+ * (globs expanded), less `exclude` (readiness audit M3: victauri's members enable
+ * `rustls-tls`, none was read).
+ */
+function workspaceMembers(wsRoot: string, content: string): string[] {
+  const table = workspaceTable(content);
+  if (!table) return [];
+  const excluded = new Set(arrayIn(table, "exclude").flatMap((p) => expandMember(wsRoot, p)).map((d) => path.resolve(d)));
+  return arrayIn(table, "members")
+    .flatMap((p) => expandMember(wsRoot, p))
+    .map((d) => path.resolve(d))
+    .filter((d) => !excluded.has(d));
+}
+
 /**
  * Features this project enables on `crate`: the Cargo.toml at the project
- * root (workspace dependencies) and in each manifest directory that pins the
- * crate directly. Bounded; unreadable manifests are skipped.
+ * root (workspace dependencies), in each manifest directory that pins the
+ * crate directly, and in every member of a workspace either declares.
+ * Bounded; unreadable manifests are skipped.
  */
 export function projectCargoFeatures(
   root: string | null,
@@ -79,14 +146,16 @@ export function projectCargoFeatures(
     for (const dir of d.sourceDirs ?? []) dirs.add(path.resolve(dir));
   }
   const out = new Set<string>();
-  for (const dir of [...dirs].slice(0, MAX_MANIFESTS)) {
-    const manifest = path.join(dir, "Cargo.toml");
-    try {
-      if (fs.statSync(manifest).size > MAX_MANIFEST_BYTES) continue;
-      for (const f of cargoFeaturesInManifest(fs.readFileSync(manifest, "utf8"), crate)) out.add(f);
-    } catch {
-      // No manifest there, or unreadable: nothing to add.
-    }
+  const read = new Set<string>();
+  const queue = [...dirs];
+  while (queue.length > 0 && read.size < MAX_MANIFESTS) {
+    const dir = queue.shift()!;
+    if (read.has(dir)) continue;
+    read.add(dir);
+    const content = readManifest(dir);
+    if (content === null) continue;
+    for (const f of cargoFeaturesInManifest(content, crate)) out.add(f);
+    for (const member of workspaceMembers(dir, content)) if (!read.has(member)) queue.push(member);
   }
   return [...out].sort();
 }

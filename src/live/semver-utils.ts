@@ -8,6 +8,13 @@ export function parseSemver(version: string): [number, number, number] | null {
   return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
 }
 
+/** MAJOR[.MINOR[.PATCH]] at the start of a version, missing parts as 0; null without a leading number. */
+function parseLooseRelease(version: string): [number, number, number] | null {
+  const match = version.replace(/^v/, "").match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  if (!match) return null;
+  return [parseInt(match[1]), parseInt(match[2] ?? "0"), parseInt(match[3] ?? "0")];
+}
+
 /**
  * How far `current` is behind `latest`. `label` is the kind of bump, by the
  * caret rules npm and Cargo apply: below 1.0 a minor bump is breaking (^0.8.6
@@ -17,8 +24,11 @@ export function parseSemver(version: string): [number, number, number] | null {
  * The numeric fields stay literal (0.8.6 -> 0.9.0 is major 0, minor 1).
  */
 export function computeSemverDistance(current: string, latest: string): SemverDistance | null {
-  const c = parseSemver(current);
-  const l = parseSemver(latest);
+  // Missing parts count as 0: PyPI and Go write `4.2` and `1.23`. Requiring three parts left
+  // Django 4.2 -> 5.2.17 and urllib3 1.23 -> 2.8.0 "unknown", which the planner counted as
+  // non-breaking (audit 6.2.5 A-3 / D-9).
+  const c = parseLooseRelease(current);
+  const l = parseLooseRelease(latest);
   if (!c || !l) return null;
 
   const major = l[0] - c[0];

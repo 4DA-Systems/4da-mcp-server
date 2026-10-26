@@ -23,7 +23,7 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { advisoryAffects, advisoryRanges, smallestCleanVersion } from "../live/osv-ranges.js";
 import { extractFixedVersion } from "../live/osv-scanner.js";
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
-import { cargoPrecisePrerequisites, manualRefreshSteps, refreshCommand, refreshCommandFor, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
+import { cargoPrecisePrerequisites, npmDirectCommand, manualRefreshSteps, overrideReaches, refreshCommand, refreshCommandFor, type CratesSparse, type FixPathSources } from "../live/fix-paths.js";
 import { bunParents, cargoParents, packageLockParents, pnpmParents, yarnParents } from "../live/lockfile-parents.js";
 import type { FourDADatabase } from "../db.js";
 import type { OsvVulnerability, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
@@ -214,6 +214,69 @@ describe("lockfile parents and their declared requirements", () => {
   });
 });
 
+describe("bundled copies (audit E8: NodeGoat, 2026-10-12)", () => {
+  // NodeGoat's fsevents 1.2.9 ships debug 4.1.1 inside its tarball; needle (also bundled) declares ^4.1.0.
+  // npm 10.9.2 (2026-10-15): neither `npm update debug` nor "overrides" moved a bundled copy.
+  const nodegoat = {
+    lockfileVersion: 2,
+    packages: {
+      "": { dependencies: { chokidar: "^2.1.8" } },
+      "node_modules/chokidar": { version: "2.1.8", optionalDependencies: { fsevents: "^1.2.7" } },
+      "node_modules/fsevents": { version: "1.2.9", bundleDependencies: ["node-pre-gyp"], dependencies: { "node-pre-gyp": "^0.12.0" } },
+      "node_modules/fsevents/node_modules/node-pre-gyp": { version: "0.12.0", inBundle: true, dependencies: { needle: "^2.2.1" } },
+      "node_modules/fsevents/node_modules/needle": { version: "2.3.0", inBundle: true, dependencies: { debug: "^4.1.0" } },
+      "node_modules/fsevents/node_modules/debug": { version: "4.1.1", inBundle: true },
+      "node_modules/npm": { version: "3.10.10", bundleDependencies: ["semver"], dependencies: { semver: "^5.7.1" } },
+      "node_modules/npm/node_modules/semver": { version: "5.7.1", inBundle: true },
+    },
+  };
+
+  it("a bundled copy hangs off its bundle owner as an exact pin; the bundle's own ranges are not parents", () => {
+    expect(packageLockParents(nodegoat, "debug", "4.1.1")).toEqual([
+      { parent: "fsevents", parentVersion: "1.2.9", range: "4.1.1", local: false, bundled: true },
+    ]);
+  });
+
+  it("an owner that declares what it bundles (npm requires it) gets the bundled edge only, not its range", () => {
+    expect(packageLockParents(nodegoat, "semver", "5.7.1")).toEqual([
+      { parent: "npm", parentVersion: "3.10.10", range: "5.7.1", local: false, bundled: true },
+    ]);
+  });
+
+  it("a project's or workspace member's own bundleDependencies stay in the user's tree: ordinary edges", () => {
+    const own = {
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "app", bundleDependencies: ["left-pad"], dependencies: { "left-pad": "^1.3.0" } },
+        "node_modules/left-pad": { version: "1.3.0", inBundle: true, dependencies: { "tiny-dep": "^2.0.0" } },
+        "node_modules/tiny-dep": { version: "2.0.1", inBundle: true },
+      },
+    };
+    expect(packageLockParents(own, "left-pad", "1.3.0")).toEqual([{ parent: "app", parentVersion: null, range: "^1.3.0", local: true, dir: ".", section: "dependencies" }]);
+    expect(packageLockParents(own, "tiny-dep", "2.0.1")).toEqual([{ parent: "left-pad", parentVersion: "1.3.0", range: "^2.0.0", local: false }]);
+  });
+
+  it("no override reaches a copy one of whose blocking parents bundles it", () => {
+    expect(overrideReaches([{ bundled: true }])).toBe(false);
+    expect(overrideReaches([{}, { bundled: true }])).toBe(false);
+    expect(overrideReaches([{}])).toBe(true);
+  });
+});
+
+// The full rule set is the 4DA corpus fix_command vectors (fc-028..fc-061, run by rule-vectors.test.ts); these are the operator rules alone.
+describe("npmDirectCommand keeps the declared operator (readiness review 2026-10-17, finding 4)", () => {
+  it("an exact pin stays exact, ^ and ~ are kept and quoted, anything else names nothing", () => {
+    expect(npmDirectCommand("npm", "1.2.5", "minimist", "1.2.8")).toBe("npm install minimist@1.2.8 --save-exact");
+    expect(npmDirectCommand("npm", "^7.20.5", "@babel/traverse", "7.23.2")).toBe('npm install "@babel/traverse@^7.23.2"');
+    expect(npmDirectCommand("pnpm", "~2.1.1", "ms", "2.1.3")).toBe('pnpm up "ms@~2.1.3"');
+    expect(npmDirectCommand("yarn1", "7.5.0", "semver", "7.5.4")).toBe("yarn upgrade semver@7.5.4");
+    expect(npmDirectCommand("yarn-berry", "^1.2.5", "minimist", "1.2.8")).toBe('yarn up "minimist@^1.2.8"');
+    for (const spec of [">=1.2.0", "1.x", "^1 || ^2", "latest", "workspace:*", "github:a/b", "npm:other@^1.0.0"]) {
+      expect(npmDirectCommand("npm", spec, "minimist", "1.2.8")).toBeNull();
+    }
+  });
+});
+
 describe("cargo --precise prerequisites", () => {
   const lock = [
     ["nu", "0.1.0", null, ["openssl", "rstest"]],
@@ -263,6 +326,8 @@ let npmDir: string;
 let pnpmDir: string;
 let cargoDir: string;
 let pinnedDir: string;
+let bundledDir: string;
+let directDir: string;
 let priorOffline: string | undefined;
 const noDb = null as unknown as FourDADatabase;
 
@@ -340,7 +405,28 @@ beforeAll(() => {
   pnpmDir = path.join(root, "taxonomy");
   cargoDir = path.join(root, "nushell");
   pinnedDir = path.join(root, "pinned");
-  for (const d of [npmDir, pnpmDir, cargoDir, pinnedDir]) fs.mkdirSync(d);
+  bundledDir = path.join(root, "bundled");
+  directDir = path.join(root, "direct");
+  for (const d of [npmDir, pnpmDir, cargoDir, pinnedDir, bundledDir, directDir]) fs.mkdirSync(d);
+  // minimist 1.2.5 ships inside nyc 7.1.0 (bundled, declared by its owner with ^1.2.0).
+  fs.writeFileSync(path.join(bundledDir, "package.json"), JSON.stringify({ devDependencies: { nyc: "7.1.0" } }));
+  fs.writeFileSync(
+    path.join(bundledDir, "package-lock.json"),
+    JSON.stringify({
+      lockfileVersion: 2,
+      packages: {
+        "": { devDependencies: { nyc: "7.1.0" } },
+        "node_modules/nyc": { version: "7.1.0", dev: true, bundleDependencies: ["minimist"], dependencies: { minimist: "^1.2.0" } },
+        "node_modules/nyc/node_modules/minimist": { version: "1.2.5", dev: true, inBundle: true },
+      },
+    }),
+  );
+  // minimist 1.2.5 declared directly.
+  fs.writeFileSync(path.join(directDir, "package.json"), JSON.stringify({ dependencies: { minimist: "1.2.5" } }));
+  fs.writeFileSync(
+    path.join(directDir, "package-lock.json"),
+    JSON.stringify({ lockfileVersion: 3, packages: { "": { dependencies: { minimist: "1.2.5" } }, "node_modules/minimist": { version: "1.2.5" } } }),
+  );
   fs.writeFileSync(path.join(npmDir, "package.json"), JSON.stringify({ dependencies: { mkdirp: "^0.5.5" } }));
   fs.writeFileSync(
     path.join(npmDir, "package-lock.json"),
@@ -449,6 +535,28 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const step = plan.recommendations.find((s: { package: string }) => s.package === "minimist");
     expect(step.action).toBe("waiting_on_upstream");
     expect(step.reasons.join(" ")).toMatch(/left-pad 1\.0\.0 requires "1\.2\.5"/);
+  });
+
+  it("a bundled copy waits on its owner: no lockfile refresh, no override (audit E8)", async () => {
+    stubNetwork();
+    const li = intel(bundledDir, "javascript", ["nyc"], entriesFor(MINIMIST, "minimist", "npm", "1.2.5", bundledDir));
+    const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
+    const step = plan.recommendations.find((s: { package: string }) => s.package === "minimist");
+    expect(step.action).toBe("waiting_on_upstream");
+    expect(step.refreshCommands).toBeUndefined();
+    const why = step.reasons.join(" ");
+    expect(why).toMatch(/nyc 7\.1\.0 ships it bundled at 1\.2\.5/);
+    expect(why).toMatch(/neither a lockfile refresh nor an override can move it/);
+    expect(why).not.toMatch(/overrides|npm update/);
+  });
+
+  it("a direct dependency gets the command that moves it where it is declared (audit E8)", async () => {
+    stubNetwork();
+    const li = intel(directDir, "javascript", ["minimist"], entriesFor(MINIMIST, "minimist", "npm", "1.2.5", directDir).map((e) => ({ ...e, isDirect: true })));
+    const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
+    const step = plan.recommendations.find((s: { package: string }) => s.package === "minimist");
+    // Declared "1.2.5" (an exact pin): plain `npm install minimist@1.2.6` would write ^1.2.6 (fc-028).
+    expect(step).toMatchObject({ action: "upgrade_direct", targetVersion: "1.2.6", upgradeCommands: [{ command: "npm install minimist@1.2.6 --save-exact" }] });
   });
 
   it("pnpm: when no parent's requirement can be read, a semver-compatible target is an inferred refresh, and says so (AD-055 ¶1)", async () => {

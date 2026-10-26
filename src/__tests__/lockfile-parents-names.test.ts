@@ -71,7 +71,8 @@ const PNPM5 = [
   "    dev: false", "",
 ].join("\n");
 
-const edge = (parent: string, parentVersion: string | null, range: string | null, local = false) => ({ parent, parentVersion, range, local });
+// A local (importer) edge also names the importer's directory (final audit, finding 3).
+const edge = (parent: string, parentVersion: string | null, range: string | null, local = false) => ({ parent, parentVersion, range, local, ...(local ? { dir: parent } : {}) });
 
 describe("yarn berry: npm aliases in parent edges", () => {
   it("an aliased dependency edge names the parent, with the real package's range", () => {

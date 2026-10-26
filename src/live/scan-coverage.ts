@@ -32,8 +32,32 @@ export function vulnerabilityCoverage(
   }
   // A stub or an older result that says offline without a count answered for nothing.
   const unchecked = result.unchecked ?? (result.offline ? result.totalScanned : 0);
-  if (unchecked <= 0) return null;
-  return build(result.totalScanned, unchecked, result.uncheckedReason ?? "OSV.dev could not be queried");
+  const stale = result.staleAnswers ?? 0;
+  if (unchecked <= 0 && stale <= 0) return null;
+  if (unchecked > 0) {
+    const gap = build(result.totalScanned, unchecked, result.uncheckedReason ?? "OSV.dev could not be queried");
+    return stale > 0 ? { ...gap, stale_dependencies: stale, note: `${gap.note} ${staleLine(result, stale)}` } : gap;
+  }
+  // Every dependency has an answer, but some only from an expired cache because the fresh query
+  // failed. That answer can predate an advisory, so it is not a current all-clear (audit 6.2.5
+  // B-2: dependency_check said `proceed` and the scan "0 vulnerable" on a 1 h old answer).
+  const reason = result.staleReason ?? "OSV.dev could not be queried";
+  return {
+    complete: false,
+    total_dependencies: result.totalScanned,
+    checked_dependencies: result.totalScanned,
+    unchecked_dependencies: 0,
+    stale_dependencies: stale,
+    reason,
+    note: `STALE: ${reason}. ${staleLine(result, stale)}`,
+  };
+}
+
+/** "N dependencies were answered only from an expired cached answer (the oldest fetched ...)". */
+function staleLine(result: VulnerabilityScanResult, stale: number): string {
+  const n = stale.toLocaleString("en-US");
+  const oldest = result.staleOldestFetchedAt ? ` (the oldest fetched ${result.staleOldestFetchedAt} UTC)` : "";
+  return `${n} dependenc${stale === 1 ? "y was" : "ies were"} answered only from an expired cached answer${oldest}; an advisory published since would not show, so this is not a current all-clear. Call again once OSV.dev answers (force_refresh).`;
 }
 
 function build(total: number, unchecked: number, reason: string): VulnerabilityCoverage {

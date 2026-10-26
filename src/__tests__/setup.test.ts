@@ -22,12 +22,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   CLAUDE_CODE_COMMAND,
   claudeCodeConfigPath,
   editorTargets,
+  isEntryPoint,
   planConfig,
   runSetup,
   writeConfigAtomic,
@@ -395,5 +397,35 @@ describe("writeConfigAtomic", () => {
     expect(readFileSync(`${file}.bak`, "utf-8")).toBe("v1");
     expect(readFileSync(second!, "utf-8")).toBe("v2");
     expect(readFileSync(file, "utf-8")).toBe("v3");
+  });
+});
+
+// Audit 6.2.5 E-2: on macOS and Linux npm installs the `4da-mcp-setup` bin as
+// a symlink with that name; the old name check ("ends with setup.js") was
+// false there, so the command printed nothing and exited 0.
+describe("isEntryPoint", () => {
+  const target = path.resolve("src/setup.ts");
+  const url = pathToFileURL(target).href;
+
+  it("is true through a symlink whose name is the bin's", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "4da-setup-bin-"));
+    const link = path.join(dir, "4da-mcp-setup");
+    try {
+      try {
+        symlinkSync(target, link);
+      } catch {
+        return; // no symlink privilege on this host
+      }
+      expect(isEntryPoint(link, url)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is true for the file itself, false for another script or none", () => {
+    expect(isEntryPoint(target, url)).toBe(true);
+    expect(isEntryPoint(path.resolve("src/index.ts"), url)).toBe(false);
+    expect(isEntryPoint(undefined, url)).toBe(false);
+    expect(isEntryPoint(path.resolve("does-not-exist.js"), url)).toBe(false);
   });
 });

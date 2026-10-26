@@ -100,17 +100,20 @@ export interface OsvVulnerability {
   aliases?: string[];
   severity?: Array<{ type: string; score: string }>;
   affected?: Array<{
-    package: { name: string; ecosystem: string };
+    /** Optional in the OSV schema: an entry with only GIT ranges has no package (EEF-CVE-2026-56812). */
+    package?: { name: string; ecosystem: string };
     ranges: Array<{
       type: string;
       events: Array<{ introduced?: string; fixed?: string; last_affected?: string; limit?: string }>;
     }>;
     /** Versions listed explicitly, in addition to (or instead of) the ranges. */
     versions?: string[];
+    /** RustSec puts `informational` (unmaintained | unsound | notice) here, per package. */
+    database_specific?: { informational?: string };
   }>;
   references?: Array<{ type: string; url: string }>;
-  /** GitHub-advisory severity label: LOW | MODERATE | HIGH | CRITICAL. */
-  database_specific?: { severity?: string };
+  /** GitHub-advisory severity label: LOW | MODERATE | HIGH | CRITICAL; `cwe_ids` (CWE-506 = malicious code). */
+  database_specific?: { severity?: string; cwe_ids?: string[]; informational?: string };
   /** Set (to an RFC3339 timestamp) when the advisory has been withdrawn/retracted. */
   withdrawn?: string;
   published?: string;
@@ -128,6 +131,22 @@ export interface VulnerabilityEntry {
   aliases: string[];
   severity: "critical" | "high" | "medium" | "low" | "unknown";
   cvssScore: number | null;
+  /**
+   * Set when `severity` is not this record's own: it rates nothing (Go's
+   * records) and names a GHSA alias, whose rating it took (osv-scanner.ts
+   * rateFromAliases). The alias's id.
+   */
+  severityFrom?: string;
+  /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
+  malware?: boolean;
+  /**
+   * Whether the record makes this a maintenance notice for this package
+   * (maintenance.ts isMaintenanceRecord: a stated `informational` class decides, the
+   * wording only when none is stated). Absent only on foreign or stub entries, which
+   * fall back to the summary wording; the scan cache key moved to osv:v3 so entries
+   * cached by 6.2.4 without it are never read.
+   */
+  maintenance?: boolean;
   summary: string;
   fixedVersion: string | null;
   published: string;
@@ -178,6 +197,23 @@ export interface VulnerabilityScanResult {
   uncheckedReason?: string | null;
   /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
   staleAnswers?: number;
+  /** Why fresh answers were not had for the `staleAnswers` dependencies. */
+  staleReason?: string;
+  /** fetched_at (SQLite UTC, "YYYY-MM-DD HH:MM:SS") of the oldest stale answer used. */
+  staleOldestFetchedAt?: string | null;
+  /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
+  aliasSeverity?: AliasSeverityReport;
+}
+
+export interface AliasSeverityReport {
+  /** Records whose severity came from their GHSA alias. */
+  rated: number;
+  /** GHSA alias ids that could not be read (cap, time budget, no answer): they never lower a grade. */
+  unresolved: string[];
+  /** Record ids that name a GHSA alias and are still unknown: no alias of theirs could be read or graded. */
+  ungraded: string[];
+  /** Why `unresolved` or `ungraded` is not empty; null when both are. */
+  reason: string | null;
 }
 
 /** How much of a dependency set OSV actually answered for. */
@@ -189,6 +225,8 @@ export interface VulnerabilityCoverage {
   checked_dependencies: number;
   /** Dependencies with NO answer: nothing is known about their advisories. */
   unchecked_dependencies: number;
+  /** Dependencies answered only from an expired cached answer (a fresh query failed); present when any were. */
+  stale_dependencies?: number;
   /** Why, in words ("OSV.dev unreachable (fetch failed)", "live lookups disabled (FOURDA_OFFLINE=true)"). */
   reason: string;
   /** One line to read first; never a clean result. */
@@ -245,6 +283,14 @@ export interface RegistryPackageInfo {
    * workspaces are listed comma-separated.
    */
   installedVersion?: string;
+  /**
+   * dependency_health: present when `latestStableVersion` is NOT offered as an upgrade: an advisory
+   * affects it or the registry withdrew it. The newest release above `currentVersion` that is
+   * neither (null when none), which `versionsBehind` is then measured to.
+   */
+  latestSafeVersion?: string | null;
+  /** dependency_health: why `latestStableVersion` is not offered, or that it could not be checked. */
+  latestStableNote?: string;
 }
 
 export interface SemverDistance {
@@ -285,19 +331,38 @@ export interface DependencyHealthResult {
    */
   vulnerableCount: number | null;
   /**
-   * Every advisory row the scan returned, before the platform and maintenance
-   * splits and before alias collapsing. Present so nothing is hidden by the
-   * `vulnerableCount` filter: the difference is platform-inactive packages and
-   * unmaintained-dependency notices.
+   * Distinct advisories the scan returned (records naming each other, such as
+   * a GHSA and its PYSEC twin, are one advisory per installed copy, as in
+   * vulnerability_scan), before the platform and maintenance splits. Present
+   * so nothing is hidden by the `vulnerableCount` filter: the difference is
+   * platform-inactive packages and unmaintained-dependency notices.
    */
   advisoryCount: number;
   /** Null when vulnerability data is missing or incomplete: a score computed without it would read as healthier than it is. */
   healthScore: number | null;
+  /**
+   * Why `healthScore` is null: OSV gave no answer for some dependencies, a
+   * lockfile could not be read, or nothing was resolved at all. Absent when
+   * there is a score.
+   */
+  withheldReason?: "vulnerability_data_incomplete" | "lockfile_unreadable" | "nothing_checked";
+  /**
+   * Present when the score is over the checked part only: a lockfile read with
+   * entries skipped (PARTIAL) or a requirements include refused (REFUSED).
+   * The counts are lower bounds; `notes` say what is missing.
+   */
+  scoreCoverage?: { complete: false; basis: "checked_part"; notes: string[] };
+  /** Records graded from a GHSA alias, and those still unknown, as in vulnerability_scan's `_meta.alias_severity`. */
+  aliasSeverity?: AliasSeverityReport;
   /** Present when the vulnerability check is incomplete: what was not checked and why. */
   vulnerabilityCoverage?: VulnerabilityCoverage;
   dependencies: RegistryPackageInfo[];
-  /** Advisories (not packages) on the full tree by severity, over the same actionable set. */
-  vulnerabilitySummary: { critical: number; high: number; medium: number; low: number } | null;
+  /**
+   * Advisories (not packages) on the full tree by their own grade, over the same actionable set: the
+   * same counts as vulnerability_scan's `advisory_by_severity` for the same scope. `unknown` counts the
+   * ungraded ones, which were left out of every bucket before (pygoat: 186 counted of 187).
+   */
+  vulnerabilitySummary: { critical: number; high: number; medium: number; low: number; unknown: number } | null;
   summary: string;
   scanDurationMs: number;
   cached: boolean;
