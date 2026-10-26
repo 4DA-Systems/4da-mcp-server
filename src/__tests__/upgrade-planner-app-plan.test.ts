@@ -15,7 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import { FourDADatabase } from "../db.js";
-import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
+import { executeUpgradePlanner, type UpgradePlanResult } from "../tools/upgrade-planner.js";
 import { readAppPlan, APP_PLAN_SCHEMA_VERSION, type AppPlanResult } from "../tools/app-plan.js";
 
 let root: string;
@@ -317,6 +317,34 @@ describe("upgrade_planner project_path", () => {
     } finally {
       process.env.FOURDA_PROJECT_DIR = root;
     }
+  });
+
+  // Audit 6.2.5 D-1: a desktop-mode server started in a project the app never
+  // indexed narrowed the app's plan to it and answered "0 steps" for NodeGoat
+  // (83 vulnerable packages). The plan does not cover that project at all.
+  it("plans a project the app does not track from its own files, and says so", async () => {
+    const other = path.join(root, "untracked");
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, "package.json"), "{}");
+    const db = dbWith("untracked", JSON.stringify(envelope()));
+    const result = (await executeUpgradePlanner(db, { project_path: other }, null)) as UpgradePlanResult;
+    expect(result.provenance.mode).toBe("standalone_heuristic");
+    expect(result.appPlanUnavailable).toMatch(/does not track/);
+  });
+
+  it("an app-tracked project with nothing to do still gets the app's (empty) plan", async () => {
+    const quiet = path.join(root, "quiet");
+    fs.mkdirSync(quiet, { recursive: true });
+    fs.writeFileSync(path.join(quiet, "package.json"), "{}");
+    const db = dbWith("tracked-quiet", JSON.stringify(envelope()));
+    // The app writes this table; the server opens its database read-only.
+    const writer = new Database(path.join(root, "tracked-quiet.db"));
+    writer.exec("CREATE TABLE project_dependencies (package_name TEXT, language TEXT, project_path TEXT, is_dev INTEGER, is_direct INTEGER)");
+    writer.prepare("INSERT INTO project_dependencies VALUES (?, ?, ?, 0, 1)").run("left-pad", "npm", quiet);
+    writer.close();
+    const result = (await executeUpgradePlanner(db, { project_path: quiet }, null)) as AppPlanResult;
+    expect(result.provenance.mode).toBe("app_plan");
+    expect(result.totalSteps).toBe(0);
   });
 
   it("rejects a project_path that is not a directory", async () => {

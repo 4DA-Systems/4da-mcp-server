@@ -29,11 +29,11 @@ import type { LiveIntelligence } from "../live/index.js";
 import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { compareVersions, inEcosystemForm, maxVersion, namesPackage } from "../live/version-compare.js";
-import { formatAppPlan, readAppPlan, type AppPlanResult } from "./app-plan.js";
+import { formatAppPlan, readAppPlan, scopeAppPlanSteps, type AppPlanResult } from "./app-plan.js";
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
-import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
+import { appTracksProject, liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { reconcileDirectTargets, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
@@ -158,7 +158,7 @@ interface UpgradeRecommendation {
   declaredRange?: string;
 }
 
-interface UpgradePlanResult {
+export interface UpgradePlanResult {
   generatedAt: string;
   projectPath: string;
   totalDeps: number;
@@ -286,8 +286,16 @@ export async function executeUpgradePlanner(
   // One brain: the app's plan wins whenever there is one, stale or not (a
   // stale plan is returned flagged, never silently replaced by a heuristic).
   // It covers every project the app tracks, so it is narrowed to this one.
+  // A project the app does not track is not in its plan at all; narrowing the
+  // plan to it gave "0 steps" for a project with 83 vulnerable packages
+  // (audit 6.2.5 D-1). Plan it from its own lockfiles instead.
   const appPlan = readAppPlan(db);
-  if (appPlan.kind === "plan") return formatAppPlan(appPlan, params, scopePath);
+  const untracked =
+    appPlan.kind === "plan" &&
+    scopePath !== null &&
+    scopeAppPlanSteps(appPlan.snapshot.steps, scopePath).length === 0 &&
+    !appTracksProject(db, scopePath);
+  if (appPlan.kind === "plan" && !untracked) return formatAppPlan(appPlan, params, scopePath);
   // The live layer already covers the server's own project; only an explicit
   // project_path elsewhere resolves another tree.
   const scoped =
@@ -295,7 +303,11 @@ export async function executeUpgradePlanner(
       ? (liveIntelFor(liveIntel, db, scope) as LiveIntelligence | null)
       : liveIntel;
   const standalone = await executeStandalonePlanner(params, scoped);
-  return { ...standalone, appPlanUnavailable: appPlan.reason, projectScope: scopePath ?? standalone.projectPath };
+  const appPlanUnavailable =
+    appPlan.kind === "plan"
+      ? `the 4DA app does not track ${scopePath}, so its plan does not cover it; this plan is computed from the project's own lockfiles`
+      : appPlan.reason;
+  return { ...standalone, appPlanUnavailable, projectScope: scopePath ?? standalone.projectPath };
 }
 
 async function executeStandalonePlanner(

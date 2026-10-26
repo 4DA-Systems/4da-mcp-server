@@ -214,6 +214,17 @@ function getDatabase(): FourDADatabase {
 
         if (groups.size > 0) {
           liveIntel.initFromDependencyGroups([...groups.values()]);
+        } else {
+          // The app tracks nothing under this directory (it indexes the
+          // projects it was pointed at, not every directory a host starts the
+          // server in). Its tables say nothing about this project, so read it
+          // from disk as standalone mode does; never write the scan into the
+          // app's database. Without this every tool read the project as empty
+          // and the planner answered "0 steps" (audit 6.2.5 D-1).
+          const root = resolveProjectDir();
+          const { entries: tree, discovery } = scanProjectTree(root);
+          liveIntel.initFromProjectTree(root, treeResolutionGroups(tree), discovery);
+          console.error(`[4DA]   The 4DA app tracks no project at ${root}; reading its lockfiles directly.`);
         }
 
         // Headlines are fetched only when ecosystem_pulse is called: the
