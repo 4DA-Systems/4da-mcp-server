@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.5 — unreleased
+## 6.2.5 — 2026-10-26
 
 ### Pre-publish adversarial audit fixes (2026-10-26)
 
