@@ -2,6 +2,51 @@
 
 ## 6.2.5 — unreleased
 
+### Pre-publish adversarial audit fixes (2026-10-26)
+
+An independent six-track audit of the 6.2.5 candidate (oracle parity, fault
+injection, security, honesty, install/release, cross-engine parity) found the
+following. Each fix has a regression test that fails on the old code.
+
+- **Suggested commands never carry text a repository controls.** `cargo add`
+  put a Cargo.toml `[target.'cfg(...)']` header inside `--target "..."` and a
+  renamed key after `--rename`, where a shell would expand it. Every command
+  builder now checks every value it splices; anything else gets words, not a command.
+- **cargo runs from the server's own data directory**, not a fixed folder in
+  the shared temp directory where another account could plant a cargo config.
+- **An unchecked fix target is never said to "resolve" anything.** When the
+  target check runs out of time the line says NOT CHECKED; an alias group's fix
+  is the highest any of its records names (netmask: 2.0.1, not 1.1.0).
+- **A fix target is judged by what it installs.** A release that exact-pins (or
+  narrowly pins) an affected dependency is not offered: express 4.22.3, not
+  4.20.0, in vulnerability_scan, dependency_check and upgrade_planner.
+- **One OSV record no longer blinds the scan.** An `affected[]` entry with no
+  `package` (EEF-CVE-2026-56812, npm phoenix) made every dependency NOT CHECKED.
+- **Desktop mode reads a project the app does not track** from its own
+  lockfiles; the planner no longer answers "0 steps" for it.
+- **Fail-closed, further:** an answer from an expired cache, a cache row
+  fetched "in the future", a malformed querybatch entry, a stalled response
+  body or a registry outage is never presented as a current, complete answer.
+- **Malware** is critical in every tool, scan rows carry `malware`, and a copy
+  with a clean later release is an upgrade, not a removal.
+- **Honesty:** unsound RustSec advisories are never hidden as notices; Maven /
+  Gradle / .NET tasks are never `safe_to_delegate`; a Maven-only scan has null
+  totals; a Go scan says the standard library is not checked; a flat
+  requirements.txt says its dependencies were not checked; aliases are counted
+  once; two-part versions (Django 4.2 -> 5.2) are majors; a clean stable release
+  comes before a prerelease fix; recalled memories are labelled untrusted data;
+  the privacy wording names private package names, HN search and opt-ins.
+- **PyPI advice:** a compiled requirements file is re-compiled
+  (`--upgrade-package`), never hand-edited; pins of a fully pinned file are
+  re-resolved together.
+- **Paths:** symlinked requirements files and Cargo workspace members outside
+  the project are not read; `[build-dependencies]` are normal dependencies.
+- **Install:** `4da-mcp-setup` works on macOS and Linux (it was a no-op through
+  npm's symlinked bin); CI now installs the packed tarball on all three OSes;
+  the release verifies provenance on every run and pins npm.
+- **Performance:** a large pnpm-lock.yaml is read in linear time (200k entries:
+  409 s -> 0.6 s).
+
 ### An incomplete scan is never a clean one (audit A1/B-1/B-2, critical)
 
 6.2.4 turned an OSV.dev outage, a 503, a timeout or its own rate limit into a
