@@ -365,7 +365,10 @@ export function smallestCleanVersion(input: {
     releases.filter((v) => withdrawn(v) && (target === null || cmp(v, target) < 0) && clear(judged)(v));
   // Clean against everything if any candidate is; otherwise against every advisory a release fixes.
   for (const judged of [input.advisories, fixable]) {
-    const candidate = candidates.find(clear(judged));
+    // A prerelease fix event (docker/distribution v2.8.2-beta.1) lets prereleases in, but a clean
+    // stable release still comes first: v2.8.2+incompatible, not the beta (audit 6.2.5 A-7).
+    const candidate =
+      (allowPre ? candidates.find((v) => !isPrereleaseVersion(v, ecosystem) && clear(judged)(v)) : undefined) ?? candidates.find(clear(judged));
     if (candidate) {
       return {
         target: candidate,
