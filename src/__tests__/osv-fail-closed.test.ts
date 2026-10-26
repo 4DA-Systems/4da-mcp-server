@@ -283,3 +283,23 @@ describe("OSV advisory detail: only the record asked for is an answer", () => {
     expect(cache.get("osv:detail:GHSA-empty-detail")).toBeNull();
   });
 });
+
+// Audit 6.2.5 B-3: rows are trusted until their own expires_at. Written under a clock a year
+// ahead (or read after the clock went back), "no advisories" stayed live for a year.
+describe("a cache row fetched in the future is never an answer", () => {
+  it("is not read, fresh or stale, and is purged at start", () => {
+    const db = new Database(":memory:");
+    new LiveCache(db); // creates the table
+    db.prepare(
+      "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '+365 days'), datetime('now', '+365 days', '+3600 seconds'))",
+    ).run("osv:v3:npm:lodash:4.17.15");
+    db.prepare(
+      "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now'), datetime('now', '+3600 seconds'))",
+    ).run("osv:v3:npm:left-pad:1.3.0");
+    const cache = new LiveCache(db);
+    expect(cache.get("osv:v3:npm:lodash:4.17.15")).toBeNull();
+    expect(cache.getStale("osv:v3:npm:lodash:4.17.15")).toBeNull();
+    expect(cache.get("osv:v3:npm:left-pad:1.3.0")).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM live_cache WHERE cache_key = ?").get("osv:v3:npm:lodash:4.17.15")).toEqual({ n: 0 });
+  });
+});
