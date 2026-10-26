@@ -714,7 +714,8 @@ async function executeStandalonePlanner(
   if (coverage) parts.push(`${coverage.note} This plan ranks only what the checked part showed`);
   parts.push(
     filtered.length > limited.length
-      ? `Showing ${limited.length} of ${filtered.length} recommendations (raise max_recommendations for the rest)`
+      ? // The counts that follow describe the rows shown, not the whole plan (audit 6.2.5 D-6: 6 waiting shown vs 43 real).
+        `Showing ${limited.length} of ${filtered.length} recommendations (raise max_recommendations for the rest); the counts below are for the ${limited.length} shown`
       : `${limited.length} recommendation${limited.length !== 1 ? "s" : ""}`,
   );
   if (upgrades.length > 0) parts.push(`${upgrades.length} upgradable directly (${quickWins} non-breaking, ${breakingChanges} crossing a major version)`);

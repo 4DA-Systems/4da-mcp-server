@@ -426,6 +426,9 @@ export async function executeDependencyHealth(
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     dependencies: limited,
     vulnerabilitySummary: vulnSummary,
+    // By each advisory's own grade, before the transitive/dev-only discount vulnerability_scan's
+    // by_severity applies; unlabelled, the two read as a contradiction (audit 6.2.5 D-8: 13 vs 1 critical).
+    ...(vulnSummary ? { vulnerabilitySummaryBasis: "each advisory's own severity, before the transitive and dev-only discount vulnerability_scan's by_severity applies" } : {}),
     summary: withheld
       ? `${[coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
       : `Health: ${healthScore}/100${scorePartial ? " over the checked part only (see scoreCoverage)" : ""} (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
