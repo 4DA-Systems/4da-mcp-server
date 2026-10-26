@@ -243,7 +243,13 @@ export class OsvHttpSource implements AdvisorySource {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await fetchWithTimeout(`${OSV_VULN_URL}${encodeURIComponent(id)}`, {}, OSV_TIMEOUT_MS);
-        if (response.ok) return (await response.json()) as OsvVulnerability;
+        if (response.ok) {
+          // Only the record asked for is an answer: a 200 `{}` (or any other record) crashed the
+          // scan downstream and was cached for 24 h (audit 6.2.5 B-8). Anything else is retried.
+          const record = (await response.json()) as OsvVulnerability | null;
+          if (record && typeof record === "object" && record.id === id) return record;
+          throw new Error(`OSV.dev answered a malformed record for ${id}`);
+        }
         // 404 and other client errors are answers, not failures to retry.
         if (response.status !== 429 && response.status < 500) return null;
       } catch {

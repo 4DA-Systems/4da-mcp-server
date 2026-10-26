@@ -261,3 +261,25 @@ describe("tools over a blocked OSV.dev", () => {
     expect(result.coverage).toBeUndefined();
   });
 });
+
+// Audit 6.2.5 B-8: a 200 `{}` for an advisory detail crashed vulnerability_scan ("Cannot read
+// properties of undefined (reading 'length')") and the bad record was cached for 24 h.
+describe("OSV advisory detail: only the record asked for is an answer", () => {
+  it("a 200 {} detail leaves the advisory listed (ungraded) and is not cached", async () => {
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/querybatch")) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: unknown[] };
+        return new Response(JSON.stringify({ results: queries.map(() => ({ vulns: [{ id: "GHSA-empty-detail" }] })) }), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+    const db = new Database(":memory:");
+    const cache = new LiveCache(db);
+    const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
+    const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15")], "/proj");
+    expect(result.vulnerabilities.map((v) => v.vulnId)).toEqual(["GHSA-empty-detail"]);
+    expect(result.vulnerabilities[0].severity).toBe("unknown");
+    expect(cache.get("osv:detail:GHSA-empty-detail")).toBeNull();
+  });
+});
