@@ -24,6 +24,7 @@
  * cached, and any failure degrades to the old answer, never to a guess.
  */
 
+import { isShellSafeCargoTarget, isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -726,6 +727,8 @@ export interface RefreshVerdict {
  * pnpm 8.15 to 10.34 also moved a root project's transitive copy without it.
  */
 export function refreshCommand(format: LockfileFormat, name: string, installed: string, target: string, workspaceRoot = false): string | null {
+  const ecosystem = format === "cargo" ? "crates.io" : "npm";
+  if (!isShellSafeName(name, ecosystem) || !isShellSafeVersion(installed) || !isShellSafeVersion(target)) return null;
   switch (format) {
     case "package-lock":
       return `npm update ${name}`;
@@ -865,6 +868,7 @@ function npmOperator(declared: string): "" | "^" | "~" | null {
 
 /** The command that moves a declared npm-family dependency, keeping its operator (quoted: `^` is cmd.exe's escape). */
 export function npmDirectCommand(manager: NpmManager, declared: string, name: string, target: string): string | null {
+  if (!isShellSafeName(name, "npm") || !isShellSafeVersion(target)) return null;
   const op = npmOperator(declared);
   if (op === null) return null;
   const spec = op === "" ? `${name}@${target}` : `"${name}@${op}${target}"`;
@@ -983,6 +987,16 @@ function cargoDirect(decl: CargoDecl, crate: string, target: string): DirectFix 
       instruction: `bump ${crate} to ${target} in the workspace root's [workspace.dependencies] (it is inherited here; \`cargo add\` in this crate would replace the inheritance with a local pin)`,
     };
   }
+  // Every value spliced below comes from the project's own Cargo.toml or lockfile (C-1).
+  const keyRenamed = crateKey(decl.key) !== crateKey(crate);
+  if (
+    !isShellSafeName(crate, "crates.io") ||
+    !isShellSafeVersion(target) ||
+    (decl.target !== null && !isShellSafeCargoTarget(decl.target)) ||
+    (keyRenamed && !isShellSafeName(decl.key, "crates.io"))
+  ) {
+    return { instruction: `bump the ${isShellSafeName(crate, "crates.io") ? crate : "dependency"} requirement in Cargo.toml so it admits the fixed release (no command is named: the declaration holds characters that are unsafe in a command)` };
+  }
   const r = decl.req?.trim() ?? "";
   const op = r.startsWith("=") ? "=" : r.startsWith("~") ? "~" : r.startsWith("^") ? "^" : /^\d/.test(r) ? "" : null;
   if (op === null) return null;
@@ -997,6 +1011,7 @@ function cargoDirect(decl: CargoDecl, crate: string, target: string): DirectFix 
 
 /** `go get <module>@v<target>` when go.mod requires the module directly at `installed` and no `replace` points it elsewhere. */
 export function goDirectCommand(goMod: string, module: string, installed: string, target: string): string | null {
+  if (!isShellSafeName(module, "Go") || !isShellSafeVersion(installed) || !isShellSafeVersion(target)) return null;
   const v = (s: string) => (s.startsWith("v") ? s : `v${s}`);
   let inRequire = false;
   let inReplace = false;
@@ -1065,7 +1080,7 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       // withdrawn or held release, and names nothing (fc-059, the app's npm_direct_fix).
       const op = npmOperator(declared);
       const bounded = op === "^" || op === "~";
-      if (bounded && npmRangeAdmits(declared, target) === true) return { command: npmDirectRefresh(manager, name), refresh: true };
+      if (bounded && npmRangeAdmits(declared, target) === true) return isShellSafeName(name, "npm") ? { command: npmDirectRefresh(manager, name), refresh: true } : null;
       const command = npmDirectCommand(manager, declared, name, target);
       return command ? { command } : null;
     }
@@ -1078,7 +1093,8 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       const admits = only.req !== null ? cargoReqAdmits(only.req, installed) === true : only.workspace;
       // A workspace-inherited, git, path or alternate-registry entry is never refreshed this way.
       if (admits && only.req !== null && !only.workspace && !only.otherSource && cargoReqAdmits(only.req, target) === true) {
-        return { command: `cargo update -p ${name}@${installed} --precise ${target}`, refresh: true };
+        const command = refreshCommand("cargo", name, installed, target);
+        return command ? { command, refresh: true } : null;
       }
       return admits ? cargoDirect(only, name, target) : null;
     }
@@ -1110,6 +1126,8 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
 
 /** For a lockfile with no in-place refresh command (yarn 1, bun): the steps that move the copy. */
 export function manualRefreshSteps(format: "yarn" | "bun", name: string): string {
+  // The steps are read and followed; a name a shell would read specially is not echoed into them (C-1).
+  if (!isShellSafeName(name, "npm")) return `refresh this package's ${format === "yarn" ? "yarn.lock" : "bun.lock"} entries by hand: its name contains characters that are unsafe in a command`;
   // Yarn 1 keys a block by every spec that resolved to it, and an alias block's
   // first key names the alias ("string-width-cjs@npm:string-width@^4.2.0"), so
   // name both forms. Deleting the entries and reinstalling is what moved the
@@ -1212,6 +1230,7 @@ export async function refreshVerdict(
     }
     const prereqs = await cargoPrecisePrerequisites(sources, content, name, installed, target);
     if (prereqs === null) return null;
+    if (prereqs.some((p) => !/^[A-Za-z0-9_-]+(?:@[0-9A-Za-z.+_-]+)?$/.test(p))) return null;
     if (prereqs.length > 0) command = `cargo update ${prereqs.map((p) => `-p ${p}`).join(" ")} && ${command}`;
   }
   return {
