@@ -96,7 +96,7 @@ jobs:
     name: Publish to npm and the MCP Registry
     needs: [verify, bundles]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35  # the provenance wait alone can take 10 (audit 6.2.5 E-3)
     # npm publishes are irreversible. The `release` environment waits for a
     # maintainer's approval and admits only `mcp-v*` tags, so a tag pushed by
     # mistake, or by an automated agent with push rights, waits for a human.
@@ -137,7 +137,8 @@ jobs:
           if npm view "@4da/mcp-server@$PKG_VERSION" version >/dev/null 2>&1; then
             echo "@4da/mcp-server@$PKG_VERSION is already on npm; skipping the publish."
           else
-            npm install -g npm@11
+            # Exact pin: this job holds the OIDC publish identity (audit 6.2.5 E-4).
+            npm install -g npm@11.21.0
             npm --version
             npm publish --access public
             echo "published=true" >> "$GITHUB_OUTPUT"
@@ -148,11 +149,15 @@ jobs:
       # server's own dependency_check (and pnpm's trustPolicy) read a release
       # without them, after releases that had them, as a trust DOWNGRADE, so a
       # silently unattested publish would make our own tool flag us.
+      #
+      # It runs on every run, not only the one that published: the documented fix for a failed
+      # registry step is `gh run rerun --failed`, which skips the publish, and a run that skipped
+      # this check could finish green over an unattested version (audit 6.2.5 E-3). npm can take
+      # minutes to show the attestation (6.1.0 timed out at 150 s), so it waits up to 10 minutes.
       - name: Verify provenance and the trusted-publisher identity
-        if: steps.npm_publish.outputs.published == 'true'
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          for attempt in $(seq 1 40); do
             PRED=$(npm view "@4da/mcp-server@$PKG_VERSION" dist.attestations.provenance.predicateType 2>/dev/null || true)
             TP=$(npm view "@4da/mcp-server@$PKG_VERSION" _npmUser.trustedPublisher.id 2>/dev/null || true)
             if [ -n "$PRED" ] && [ -n "$TP" ]; then
