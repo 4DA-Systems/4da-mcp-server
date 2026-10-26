@@ -314,11 +314,13 @@ export class OsvScanner {
     }
 
     let staleAnswers = 0;
+    let staleOldest: string | null = null;
     const unchecked: ResolvedDependency[] = [];
     for (const dep of unanswered) {
       const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v2:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
       if (stale) {
         staleAnswers++;
+        if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
         cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
       } else {
         unchecked.push(dep);
@@ -360,6 +362,8 @@ export class OsvScanner {
       unchecked: unchecked.length,
       uncheckedReason: offline ? (failure ?? "OSV.dev could not be queried") : null,
       staleAnswers,
+      // An expired answer is not a current one: every consumer says so (audit 6.2.5 B-2).
+      ...(staleAnswers > 0 ? { staleReason: failure ?? "OSV.dev could not be queried", staleOldestFetchedAt: staleOldest } : {}),
       ...(rated.report ? { aliasSeverity: rated.report } : {}),
     };
   }

@@ -481,7 +481,8 @@ async function awaitScan(
       scan = null;
     }
     // A scan that resolved no dependency versions checked nothing.
-    scanStatus = scan && scan.totalScanned > 0 ? "ready" : "unavailable";
+    // A scan answered partly from expired cache (OSV failed) is not a current one (audit 6.2.5 B-2).
+    scanStatus = scan && scan.totalScanned > 0 && !scan.offline && !(scan.staleAnswers ?? 0) ? "ready" : "unavailable";
   }
   let resolvedAt: string | null = null;
   try {

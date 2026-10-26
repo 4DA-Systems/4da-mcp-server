@@ -195,6 +195,10 @@ export interface VulnerabilityScanResult {
   uncheckedReason?: string | null;
   /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
   staleAnswers?: number;
+  /** Why fresh answers were not had for the `staleAnswers` dependencies. */
+  staleReason?: string;
+  /** fetched_at (SQLite UTC, "YYYY-MM-DD HH:MM:SS") of the oldest stale answer used. */
+  staleOldestFetchedAt?: string | null;
   /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
   aliasSeverity?: AliasSeverityReport;
 }
@@ -219,6 +223,8 @@ export interface VulnerabilityCoverage {
   checked_dependencies: number;
   /** Dependencies with NO answer: nothing is known about their advisories. */
   unchecked_dependencies: number;
+  /** Dependencies answered only from an expired cached answer (a fresh query failed); present when any were. */
+  stale_dependencies?: number;
   /** Why, in words ("OSV.dev unreachable (fetch failed)", "live lookups disabled (FOURDA_OFFLINE=true)"). */
   reason: string;
   /** One line to read first; never a clean result. */

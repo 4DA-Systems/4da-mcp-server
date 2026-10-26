@@ -219,9 +219,13 @@ export async function executeDependencyCheck(
     const key = instanceKey(v.ecosystem, v.package, v.currentVersion);
     byInstance.set(key, [...(byInstance.get(key) ?? []), v]);
   }
+  // A pre-install check needs a current answer: an expired cached one (OSV failed) can predate
+  // the advisory that matters, and read as `proceed` (audit 6.2.5 B-2).
   const advisoriesFor = (item: CheckItem): AdvisoryFacts =>
     scan.offline
       ? { available: false, detail: "lookup failed or was rate limited" }
+      : (scan.staleAnswers ?? 0) > 0
+        ? { available: false, detail: `no current answer, only an expired cached one (${scan.staleReason ?? "the fresh query failed"})` }
       : {
           available: true,
           to: refs(byInstance.get(instanceKey(item.ecosystem, item.package, item.to))),

@@ -24,6 +24,7 @@ import { LiveIntelligence } from "../live/index.js";
 import { OsvHttpSource, OsvScanner } from "../live/osv-scanner.js";
 import { DEFAULT_RATE_LIMITS, RateLimiter } from "../live/rate-limiter.js";
 import type { ResolvedDependency } from "../live/types.js";
+import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
@@ -129,6 +130,26 @@ describe("OSV scanner: no answer is never an empty answer", () => {
     const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15"), dep("minimist", "1.2.0")], "/proj");
     expect(result.staleAnswers).toBe(1);
     expect(result.unchecked).toBe(1);
+  });
+
+  // Audit 6.2.5 B-2: with every dependency answered, some only from an expired cache because
+  // OSV failed, dependency_check said `proceed` and the scan "0 vulnerable" with no coverage note.
+  it("an all-stale answer is never a current all-clear: coverage says STALE, with the age", async () => {
+    const db = new Database(":memory:");
+    const cache = new LiveCache(db);
+    const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
+    db.prepare(
+      "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '-2 hours'), datetime('now', '-1 hours'))",
+    ).run("osv:v2:npm:lodash:4.17.15");
+    stubOsv(() => "throw");
+    const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15")], "/proj");
+    expect(result.unchecked).toBe(0);
+    expect(result.offline).toBe(false);
+    expect(result.staleAnswers).toBe(1);
+    expect(result.staleOldestFetchedAt).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+    const coverage = vulnerabilityCoverage(result, { enabled: true });
+    expect(coverage).toMatchObject({ complete: false, unchecked_dependencies: 0, stale_dependencies: 1 });
+    expect(coverage!.note).toMatch(/^STALE: .*expired cached answer \(the oldest fetched .* UTC\).*not a current all-clear/);
   });
 });
 
