@@ -16,7 +16,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { confinedInclude, normalizePythonName, parseGoMod, requirementOptions } from "./live/lockfile-parsers-pygo.js";
+import { compiledIndirect, compiledRequirements, confinedInclude, normalizePythonName, parseGoMod, requirementOptions } from "./live/lockfile-parsers-pygo.js";
 
 /** The body of a TOML table (`[name]`) up to the next table header, or null. */
 export function tomlTable(content: string, name: string): string | null {
@@ -140,7 +140,10 @@ export function requirementNamesWithIncludes(file: string, root: string = path.d
   } catch {
     return [];
   }
-  const names = parseRequirementNames(content);
+  // A compiled file pins its whole tree: a pin there only because other packages require it
+  // (`# via requests`) is transitive, as go.mod's `// indirect` is (audit 6.2.5 A-4).
+  const compiled = compiledRequirements(content);
+  const names = parseRequirementNames(content).filter((n) => !compiled || !compiledIndirect(compiled, n));
   for (const { option, target } of requirementOptions(content)) {
     if (option !== "r") continue;
     const included = confinedInclude(path.dirname(file), target, root);

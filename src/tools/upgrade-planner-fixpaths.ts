@@ -58,6 +58,7 @@ import {
   type ParentEdge,
 } from "../live/lockfile-parents.js";
 import { advisoriesAffecting, advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { pypiCompiledInstruction, pypiPinnedTogether } from "../live/pypi-advice.js";
 import { requirementAdmits, type RequirementDialect } from "../live/refresh-rule.js";
 import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
@@ -469,18 +470,58 @@ function declaredFixes(
 /** upgrade_direct: name the command that moves the declared dependency, per declaring project (audit E8). */
 function withUpgradeCommands(input: FixPathInput, liveIntel: Pick<LiveIntelligence, "getProjectRoot">): void {
   const { step } = input;
+  if (withCompiledPypi(input, liveIntel)) return;
   if (step.action !== "upgrade_direct" || step.scope !== "direct" || !step.targetVersion || !step.currentVersion) return;
   const fixes = declaredFixes(liveIntel, step.ecosystem, step.package, step.currentVersion, step.targetVersion, input.sourceDirs);
   delete step.upgradeCommands;
   delete step.upgradeInstructions;
   if (fixes.commands) step.upgradeCommands = fixes.commands;
   if (fixes.instructions) step.upgradeInstructions = fixes.instructions;
+  if (step.ecosystem === "PyPI" && step.upgradeInstructions) {
+    // An `==` edit of a file that pins everything is not independently safe: 4 of pygoat's 15
+    // did not resolve against the other pins, nor did all 15 (audit 6.2.5 A-4). Said, per edit.
+    const root = liveIntel.getProjectRoot() ?? process.cwd();
+    for (const dir of [...new Set(input.sourceDirs)]) {
+      const together = pypiPinnedTogether(dir, step.package, step.currentVersion);
+      const at = together ? step.upgradeInstructions.find((i) => i.dir === relativeDir(dir, root)) : undefined;
+      if (at && together) at.instruction = `${at.instruction}; ${together}`;
+    }
+  }
   // Every fix on the row an in-range refresh: said in the app's words, not as a bump.
   step.reasons = step.reasons.filter((r) => !r.startsWith(REFRESH_ROW) && !r.endsWith(REFRESH_LABEL));
   const cmds = fixes.commands ?? [];
   const list = (cs: typeof cmds) => cs.map((c) => `\`${c.command}\`${cmds.length > 1 ? ` in ${c.dir}` : ""}`).join("; ");
   if (cmds.length > 0 && cmds.every((c) => c.refresh) && !fixes.instructions) step.reasons.push(`${REFRESH_ROW}: ${list(cmds)}`);
   else if (cmds.some((c) => c.refresh)) step.reasons.push(`${list(cmds.filter((c) => c.refresh))}${REFRESH_LABEL}`);
+}
+
+/**
+ * A PyPI step whose pin sits in a compiled requirements file (`uv pip compile`, `pip-compile`):
+ * moved by re-compiling from the input with `--upgrade-package`, never by editing the output, and
+ * for an indirect pin (`# via requests`) the row is transitive (audit 6.2.5 A-4). True when the
+ * step was worded here; the action stays as verified (a transitive one keeps the conservative
+ * waiting_on_upstream: no parent's requirement was read).
+ */
+function withCompiledPypi(input: FixPathInput, liveIntel: Pick<LiveIntelligence, "getProjectRoot">): boolean {
+  const { step } = input;
+  if (step.ecosystem !== "PyPI" || !step.targetVersion || !step.currentVersion) return false;
+  if (!(step.action === "upgrade_direct" || (step.scope === "transitive" && step.action === "waiting_on_upstream"))) return false;
+  const root = liveIntel.getProjectRoot() ?? process.cwd();
+  const instructions: Array<{ dir: string; instruction: string }> = [];
+  for (const dir of [...new Set(input.sourceDirs)]) {
+    const instruction = pypiCompiledInstruction(dir, step.package, step.currentVersion, step.targetVersion);
+    if (instruction) instructions.push({ dir: relativeDir(dir, root), instruction });
+  }
+  if (instructions.length === 0) return false;
+  delete step.upgradeCommands;
+  step.upgradeInstructions = instructions;
+  if (step.scope === "transitive") {
+    const at = step.reasons.findIndex((r) => TRANSITIVE_REASON.test(r));
+    const text = "Transitive dependency — a compiled requirements file pins it only because other packages require it; re-compiling with the upgrade moves it (upgradeInstructions), and the resolver says when a parent blocks it";
+    if (at >= 0) step.reasons[at] = text;
+    else step.reasons.push(text);
+  }
+  return true;
 }
 
 /** A row whose every fix is an in-range refresh (the app's wording). */

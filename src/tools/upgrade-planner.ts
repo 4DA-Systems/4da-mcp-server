@@ -142,7 +142,11 @@ interface UpgradeRecommendation {
    * dev-dependency). Absent for tools no command is named for.
    */
   upgradeCommands?: Array<{ dir: string; command: string; refresh?: true }>;
-  /** upgrade_direct: a manifest edit where no single verified command makes it (a workspace-inherited crate, a requirements.txt pin). */
+  /**
+   * upgrade_direct: a manifest edit where no single verified command makes it (a workspace-inherited
+   * crate, a requirements.txt pin). Also on a PyPI row, direct or transitive, whose pin sits in a
+   * compiled requirements file: the re-compile with `--upgrade-package` (audit 6.2.5 A-4).
+   */
   upgradeInstructions?: Array<{ dir: string; instruction: string }>;
   /**
    * lockfile_refresh: true when not every parent's requirement could be read
