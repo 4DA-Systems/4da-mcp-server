@@ -263,8 +263,11 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   entries.finish();
   for (const [name, version] of transitive) setFirst(name, version);
   if (!instances) return;
+  // A Set, not `transitive.some` per entry: that was O(n²), and a 200k-entry pnpm-lock.yaml
+  // held the single-threaded stdio server for 409 s (audit 6.2.5 C-8).
+  const seen = new Set(transitive.map(([n, v]) => `${n} ${v}`));
   for (const [name, version] of versions) {
-    if (!transitive.some(([n, v]) => n === name && v === version)) instances.add(name, version);
+    if (!seen.has(`${name} ${version}`)) instances.add(name, version);
   }
   for (const [name, version] of transitive) instances.add(name, version, devByKey.get(`${name}\0${version}`));
 }
