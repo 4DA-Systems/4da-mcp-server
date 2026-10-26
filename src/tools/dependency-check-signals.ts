@@ -406,7 +406,14 @@ export function decide(signals: Signal[]): { verdict: Verdict; reason: string } 
       const fixes = signals.find((s) => s.id === "release_age" && /security fix/.test(s.evidence));
       return { verdict, reason: fixes ? fixes.evidence : "No advisory, age, trust, script or new-dependency concern found." };
     }
-    return { verdict, reason: hits.map((s) => `${s.id}: ${s.evidence}`).join(" | ") };
+    // A stronger verdict must not hide what could not be checked: crossenv `latest` (the malware
+    // 1.0.1) read `review` for "major" alone while its advisory lookup had failed (audit 6.2.5 D-10).
+    const unchecked = verdict === "unknown" ? [] : signals.filter((s) => s.effect === "unknown");
+    const reason = hits.map((s) => `${s.id}: ${s.evidence}`).join(" | ");
+    return {
+      verdict,
+      reason: unchecked.length > 0 ? `${reason} | NOT CHECKED: ${unchecked.map((s) => `${s.id}: ${s.evidence}`).join(" | ")}` : reason,
+    };
   }
   return { verdict: "unknown", reason: "No signal could be evaluated." };
 }
