@@ -34,7 +34,9 @@ const NOTICE_WORDING = /\b(unmaintained|no longer maintained)\b/i;
  * its wording.
  */
 export function isMaintenanceNotice(v: Pick<VulnerabilityEntry, "summary"> & { maintenance?: boolean }): boolean {
-  return v.maintenance === true || NOTICE_WORDING.test(v.summary || "");
+  // The scan decided from the record (isMaintenanceRecord); only an entry without that answer
+  // falls back to the wording.
+  return typeof v.maintenance === "boolean" ? v.maintenance : NOTICE_WORDING.test(v.summary || "");
 }
 
 /**
@@ -51,14 +53,17 @@ export function isMaintenanceRecord(
   packageName: string,
   ecosystem: string,
 ): boolean {
-  if (NOTICE_WORDING.test(vuln.summary ?? "")) return true;
-  if (NOTICE_KINDS.has(vuln.database_specific?.informational ?? "")) return true;
-  return (vuln.affected ?? []).some(
-    (a) =>
-      a.package?.ecosystem === ecosystem &&
-      samePackageName(a.package.name, packageName, ecosystem) &&
-      NOTICE_KINDS.has(a.database_specific?.informational ?? ""),
-  );
+  // Structured data beats wording (the rule as amended 2026-10-26, 4DA fix/notice-class-beats-wording):
+  // a class the record states for this package decides alone, the affected[] entry's first, else
+  // the record's. `unsound` is never a notice, whatever its summary says: serde_yml's
+  // unsound advisory reads "unmaintained" and was hidden as a notice that never blocks
+  // (audit 6.2.5 F-7). The wording counts only when no class is stated.
+  const own = (vuln.affected ?? []).find(
+    (a) => a.package?.ecosystem === ecosystem && samePackageName(a.package.name, packageName, ecosystem) && a.database_specific?.informational,
+  )?.database_specific?.informational;
+  const stated = own ?? vuln.database_specific?.informational;
+  if (stated) return NOTICE_KINDS.has(stated);
+  return NOTICE_WORDING.test(vuln.summary ?? "");
 }
 
 /**

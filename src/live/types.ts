@@ -140,11 +140,13 @@ export interface VulnerabilityEntry {
   /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
   malware?: boolean;
   /**
-   * A maintenance notice by the record's `informational` field for this package
-   * (maintenance.ts isMaintenanceRecord). Absent on entries cached before 6.2.5,
-   * which fall back to the summary wording.
+   * Whether the record makes this a maintenance notice for this package
+   * (maintenance.ts isMaintenanceRecord: a stated `informational` class decides, the
+   * wording only when none is stated). Absent only on foreign or stub entries, which
+   * fall back to the summary wording; the scan cache key moved to osv:v3 so entries
+   * cached by 6.2.4 without it are never read.
    */
-  maintenance?: true;
+  maintenance?: boolean;
   summary: string;
   fixedVersion: string | null;
   published: string;

@@ -287,7 +287,7 @@ export class OsvScanner {
     const cachedVulns: VulnerabilityEntry[] = [];
 
     for (const dep of scannable) {
-      const cacheKey = `osv:v2:${dep.ecosystem}:${dep.name}:${dep.version}`;
+      const cacheKey = `osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`;
       const cached = network ? this.cache.get<VulnerabilityEntry[]>(cacheKey) : null;
       if (cached !== null) {
         cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
@@ -323,7 +323,7 @@ export class OsvScanner {
     let staleOldest: string | null = null;
     const unchecked: ResolvedDependency[] = [];
     for (const dep of unanswered) {
-      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v2:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
+      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
       if (stale) {
         staleAnswers++;
         if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
@@ -474,7 +474,7 @@ export class OsvScanner {
       // and dropping a real advisory is worse than keeping an un-enriched one.
       const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
       const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
-      rows.push([`osv:v2:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      rows.push([`osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
@@ -543,7 +543,7 @@ function mapVulnerability(
     severity,
     cvssScore,
     ...(malware ? { malware: true } : {}),
-    ...(isMaintenanceRecord(vuln, dep.name, dep.ecosystem) ? { maintenance: true as const } : {}),
+    maintenance: isMaintenanceRecord(vuln, dep.name, dep.ecosystem),
     summary: vuln.summary || vuln.details?.slice(0, 200) || vuln.id,
     fixedVersion,
     published: vuln.published || vuln.modified || "",

@@ -125,7 +125,7 @@ describe("OSV scanner: no answer is never an empty answer", () => {
     // An answer from two hours ago, past its 1 h life.
     db.prepare(
       "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '-2 hours'), datetime('now', '-1 hours'))",
-    ).run("osv:v2:npm:lodash:4.17.15");
+    ).run("osv:v3:npm:lodash:4.17.15");
     stubOsv(() => "throw");
     const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15"), dep("minimist", "1.2.0")], "/proj");
     expect(result.staleAnswers).toBe(1);
@@ -140,7 +140,7 @@ describe("OSV scanner: no answer is never an empty answer", () => {
     const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
     db.prepare(
       "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '-2 hours'), datetime('now', '-1 hours'))",
-    ).run("osv:v2:npm:lodash:4.17.15");
+    ).run("osv:v3:npm:lodash:4.17.15");
     stubOsv(() => "throw");
     const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15")], "/proj");
     expect(result.unchecked).toBe(0);
