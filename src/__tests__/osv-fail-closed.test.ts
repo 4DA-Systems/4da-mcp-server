@@ -303,3 +303,25 @@ describe("a cache row fetched in the future is never an answer", () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM live_cache WHERE cache_key = ?").get("osv:v3:npm:lodash:4.17.15")).toEqual({ n: 0 });
   });
 });
+
+// Audit 6.2.5 B-4: a querybatch whose entries are null was read as "no advisories" for every
+// dependency and cached for an hour, so the next, healthy scan still said clean.
+describe("a malformed querybatch entry is not an answer", () => {
+  it("null entries leave the dependencies unchecked, and nothing is cached", async () => {
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/querybatch")) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: unknown[] };
+        return new Response(JSON.stringify({ results: queries.map(() => null) }), { status: 200 });
+      }
+      throw new TypeError("fetch failed");
+    });
+    const db = new Database(":memory:");
+    const cache = new LiveCache(db);
+    const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
+    const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15"), dep("minimist", "1.2.0")], "/proj");
+    expect(result.unchecked).toBe(2);
+    expect(result.offline).toBe(true);
+    expect(cache.get("osv:v3:npm:lodash:4.17.15")).toBeNull();
+  });
+});

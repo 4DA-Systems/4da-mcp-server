@@ -196,6 +196,11 @@ export class OsvHttpSource implements AdvisorySource {
         if (!Array.isArray(data?.results) || data.results.length !== chunk.length) {
           throw new Error(`OSV.dev answered ${Array.isArray(data?.results) ? data.results.length : "no"} results for ${chunk.length} queries`);
         }
+        // `{}` is OSV's own "nothing found"; null, a string or a non-array `vulns` is not an answer
+        // and was read as clean, then cached for an hour (audit 6.2.5 B-4).
+        if (data.results.some((r) => r === null || typeof r !== "object" || ("vulns" in r && !Array.isArray(r.vulns)))) {
+          throw new Error("OSV.dev answered a malformed result");
+        }
         return chunk.map((_, i) => (data.results[i]?.vulns ?? []).map((v) => v.id));
       } catch (error) {
         lastError = error;
