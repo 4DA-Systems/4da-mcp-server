@@ -604,7 +604,8 @@ describe("L: the smaller findings", () => {
     const out = formatScanResult(result as never, undefined, { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true }) as Record<string, any>;
     expect(out.vulnerabilities[0].fixed_version).toBe("v0.33.0");
     expect(out.fix_targets["golang.org/x/net@v0.20.0"].target).toBe("v0.33.0");
-    expect(out.recommendations[0]).toMatch(/→ v0\.33\.0/);
+    // No verified target was passed: the advisories' own fix, said to be unchecked (audit 6.2.5 F-1).
+    expect(out.recommendations[0]).toMatch(/name v0\.33\.0 as the fix, but v0\.33\.0 was NOT CHECKED/);
   });
 
   it("7f: a target with a whole-line deprecation notice stays the target, and says it is deprecated", async () => {
@@ -1064,5 +1065,42 @@ describe("D-3: installed malware with a clean later release is an upgrade, criti
     expect(detailed.vulnerabilities[0]).toMatchObject({ package: "fsevents", severity: "critical", malware: true });
     const concise = await scan();
     expect(concise.vulnerable_packages[0]).toMatchObject({ package: "fsevents", severity: "critical", malware: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit 6.2.5 F-1: an unchecked target is never said to resolve anything
+// ---------------------------------------------------------------------------
+
+describe("F-1: the scan's fallback target", () => {
+  // netmask 1.0.6: GHSA-4c7m-wxvm-r7gc says fixed in 1.1.0; its alias GHSA-pch5-whg9-qr2r
+  // (same CVE) says 2.0.1. Collapsing kept the richer record and its 1.1.0.
+  const record = (vulnId: string, aliases: string[], fixedVersion: string, cvssScore: number | null) => ({
+    package: "netmask", currentVersion: "1.0.6", ecosystem: "npm" as const, isDev: false, isDirect: true, devScopeKnown: true,
+    vulnId, aliases, severity: "critical" as const, cvssScore, summary: "netmask", fixedVersion, published: "", references: [],
+    target: null, platformActive: true, sourceDirs: [dir],
+  });
+
+  it("an alias group's fix is the highest any of its records names", async () => {
+    const { collapseAliases } = await import("../tools/vulnerability-scan-format.js");
+    const kept = collapseAliases([
+      record("GHSA-4c7m-wxvm-r7gc", ["CVE-2021-28918"], "1.1.0", 9.1),
+      record("GHSA-pch5-whg9-qr2r", ["CVE-2021-28918"], "2.0.1", null),
+    ] as never);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].fixedVersion).toBe("2.0.1");
+  });
+
+  it("with no verified target the recommendation says NOT CHECKED, never 'resolves'", async () => {
+    const { formatScanResult } = await import("../tools/vulnerability-scan-format.js");
+    const result = {
+      scannedAt: "", projectPath: dir, ecosystemsScanned: ["npm"], totalScanned: 1, totalVulnerable: 1, platformInactiveVulnerable: 0,
+      bySeverity: { critical: 1, high: 0, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [record("GHSA-4c7m-wxvm-r7gc", [], "1.1.0", 9.1)],
+      cleanCount: 0, scanDurationMs: 0, cached: false, offline: false,
+    };
+    const out = formatScanResult(result as never, undefined, { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true }) as Record<string, any>;
+    expect(out.recommendations[0]).not.toMatch(/resolves/);
+    expect(out.recommendations[0]).toMatch(/1\.1\.0 was NOT CHECKED against every advisory of netmask/);
+    expect(out.fix_targets["netmask@1.0.6"].checked).toBe("installed_advisories_only");
   });
 });
