@@ -1033,3 +1033,36 @@ describe("maintenance notices never block a release; a malicious landing is repo
     expect(JSON.stringify(parStep)).not.toMatch(/brings in MAL-/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Audit 6.2.5 D-3: a malware record with a clean later release
+// ---------------------------------------------------------------------------
+
+describe("D-3: installed malware with a clean later release is an upgrade, critical in every tool", () => {
+  // MAL-2023-462's shape: fsevents 1.2.9-1.2.10 malicious, clean from 1.2.11.
+  function fseventsProject(direct: boolean) {
+    ADVISORIES.fsevents = [adv("MAL-2023-462", "fsevents", [{ introduced: "1.2.9" }, { fixed: "1.2.11" }], { summary: "Malicious code in fsevents" })];
+    NPM.fsevents = { latest: "1.2.13", versions: { "1.2.7": {}, "1.2.9": {}, "1.2.10": {}, "1.2.11": {}, "1.2.13": {} } };
+    NPM.chokidar = { latest: "2.1.8", versions: { "2.1.8": { optionalDependencies: { fsevents: "^1.2.7" } } } };
+    if (direct) project({ fsevents: "1.2.9" }, {});
+    else project({ chokidar: "2.1.8" }, {}, { "node_modules/fsevents": { version: "1.2.9" } });
+  }
+
+  it("upgrade_planner moves a direct copy to the clean release instead of removing it", async () => {
+    fseventsProject(true);
+    const { result, step } = await plan();
+    const row = step("fsevents");
+    expect(row.action).toBe("upgrade_direct");
+    expect(row.targetVersion).toBe("1.2.11");
+    expect(row.reasons.join(" ")).toMatch(/malware|malicious/i);
+    expect(result.summary).not.toMatch(/to remove/);
+  });
+
+  it("vulnerability_scan grades a transitive malicious copy critical and flags the row", async () => {
+    fseventsProject(false);
+    const detailed = await scan({ response_format: "detailed" });
+    expect(detailed.vulnerabilities[0]).toMatchObject({ package: "fsevents", severity: "critical", malware: true });
+    const concise = await scan();
+    expect(concise.vulnerable_packages[0]).toMatchObject({ package: "fsevents", severity: "critical", malware: true });
+  });
+});

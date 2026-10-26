@@ -96,8 +96,10 @@ interface UpgradeRecommendation {
    * `upgrade_parent_unverified` = transitive, a parent release that admits a clean version exists,
    * but no release of the declared dependency that brings it in was verified (every lever's `to`
    * is null): `parentUpgrades` says what to check; nothing is counted as fixed;
-   * `remove_dependency` = the installed version is npm's security placeholder and every newer
-   * release is known-affected (crossenv: 1.0.0 and 1.0.1 are malware): remove the dependency;
+   * `remove_dependency` = the installed copy is flagged malicious and no release is clean of
+   * it (crossenv: 1.0.0 and 1.0.1 are malware), or the installed version is a placeholder and every
+   * newer release is known-affected: remove or replace the dependency. A malware record with a
+   * clean later release (fsevents 1.2.9, MAL-2023-462, clean from 1.2.11) is an upgrade instead;
    * `hold_current` = no advisory affects the installed version, and every newer release is
    * known-affected or withdrawn: stay on it (the reasons say why).
    * Every release a row offers, the newest one included, is checked against the package's
@@ -725,7 +727,7 @@ async function executeStandalonePlanner(
     );
   }
   if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream`);
-  if (removals > 0) parts.push(`${removals} to remove: npm's security placeholder, every newer release known-affected (malware)`);
+  if (removals > 0) parts.push(`${removals} to remove or replace: no release is clean of the malware or advisories affecting the installed copy`);
   if (holds > 0) parts.push(`${holds} to keep where ${holds === 1 ? "it is" : "they are"}: every newer release is known-affected or withdrawn`);
   if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated, already its latest release, or no release admits a clean version): override the version or replace the parent`);
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);

@@ -282,14 +282,20 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   // #981 round 3: an installed copy flagged malicious names no release at all: remove or replace it.
   const own = step.currentVersion ? await sources.packageAdvisories(ecosystem, step.package).catch(() => null) : null;
   const malicious = own ? cleanReleases(own, ecosystem, []).maliciousAt(step.currentVersion!) : [];
+  const clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion);
   if (malicious.length > 0) {
     step.reasons.push(malwareText(step.package, malicious));
-    noInstallableFix(step);
-    step.action = "remove_dependency";
-    step.fixPathChecked = "all_advisories";
-    return "verified";
+    // A malware record with a fixed release (MAL-2023-462: fsevents 1.2.9-1.2.10, clean from
+    // 1.2.11) is escaped by moving to a release clean of it and of every other advisory; only
+    // with no such release is the copy removed or replaced (audit 6.2.5 D-3). The clean
+    // predicate never skips malware (osv-ranges cleanReleases), so a target here is clean of it.
+    if (!clean?.target || clean.stillAffectedBy.length > 0 || clean.advisoriesUnread) {
+      noInstallableFix(step);
+      step.action = "remove_dependency";
+      step.fixPathChecked = "all_advisories";
+      return "verified";
+    }
   }
-  const clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion);
   if (input.fixes.length === 0) {
     // No advisory names a fix: the answer stays "no fix" unless the registry has a clean release past the bound.
     if (!clean?.noAdvisoryFix || !clean.target) {

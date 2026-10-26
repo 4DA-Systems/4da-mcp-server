@@ -79,7 +79,7 @@ export function scopeAdjustedSeverity(advisory: SeverityTier, scope: DependencyS
   return tier;
 }
 
-type ScopedEntry = Pick<VulnerabilityEntry, "severity" | "isDirect" | "isDev" | "devScopeKnown">;
+type ScopedEntry = Pick<VulnerabilityEntry, "severity" | "isDirect" | "isDev" | "devScopeKnown" | "malware">;
 
 /**
  * The grade a surface presents for one scan entry. A missing `isDirect`
@@ -87,6 +87,10 @@ type ScopedEntry = Pick<VulnerabilityEntry, "severity" | "isDirect" | "isDev" | 
  * direct, and a missing `devScopeKnown` as unknown: both mean no discount.
  */
 export function presentedSeverity(v: ScopedEntry): SeverityTier {
+  // An installed malicious copy is critical wherever it sits: a transitive or
+  // dev-only copy runs its install scripts all the same. The scan capped it at
+  // high for a transitive copy while the planner said critical (audit 6.2.5 D-3).
+  if (v.malware === true) return "critical";
   return scopeAdjustedSeverity(v.severity, {
     isDirect: v.isDirect !== false,
     isDev: v.isDev === true,
