@@ -399,7 +399,9 @@ async function executeStandalonePlanner(
     expectedTotal: scopeTotal,
     notLoaded: `the OSV.dev scan did not finish within ${PLANNER_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
   });
-  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null;
+  // A project whose only manifests are ones this server does not read (pom.xml) has no data at all (audit 6.2.5 A-6).
+  const nothingReadable = (vulnResult?.totalScanned ?? 0) === 0 && (liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0;
+  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
   // charged with RUSTSEC-2026-0190 (fixed in 1.0.103 — it isn't affected) while

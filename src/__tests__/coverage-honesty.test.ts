@@ -137,6 +137,9 @@ describe("project scans say what they did not cover", () => {
     expect(text).toMatch(/NOT COVERED/);
     expect(text).toMatch(/pom\.xml/);
     expect(text).not.toMatch(/Run this tool from your project root/);
+    // Audit 6.2.5 A-6: no "0 vulnerable" beside NOT COVERED when nothing was read at all.
+    expect(result.total_vulnerable_packages).toBeNull();
+    expect(result.by_severity).toBeNull();
   });
 
   it("a mixed repository scans what it can and lists every file it could not", async () => {
