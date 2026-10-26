@@ -54,7 +54,10 @@ export function requirementFiles(cwd: string): string[] {
   } catch {
     // no requirements/ folder
   }
-  return out;
+  // A symlinked requirements-dev.txt or a junctioned requirements/ folder can point anywhere; only
+  // `-r` includes were confined, so pins from outside the project reached OSV and the output
+  // (audit 6.2.5 C-3). Every file read must resolve inside the project.
+  return out.filter((file) => confinedInclude(cwd, path.relative(cwd, file), cwd) !== null);
 }
 
 /** Above this a .txt is not read to decide whether it is a requirements file. */

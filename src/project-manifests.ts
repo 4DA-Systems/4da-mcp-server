@@ -180,10 +180,13 @@ export function cargoWorkspaceDeps(root: string, content: string): { deps: strin
       }
       const name = /^name\s*=\s*"([^"]+)"/m.exec(tomlTable(manifest, "package") ?? "")?.[1];
       if (name) memberNames.add(name);
-      for (const dep of tomlKeys(tomlTable(manifest, "dependencies"))) deps.add(dep);
-      for (const section of ["dev-dependencies", "build-dependencies"]) {
-        for (const dep of tomlKeys(tomlTable(manifest, section))) devDeps.add(dep);
+      // build-dependencies run at build time on every machine that builds the crate: they are not
+      // dev-only (the app reads them as normal), and discounting them hid memoffset with
+      // include_dev: false (audit 6.2.5 F-3).
+      for (const section of ["dependencies", "build-dependencies"]) {
+        for (const dep of tomlKeys(tomlTable(manifest, section))) deps.add(dep);
       }
+      for (const dep of tomlKeys(tomlTable(manifest, "dev-dependencies"))) devDeps.add(dep);
     }
   }
 
@@ -194,6 +197,13 @@ export function cargoWorkspaceDeps(root: string, content: string): { deps: strin
 
 /** Member directories for one `members` entry: a path, or a path whose last segment is `*`. */
 function expandMemberGlob(root: string, pattern: string): string[] {
+  // `members = ["../outside/*"]` was followed out of the project: manifests outside it were read
+  // and their dependency names sent to the registries (audit 6.2.5 C-4). Members must resolve inside.
+  const inside = (dir: string) => confinedInclude(root, path.relative(root, dir), root) !== null;
+  return expandMemberGlobUnconfined(root, pattern).filter(inside);
+}
+
+function expandMemberGlobUnconfined(root: string, pattern: string): string[] {
   if (!pattern.includes("*")) return [path.join(root, pattern)];
   const star = pattern.indexOf("*");
   const parent = path.join(root, pattern.slice(0, star));
