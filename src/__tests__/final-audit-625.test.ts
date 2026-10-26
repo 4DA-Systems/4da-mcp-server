@@ -1119,3 +1119,17 @@ describe("B-7: a registry that does not answer leaves the health score partial",
     expect(h.scoreCoverage).toMatchObject({ complete: false });
   });
 });
+
+// Audit 6.2.5 F-5: a Go scan never checks the standard library or toolchain, and never said so.
+describe("F-5: a Go scan says the standard library is not checked", () => {
+  it("the coverage note names it, and a non-Go scan carries no such note", async () => {
+    const { formatScanResult } = await import("../tools/vulnerability-scan-format.js");
+    const base = { scannedAt: "", projectPath: dir, totalScanned: 1, totalVulnerable: 0, platformInactiveVulnerable: 0,
+      bySeverity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [], cleanCount: 1, scanDurationMs: 0, cached: false, offline: false };
+    const ctx = { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true };
+    const go = formatScanResult({ ...base, ecosystemsScanned: ["Go"] } as never, undefined, ctx) as Record<string, any>;
+    expect(go.coverage.note).toMatch(/standard library and toolchain .* are not checked/);
+    const npm = formatScanResult({ ...base, ecosystemsScanned: ["npm"] } as never, undefined, ctx) as Record<string, any>;
+    expect(JSON.stringify(npm)).not.toMatch(/standard library/);
+  });
+});
