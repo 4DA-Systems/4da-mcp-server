@@ -175,6 +175,17 @@ describe("vulnerability_scan: a fix target is judged by what it installs (audit 
     expect(concise.recommendations[0]).toMatch(/4\.20\.0 exact-pins qs 6\.11\.0 .*no release on its line up to 4\.22\.3 that its own advisories leave clean clears them, so 4\.20\.0 is NOT a clean fix/);
   });
 
+  it("a release whose held dependencies cannot be judged is named NOT CHECKED, never counted as not clearing them (4DA #1039)", async () => {
+    NPM.express.versions["4.22.3"] = { dependencies: { qs: "6.13.0", "path-to-regexp": "0.1.13", cookie: "0.7.1" } };
+    // 4.21.2 narrowly ranges a package the registry does not serve: what it installs cannot be read.
+    NPM.express.versions["4.21.2"] = { dependencies: { "gone-dep": "~1.0.0" } };
+    const concise = await scan();
+    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: "4.20.0", fix_checked: "installed_advisories_only" });
+    expect(concise.recommendations[0]).toMatch(
+      /no release on its line up to 4\.22\.3 that its own advisories leave clean clears them, of the releases that could be checked \(4\.21\.2 NOT CHECKED\), so 4\.20\.0 is NOT a clean fix/,
+    );
+  });
+
   it("fails closed: when the held dependencies cannot be looked up, the claim is not upgraded", async () => {
     HELD_LOOKUP_DOWN = true;
     const concise = await scan();
@@ -219,6 +230,40 @@ describe("dependency_check: an exact `to` that holds an affected dependency is n
     expect(r.verdict).toBe("unknown");
     expect(advisoriesOf(r)).toMatchObject({ effect: "unknown" });
     expect(advisoriesOf(r).evidence).toMatch(/was not checked/);
+  });
+});
+
+describe("upgrade_planner: a transitive row's target is judged the same way (pr-007, 4DA #1039)", () => {
+  it("serve-static 1.13.2 under express goes to 1.16.1, not 1.16.0 (which exact-pins an affected send)", async () => {
+    // The real ids and bounds (OSV 2026-10-27), the releases cut down to the ones that decide it.
+    ADVISORIES["serve-static"] = [adv("GHSA-cm22-4g7w-348p", "serve-static", "1.16.0", "LOW")];
+    ADVISORIES.send = [adv("GHSA-m6fv-jmcg-4jfg", "send", "0.19.0", "LOW")];
+    NPM["serve-static"] = {
+      latest: "1.16.2",
+      versions: {
+        "1.13.2": { dependencies: { send: "0.16.2" } },
+        "1.16.0": { dependencies: { send: "0.18.0" } },
+        "1.16.1": { dependencies: { send: "0.19.0" } },
+        "1.16.2": { dependencies: { send: "0.19.0" } },
+      },
+    };
+    NPM.send = { latest: "0.19.0", versions: { "0.16.2": {}, "0.18.0": {}, "0.19.0": {} } };
+    const packages = {
+      "": { name: "x", dependencies: { express: "4.16.4" } },
+      "node_modules/express": { version: "4.16.4", dependencies: { "serve-static": "1.13.2" } },
+      "node_modules/serve-static": { version: "1.13.2", dependencies: { send: "0.16.2" } },
+      "node_modules/send": { version: "0.16.2" },
+    };
+    fs.writeFileSync(path.join(dir, "package-lock.json"), JSON.stringify({ name: "x", lockfileVersion: 3, packages }));
+    try {
+      const result = (await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50 }, await liveFor())) as Record<string, any>;
+      const row = result.recommendations.find((s: { package: string; currentVersion: string }) => s.package === "serve-static" && s.currentVersion === "1.13.2");
+      expect(row?.targetVersion).toBe("1.16.1");
+      expect(row.reasons.join(" ")).toMatch(/1\.16\.0 exact-pins send 0\.18\.0 \(GHSA-m6fv-jmcg-4jfg\)/);
+    } finally {
+      delete ADVISORIES["serve-static"];
+      delete ADVISORIES.send;
+    }
   });
 });
 

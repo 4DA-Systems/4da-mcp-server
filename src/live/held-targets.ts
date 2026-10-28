@@ -77,6 +77,7 @@ export async function withHeldTargets(
     }
     if (own.affected.length === 0) continue;
     const past: NonNullable<FixTargetResult["heldPast"]> = [];
+    const unchecked: string[] = [];
     let chosen: string | null = null;
     for (const v of candidates) {
       const c = at(v);
@@ -84,11 +85,13 @@ export async function withHeldTargets(
         chosen = v;
         break;
       }
-      // An unchecked candidate is passed silently: the one chosen after it was itself judged clean.
+      // An unchecked candidate is passed: the one chosen after it was itself judged clean. With none
+      // chosen it is named NOT CHECKED, never counted among the releases that do not clear it (4DA #1039).
       if (c.status === "checked") past.push({ version: v, affected: c.affected });
+      else unchecked.push(v);
     }
     if (!chosen) {
-      out.set(item.key, { ...item.clean, heldBlocked: { affected: own.affected, searched: candidates } });
+      out.set(item.key, { ...item.clean, heldBlocked: { affected: own.affected, searched: candidates, ...(unchecked.length > 0 ? { unchecked } : {}) } });
       continue;
     }
     const view = cleanReleases((await settle(sources.packageAdvisories("npm", item.name), deadline)) ?? [], "npm", facts.versions, item.installed);

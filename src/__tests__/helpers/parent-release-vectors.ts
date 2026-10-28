@@ -20,6 +20,8 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../../live/index.js";
 import { advisoryAffects, advisoryRanges } from "../../live/osv-ranges.js";
+import { extractFixedVersion } from "../../live/osv-scanner.js";
+import { verifyFixTargets } from "../../live/fix-paths.js";
 import type { OsvVulnerability } from "../../live/types.js";
 import { executeUpgradePlanner } from "../../tools/upgrade-planner.js";
 import { parentOutcomes, type ParentUpgrade } from "../../tools/upgrade-planner-fixpaths.js";
@@ -57,6 +59,8 @@ interface World {
   /** crate -> sparse index lines (index.crates.io) */
   crates?: Record<string, string>;
   ecosystem?: string;
+  /** OSV.dev answers only for these packages; a query that names any other fails (a held lookup down). */
+  osvOnly?: string[];
 }
 
 async function withWorld<T>(world: World, run: () => Promise<T>): Promise<T> {
@@ -66,8 +70,10 @@ async function withWorld<T>(world: World, run: () => Promise<T>): Promise<T> {
   globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    const refused = (names: string[]) => world.osvOnly !== undefined && names.some((n) => !world.osvOnly!.includes(n));
     if (url.endsWith("/v1/querybatch")) {
       const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string }; version: string }> };
+      if (refused(queries.map((q) => q.package.name))) return new Response("unavailable", { status: 503 });
       return json({
         results: queries.map((q) => ({
           vulns: (world.osv[q.package.name] ?? [])
@@ -87,6 +93,7 @@ async function withWorld<T>(world: World, run: () => Promise<T>): Promise<T> {
     }
     if (url === "https://api.osv.dev/v1/query") {
       const q = JSON.parse(String(init?.body)) as { package: { name: string } };
+      if (refused([q.package.name])) return new Response("unavailable", { status: 503 });
       return json({ vulns: world.osv[q.package.name] ?? [] });
     }
     const crate = /^https:\/\/index\.crates\.io\/.*\/([^/]+)$/.exec(url);
@@ -287,6 +294,51 @@ export async function planParentReleaseLine(v: Json): Promise<Json> {
     return captured;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// fix_target lines with a `held` block (audit 6.2.5 D-4, ft-079..ft-092)
+// ---------------------------------------------------------------------------
+
+/**
+ * A `held` line through the scan's own target path (vulnerability_scan's verifyScanTargets):
+ * cleanFixTarget per copy, then the held-dependency pass, with the registry and OSV.dev answered
+ * from the line. `held.lookup: "down"`: OSV.dev answers for the package itself only, as the Rust
+ * runner stores only its own advisories.
+ */
+export async function checkHeldTarget(v: Json): Promise<string | null> {
+  const { name, installed } = v as { name: string; installed: string };
+  const held = v.held as Json;
+  const world: World = { registry: held.registry, osv: {}, ...(held.lookup === "down" ? { osvOnly: [name] } : {}) };
+  for (const a of held.advisories as Json[]) (world.osv[a.package] ??= []).push(record(a.id, a.package, a.ranges, "npm", a));
+  try {
+    const result = await withWorld(world, async () => {
+      const li = new LiveIntelligence(new Database(":memory:"));
+      // The copy's per-advisory fixes, as the scan collects them (notices give none).
+      const fixes = (world.osv[name] ?? []).flatMap((r) => {
+        const ranges = advisoryRanges(r, name, "npm");
+        if (!ranges || ranges.maintenance || !advisoryAffects(ranges, installed, "npm")) return [];
+        const fix = extractFixedVersion(r.affected, name, "npm", installed);
+        return fix ? [fix] : [];
+      });
+      const key = `npm:${name}@${installed}`;
+      const out = await verifyFixTargets(li.getFixPathSources(), [{ key, ecosystem: "npm", name, fixes, installed }], 5_000, undefined, {
+        heldQuery: (deps) => li.queryAdvisories(deps),
+      });
+      return out.get(key) ?? null;
+    });
+    const target = result?.target ?? null;
+    if (target !== (v.target ?? null)) return `target: got ${target}, want ${v.target}`;
+    const outcome = !result ? "clean" : result.heldFrom ? "moved" : result.heldBlocked ? "not_clean" : result.heldUnchecked !== undefined ? "not_checked" : "clean";
+    if (outcome !== v.held_outcome) return `held_outcome: got ${outcome}, want ${v.held_outcome}`;
+    if (typeof v.held_from === "string" && result?.heldFrom !== v.held_from) return `held_from: got ${result?.heldFrom}, want ${v.held_from}`;
+    if (Array.isArray(v.searched) && JSON.stringify(result?.heldBlocked?.searched ?? null) !== JSON.stringify(v.searched)) {
+      return `searched: got ${JSON.stringify(result?.heldBlocked?.searched ?? null)}, want ${JSON.stringify(v.searched)}`;
+    }
+    return null;
+  } catch (e) {
+    return `error: ${(e as Error).message}`;
   }
 }
 

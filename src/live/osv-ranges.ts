@@ -336,8 +336,15 @@ export function smallestCleanVersion(input: {
   const withdrawn = (v: string) => excluded.length > 0 && isListedVersion(excluded, v, ecosystem);
 
   const fromRegistry = input.published !== null && input.published.length > 0;
+  // Audit A-1 (4DA FX `unlisted`): with registry facts, a version the advisory data names that the
+  // registry does not list, below a release it does list, is no release at all: never a step, and
+  // named in `withheld` (node-ipc's GHSA-97m3-w2cp-4xx6 "fixed" 10.1.3; npm serves 10.1.0, then
+  // 11.0.0). A version above every listed release may be newer than the facts: the advisory's word stands.
+  const listed = fromRegistry ? input.published!.filter((v) => isComparable(v, ecosystem)) : [];
+  const ceiling = listed.length > 0 ? listed.reduce((max, v) => (cmp(v, max) > 0 ? v : max), listed[0]) : null;
+  const unlisted = (v: string) => ceiling !== null && cmp(v, ceiling) <= 0 && !isListedVersion(listed, v, ecosystem);
   const pool = fromRegistry
-    ? input.published!
+    ? [...input.published!, ...fixes.filter((f) => ceiling !== null && cmp(f, ceiling) > 0)]
     : [floor, ...input.advisories.flatMap((a) => a.spans.map((s) => s.fixed).filter((f): f is string => f !== null))];
   const releases = [...new Set(pool)]
     .filter((v) => isComparable(v, ecosystem) && cmp(v, floor) >= 0 && (allowPre || !isPrereleaseVersion(v, ecosystem)))
@@ -360,9 +367,16 @@ export function smallestCleanVersion(input: {
   const unfixableIds = [...new Set(unfixable.map((a) => a.id))];
   const affecting = (v: string) => [...new Set(input.advisories.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))];
   const clear = (judged: AdvisoryRanges[]) => (v: string) => !judged.some((a) => advisoryAffects(a, v, ecosystem));
-  // The withdrawn releases that would have been the target: clean against `judged`, below `target`.
-  const passed = (judged: AdvisoryRanges[], target: string | null) =>
-    releases.filter((v) => withdrawn(v) && (target === null || cmp(v, target) < 0) && clear(judged)(v));
+  // The withdrawn releases that would have been the target (clean against `judged`), and the fixes
+  // the registry does not list (A-1), below `target`; ascending.
+  const passed = (judged: AdvisoryRanges[], target: string | null) => {
+    const below = (v: string) => target === null || cmp(v, target) < 0;
+    const out = [
+      ...releases.filter((v) => withdrawn(v) && below(v) && clear(judged)(v)),
+      ...[...new Set(fixes)].filter((f) => unlisted(f) && below(f)),
+    ];
+    return [...new Set(out)].sort(cmp);
+  };
   // Clean against everything if any candidate is; otherwise against every advisory a release fixes.
   for (const judged of [input.advisories, fixable]) {
     // A prerelease fix event (docker/distribution v2.8.2-beta.1) lets prereleases in, but a clean

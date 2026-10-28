@@ -202,9 +202,14 @@ export async function heldAdvisories(
  * "4.22.0 requires qs "~6.14.0", whose newest admitted release 6.14.2 is affected (GHSA-d)".
  * At most three dependencies are named; the rest are counted.
  */
+/** "a", "a and b", "a, b and c". */
+export function andList(parts: string[]): string {
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : (parts[0] ?? "");
+}
+
 export function heldText(release: string, affected: HeldDependency[]): string {
   const shown = affected.slice(0, 3);
-  const and = (parts: string[]) => (parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0]);
+  const and = andList;
   const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})`);
   const ranged = shown
     .filter((d) => !d.exact)

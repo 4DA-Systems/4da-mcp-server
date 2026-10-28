@@ -29,7 +29,7 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { escapeModulePath } from "./go-registry.js";
-import { advisoryRanges, advisoryAffects, installableFix, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
+import { advisoryRanges, advisoryAffects, installableFix, isListedVersion, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
@@ -40,7 +40,7 @@ import { refreshRule, requirementAdmits, type ParentRequirement, type Requiremen
 import { compareVersions, maxVersion } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
-import { heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
+import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
@@ -482,8 +482,12 @@ export type FixTargetResult = CleanTarget & {
    */
   heldFrom?: string;
   heldPast?: Array<{ version: string; affected: HeldDependency[] }>;
-  /** The target holds an affected dependency and no later release searched (`searched`) clears it: not a clean fix. */
-  heldBlocked?: { affected: HeldDependency[]; searched: string[] };
+  /**
+   * The target holds an affected dependency and no later release searched (`searched`) clears it: not a
+   * clean fix. `unchecked`: the releases in `searched` whose held dependencies could not be judged,
+   * neither clean nor affected (4DA `HeldOutcome::Blocked.unchecked`, #1039).
+   */
+  heldBlocked?: { affected: HeldDependency[]; searched: string[]; unchecked?: string[] };
   /** Whether the target's held dependencies are affected could not be checked, and why: not a clean fix either. */
   heldUnchecked?: string;
 };
@@ -510,7 +514,9 @@ export function heldNote(clean: FixTargetResult): string | null {
   if (clean.heldBlocked && clean.target) {
     const last = clean.heldBlocked.searched[clean.heldBlocked.searched.length - 1];
     const upTo = last && last !== clean.target ? `up to ${last} ` : "";
-    return `${heldText(clean.target, clean.heldBlocked.affected)}; no release on its line ${upTo}that its own advisories leave clean clears ${clean.heldBlocked.affected.length === 1 ? "it" : "them"}, so ${clean.target} is NOT a clean fix: confirm a release with dependency_check before pinning it`;
+    const unchecked = clean.heldBlocked.unchecked ?? [];
+    const partial = unchecked.length > 0 ? `, of the releases that could be checked (${andList(unchecked)} NOT CHECKED)` : "";
+    return `${heldText(clean.target, clean.heldBlocked.affected)}; no release on its line ${upTo}that its own advisories leave clean clears ${clean.heldBlocked.affected.length === 1 ? "it" : "them"}${partial}, so ${clean.target} is NOT a clean fix: confirm a release with dependency_check before pinning it`;
   }
   if (clean.heldUnchecked !== undefined && clean.target) {
     return `whether the dependencies ${clean.target} exact-pins or narrowly ranges are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
@@ -596,7 +602,10 @@ function withRegistryFacts(
     lineFixes[fix] = installableFix({ ecosystem, fix, advisories: fixedHere, published, excluded: facts.withdrawn });
   }
   const named = new Set([...clean.withheld, ...Object.values(lineFixes).flatMap((l) => l.withheld)]);
-  const withheldWhy = Object.fromEntries([...named].map((v) => [v, facts.withdrawnWhy[v] ?? withdrawalText(ecosystem, v)]));
+  // A withheld version the registry does not list at all (audit A-1) is not called deprecated or yanked.
+  const why = (v: string) =>
+    facts.withdrawnWhy[v] ?? (isListedVersion(published, v, ecosystem) ? withdrawalText(ecosystem, v) : `${v} is not a release the registry lists`);
+  const withheldWhy = Object.fromEntries([...named].map((v) => [v, why(v)]));
   const notice = clean.target ? facts.lineNotices?.[clean.target] : undefined;
   return {
     ...clean,

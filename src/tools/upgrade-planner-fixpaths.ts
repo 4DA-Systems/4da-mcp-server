@@ -292,10 +292,10 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   let clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion);
   // npm: a target that exact-pins (or narrowly ranges) an affected dependency installs it: express
   // 4.20.0 and qs 6.11.0 (audit 6.2.5 D-4). The same check vulnerability_scan runs on its targets,
-  // here on a direct row only, the release the plan tells the agent to install. A transitive row's
-  // release is moved by its parents' levers, and the shared rule vector pr-007 keeps the app's
-  // answer for it (serve-static 1.16.0, though it exact-pins send 0.18.0).
-  if (clean?.target && ecosystem === "npm" && step.scope === "direct" && liveIntel.queryAdvisories) {
+  // on every row: a transitive copy's target is the floor its parents' levers must admit, so a
+  // release that pins an affected dependency is no floor either (serve-static 1.16.0 exact-pins send
+  // 0.18.0, so 1.16.1: shared rule vector pr-007, 4DA #1039).
+  if (clean?.target && ecosystem === "npm" && liveIntel.queryAdvisories) {
     const query = liveIntel.queryAdvisories.bind(liveIntel);
     const held = await withHeldTargets(sources, query, [{ key: "step", name: step.package, installed: step.currentVersion, clean }], Date.now() + HELD_BUDGET_MS);
     clean = held.get("step") ?? clean;

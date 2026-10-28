@@ -10,10 +10,12 @@
  *   version_order    compareVersions (version-compare.ts)
  *   osv_range        advisoryRanges + advisoryAffects (osv-ranges.ts)
  *   fix_target       extractFixedVersion per affecting advisory, then
- *                    smallestCleanVersion over every record (the
- *                    vulnerability_scan / upgrade_planner target), with the
- *                    line's `published` / `excluded` registry state; its
- *                    `withheld` is checked where the line states it (FX-H5)
+ *                    cleanFixTarget over every record (the vulnerability_scan /
+ *                    upgrade_planner target), with the line's `published` /
+ *                    `excluded` registry state; its `withheld` is checked where
+ *                    the line states it (FX-H5). A `held` line (D-4) runs
+ *                    verifyFixTargets with the held-dependency pass
+ *                    (parent-release-vectors.ts checkHeldTarget)
  *   refresh_verdict  refreshRule (refresh-rule.ts), which refreshVerdict applies
  *   fix_command      refreshCommandFor on a directory holding that tool's files;
  *                    directFix for `kind: "direct"` lines (audit E8), on a project
@@ -27,13 +29,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { advisoryAffects, advisoryRanges, smallestCleanVersion, type AdvisoryRanges } from "../../live/osv-ranges.js";
+import { advisoryAffects, advisoryRanges, type AdvisoryRanges } from "../../live/osv-ranges.js";
 import { deriveSeverity, extractFixedVersion, isSecurityHoldingRelease } from "../../live/osv-scanner.js";
 import { gradeGroup } from "../../live/advisory-groups.js";
-import { checkParentRelease } from "./parent-release-vectors.js";
+import { checkHeldTarget, checkParentRelease } from "./parent-release-vectors.js";
 import { isMaintenanceRecord } from "../../live/maintenance.js";
 import { cweIdsOf } from "../../live/malware.js";
-import { directFix, overrideReaches, refreshCommandFor } from "../../live/fix-paths.js";
+import { cleanFixTarget, directFix, overrideReaches, refreshCommandFor, type FixPathSources, type PackageReleaseFacts } from "../../live/fix-paths.js";
+import type { OsvEcosystem } from "../../live/types.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
 import { compareVersions, isComparable } from "../../live/version-compare.js";
 import type { OsvVulnerability } from "../../live/types.js";
@@ -113,7 +116,10 @@ function sameVersion(a: string | null, b: string | null, ecosystem: string): boo
   return a === b || (isComparable(a, ecosystem) && isComparable(b, ecosystem) && compareVersions(a, b, ecosystem) === 0);
 }
 
-function checkFixTarget(v: Vector, records: Records): string | null {
+async function checkFixTarget(v: Vector, records: Records): Promise<string | null> {
+  // A `held` line (audit 6.2.5 D-4) carries its own advisories and registry documents and runs the
+  // scan's whole target path (parent-release-vectors.ts), as the Rust runner's held_vectors does.
+  if (v.held !== undefined) return checkHeldTarget(v);
   const [eco, name, installed] = [str(v, "eco"), str(v, "name"), str(v, "installed")];
   const ids = (v.record_ids as string[] | undefined) ?? [];
   const advisories = ids.map((id) => records.ranges(id, eco, name));
@@ -127,9 +133,17 @@ function checkFixTarget(v: Vector, records: Records): string | null {
     .filter((f): f is string => f !== null);
   // FX-H5: the registry state written into the line, as given (the app rule's output on the
   // `source` date). `published` is what this server's registry readers list; `excluded` is never
-  // a target. Lines without them run on the advisory data alone, as before.
+  // a target. Lines without them run on the advisory data alone, as before. The line runs through
+  // cleanFixTarget, the scan's own entry point, so a last_affected-only advisory gets the registry
+  // walk the scan gives it (audit A6, ft-076), not "no fix".
   const published = strings(v, "published");
-  const clean = smallestCleanVersion({ ecosystem: eco, fixes, advisories, published: published.length > 0 ? published : null, excluded: strings(v, "excluded"), installed });
+  const excluded = strings(v, "excluded");
+  const facts: PackageReleaseFacts | null =
+    published.length > 0
+      ? { versions: published.filter((p) => !excluded.includes(p)), withdrawn: excluded, withdrawnWhy: {}, latest: null, deprecatedLatest: null }
+      : null;
+  const sources = { packageAdvisories: async () => advisories, releaseFacts: async () => facts } as unknown as FixPathSources;
+  const clean = await cleanFixTarget(sources, eco as OsvEcosystem, name, fixes, installed);
   const target = clean?.target ?? null;
   const clears = clean !== null && clean.target !== null && clean.stillAffectedBy.length === 0;
   const wantTarget = optStr(v, "target");
@@ -298,22 +312,29 @@ function checkSeverity(v: Vector): string | null {
     raw.map((r) => ({ id: r.id, own: deriveSeverity(r).severity, aliases: r.aliases ?? [], maintenance: isMaintenanceRecord(r, r.affected?.[0]?.package?.name ?? "", r.affected?.[0]?.package?.ecosystem ?? ""), cweIds: cweIdsOf(r), summary: r.summary ?? "" })),
     aliasGrades,
   );
-  const want = v.expect as { severity: string | null; severity_from: string | null; urgency: string };
+  const want = v.expect as { severity: string | null; severity_from: string | null; urgency: string; notices?: number };
   const got = { severity: grade.severity, severity_from: grade.inheritedFrom, urgency: grade.urgency };
-  return JSON.stringify(got) === JSON.stringify({ severity: want.severity, severity_from: want.severity_from, urgency: want.urgency }) ? null : `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
+  if (JSON.stringify(got) !== JSON.stringify({ severity: want.severity, severity_from: want.severity_from, urgency: want.urgency })) return `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
+  // `notices` (optional, 4DA #1029): the records that read as notices after the alias-group rule, an
+  // alias group being a notice only when every record of it is (the scan's collapseAliases).
+  if (typeof want.notices === "number") {
+    const each = raw.map((r) => isMaintenanceRecord(r, r.affected?.[0]?.package?.name ?? "", r.affected?.[0]?.package?.ecosystem ?? ""));
+    const notices = each.every(Boolean) ? each.length : 0;
+    if (notices !== want.notices) return `notices: got ${notices}, want ${want.notices}`;
+  }
+  return null;
 }
 
 export function checkVector(file: VectorFile, v: Vector, records: Records): string | null | Promise<string | null> {
   // parent_release lines run the whole planner (async): parent-release-vectors.ts.
   if (file === "parent_release") return checkParentRelease(v);
+  if (file === "fix_target") return checkFixTarget(v, records).catch((e: Error) => `error: ${e.message}`);
   try {
     switch (file) {
       case "version_order":
         return checkVersionOrder(v);
       case "osv_range":
         return checkOsvRange(v, records);
-      case "fix_target":
-        return checkFixTarget(v, records);
       case "refresh_verdict":
         return checkRefreshVerdict(v);
       case "fix_command":

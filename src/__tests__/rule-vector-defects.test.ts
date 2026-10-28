@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import { compareVersions } from "../live/version-compare.js";
 import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
 import { leavesCaret, refreshRule, type ParentRequirement } from "../live/refresh-rule.js";
+import { smallestCleanVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { cleanFixTarget, withheldText, type FixPathSources } from "../live/fix-paths.js";
 
 describe("PEP 440 local labels order (vo-013..vo-015)", () => {
   it.each([
@@ -83,5 +85,34 @@ describe("refreshRule: the AD-055 ¶1 refresh-or-parent rule", () => {
     ["v1.2.0", "v1.4.0", false],
   ])("the caret fallback: %s -> %s leaves it: %s (rv-060..rv-064)", (installed, target, leaves) => {
     expect(leavesCaret(installed, target)).toBe(leaves);
+  });
+});
+
+describe("a fix the registry does not list is never a step, and is named (ft-078, audit A-1)", () => {
+  // node-ipc: GHSA-97m3-w2cp-4xx6 "fixed" 10.1.3, which npm does not serve (10.1.0, then 11.0.0);
+  // GHSA-3mpp-xfvh-qh37 holds 11.0.0..12.0.0.
+  const range = (id: string, introduced: string, fixed: string): AdvisoryRanges => ({
+    id,
+    spans: [{ introduced, fixed, lastAffected: null }],
+    versions: [],
+  }) as unknown as AdvisoryRanges;
+  const advisories = [range("GHSA-97m3-w2cp-4xx6", "10.0.0", "10.1.3"), range("GHSA-3mpp-xfvh-qh37", "11.0.0", "12.0.0")];
+
+  it("the walk goes on to the next listed release and `withheld` names the unlisted fix", () => {
+    const clean = smallestCleanVersion({ ecosystem: "npm", fixes: ["10.1.3"], advisories, published: ["10.1.0", "11.0.0", "11.1.0", "12.0.0", "14.0.0"], installed: "10.1.1" });
+    expect(clean).toMatchObject({ target: "12.0.0", withheld: ["10.1.3"] });
+  });
+
+  it("a fix above every listed release may be newer than the facts: the advisory's word stands", () => {
+    const clean = smallestCleanVersion({ ecosystem: "npm", fixes: ["10.1.3"], advisories: [advisories[0]], published: ["10.0.0", "10.1.0", "10.1.1"], installed: "10.1.1" });
+    expect(clean).toMatchObject({ target: "10.1.3", withheld: [] });
+  });
+
+  it("is said as not listed, never as deprecated or yanked", async () => {
+    const facts = { versions: ["10.1.0", "11.0.0", "11.1.0", "12.0.0", "14.0.0"], withdrawn: [], withdrawnWhy: {}, latest: "14.0.0", deprecatedLatest: null };
+    const sources = { packageAdvisories: async () => advisories, releaseFacts: async () => facts } as unknown as FixPathSources;
+    const clean = await cleanFixTarget(sources, "npm", "node-ipc", ["10.1.3"], "10.1.1");
+    expect(clean?.target).toBe("12.0.0");
+    expect(withheldText(clean!, "npm")).toBe("10.1.3 is not a release the registry lists; 12.0.0 is the smallest clean release");
   });
 });

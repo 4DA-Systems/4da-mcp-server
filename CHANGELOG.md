@@ -1,5 +1,31 @@
 # Changelog
 
+## 6.2.6 — unreleased
+
+Parity with the 4DA app's engine after its D-4, A-1 and F-7 changes. The
+shared rule vectors are pinned at 4DA `511ba1cda` (schema 130); every one of
+them passes, the conformance corpus too.
+
+- **A transitive row's fix target is judged by what it installs, too.**
+  upgrade_planner checked held dependencies on direct rows only, so it named
+  serve-static 1.16.0, which exact-pins an affected send 0.18.0; it now names
+  1.16.1, as vulnerability_scan does (shared vector pr-007).
+- **A release whose held dependencies could not be judged is named, not
+  counted.** When no release on a target's line cleared what it holds, the note
+  said "no release up to X clears them" even if some of those releases were
+  never checked. It now says "of the releases that could be checked (... NOT
+  CHECKED)" (4DA #1039).
+- **A fix version the registry does not list is named.** When an advisory's
+  fix (node-ipc 10.1.3) is not a release the registry lists, below one it does,
+  the target already moved past it; the answer now says so ("10.1.3 is not a
+  release the registry lists") instead of passing it silently (shared vector
+  ft-078, audit A-1). A fix above every listed release still stands.
+- The shared vectors' new `held` line kind (ft-079..ft-092) runs through the
+  scan's own target path, and plain fix-target lines through `cleanFixTarget`,
+  the scan's entry point (ft-076, a last_affected-only advisory, already
+  passed there). The severity runner checks the optional `expect.notices`.
+- `contract/app-schema.sql` follows the app to schema 130 (version lines only).
+
 ## 6.2.5 — 2026-10-26
 
 ### Pre-publish adversarial audit fixes (2026-10-26)
