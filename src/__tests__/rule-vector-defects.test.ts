@@ -10,7 +10,8 @@ import { compareVersions } from "../live/version-compare.js";
 import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
 import { leavesCaret, refreshRule, type ParentRequirement } from "../live/refresh-rule.js";
 import { smallestCleanVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
-import { cleanFixTarget, withheldText, type FixPathSources } from "../live/fix-paths.js";
+import { cleanFixTarget, rowFix, targetNote, withheldText, type FixPathSources } from "../live/fix-paths.js";
+import { coalescingQuery } from "../live/held-dependencies.js";
 
 describe("PEP 440 local labels order (vo-013..vo-015)", () => {
   it.each([
@@ -114,5 +115,60 @@ describe("a fix the registry does not list is never a step, and is named (ft-078
     const clean = await cleanFixTarget(sources, "npm", "node-ipc", ["10.1.3"], "10.1.1");
     expect(clean?.target).toBe("12.0.0");
     expect(withheldText(clean!, "npm")).toBe("10.1.3 is not a release the registry lists; 12.0.0 is the smallest clean release");
+  });
+});
+
+describe("6.2.6 delta audit fixes", () => {
+  const span = (introduced: string, fixed: string | null, lastAffected: string | null = null) => ({ introduced, fixed, lastAffected });
+  const adv = (id: string, spans: ReturnType<typeof span>[], extra: Record<string, unknown> = {}): AdvisoryRanges =>
+    ({ id, spans, versions: [], ...extra }) as unknown as AdvisoryRanges;
+  const facts = (versions: string[]) => ({ versions, withdrawn: [], withdrawnWhy: {}, latest: versions[versions.length - 1], deprecatedLatest: null });
+  const sourcesOf = (advisories: AdvisoryRanges[], versions: string[]) =>
+    ({ packageAdvisories: async () => advisories, releaseFacts: async () => facts(versions) }) as unknown as FixPathSources;
+
+  it("F1: the per-advisory fix the registry does not list becomes the release past it (node-ipc 10.1.3 -> 11.0.0)", async () => {
+    const advisories = [adv("GHSA-97m3-w2cp-4xx6", [span("10.0.0", "10.1.3")]), adv("GHSA-3mpp-xfvh-qh37", [span("11.0.0", "12.0.0")])];
+    const clean = await cleanFixTarget(sourcesOf(advisories, ["10.1.0", "11.0.0", "11.1.0", "12.0.0", "14.0.0"]), "npm", "node-ipc", ["10.1.3"], "10.1.1");
+    expect(clean?.lineFixes?.["10.1.3"]).toEqual({ fix: "11.0.0", withheld: ["10.1.3"] });
+    expect(rowFix("10.1.3", clean!, "npm")).toEqual({
+      fixed: "11.0.0",
+      withheld: ["10.1.3"],
+      note: "10.1.3 is not a release the registry lists; 11.0.0 is the smallest release past it that fixes this advisory",
+    });
+  });
+
+  it("F2: with no target an unlisted fix is not withheld, so the real reason (malware) is said", () => {
+    const clean = smallestCleanVersion({
+      ecosystem: "npm",
+      fixes: ["1.0.5"],
+      advisories: [adv("GHSA-a", [span("0", "1.0.5")]), adv("MAL-2026-1", [span("1.0.5", null)], { malware: true })],
+      published: ["1.0.0", "1.1.0", "1.2.0"],
+      installed: "1.0.0",
+    });
+    expect(clean).toMatchObject({ target: null, withheld: [], maliciousLanding: ["MAL-2026-1"] });
+  });
+
+  it("F3: a fix above every listed release stays the target and is said to be unlisted", async () => {
+    const clean = await cleanFixTarget(sourcesOf([adv("GHSA-b", [span("0", "1.0.1")])], ["1.0.0"]), "npm", "p", ["1.0.1"], "1.0.0");
+    expect(clean).toMatchObject({ target: "1.0.1", aboveListed: true });
+    expect(targetNote(clean!, "npm")).toMatch(/1\.0\.1 is an advisory's fixed version newer than every release the registry listed when it was read: confirm it is published/);
+  });
+
+  it("F6: the installed version is never named as a withheld fix (the last_affected walk)", async () => {
+    const clean = await cleanFixTarget(sourcesOf([adv("GHSA-c", [span("0", null, "1.0.5")])], ["1.0.0", "1.1.0"]), "npm", "p", [], "1.0.5");
+    expect(clean).toMatchObject({ target: "1.1.0", noAdvisoryFix: true, withheld: [] });
+  });
+
+  it("F4: held lookups made together go out as one query", async () => {
+    const calls: string[][] = [];
+    const query = coalescingQuery(async (deps) => {
+      calls.push(deps.map((d) => `${d.name}@${d.version}`));
+      return { vulnerabilities: [] } as never;
+    });
+    const dep = (name: string, version: string) => ({ name, version }) as never;
+    await Promise.all([query([dep("qs", "6.11.0")]), query([dep("send", "0.18.0"), dep("qs", "6.11.0")]), query([dep("cookie", "0.6.0")])]);
+    expect(calls).toEqual([["qs@6.11.0", "send@0.18.0", "cookie@0.6.0"]]);
+    await query([dep("qs", "6.13.0")]);
+    expect(calls).toHaveLength(2);
   });
 });

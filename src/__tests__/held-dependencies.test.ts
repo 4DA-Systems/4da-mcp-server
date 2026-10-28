@@ -260,6 +260,14 @@ describe("upgrade_planner: a transitive row's target is judged the same way (pr-
       const row = result.recommendations.find((s: { package: string; currentVersion: string }) => s.package === "serve-static" && s.currentVersion === "1.13.2");
       expect(row?.targetVersion).toBe("1.16.1");
       expect(row.reasons.join(" ")).toMatch(/1\.16\.0 exact-pins send 0\.18\.0 \(GHSA-m6fv-jmcg-4jfg\)/);
+      // 6.2.6 delta audit F5: a held-blocked transitive row is never summed as fixed, nor blamed on the network.
+      NPM["serve-static"].versions["1.16.1"] = { dependencies: { send: "0.18.0" } };
+      NPM["serve-static"].versions["1.16.2"] = { dependencies: { send: "0.18.0" } };
+      const blocked = (await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50 }, await liveFor())) as Record<string, any>;
+      const stuck = blocked.recommendations.find((s: { package: string; currentVersion: string }) => s.package === "serve-static" && s.currentVersion === "1.13.2");
+      expect(stuck).toMatchObject({ targetVersion: "1.16.0", fixPathChecked: "installed_advisories_only" });
+      expect(blocked.summary).toMatch(/1 fix target NOT a clean fix: the release pins \(or narrowly ranges\) an affected dependency/);
+      expect(blocked.summary).not.toMatch(/did not answer in time/);
     } finally {
       delete ADVISORIES["serve-static"];
       delete ADVISORIES.send;

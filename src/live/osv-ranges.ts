@@ -271,11 +271,19 @@ export interface CleanTarget {
    * Releases the registry withdrew (yanked, deprecated: `excluded`) that the
    * target would otherwise have been: each one at or above the floor and
    * below the target (every one, when there is no target) that the advisories
-   * the target is judged against do not affect. Ascending. With no target, a
-   * non-empty list means a fix WAS published and then withdrawn: "no
+   * the target is judged against do not affect; with a target, also the
+   * per-advisory fixes below it that the registry does not list although it
+   * lists a later release (audit A-1, node-ipc 10.1.3). Ascending. With no
+   * target, a non-empty list means a fix WAS published and then withdrawn: "no
    * installable fix", not "no fix published" (4DA FX-H5 `WalkOutcome.withheld`).
    */
   withheld: string[];
+  /**
+   * The target is above every release the registry listed when read: an advisory's fixed version
+   * newer than the facts (4DA `Known::unlisted`, the ceiling rule). Said, so nobody takes it for a
+   * release the registry was seen to serve.
+   */
+  aboveListed?: boolean;
   /** Advisories whose ranges cannot be read: no target is named, and the reason says so (#981 rule b). */
   unreadable?: string[];
   /** No target: every fixing release brings in these advisories, which the installed version does not have. */
@@ -367,13 +375,17 @@ export function smallestCleanVersion(input: {
   const unfixableIds = [...new Set(unfixable.map((a) => a.id))];
   const affecting = (v: string) => [...new Set(input.advisories.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))];
   const clear = (judged: AdvisoryRanges[]) => (v: string) => !judged.some((a) => advisoryAffects(a, v, ecosystem));
-  // The withdrawn releases that would have been the target (clean against `judged`), and the fixes
-  // the registry does not list (A-1), below `target`; ascending.
+  // The withdrawn releases that would have been the target (clean against `judged`), below `target`,
+  // and, when there IS a target, the fixes the registry does not list that it steps past (A-1).
+  // With no target `withheld` keeps its meaning (a fix was published, then withdrawn): an unlisted
+  // fix was never published, and naming it would put "no installable fix" in place of the real
+  // reason (malware, an advisory every fix brings in). The installed version is never a fix.
   const passed = (judged: AdvisoryRanges[], target: string | null) => {
     const below = (v: string) => target === null || cmp(v, target) < 0;
+    const isInstalled = (v: string) => Boolean(input.installed) && isComparable(input.installed!, ecosystem) && cmp(v, input.installed!) === 0;
     const out = [
       ...releases.filter((v) => withdrawn(v) && below(v) && clear(judged)(v)),
-      ...[...new Set(fixes)].filter((f) => unlisted(f) && below(f)),
+      ...(target === null ? [] : [...new Set(fixes)].filter((f) => unlisted(f) && below(f) && !isInstalled(f))),
     ];
     return [...new Set(out)].sort(cmp);
   };
@@ -385,6 +397,7 @@ export function smallestCleanVersion(input: {
       (allowPre ? candidates.find((v) => !isPrereleaseVersion(v, ecosystem) && clear(judged)(v)) : undefined) ?? candidates.find(clear(judged));
     if (candidate) {
       return {
+        ...(ceiling !== null && cmp(candidate, ceiling) > 0 ? { aboveListed: true } : {}),
         target: candidate,
         basis,
         floor,

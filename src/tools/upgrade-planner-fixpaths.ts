@@ -65,6 +65,7 @@ import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
 import { withHeldTargets } from "../live/held-targets.js";
+import { coalescingQuery, type AdvisoryQuery } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 
 /** One dependency the project declares that moves a blocking parent. */
@@ -208,7 +209,8 @@ const NO_FIX_REASON = /^\d+ of them (?:has|have) no published fix$/;
  */
 const LEVER_ADMITS = new WeakMap<ParentLever, (version: string) => { requirement?: string | null; resolvesTo?: string | null } | null>();
 
-type Outcome = "verified" | "unverified" | "failed";
+/** `held`: checked, but the target holds an affected dependency or that could not be judged (D-4): not a clean fix. */
+type Outcome = "verified" | "unverified" | "held" | "failed";
 
 /** Verify and rewrite the steps in place. Returns how many could not be verified (offline, failure, budget). */
 export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, budgetMs = FIX_PATH_BUDGET_MS): Promise<number> {
@@ -225,6 +227,8 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
     return todo.length;
   }
   const deadline = Date.now() + budgetMs;
+  // The held-dependency lookups of the rows in flight go out as one OSV batch (delta audit F4).
+  const heldQuery = liveIntel.queryAdvisories ? coalescingQuery(liveIntel.queryAdvisories.bind(liveIntel)) : null;
   let unverified = 0;
   let next = 0;
   const worker = async () => {
@@ -234,12 +238,11 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
       // On a draft: when the budget runs out first, the lookups still in flight write to the
       // draft, never to the step (readiness review 2026-10-17, finding 9).
       const draft = structuredClone(input.step);
-      const outcome: Outcome = remaining > 0 ? await withTimeout(verifyOne({ ...input, step: draft }, sources, liveIntel), remaining, "failed") : "failed";
+      const outcome: Outcome = remaining > 0 ? await withTimeout(verifyOne({ ...input, step: draft }, sources, liveIntel, heldQuery), remaining, "failed") : "failed";
       if (outcome !== "failed") commit(input.step, draft);
-      if (outcome !== "verified") {
-        input.step.fixPathChecked = "installed_advisories_only";
-        unverified++;
-      }
+      if (outcome !== "verified") input.step.fixPathChecked = "installed_advisories_only";
+      // A held-unclean target was checked: it is not one OSV or the registry did not answer for (delta audit F5).
+      if (outcome !== "verified" && outcome !== "held") unverified++;
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, todo.length) }, worker));
@@ -283,7 +286,7 @@ function setTarget(step: FixPathStep, target: string): void {
   if (step.scope === "direct") step.breaking = step.upgradeType === "major";
 }
 
-async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel: Intel): Promise<Outcome> {
+async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel: Intel, heldQuery: AdvisoryQuery | null): Promise<Outcome> {
   const { step } = input;
   const ecosystem = step.ecosystem as OsvEcosystem;
   // #981 round 3: an installed copy flagged malicious names no release at all: remove or replace it.
@@ -295,9 +298,8 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   // on every row: a transitive copy's target is the floor its parents' levers must admit, so a
   // release that pins an affected dependency is no floor either (serve-static 1.16.0 exact-pins send
   // 0.18.0, so 1.16.1: shared rule vector pr-007, 4DA #1039).
-  if (clean?.target && ecosystem === "npm" && liveIntel.queryAdvisories) {
-    const query = liveIntel.queryAdvisories.bind(liveIntel);
-    const held = await withHeldTargets(sources, query, [{ key: "step", name: step.package, installed: step.currentVersion, clean }], Date.now() + HELD_BUDGET_MS);
+  if (clean?.target && ecosystem === "npm" && heldQuery) {
+    const held = await withHeldTargets(sources, heldQuery, [{ key: "step", name: step.package, installed: step.currentVersion, clean }], Date.now() + HELD_BUDGET_MS);
     clean = held.get("step") ?? clean;
   }
   const heldUnclean = clean ? Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined : false;
@@ -341,7 +343,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
     if (step.scope === "transitive" && step.currentVersion) await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
     withUpgradeCommands(input, liveIntel);
-    return heldUnclean ? "unverified" : "verified";
+    return heldUnclean ? "held" : "verified";
   }
   if (!clean) return "failed";
   const withheld = withheldText(clean, ecosystem);
@@ -438,7 +440,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   }
   withUpgradeCommands(input, liveIntel);
   // Held dependencies affected with no clean release found, or not checked: never "all_advisories".
-  return heldUnclean ? "unverified" : "verified";
+  return heldUnclean ? "held" : "verified";
 }
 
 /**

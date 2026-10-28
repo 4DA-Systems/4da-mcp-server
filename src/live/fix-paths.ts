@@ -37,7 +37,7 @@ import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, requirementOptions } from "./lockfile-parsers-pygo.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
-import { compareVersions, maxVersion } from "./version-compare.js";
+import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
@@ -501,6 +501,9 @@ export function targetCheckedAll(clean: FixTargetResult): boolean {
   return !clean.advisoriesUnread && !clean.heldBlocked && clean.heldUnchecked === undefined;
 }
 
+/** A reason heldNote writes for a target that is not a clean fix (heldBlocked / heldUnchecked): the plan summary counts those rows apart. */
+export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|exact-pins or narrowly ranges are affected was NOT CHECKED \(/;
+
 /** The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked), or null when there is nothing to say. */
 export function heldNote(clean: FixTargetResult): string | null {
   if (clean.heldFrom && clean.heldPast && clean.heldPast.length > 0 && clean.target) {
@@ -596,10 +599,16 @@ function withRegistryFacts(
   if (!facts) return WITHDRAWALS_READ.has(ecosystem) ? { ...clean, registryUnread: true } : clean;
   const lineFixes: NonNullable<FixTargetResult["lineFixes"]> = {};
   const published = [...facts.versions, ...facts.withdrawn];
+  const top = maxVersion(published.filter((v) => isComparable(v, ecosystem)), ecosystem);
+  // Audit A-1 (the app's `installable_fix`): a fix the registry does not list, below a release it
+  // lists, is no more installable than a withdrawn one (node-ipc GHSA-97m3's 10.1.3 -> 11.0.0).
+  const unlisted = (fix: string) =>
+    top !== null && isComparable(fix, ecosystem) && compareVersions(fix, top, ecosystem) <= 0 && !isListedVersion(published, fix, ecosystem);
   for (const fix of new Set(fixes)) {
-    if (!facts.withdrawn.includes(fix)) continue;
+    const notListed = unlisted(fix);
+    if (!facts.withdrawn.includes(fix) && !notListed) continue;
     const fixedHere = advisories.filter((a) => a.spans.some((s) => s.fixed !== null && compareVersions(s.fixed, fix, ecosystem) === 0));
-    lineFixes[fix] = installableFix({ ecosystem, fix, advisories: fixedHere, published, excluded: facts.withdrawn });
+    lineFixes[fix] = installableFix({ ecosystem, fix, advisories: fixedHere, published, excluded: notListed ? [...facts.withdrawn, fix] : facts.withdrawn });
   }
   const named = new Set([...clean.withheld, ...Object.values(lineFixes).flatMap((l) => l.withheld)]);
   // A withheld version the registry does not list at all (audit A-1) is not called deprecated or yanked.
@@ -752,6 +761,9 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
   }
   if (clean.target && clean.stillAffectedBy.length > 0) {
     parts.push(`${clean.target} ${remainsText(clean.stillAffectedBy)}: ${clean.stillAffectedBy.length === 1 ? "it affects" : "they affect"} every newer release too`);
+  }
+  if (clean.target && clean.aboveListed) {
+    parts.push(`${clean.target} is an advisory's fixed version newer than every release the registry listed when it was read: confirm it is published before pinning it`);
   }
   if (clean.target === null && clean.unreadable && clean.unreadable.length > 0) parts.push(unreadableText(clean.unreadable));
   if (clean.target === null && clean.landingNote) parts.push(clean.landingNote);

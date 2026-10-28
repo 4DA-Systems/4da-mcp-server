@@ -328,9 +328,11 @@ export async function checkHeldTarget(v: Json): Promise<string | null> {
       });
       return out.get(key) ?? null;
     });
-    const target = result?.target ?? null;
+    // No result is a check that timed out or failed, never "clean" (delta audit F9).
+    if (!result) return "no fix-target result (the check failed or timed out)";
+    const target = result.target ?? null;
     if (target !== (v.target ?? null)) return `target: got ${target}, want ${v.target}`;
-    const outcome = !result ? "clean" : result.heldFrom ? "moved" : result.heldBlocked ? "not_clean" : result.heldUnchecked !== undefined ? "not_checked" : "clean";
+    const outcome = result.heldFrom ? "moved" : result.heldBlocked ? "not_clean" : result.heldUnchecked !== undefined ? "not_checked" : "clean";
     if (outcome !== v.held_outcome) return `held_outcome: got ${outcome}, want ${v.held_outcome}`;
     if (typeof v.held_from === "string" && result?.heldFrom !== v.held_from) return `held_from: got ${result?.heldFrom}, want ${v.held_from}`;
     if (Array.isArray(v.searched) && JSON.stringify(result?.heldBlocked?.searched ?? null) !== JSON.stringify(v.searched)) {

@@ -155,6 +155,10 @@ async function checkFixTarget(v: Vector, records: Records): Promise<string | nul
   if (Array.isArray(v.withheld) && JSON.stringify(withheld) !== JSON.stringify(strings(v, "withheld"))) {
     return `withheld: got ${JSON.stringify(withheld)}, want ${JSON.stringify(v.withheld)}`;
   }
+  // `malicious` (record ids, sorted) is checked only on lines that state it: the MCP's maliciousLanding.
+  if (Array.isArray(v.malicious) && JSON.stringify(clean?.maliciousLanding ?? []) !== JSON.stringify(strings(v, "malicious"))) {
+    return `malicious: got ${JSON.stringify(clean?.maliciousLanding ?? [])}, want ${JSON.stringify(v.malicious)}`;
+  }
   // Decision 2 (the 4DA lead, 2026-10-18): lines that state `introduces` pin the union, sorted.
   if (Array.isArray(v.introduces) && JSON.stringify(clean?.introduces ?? []) !== JSON.stringify(strings(v, "introduces"))) {
     return `introduces: got ${JSON.stringify(clean?.introduces ?? [])}, want ${JSON.stringify(v.introduces)}`;

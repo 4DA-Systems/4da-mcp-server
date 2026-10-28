@@ -49,6 +49,32 @@ export interface HeldSources {
 /** The advisory lookup the tools share (LiveIntelligence.queryAdvisories). */
 export type AdvisoryQuery = (deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>;
 
+/**
+ * One lookup for the calls made within `windowMs` of each other: the planner judges each row's
+ * target on its own, so without it a 60-row plan made 61 OSV batches where the scan makes one
+ * (6.2.6 delta audit F4). Every caller gets the combined answer; heldAdvisories reads only its own
+ * dependencies from it, and a failure (offline, stale) is the batch's, so it fails closed for all.
+ */
+export function coalescingQuery(query: AdvisoryQuery, windowMs = 25): AdvisoryQuery {
+  let pending: { deps: Map<string, ResolvedDependency>; answer: Promise<VulnerabilityScanResult> } | null = null;
+  return (deps) => {
+    if (!pending) {
+      const batch = new Map<string, ResolvedDependency>();
+      pending = {
+        deps: batch,
+        answer: new Promise((resolve, reject) => {
+          setTimeout(() => {
+            pending = null;
+            query([...batch.values()]).then(resolve, reject);
+          }, windowMs);
+        }),
+      };
+    }
+    for (const d of deps) pending.deps.set(`${d.name}@${d.version}`, d);
+    return pending.answer;
+  };
+}
+
 export interface HeldDependency {
   name: string;
   /** The release's own spec for it, as published. */
@@ -197,16 +223,16 @@ export async function heldAdvisories(
   return out;
 }
 
-/**
- * "4.20.0 exact-pins qs 6.11.0 (GHSA-a, GHSA-b) and cookie 0.6.0 (GHSA-c)", and for a narrow range
- * "4.22.0 requires qs "~6.14.0", whose newest admitted release 6.14.2 is affected (GHSA-d)".
- * At most three dependencies are named; the rest are counted.
- */
 /** "a", "a and b", "a, b and c". */
 export function andList(parts: string[]): string {
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : (parts[0] ?? "");
 }
 
+/**
+ * "4.20.0 exact-pins qs 6.11.0 (GHSA-a, GHSA-b) and cookie 0.6.0 (GHSA-c)", and for a narrow range
+ * "4.22.0 requires qs "~6.14.0", whose newest admitted release 6.14.2 is affected (GHSA-d)".
+ * At most three dependencies are named; the rest are counted.
+ */
 export function heldText(release: string, affected: HeldDependency[]): string {
   const shown = affected.slice(0, 3);
   const and = andList;
