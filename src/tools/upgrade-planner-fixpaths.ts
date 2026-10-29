@@ -30,6 +30,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { LiveIntelligence } from "../live/index.js";
 import {
+  aboveListedText,
   cleanFixTarget,
   directFix,
   heldNote,
@@ -65,7 +66,7 @@ import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
 import { withHeldTargets } from "../live/held-targets.js";
-import { coalescingQuery, type AdvisoryQuery } from "../live/held-dependencies.js";
+import type { AdvisoryQuery } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 
 /** One dependency the project declares that moves a blocking parent. */
@@ -227,8 +228,10 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
     return todo.length;
   }
   const deadline = Date.now() + budgetMs;
-  // The held-dependency lookups of the rows in flight go out as one OSV batch (delta audit F4).
-  const heldQuery = liveIntel.queryAdvisories ? coalescingQuery(liveIntel.queryAdvisories.bind(liveIntel)) : null;
+  // One held-dependency lookup per row, through the scanner's cache and rate limit. Batching the rows
+  // in flight into one query was tried (6.2.6 delta audit F4) and reverted: one failed or slow batch
+  // then marked every row in it NOT CHECKED (second review N1, N2).
+  const heldQuery = liveIntel.queryAdvisories ? liveIntel.queryAdvisories.bind(liveIntel) : null;
   let unverified = 0;
   let next = 0;
   const worker = async () => {
@@ -430,6 +433,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   }
   const heldWords = heldNote(clean);
   if (heldWords) step.reasons.push(heldWords);
+  if (clean.aboveListed) step.reasons.push(aboveListedText(clean.target));
   if (step.targetVersion !== clean.target) setTarget(step, clean.target);
   if (step.latestVersion === step.targetVersion) delete step.latestVersion;
   // A deprecation notice on the target's whole line: still the target, and said (audit 7f).

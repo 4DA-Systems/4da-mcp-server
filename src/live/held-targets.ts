@@ -55,6 +55,12 @@ export async function withHeldTargets(
         out.set(item.key, { ...item.clean, heldUnchecked: "the npm registry facts carry no dependency specs" });
         return;
       }
+      // A target the registry does not list yet (an advisory's fix newer than the facts, `aboveListed`):
+      // what it pins cannot be read, which is never "holds nothing" (6.2.6 second review I2).
+      if (!facts.versions.includes(target) && !facts.withdrawn.includes(target)) {
+        out.set(item.key, { ...item.clean, heldUnchecked: `the npm registry does not list ${target} yet, so what it pins could not be read` });
+        return;
+      }
       if (!facts.heldSpecs[target]) return; // holds nothing: what it installs is ranges a refresh moves
       const advisories = await settle(sources.packageAdvisories("npm", item.name), deadline);
       // Without the package's own advisory list no later release can be judged; the target alone still can.

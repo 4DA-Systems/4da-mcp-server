@@ -275,6 +275,31 @@ describe("upgrade_planner: a transitive row's target is judged the same way (pr-
   });
 });
 
+describe("upgrade_planner: 6.2.6 second review (I1, I2)", () => {
+  it("I1: a direct target that is NOT a clean fix is not counted as upgradable", async () => {
+    NPM.express.versions["4.22.3"] = { dependencies: { qs: "6.13.0", "path-to-regexp": "0.1.13", cookie: "0.7.1" } };
+    const result = (await executeUpgradePlanner(noDb, { project_path: dir, package: "express" }, await liveFor())) as Record<string, any>;
+    expect(result.recommendations.find((s: { package: string }) => s.package === "express")).toMatchObject({ targetVersion: "4.20.0", fixPathChecked: "installed_advisories_only" });
+    expect(result.summary).toMatch(/1 fix target NOT a clean fix/);
+    expect(result.summary).not.toMatch(/upgradable directly/);
+  });
+
+  it("I2: a target the registry does not list yet is said, and what it pins is NOT CHECKED, never clean", async () => {
+    // express's own advisory names 5.0.1, newer than every release the registry lists (latest 5.0.0).
+    ADVISORIES.express = [adv("GHSA-qw6h-vgh9-j6wx", "express", "5.0.1", "LOW")];
+    try {
+      const result = (await executeUpgradePlanner(noDb, { project_path: dir, package: "express" }, await liveFor())) as Record<string, any>;
+      const row = result.recommendations.find((s: { package: string }) => s.package === "express");
+      expect(row).toMatchObject({ targetVersion: "5.0.1", fixPathChecked: "installed_advisories_only" });
+      const reasons = row.reasons.join(" ");
+      expect(reasons).toMatch(/5\.0\.1 is an advisory's fixed version newer than every release the registry listed when it was read: confirm it is published/);
+      expect(reasons).toMatch(/NOT CHECKED \(the npm registry does not list 5\.0\.1 yet/);
+    } finally {
+      ADVISORIES.express = [adv("GHSA-qw6h-vgh9-j6wx", "express", "4.20.0", "LOW"), adv("GHSA-rv95-896h-c2vc", "express", "4.19.2", "MODERATE")];
+    }
+  });
+});
+
 describe("upgrade_planner: a direct row's target is judged the same way", () => {
   it("planned on its own (package: express), express goes to 4.22.3 as the scan says", async () => {
     const result = (await executeUpgradePlanner(noDb, { project_path: dir, package: "express" }, await liveFor())) as Record<string, any>;

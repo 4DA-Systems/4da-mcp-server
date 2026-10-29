@@ -15,29 +15,34 @@ them passes, the conformance corpus too.
   said "no release up to X clears them" even if some of those releases were
   never checked. It now says "of the releases that could be checked (... NOT
   CHECKED)" (4DA #1039).
-- **A fix version the registry does not list is never offered.** node-ipc's
-  GHSA-97m3-w2cp-4xx6 is "fixed" in 10.1.3, which npm does not serve. The
-  package target already moved past it (12.0.0), but the advisory's own row
-  still said `fixed_version: 10.1.3`; it now says 11.0.0, with "10.1.3 is not a
-  release the registry lists" (shared vector ft-078, audit A-1, the app's
-  `installable_fix`). A fix newer than every release the registry listed stays
-  the target, as the app keeps it, but is now said to be unlisted: "confirm it
-  is published before pinning it".
+- **A fix version the registry does not list, below one it does, is no longer
+  offered as a step.** node-ipc's GHSA-97m3-w2cp-4xx6 is "fixed" in 10.1.3,
+  which npm does not serve. The package target already moved past it (12.0.0),
+  but the advisory's own row still said `fixed_version: 10.1.3`; it now says
+  11.0.0, with "10.1.3 is not a release the registry lists" (shared vector
+  ft-078, audit A-1, the app's `installable_fix`). A Go pseudo-version is never
+  called unlisted.
+- **A fix newer than every release the registry listed** stays the target, as
+  the app keeps it, and is now said: "confirm it is published before pinning
+  it", in vulnerability_scan and upgrade_planner. For npm, what such a release
+  pins cannot be read, so it is NOT CHECKED, never a clean fix.
 - **upgrade_planner's summary** counts a target that pins an affected dependency
-  (or whose pins could not be checked) as "NOT a clean fix", never as "fixed by
-  a lockfile refresh" or as an answer OSV did not give in time.
-- **One OSV lookup per batch of plan rows.** The held check's lookups for the
-  rows being verified together go out as one query (a 40-row plan: 5 OSV
-  batches, not 41).
+  (or whose pins could not be checked) as "NOT a clean fix", never as
+  upgradable, fixed by a lockfile refresh or by a parent upgrade, nor as an
+  answer OSV did not give in time.
+- The held check on transitive rows costs one OSV lookup per npm row (a
+  40-row plan took about twice as long in a synthetic test, still within the
+  plan's budget and failing closed). Batching the rows' lookups was tried and
+  dropped: one failed batch marked every row in it NOT CHECKED.
 - The shared vectors' new `held` line kind (ft-079..ft-092) runs through the
   scan's own target path, and plain fix-target lines through `cleanFixTarget`,
   the scan's entry point (ft-076, a last_affected-only advisory, already
   passed there). The severity runner checks the optional `expect.notices`, and
   fix-target lines' `malicious[]` is now checked too.
-- An independent delta audit of this change found 11 issues. Fixed: an unlisted
-  fix named as "no installable fix" in place of the real reason (malware, or an
-  advisory every fix brings in), and the installed version named as a withheld
-  fix. That audit ran on the first build; the fixes after it had no second audit.
+- Two independent reviews of this change ran before release. The first found an
+  unlisted fix named as "no installable fix" in place of the real reason
+  (malware, or an advisory every fix brings in); the second found its fix too
+  broad, and the batching above. Both are fixed, each with a regression test.
 - `contract/app-schema.sql` follows the app to schema 130 (version lines only).
 
 ## 6.2.5 — 2026-10-26

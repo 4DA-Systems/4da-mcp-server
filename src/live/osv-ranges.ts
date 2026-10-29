@@ -271,11 +271,13 @@ export interface CleanTarget {
    * Releases the registry withdrew (yanked, deprecated: `excluded`) that the
    * target would otherwise have been: each one at or above the floor and
    * below the target (every one, when there is no target) that the advisories
-   * the target is judged against do not affect; with a target, also the
-   * per-advisory fixes below it that the registry does not list although it
-   * lists a later release (audit A-1, node-ipc 10.1.3). Ascending. With no
-   * target, a non-empty list means a fix WAS published and then withdrawn: "no
-   * installable fix", not "no fix published" (4DA FX-H5 `WalkOutcome.withheld`).
+   * the target is judged against do not affect, and the per-advisory fixes
+   * below it that the registry does not list although it lists a later
+   * release (audit A-1, node-ipc 10.1.3). Ascending. With no target, a
+   * non-empty list means no fix can be installed (withdrawn, or never
+   * published): "no installable fix", not "no fix published" (4DA FX-H5
+   * `WalkOutcome.withheld`); left without the unlisted ones when malware or an
+   * advisory every fix brings in is the reason instead.
    */
   withheld: string[];
   /**
@@ -350,7 +352,8 @@ export function smallestCleanVersion(input: {
   // 11.0.0). A version above every listed release may be newer than the facts: the advisory's word stands.
   const listed = fromRegistry ? input.published!.filter((v) => isComparable(v, ecosystem)) : [];
   const ceiling = listed.length > 0 ? listed.reduce((max, v) => (cmp(v, max) > 0 ? v : max), listed[0]) : null;
-  const unlisted = (v: string) => ceiling !== null && cmp(v, ceiling) <= 0 && !isListedVersion(listed, v, ecosystem);
+  // A Go pseudo-version is never in the proxy's list, yet installable: never "unlisted" (second review W2).
+  const unlisted = (v: string) => ceiling !== null && cmp(v, ceiling) <= 0 && !isListedVersion(listed, v, ecosystem) && !isGoPseudoVersion(v, ecosystem);
   const pool = fromRegistry
     ? [...input.published!, ...fixes.filter((f) => ceiling !== null && cmp(f, ceiling) > 0)]
     : [floor, ...input.advisories.flatMap((a) => a.spans.map((s) => s.fixed).filter((f): f is string => f !== null))];
@@ -375,17 +378,16 @@ export function smallestCleanVersion(input: {
   const unfixableIds = [...new Set(unfixable.map((a) => a.id))];
   const affecting = (v: string) => [...new Set(input.advisories.filter((a) => advisoryAffects(a, v, ecosystem)).map((a) => a.id))];
   const clear = (judged: AdvisoryRanges[]) => (v: string) => !judged.some((a) => advisoryAffects(a, v, ecosystem));
-  // The withdrawn releases that would have been the target (clean against `judged`), below `target`,
-  // and, when there IS a target, the fixes the registry does not list that it steps past (A-1).
-  // With no target `withheld` keeps its meaning (a fix was published, then withdrawn): an unlisted
-  // fix was never published, and naming it would put "no installable fix" in place of the real
-  // reason (malware, an advisory every fix brings in). The installed version is never a fix.
-  const passed = (judged: AdvisoryRanges[], target: string | null) => {
+  // The withdrawn releases that would have been the target (clean against `judged`), and the fixes
+  // the registry does not list (A-1), below `target`; ascending. `unlistedToo: false` when there is no
+  // target for a stated reason (malware, an advisory every fix brings in): "no installable fix" must
+  // not take its place (delta audit F2, second review N3). The installed version is never a fix (F6).
+  const passed = (judged: AdvisoryRanges[], target: string | null, unlistedToo = true) => {
     const below = (v: string) => target === null || cmp(v, target) < 0;
     const isInstalled = (v: string) => Boolean(input.installed) && isComparable(input.installed!, ecosystem) && cmp(v, input.installed!) === 0;
     const out = [
       ...releases.filter((v) => withdrawn(v) && below(v) && clear(judged)(v)),
-      ...(target === null ? [] : [...new Set(fixes)].filter((f) => unlisted(f) && below(f) && !isInstalled(f))),
+      ...(unlistedToo ? [...new Set(fixes)].filter((f) => unlisted(f) && below(f) && !isInstalled(f)) : []),
     ];
     return [...new Set(out)].sort(cmp);
   };
@@ -428,8 +430,13 @@ export function smallestCleanVersion(input: {
     floorAffectedBy: affecting(floor),
     stillAffectedBy: affecting(floor),
     unfixable: unfixableIds,
-    withheld: passed(fixable, null),
+    withheld: passed(fixable, null, introduces.length === 0 && maliciousLanding.length === 0),
   };
+}
+
+/** A Go pseudo-version (`v0.0.0-20220314234659-1baeb1ce4c0b`, `+incompatible` allowed). */
+export function isGoPseudoVersion(version: string, ecosystem: string): boolean {
+  return ecosystem === "Go" && /\d{14}-[0-9a-f]{12}(\+incompatible)?$/.test(version);
 }
 
 /**

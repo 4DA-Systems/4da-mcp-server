@@ -29,7 +29,7 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { escapeModulePath } from "./go-registry.js";
-import { advisoryRanges, advisoryAffects, installableFix, isListedVersion, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
+import { advisoryRanges, advisoryAffects, installableFix, isGoPseudoVersion, isListedVersion, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
@@ -501,6 +501,11 @@ export function targetCheckedAll(clean: FixTargetResult): boolean {
   return !clean.advisoriesUnread && !clean.heldBlocked && clean.heldUnchecked === undefined;
 }
 
+/** A target above every release the registry listed (CleanTarget.aboveListed), in plain words. */
+export function aboveListedText(target: string): string {
+  return `${target} is an advisory's fixed version newer than every release the registry listed when it was read: confirm it is published before pinning it`;
+}
+
 /** A reason heldNote writes for a target that is not a clean fix (heldBlocked / heldUnchecked): the plan summary counts those rows apart. */
 export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|exact-pins or narrowly ranges are affected was NOT CHECKED \(/;
 
@@ -603,7 +608,11 @@ function withRegistryFacts(
   // Audit A-1 (the app's `installable_fix`): a fix the registry does not list, below a release it
   // lists, is no more installable than a withdrawn one (node-ipc GHSA-97m3's 10.1.3 -> 11.0.0).
   const unlisted = (fix: string) =>
-    top !== null && isComparable(fix, ecosystem) && compareVersions(fix, top, ecosystem) <= 0 && !isListedVersion(published, fix, ecosystem);
+    top !== null &&
+    isComparable(fix, ecosystem) &&
+    compareVersions(fix, top, ecosystem) <= 0 &&
+    !isListedVersion(published, fix, ecosystem) &&
+    !isGoPseudoVersion(fix, ecosystem);
   for (const fix of new Set(fixes)) {
     const notListed = unlisted(fix);
     if (!facts.withdrawn.includes(fix) && !notListed) continue;
@@ -762,9 +771,7 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
   if (clean.target && clean.stillAffectedBy.length > 0) {
     parts.push(`${clean.target} ${remainsText(clean.stillAffectedBy)}: ${clean.stillAffectedBy.length === 1 ? "it affects" : "they affect"} every newer release too`);
   }
-  if (clean.target && clean.aboveListed) {
-    parts.push(`${clean.target} is an advisory's fixed version newer than every release the registry listed when it was read: confirm it is published before pinning it`);
-  }
+  if (clean.target && clean.aboveListed) parts.push(aboveListedText(clean.target));
   if (clean.target === null && clean.unreadable && clean.unreadable.length > 0) parts.push(unreadableText(clean.unreadable));
   if (clean.target === null && clean.landingNote) parts.push(clean.landingNote);
   if (clean.target === null && clean.introduces && clean.introduces.length > 0) parts.push(introducesText(clean.introduces));

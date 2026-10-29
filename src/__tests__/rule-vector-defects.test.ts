@@ -11,8 +11,6 @@ import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
 import { leavesCaret, refreshRule, type ParentRequirement } from "../live/refresh-rule.js";
 import { smallestCleanVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { cleanFixTarget, rowFix, targetNote, withheldText, type FixPathSources } from "../live/fix-paths.js";
-import { coalescingQuery } from "../live/held-dependencies.js";
-
 describe("PEP 440 local labels order (vo-013..vo-015)", () => {
   it.each([
     ["1.0", "1.0+abc.5", -1],
@@ -159,16 +157,20 @@ describe("6.2.6 delta audit fixes", () => {
     expect(clean).toMatchObject({ target: "1.1.0", noAdvisoryFix: true, withheld: [] });
   });
 
-  it("F4: held lookups made together go out as one query", async () => {
-    const calls: string[][] = [];
-    const query = coalescingQuery(async (deps) => {
-      calls.push(deps.map((d) => `${d.name}@${d.version}`));
-      return { vulnerabilities: [] } as never;
-    });
-    const dep = (name: string, version: string) => ({ name, version }) as never;
-    await Promise.all([query([dep("qs", "6.11.0")]), query([dep("send", "0.18.0"), dep("qs", "6.11.0")]), query([dep("cookie", "0.6.0")])]);
-    expect(calls).toEqual([["qs@6.11.0", "send@0.18.0", "cookie@0.6.0"]]);
-    await query([dep("qs", "6.13.0")]);
-    expect(calls).toHaveLength(2);
+});
+
+describe("6.2.6 second review fixes", () => {
+  const span = (introduced: string, fixed: string | null) => ({ introduced, fixed, lastAffected: null });
+  const adv = (id: string, spans: ReturnType<typeof span>[]): AdvisoryRanges => ({ id, spans, versions: [] }) as unknown as AdvisoryRanges;
+
+  it("N3: with no target and no other reason, an unlisted fix is still named (never a false 'still affected')", () => {
+    const clean = smallestCleanVersion({ ecosystem: "npm", fixes: ["1.9.0"], advisories: [adv("GHSA-d", [span("0", "1.9.0")])], published: ["1.0.0", "2.0.0-rc.1"], installed: "1.0.0" });
+    expect(clean).toMatchObject({ target: null, withheld: ["1.9.0"] });
+  });
+
+  it("W2: a Go pseudo-version fix is never 'unlisted' (the proxy lists only tagged versions)", () => {
+    const pseudo = "0.0.0-20220314234659-1baeb1ce4c0b";
+    const clean = smallestCleanVersion({ ecosystem: "Go", fixes: [pseudo], advisories: [adv("GO-x", [span("0", pseudo)])], published: ["0.0.0-20210101000000-aaaaaaaaaaaa", "0.1.0"], installed: "0.0.0-20210101000000-aaaaaaaaaaaa" });
+    expect(clean?.withheld).toEqual([]);
   });
 });

@@ -49,32 +49,6 @@ export interface HeldSources {
 /** The advisory lookup the tools share (LiveIntelligence.queryAdvisories). */
 export type AdvisoryQuery = (deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>;
 
-/**
- * One lookup for the calls made within `windowMs` of each other: the planner judges each row's
- * target on its own, so without it a 60-row plan made 61 OSV batches where the scan makes one
- * (6.2.6 delta audit F4). Every caller gets the combined answer; heldAdvisories reads only its own
- * dependencies from it, and a failure (offline, stale) is the batch's, so it fails closed for all.
- */
-export function coalescingQuery(query: AdvisoryQuery, windowMs = 25): AdvisoryQuery {
-  let pending: { deps: Map<string, ResolvedDependency>; answer: Promise<VulnerabilityScanResult> } | null = null;
-  return (deps) => {
-    if (!pending) {
-      const batch = new Map<string, ResolvedDependency>();
-      pending = {
-        deps: batch,
-        answer: new Promise((resolve, reject) => {
-          setTimeout(() => {
-            pending = null;
-            query([...batch.values()]).then(resolve, reject);
-          }, windowMs);
-        }),
-      };
-    }
-    for (const d of deps) pending.deps.set(`${d.name}@${d.version}`, d);
-    return pending.answer;
-  };
-}
-
 export interface HeldDependency {
   name: string;
   /** The release's own spec for it, as published. */
