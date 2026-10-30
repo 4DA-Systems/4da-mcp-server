@@ -55,6 +55,12 @@ export async function withHeldTargets(
         out.set(item.key, { ...item.clean, heldUnchecked: "the npm registry facts carry no dependency specs" });
         return;
       }
+      // A target the registry does not list yet (an advisory's fix newer than the facts, `aboveListed`):
+      // what it pins cannot be read, which is never "holds nothing" (6.2.6 second review I2).
+      if (!facts.versions.includes(target) && !facts.withdrawn.includes(target)) {
+        out.set(item.key, { ...item.clean, heldUnchecked: `the npm registry does not list ${target} yet, so what it pins could not be read` });
+        return;
+      }
       if (!facts.heldSpecs[target]) return; // holds nothing: what it installs is ranges a refresh moves
       const advisories = await settle(sources.packageAdvisories("npm", item.name), deadline);
       // Without the package's own advisory list no later release can be judged; the target alone still can.
@@ -77,6 +83,7 @@ export async function withHeldTargets(
     }
     if (own.affected.length === 0) continue;
     const past: NonNullable<FixTargetResult["heldPast"]> = [];
+    const unchecked: string[] = [];
     let chosen: string | null = null;
     for (const v of candidates) {
       const c = at(v);
@@ -84,11 +91,13 @@ export async function withHeldTargets(
         chosen = v;
         break;
       }
-      // An unchecked candidate is passed silently: the one chosen after it was itself judged clean.
+      // An unchecked candidate is passed: the one chosen after it was itself judged clean. With none
+      // chosen it is named NOT CHECKED, never counted among the releases that do not clear it (4DA #1039).
       if (c.status === "checked") past.push({ version: v, affected: c.affected });
+      else unchecked.push(v);
     }
     if (!chosen) {
-      out.set(item.key, { ...item.clean, heldBlocked: { affected: own.affected, searched: candidates } });
+      out.set(item.key, { ...item.clean, heldBlocked: { affected: own.affected, searched: candidates, ...(unchecked.length > 0 ? { unchecked } : {}) } });
       continue;
     }
     const view = cleanReleases((await settle(sources.packageAdvisories("npm", item.name), deadline)) ?? [], "npm", facts.versions, item.installed);

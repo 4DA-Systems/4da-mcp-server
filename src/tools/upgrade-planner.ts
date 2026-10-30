@@ -36,6 +36,7 @@ import { relativeDir } from "./vulnerability-scan-format.js";
 import { appTracksProject, liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { reconcileDirectTargets, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
+import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
@@ -121,10 +122,11 @@ interface UpgradeRecommendation {
   parentUpgrades?: ParentUpgrade[];
   /**
    * For a vulnerable package: whether the target was checked against EVERY
-   * known advisory of the package (`all_advisories`), or only against the
-   * advisories of the installed version because the lookups failed or ran
-   * out of time (`installed_advisories_only`; the target may then be
-   * affected by an advisory the installed version predates).
+   * known advisory of the package and judged a clean fix (`all_advisories`),
+   * or not (`installed_advisories_only`): the lookups failed or ran out of
+   * time (the target may then be affected by an advisory the installed
+   * version predates), or, for npm, the target pins an affected dependency or
+   * what it pins could not be checked (the reasons say which; audit 6.2.5 D-4).
    */
   fixPathChecked?: "all_advisories" | "installed_advisories_only";
   /**
@@ -700,12 +702,17 @@ async function executeStandalonePlanner(
     r.targetVersion = inEcosystemForm(r.ecosystem, r.targetVersion);
     if (r.latestVersion !== undefined) r.latestVersion = inEcosystemForm(r.ecosystem, r.latestVersion);
   }
-  const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct");
+  // Targets that pin (or narrowly range) an affected dependency, or whose held dependencies could not be
+  // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
+  // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
+  const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
+  const heldRows = limited.filter(heldUnclean);
+  const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r));
   const quickWins = upgrades.filter((r) => !r.breaking).length;
   const breakingChanges = upgrades.filter((r) => r.breaking).length;
   const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length;
-  const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh").length;
-  const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent").length;
+  const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r)).length;
+  const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent" && !heldUnclean(r)).length;
   const devOnly = limited.filter((r) => r.isDev).length;
   const overrides = limited.filter((r) => r.action === "override_or_replace").length;
   const reinstalls = limited.filter((r) => r.action === "reinstall").length;
@@ -737,6 +744,11 @@ async function executeStandalonePlanner(
   if (removals > 0) parts.push(`${removals} to remove or replace: no release is clean of the malware or advisories affecting the installed copy`);
   if (holds > 0) parts.push(`${holds} to keep where ${holds === 1 ? "it is" : "they are"}: every newer release is known-affected or withdrawn`);
   if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated, already its latest release, or no release admits a clean version): override the version or replace the parent`);
+  if (heldRows.length > 0) {
+    parts.push(
+      `${heldRows.length} fix target${heldRows.length !== 1 ? "s" : ""} NOT a clean fix: the release pins (or narrowly ranges) an affected dependency, or what it pins could not be checked (see reasons; confirm with dependency_check)`,
+    );
+  }
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
   if (noFix > 0) parts.push(`${noFix} vulnerable with no fixed release yet`);
   if (inactive > 0) parts.push(`${inactive} vulnerable only in code not built on this host`);
