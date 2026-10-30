@@ -1,6 +1,6 @@
 {
   "name": "4da",
-  "version": "6.2.5",
+  "version": "6.2.6",
   "description": "Upgrade intelligence for your agent: what an upgrade changes and where it touches your code, CVE scans against your real lockfiles, upgrade plans, decision memory. Package names and versions (private ones in your lockfiles included) go to OSV.dev and the package registries (GitHub only if you opt in to release notes); source code never leaves the machine.",
   "mcpServers": {
     "4da": {
