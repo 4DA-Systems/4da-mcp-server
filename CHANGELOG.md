@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.6 — unreleased
+## 6.2.6 — 2026-10-30
 
 Parity with the 4DA app's engine after its D-4, A-1 and F-7 changes. The
 shared rule vectors are pinned at 4DA `511ba1cda` (schema 130); every one of
