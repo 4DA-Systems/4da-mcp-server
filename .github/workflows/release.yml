@@ -4,10 +4,19 @@ name: Release
 # `node scripts/release.mjs`, merged through a PR) publishes that version to
 # npm and the MCP Registry, and attaches the Claude Desktop bundles to a
 # GitHub release.
+#
+# Only `publish` holds the OIDC publish identity (id-token: write). It runs no
+# dependency install, no build and no repository script: it publishes the exact
+# tarball `verify` packed (checked by SHA-256) and `install-smoke` installed on
+# every OS (audit 6.2.5 E-4, E-7).
+#
+# workflow_dispatch is a dry run on any ref: verify, pack, install smoke and
+# bundles, without the tag checks, and with no publish or release job.
 on:
   push:
     tags:
       - "mcp-v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,6 +26,9 @@ jobs:
     name: Verify the tagged commit
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -38,6 +50,7 @@ jobs:
       - run: pnpm run contract
 
       - name: The tag names the version every manifest declares
+        if: github.event_name == 'push'
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/mcp-v}"
           PKG_VERSION=$(node -p "require('./package.json').version")
@@ -49,12 +62,97 @@ jobs:
           # manifest-versions.test.ts (run above) holds the other manifests to package.json.
 
       - name: The tagged commit is on main
+        if: github.event_name == 'push'
         run: |
           git fetch --no-tags --depth=200 origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
             echo "::error::$GITHUB_SHA is not on main. Release from a merged commit."
             exit 1
           }
+
+      # The release artifact, packed from the build tested above, in this job
+      # (no id-token). `publish` publishes this file and nothing else.
+      - name: Pack the npm tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tarball"
+          npm pack --pack-destination "$RUNNER_TEMP/tarball"
+          cd "$RUNNER_TEMP/tarball"
+          [ "$(ls ./*.tgz | wc -l)" = 1 ] || { echo "::error::expected one tarball: $(ls)"; exit 1; }
+          TGZ=$(basename ./*.tgz)
+          PKG_VERSION=$(node -p "require(process.env.GITHUB_WORKSPACE + '/package.json').version")
+          TGZ_VERSION=$(tar -xzOf "$TGZ" package/package.json | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).version)')
+          [ "$TGZ_VERSION" = "$PKG_VERSION" ] || { echo "::error::$TGZ holds $TGZ_VERSION, package.json says $PKG_VERSION"; exit 1; }
+          SHA256=$(sha256sum "$TGZ" | cut -d' ' -f1)
+          echo "$TGZ sha256 $SHA256"
+          echo "tarball=$TGZ" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/tarball/*.tgz
+          if-no-files-found: error
+
+  # The tarball as a user installs it, before anyone can approve its publish:
+  # each OS, npm 10 (Node 22's own) and npm 12 (no install scripts), in a
+  # scratch project with a scratch HOME (scripts/smoke-installed.mjs).
+  install-smoke:
+    name: Install smoke (${{ matrix.os }}, npm ${{ matrix.npm }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        npm: ["10", "12"]
+        include:
+          - npm: "10"
+            npm-install: bundled
+          - npm: "12"
+            npm-install: "12.2.1"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/proj
+
+      - name: Use npm ${{ matrix.npm-install }}
+        if: matrix.npm-install != 'bundled'
+        shell: bash
+        run: npm install -g --no-audit --no-fund "npm@${{ matrix.npm-install }}"
+
+      - name: Install the verified tarball in a scratch project, smoke it
+        shell: bash
+        env:
+          TGZ: ${{ needs.verify.outputs.tarball }}
+          SHA256: ${{ needs.verify.outputs.sha256 }}
+          NPM_MAJOR: ${{ matrix.npm }}
+        run: |
+          set -euo pipefail
+          echo "node $(node --version), npm $(npm --version)"
+          [ "$(npm --version | cut -d. -f1)" = "$NPM_MAJOR" ] || { echo "::error::expected npm $NPM_MAJOR"; exit 1; }
+          cd "$RUNNER_TEMP/proj"
+          # node, not sha256sum: macOS runners do not ship GNU coreutils.
+          node -e '
+            const got = require("crypto").createHash("sha256").update(require("fs").readFileSync(process.env.TGZ)).digest("hex");
+            if (got !== process.env.SHA256) { console.error(`::error::${process.env.TGZ} sha256 ${got}, verify packed ${process.env.SHA256}`); process.exit(1); }
+            console.log(`${process.env.TGZ}: sha256 OK`);
+          '
+          echo '{"name":"smoke","private":true}' > package.json
+          npm install --no-audit --no-fund "./$TGZ"
+          npm ls --all --omit=dev || true
+          node "$GITHUB_WORKSPACE/scripts/smoke-installed.mjs" .
 
   bundles:
     name: Bundle (${{ matrix.label }})
@@ -99,7 +197,9 @@ jobs:
 
   publish:
     name: Publish to npm and the MCP Registry
-    needs: [verify, bundles]
+    needs: [verify, install-smoke, bundles]
+    # Tag pushes only: a workflow_dispatch dry run ends before this job.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mcp-v')
     runs-on: ubuntu-latest
     timeout-minutes: 35  # the provenance wait alone can take 10 (audit 6.2.5 E-3)
     # npm publishes are irreversible. The `release` environment waits for a
@@ -109,21 +209,41 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    # Nothing here installs the package's dependencies, builds, or runs a
+    # repository script while the OIDC identity is in reach. The checkout is
+    # read for the version and server.json (MCP Registry) only.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
-          cache: pnpm
           # No registry-url: that input writes an .npmrc that points auth at
           # NODE_AUTH_TOKEN. This workflow publishes without a token.
+          # No cache: nothing is installed from the lockfile in this job.
 
-      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/tarball
 
-      - run: pnpm run build
+      # The file is the one verify packed and install-smoke installed: the same
+      # SHA-256 (verify's job output, not a file carried in the artifact), and
+      # the version the tag names.
+      - name: Check the tarball against verify's SHA-256 and the tag
+        env:
+          TGZ: ${{ needs.verify.outputs.tarball }}
+          SHA256: ${{ needs.verify.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [ -n "$TGZ" ] && [ -n "$SHA256" ] || { echo "::error::verify produced no tarball name or SHA-256; re-run all jobs"; exit 1; }
+          cd "$RUNNER_TEMP/tarball"
+          echo "$SHA256  $TGZ" | sha256sum -c -
+          TAG_VERSION="${GITHUB_REF#refs/tags/mcp-v}"
+          TGZ_VERSION=$(tar -xzOf "$TGZ" package/package.json | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).version)')
+          [ "$TGZ_VERSION" = "$TAG_VERSION" ] || { echo "::error::$TGZ holds $TGZ_VERSION, the tag says $TAG_VERSION"; exit 1; }
 
       # npm TRUSTED PUBLISHING (OIDC). No token exists: the package's
       # publishing access is "require 2FA and disallow tokens", so this job is
@@ -135,17 +255,32 @@ jobs:
       #
       # Idempotent: when the version is already on npm (a re-run after the
       # registry step failed), the publish is skipped and the rest proceeds.
+      #
+      # It publishes the verified tarball, not the checkout: `npm publish <tgz>`
+      # with --ignore-scripts runs no lifecycle script (prepublishOnly builds).
+      # On a re-run over a live version it compares the registry's integrity
+      # with this tarball, and warns if they differ.
       - name: Publish to npm (trusted publishing; skipped if the version is live)
         id: npm_publish
+        env:
+          TGZ: ${{ needs.verify.outputs.tarball }}
         run: |
+          set -euo pipefail
           PKG_VERSION=$(node -p "require('./package.json').version")
+          TGZ_PATH="$RUNNER_TEMP/tarball/$TGZ"
           if npm view "@4da/mcp-server@$PKG_VERSION" version >/dev/null 2>&1; then
             echo "@4da/mcp-server@$PKG_VERSION is already on npm; skipping the publish."
+            LIVE=$(npm view "@4da/mcp-server@$PKG_VERSION" dist.integrity)
+            OURS="sha512-$(openssl dgst -sha512 -binary "$TGZ_PATH" | base64 -w0)"
+            if [ "$LIVE" != "$OURS" ]; then
+              echo "::warning::the live $PKG_VERSION tarball ($LIVE) is not this run's tarball ($OURS)"
+            fi
           else
-            # Exact pin: this job holds the OIDC publish identity (audit 6.2.5 E-4).
-            npm install -g npm@11.21.0
+            # Exact pin, no install scripts: this job holds the OIDC publish
+            # identity (audit 6.2.5 E-4). OIDC needs npm >= 11.5.1.
+            npm install -g --ignore-scripts --no-audit --no-fund npm@11.21.0
             npm --version
-            npm publish --access public
+            npm publish "$TGZ_PATH" --access public --ignore-scripts
             echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -211,6 +346,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: bundles
+          pattern: mcpb-*
           merge-multiple: true
 
       - name: Create the release (notes from CHANGELOG.md)
