@@ -197,6 +197,35 @@ jobs:
           npm ls --all --omit=dev || true
           node "$GITHUB_WORKSPACE/scripts/smoke-installed.mjs" .
 
+  # The Claude Desktop bundle, built the way release.yml builds it: production
+  # node_modules from pnpm-lock.yaml (the tested versions) and the mcpb CLI
+  # from tools/mcpb's lockfile, then its server smoked over stdio. Linux only
+  # here (Claude Desktop is macOS/Windows; release.yml builds those); the build
+  # path is the same on every OS (audit 6.2.5 E-6).
+  bundle:
+    name: Bundle build (from the lockfiles)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - name: Build the .mcpb bundle
+        run: node scripts/build-mcpb.mjs
+
+      - name: Smoke the bundled server
+        run: node scripts/smoke-installed.mjs --bundle dist-mcpb/stage/server
+
   # The dependency engine scored against the 4DA conformance corpus (lockfiles,
   # pinned OSV records, adjudicated truth) at the commit conformance.lock pins.
   # Offline and platform-independent once pinned, so ubuntu only. The corpus

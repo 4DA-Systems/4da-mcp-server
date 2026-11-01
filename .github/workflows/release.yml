@@ -83,8 +83,13 @@ jobs:
 
       - run: pnpm run build
 
+      # Production node_modules from pnpm-lock.yaml, the mcpb CLI from
+      # tools/mcpb's lockfile (audit 6.2.5 E-6).
       - name: Build the .mcpb bundle
         run: node scripts/build-mcpb.mjs
+
+      - name: Smoke the bundled server
+        run: node scripts/smoke-installed.mjs --bundle dist-mcpb/stage/server
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
         with:

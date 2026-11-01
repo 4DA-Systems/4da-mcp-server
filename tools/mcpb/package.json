@@ -1,0 +1,12 @@
+{
+  "name": "4da-mcp-server-mcpb-tool",
+  "private": true,
+  "description": "The mcpb CLI that packs the Claude Desktop bundle, pinned with its whole tree and installed by scripts/build-mcpb.mjs with npm ci. It has its own lockfile so the package audit stays meaningful: mcpb needs zod 3, whose high advisory GHSA-mrhx-c7xc-m3w5 has no 3.x fix; here zod only validates the manifest build-mcpb.mjs writes.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  },
+  "overrides": {
+    "tmp": "0.2.7"
+  }
+}
