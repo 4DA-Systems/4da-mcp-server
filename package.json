@@ -80,9 +80,9 @@
     "url": "https://github.com/4DA-Systems/4da-mcp-server/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/node": "^2.1.1",
-    "@modelcontextprotocol/server": "^2.3.1",
-    "hono": "^4.13.13",
+    "@modelcontextprotocol/node": "^2.1.2",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "hono": "^4.13.14",
     "jsonc-parser": "^3.3.1"
   },
   "optionalDependencies": {
@@ -90,10 +90,10 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vite": "~7.3.5",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": ">=22.0.0"
