@@ -7,6 +7,10 @@
  * E-2, E-7).
  *
  *   node scripts/smoke-installed.mjs <dir holding node_modules/@4da/mcp-server>
+ *   node scripts/smoke-installed.mjs --bundle <a .mcpb's server/ dir>
+ *
+ * --bundle smokes the Claude Desktop bundle's server as built (no bins: Claude
+ * Desktop runs `node server/dist/index.js`), so the stdio checks only.
  *
  * Checks: `4da-mcp --version` prints the package version; the stdio server
  * answers initialize and lists its standalone tools; `4da-mcp-setup --dry-run`
@@ -17,8 +21,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const project = path.resolve(process.argv[2] ?? ".");
-const pkgDir = path.join(project, "node_modules", "@4da", "mcp-server");
+const bundle = process.argv[2] === "--bundle";
+const project = path.resolve((bundle ? process.argv[3] : process.argv[2]) ?? ".");
+const pkgDir = bundle ? project : path.join(project, "node_modules", "@4da", "mcp-server");
 const { version } = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
 const binDir = path.join(project, "node_modules", ".bin");
 const bin = (name) => path.join(binDir, process.platform === "win32" ? `${name}.cmd` : name);
@@ -44,15 +49,17 @@ function runBin(name, args) {
   return { code: result.status, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-const v = runBin("4da-mcp", ["--version"]);
-if (v.code !== 0 || !v.out.includes(version)) fail(`4da-mcp --version: exit ${v.code}, output ${JSON.stringify(v.out.slice(0, 300))}`);
-console.log(`4da-mcp --version: ${v.out.trim()}`);
+if (!bundle) {
+  const v = runBin("4da-mcp", ["--version"]);
+  if (v.code !== 0 || !v.out.includes(version)) fail(`4da-mcp --version: exit ${v.code}, output ${JSON.stringify(v.out.slice(0, 300))}`);
+  console.log(`4da-mcp --version: ${v.out.trim()}`);
 
-const setup = runBin("4da-mcp-setup", ["--dry-run"]);
-if (setup.code !== 0 || !/Setup/.test(setup.out) || !/DRY RUN/.test(setup.out)) {
-  fail(`4da-mcp-setup --dry-run printed nothing it should: exit ${setup.code}, output ${JSON.stringify(setup.out.slice(0, 300))}`);
+  const setup = runBin("4da-mcp-setup", ["--dry-run"]);
+  if (setup.code !== 0 || !/Setup/.test(setup.out) || !/DRY RUN/.test(setup.out)) {
+    fail(`4da-mcp-setup --dry-run printed nothing it should: exit ${setup.code}, output ${JSON.stringify(setup.out.slice(0, 300))}`);
+  }
+  console.log("4da-mcp-setup --dry-run: ran");
 }
-console.log("4da-mcp-setup --dry-run: ran");
 
 const child = spawn(process.execPath, [path.join(pkgDir, "dist", "index.js")], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
 let buffer = "";
