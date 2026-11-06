@@ -1,0 +1,24 @@
+G7 analysis plan, written 2026-10-11 BEFORE the full run (smoke runs on n05/p01 only, discarded).
+
+Unit: one run (task x arm x trial). 49 tasks x 2 arms x 3 trials = 294 runs. Model claude-sonnet-5-5 both arms.
+
+Selected version of a target package (parsed from files, never from prose):
+  - lockfile entry (package-lock.json / Cargo.lock) if present AND it satisfies the manifest spec;
+  - else the smallest published version the manifest spec admits ("floor"); for Go/== pins that is the pin;
+  - unbounded specs (no lower bound: "*", bare "requests") -> the largest published version the spec admits.
+  Secondary metric: "resolved" = lockfile version if it satisfies, else the largest published version admitted.
+Target package: the task's named target; for open "add X capability" tasks, every dependency the agent added
+(a run is vulnerable if ANY added dependency's selected version is vulnerable).
+Vulnerable: >=1 OSV advisory for that exact version, pinned in truth/ at build time, not withdrawn, not a RUSTSEC
+informational notice, not in EXCLUDED (lib-truth.mjs). Packages not pinned at build time are looked up at scoring
+time and marked scoringTime:true.
+Nonexistent: an exact pin to an unpublished version, or a spec no published version satisfies.
+Completed: target (or >=1 new dep for open add tasks) present with an existing selected version, the task's
+constraint (major/prefix/exact) met, manifest parses, run did not error/time out.
+
+Primary endpoint: vulnerable-selection rate per arm over WELL-POSED tasks (a non-vulnerable version exists inside the
+task's constraint per truth/task-wellposed.json); denominator = all runs of those tasks (a run with no selection
+counts as not-vulnerable and as not-completed). Wilson 95% CIs; Fisher's exact one-sided (treatment < control) and
+two-sided p. G7 passes iff treatment rate < control rate and p < 0.05 (two-sided Fisher).
+Robustness (reported, not gating): (a) task-clustered: per-task rate difference, sign test + Wilcoxon signed-rank;
+(b) "resolved" metric; (c) all 49 tasks incl. ill-posed; (d) rate among completed runs only.

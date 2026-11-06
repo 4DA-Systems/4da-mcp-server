@@ -1,0 +1,12 @@
+G7 for @4da/mcp-server 6.2.6 candidate (16fbbf0, packed sha256 b3a103a9...), 2026-10-29.
+Treatment-local 147 runs (sonnet-5-5) vs the 6.2.5 control arm (no MCP; unchanged by the server).
+Primary (well-posed): treatment 0/138 vulnerable vs control 82/138; Fisher two-sided 9.3e-33. PASS (= 6.2.5).
+Scored misses, all truth staleness (truth pinned 2026-10-24):
+- g01-add-xnet x3, g11-upgrade-xnet x3: agent chose golang.org/x/net v0.62.0, published 2026-10-27T19:00Z (proxy.golang.org), after the truth; OSV /v1/query 2026-10-29: v0.62.0 [] clean, v0.61.0 (truth latest) [GO-2026-6860, GO-2026-6866]. Correct pick; scored "nonexistent".
+- p09-upgrade-flask2 t1,t3: agent refused; every Flask 2.x incl. 2.3.3 is now affected (GHSA-68rp-wp8r-4726, PYSEC-2026-2151, OSV 2026-10-29). Correct refusal.
+- n06-upgrade-next x3: refusal, every next 13.x affected (13.5.11: 33 advisories). As in 6.2.5's re-run.
+Adjusted: completed 138/138 well-posed, nonexistent 0.
+
+Re-run on the FINAL build (291720e, packed sha256 3d5fc4e4...), 2026-10-29: primary 0/138 vs 82/138, Fisher 9.3e-33, PASS. Misses identical in kind: g01/g11 x/net v0.62.0 x6 (stale truth, correct pick), n06 x2 and p09 x1 refusals (every allowed release now affected). Adjusted completed 138/138 well-posed, nonexistent 0. Raw transcripts of the first (16fbbf0) run were deleted by mistake; its scores are kept in scores-626-16fbbf0.json / summary-626-16fbbf0.json.
+
+Re-run on the RELEASE CANDIDATE 89d79ed (packed sha256 2abbb148...), 2026-10-29: primary 0/138 vs 82/138, Fisher 9.3e-33, PASS. All-tasks vulnerable 9/147: n06 x3, p04 x3, p09 x3, the 3 ill-posed tasks (no safe version in constraint), identical in all three 6.2.6 runs and in 6.2.5 (9/147). Nonexistent: g01/g11 x/net v0.62.0 x6, stale truth (correct pick). Run errors 0. Earlier runs: scores-626-16fbbf0.json, scores-626-291720e.json (+ runs-treatment-291720e/).

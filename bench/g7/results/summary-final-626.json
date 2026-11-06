@@ -1,0 +1,695 @@
+{
+  "runs": {
+    "control": 147,
+    "treatment": 147
+  },
+  "tasks": 49,
+  "wellPosedTasks": 46,
+  "primary_vulnerable_wellposed": {
+    "control": {
+      "k": 82,
+      "n": 138,
+      "rate": 0.5942028985507246,
+      "ci": [
+        0.5108007563878045,
+        0.6725024908084812
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 138,
+      "rate": 0,
+      "ci": [
+        1.687742367942938e-18,
+        0.02708276488125261
+      ]
+    },
+    "fisher": {
+      "two": 9.276980243329133e-33,
+      "less": 4.6384901216645665e-33
+    }
+  },
+  "vulnerable_all_tasks": {
+    "control": {
+      "k": 91,
+      "n": 147,
+      "rate": 0.6190476190476191,
+      "ci": [
+        0.5384595305061105,
+        0.6935721686008512
+      ]
+    },
+    "treatment": {
+      "k": 9,
+      "n": 147,
+      "rate": 0.061224489795918366,
+      "ci": [
+        0.03254150162529763,
+        0.11225595023761518
+      ]
+    },
+    "fisher": {
+      "two": 7.230782037516467e-26,
+      "less": 3.615391018758233e-26
+    }
+  },
+  "resolved_vulnerable_wellposed": {
+    "control": {
+      "k": 82,
+      "n": 138,
+      "rate": 0.5942028985507246,
+      "ci": [
+        0.5108007563878045,
+        0.6725024908084812
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 138,
+      "rate": 0,
+      "ci": [
+        1.687742367942938e-18,
+        0.02708276488125261
+      ]
+    },
+    "fisher": {
+      "two": 9.276980243329133e-33,
+      "less": 4.6384901216645665e-33
+    }
+  },
+  "vulnerable_among_completed_wellposed": {
+    "control": {
+      "k": 82,
+      "n": 138,
+      "rate": 0.5942028985507246,
+      "ci": [
+        0.5108007563878045,
+        0.6725024908084812
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 132,
+      "rate": 0,
+      "ci": [
+        -1.6856672529484092e-18,
+        0.028278987232114673
+      ]
+    },
+    "fisher": {
+      "two": 7.252858960489799e-32,
+      "less": 3.936957954572899e-32
+    }
+  },
+  "completed_wellposed": {
+    "control": {
+      "k": 138,
+      "n": 138,
+      "rate": 1,
+      "ci": [
+        0.9729172351187474,
+        1
+      ]
+    },
+    "treatment": {
+      "k": 132,
+      "n": 138,
+      "rate": 0.9565217391304348,
+      "ci": [
+        0.9083922329134368,
+        0.9799235034993324
+      ]
+    },
+    "fisher": {
+      "two": 0.02956416277449036,
+      "less": 0.01478208138724518
+    }
+  },
+  "completed_all": {
+    "control": {
+      "k": 147,
+      "n": 147,
+      "rate": 1,
+      "ci": [
+        0.9745331362492389,
+        1
+      ]
+    },
+    "treatment": {
+      "k": 137,
+      "n": 147,
+      "rate": 0.9319727891156463,
+      "ci": [
+        0.8793111620787228,
+        0.9626324318236809
+      ]
+    },
+    "fisher": {
+      "two": 0.0016673400718785353,
+      "less": 0.0008336700359392676
+    }
+  },
+  "nonexistent_all": {
+    "control": {
+      "k": 0,
+      "n": 147,
+      "rate": 0,
+      "ci": [
+        0,
+        0.025466863750761112
+      ]
+    },
+    "treatment": {
+      "k": 6,
+      "n": 147,
+      "rate": 0.04081632653061224,
+      "ci": [
+        0.018838561325457193,
+        0.08618202783340505
+      ]
+    },
+    "fisher": {
+      "two": 0.029666644711399348,
+      "less": 1
+    }
+  },
+  "run_error_all": {
+    "control": {
+      "k": 0,
+      "n": 147,
+      "rate": 0,
+      "ci": [
+        0,
+        0.025466863750761112
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 147,
+      "rate": 0,
+      "ci": [
+        0,
+        0.025466863750761112
+      ]
+    },
+    "fisher": {
+      "two": 1,
+      "less": 1
+    }
+  },
+  "clustered": {
+    "sign": {
+      "pos": 0,
+      "neg": 28,
+      "ties": 18,
+      "p_two": 7.450580596923836e-9
+    },
+    "perm": {
+      "p_two": 0.0000049999750001249995,
+      "method": "Monte Carlo 200k sign flips"
+    },
+    "meanDiff": -0.5942028985507247
+  },
+  "vulnerable_wellposed_npm": {
+    "control": {
+      "k": 21,
+      "n": 36,
+      "rate": 0.5833333333333334,
+      "ci": [
+        0.422002514538589,
+        0.7285943804665979
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 36,
+      "rate": 0,
+      "ci": [
+        -6.269855260193084e-18,
+        0.09641862996887933
+      ]
+    },
+    "fisher": {
+      "two": 1.4411683019989614e-8,
+      "less": 7.205841509994807e-9
+    }
+  },
+  "vulnerable_wellposed_PyPI": {
+    "control": {
+      "k": 18,
+      "n": 30,
+      "rate": 0.6,
+      "ci": [
+        0.42320360121215705,
+        0.7540937198355525
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 30,
+      "rate": 0,
+      "ci": [
+        0,
+        0.11351339476145204
+      ]
+    },
+    "fisher": {
+      "two": 1.8700640109964586e-7,
+      "less": 9.350320054982293e-8
+    }
+  },
+  "vulnerable_wellposed_crates.io": {
+    "control": {
+      "k": 22,
+      "n": 36,
+      "rate": 0.6111111111111112,
+      "ci": [
+        0.4486445897263513,
+        0.7521512702805645
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 36,
+      "rate": 0,
+      "ci": [
+        -6.269855260193084e-18,
+        0.09641862996887933
+      ]
+    },
+    "fisher": {
+      "two": 4.238730299997036e-9,
+      "less": 2.119365149998518e-9
+    }
+  },
+  "vulnerable_wellposed_Go": {
+    "control": {
+      "k": 21,
+      "n": 36,
+      "rate": 0.5833333333333334,
+      "ci": [
+        0.422002514538589,
+        0.7285943804665979
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 36,
+      "rate": 0,
+      "ci": [
+        -6.269855260193084e-18,
+        0.09641862996887933
+      ]
+    },
+    "fisher": {
+      "two": 1.4411683019989614e-8,
+      "less": 7.205841509994807e-9
+    }
+  },
+  "vulnerable_wellposed_add": {
+    "control": {
+      "k": 40,
+      "n": 72,
+      "rate": 0.5555555555555556,
+      "ci": [
+        0.44087390777767466,
+        0.664609295182876
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 72,
+      "rate": 0,
+      "ci": [
+        -3.293715392944081e-18,
+        0.05065117335504446
+      ]
+    },
+    "fisher": {
+      "two": 8.63642325970648e-16,
+      "less": 4.31821162985324e-16
+    }
+  },
+  "vulnerable_wellposed_upgrade": {
+    "control": {
+      "k": 15,
+      "n": 24,
+      "rate": 0.625,
+      "ci": [
+        0.4270996229526447,
+        0.7884063254095233
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 24,
+      "rate": 0,
+      "ci": [
+        0,
+        0.13797620655132792
+      ]
+    },
+    "fisher": {
+      "two": 0.000002391935870894613,
+      "less": 0.0000011959679354473066
+    }
+  },
+  "vulnerable_wellposed_pin": {
+    "control": {
+      "k": 27,
+      "n": 42,
+      "rate": 0.6428571428571429,
+      "ci": [
+        0.4916636560079472,
+        0.7701081176843639
+      ]
+    },
+    "treatment": {
+      "k": 0,
+      "n": 42,
+      "rate": 0,
+      "ci": [
+        0,
+        0.08379879207691124
+      ]
+    },
+    "fisher": {
+      "two": 2.627654260735376e-11,
+      "less": 1.313827130367688e-11
+    }
+  },
+  "treatment_tool_usage": {
+    "runs": 147,
+    "runsWithAnyMcpCall": 147,
+    "runsPerTool": {
+      "dependency_check": 147,
+      "upgrade_impact": 1
+    },
+    "totalCalls": 157,
+    "runsCheckedAfterLastEdit": 0,
+    "vulnerableRate_whenToolUsed": {
+      "k": 0,
+      "n": 138,
+      "rate": 0,
+      "ci": [
+        1.687742367942938e-18,
+        0.02708276488125261
+      ]
+    },
+    "vulnerableRate_whenNoToolCall": {
+      "k": 0,
+      "n": 0,
+      "ci": [
+        null,
+        null
+      ]
+    }
+  },
+  "cost_usd": {
+    "control": 2.7922129,
+    "treatment": 4.835929399999999
+  },
+  "mean_seconds": {
+    "control": 18.887843537414966,
+    "treatment": 19.077115646258502
+  },
+  "perTask": [
+    {
+      "id": "n01-add-yaml",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "n02-add-http",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "n03-add-lodash",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "n04-add-markdown",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "n05-upgrade-express",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "n07-pin-ws",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "n08-pin-minimist",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "n09-pin-node-fetch2",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "n10-upgrade-axios0",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "n11-add-jwt",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "n12-pin-semver",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "n13-pin-body-parser",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "p01-add-http",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "p02-add-yaml",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "p03-pin-jinja2",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "p05-add-pillow",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "p06-add-wsgi",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "p07-pin-aiohttp",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "p08-pin-cryptography",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "p10-upgrade-requests",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "p11-pin-tornado",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "p12-add-fastapi",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "c01-add-tokio",
+      "control": 0.3333333333333333,
+      "treatment": 0,
+      "diff": -0.3333333333333333
+    },
+    {
+      "id": "c02-pin-tokio",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "c03-add-openssl",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "c04-add-regex",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "c05-add-time",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "c06-pin-h2",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "c07-pin-ring",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "c08-add-sqlx",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "c09-upgrade-openssl",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "c10-pin-protobuf",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "c11-add-tar",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "c12-pin-rustls",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "g01-add-xnet",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "g02-add-web",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "g03-add-jwt",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "g04-add-xcrypto",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "g05-add-yaml",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "g06-upgrade-grpc",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "g07-upgrade-protobuf",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "g08-add-oauth2",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "g09-upgrade-gin",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "g10-add-websocket",
+      "control": 0,
+      "treatment": 0,
+      "diff": 0
+    },
+    {
+      "id": "g11-upgrade-xnet",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    },
+    {
+      "id": "g12-add-echo",
+      "control": 1,
+      "treatment": 0,
+      "diff": -1
+    }
+  ],
+  "g7_pass": true
+}

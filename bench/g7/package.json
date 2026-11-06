@@ -1,0 +1,17 @@
+{
+  "name": "g7-bench",
+  "private": true,
+  "description": "G7: does @4da/mcp-server stop a coding agent from writing a vulnerable dependency version? Not part of the npm package.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "gen-tasks": "node gen-tasks.mjs",
+    "build-truth": "node build-truth.mjs",
+    "score": "node score-g7.mjs"
+  },
+  "dependencies": {
+    "semver": "7.7.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
