@@ -357,7 +357,9 @@ function withAlternatives(reason: string, item: Resolved, unsafe: boolean): stri
   const where = rc.basis === "requested" ? `in ${rc.range}` : `on ${item.to}'s line (${rc.range})`;
   if (rc.smallest_safe_in_range === null) {
     const ids = rc.affecting_all ?? [];
-    const all = ids.length ? `: ${ids.slice(0, 3).join(", ")}${ids.length > 3 ? ` and ${ids.length - 3} more` : ""} affect every one` : "";
+    // The count comes from the uncapped total: `affecting_all` names at most 10.
+    const total = Math.max(rc.affecting_all_total ?? ids.length, ids.length);
+    const all = ids.length ? `: ${ids.slice(0, 3).join(", ")}${total > 3 ? ` and ${total - 3} more` : ""} affect every one` : "";
     const outside = rc.newest_safe_outside_range ? ` Newest safe release outside it: ${rc.newest_safe_outside_range}.` : "";
     const withheld = rc.withheld_note ? ` ${rc.withheld_note}.` : "";
     return `${reason} | No release ${where} is free of known advisories${all}.${withheld}${outside}`;

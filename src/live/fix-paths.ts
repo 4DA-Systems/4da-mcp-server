@@ -51,8 +51,11 @@ const VERSIONS_TTL = 6 * 3600;
 const VERSION_DEPS_TTL = 30 * 86_400;
 const MAX_OSV_PAGES = 10;
 
-/** Bump when the shape of anything this module caches changes (10: npm facts carry `heldSpecs`, audit 6.2.5 D-4). */
-const CACHE_VERSION = 10;
+/**
+ * Bump when the shape of anything this module caches changes (10: npm facts carry `heldSpecs`, audit 6.2.5 D-4;
+ * 11: advisory ranges carry `aliases`, so a GHSA record and its PYSEC twin count once).
+ */
+const CACHE_VERSION = 11;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
