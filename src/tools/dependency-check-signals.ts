@@ -165,17 +165,14 @@ function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
       : "";
   const fixedNote = fixed.length > 0 ? ` This change fixes ${list(fixed)} affecting ${item.from}.` : "";
 
-  const serious = facts.to.filter((a) => !a.maintenance && (a.severity === "critical" || a.severity === "high"));
-  if (serious.length > 0) {
-    return { id: "advisories", value, effect: "avoid", evidence: `${item.to} is affected by ${list(serious)}.${fixedNote}${noticeNote}` };
-  }
-  const other = facts.to.filter((a) => !a.maintenance);
-  if (other.length > 0) {
+  const affecting = facts.to.filter((a) => !a.maintenance);
+  if (affecting.length > 0) {
+    const serious = affecting.some((a) => a.severity === "critical" || a.severity === "high");
     return {
       id: "advisories",
       value,
-      effect: "review",
-      evidence: `${item.to} is affected by ${list(other)}.${fixedNote}${noticeNote}`,
+      effect: serious ? "avoid" : "review",
+      evidence: `${affectedText(item.to, affecting)}.${fixedNote}${noticeNote}`,
     };
   }
   return {
@@ -190,10 +187,25 @@ function fmt(a: AdvisoryRef): string {
   return `${a.id} (${a.maintenance ? "unmaintained notice" : a.severityFrom ? `${a.severity}, per ${a.severityFrom}` : a.severity})`;
 }
 
+/**
+ * "1.7.4 is affected by 33 known advisories, 13 of them high or critical: A (high), B (high),
+ * C (high) and 10 more high or critical". The total always counts every advisory in
+ * `affecting_to`, so a reader of the prose alone never undercounts; the names shown are
+ * the high and critical ones when there are any.
+ */
+function affectedText(to: string, affecting: AdvisoryRef[]): string {
+  if (affecting.length === 1) return `${to} is affected by ${fmt(affecting[0])}`;
+  const serious = affecting.filter((a) => a.severity === "critical" || a.severity === "high");
+  const total = `${to} is affected by ${affecting.length} known advisories`;
+  if (serious.length === 0) return `${total}: ${list(affecting)}`;
+  const share = serious.length === affecting.length ? "all of them" : `${serious.length} of them`;
+  return `${total}, ${share} high or critical: ${list(serious, " high or critical")}`;
+}
+
 /** At most three named in prose; the full id list is in the signal's `value`. */
-function list(advisories: AdvisoryRef[]): string {
+function list(advisories: AdvisoryRef[], kind = ""): string {
   const shown = advisories.slice(0, 3).map(fmt).join(", ");
-  return advisories.length > 3 ? `${shown} and ${advisories.length - 3} more` : shown;
+  return advisories.length > 3 ? `${shown} and ${advisories.length - 3} more${kind}` : shown;
 }
 
 /**

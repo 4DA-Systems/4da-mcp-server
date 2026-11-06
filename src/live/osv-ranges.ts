@@ -41,6 +41,8 @@ export interface AdvisoryRanges {
   maintenance?: boolean;
   /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
   malware?: boolean;
+  /** The record's `aliases`: the same issue's ids elsewhere (GHSA, PYSEC, CVE). Absent on entries cached by earlier versions. */
+  aliases?: string[];
 }
 
 /**
@@ -105,7 +107,35 @@ export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecos
     versions: listedVersions(vuln.affected, packageName, ecosystem),
     maintenance: isMaintenanceRecord(vuln, packageName, ecosystem),
     ...(malware ? { malware: true } : {}),
+    ...(vuln.aliases && vuln.aliases.length > 0 ? { aliases: [...vuln.aliases] } : {}),
   };
+}
+
+/**
+ * One id per advisory: OSV publishes one issue as a GHSA record and an ecosystem record
+ * (PYSEC, RUSTSEC, GO) naming each other in `aliases`, so counting ids counted one issue
+ * twice (advisory-groups.ts does the same for scan entries). Grouping is transitive; the
+ * first id of each group, in input order, stands for it.
+ */
+export function oneIdPerAdvisory(ids: readonly string[], advisories: readonly AdvisoryRanges[]): string[] {
+  const links = new Map<string, string[]>();
+  for (const a of advisories) links.set(a.id, [...(links.get(a.id) ?? []), ...(a.aliases ?? [])]);
+  const reverse = new Map<string, string[]>();
+  for (const [id, aliases] of links) for (const alias of aliases) reverse.set(alias, [...(reverse.get(alias) ?? []), id]);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    out.push(id);
+    const stack = [id];
+    while (stack.length > 0) {
+      const next = stack.pop()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(...(links.get(next) ?? []), ...(reverse.get(next) ?? []));
+    }
+  }
+  return out;
 }
 
 /**

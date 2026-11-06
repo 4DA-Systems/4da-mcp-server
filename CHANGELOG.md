@@ -1,5 +1,22 @@
 # Changelog
 
+## 6.2.7 — unreleased
+
+- **dependency_check's prose no longer undercounts advisories.** With high or
+  critical advisories present, the advisories signal named three of them and
+  added "and N more", where N counted only the high and critical ones: axios
+  1.7.4 read "... and 10 more" (13 in all) while `affecting_to` held 33 ids.
+  It now states the total and the serious share: "1.7.4 is affected by 33
+  known advisories, 13 of them high or critical: GHSA-35jp-ww65-95wh (high),
+  GHSA-3g43-6gmg-66jw (high), GHSA-43fc-jf86-j433 (high) and 10 more high or
+  critical."
+- **"No release ... is free of known advisories" counts each advisory once,
+  and all of them.** The count came from `range_check.affecting_all`, which
+  names at most 10 ids, and a GHSA record and its PYSEC twin were counted as
+  two: pyjwt 2.9.* read "... and 29 more affect every one" for 17 advisories.
+  Aliases are now grouped as everywhere else, and the new
+  `range_check.affecting_all_total` carries the uncapped count.
+
 ## 6.2.6 — 2026-10-30
 
 Parity with the 4DA app's engine after its D-4, A-1 and F-7 changes. The

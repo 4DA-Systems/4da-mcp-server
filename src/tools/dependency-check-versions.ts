@@ -16,7 +16,7 @@
  */
 
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
-import { advisoriesAffecting, isPrereleaseVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoriesAffecting, isPrereleaseVersion, oneIdPerAdvisory, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { compareVersions, parsePep440 } from "../live/version-compare.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
@@ -194,6 +194,8 @@ export interface RangeCheck {
   safe_versions: string[];
   /** Advisories that affect every release in range (no safe choice inside it); at most 10 named. */
   affecting_all?: string[];
+  /** How many advisories affect every release in range: `affecting_all` names at most 10 of them. */
+  affecting_all_total?: number;
   /** When nothing in range is safe: the newest release of the package that is, outside the range. */
   newest_safe_outside_range?: string | null;
   /** When `from` is given: the smallest safe release above it (the minimal fixing upgrade). */
@@ -270,7 +272,11 @@ export function checkRange(input: {
     safe_versions: safe.slice(-8),
   };
   if (candidates.length > 0 && safe.length === 0) {
-    out.affecting_all = [...new Set(candidates.flatMap(affecting))].filter((id) => candidates.every((v) => affecting(v).includes(id))).slice(0, 10);
+    const every = [...new Set(candidates.flatMap(affecting))].filter((id) => candidates.every((v) => affecting(v).includes(id)));
+    // A GHSA record and its PYSEC twin are one advisory, counted once (pyjwt 2.9.* read 32 for 17).
+    const all = oneIdPerAdvisory(every, input.advisories);
+    out.affecting_all = all.slice(0, 10);
+    out.affecting_all_total = all.length;
     const outside = installable
       .filter((v) => !isPrereleaseIn(ecosystem, v) && affecting(v).length === 0 && !input.held?.unsafe(v))
       .sort((a, b) => compareIn(ecosystem, a, b));
