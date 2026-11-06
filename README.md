@@ -112,6 +112,8 @@ The server reads every lockfile of the project it is started in, including indep
 
 Measured against osv-scanner on 19 public repositories (npm, pnpm v5-v9, yarn v1 and berry, bun, Cargo, Poetry, uv, Pipfile, requirements, Go; 2026-10-10), every difference settled by OSV's own API: precision 1.00 over 19,115 findings, recall 19,115 of 19,116 on the lockfiles it reads (Maven/Gradle are not read). Newly read requirement files were also checked against pip-audit.
 
+Measured with a coding agent (pre-registered, 49 dependency tasks x 3 trials, `claude-sonnet-5-5`, shell and web off in both arms): it wrote a vulnerable version in 82 of 138 well-posed runs without the server and 0 of 138 with it. Harness, tasks, pinned truth and results: [`bench/g7`](bench/g7/).
+
 - **OSV.dev** for known vulnerabilities, matched to exact installed versions
 - **npm registry, crates.io, PyPI, Go module proxy** (registry.npmjs.org, crates.io and index.crates.io, pypi.org, proxy.golang.org) for versions, deprecations and yanks
 - **npm download counts** (api.npmjs.org), for `dependency_health`'s weekly-downloads figure

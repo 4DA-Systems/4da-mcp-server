@@ -1,0 +1,926 @@
+[
+  {
+    "id": "n01-add-yaml",
+    "rows": [
+      {
+        "pkg": "js-yaml",
+        "inConstraint": 93,
+        "vulnerableInConstraint": 87,
+        "oldestSafe": "3.15.2",
+        "newestSafe": "5.5.0"
+      },
+      {
+        "pkg": "yaml",
+        "inConstraint": 69,
+        "vulnerableInConstraint": 56,
+        "oldestSafe": "0.1.0",
+        "newestSafe": "2.9.1"
+      }
+    ]
+  },
+  {
+    "id": "n02-add-http",
+    "rows": [
+      {
+        "pkg": "axios",
+        "inConstraint": 138,
+        "vulnerableInConstraint": 136,
+        "oldestSafe": "0.34.0",
+        "newestSafe": "1.20.0"
+      },
+      {
+        "pkg": "node-fetch",
+        "inConstraint": 73,
+        "vulnerableInConstraint": 61,
+        "oldestSafe": "2.6.7",
+        "newestSafe": "3.3.2"
+      },
+      {
+        "pkg": "got",
+        "inConstraint": 187,
+        "vulnerableInConstraint": 138,
+        "oldestSafe": "11.8.5",
+        "newestSafe": "16.1.0"
+      },
+      {
+        "pkg": "undici",
+        "inConstraint": 284,
+        "vulnerableInConstraint": 280,
+        "oldestSafe": "6.29.1",
+        "newestSafe": "8.12.3"
+      },
+      {
+        "pkg": "ky",
+        "inConstraint": 100,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.0.0",
+        "newestSafe": "2.2.0"
+      },
+      {
+        "pkg": "superagent",
+        "inConstraint": 166,
+        "vulnerableInConstraint": 102,
+        "oldestSafe": "3.7.0",
+        "newestSafe": "10.4.1"
+      }
+    ]
+  },
+  {
+    "id": "n03-add-lodash",
+    "rows": [
+      {
+        "pkg": "lodash",
+        "inConstraint": 113,
+        "vulnerableInConstraint": 111,
+        "oldestSafe": "4.18.0",
+        "newestSafe": "4.18.1"
+      }
+    ]
+  },
+  {
+    "id": "n04-add-markdown",
+    "rows": [
+      {
+        "pkg": "marked",
+        "inConstraint": 225,
+        "vulnerableInConstraint": 106,
+        "oldestSafe": "4.0.10",
+        "newestSafe": "18.1.1"
+      },
+      {
+        "pkg": "markdown-it",
+        "inConstraint": 89,
+        "vulnerableInConstraint": 87,
+        "oldestSafe": "14.3.3",
+        "newestSafe": "15.0.3"
+      },
+      {
+        "pkg": "showdown",
+        "inConstraint": 59,
+        "vulnerableInConstraint": 59,
+        "oldestSafe": null,
+        "newestSafe": null
+      },
+      {
+        "pkg": "remark",
+        "inConstraint": 43,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.0.1",
+        "newestSafe": "15.0.1"
+      },
+      {
+        "pkg": "micromark",
+        "inConstraint": 39,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "1.0.0",
+        "newestSafe": "4.0.3"
+      },
+      {
+        "pkg": "sanitize-html",
+        "inConstraint": 123,
+        "vulnerableInConstraint": 122,
+        "oldestSafe": "2.18.1",
+        "newestSafe": "2.18.1"
+      },
+      {
+        "pkg": "dompurify",
+        "inConstraint": 154,
+        "vulnerableInConstraint": 153,
+        "oldestSafe": "3.4.17",
+        "newestSafe": "3.4.17"
+      },
+      {
+        "pkg": "isomorphic-dompurify",
+        "inConstraint": 112,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.1.0",
+        "newestSafe": "4.6.0"
+      }
+    ]
+  },
+  {
+    "id": "n05-upgrade-express",
+    "rows": [
+      {
+        "pkg": "express",
+        "inConstraint": 95,
+        "vulnerableInConstraint": 87,
+        "oldestSafe": "4.20.0",
+        "newestSafe": "4.22.3"
+      }
+    ]
+  },
+  {
+    "id": "n06-upgrade-next",
+    "rows": [
+      {
+        "pkg": "next",
+        "inConstraint": 56,
+        "vulnerableInConstraint": 56,
+        "oldestSafe": null,
+        "newestSafe": null
+      }
+    ]
+  },
+  {
+    "id": "n07-pin-ws",
+    "rows": [
+      {
+        "pkg": "ws",
+        "inConstraint": 33,
+        "vulnerableInConstraint": 30,
+        "oldestSafe": "7.5.11",
+        "newestSafe": "7.5.13"
+      }
+    ]
+  },
+  {
+    "id": "n08-pin-minimist",
+    "rows": [
+      {
+        "pkg": "minimist",
+        "inConstraint": 31,
+        "vulnerableInConstraint": 27,
+        "oldestSafe": "0.2.4",
+        "newestSafe": "1.2.8"
+      }
+    ]
+  },
+  {
+    "id": "n09-pin-node-fetch2",
+    "rows": [
+      {
+        "pkg": "node-fetch",
+        "inConstraint": 25,
+        "vulnerableInConstraint": 17,
+        "oldestSafe": "2.6.7",
+        "newestSafe": "2.7.0"
+      }
+    ]
+  },
+  {
+    "id": "n10-upgrade-axios0",
+    "rows": [
+      {
+        "pkg": "axios",
+        "inConstraint": 68,
+        "vulnerableInConstraint": 67,
+        "oldestSafe": "0.34.0",
+        "newestSafe": "0.34.0"
+      }
+    ]
+  },
+  {
+    "id": "n11-add-jwt",
+    "rows": [
+      {
+        "pkg": "jsonwebtoken",
+        "inConstraint": 82,
+        "vulnerableInConstraint": 78,
+        "oldestSafe": "9.0.0",
+        "newestSafe": "9.0.3"
+      },
+      {
+        "pkg": "jose",
+        "inConstraint": 245,
+        "vulnerableInConstraint": 177,
+        "oldestSafe": "2.0.7",
+        "newestSafe": "6.2.13"
+      },
+      {
+        "pkg": "jwt-simple",
+        "inConstraint": 13,
+        "vulnerableInConstraint": 9,
+        "oldestSafe": "0.5.3",
+        "newestSafe": "0.5.6"
+      },
+      {
+        "pkg": "express-jwt",
+        "inConstraint": 73,
+        "vulnerableInConstraint": 37,
+        "oldestSafe": "6.0.0",
+        "newestSafe": "8.5.1"
+      }
+    ]
+  },
+  {
+    "id": "n12-pin-semver",
+    "rows": [
+      {
+        "pkg": "semver",
+        "inConstraint": 39,
+        "vulnerableInConstraint": 21,
+        "oldestSafe": "7.5.2",
+        "newestSafe": "7.8.5"
+      }
+    ]
+  },
+  {
+    "id": "n13-pin-body-parser",
+    "rows": [
+      {
+        "pkg": "body-parser",
+        "inConstraint": 76,
+        "vulnerableInConstraint": 75,
+        "oldestSafe": "1.20.9",
+        "newestSafe": "1.20.9"
+      }
+    ]
+  },
+  {
+    "id": "p01-add-http",
+    "rows": [
+      {
+        "pkg": "requests",
+        "inConstraint": 160,
+        "vulnerableInConstraint": 155,
+        "oldestSafe": "2.33.0",
+        "newestSafe": "2.34.2"
+      },
+      {
+        "pkg": "httpx",
+        "inConstraint": 68,
+        "vulnerableInConstraint": 53,
+        "oldestSafe": "0.23.0",
+        "newestSafe": "0.28.1"
+      },
+      {
+        "pkg": "aiohttp",
+        "inConstraint": 227,
+        "vulnerableInConstraint": 225,
+        "oldestSafe": "3.14.4",
+        "newestSafe": "3.14.5"
+      },
+      {
+        "pkg": "urllib3",
+        "inConstraint": 101,
+        "vulnerableInConstraint": 100,
+        "oldestSafe": "2.8.0",
+        "newestSafe": "2.8.0"
+      }
+    ]
+  },
+  {
+    "id": "p02-add-yaml",
+    "rows": [
+      {
+        "pkg": "PyYAML",
+        "inConstraint": 25,
+        "vulnerableInConstraint": 19,
+        "oldestSafe": "5.4",
+        "newestSafe": "6.0.3"
+      },
+      {
+        "pkg": "ruamel.yaml",
+        "inConstraint": 271,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.1",
+        "newestSafe": "0.19.1"
+      }
+    ]
+  },
+  {
+    "id": "p03-pin-jinja2",
+    "rows": [
+      {
+        "pkg": "Jinja2",
+        "inConstraint": 7,
+        "vulnerableInConstraint": 6,
+        "oldestSafe": "3.1.6",
+        "newestSafe": "3.1.6"
+      }
+    ]
+  },
+  {
+    "id": "p04-upgrade-django",
+    "rows": [
+      {
+        "pkg": "Django",
+        "inConstraint": 30,
+        "vulnerableInConstraint": 30,
+        "oldestSafe": null,
+        "newestSafe": null
+      }
+    ]
+  },
+  {
+    "id": "p05-add-pillow",
+    "rows": [
+      {
+        "pkg": "Pillow",
+        "inConstraint": 105,
+        "vulnerableInConstraint": 104,
+        "oldestSafe": "13.0.0",
+        "newestSafe": "13.0.0"
+      },
+      {
+        "pkg": "pillow",
+        "inConstraint": 105,
+        "vulnerableInConstraint": 104,
+        "oldestSafe": "13.0.0",
+        "newestSafe": "13.0.0"
+      }
+    ]
+  },
+  {
+    "id": "p06-add-wsgi",
+    "rows": [
+      {
+        "pkg": "gunicorn",
+        "inConstraint": 100,
+        "vulnerableInConstraint": 85,
+        "oldestSafe": "22.0.0",
+        "newestSafe": "26.2.0"
+      },
+      {
+        "pkg": "waitress",
+        "inConstraint": 40,
+        "vulnerableInConstraint": 38,
+        "oldestSafe": "3.0.1",
+        "newestSafe": "3.0.2"
+      },
+      {
+        "pkg": "uwsgi",
+        "inConstraint": 67,
+        "vulnerableInConstraint": 56,
+        "oldestSafe": "2.0.22",
+        "newestSafe": "2.0.31"
+      },
+      {
+        "pkg": "uWSGI",
+        "inConstraint": 67,
+        "vulnerableInConstraint": 56,
+        "oldestSafe": "2.0.22",
+        "newestSafe": "2.0.31"
+      }
+    ]
+  },
+  {
+    "id": "p07-pin-aiohttp",
+    "rows": [
+      {
+        "pkg": "aiohttp",
+        "inConstraint": 105,
+        "vulnerableInConstraint": 103,
+        "oldestSafe": "3.14.4",
+        "newestSafe": "3.14.5"
+      }
+    ]
+  },
+  {
+    "id": "p08-pin-cryptography",
+    "rows": [
+      {
+        "pkg": "cryptography",
+        "inConstraint": 157,
+        "vulnerableInConstraint": 154,
+        "oldestSafe": "50.0.0",
+        "newestSafe": "50.0.2"
+      }
+    ]
+  },
+  {
+    "id": "p09-upgrade-flask2",
+    "rows": [
+      {
+        "pkg": "Flask",
+        "inConstraint": 18,
+        "vulnerableInConstraint": 18,
+        "oldestSafe": null,
+        "newestSafe": null
+      }
+    ]
+  },
+  {
+    "id": "p10-upgrade-requests",
+    "rows": [
+      {
+        "pkg": "requests",
+        "inConstraint": 81,
+        "vulnerableInConstraint": 76,
+        "oldestSafe": "2.33.0",
+        "newestSafe": "2.34.2"
+      }
+    ]
+  },
+  {
+    "id": "p11-pin-tornado",
+    "rows": [
+      {
+        "pkg": "tornado",
+        "inConstraint": 26,
+        "vulnerableInConstraint": 23,
+        "oldestSafe": "6.5.9",
+        "newestSafe": "6.6"
+      }
+    ]
+  },
+  {
+    "id": "p12-add-fastapi",
+    "rows": [
+      {
+        "pkg": "fastapi",
+        "inConstraint": 353,
+        "vulnerableInConstraint": 185,
+        "oldestSafe": "0.109.1",
+        "newestSafe": "0.162.0"
+      },
+      {
+        "pkg": "uvicorn",
+        "inConstraint": 201,
+        "vulnerableInConstraint": 115,
+        "oldestSafe": "0.11.7",
+        "newestSafe": "0.54.0"
+      },
+      {
+        "pkg": "starlette",
+        "inConstraint": 199,
+        "vulnerableInConstraint": 190,
+        "oldestSafe": "1.3.1",
+        "newestSafe": "1.9.0"
+      },
+      {
+        "pkg": "pydantic",
+        "inConstraint": 170,
+        "vulnerableInConstraint": 102,
+        "oldestSafe": "1.10.13",
+        "newestSafe": "2.14.1"
+      },
+      {
+        "pkg": "python-multipart",
+        "inConstraint": 30,
+        "vulnerableInConstraint": 28,
+        "oldestSafe": "0.0.31",
+        "newestSafe": "0.0.32"
+      }
+    ]
+  },
+  {
+    "id": "c01-add-tokio",
+    "rows": [
+      {
+        "pkg": "tokio",
+        "inConstraint": 189,
+        "vulnerableInConstraint": 139,
+        "oldestSafe": "0.0.0",
+        "newestSafe": "1.54.1"
+      }
+    ]
+  },
+  {
+    "id": "c02-pin-tokio",
+    "rows": [
+      {
+        "pkg": "tokio",
+        "inConstraint": 132,
+        "vulnerableInConstraint": 96,
+        "oldestSafe": "1.38.2",
+        "newestSafe": "1.54.1"
+      }
+    ]
+  },
+  {
+    "id": "c03-add-openssl",
+    "rows": [
+      {
+        "pkg": "openssl",
+        "inConstraint": 171,
+        "vulnerableInConstraint": 169,
+        "oldestSafe": "0.10.80",
+        "newestSafe": "0.10.81"
+      }
+    ]
+  },
+  {
+    "id": "c04-add-regex",
+    "rows": [
+      {
+        "pkg": "regex",
+        "inConstraint": 165,
+        "vulnerableInConstraint": 129,
+        "oldestSafe": "1.5.5",
+        "newestSafe": "1.13.1"
+      },
+      {
+        "pkg": "fancy-regex",
+        "inConstraint": 31,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.1.0",
+        "newestSafe": "0.20.0"
+      }
+    ]
+  },
+  {
+    "id": "c05-add-time",
+    "rows": [
+      {
+        "pkg": "chrono",
+        "inConstraint": 71,
+        "vulnerableInConstraint": 46,
+        "oldestSafe": "0.4.20",
+        "newestSafe": "0.4.45"
+      },
+      {
+        "pkg": "time",
+        "inConstraint": 124,
+        "vulnerableInConstraint": 106,
+        "oldestSafe": "0.2.23",
+        "newestSafe": "0.3.55"
+      },
+      {
+        "pkg": "jiff",
+        "inConstraint": 69,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.0.1",
+        "newestSafe": "0.2.38"
+      }
+    ]
+  },
+  {
+    "id": "c06-pin-h2",
+    "rows": [
+      {
+        "pkg": "h2",
+        "inConstraint": 21,
+        "vulnerableInConstraint": 16,
+        "oldestSafe": "0.4.16",
+        "newestSafe": "0.4.20"
+      }
+    ]
+  },
+  {
+    "id": "c07-pin-ring",
+    "rows": [
+      {
+        "pkg": "ring",
+        "inConstraint": 14,
+        "vulnerableInConstraint": 11,
+        "oldestSafe": "0.17.12",
+        "newestSafe": "0.17.14"
+      }
+    ]
+  },
+  {
+    "id": "c08-add-sqlx",
+    "rows": [
+      {
+        "pkg": "sqlx",
+        "inConstraint": 47,
+        "vulnerableInConstraint": 41,
+        "oldestSafe": "0.8.1",
+        "newestSafe": "0.9.0"
+      },
+      {
+        "pkg": "tokio-postgres",
+        "inConstraint": 33,
+        "vulnerableInConstraint": 25,
+        "oldestSafe": "0.1.0",
+        "newestSafe": "0.7.18"
+      },
+      {
+        "pkg": "diesel",
+        "inConstraint": 95,
+        "vulnerableInConstraint": 90,
+        "oldestSafe": "2.3.10",
+        "newestSafe": "2.3.14"
+      },
+      {
+        "pkg": "postgres",
+        "inConstraint": 104,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.1.0",
+        "newestSafe": "0.19.14"
+      }
+    ]
+  },
+  {
+    "id": "c09-upgrade-openssl",
+    "rows": [
+      {
+        "pkg": "openssl",
+        "inConstraint": 80,
+        "vulnerableInConstraint": 78,
+        "oldestSafe": "0.10.80",
+        "newestSafe": "0.10.81"
+      }
+    ]
+  },
+  {
+    "id": "c10-pin-protobuf",
+    "rows": [
+      {
+        "pkg": "protobuf",
+        "inConstraint": 13,
+        "vulnerableInConstraint": 12,
+        "oldestSafe": "3.7.2",
+        "newestSafe": "3.7.2"
+      }
+    ]
+  },
+  {
+    "id": "c11-add-tar",
+    "rows": [
+      {
+        "pkg": "tar",
+        "inConstraint": 80,
+        "vulnerableInConstraint": 79,
+        "oldestSafe": "0.4.46",
+        "newestSafe": "0.4.46"
+      },
+      {
+        "pkg": "flate2",
+        "inConstraint": 76,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "0.0.1",
+        "newestSafe": "1.1.10"
+      }
+    ]
+  },
+  {
+    "id": "c12-pin-rustls",
+    "rows": [
+      {
+        "pkg": "rustls",
+        "inConstraint": 46,
+        "vulnerableInConstraint": 45,
+        "oldestSafe": "0.23.46",
+        "newestSafe": "0.23.46"
+      }
+    ]
+  },
+  {
+    "id": "g01-add-xnet",
+    "rows": [
+      {
+        "pkg": "golang.org/x/net",
+        "inConstraint": 61,
+        "vulnerableInConstraint": 59,
+        "oldestSafe": "v0.60.0",
+        "newestSafe": "v0.61.0"
+      }
+    ]
+  },
+  {
+    "id": "g02-add-web",
+    "rows": [
+      {
+        "pkg": "github.com/gin-gonic/gin",
+        "inConstraint": 28,
+        "vulnerableInConstraint": 23,
+        "oldestSafe": "v1.9.1",
+        "newestSafe": "v1.12.0"
+      },
+      {
+        "pkg": "github.com/labstack/echo/v4",
+        "inConstraint": 58,
+        "vulnerableInConstraint": 56,
+        "oldestSafe": "v4.16.1",
+        "newestSafe": "v4.16.2"
+      },
+      {
+        "pkg": "github.com/go-chi/chi/v5",
+        "inConstraint": 27,
+        "vulnerableInConstraint": 25,
+        "oldestSafe": "v5.4.0",
+        "newestSafe": "v5.5.0"
+      },
+      {
+        "pkg": "github.com/gofiber/fiber/v2",
+        "inConstraint": 97,
+        "vulnerableInConstraint": 94,
+        "oldestSafe": "v2.52.14",
+        "newestSafe": "v2.52.16"
+      }
+    ]
+  },
+  {
+    "id": "g03-add-jwt",
+    "rows": [
+      {
+        "pkg": "github.com/golang-jwt/jwt/v5",
+        "inConstraint": 8,
+        "vulnerableInConstraint": 4,
+        "oldestSafe": "v5.2.2",
+        "newestSafe": "v5.3.1"
+      },
+      {
+        "pkg": "github.com/golang-jwt/jwt/v4",
+        "inConstraint": 11,
+        "vulnerableInConstraint": 10,
+        "oldestSafe": "v4.5.2",
+        "newestSafe": "v4.5.2"
+      },
+      {
+        "pkg": "github.com/golang-jwt/jwt",
+        "inConstraint": 16,
+        "vulnerableInConstraint": 16,
+        "oldestSafe": null,
+        "newestSafe": null
+      },
+      {
+        "pkg": "github.com/dgrijalva/jwt-go",
+        "inConstraint": 14,
+        "vulnerableInConstraint": 14,
+        "oldestSafe": null,
+        "newestSafe": null
+      },
+      {
+        "pkg": "github.com/lestrrat-go/jwx/v2",
+        "inConstraint": 30,
+        "vulnerableInConstraint": 21,
+        "oldestSafe": "v2.0.21",
+        "newestSafe": "v2.1.7"
+      }
+    ]
+  },
+  {
+    "id": "g04-add-xcrypto",
+    "rows": [
+      {
+        "pkg": "golang.org/x/crypto",
+        "inConstraint": 58,
+        "vulnerableInConstraint": 55,
+        "oldestSafe": "v0.56.0",
+        "newestSafe": "v0.58.0"
+      }
+    ]
+  },
+  {
+    "id": "g05-add-yaml",
+    "rows": [
+      {
+        "pkg": "gopkg.in/yaml.v3",
+        "inConstraint": 2,
+        "vulnerableInConstraint": 1,
+        "oldestSafe": "v3.0.1",
+        "newestSafe": "v3.0.1"
+      },
+      {
+        "pkg": "gopkg.in/yaml.v2",
+        "inConstraint": 14,
+        "vulnerableInConstraint": 11,
+        "oldestSafe": "v2.2.8",
+        "newestSafe": "v2.4.0"
+      },
+      {
+        "pkg": "sigs.k8s.io/yaml",
+        "inConstraint": 7,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "v1.0.0",
+        "newestSafe": "v1.6.0"
+      },
+      {
+        "pkg": "github.com/goccy/go-yaml",
+        "inConstraint": 135,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "v1.0.0",
+        "newestSafe": "v1.19.2"
+      }
+    ]
+  },
+  {
+    "id": "g06-upgrade-grpc",
+    "rows": [
+      {
+        "pkg": "google.golang.org/grpc",
+        "inConstraint": 190,
+        "vulnerableInConstraint": 188,
+        "oldestSafe": "v1.83.2",
+        "newestSafe": "v1.84.0"
+      }
+    ]
+  },
+  {
+    "id": "g07-upgrade-protobuf",
+    "rows": [
+      {
+        "pkg": "google.golang.org/protobuf",
+        "inConstraint": 37,
+        "vulnerableInConstraint": 17,
+        "oldestSafe": "v1.33.0",
+        "newestSafe": "v1.36.12"
+      }
+    ]
+  },
+  {
+    "id": "g08-add-oauth2",
+    "rows": [
+      {
+        "pkg": "golang.org/x/oauth2",
+        "inConstraint": 37,
+        "vulnerableInConstraint": 26,
+        "oldestSafe": "v0.27.0",
+        "newestSafe": "v0.37.0"
+      }
+    ]
+  },
+  {
+    "id": "g09-upgrade-gin",
+    "rows": [
+      {
+        "pkg": "github.com/gin-gonic/gin",
+        "inConstraint": 28,
+        "vulnerableInConstraint": 23,
+        "oldestSafe": "v1.9.1",
+        "newestSafe": "v1.12.0"
+      }
+    ]
+  },
+  {
+    "id": "g10-add-websocket",
+    "rows": [
+      {
+        "pkg": "github.com/gorilla/websocket",
+        "inConstraint": 11,
+        "vulnerableInConstraint": 10,
+        "oldestSafe": "v1.5.3",
+        "newestSafe": "v1.5.3"
+      },
+      {
+        "pkg": "nhooyr.io/websocket",
+        "inConstraint": 43,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "v0.1.0",
+        "newestSafe": "v1.8.17"
+      },
+      {
+        "pkg": "github.com/coder/websocket",
+        "inConstraint": 41,
+        "vulnerableInConstraint": 0,
+        "oldestSafe": "v0.1.0",
+        "newestSafe": "v1.8.15"
+      }
+    ]
+  },
+  {
+    "id": "g11-upgrade-xnet",
+    "rows": [
+      {
+        "pkg": "golang.org/x/net",
+        "inConstraint": 61,
+        "vulnerableInConstraint": 59,
+        "oldestSafe": "v0.60.0",
+        "newestSafe": "v0.61.0"
+      }
+    ]
+  },
+  {
+    "id": "g12-add-echo",
+    "rows": [
+      {
+        "pkg": "github.com/labstack/echo/v4",
+        "inConstraint": 58,
+        "vulnerableInConstraint": 56,
+        "oldestSafe": "v4.16.1",
+        "newestSafe": "v4.16.2"
+      },
+      {
+        "pkg": "github.com/labstack/echo",
+        "inConstraint": 49,
+        "vulnerableInConstraint": 49,
+        "oldestSafe": null,
+        "newestSafe": null
+      }
+    ]
+  }
+]

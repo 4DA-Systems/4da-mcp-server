@@ -1,0 +1,2 @@
+# Pinned truth is hashed in truth/SHA256SUMS: keep its bytes exactly as written.
+truth/** -text

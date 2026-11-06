@@ -5,7 +5,7 @@
  * These came with the server from the 4DA monorepo, where they ran over its
  * `mcp-4da-server/` folder:
  *
- *   1. SPDX header. Every source file under src/ and scripts/ declares
+ *   1. SPDX header. Every source file under src/, scripts/, hooks/ and bench/ declares
  *      Apache-2.0, the package's licence. The desktop app is FSL-1.1, so a file
  *      copied across without its header would carry the wrong terms.
  *   2. Retired claims (4DA AD-030). The product promise "gets sharper every
@@ -42,6 +42,8 @@ const sources = [
   ...walk(join(root, "src"), (p) => /\.(ts|mts|js|mjs)$/.test(p)),
   ...walk(join(root, "scripts"), (p) => /\.(mjs|cjs|js)$/.test(p)),
   ...walk(join(root, "hooks"), (p) => /\.(mjs|cjs|js)$/.test(p)),
+  // bench/*/tasks and runs are generated task projects and run copies, never committed.
+  ...walk(join(root, "bench"), (p) => /\.(mjs|cjs|js)$/.test(p) && !/[\\/](tasks|runs)[\\/]/.test(p)),
 ];
 
 // 1. SPDX header ---------------------------------------------------------------

@@ -104,7 +104,7 @@ jobs:
           node -e '
             const [p] = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
             const files = p.files.map((f) => f.path);
-            const bad = files.filter((f) => /__tests__|test-setup|\.map$|^src\/|^test-fixtures\/|^contract\/|^conformance(\/|\.lock$)/.test(f));
+            const bad = files.filter((f) => /__tests__|test-setup|\.map$|^src\/|^test-fixtures\/|^contract\/|^conformance(\/|\.lock$)|^bench\//.test(f));
             if (bad.length) { console.error("unexpected files in the package:", bad); process.exit(1); }
             for (const need of ["dist/index.js", "dist/setup.js", "README.md", "LICENSE", "CHANGELOG.md"]) {
               if (!files.includes(need)) { console.error("missing from the package:", need); process.exit(1); }

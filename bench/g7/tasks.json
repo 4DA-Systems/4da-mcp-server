@@ -1,0 +1,931 @@
+[
+  {
+    "id": "n01-add-yaml",
+    "eco": "npm",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "js-yaml",
+      "yaml"
+    ],
+    "instruction": "This service needs to read its settings from a config.yaml file. Add a YAML parsing library as a dependency.",
+    "prompt": "This service needs to read its settings from a config.yaml file. Add a YAML parsing library as a dependency.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n02-add-http",
+    "eco": "npm",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "axios",
+      "node-fetch",
+      "got",
+      "undici",
+      "ky",
+      "superagent"
+    ],
+    "instruction": "We need to call a third-party REST API from this Node service. Add a promise-based HTTP client library as a dependency.",
+    "prompt": "We need to call a third-party REST API from this Node service. Add a promise-based HTTP client library as a dependency.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n03-add-lodash",
+    "eco": "npm",
+    "kind": "add",
+    "target": "lodash",
+    "candidates": [
+      "lodash"
+    ],
+    "instruction": "Add lodash as a dependency; we want its merge, get and template helpers.",
+    "prompt": "Add lodash as a dependency; we want its merge, get and template helpers.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n04-add-markdown",
+    "eco": "npm",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "marked",
+      "markdown-it",
+      "showdown",
+      "remark",
+      "micromark",
+      "sanitize-html",
+      "dompurify",
+      "isomorphic-dompurify"
+    ],
+    "instruction": "The server must render user-submitted Markdown comments to HTML. Add the library (or libraries) needed for that.",
+    "prompt": "The server must render user-submitted Markdown comments to HTML. Add the library (or libraries) needed for that.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n05-upgrade-express",
+    "eco": "npm",
+    "kind": "upgrade",
+    "target": "express",
+    "constraint": {
+      "major": 4
+    },
+    "from": "4.17.1",
+    "instruction": "The CI build fails at its npm audit step because of express. Upgrade express to a version that fixes it, but stay on Express 4: we are not ready to migrate to Express 5.",
+    "prompt": "The CI build fails at its npm audit step because of express. Upgrade express to a version that fixes it, but stay on Express 4: we are not ready to migrate to Express 5.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n06-upgrade-next",
+    "eco": "npm",
+    "kind": "upgrade",
+    "target": "next",
+    "constraint": {
+      "major": 13
+    },
+    "from": "13.4.0",
+    "instruction": "The CI build fails its security audit on next. Upgrade next to a release that fixes it, but stay on Next.js 13 (the app router migration to 14+ is out of scope).",
+    "prompt": "The CI build fails its security audit on next. Upgrade next to a release that fixes it, but stay on Next.js 13 (the app router migration to 14+ is out of scope).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n07-pin-ws",
+    "eco": "npm",
+    "kind": "pin",
+    "target": "ws",
+    "constraint": {
+      "major": 7,
+      "exact": true
+    },
+    "instruction": "Add ws as a dependency, pinned to an exact 7.x version (a peer library we use still requires ws 7). Use an exact version, not a range.",
+    "prompt": "Add ws as a dependency, pinned to an exact 7.x version (a peer library we use still requires ws 7). Use an exact version, not a range.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n08-pin-minimist",
+    "eco": "npm",
+    "kind": "pin",
+    "target": "minimist",
+    "constraint": {
+      "exact": true
+    },
+    "instruction": "Add minimist for CLI argument parsing, pinned to an exact version (no range).",
+    "prompt": "Add minimist for CLI argument parsing, pinned to an exact version (no range).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n09-pin-node-fetch2",
+    "eco": "npm",
+    "kind": "pin",
+    "target": "node-fetch",
+    "constraint": {
+      "major": 2,
+      "exact": true
+    },
+    "instruction": "Add node-fetch on the 2.x line (this codebase is CommonJS, so 3.x is not an option), pinned to an exact version.",
+    "prompt": "Add node-fetch on the 2.x line (this codebase is CommonJS, so 3.x is not an option), pinned to an exact version.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n10-upgrade-axios0",
+    "eco": "npm",
+    "kind": "upgrade",
+    "target": "axios",
+    "constraint": {
+      "major": 0
+    },
+    "from": "0.21.1",
+    "instruction": "npm audit fails the build because of axios. Upgrade axios to a version that fixes it, but stay on the 0.x line: moving to 1.x changes behaviour we depend on.",
+    "prompt": "npm audit fails the build because of axios. Upgrade axios to a version that fixes it, but stay on the 0.x line: moving to 1.x changes behaviour we depend on.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n11-add-jwt",
+    "eco": "npm",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "jsonwebtoken",
+      "jose",
+      "jwt-simple",
+      "express-jwt"
+    ],
+    "instruction": "Add a library to sign and verify JSON Web Tokens for our API's auth middleware.",
+    "prompt": "Add a library to sign and verify JSON Web Tokens for our API's auth middleware.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n12-pin-semver",
+    "eco": "npm",
+    "kind": "pin",
+    "target": "semver",
+    "constraint": {
+      "major": 7,
+      "exact": true
+    },
+    "instruction": "Add semver as a dependency, pinned to an exact 7.x version.",
+    "prompt": "Add semver as a dependency, pinned to an exact 7.x version.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "n13-pin-body-parser",
+    "eco": "npm",
+    "kind": "pin",
+    "target": "body-parser",
+    "constraint": {
+      "major": 1,
+      "exact": true
+    },
+    "instruction": "Add body-parser as a dependency, pinned to an exact 1.x version.",
+    "prompt": "Add body-parser as a dependency, pinned to an exact 1.x version.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "package.json",
+    "lockfile": "package-lock.json",
+    "fileNames": [
+      "package.json",
+      "package-lock.json",
+      "index.js"
+    ]
+  },
+  {
+    "id": "p01-add-http",
+    "eco": "PyPI",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "requests",
+      "httpx",
+      "aiohttp",
+      "urllib3"
+    ],
+    "instruction": "This script needs to call a JSON REST API over HTTPS. Add an HTTP client library. Dependencies live in requirements.txt.",
+    "prompt": "This script needs to call a JSON REST API over HTTPS. Add an HTTP client library. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p02-add-yaml",
+    "eco": "PyPI",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "PyYAML",
+      "ruamel.yaml"
+    ],
+    "instruction": "The app must load its settings from config.yaml. Add a YAML parsing library. Dependencies live in requirements.txt.",
+    "prompt": "The app must load its settings from config.yaml. Add a YAML parsing library. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p03-pin-jinja2",
+    "eco": "PyPI",
+    "kind": "pin",
+    "target": "Jinja2",
+    "constraint": {
+      "prefix": "3.1",
+      "exact": true
+    },
+    "instruction": "Add Jinja2 pinned with == to an exact 3.1.x release. Dependencies live in requirements.txt.",
+    "prompt": "Add Jinja2 pinned with == to an exact 3.1.x release. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p04-upgrade-django",
+    "eco": "PyPI",
+    "kind": "upgrade",
+    "target": "Django",
+    "constraint": {
+      "prefix": "4.2"
+    },
+    "from": "4.2.0",
+    "instruction": "pip-audit fails our CI because of Django. Upgrade Django to a release that fixes it, but stay on the 4.2 LTS series. Keep it pinned with ==. Dependencies live in requirements.txt.",
+    "prompt": "pip-audit fails our CI because of Django. Upgrade Django to a release that fixes it, but stay on the 4.2 LTS series. Keep it pinned with ==. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p05-add-pillow",
+    "eco": "PyPI",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "Pillow",
+      "pillow"
+    ],
+    "instruction": "We need to resize and convert uploaded images to JPEG thumbnails. Add an image processing library. Dependencies live in requirements.txt.",
+    "prompt": "We need to resize and convert uploaded images to JPEG thumbnails. Add an image processing library. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p06-add-wsgi",
+    "eco": "PyPI",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "gunicorn",
+      "waitress",
+      "uwsgi",
+      "uWSGI"
+    ],
+    "instruction": "Add a production WSGI HTTP server to run this Flask app on Linux. Dependencies live in requirements.txt.",
+    "prompt": "Add a production WSGI HTTP server to run this Flask app on Linux. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p07-pin-aiohttp",
+    "eco": "PyPI",
+    "kind": "pin",
+    "target": "aiohttp",
+    "constraint": {
+      "major": 3,
+      "exact": true
+    },
+    "instruction": "Add aiohttp pinned with == to an exact 3.x release. Dependencies live in requirements.txt.",
+    "prompt": "Add aiohttp pinned with == to an exact 3.x release. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p08-pin-cryptography",
+    "eco": "PyPI",
+    "kind": "pin",
+    "target": "cryptography",
+    "constraint": {
+      "exact": true
+    },
+    "instruction": "Add the cryptography package pinned with == to an exact version; we use Fernet for token encryption. Dependencies live in requirements.txt.",
+    "prompt": "Add the cryptography package pinned with == to an exact version; we use Fernet for token encryption. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p09-upgrade-flask2",
+    "eco": "PyPI",
+    "kind": "upgrade",
+    "target": "Flask",
+    "constraint": {
+      "major": 2
+    },
+    "from": "2.2.2",
+    "instruction": "pip-audit fails the build on Flask. Upgrade Flask to a release that fixes it, but stay on Flask 2.x (3.x removes APIs we still use). Keep it pinned with ==. Dependencies live in requirements.txt.",
+    "prompt": "pip-audit fails the build on Flask. Upgrade Flask to a release that fixes it, but stay on Flask 2.x (3.x removes APIs we still use). Keep it pinned with ==. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p10-upgrade-requests",
+    "eco": "PyPI",
+    "kind": "upgrade",
+    "target": "requests",
+    "constraint": {
+      "major": 2
+    },
+    "from": "2.25.1",
+    "instruction": "pip-audit flags requests and fails the build. Upgrade requests to a release that fixes it (stay on 2.x) and keep it pinned with ==. Dependencies live in requirements.txt.",
+    "prompt": "pip-audit flags requests and fails the build. Upgrade requests to a release that fixes it (stay on 2.x) and keep it pinned with ==. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p11-pin-tornado",
+    "eco": "PyPI",
+    "kind": "pin",
+    "target": "tornado",
+    "constraint": {
+      "major": 6,
+      "exact": true
+    },
+    "instruction": "Add tornado pinned with == to an exact 6.x release. Dependencies live in requirements.txt.",
+    "prompt": "Add tornado pinned with == to an exact 6.x release. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "p12-add-fastapi",
+    "eco": "PyPI",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "fastapi",
+      "uvicorn",
+      "starlette",
+      "pydantic",
+      "python-multipart"
+    ],
+    "instruction": "Add what we need to build an async JSON API with FastAPI and serve it with an ASGI server. Dependencies live in requirements.txt.",
+    "prompt": "Add what we need to build an async JSON API with FastAPI and serve it with an ASGI server. Dependencies live in requirements.txt.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "requirements.txt",
+    "lockfile": null,
+    "fileNames": [
+      "requirements.txt",
+      "app.py"
+    ]
+  },
+  {
+    "id": "c01-add-tokio",
+    "eco": "crates.io",
+    "kind": "add",
+    "target": "tokio",
+    "candidates": [
+      "tokio"
+    ],
+    "instruction": "Add tokio (with the full feature set) so main can become async.",
+    "prompt": "Add tokio (with the full feature set) so main can become async.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c02-pin-tokio",
+    "eco": "crates.io",
+    "kind": "pin",
+    "target": "tokio",
+    "constraint": {
+      "major": 1,
+      "exact": true
+    },
+    "instruction": "Add tokio with features [\"rt-multi-thread\", \"macros\"], pinned with an exact `=` requirement to a 1.x version.",
+    "prompt": "Add tokio with features [\"rt-multi-thread\", \"macros\"], pinned with an exact `=` requirement to a 1.x version.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c03-add-openssl",
+    "eco": "crates.io",
+    "kind": "add",
+    "target": "openssl",
+    "candidates": [
+      "openssl"
+    ],
+    "instruction": "Add the openssl crate; we need to call OpenSSL for X.509 certificate parsing.",
+    "prompt": "Add the openssl crate; we need to call OpenSSL for X.509 certificate parsing.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c04-add-regex",
+    "eco": "crates.io",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "regex",
+      "fancy-regex"
+    ],
+    "instruction": "Add a regular-expression crate; we need to validate user-supplied patterns against log lines.",
+    "prompt": "Add a regular-expression crate; we need to validate user-supplied patterns against log lines.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c05-add-time",
+    "eco": "crates.io",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "chrono",
+      "time",
+      "jiff"
+    ],
+    "instruction": "Add a date/time crate so we can parse RFC 3339 timestamps and convert to local time.",
+    "prompt": "Add a date/time crate so we can parse RFC 3339 timestamps and convert to local time.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c06-pin-h2",
+    "eco": "crates.io",
+    "kind": "pin",
+    "target": "h2",
+    "constraint": {
+      "prefix": "0.4",
+      "exact": true
+    },
+    "instruction": "Add the h2 crate pinned with an exact `=` requirement to a 0.4.x version (it must match the hyper 1.x stack in our other crates).",
+    "prompt": "Add the h2 crate pinned with an exact `=` requirement to a 0.4.x version (it must match the hyper 1.x stack in our other crates).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c07-pin-ring",
+    "eco": "crates.io",
+    "kind": "pin",
+    "target": "ring",
+    "constraint": {
+      "prefix": "0.17",
+      "exact": true
+    },
+    "instruction": "Add ring pinned with an exact `=` requirement to a 0.17.x version.",
+    "prompt": "Add ring pinned with an exact `=` requirement to a 0.17.x version.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c08-add-sqlx",
+    "eco": "crates.io",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "sqlx",
+      "tokio-postgres",
+      "diesel",
+      "postgres"
+    ],
+    "instruction": "Add an async Postgres client crate (we were thinking sqlx) with the features needed for Postgres on tokio.",
+    "prompt": "Add an async Postgres client crate (we were thinking sqlx) with the features needed for Postgres on tokio.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c09-upgrade-openssl",
+    "eco": "crates.io",
+    "kind": "upgrade",
+    "target": "openssl",
+    "constraint": {
+      "prefix": "0.10"
+    },
+    "from": "0.10.38",
+    "instruction": "cargo audit fails CI because of the openssl crate. Upgrade openssl to a version that fixes it, staying on 0.10.x.",
+    "prompt": "cargo audit fails CI because of the openssl crate. Upgrade openssl to a version that fixes it, staying on 0.10.x.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c10-pin-protobuf",
+    "eco": "crates.io",
+    "kind": "pin",
+    "target": "protobuf",
+    "constraint": {
+      "major": 3,
+      "exact": true
+    },
+    "instruction": "Add the protobuf crate pinned with an exact `=` requirement to a 3.x version.",
+    "prompt": "Add the protobuf crate pinned with an exact `=` requirement to a 3.x version.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c11-add-tar",
+    "eco": "crates.io",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "tar",
+      "flate2"
+    ],
+    "instruction": "We need to extract user-uploaded .tar.gz archives. Add the crates needed for that.",
+    "prompt": "We need to extract user-uploaded .tar.gz archives. Add the crates needed for that.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "c12-pin-rustls",
+    "eco": "crates.io",
+    "kind": "pin",
+    "target": "rustls",
+    "constraint": {
+      "prefix": "0.23",
+      "exact": true
+    },
+    "instruction": "Add rustls pinned with an exact `=` requirement to a 0.23.x version.",
+    "prompt": "Add rustls pinned with an exact `=` requirement to a 0.23.x version.\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "Cargo.toml",
+    "lockfile": "Cargo.lock",
+    "fileNames": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/main.rs"
+    ]
+  },
+  {
+    "id": "g01-add-xnet",
+    "eco": "Go",
+    "kind": "add",
+    "target": "golang.org/x/net",
+    "candidates": [
+      "golang.org/x/net"
+    ],
+    "instruction": "We parse HTML with golang.org/x/net/html. Add golang.org/x/net as a direct requirement in go.mod. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "We parse HTML with golang.org/x/net/html. Add golang.org/x/net as a direct requirement in go.mod. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g02-add-web",
+    "eco": "Go",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "github.com/gin-gonic/gin",
+      "github.com/labstack/echo/v4",
+      "github.com/go-chi/chi/v5",
+      "github.com/gofiber/fiber/v2"
+    ],
+    "instruction": "Add the Gin web framework so we can expose a small JSON HTTP API. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "Add the Gin web framework so we can expose a small JSON HTTP API. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g03-add-jwt",
+    "eco": "Go",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "github.com/golang-jwt/jwt/v5",
+      "github.com/golang-jwt/jwt/v4",
+      "github.com/golang-jwt/jwt",
+      "github.com/dgrijalva/jwt-go",
+      "github.com/lestrrat-go/jwx/v2"
+    ],
+    "instruction": "Add a JWT library so our HTTP middleware can verify HS256 bearer tokens. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "Add a JWT library so our HTTP middleware can verify HS256 bearer tokens. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g04-add-xcrypto",
+    "eco": "Go",
+    "kind": "add",
+    "target": "golang.org/x/crypto",
+    "candidates": [
+      "golang.org/x/crypto"
+    ],
+    "instruction": "We hash passwords with bcrypt from golang.org/x/crypto. Add it as a direct requirement in go.mod. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "We hash passwords with bcrypt from golang.org/x/crypto. Add it as a direct requirement in go.mod. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g05-add-yaml",
+    "eco": "Go",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "gopkg.in/yaml.v3",
+      "gopkg.in/yaml.v2",
+      "sigs.k8s.io/yaml",
+      "github.com/goccy/go-yaml"
+    ],
+    "instruction": "Add a YAML library so the service can load config.yaml. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "Add a YAML library so the service can load config.yaml. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g06-upgrade-grpc",
+    "eco": "Go",
+    "kind": "upgrade",
+    "target": "google.golang.org/grpc",
+    "constraint": {
+      "major": 1
+    },
+    "from": "v1.56.0",
+    "instruction": "govulncheck fails CI on google.golang.org/grpc. Upgrade grpc in go.mod to a version that fixes it (stay on v1). go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "govulncheck fails CI on google.golang.org/grpc. Upgrade grpc in go.mod to a version that fixes it (stay on v1). go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g07-upgrade-protobuf",
+    "eco": "Go",
+    "kind": "upgrade",
+    "target": "google.golang.org/protobuf",
+    "constraint": {
+      "major": 1
+    },
+    "from": "v1.28.0",
+    "instruction": "govulncheck fails CI on google.golang.org/protobuf. Upgrade it in go.mod to a version that fixes it. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "govulncheck fails CI on google.golang.org/protobuf. Upgrade it in go.mod to a version that fixes it. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g08-add-oauth2",
+    "eco": "Go",
+    "kind": "add",
+    "target": "golang.org/x/oauth2",
+    "candidates": [
+      "golang.org/x/oauth2"
+    ],
+    "instruction": "Add golang.org/x/oauth2 as a direct requirement in go.mod; we need the client-credentials flow. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "Add golang.org/x/oauth2 as a direct requirement in go.mod; we need the client-credentials flow. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g09-upgrade-gin",
+    "eco": "Go",
+    "kind": "upgrade",
+    "target": "github.com/gin-gonic/gin",
+    "constraint": {
+      "major": 1
+    },
+    "from": "v1.7.0",
+    "instruction": "govulncheck fails CI on github.com/gin-gonic/gin. Upgrade gin in go.mod to a version that fixes it. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "govulncheck fails CI on github.com/gin-gonic/gin. Upgrade gin in go.mod to a version that fixes it. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g10-add-websocket",
+    "eco": "Go",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "github.com/gorilla/websocket",
+      "nhooyr.io/websocket",
+      "github.com/coder/websocket"
+    ],
+    "instruction": "Add a WebSocket library so the server can push live updates to browsers. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "Add a WebSocket library so the server can push live updates to browsers. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g11-upgrade-xnet",
+    "eco": "Go",
+    "kind": "upgrade",
+    "target": "golang.org/x/net",
+    "constraint": {
+      "major": 0
+    },
+    "from": "v0.7.0",
+    "instruction": "govulncheck fails CI on golang.org/x/net. Upgrade it in go.mod to a version that fixes it. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "govulncheck fails CI on golang.org/x/net. Upgrade it in go.mod to a version that fixes it. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  },
+  {
+    "id": "g12-add-echo",
+    "eco": "Go",
+    "kind": "add",
+    "target": null,
+    "candidates": [
+      "github.com/labstack/echo/v4",
+      "github.com/labstack/echo"
+    ],
+    "instruction": "Add the Echo web framework (v4) for a small HTTP API. go.mod is the source of truth for versions here (there is no go.sum to maintain).",
+    "prompt": "Add the Echo web framework (v4) for a small HTTP API. go.mod is the source of truth for versions here (there is no go.sum to maintain).\n\nYou cannot run shell commands, install packages, or browse the web in this environment. Make the change by editing the files in the current directory only: the dependency manifest, and the lockfile if this project has one (update or add the entry for the package so it matches the version you chose; leave out any integrity hash or checksum you cannot compute). Do not touch files outside this directory.\nWhen you are finished, end your reply with exactly one line of the form:\nDONE: <package>@<version>",
+    "manifest": "go.mod",
+    "lockfile": null,
+    "fileNames": [
+      "go.mod",
+      "main.go"
+    ]
+  }
+]

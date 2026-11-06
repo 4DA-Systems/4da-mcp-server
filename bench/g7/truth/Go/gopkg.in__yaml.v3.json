@@ -1,0 +1,1 @@
+{"eco":"Go","name":"gopkg.in/yaml.v3","exists":true,"versions":["v3.0.1","v3.0.0"],"yanked":[],"latest":"v3.0.1","vulnsByVersion":{"v3.0.1":[],"v3.0.0":["GHSA-hp87-p4gw-j4gq"]},"fetchedAt":"2026-10-24T10:27:21.194Z","scoringTime":false}
