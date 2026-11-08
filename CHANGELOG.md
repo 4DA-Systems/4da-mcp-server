@@ -13,7 +13,8 @@
 - **"No release ... is free of known advisories" counts each advisory once,
   and all of them.** The count came from `range_check.affecting_all`, which
   names at most 10 ids, and a GHSA record and its PYSEC twin were counted as
-  two: pyjwt 2.9.* read "... and 29 more affect every one" for 17 advisories.
+  two: pyjwt 2.9.* read "... and 7 more affect every one", naming 10 of its 17
+  advisories; it now reads "... and 14 more".
   Aliases are now grouped as everywhere else, and the new
   `range_check.affecting_all_total` carries the uncapped count.
 - **The first scan after updating fetches its fix-path data again, once.** The
