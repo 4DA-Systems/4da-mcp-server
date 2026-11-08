@@ -10,7 +10,7 @@ package-contents check rejects `bench/`).
 
 ## Results
 
-Measured on the 6.2.5 and 6.2.6 release candidates (each installed from its packed tarball),
+Measured on the 6.2.5, 6.2.6 and 6.2.7 release candidates (each installed from its packed tarball),
 model `claude-sonnet-5-5`, 49 tasks x 3 trials per arm.
 
 | | without the server | with the server |
@@ -24,9 +24,9 @@ model `claude-sonnet-5-5`, 49 tasks x 3 trials per arm.
 | Run errors | 0 / 147 | 0 / 147 |
 | Runs that called the server | | 147 / 147 (`dependency_check` in all) |
 
-The 6.2.5 and 6.2.6 runs gave the same primary result; both share one control arm (the control arm
-has no server, so a server release does not change it). `results/summary-final-62{5,6}.json` hold
-every table; `results/scores-final-62{5,6}.json` hold the per-run rows.
+The 6.2.5, 6.2.6 and 6.2.7 runs gave the same primary result; all three share one control arm (the
+control arm has no server, so a server release does not change it). `results/summary-final-62{5,6,7}.json`
+hold every table; `results/scores-final-62{5,6,7}.json` hold the per-run rows.
 
 **The 9 / 147 on all tasks** are the three ill-posed tasks (n06, p04, p09), 3 runs each: by the
 pinned truth, no release inside their constraint is free of advisories (every Next.js 13.x, every
@@ -43,13 +43,22 @@ and v0.61.0, the newest release in the truth, has two, so the pick was correct. 
 completed 138 / 138, nonexistent 0. The primary endpoint is unaffected (a nonexistent pick is not
 counted as vulnerable, in either direction).
 
+**Truth staleness adjustments (6.2.7, `ADJUDICATION-627.txt`).** Run on 2026-11-08, two weeks after
+the truth, so 27 treatment runs scored "nonexistent". Each pick was checked against the registries
+and OSV directly. 24 runs chose a release published after the truth with no advisory: axios 1.21.0
+and 0.35.0, marked 18.1.3, jsdom 31.0.0, semver 7.8.6, openssl 0.10.82, golang.org/x/net v0.62.0.
+The other 3 are g12-add-echo, which became ill-posed on 2026-11-05: GO-2026-6872 and GO-2026-6875
+affect every echo/v4 release, with fixes only in the echo/v5 module. In all three runs the server
+answered `review`, and the agent wrote v4.16.3 while telling the user both advisories and that no v4
+release is free of them. The primary endpoint is unchanged: 0 vulnerable on well-posed tasks.
+
 ## Design
 
 - **Pre-registered.** `PREREGISTRATION.txt` was written on 2026-10-11, before the full run (smoke runs on
   two tasks were discarded). It fixes the unit, the version-selection rule, the vulnerable rule, the
   primary endpoint (vulnerable-selection rate over well-posed tasks, Fisher two-sided p < 0.05) and
-  the robustness checks. The first full run measured 6.1.0; this directory publishes the 6.2.5 and
-  6.2.6 runs, scored by the same rule.
+  the robustness checks. The first full run measured 6.1.0; this directory publishes the 6.2.5,
+  6.2.6 and 6.2.7 runs, scored by the same rule.
 - **Tasks.** 49 tasks (13 npm, 12 PyPI, 12 crates.io, 12 Go; 24 add, 11 upgrade, 14 pin), each a small
   project with a manifest and, where the ecosystem has one, a lockfile. `gen-tasks.mjs` generates
   them; `tasks.json` holds every prompt, target and constraint. A task is well-posed when a release
@@ -78,6 +87,7 @@ counted as vulnerable, in either direction).
 |---|---|
 | `PREREGISTRATION.txt` | the analysis plan, 2026-10-11 |
 | `ADJUDICATION-626.txt` | the 6.2.6 runs and every scored miss, adjudicated against live OSV |
+| `ADJUDICATION-627.txt` | the same for the 6.2.7 runs |
 | `gen-tasks.mjs` | writes `tasks/<id>/` and `tasks.json` (deterministic) |
 | `tasks.json` | the 49 task definitions |
 | `lib-truth.mjs`, `build-truth.mjs` | pin registry versions and OSV advisories into `truth/` |
@@ -85,7 +95,7 @@ counted as vulnerable, in either direction).
 | `truth/` | the pinned truth, 2026-10-24 (89 files, about 5 MB, 240 kB compressed) |
 | `run-g7.mjs` | the runner |
 | `score-g7.mjs` | the scorer: `results/scores-<label>.json`, `results/summary-<label>.json` |
-| `results/` | the published 6.2.5 and 6.2.6 scores and summaries |
+| `results/` | the published 6.2.5, 6.2.6 and 6.2.7 scores and summaries |
 
 `tasks/` is generated, not committed: its manifests pin vulnerable versions on purpose, and committed
 they would raise dependency alerts against this repository. Run transcripts and work directories
@@ -95,7 +105,9 @@ retained run records with this `score-g7.mjs` before publishing, and match byte 
 ## Reproduce
 
 Needs Node 22+, Python 3 with `packaging` (`pip install packaging`; set `G7_PYTHON` if the interpreter
-is not `python`), and Claude Code (`claude` on PATH, or `G7_CLAUDE=<path to the executable>`).
+is not `python`), and Claude Code (`claude` on PATH, or `G7_CLAUDE=<path to the executable>`). The
+scorer runs Python isolated (`-I`), which ignores the user site-packages, so a `pip install --user
+packaging` is not seen: install it into the interpreter itself, or into a venv named by `G7_PYTHON`.
 
 ```bash
 cd bench/g7
@@ -120,8 +132,8 @@ With the committed truth, a release published after 2026-10-24 scores as "nonexi
 advisory published since is not counted (see Limitations).
 
 **Cost and time** (model `claude-sonnet-5-5`, 147 runs per arm): control $2.79 in all, 18.9 s per run
-on average; treatment $4.53 (6.2.5) and $4.84 (6.2.6), 23.2 s and 19.1 s per run. The 6.2.6
-treatment arm took 15.8 minutes at concurrency 3.
+on average; treatment $4.53 (6.2.5), $4.84 (6.2.6) and $4.80 (6.2.7), 23.2 s, 19.1 s and 21.6 s per
+run. The 6.2.6 and 6.2.7 treatment arms took 15.8 and 17.9 minutes at concurrency 3.
 
 ## Limitations
 
