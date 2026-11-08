@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.7 — unreleased
+## 6.2.7 — 2026-11-08
 
 - **dependency_check's prose no longer undercounts advisories.** With high or
   critical advisories present, the advisories signal named three of them and
