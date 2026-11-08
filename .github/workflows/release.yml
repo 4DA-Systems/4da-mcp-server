@@ -37,7 +37,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
-          cache: pnpm
+          # No cache: a release job must not restore a pnpm store that main's CI
+          # wrote (its install-smoke runs unlocked installs with scripts on).
 
       - run: pnpm install --frozen-lockfile
 
@@ -175,7 +176,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
-          cache: pnpm
+          # No cache: a release job must not restore a pnpm store that main's CI
+          # wrote (its install-smoke runs unlocked installs with scripts on).
 
       - run: pnpm install --frozen-lockfile
 
@@ -353,6 +355,19 @@ jobs:
           path: bundles
           pattern: mcpb-*
           merge-multiple: true
+
+      # Exactly the three bundles the matrix builds, nothing else that matched
+      # `mcpb-*` in this run (another job of the same run could upload one).
+      - name: Check the bundle set
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/mcp-v}"
+          expected=$(printf '%s\n' "4da-mcp-server-${VERSION}-darwin-arm64.mcpb" "4da-mcp-server-${VERSION}-darwin-x64.mcpb" "4da-mcp-server-${VERSION}-win32-x64.mcpb")
+          actual=$(cd bundles && ls -1 | LC_ALL=C sort)
+          if [ "$actual" != "$(printf '%s\n' "$expected" | LC_ALL=C sort)" ]; then
+            echo "::error::bundles/ holds an unexpected set:"; printf '%s\n' "$actual"; exit 1
+          fi
+          echo "$actual"
 
       - name: Create the release (notes from CHANGELOG.md)
         env:

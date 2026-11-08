@@ -31,7 +31,8 @@
   The `.mcpb` bundles are built from `pnpm-lock.yaml` with a pinned mcpb CLI
   (#48). The publish job, the only one holding the publish identity, builds
   nothing and uploads that file (#49) with `--provenance`, so npm refuses before
-  the upload if it cannot attest.
+  the upload if it cannot attest. Release jobs restore no dependency cache, and
+  the GitHub release attaches exactly the three bundles the run built.
 - **`bench/g7`** publishes the agent-level evaluation: 49 dependency tasks, run
   with and without the server, with its pre-registration, pinned truth, scorer
   and the 6.2.5 and 6.2.6 results (#53). It is not part of the npm package.
