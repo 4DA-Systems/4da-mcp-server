@@ -280,7 +280,12 @@ jobs:
             # identity (audit 6.2.5 E-4). OIDC needs npm >= 11.5.1.
             npm install -g --ignore-scripts --no-audit --no-fund npm@11.21.0
             npm --version
-            npm publish "$TGZ_PATH" --access public --ignore-scripts
+            # --provenance makes the attestation a precondition, not a hope: npm
+            # refuses BEFORE the upload if it cannot attest (no id-token, an
+            # unsupported provider, signing down). Without it, a publish that came
+            # out unattested is found only by the check below, after the version
+            # is irreversibly live. That check stays, as the second gate.
+            npm publish "$TGZ_PATH" --access public --ignore-scripts --provenance
             echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
