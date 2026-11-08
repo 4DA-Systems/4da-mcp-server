@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.2.7 — unreleased
+## 6.2.7 — 2026-11-08
 
 - **dependency_check's prose no longer undercounts advisories.** With high or
   critical advisories present, the advisories signal named three of them and
@@ -13,9 +13,32 @@
 - **"No release ... is free of known advisories" counts each advisory once,
   and all of them.** The count came from `range_check.affecting_all`, which
   names at most 10 ids, and a GHSA record and its PYSEC twin were counted as
-  two: pyjwt 2.9.* read "... and 29 more affect every one" for 17 advisories.
+  two: pyjwt 2.9.* read "... and 7 more affect every one", naming 10 of its 17
+  advisories; it now reads "... and 14 more".
   Aliases are now grouped as everywhere else, and the new
   `range_check.affecting_all_total` carries the uncapped count.
+- **The first scan after updating fetches its fix-path data again, once.** The
+  cache behind fix targets (OSV package records and the npm, crates.io, PyPI and
+  Go facts) moves to version 11 with the count change above, so entries written
+  by 6.2.6 are not reused.
+- **Dependencies:** the MCP SDK moves to `@modelcontextprotocol/server` and
+  `core` 2.4.0, and `@modelcontextprotocol/node` 2.1.2; hono moves to 4.13.14
+  (#50). What 2.4.0 changes (tool `outputSchema` handling, `$id`/`$ref` URI
+  checks, `x-mcp-header` parameters) touches nothing this server declares.
+- **Release pipeline:** the package is published from the exact tarball CI
+  verified. `verify` packs it once and records its SHA-256. `install-smoke`
+  installs that file on Linux, macOS and Windows with npm 10 and npm 12 (#47).
+  The `.mcpb` bundles are built from `pnpm-lock.yaml` with a pinned mcpb CLI
+  (#48). The publish job, the only one holding the publish identity, builds
+  nothing and uploads that file (#49) with `--provenance`, so npm refuses before
+  the upload if it cannot attest. Release jobs restore no dependency cache, and
+  the GitHub release attaches exactly the three bundles the run built.
+- **`bench/g7`** publishes the agent-level evaluation: 49 dependency tasks, run
+  with and without the server, with its pre-registration, pinned truth, scorer
+  and the 6.2.5 and 6.2.6 results (#53). It is not part of the npm package.
+- The conformance corpus and shared rule vectors are pinned at 4DA `807e0a35c`.
+  Since `511ba1cda`, only the Rust engine's skip list changed there, and every
+  vector still passes here.
 
 ## 6.2.6 — 2026-10-30
 
