@@ -42,6 +42,14 @@
   medium (6.8). The score is a port of the FIRST reference calculator, checked
   against it on 100,000 random vectors with no difference. A curated label still
   wins, and a v3.x vector still wins over a v4.0 one.
+- **upgrade_planner reads the app's plan schema 5 as well as 4.** The 4DA app
+  now writes the mechanisms `lockfile_refresh`, `parent_update` and
+  `blocked_upstream` (`lockfile_or_parent_update` now means the route is
+  undecided or differs between copies) and `blocked_upstream` holds on a step.
+  Each step gets a `next_step` sentence in its schema's terms; a blocked step
+  names no upgrade, says what holds each copy and lists the options. Holds are
+  narrowed by `project_path` with the lines. Any other schema still falls back
+  to the standalone plan, saying why.
 - **The first scan after updating fetches again, once.** The scan cache moves to
   `osv:v4` and the fix-path cache to version 12, since entries written by 6.2.7
   hold the old grades and range readings.

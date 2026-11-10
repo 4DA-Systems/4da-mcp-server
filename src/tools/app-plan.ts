@@ -10,16 +10,26 @@
  * range matching, target walking or scope grading is reimplemented here, so
  * the agent gets the app's answer, not a second opinion.
  *
- * Fail-closed like the Rust reader: any schema version other than
- * APP_PLAN_SCHEMA_VERSION is treated as absent and the caller falls back to
- * its standalone heuristic.
+ * Schema 5 (the app's Y5, 2026-11-10) adds the mechanisms `lockfile_refresh`,
+ * `parent_update` and `blocked_upstream`, narrows `lockfile_or_parent_update`
+ * to "the route of some copy is undecided, or the copies' routes differ", and
+ * lets a step carry `blocked_upstream` holds: copies no published release can
+ * fix yet, with what holds each and the options. Both 4 and 5 are read; each
+ * step gets a `next_step` sentence in the schema's own terms, and a blocked fix
+ * is never worded as an upgrade.
+ *
+ * Fail-closed like the Rust reader: any schema version not in
+ * APP_PLAN_SCHEMA_VERSIONS is treated as absent and the caller falls back to
+ * its standalone heuristic, saying why.
  */
 
 import type { FourDADatabase } from "../db.js";
 import { isWithin } from "./project-scope.js";
 
-/** The snapshot schema this reader understands (Rust `PLAN_SCHEMA_VERSION`). */
-export const APP_PLAN_SCHEMA_VERSION = 4;
+/** The snapshot schemas this reader understands (Rust `PLAN_SCHEMA_VERSION`, 4 and 5). */
+export const APP_PLAN_SCHEMA_VERSIONS: readonly number[] = [4, 5];
+/** The newest of them, the one the app writes today. */
+export const APP_PLAN_SCHEMA_VERSION = 5;
 
 const PLAN_KV_KEY = "upgrade_plan_snapshot";
 
@@ -35,14 +45,45 @@ export interface AppPlanLine {
   upgrade_type: "patch" | "minor" | "major" | null;
   clears_all_known: boolean;
   sites: AppPlanSite[];
+  /** npm: what the held-dependency rule said about `target` (passed through as the app wrote it). */
+  held?: unknown;
 }
+
+/** Schema 5: one transitive copy no published release can fix yet (Rust `BlockedHold`). */
+export interface AppPlanBlockedHold {
+  project: string;
+  installed: string;
+  /** The version that clears the advisories. */
+  cleared_version: string;
+  /** The package that pulls the copy in, and its installed version. */
+  parent: string;
+  parent_version: string;
+  /** The parent's requirement on the package, when it was read. */
+  requirement?: string;
+  /** The package whose newest release keeps the copy (the parent, or the dependency it arrives through). */
+  held_by: string;
+  held_by_newest: string;
+  /** What can be done instead, in order. */
+  options: string[];
+}
+
+export type AppPlanMechanism =
+  | "manifest_bump"
+  | "lockfile_or_parent_update"
+  | "lockfile_refresh"
+  | "parent_update"
+  | "blocked_upstream"
+  | "mixed"
+  | "no_fix";
 
 export interface AppPlanStep {
   item_id: string;
   ecosystem: string;
   package: string;
   lines: AppPlanLine[];
-  mechanism: "manifest_bump" | "lockfile_or_parent_update" | "mixed" | "no_fix";
+  mechanism: AppPlanMechanism;
+  /** Schema 5: the copies no published release can fix yet; absent when none is blocked. */
+  blocked_upstream?: AppPlanBlockedHold[];
   advisory_ids: string[];
   verification: string;
 }
@@ -57,6 +98,8 @@ interface AppPlanItem {
 export interface AppPlanStepView extends AppPlanStep {
   title: string | null;
   urgency: string | null;
+  /** What to do, in words, from the mechanism (and the schema's meaning of it); a blocked fix is never "upgrade". */
+  next_step: string;
 }
 
 export interface AppPlanSnapshot {
@@ -108,10 +151,10 @@ export function readAppPlan(db: FourDADatabase | null | undefined, now: Date = n
   }
 
   const version = env.schema_version;
-  if (version !== APP_PLAN_SCHEMA_VERSION) {
+  if (typeof version !== "number" || !APP_PLAN_SCHEMA_VERSIONS.includes(version)) {
     return {
       kind: "absent",
-      reason: `the app's plan snapshot is schema ${String(version)}, this server reads schema ${APP_PLAN_SCHEMA_VERSION}`,
+      reason: `the app's plan snapshot is schema ${String(version)}, this server reads schemas ${APP_PLAN_SCHEMA_VERSIONS.join(" and ")}`,
     };
   }
   if (!Array.isArray(env.steps) || !Array.isArray(env.items)) {
@@ -125,9 +168,12 @@ export function readAppPlan(db: FourDADatabase | null | undefined, now: Date = n
   for (const item of env.items as AppPlanItem[]) {
     if (item && typeof item.id === "string") items.set(item.id, item);
   }
-  const steps: AppPlanStepView[] = (env.steps as AppPlanStep[]).map((step) => {
-    const item = items.get(step.item_id);
-    return { ...step, title: item?.title ?? null, urgency: item?.urgency ?? null };
+  const steps: AppPlanStepView[] = (env.steps as AppPlanStep[]).map((raw) => {
+    const item = items.get(raw.item_id);
+    // A v4 snapshot has no holds; a v5 one omits the field when nothing is blocked.
+    const step: AppPlanStep = { ...raw };
+    if (!Array.isArray(step.blocked_upstream) || step.blocked_upstream.length === 0) delete step.blocked_upstream;
+    return { ...step, title: item?.title ?? null, urgency: item?.urgency ?? null, next_step: nextStep(step, version) };
   });
 
   const expires = Date.parse(env.expires_at);
@@ -138,7 +184,7 @@ export function readAppPlan(db: FourDADatabase | null | undefined, now: Date = n
     kind: "plan",
     stale,
     snapshot: {
-      schemaVersion: APP_PLAN_SCHEMA_VERSION,
+      schemaVersion: version,
       generatedAt: env.generated_at,
       expiresAt: env.expires_at,
       generatorVersion: typeof env.generator_version === "string" ? env.generator_version : null,
@@ -149,6 +195,52 @@ export function readAppPlan(db: FourDADatabase | null | undefined, now: Date = n
       steps,
     },
   };
+}
+
+/** "5.28.4 -> 6.28.1 (major)", per installed line with a target. */
+function moves(step: AppPlanStep): string {
+  const lines = step.lines.filter((l) => l.target);
+  return lines.map((l) => `${l.installed} -> ${l.target}${l.upgrade_type ? ` (${l.upgrade_type})` : ""}`).join(", ");
+}
+
+/** "zip 8.6.0 in d:/app is held by docx-rs 0.4.22 (its newest release), which requires ^8.6.0; 9.0.5 clears it. Options: a; or b". */
+export function blockedText(step: AppPlanStep, hold: AppPlanBlockedHold): string {
+  const newest = hold.held_by === hold.parent && hold.held_by_newest === hold.parent_version ? " (its newest release)" : `, whose newest release ${hold.held_by_newest} still holds it`;
+  const via = hold.held_by === hold.parent ? `${hold.parent} ${hold.parent_version}${newest}` : `${hold.parent} ${hold.parent_version}, through ${hold.held_by}${newest}`;
+  const req = hold.requirement ? `, which requires ${step.package} ${hold.requirement}` : "";
+  const options = hold.options.length > 0 ? ` Options: ${hold.options.join("; or ")}.` : "";
+  return `${step.package} ${hold.installed} in ${hold.project} is held by ${via}${req}; ${hold.cleared_version} would clear it, and no published release lets it in yet.${options}`;
+}
+
+/**
+ * The step in words. Schema 4's `lockfile_or_parent_update` covered every transitive step; from
+ * schema 5 it means the route is undecided (or differs between copies), and the decided routes have
+ * their own mechanisms. A `blocked_upstream` step names no upgrade to make: it says what holds each
+ * copy and lists the options.
+ */
+export function nextStep(step: AppPlanStep, schema: number): string {
+  const blocked = step.blocked_upstream ?? [];
+  const blockedNote = blocked.length > 0 ? ` Blocked upstream: ${blocked.map((h) => blockedText(step, h)).join(" ")}` : "";
+  switch (step.mechanism) {
+    case "manifest_bump":
+      return `Bump ${step.package} in each project's manifest: ${moves(step)}.`;
+    case "lockfile_refresh":
+      return `Refresh the lockfile so ${step.package} resolves to the fixed release (${moves(step)}); every parent's requirement already admits it, so no manifest changes.`;
+    case "parent_update":
+      return `Update the parent that pulls ${step.package} in to a release whose requirement admits the fix (${moves(step)}); see the plan item for which parent. Copies whose parents already admit it need only a lockfile refresh.`;
+    case "blocked_upstream":
+      return `Do not upgrade ${step.package}: no published release of what pulls it in admits the fixed version yet.${blockedNote}`;
+    case "lockfile_or_parent_update":
+      return schema >= 5
+        ? `Transitive only, and the route is undecided or differs between copies: refresh the lockfile where the parent's requirement admits the fix, else update the parent (${moves(step)}); the plan item says which.${blockedNote}`
+        : `Transitive only: refresh the lockfile, or update the parent that pulls ${step.package} in (${moves(step)}); the plan item says which.`;
+    case "mixed":
+      return `Bump ${step.package} in the projects that declare it, and refresh the lockfile or update the parent where it is transitive (${moves(step)}).${blockedNote}`;
+    case "no_fix":
+      return `No fix is published for ${step.package}: nothing to upgrade to yet.`;
+    default:
+      return `This server does not know the mechanism "${String(step.mechanism)}": read the plan item before acting on it.${blockedNote}`;
+  }
 }
 
 const URGENCY_RISK: Record<string, number> = { critical: 3, high: 2, medium: 1, watch: 0 };
@@ -183,7 +275,10 @@ export function scopeAppPlanSteps(steps: AppPlanStepView[], scope: string | null
     const lines = step.lines
       .map((line) => ({ ...line, sites: line.sites.filter((s) => isWithin(s.project, scope)) }))
       .filter((line) => line.sites.length > 0);
-    if (lines.length > 0) out.push({ ...step, lines });
+    if (lines.length === 0) continue;
+    const holds = step.blocked_upstream?.filter((h) => isWithin(h.project, scope));
+    const { blocked_upstream: _all, ...rest } = step;
+    out.push(holds && holds.length > 0 ? { ...rest, lines, blocked_upstream: holds } : { ...rest, lines });
   }
   return out;
 }
@@ -219,8 +314,17 @@ export function formatAppPlan(
   ];
   const otherProjectSteps = snapshot.steps.length - scoped.length;
   if (count("manifest_bump") > 0) parts.push(`${count("manifest_bump")} manifest bump(s)`);
+  if (count("lockfile_refresh") > 0) parts.push(`${count("lockfile_refresh")} lockfile refresh(es) (transitive, no manifest change)`);
+  if (count("parent_update") > 0) parts.push(`${count("parent_update")} parent update(s) (transitive)`);
   if (count("lockfile_or_parent_update") > 0) {
-    parts.push(`${count("lockfile_or_parent_update")} lockfile or parent update(s) (transitive only)`);
+    parts.push(
+      snapshot.schemaVersion >= 5
+        ? `${count("lockfile_or_parent_update")} transitive with the route undecided or mixed (lockfile refresh or parent update)`
+        : `${count("lockfile_or_parent_update")} lockfile or parent update(s) (transitive only)`,
+    );
+  }
+  if (count("blocked_upstream") > 0) {
+    parts.push(`${count("blocked_upstream")} blocked upstream (no published release admits the fix yet: nothing to upgrade, options listed per step)`);
   }
   if (count("mixed") > 0) parts.push(`${count("mixed")} mixed (direct in some projects, transitive in others)`);
   if (count("no_fix") > 0) parts.push(`${count("no_fix")} with no fix published`);
