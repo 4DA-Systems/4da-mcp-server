@@ -213,6 +213,21 @@ export interface RangeCheck {
    */
   held_excluded?: number;
   held_note?: string;
+  /**
+   * npm: no release in range is safe only because of low or moderate advisories on dependencies
+   * they hold (dependency-check-held.ts adviseHeldOnly): which ones, the release that clears each,
+   * and the far older release outside the range that is therefore not offered.
+   */
+  held_advice?: HeldAdvice;
+}
+
+export interface HeldAdvice {
+  /** What `to` holds that keeps it from being safe, and the smallest release of each that is (null: none known). */
+  dependencies: Array<{ package: string; installs: string; advisories: string[]; severity: string; fixed_in: string | null }>;
+  /** The newest safe release outside the range, withheld as an alternative, and why. */
+  not_offered?: { version: string; published: string | null; reason: string };
+  /** The release offered in its place, when `dependencies` are what it holds (not what `to` holds). */
+  alternative?: string;
 }
 
 /** The installable releases a constraint admits, ascending; prereleases only when it admits nothing else. */

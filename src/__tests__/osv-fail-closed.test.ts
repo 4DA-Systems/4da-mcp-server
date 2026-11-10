@@ -125,7 +125,7 @@ describe("OSV scanner: no answer is never an empty answer", () => {
     // An answer from two hours ago, past its 1 h life.
     db.prepare(
       "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '-2 hours'), datetime('now', '-1 hours'))",
-    ).run("osv:v3:npm:lodash:4.17.15");
+    ).run("osv:v4:npm:lodash:4.17.15");
     stubOsv(() => "throw");
     const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15"), dep("minimist", "1.2.0")], "/proj");
     expect(result.staleAnswers).toBe(1);
@@ -140,7 +140,7 @@ describe("OSV scanner: no answer is never an empty answer", () => {
     const limiter = new RateLimiter(DEFAULT_RATE_LIMITS);
     db.prepare(
       "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '-2 hours'), datetime('now', '-1 hours'))",
-    ).run("osv:v3:npm:lodash:4.17.15");
+    ).run("osv:v4:npm:lodash:4.17.15");
     stubOsv(() => "throw");
     const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15")], "/proj");
     expect(result.unchecked).toBe(0);
@@ -292,15 +292,15 @@ describe("a cache row fetched in the future is never an answer", () => {
     new LiveCache(db); // creates the table
     db.prepare(
       "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now', '+365 days'), datetime('now', '+365 days', '+3600 seconds'))",
-    ).run("osv:v3:npm:lodash:4.17.15");
+    ).run("osv:v4:npm:lodash:4.17.15");
     db.prepare(
       "INSERT INTO live_cache (cache_key, data, source, fetched_at, expires_at) VALUES (?, '[]', 'osv', datetime('now'), datetime('now', '+3600 seconds'))",
-    ).run("osv:v3:npm:left-pad:1.3.0");
+    ).run("osv:v4:npm:left-pad:1.3.0");
     const cache = new LiveCache(db);
-    expect(cache.get("osv:v3:npm:lodash:4.17.15")).toBeNull();
-    expect(cache.getStale("osv:v3:npm:lodash:4.17.15")).toBeNull();
-    expect(cache.get("osv:v3:npm:left-pad:1.3.0")).toEqual([]);
-    expect(db.prepare("SELECT COUNT(*) AS n FROM live_cache WHERE cache_key = ?").get("osv:v3:npm:lodash:4.17.15")).toEqual({ n: 0 });
+    expect(cache.get("osv:v4:npm:lodash:4.17.15")).toBeNull();
+    expect(cache.getStale("osv:v4:npm:lodash:4.17.15")).toBeNull();
+    expect(cache.get("osv:v4:npm:left-pad:1.3.0")).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM live_cache WHERE cache_key = ?").get("osv:v4:npm:lodash:4.17.15")).toEqual({ n: 0 });
   });
 });
 
@@ -322,6 +322,6 @@ describe("a malformed querybatch entry is not an answer", () => {
     const result = await new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter)).scan([dep("lodash", "4.17.15"), dep("minimist", "1.2.0")], "/proj");
     expect(result.unchecked).toBe(2);
     expect(result.offline).toBe(true);
-    expect(cache.get("osv:v3:npm:lodash:4.17.15")).toBeNull();
+    expect(cache.get("osv:v4:npm:lodash:4.17.15")).toBeNull();
   });
 });

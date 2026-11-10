@@ -67,9 +67,12 @@ export function collectAffectedSpans(
       for (const event of range.events || []) {
         if (event.introduced !== undefined) {
           if (open) spans.push(open);
-          open = { introduced: event.introduced, fixed: null, lastAffected: null };
+          open = { introduced: coerceBound(event.introduced, ecosystem), fixed: null, lastAffected: null };
         } else if (event.fixed !== undefined || event.last_affected !== undefined) {
-          const close = { fixed: event.fixed ?? null, lastAffected: event.fixed === undefined ? (event.last_affected ?? null) : null };
+          const close = {
+            fixed: event.fixed !== undefined ? coerceBound(event.fixed, ecosystem) : null,
+            lastAffected: event.fixed === undefined && event.last_affected !== undefined ? coerceBound(event.last_affected, ecosystem) : null,
+          };
           if (open) {
             spans.push({ ...open, ...close });
             open = null;
@@ -84,6 +87,31 @@ export function collectAffectedSpans(
     }
   }
   return spans;
+}
+
+const SEMVER_FAMILY = new Set(["npm", "crates.io", "Go"]);
+const LOOSE_SEMVER = /^(v?)(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:([-+])?([0-9A-Za-z][0-9A-Za-z.+-]*))?$/;
+
+/**
+ * A range bound as OSV evaluates it, for the semver ecosystems (npm, crates.io, Go). Advisory
+ * data is hand-written and sometimes not semver: GHSA-92cp-5422-2mw7 (go-redis v9) opens a range
+ * at `9.6.0b1`. Read as unreadable, it made vulnerability_scan say no release clears the advisory
+ * ("9.6.3 is still affected") while dependency_check read the bound as 0 and called 9.6.3 clean,
+ * and called 9.5.5 affected, which OSV does not. OSV's own reading (its semver coercion: missing
+ * minor and patch are 0, a bare suffix is a prerelease) puts `9.6.0b1` just below 9.6.0, which is
+ * what api.osv.dev answers per version: 9.6.0 to 9.6.2 affected, 9.5.5 and 9.6.3 not
+ * (2026-11-10). So a bound that does not parse is coerced that way, and kept as written when
+ * even that does not parse (then readableAdvisory still calls it unreadable, as before).
+ * Every reader of ranges goes through here, so every tool reads the same bound the same way.
+ */
+export function coerceBound(bound: string, ecosystem: string): string {
+  if (bound === "0" || !SEMVER_FAMILY.has(ecosystem) || isComparable(bound, ecosystem)) return bound;
+  const m = LOOSE_SEMVER.exec(bound.trim());
+  if (!m) return bound;
+  const [, v, major, minor, patch, sep, rest] = m;
+  const core = `${v}${major}.${minor ?? "0"}.${patch ?? "0"}`;
+  const coerced = rest === undefined ? core : sep === "+" ? `${core}+${rest}` : `${core}-${rest}`;
+  return isComparable(coerced, ecosystem) ? coerced : bound;
 }
 
 /** Versions an advisory lists explicitly for this package (`affected[].versions`). */

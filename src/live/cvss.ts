@@ -6,7 +6,7 @@
  * (e.g. "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L") rather than a numeric
  * base score. Without computing the score we cannot bucket the advisory into
  * critical/high/medium/low — so this implements the published base-score
- * formula. CVSS v4.0 vectors are not yet handled (returns null).
+ * formula. CVSS v4.0 vectors are scored by cvss4.ts (this returns null for them).
  */
 
 const AV: Record<string, number> = { N: 0.85, A: 0.62, L: 0.55, P: 0.2 };

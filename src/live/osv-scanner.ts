@@ -12,6 +12,7 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { cvssBaseScore } from "./cvss.js";
+import { cvss4Score } from "./cvss4.js";
 import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { collectAffectedSpans } from "./osv-ranges.js";
 import { isMaintenanceNotice, isMaintenanceRecord } from "./maintenance.js";
@@ -292,7 +293,7 @@ export class OsvScanner {
     const cachedVulns: VulnerabilityEntry[] = [];
 
     for (const dep of scannable) {
-      const cacheKey = `osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`;
+      const cacheKey = `osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`;
       const cached = network ? this.cache.get<VulnerabilityEntry[]>(cacheKey) : null;
       if (cached !== null) {
         cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
@@ -328,7 +329,7 @@ export class OsvScanner {
     let staleOldest: string | null = null;
     const unchecked: ResolvedDependency[] = [];
     for (const dep of unanswered) {
-      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
+      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
       if (stale) {
         staleAnswers++;
         if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
@@ -479,7 +480,7 @@ export class OsvScanner {
       // and dropping a real advisory is worse than keeping an un-enriched one.
       const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
       const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
-      rows.push([`osv:v3:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      rows.push([`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
@@ -600,7 +601,8 @@ export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
 } {
   // The curated label first, the CVSS band second (the rule shared with the 4DA app, 2026-10-18,
   // severity vectors sv-015..sv-017): on the pinned corpus 123 of 3,923 records disagree, all GHSA,
-  // 113 beside a CVSS v4 vector neither engine scores and the label follows. A CVSS 0.0 goes by its label.
+  // 113 beside a CVSS v4 vector, where the label follows. A CVSS 0.0 goes by its label. A record with no
+  // label is graded by its v3.x vector, else its v4.0 one (cvss4.ts).
   const cvssScore = extractCvssScore(vuln.severity);
   const label = labelToSeverity(vuln.database_specific?.severity);
   if (label !== "unknown") return { severity: label, cvssScore };
@@ -640,6 +642,14 @@ export function extractCvssScore(severity: Array<{ type: string; score: string }
   for (const s of severity) {
     if (s.score.includes("AV:")) {
       const score = cvssBaseScore(s.score);
+      if (score !== null) return score;
+    }
+  }
+  // A v4.0 vector only when no v3.x one scored: RustSec records now often carry v4.0 alone
+  // (RUSTSEC-2026-0459 was graded unknown), and v3 keeps its place where both are given.
+  for (const s of severity) {
+    if (/^\s*CVSS:4\.0\//i.test(s.score)) {
+      const score = cvss4Score(s.score);
       if (score !== null) return score;
     }
   }

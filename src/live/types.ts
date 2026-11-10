@@ -144,7 +144,8 @@ export interface VulnerabilityEntry {
    * (maintenance.ts isMaintenanceRecord: a stated `informational` class decides, the
    * wording only when none is stated). Absent only on foreign or stub entries, which
    * fall back to the summary wording; the scan cache key moved to osv:v3 so entries
-   * cached by 6.2.4 without it are never read.
+   * cached by 6.2.4 without it are never read (osv:v4 since CVSS v4.0 grades and OSV-read range
+   * bounds changed what an entry holds).
    */
   maintenance?: boolean;
   summary: string;
