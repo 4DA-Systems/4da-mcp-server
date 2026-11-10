@@ -67,7 +67,10 @@ import {
   type Verdict,
 } from "./dependency-check-signals.js";
 import { checkRange, compareIn, isPrereleaseIn, lineOf, ownSafeInRange, parseTarget, rangeAdmits, type RangeCheck, type Target } from "./dependency-check-versions.js";
-import { HeldJudge, heldRangeCandidates } from "./dependency-check-held.js";
+import { adviseNoSafeRelease, HeldJudge, heldRangeCandidates } from "./dependency-check-held.js";
+import { andList } from "../live/held-dependencies.js";
+import { closestPopularNpm, maliciousName, maliciousSignal, type MaliciousName } from "./dependency-check-malicious.js";
+import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
@@ -96,6 +99,7 @@ export const dependencyCheckTool = {
     "",
     "Per item: `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason`, `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release.",
     "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm: a dependency `to` exact-pins, or narrowly ranges with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones.",
+    "  A package name that is malware itself (npm took it down and holds it with a `0.0.N-security` placeholder, or a malicious-package record covers every release) -> avoid, with `malicious_package` and the popular package it likely imitates. When no release in range is safe only because of a low or moderate advisory on a held dependency, `range_check.held_advice` names it and the override that clears it; a release more than one major or about 18 months older is not offered instead.",
     "- release_age: under 3 days -> wait, unless `to` fixes an advisory affecting `from`, or every release on its line past the hold has an advisory and no safe one is past it (then proceed; tell the user its age).",
     "- yanked_or_deprecated: yanked, unpublished, retracted (Go) or deprecated -> avoid.",
     "- publish_trust (npm, crates.io): trusted publisher / provenance dropped -> review. install_script_added (npm): new install script -> review. new_dependencies (npm, crates.io): a new runtime dependency under 30 days old -> review. Not applicable elsewhere, and said so.",
@@ -285,8 +289,18 @@ export async function executeDependencyCheck(
     const filter = item.ecosystem === "npm" ? held.rangeFilter(item.package) : undefined;
     item.rangeCheck = checkRange({ ecosystem: item.ecosystem, index, range: line, basis: "same_line", advisories, from: item.from, ...(filter ? { held: filter } : {}) });
   }
+  // Nothing in range is safe: never point at a release years older when a low or moderate advisory on a
+  // held dependency is what stands in the way; say which, and how to clear it (Y3, nx -> 13.2.4).
+  for (const item of items.filter(isNpm)) {
+    const lookup = indexes.get(lookupKey(item));
+    if (!item.rangeCheck || lookup?.status !== "ok") continue;
+    const advisories = advisoryLists.get(lookupKey(item));
+    await adviseNoSafeRelease({ judge: held, pkg: item.package, to: item.to, rc: item.rangeCheck, index: lookup.data, advisories, sources: fixSources, now });
+  }
 
   const holdWaivers = await findHoldWaivers(items, indexes, advisoryLists, fixSources, sources.Go, advisoriesFor, now);
+  // A name that is malware itself (a typo-squat npm took down): avoid, whatever the release says.
+  const malicious = await findMaliciousNames(items, indexes, advisoryLists, fixSources);
 
   // Phase 2: first-publish dates of newly introduced dependencies.
   const plans = items.map((item) => planItem(item, indexes.get(lookupKey(item))!));
@@ -309,9 +323,14 @@ export async function executeDependencyCheck(
       const ids = (s.value as { maintenance_notices?: string[] } | null)?.maintenance_notices;
       return ids && ids.length > 0 ? { maintenance_notices: ids } : {};
     };
+    const bad = malicious.get(p.item);
     if (p.blocked) {
       // No release metadata: only the advisory lookup can still speak, and
       // only a negative finding is worth more than "unknown".
+      if (bad) {
+        const sig = maliciousSignal(p.item, bad, null);
+        return { ...head(p.item), verdict: "avoid" as const, reason: `${sig.id}: ${sig.evidence}`, signals: [sig], ...extra };
+      }
       if (p.item.unresolved) return { ...head(p.item), verdict: "unknown" as const, reason: p.blocked, signals: [], ...extra };
       const advisories = advisoriesSignal(p.item, advisoriesFor(p.item), heldAt(p.item));
       const negative = advisories.effect === "avoid" || advisories.effect === "review";
@@ -327,7 +346,8 @@ export async function executeDependencyCheck(
     const { item, index } = p;
     const to = index!.releases[item.to];
     const base = selectBaseline(index!, item);
-    const advisories = advisoriesSignal(item, advisoriesFor(item), heldAt(item));
+    const own = advisoriesSignal(item, advisoriesFor(item), heldAt(item));
+    const advisories = bad ? maliciousSignal(item, bad, own) : own;
     const createdForItem = new Map<string, CreatedAtFact>();
     for (const name of p.introduced ?? []) {
       const fact = created.get(`${item.ecosystem}\0${name}`);
@@ -362,7 +382,7 @@ function withAlternatives(reason: string, item: Resolved, unsafe: boolean): stri
     const all = ids.length ? `: ${ids.slice(0, 3).join(", ")}${total > 3 ? ` and ${total - 3} more` : ""} affect every one` : "";
     const outside = rc.newest_safe_outside_range ? ` Newest safe release outside it: ${rc.newest_safe_outside_range}.` : "";
     const withheld = rc.withheld_note ? ` ${rc.withheld_note}.` : "";
-    return `${reason} | No release ${where} is free of known advisories${all}.${withheld}${outside}`;
+    return `${reason} | No release ${where} is free of known advisories${all}.${withheld}${heldAdviceText(item, rc)}${outside}`;
   }
   const upgrade = rc.smallest_safe_upgrade && rc.smallest_safe_upgrade !== rc.smallest_safe_in_range ? `, smallest above ${item.from} ${rc.smallest_safe_upgrade}` : "";
   // FX-H5: a withdrawn release the pick steps over is named, in the registry's words.
@@ -372,6 +392,39 @@ function withAlternatives(reason: string, item: Resolved, unsafe: boolean): stri
   const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}${heldOut}`;
   if (rc.basis === "same_line" && !unsafe) return reason;
   return `${reason} | ${safe}`;
+}
+
+/**
+ * " Only a low or moderate advisory on a dependency they install keeps them out: 24.0.5 holds
+ * minimatch 10.2.5 (GHSA-x, medium). 13.2.4, the newest release clear of every advisory, is not
+ * offered: 11 majors below 24.0.5 [...]. To install 24.0.5 without it, override minimatch to ..."
+ */
+function heldAdviceText(item: Resolved, rc: RangeCheck): string {
+  const advice = rc.held_advice;
+  if (!advice) return "";
+  const deps = advice.dependencies;
+  const one = deps.length === 1;
+  const named = andList(deps.map((d) => `${d.package} ${d.installs} (${d.advisories.join(", ")}, ${d.severity})`));
+  const subject = advice.alternative ?? item.to;
+  const notOffered = advice.not_offered
+    ? ` ${advice.not_offered.version}, the newest release clear of every advisory, is not offered: ${advice.not_offered.reason}.`
+    : "";
+  const held = advice.alternative
+    ? `${notOffered} The newest release clear of ${item.package}'s own advisories is ${subject}, which holds ${named}: check it with dependency_check.`
+    : ` Only a low or moderate advisory on a dependency they install keeps them out: ${subject} holds ${named}.${notOffered}`;
+  const overrides = deps
+    .filter((d) => d.fixed_in)
+    .map((d) => {
+      const major = (v: string) => v.split(".")[0];
+      const newMajor = major(d.fixed_in!) !== major(d.installs) ? `, a new major of ${d.package}: check that ${item.package} works with it` : "";
+      return `${d.package} to ${d.fixed_in}${newMajor}`;
+    });
+  const unfixed = deps.filter((d) => !d.fixed_in).map((d) => d.package);
+  const how =
+    overrides.length > 0
+      ? ` To install ${subject} without ${one ? "it" : "them"}, override ${andList(overrides)} (npm "overrides", pnpm "overrides", Yarn "resolutions")${unfixed.length > 0 ? ` (no fixed release of ${andList(unfixed)} is known)` : ""}, or wait for a later ${item.package} release that moves past ${one ? "it" : "them"}.`
+      : ` No fixed release of ${andList(unfixed)} is known: wait for one, and for a ${item.package} release that takes it, or accept the advisory knowingly.`;
+  return `${held}${how}`;
 }
 
 function hasRealAdvisory(facts: AdvisoryFacts): boolean {
@@ -551,6 +604,45 @@ async function findHoldWaivers(
   return out;
 }
 
+/**
+ * The items whose package name is malware itself (dependency-check-malicious.ts): asked of a new
+ * dependency (no `from`), of a name the registry does not have, and of an npm name held by a
+ * security placeholder, with the package's advisory list (read once, shared with the range checks).
+ */
+async function findMaliciousNames(
+  items: Resolved[],
+  indexes: Map<string, RegistryLookup<PackageReleaseIndex>>,
+  advisoryLists: Map<string, AdvisoryRanges[] | null>,
+  fixSources: FixPathSources | null,
+): Promise<Map<Resolved, MaliciousName>> {
+  const out = new Map<Resolved, MaliciousName>();
+  // npm holds the name: a placeholder, and nothing else it still serves.
+  const holdingOnly = (lookup: RegistryLookup<PackageReleaseIndex> | undefined) => {
+    if (lookup?.status !== "ok") return false;
+    const all = Object.values(lookup.data.releases);
+    return all.some((r) => isSecurityHoldingRelease("npm", r.version)) && all.every((r) => isSecurityHoldingRelease("npm", r.version) || r.withdrawn);
+  };
+  const asked = items.filter((i) => {
+    const lookup = indexes.get(lookupKey(i));
+    return !i.from || lookup?.status === "not_found" || (i.ecosystem === "npm" && (isSecurityHoldingRelease("npm", i.to) || holdingOnly(lookup)));
+  });
+  const missing = asked.filter((i) => !advisoryLists.has(lookupKey(i)));
+  for (const [k, v] of await packageAdvisoryLists(fixSources, missing)) advisoryLists.set(k, v);
+  for (const item of asked) {
+    const lookup = indexes.get(lookupKey(item));
+    const found = maliciousName({
+      ecosystem: item.ecosystem,
+      package: item.package,
+      to: item.to,
+      index: lookup?.status === "ok" ? lookup.data : null,
+      notFound: lookup?.status === "not_found",
+      advisories: advisoryLists.get(lookupKey(item)),
+    });
+    if (found) out.set(item, found);
+  }
+  return out;
+}
+
 async function packageAdvisoryLists(
   fixSources: FixPathSources | null,
   items: Array<{ ecosystem: CheckEcosystem; package: string }>,
@@ -569,9 +661,10 @@ function planItem(item: Resolved, lookup: RegistryLookup<PackageReleaseIndex>) {
     return { item, blocked: `Registry could not be reached (${lookup.detail}); nothing about ${item.to} was verified.`, index: null, introduced: null };
   }
   if (lookup.status === "not_found") {
+    const guess = item.ecosystem === "npm" ? closestPopularNpm(item.package) : null;
     return {
       item,
-      blocked: `${lookup.detail}. If it is a private package this tool cannot judge it; otherwise check the name for a typo or a hallucinated package before adding it.`,
+      blocked: `${lookup.detail}. If it is a private package this tool cannot judge it; otherwise check the name for a typo or a hallucinated package before adding it${guess ? ` (did you mean ${guess}?)` : ""}.`,
       index: null,
       introduced: null,
     };

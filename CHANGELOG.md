@@ -1,5 +1,59 @@
 # Changelog
 
+## 6.3.0 — unreleased
+
+- **dependency_check says avoid for a name that is malware itself.** `{npm,
+  lodahs, latest}` said proceed: `latest` is 0.0.1-security, the empty
+  placeholder npm publishes after taking a malicious package down, and the
+  scanner rightly drops findings on an installed placeholder (it holds no
+  code). `electorn`, `loadyaml`, `axois` and others read the same. A name npm
+  holds with a security placeholder, or that a malicious-package record covers
+  as a whole (open from the first version, every listed release, or a name the
+  registry no longer has), is now `avoid`, with the records and the popular
+  package it imitates when one is close ("Did you mean lodash?"). Hijacked
+  releases of real packages (chalk 5.6.1, nx 21.5.0, ua-parser-js 0.7.29) stay
+  avoid release by release, and the rest of those packages is judged as before;
+  vulnerability_scan still reports no malware for an installed placeholder. On
+  43 taken-down names checked live, all are avoid (6.2.7: 7 proceed); none of
+  the 1,822 bundled popular names is flagged. The suggestion list is bundled
+  (`src/live/popular-npm.ts`, from npm-high-impact 1.13.0), so it works offline.
+  A name the registry does not have also gets the suggestion in its `unknown`.
+- **No more steering to a release years old over a moderate advisory a
+  dependency holds.** `{npm, nx, latest}` said review and "Newest safe release
+  outside it: 13.2.4" (December 2021) because every 24.x exact-pins minimatch
+  10.2.5 (GHSA-g3hv-75wg-m249, moderate). When no release in range is safe, the
+  newest safe release outside it is offered only when it is at most one major
+  below the requested one and under about 18 months old. When a low or moderate
+  advisory on a held dependency is what stands in the way, the answer names
+  the dependency, its advisories and the release of it that clears them, with
+  the override that installs it ("override minimatch to 11.0.1, a new major of
+  minimatch: check that nx works with it"), in `range_check.held_advice`. A
+  release that is itself vulnerable (nx 21.5.0) is pointed at the newest
+  release clear of the package's own advisories, with the same advice, not at
+  13.2.4. High and critical held advisories are unchanged: avoid.
+- **vulnerability_scan and dependency_check read a malformed range bound the
+  same way, OSV's.** GHSA-92cp-5422-2mw7 (go-redis v9) opens a range at
+  `9.6.0b1`. vulnerability_scan treated the record as unreadable and said no
+  release clears it ("9.6.3 is still affected"); dependency_check read the bound
+  as 0. Both now read it as OSV.dev does (`9.6.0-b1`: missing parts are 0, a bare
+  suffix is a prerelease), and both name v9.6.3 for an installed v9.5.1.
+- **CVSS v4.0 vectors are scored.** A record with only a `CVSS:4.0/` vector and
+  no label (RUSTSEC-2026-0459, libsqlite3-sys) was graded `unknown`; it is now
+  medium (6.8). The score is a port of the FIRST reference calculator, checked
+  against it on 100,000 random vectors with no difference. A curated label still
+  wins, and a v3.x vector still wins over a v4.0 one.
+- **upgrade_planner reads the app's plan schema 5 as well as 4.** The 4DA app
+  now writes the mechanisms `lockfile_refresh`, `parent_update` and
+  `blocked_upstream` (`lockfile_or_parent_update` now means the route is
+  undecided or differs between copies) and `blocked_upstream` holds on a step.
+  Each step gets a `next_step` sentence in its schema's terms; a blocked step
+  names no upgrade, says what holds each copy and lists the options. Holds are
+  narrowed by `project_path` with the lines. Any other schema still falls back
+  to the standalone plan, saying why.
+- **The first scan after updating fetches again, once.** The scan cache moves to
+  `osv:v4` and the fix-path cache to version 12, since entries written by 6.2.7
+  hold the old grades and range readings.
+
 ## 6.2.7 — 2026-11-08
 
 - **dependency_check's prose no longer undercounts advisories.** With high or

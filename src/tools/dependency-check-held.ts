@@ -14,8 +14,13 @@
  * safe releases stay as its own advisories decide them, with the reason in the signal.
  */
 
-import { heldAdvisories, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck } from "../live/held-dependencies.js";
-import type { FixPathSources } from "../live/fix-paths.js";
+import { heldAdvisories, heldSeverity, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
+import { cleanFixTarget, type FixPathSources } from "../live/fix-paths.js";
+import { advisoriesAffecting, advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
+import type { PackageReleaseIndex } from "../live/release-metadata.js";
+import { compareVersions } from "../live/version-compare.js";
+import { excludedReleases } from "../live/withdrawn-releases.js";
+import { isPrereleaseIn, rangeAdmits, versionParts, type HeldAdvice, type RangeCheck } from "./dependency-check-versions.js";
 
 /** Time a dependency_check call may spend judging held dependencies, in all. */
 const HELD_CHECK_BUDGET_MS = 10_000;
@@ -89,6 +94,127 @@ export class HeldJudge {
       note: HELD_RANGE_NOTE,
     };
   }
+}
+
+/** An alternative outside the range is offered only within this distance of `to`'s line... */
+const OFFER_MAJORS_BEHIND = 1;
+/** ...and this age (about 18 months). */
+const OFFER_MAX_AGE_DAYS = 548;
+const DAY_MS = 86_400_000;
+
+/**
+ * Audit 2026-11-10 (Y3): `{npm, nx, latest}` said review and "Newest safe release outside it:
+ * 13.2.4", a December 2021 release eleven majors back, because every 24.x exact-pins minimatch
+ * 10.2.5 and GHSA-g3hv-75wg-m249 (a moderate ReDoS) affects it. An agent told to write only safe
+ * versions either never installs a current nx or is pushed four years back. nx 21.5.0 (malware,
+ * rightly avoid) was sent to 13.2.4 the same way.
+ *
+ * When no release in range is safe, the newest safe release outside it is offered only when it is
+ * at most one major below `to` and under about 18 months old. Otherwise, when what stands in the
+ * way is a low or moderate advisory on a dependency a release holds, the answer names it, its
+ * advisories and the smallest release of it that clears them (an override), for:
+ * (a) `to` itself, when nothing in range is safe ONLY because of what it holds (its own
+ *     advisories cover none of the range): the verdict stays review, and the reason says how to
+ *     install `to` without the advisory: an override of the child, or a later parent release;
+ * (b) else the newest release outside the range that the package's own advisories leave clean,
+ *     when it is newer than the far-back one: it is the alternative instead, with its override.
+ * A high or critical held advisory is avoid, and is never offered around: there the age of a
+ * clean release is no reason to keep the vulnerable one, and the far-back release stays offered.
+ */
+export async function adviseNoSafeRelease(input: {
+  judge: HeldJudge;
+  pkg: string;
+  to: string;
+  rc: RangeCheck;
+  index: PackageReleaseIndex;
+  advisories: readonly AdvisoryRanges[] | null | undefined;
+  sources: FixPathSources | null;
+  now: Date;
+}): Promise<void> {
+  const { rc, judge, pkg } = input;
+  if (rc.smallest_safe_in_range !== null) return;
+  const outside = rc.newest_safe_outside_range ?? null;
+  const published = (v: string) => input.index.releases[v]?.publishedAt ?? null;
+  const why = outside ? tooFarBack(input.to, outside, published(outside), input.now) : null;
+  const notOffered = outside && why ? { version: outside, published: published(outside), reason: why } : undefined;
+
+  // (a) Only what `to` holds keeps the range unsafe.
+  const own = judge.at(pkg, input.to);
+  if (rc.held_excluded && (rc.affecting_all_total ?? 0) === 0 && minorOnly(own)) {
+    rc.held_advice = { dependencies: await describe(own, input.sources), ...(notOffered ? { not_offered: notOffered } : {}) };
+    if (notOffered) rc.newest_safe_outside_range = null;
+    return;
+  }
+  if (!notOffered || !input.advisories) return;
+
+  // (b) The newest release clear of the package's own advisories, past the far-back one.
+  const excluded = excludedReleases(input.index);
+  const candidate = Object.values(input.index.releases)
+    .map((r) => r.version)
+    .filter(
+      (v) =>
+        !excluded.has(v) &&
+        !isPrereleaseIn("npm", v) &&
+        compareVersions(v, notOffered.version, "npm") > 0 &&
+        rangeAdmits("npm", rc.range, v) !== true &&
+        advisoriesAffecting(input.advisories!, v, "npm").length === 0,
+    )
+    .sort((a, b) => compareVersions(a, b, "npm"))
+    .pop();
+  if (!candidate) return;
+  await judge.judge([{ pkg, versions: [candidate] }]);
+  const check = judge.at(pkg, candidate);
+  if (check?.status === "checked" && check.affected.length === 0) {
+    // Clean after all: it was passed over only because it had not been judged.
+    rc.newest_safe_outside_range = candidate;
+    return;
+  }
+  if (!minorOnly(check)) return;
+  rc.held_advice = { dependencies: await describe(check, input.sources), alternative: candidate, not_offered: notOffered };
+  rc.newest_safe_outside_range = null;
+}
+
+/** A held check whose affected dependencies carry only low or moderate advisories. */
+function minorOnly(check: HeldCheck | undefined): check is { status: "checked"; affected: HeldDependency[] } {
+  if (check?.status !== "checked" || check.affected.length === 0) return false;
+  const worst = heldSeverity(check.affected);
+  return worst === "low" || worst === "medium";
+}
+
+async function describe(check: { affected: HeldDependency[] }, sources: FixPathSources | null): Promise<HeldAdvice["dependencies"]> {
+  return Promise.all(
+    check.affected.map(async (d) => ({
+      package: d.name,
+      installs: d.version,
+      advisories: d.ids,
+      severity: d.severity,
+      fixed_in: sources ? await childFix(sources, d.name, d.version) : null,
+    })),
+  );
+}
+
+/** Why a release outside the range is too far behind `to` to offer instead of it; null when it is not. */
+function tooFarBack(to: string, outside: string, publishedAt: string | null, now: Date): string | null {
+  const a = versionParts("npm", to);
+  const b = versionParts("npm", outside);
+  const why: string[] = [];
+  const behind = a && b && a.major > 0 ? a.major - b.major : 0;
+  if (behind > OFFER_MAJORS_BEHIND) why.push(`${behind} majors below ${to}`);
+  const age = publishedAt ? (now.getTime() - Date.parse(publishedAt)) / DAY_MS : NaN;
+  if (age > OFFER_MAX_AGE_DAYS) why.push(`published ${publishedAt!.slice(0, 10)}, more than 18 months ago`);
+  return why.length > 0 ? why.join(" and ") : null;
+}
+
+/** The smallest release of a held dependency that clears every advisory affecting `version`; null when none is known. */
+async function childFix(sources: FixPathSources, name: string, version: string): Promise<string | null> {
+  const advisories = await sources.packageAdvisories("npm", name).catch(() => null);
+  if (!advisories) return null;
+  const fixes = advisories
+    .filter((a) => !a.maintenance && advisoryAffects(a, version, "npm"))
+    .flatMap((a) => a.spans.map((s) => s.fixed).filter((f): f is string => f !== null && compareVersions(f, version, "npm") > 0));
+  if (fixes.length === 0) return null;
+  const clean = await cleanFixTarget(sources, "npm", name, fixes, version).catch(() => null);
+  return clean?.target ?? null;
 }
 
 /** The releases of a safe list worth judging: the smallest (above `from`) and the newest few. */

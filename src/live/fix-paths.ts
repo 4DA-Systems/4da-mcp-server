@@ -53,9 +53,10 @@ const MAX_OSV_PAGES = 10;
 
 /**
  * Bump when the shape of anything this module caches changes (10: npm facts carry `heldSpecs`, audit 6.2.5 D-4;
- * 11: advisory ranges carry `aliases`, so a GHSA record and its PYSEC twin count once).
+ * 11: advisory ranges carry `aliases`, so a GHSA record and its PYSEC twin count once; 12: range bounds
+ * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable).
  */
-const CACHE_VERSION = 11;
+const CACHE_VERSION = 12;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {

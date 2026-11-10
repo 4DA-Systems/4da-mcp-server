@@ -3,7 +3,7 @@
  * upgrade_planner reads the 4DA app's plan (AD-049): one brain.
  *
  * Fixture databases hold the `upgrade_plan_snapshot` envelope the Rust app
- * writes (`evidence::plan_snapshot::persist_upgrade_plan`, schema 4). The tool
+ * writes (`evidence::plan_snapshot::persist_upgrade_plan`, schema 4; schema 5 at the end). The tool
  * returns that plan's work order when it is current, returns it flagged stale
  * past `expires_at`, and falls back to the standalone heuristic — saying why —
  * when the snapshot is missing, from another schema, or the store is absent.
@@ -16,7 +16,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { FourDADatabase } from "../db.js";
 import { executeUpgradePlanner, type UpgradePlanResult } from "../tools/upgrade-planner.js";
-import { readAppPlan, APP_PLAN_SCHEMA_VERSION, type AppPlanResult } from "../tools/app-plan.js";
+import { readAppPlan, APP_PLAN_SCHEMA_VERSIONS, type AppPlanResult } from "../tools/app-plan.js";
 
 let root: string;
 const opened: FourDADatabase[] = [];
@@ -28,7 +28,8 @@ const RSA_ID = "upgrade-plan:crates.io:rsa";
 function envelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const hour = 3_600_000;
   return {
-    schema_version: APP_PLAN_SCHEMA_VERSION,
+    // A schema-4 snapshot, as the app wrote it until 2026-11-10 (schema 5 below).
+    schema_version: 4,
     generated_at: new Date(Date.now() - hour).toISOString(),
     expires_at: new Date(Date.now() + 23 * hour).toISOString(),
     generator_version: "1.0.3",
@@ -240,8 +241,10 @@ describe("upgrade_planner falls back to the standalone heuristic, and says why",
   });
 
   it("a newer schema is not trusted either", async () => {
-    const result = await fallback(dbWith("v5", JSON.stringify(envelope({ schema_version: 5 }))));
-    expect(result.appPlanUnavailable).toContain("schema 5");
+    expect(APP_PLAN_SCHEMA_VERSIONS).toEqual([4, 5]);
+    const result = await fallback(dbWith("v6", JSON.stringify(envelope({ schema_version: 6 }))));
+    expect(result.appPlanUnavailable).toContain("schema 6");
+    expect(result.appPlanUnavailable).toContain("reads schemas 4 and 5");
   });
 
   it("a database without the plan store (standalone MCP database)", async () => {
@@ -350,5 +353,128 @@ describe("upgrade_planner project_path", () => {
   it("rejects a project_path that is not a directory", async () => {
     const db = dbWith("scoped-bad", JSON.stringify(envelope()));
     await expect(executeUpgradePlanner(db, { project_path: path.join(root, "nope") }, null)).rejects.toThrow(/not a directory/);
+  });
+});
+
+/**
+ * Schema 5 (the app's Y5, 2026-11-10): decided routes have their own mechanisms, and a copy no
+ * published release can fix carries a `blocked_upstream` hold. The blocked step is the app's own
+ * example: zip 8.6.0 under docx-rs 0.4.22, its newest release, which still requires zip ^8.6.0.
+ */
+describe("upgrade_planner reads a schema-5 plan", () => {
+  const ZIP_ID = "upgrade-plan:crates.io:zip";
+  const QS_ID = "upgrade-plan:npm:qs";
+  const SEND_ID = "upgrade-plan:npm:send";
+  const MIX_ID = "upgrade-plan:npm:cookie";
+  const site = (project: string, direct = false) => ({ project, direct, dev: false });
+  const line = (installed: string, target: string, upgrade_type: string, sites: unknown[]) => ({ installed, target, upgrade_type, clears_all_known: true, sites });
+  const zipHold = {
+    project: "d:/4da/src-tauri",
+    installed: "8.6.0",
+    cleared_version: "9.0.5",
+    parent: "docx-rs",
+    parent_version: "0.4.22",
+    requirement: "^8.6.0",
+    held_by: "docx-rs",
+    held_by_newest: "0.4.22",
+    options: [
+      "fork docx-rs so it accepts zip >= 9.0.5 and point `[patch.crates-io]` at the fork",
+      "backport the fix onto the zip line docx-rs allows and point `[patch.crates-io]` at that fork",
+      "accept the risk with a written review date",
+    ],
+  };
+  const cookieHold = {
+    project: "d:/api",
+    installed: "0.6.0",
+    cleared_version: "0.7.0",
+    parent: "old-server",
+    parent_version: "1.0.0",
+    requirement: "0.6.0",
+    held_by: "old-server",
+    held_by_newest: "1.0.0",
+    options: ["force cookie >= 0.7.0 with an override", "accept the risk with a written review date"],
+  };
+  const v5 = () =>
+    envelope({
+      schema_version: 5,
+      item_count: 4,
+      items: [
+        { id: ZIP_ID, title: "zip 8.6.0 is blocked upstream by docx-rs", urgency: "high" },
+        { id: QS_ID, title: "Refresh qs to >= 6.14.1", urgency: "medium" },
+        { id: SEND_ID, title: "Upgrade send to >= 0.19.0 via express", urgency: "medium" },
+        { id: MIX_ID, title: "Upgrade cookie to >= 0.7.0", urgency: "medium" },
+      ],
+      steps: [
+        { item_id: ZIP_ID, ecosystem: "crates.io", package: "zip", lines: [line("8.6.0", "9.0.5", "major", [site("d:/4da/src-tauri")])], mechanism: "blocked_upstream", blocked_upstream: [zipHold], advisory_ids: ["GHSA-zip"], verification: "v" },
+        { item_id: QS_ID, ecosystem: "npm", package: "qs", lines: [line("6.14.0", "6.14.1", "patch", [site("d:/web")])], mechanism: "lockfile_refresh", advisory_ids: ["GHSA-qs"], verification: "v" },
+        { item_id: SEND_ID, ecosystem: "npm", package: "send", lines: [line("0.18.0", "0.19.0", "minor", [site("d:/web")])], mechanism: "parent_update", advisory_ids: ["GHSA-send"], verification: "v" },
+        {
+          item_id: MIX_ID,
+          ecosystem: "npm",
+          package: "cookie",
+          lines: [line("0.6.0", "0.7.0", "minor", [site("d:/web"), site("d:/api")])],
+          mechanism: "lockfile_or_parent_update",
+          blocked_upstream: [cookieHold],
+          advisory_ids: ["GHSA-cookie"],
+          verification: "v",
+        },
+      ],
+    });
+
+  it("is read as the app's plan, with the schema it was written in", async () => {
+    const result = (await executeUpgradePlanner(dbWith("v5plan", JSON.stringify(v5())), {}, null)) as AppPlanResult;
+    expect(result.provenance.mode).toBe("app_plan");
+    expect(result.snapshot.schemaVersion).toBe(5);
+    expect(result.steps.map((s) => s.mechanism)).toEqual(["blocked_upstream", "lockfile_refresh", "parent_update", "lockfile_or_parent_update"]);
+    expect(result.summary).toContain("1 lockfile refresh(es)");
+    expect(result.summary).toContain("1 parent update(s)");
+    expect(result.summary).toContain("1 transitive with the route undecided or mixed");
+    expect(result.summary).toContain("1 blocked upstream (no published release admits the fix yet: nothing to upgrade, options listed per step)");
+  });
+
+  it("a blocked step names no upgrade: it says what holds the copy and lists the options", async () => {
+    const result = (await executeUpgradePlanner(dbWith("v5blocked", JSON.stringify(v5())), {}, null)) as AppPlanResult;
+    const zip = result.steps[0];
+    expect(zip.blocked_upstream).toEqual([zipHold]);
+    expect(zip.next_step).toMatch(/^Do not upgrade zip: no published release of what pulls it in admits the fixed version yet\./);
+    expect(zip.next_step).toContain("zip 8.6.0 in d:/4da/src-tauri is held by docx-rs 0.4.22 (its newest release), which requires zip ^8.6.0; 9.0.5 would clear it");
+    expect(zip.next_step).toContain("Options: fork docx-rs so it accepts zip >= 9.0.5");
+    expect(zip.next_step).toContain("or accept the risk with a written review date.");
+    expect(zip.next_step).not.toMatch(/\bBump\b|\bRefresh\b|Update the parent/);
+  });
+
+  it("each decided route reads as what to do; a mixed-route step names its blocked copies", async () => {
+    const result = (await executeUpgradePlanner(dbWith("v5routes", JSON.stringify(v5())), {}, null)) as AppPlanResult;
+    const [, qs, send, cookie] = result.steps;
+    expect(qs.next_step).toMatch(/^Refresh the lockfile so qs resolves to the fixed release \(6\.14\.0 -> 6\.14\.1 \(patch\)\); every parent's requirement already admits it/);
+    expect(send.next_step).toMatch(/^Update the parent that pulls send in to a release whose requirement admits the fix/);
+    expect(cookie.next_step).toMatch(/^Transitive only, and the route is undecided or differs between copies/);
+    expect(cookie.next_step).toContain("Blocked upstream: cookie 0.6.0 in d:/api is held by old-server 1.0.0 (its newest release), which requires cookie 0.6.0");
+  });
+
+  it("project scope keeps only the holds in that project", async () => {
+    const web = path.join(root, "v5web");
+    fs.mkdirSync(web, { recursive: true });
+    const env = v5();
+    const steps = env.steps as Array<{ lines: Array<{ sites: Array<{ project: string }> }> }>;
+    steps[3].lines[0].sites[0].project = web.split(path.sep).join("/").toLowerCase();
+    const result = (await executeUpgradePlanner(dbWith("v5scope", JSON.stringify(env)), { project_path: web }, null)) as AppPlanResult;
+    expect(result.steps.map((s) => s.package)).toEqual(["cookie"]);
+    // The blocked copy is in d:/api, not this project.
+    expect(result.steps[0].blocked_upstream).toBeUndefined();
+  });
+
+  it("a schema-4 snapshot keeps the schema-4 meaning of lockfile_or_parent_update", async () => {
+    const result = (await executeUpgradePlanner(dbWith("v4words", JSON.stringify(envelope())), {}, null)) as AppPlanResult;
+    expect(result.snapshot.schemaVersion).toBe(4);
+    expect(result.steps[0].next_step).toMatch(/^Transitive only: refresh the lockfile, or update the parent that pulls undici in \(5\.28\.4 -> 6\.28\.1 \(major\)\)/);
+    expect(result.summary).toContain("1 lockfile or parent update(s) (transitive only)");
+  });
+
+  it("a mechanism this server does not know is not acted on", async () => {
+    const env = v5();
+    (env.steps as Array<{ mechanism: string }>)[1].mechanism = "vendor_patch";
+    const result = (await executeUpgradePlanner(dbWith("v5unknown", JSON.stringify(env)), {}, null)) as AppPlanResult;
+    expect(result.steps[1].next_step).toMatch(/^This server does not know the mechanism "vendor_patch": read the plan item before acting on it\./);
   });
 });
