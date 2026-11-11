@@ -92,6 +92,7 @@ import { andList } from "../live/held-dependencies.js";
 import { closestPopularNpm, maliciousName, maliciousSignal, type MaliciousName } from "./dependency-check-malicious.js";
 import { nameCheckSignal, nearMissOf } from "./dependency-check-nearmiss.js";
 import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
+import { lengthProblem } from "../tool-args.js";
 import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 
 export interface DependencyCheckParams {
@@ -871,6 +872,11 @@ function validateItems(raw: unknown): Requested[] {
   return raw.map((r, i) => {
     const o = (r ?? {}) as Record<string, unknown>;
     const where = `items[${i}]`;
+    // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
+    for (const field of ["package", "to", "from"]) {
+      const long = typeof o[field] === "string" ? lengthProblem(`${where}.${field}`, field, o[field] as string) : null;
+      if (long) throw new Error(long);
+    }
     const ecosystem = ECOSYSTEMS.find((e) => e === o.ecosystem || (typeof o.ecosystem === "string" && e.toLowerCase() === o.ecosystem.trim().toLowerCase()));
     if (!ecosystem) throw new Error(`${where}.ecosystem must be one of ${ECOSYSTEMS.map((e) => `"${e}"`).join(", ")}`);
     if (typeof o.package !== "string" || !o.package.trim()) throw new Error(`${where}.package must be a non-empty string`);

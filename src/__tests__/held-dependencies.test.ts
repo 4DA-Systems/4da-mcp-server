@@ -70,6 +70,8 @@ function registry() {
 
 /** When true, an OSV querybatch that asks about anything but express fails: the held-dependency lookup is down. */
 let HELD_LOOKUP_DOWN = false;
+/** What the registry answers when asked for one release by name that it does not list. */
+let MISSING_RELEASE_STATUS = 404;
 
 const cmp = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
 const affects = (v: OsvVulnerability, version: string) => cmp(version, v.affected![0].ranges[0].events.find((e) => e.fixed)!.fixed!) < 0;
@@ -101,6 +103,8 @@ function stubNetwork() {
       const time = Object.fromEntries([["created", "2015-01-01T00:00:00.000Z"], ...Object.keys(doc.versions).map((v) => [v, "2025-01-01T00:00:00.000Z"])]);
       return json({ name, "dist-tags": { latest: doc.latest }, versions: doc.versions, time });
     }
+    // One release asked for by name (fix-paths versionExists): 404 = the registry does not have it; 503 = it could not be asked.
+    if (/^https:\/\/registry\.npmjs\.org\/[^/]+\/[^/]+$/.test(url)) return json({}, MISSING_RELEASE_STATUS);
     return json({}, 404);
   });
 }
@@ -113,6 +117,7 @@ beforeEach(() => {
   delete process.env.FOURDA_OFFLINE;
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-held-"));
   HELD_LOOKUP_DOWN = false;
+  MISSING_RELEASE_STATUS = 404;
   registry();
   stubNetwork();
   // NodeGoat's declaration, cut down to the one package that decides it.
@@ -285,8 +290,10 @@ describe("upgrade_planner: 6.2.6 second review (I1, I2)", () => {
   });
 
   it("I2: a target the registry does not list yet is said, and what it pins is NOT CHECKED, never clean", async () => {
-    // express's own advisory names 5.0.1, newer than every release the registry lists (latest 5.0.0).
+    // express's own advisory names 5.0.1, newer than every release the registry lists (latest 5.0.0),
+    // and the registry, asked for 5.0.1 by name, does not answer: whether it is published is unknown.
     ADVISORIES.express = [adv("GHSA-qw6h-vgh9-j6wx", "express", "5.0.1", "LOW")];
+    MISSING_RELEASE_STATUS = 503;
     try {
       const result = (await executeUpgradePlanner(noDb, { project_path: dir, package: "express" }, await liveFor())) as Record<string, any>;
       const row = result.recommendations.find((s: { package: string }) => s.package === "express");
@@ -294,6 +301,27 @@ describe("upgrade_planner: 6.2.6 second review (I1, I2)", () => {
       const reasons = row.reasons.join(" ");
       expect(reasons).toMatch(/5\.0\.1 is an advisory's fixed version newer than every release the registry listed when it was read: confirm it is published/);
       expect(reasons).toMatch(/NOT CHECKED \(the npm registry does not list 5\.0\.1 yet/);
+    } finally {
+      ADVISORIES.express = [adv("GHSA-qw6h-vgh9-j6wx", "express", "4.20.0", "LOW"), adv("GHSA-rv95-896h-c2vc", "express", "4.19.2", "MODERATE")];
+    }
+  });
+
+  it("a fixed version the registry, asked for it by name, does not serve is never the target (audit 2026-11-11, M6)", async () => {
+    // The same advisory, and this time the registry answers 404 for express@5.0.1: it does not exist.
+    ADVISORIES.express = [adv("GHSA-qw6h-vgh9-j6wx", "express", "5.0.1", "LOW")];
+    try {
+      const result = (await executeUpgradePlanner(noDb, { project_path: dir, package: "express" }, await liveFor())) as Record<string, any>;
+      const row = result.recommendations.find((s: { package: string }) => s.package === "express");
+      expect(row).toMatchObject({ targetVersion: null, action: "no_fix_available", fixPathChecked: "all_advisories" });
+      expect(row.withheld).toEqual(["5.0.1"]);
+      const reasons = row.reasons.join(" ");
+      expect(reasons).toMatch(/No installable fix: 5\.0\.1 is not a version the npm registry serves for express \(asked for by name\), and no later release is known to clear it/);
+      expect(reasons).not.toMatch(/confirm it is published/);
+      expect(JSON.stringify(row)).not.toMatch(/npm install/);
+      // The scan's own fix target says the same.
+      const scan = (await executeVulnerabilityScan(noDb, { project_path: dir, response_format: "detailed" }, await liveFor())) as Record<string, any>;
+      expect(scan.fix_targets["express@4.16.4"]).toMatchObject({ target: null, withheld: ["5.0.1"] });
+      expect(scan.vulnerabilities[0]).toMatchObject({ fixed_version: null, withheld: ["5.0.1"] });
     } finally {
       ADVISORIES.express = [adv("GHSA-qw6h-vgh9-j6wx", "express", "4.20.0", "LOW"), adv("GHSA-rv95-896h-c2vc", "express", "4.19.2", "MODERATE")];
     }

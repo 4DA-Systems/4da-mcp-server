@@ -222,10 +222,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       langSet.add("rust");
 
       // Extract project name from [package] section
-      const nameMatch = content.match(/^\[package\]\s*\n(?:.*\n)*?name\s*=\s*"([^"]+)"/m);
-      if (nameMatch) {
-        result.projectName = nameMatch[1];
-      }
+      const crateName = cargoPackageName(content);
+      if (crateName) result.projectName = crateName;
 
       // Parse [dependencies] and [dev-dependencies] sections
       const rustDeps: string[] = [];
@@ -377,6 +375,38 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/**
+ * The crate name: the first `name = "..."` line of the `[package]` table.
+ *
+ * One pass over the lines. This was a single multi-line regular expression
+ * (`^\[package\]\s*\n(?:.*\n)*?name...`), which re-scanned the rest of the file
+ * from every `[package]` line: a 200 KB Cargo.toml of repeated `[package]`
+ * headers took 3.8 s, synchronously, in the startup walk, and 2 MB would take
+ * minutes (measured 2026-11-11). A scanned repository's manifest is its own text.
+ */
+export function cargoPackageName(content: string): string | null {
+  let inPackage = false;
+  let start = 0;
+  while (start <= content.length) {
+    let end = content.indexOf("\n", start);
+    if (end < 0) end = content.length;
+    const line = content.slice(start, end).trim();
+    start = end + 1;
+    if (line.startsWith("[")) {
+      if (inPackage) return null; // the [package] table ended without a name
+      inPackage = line === "[package]";
+      continue;
+    }
+    if (!inPackage || !line.startsWith("name")) continue;
+    const eq = line.indexOf("=");
+    if (eq < 0 || line.slice(4, eq).trim() !== "") continue;
+    const value = line.slice(eq + 1).trim();
+    const close = value.startsWith('"') ? value.indexOf('"', 1) : -1;
+    if (close > 1) return value.slice(1, close);
+  }
+  return null;
+}
 
 /**
  * Parse a TOML section for dependency names.

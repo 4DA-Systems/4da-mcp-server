@@ -28,6 +28,15 @@ export interface Session {
   resources: Array<{ uri: string }>;
   tools: string[];
   stderr: string;
+  /** How long each request took to be answered, in the order sent. */
+  timings: Array<{ method: string; ms: number }>;
+}
+
+export interface SessionOptions {
+  /** Fail a request that is not answered within this many milliseconds (a blocked event loop answers nothing). */
+  requestTimeoutMs?: number;
+  /** Send one more `tools/list` after the calls: a server a call left blocked answers the call and then nothing. */
+  listAfterCalls?: boolean;
 }
 
 export const resultText = (r: ToolResult) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
@@ -36,6 +45,7 @@ export async function stdioSession(
   cwd: string,
   calls: Array<[string, Record<string, unknown>]>,
   extraEnv: Record<string, string> = {},
+  options: SessionOptions = {},
 ): Promise<Session> {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "4da-stdio-"));
   const preload = path.join(scratch, "no-network.cjs");
@@ -71,14 +81,30 @@ export async function stdioSession(
   });
   const exited = new Promise<never>((_, reject) => child.on("exit", (code) => reject(new Error(`server exited (${code}): ${stderr.slice(-2000)}`))));
   let id = 0;
-  const rpc = (method: string, params: unknown) =>
-    Promise.race([
-      new Promise<{ result?: unknown; error?: unknown }>((resolve) => {
-        pending.set(++id, resolve);
-        child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
-      }),
-      exited,
-    ]);
+  const timings: Session["timings"] = [];
+  const rpc = async (method: string, params: unknown, label = method) => {
+    const started = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      if (options.requestTimeoutMs !== undefined) {
+        timer = setTimeout(() => reject(new Error(`no answer to ${label} within ${options.requestTimeoutMs} ms`)), options.requestTimeoutMs);
+      }
+    });
+    try {
+      const answer = await Promise.race([
+        new Promise<{ result?: unknown; error?: unknown }>((resolve) => {
+          pending.set(++id, resolve);
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+        }),
+        exited,
+        late,
+      ]);
+      timings.push({ method: label, ms: Date.now() - started });
+      return answer;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
   try {
     await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
@@ -86,10 +112,11 @@ export async function stdioSession(
     const resources = ((await rpc("resources/list", {})).result as { resources: Array<{ uri: string }> }).resources;
     const results: ToolResult[] = [];
     for (const [name, args] of calls) {
-      const r = await rpc("tools/call", { name, arguments: args });
+      const r = await rpc("tools/call", { name, arguments: args }, `tools/call ${name}`);
       results.push((r.result ?? { isError: true, content: [{ text: JSON.stringify(r.error) }] }) as ToolResult);
     }
-    return { results, resources, tools, stderr };
+    if (options.listAfterCalls) await rpc("tools/list", {}, "tools/list (after the calls)");
+    return { results, resources, tools, stderr, timings };
   } finally {
     exited.catch(() => undefined);
     const gone = child.exitCode !== null ? Promise.resolve() : new Promise((resolve) => child.once("exit", resolve));

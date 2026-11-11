@@ -29,17 +29,19 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { escapeModulePath } from "./go-registry.js";
+import { goBasePath, goPathMajor, goVersionMajor } from "./upgrade-go.js";
 import { advisoryRanges, advisoryAffects, installableFix, isGoPseudoVersion, isListedVersion, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, requirementOptions } from "./lockfile-parsers-pygo.js";
+import { projectOverride } from "./overrides.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
 import { CRATES_USER_AGENT } from "./crates-versions.js";
-import { isNpmDeprecated, npmExcludedVersions, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
+import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
@@ -54,9 +56,12 @@ const MAX_OSV_PAGES = 10;
 /**
  * Bump when the shape of anything this module caches changes (10: npm facts carry `heldSpecs`, audit 6.2.5 D-4;
  * 11: advisory ranges carry `aliases`, so a GHSA record and its PYSEC twin count once; 12: range bounds
- * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable).
+ * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable;
+ * 13: npm facts withdraw the releases a maintainer flagged on a line that carries another notice, withdrawn-releases.ts npmFlaggedReleases).
  */
-const CACHE_VERSION = 12;
+const CACHE_VERSION = 13;
+/** How long "the registry does not serve this version" is believed: it may be published later. */
+const ABSENT_TTL = 3600;
 
 /** What a registry says about one package's releases, for fix targets and parent advice. */
 export interface PackageReleaseFacts {
@@ -323,7 +328,10 @@ export class FixPathSources {
     if (!doc) return null;
     const versions = doc.versions ?? {};
     const latest = doc["dist-tags"]?.latest ?? null;
-    const withdrawn = npmExcludedVersions(Object.fromEntries(Object.entries(versions).map(([v, m]) => [v, m?.deprecated])), latest);
+    const deprecation = Object.fromEntries(Object.entries(versions).map(([v, m]) => [v, m?.deprecated]));
+    // The shared rule, plus the releases a maintainer deprecated by themselves on a line that says
+    // something else (lodash.template 4.18.0, "Bad release", in a package retired whole: audit M6).
+    const withdrawn = [...new Set([...npmExcludedVersions(deprecation, latest), ...npmFlaggedReleases(deprecation, latest)])];
     const out = new Set(withdrawn);
     const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? (versions[v].deprecated as string) : null);
     const noticed = Object.keys(versions).filter((v) => !out.has(v) && isNpmDeprecated(versions[v]?.deprecated));
@@ -346,9 +354,9 @@ export class FixPathSources {
   }
 
   /** A crate's sparse-index record: versions and per-version dependency requirements. */
-  async cratesSparse(name: string): Promise<CratesSparse | null> {
+  async cratesSparse(name: string, fresh = false): Promise<CratesSparse | null> {
     const key = `fixpath:v${CACHE_VERSION}:crates-sparse:${name}`;
-    const hit = this.cache.get<CratesSparse>(key);
+    const hit = fresh ? null : this.cache.get<CratesSparse>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
@@ -413,6 +421,56 @@ export class FixPathSources {
     }
   }
 
+  /**
+   * Whether the registry serves exactly `name@version`: asked by name, not read from a list. For a
+   * fix target above every release the registry listed (an advisory's fixed version the list has
+   * not caught up with, or one that was never published for this package or module path). Null
+   * when the registry could not be asked or is not one of the four read here.
+   */
+  async versionExists(ecosystem: OsvEcosystem, name: string, version: string): Promise<boolean | null> {
+    const key = `fixpath:v${CACHE_VERSION}:exists:${ecosystem}:${name}@${version}`;
+    const hit = this.cache.get<{ exists: boolean }>(key);
+    if (hit) return hit.exists;
+    let url: string;
+    switch (ecosystem) {
+      case "npm":
+        url = `https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
+        break;
+      case "PyPI":
+        url = `https://pypi.org/pypi/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`;
+        break;
+      case "Go":
+        // OSV's Go versions carry no `v`; the proxy's do.
+        url = `https://proxy.golang.org/${escapeModulePath(name)}/@v/${escapeModulePath(version.startsWith("v") ? version : `v${version}`)}.info`;
+        break;
+      case "crates.io": {
+        // The sparse index is the whole list: read it again rather than from the cached copy.
+        const sparse = await this.cratesSparse(name, true);
+        if (!sparse) return null;
+        const exists = [...sparse.versions, ...(sparse.yanked ?? [])].includes(version);
+        this.cache.set(key, { exists }, "crates", exists ? VERSION_DEPS_TTL : ABSENT_TTL);
+        return exists;
+      }
+      default:
+        return null;
+    }
+    if (!this.rateLimiter.consume("fixpath-registry")) return null;
+    try {
+      const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, TIMEOUT_MS);
+      // 404 (and the Go proxy's 410 Gone) is the answer "no such version"; anything else is no answer.
+      const exists = res.ok ? true : res.status === 404 || res.status === 410 ? false : null;
+      if (exists !== null) this.cache.set(key, { exists }, ecosystem === "npm" ? "npm" : ecosystem === "PyPI" ? "pypi" : "go", exists ? VERSION_DEPS_TTL : ABSENT_TTL);
+      return exists;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The versions the Go proxy lists for a module path (no `v`), or null: for naming where another major lives. */
+  async goModuleVersions(module: string): Promise<string[] | null> {
+    return this.goVersions(module);
+  }
+
   private async goVersions(name: string): Promise<string[] | null> {
     const key = `fixpath:v${CACHE_VERSION}:go-versions:${name}`;
     const hit = this.cache.get<string[]>(key);
@@ -464,6 +522,13 @@ export type FixTargetResult = CleanTarget & {
   registryUnread?: boolean;
   /** The registry's words for each `withheld` release and each withdrawn line fix. */
   withheldWhy?: Record<string, string>;
+  /**
+   * Fixed versions the advisories name that the registry, asked for each by name, does not serve
+   * for this exact package or module path (audit 2026-11-11, M6: go.etcd.io/etcd was sent to
+   * "v3.4.44", which the Go proxy does not have: major 3 is the module go.etcd.io/etcd/v3). Never
+   * the target; they are in `withheld`, and `withheldWhy` says where the fix lives when that is known.
+   */
+  absent?: string[];
   /**
    * Per-advisory fixes the registry withdrew, keyed by that fix: the release to take instead
    * (`fix: null` when none past it is known) and the withdrawn ones passed (installableFix).
@@ -570,24 +635,88 @@ export async function cleanFixTarget(
     const floor = maxVersion(perAdvisoryFixes, ecosystem) ?? perAdvisoryFixes[0];
     return { target: floor, basis: "advisory_fixes", floor, floorAffectedBy: [], stillAffectedBy: [], unfixable: [], withheld: [], advisoriesUnread: true, registryUnread: true };
   }
-  if (!advisories) return perAdvisoryFixes.length > 0 && facts ? registryOnlyTarget(ecosystem, perAdvisoryFixes, facts) : null;
+  if (!advisories) return perAdvisoryFixes.length > 0 && facts ? registryOnlyTarget(sources, ecosystem, name, perAdvisoryFixes, facts) : null;
   // Every release the registry lists, the withdrawn ones included so the result can name them;
   // `excluded` keeps them from ever being the target (FX-H5).
   const published = facts ? [...facts.versions, ...facts.withdrawn] : null;
   const excluded = facts?.withdrawn ?? [];
   const malware = advisories.filter((a) => a.malware).map((a) => a.id);
   if (perAdvisoryFixes.length > 0) {
-    const clean = smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published, excluded, installed });
+    const { clean, absent } = await publishedTarget(sources, ecosystem, name, (gone) =>
+      smallestCleanVersion({ ecosystem, fixes: perAdvisoryFixes, advisories, published, excluded, installed, absent: gone }),
+    );
     if (!clean) return null;
     if (malware.length > 0) Object.assign(clean, { malware });
     if (clean.target === null && clean.maliciousLanding) Object.assign(clean, { landingNote: malwareText(name, clean.maliciousLanding) });
-    return withRegistryFacts({ ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}) }, ecosystem, perAdvisoryFixes, advisories, facts);
+    const result: FixTargetResult = { ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}), ...(absent.length > 0 ? { absent } : {}) };
+    return withRegistryFacts(result, ecosystem, perAdvisoryFixes, advisories, facts, await absentReasons(sources, ecosystem, name, absent));
   }
   // Only a registry list can show a release past a last_affected bound.
   if (!published || published.length === 0) return null;
   const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published, excluded, installed });
   if (!clean || clean.target === null || clean.target === installed || clean.stillAffectedBy.length > 0) return null;
   return withRegistryFacts({ ...clean, noAdvisoryFix: true }, ecosystem, [], advisories, facts);
+}
+
+/** Fix targets above every listed release that are asked for by name, per package (the rest keep the "confirm it is published" note). */
+const MAX_EXISTENCE_CHECKS = 3;
+
+/**
+ * A target must be a version the registry serves for this exact package or module path. One taken
+ * from the registry's list is; one above every listed release (`aboveListed`: an advisory's fixed
+ * version) is only the advisory's word, so the registry is asked for it by name. Served: it is the
+ * target, confirmed. Not served: it is set aside (`absent`) and the target is worked out again
+ * without it, which usually leaves none: "no installable fix". No answer: the note stands.
+ *
+ * go.etcd.io/etcd v0.5.0-alpha... was sent to "v3.4.44" (audit 2026-11-11, M6): OSV's fixed version
+ * for the import path, while the module go.etcd.io/etcd has no v3.4.x at all (the proxy answers
+ * 404; Go major 3 is the module go.etcd.io/etcd/v3). The tool's own dependency_check said so.
+ */
+async function publishedTarget(
+  sources: FixPathSources,
+  ecosystem: OsvEcosystem,
+  name: string,
+  compute: (absent: string[]) => CleanTarget | null,
+): Promise<{ clean: CleanTarget | null; absent: string[] }> {
+  const absent: string[] = [];
+  let clean = compute(absent);
+  for (let i = 0; i < MAX_EXISTENCE_CHECKS && clean?.target && clean.aboveListed; i++) {
+    // Optional call: a caller's stand-in for the sources (tests, the vector runner) may not have it; then nothing is asked.
+    const exists = (await sources.versionExists?.(ecosystem, name, clean.target).catch(() => null)) ?? null;
+    if (exists === null) break;
+    if (exists) {
+      const { aboveListed: _confirmed, ...rest } = clean;
+      clean = rest;
+      break;
+    }
+    absent.push(clean.target);
+    clean = compute(absent);
+  }
+  return { clean, absent };
+}
+
+const REGISTRY_NAME: Record<string, string> = { npm: "the npm registry", "crates.io": "crates.io", PyPI: "PyPI", Go: "proxy.golang.org" };
+
+/**
+ * Per absent version, the plain words for it (they start "<version> is ", as every withheld
+ * reason does). For Go, where the fix lives when its major is another module: the path, and
+ * whether the proxy lists releases for it.
+ */
+async function absentReasons(sources: FixPathSources, ecosystem: OsvEcosystem, name: string, absent: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const version of absent) {
+    const major = ecosystem === "Go" ? goVersionMajor(version) : null;
+    if (major !== null && major >= 2 && major !== (goPathMajor(name) ?? 1) && !name.startsWith("gopkg.in/")) {
+      const other = `${goBasePath(name)}/v${major}`;
+      const listed = (await sources.goModuleVersions?.(other).catch(() => null))?.filter((v) => !isPrereleaseVersion(v, "Go")) ?? null;
+      const newest = listed && listed.length > 0 ? maxVersion(listed, "Go") : null;
+      const served = newest ? `the proxy serves it, v${newest} its newest release` : "the proxy listed no release for it when asked";
+      out[version] = `${version} is not a version of ${name}: Go major ${major} is a different module, ${other} (${served}), and moving to it changes the import path`;
+    } else {
+      out[version] = `${version} is not a version ${REGISTRY_NAME[ecosystem] ?? "the registry"} serves for ${name} (asked for by name)`;
+    }
+  }
+  return out;
 }
 
 /**
@@ -602,6 +731,7 @@ function withRegistryFacts(
   fixes: string[],
   advisories: AdvisoryRanges[],
   facts: PackageReleaseFacts | null,
+  absentWhy: Record<string, string> = {},
 ): FixTargetResult {
   // Only the registries whose withdrawals are read (as in the app: Go `retract` and the RubyGems /
   // Packagist readers are not); for the rest there was nothing to check, so nothing to say.
@@ -612,11 +742,12 @@ function withRegistryFacts(
   // Audit A-1 (the app's `installable_fix`): a fix the registry does not list, below a release it
   // lists, is no more installable than a withdrawn one (node-ipc GHSA-97m3's 10.1.3 -> 11.0.0).
   const unlisted = (fix: string) =>
-    top !== null &&
-    isComparable(fix, ecosystem) &&
-    compareVersions(fix, top, ecosystem) <= 0 &&
-    !isListedVersion(published, fix, ecosystem) &&
-    !isGoPseudoVersion(fix, ecosystem);
+    Object.hasOwn(absentWhy, fix) ||
+    (top !== null &&
+      isComparable(fix, ecosystem) &&
+      compareVersions(fix, top, ecosystem) <= 0 &&
+      !isListedVersion(published, fix, ecosystem) &&
+      !isGoPseudoVersion(fix, ecosystem));
   for (const fix of new Set(fixes)) {
     const notListed = unlisted(fix);
     if (!facts.withdrawn.includes(fix) && !notListed) continue;
@@ -626,7 +757,7 @@ function withRegistryFacts(
   const named = new Set([...clean.withheld, ...Object.values(lineFixes).flatMap((l) => l.withheld)]);
   // A withheld version the registry does not list at all (audit A-1) is not called deprecated or yanked.
   const why = (v: string) =>
-    facts.withdrawnWhy[v] ?? (isListedVersion(published, v, ecosystem) ? withdrawalText(ecosystem, v) : `${v} is not a release the registry lists`);
+    absentWhy[v] ?? facts.withdrawnWhy[v] ?? (isListedVersion(published, v, ecosystem) ? withdrawalText(ecosystem, v) : `${v} is not a release the registry lists`);
   const withheldWhy = Object.fromEntries([...named].map((v) => [v, why(v)]));
   const notice = clean.target ? facts.lineNotices?.[clean.target] : undefined;
   return {
@@ -643,13 +774,16 @@ function withRegistryFacts(
  * published (otherwise the unchecked answer stands as it is). Null when
  * nothing changes or no installable release qualifies.
  */
-function registryOnlyTarget(ecosystem: OsvEcosystem, fixes: string[], facts: PackageReleaseFacts): FixTargetResult | null {
+async function registryOnlyTarget(sources: FixPathSources, ecosystem: OsvEcosystem, name: string, fixes: string[], facts: PackageReleaseFacts): Promise<FixTargetResult | null> {
   if (facts.versions.length === 0) return null;
   const published = [...facts.versions, ...facts.withdrawn];
-  const clean = smallestCleanVersion({ ecosystem, fixes, advisories: [], published, excluded: facts.withdrawn });
+  const { clean, absent } = await publishedTarget(sources, ecosystem, name, (gone) =>
+    smallestCleanVersion({ ecosystem, fixes, advisories: [], published, excluded: facts.withdrawn, absent: gone }),
+  );
   if (!clean || (clean.target !== null && clean.target === clean.floor)) return null;
   if (clean.target === null && clean.withheld.length === 0) return null;
-  return withRegistryFacts({ ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true }, ecosystem, fixes, [], facts);
+  const result: FixTargetResult = { ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true, ...(absent.length > 0 ? { absent } : {}) };
+  return withRegistryFacts(result, ecosystem, fixes, [], facts, await absentReasons(sources, ecosystem, name, absent));
 }
 
 /** #981 (b): an advisory whose ranges cannot be read leaves the release unknown, never skipped silently. */
@@ -678,7 +812,10 @@ const WITHDRAWALS_READ: ReadonlySet<string> = new Set(["npm", "crates.io", "PyPI
 
 /** `withheldNote` for a checked target: the withdrawn releases passed, in plain words; null when none. */
 export function withheldText(clean: FixTargetResult, ecosystem: string): string | null {
-  return withheldNote(clean.withheld, clean.target, clean.withheldWhy ?? {}, ecosystem, clean.stillAffectedBy.length === 0);
+  const note = withheldNote(clean.withheld, clean.target, clean.withheldWhy ?? {}, ecosystem, clean.stillAffectedBy.length === 0);
+  // A Go fix that lives at another module path is no fix for this one: said in those words (audit M6).
+  if (note && clean.target === null && ecosystem === "Go" && (clean.absent?.length ?? 0) > 0) return note.replace(/^No installable fix:/, "No installable fix on this module path:");
+  return note;
 }
 
 /**
@@ -823,6 +960,14 @@ export interface RefreshVerdict {
   blocking: Array<{ parent: string; parentVersion: string | null; requirement: string; bundled?: boolean }>;
   /** The version a refresh resolves to, when the registry's version list was read. */
   resolvesTo: string | null;
+  /**
+   * Set when the project forces the package's version (overrides.ts): the override, not any
+   * parent's own requirement, is what this verdict was decided by. `admits`: it admits the target.
+   * `reaches`: a refresh under it lands on a clean release (false when it excludes the target, or
+   * admits it but resolves to a newer release an advisory affects); then no parent is `blocking`
+   * for it, and the step is to change the override.
+   */
+  override?: { spec: string; where: string; admits: boolean; reaches: boolean };
 }
 
 /**
@@ -1294,7 +1439,11 @@ export async function refreshVerdict(
   const clean = (v: string) => !advisories || !advisories.some((a) => !a.maintenance && advisoryAffects(a, v, ecosystem));
   const releases = (published ?? []).filter((v) => !isPrereleaseVersion(v, ecosystem));
 
-  const edgeReqs = await Promise.all(parents.edges.map((edge) => requirementsOf(sources, ecosystem, edge, name)));
+  // An override replaces every parent's requirement on the package (not a bundled copy's: that
+  // one ships inside its owner). Only one this module can read as a range is taken.
+  const declared = isCargo ? null : projectOverride(path.dirname(lockfile), name, parents.format);
+  const forced = declared && npmRangeAdmits(declared.spec, installed) !== null && npmRangeAdmits(declared.spec, target) !== null ? declared : null;
+  const edgeReqs = await Promise.all(parents.edges.map((edge) => (forced && !edge.bundled ? [forced.spec] : requirementsOf(sources, ecosystem, edge, name))));
   const reqs: Array<ParentRequirement & { edge: ParentEdge }> = [];
   for (const [i, edge] of parents.edges.entries()) {
     const all = edgeReqs[i];
@@ -1312,9 +1461,15 @@ export async function refreshVerdict(
   if (rule.verdict === "unknown") return null;
 
   const blocking: RefreshVerdict["blocking"] = [];
-  const block = (r: (typeof reqs)[number]) =>
-    blocking.push({ parent: r.edge.parent, parentVersion: r.edge.parentVersion, requirement: r.text ?? "", ...(r.edge.bundled ? { bundled: true } : {}) });
+  // What the override decides is the override's doing, not the parent's: no parent is named as blocking for it.
+  const overridden = (r: (typeof reqs)[number]) => forced !== null && !r.edge.bundled;
+  let overrideBlocks = false;
+  const block = (r: (typeof reqs)[number]) => {
+    if (overridden(r)) overrideBlocks = true;
+    else blocking.push({ parent: r.edge.parent, parentVersion: r.edge.parentVersion, requirement: r.text ?? "", ...(r.edge.bundled ? { bundled: true } : {}) });
+  };
   for (const r of reqs) if (requirementAdmits(r, target) === false) block(r);
+  const overrideAdmits = !overrideBlocks;
 
   let resolvesTo: string | null = null;
   if (rule.verdict === "refresh" && !rule.inferred) {
@@ -1332,7 +1487,7 @@ export async function refreshVerdict(
       }
     }
   }
-  const refreshFixes = rule.verdict === "refresh" && blocking.length === 0;
+  const refreshFixes = rule.verdict === "refresh" && blocking.length === 0 && !overrideBlocks;
   const named = refreshCommand(parents.format, name, installed, target, parents.format === "pnpm" && isPnpmWorkspaceRoot(lockfile));
   let command = named ?? manualRefreshSteps(parents.format === "bun" ? "bun" : "yarn", name);
   if (isCargo && refreshFixes) {
@@ -1354,6 +1509,7 @@ export async function refreshVerdict(
     command,
     blocking,
     resolvesTo: refreshFixes ? resolvesTo : null,
+    ...(forced ? { override: { spec: forced.spec, where: forced.where, admits: overrideAdmits, reaches: !overrideBlocks } } : {}),
   };
 }
 

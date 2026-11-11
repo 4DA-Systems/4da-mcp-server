@@ -12,6 +12,7 @@
  */
 
 import * as fs from "node:fs";
+import { oversize, tooLargeText } from "./bounded-read.js";
 
 /** Bytes sampled to recognise UTF-16 that carries no byte-order mark. */
 const SNIFF_BYTES = 512;
@@ -57,7 +58,14 @@ export function decodeText(bytes: Buffer): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-/** `fs.readFileSync(file, "utf-8")` for a lockfile or manifest: throws as it does when the file cannot be read. */
+/**
+ * `fs.readFileSync(file, "utf-8")` for a lockfile or manifest: throws as it
+ * does when the file cannot be read, and throws for a file over the size cap
+ * (bounded-read.ts) before reading a byte of it. The one reader for these
+ * files, so every caller gets both the encoding and the cap.
+ */
 export function readTextFile(file: string): string {
+  const size = oversize(file);
+  if (size !== null) throw new Error(`${file} ${tooLargeText(size)}`);
   return decodeText(fs.readFileSync(file));
 }

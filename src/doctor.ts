@@ -17,6 +17,7 @@ import { existsSync } from "node:fs";
 import { explicitDbPathProblem, FourDADatabase } from "./db.js";
 import { NODE_SQLITE_MIN, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
+import { configureProxy } from "./proxy.js";
 
 interface Check {
   name: string;
@@ -135,6 +136,10 @@ export function runDoctor(): void {
       detail: "Not configured — keyword recall remains available",
     });
   }
+
+  // Proxy: said only when a proxy is configured; a proxy this process does not use fails every lookup.
+  const proxy = configureProxy();
+  if (proxy.note) checks.push({ name: "Proxy", status: proxy.state === "unsupported" ? "fail" : "pass", detail: proxy.note.replace(/^Proxy: /, "") });
 
   // Print results
   const icons = { pass: "\u2713", warn: "!", fail: "\u2717" };

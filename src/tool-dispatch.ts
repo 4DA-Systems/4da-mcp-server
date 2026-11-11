@@ -12,6 +12,8 @@ import type { FourDADatabase } from "./db.js";
 import { assertToolPermission } from "./auth-context.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { cleanStrings } from "./tool-args.js";
+import { raceCallBudget, runWithCallBudget } from "./call-budget.js";
+import { lateAnswer } from "./late-answer.js";
 import { withUntrustedTextNote } from "./untrusted-text.js";
 import { TOOL_REGISTRY } from "./schema-registry.js";
 
@@ -112,6 +114,8 @@ export async function dispatchTool(
   name: string,
   db: FourDADatabase | null,
   args: Record<string, unknown> | undefined,
+  /** `startedAt`: when the request arrived (epoch ms); the call's time budget counts from there. */
+  options: { startedAt?: number } = {},
 ): Promise<CallToolResult> {
   const executor = Object.hasOwn(DISPATCH_MAP, name) ? DISPATCH_MAP[name] : undefined;
   if (!executor) {
@@ -130,18 +134,21 @@ export async function dispatchTool(
   // production caller — it is sync and the executors are async, so the retry
   // lives here.)
   const toolArgs = (args || {}) as Record<string, unknown>;
-  let result: unknown;
-  try {
-    result = await executor(db as FourDADatabase, toolArgs);
-  } catch (error: unknown) {
-    const code = (error as { code?: string }).code;
-    if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      result = await executor(db as FourDADatabase, toolArgs);
-    } else {
+  const run = async (): Promise<unknown> => {
+    try {
+      return await executor(db as FourDADatabase, toolArgs);
+    } catch (error: unknown) {
+      const code = (error as { code?: string }).code;
+      if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return executor(db as FourDADatabase, toolArgs);
+      }
       throw error;
     }
-  }
+  };
+  // One time budget per call (call-budget.ts): a call still running when it ends is answered
+  // NOT CHECKED in the tool's place, never left to hang and never answered as clean.
+  const result = await runWithCallBudget(options.startedAt ?? Date.now(), () => raceCallBudget(run(), (budgetMs) => lateAnswer(name, toolArgs, budgetMs)));
   // Feed freshness describes the desktop app's feed; a standalone install has
   // none, and telling it to "run fourda-engine" is noise.
   const withFreshness = db !== null && FRESHNESS_TOOLS.has(name) && !db.isStandalone;

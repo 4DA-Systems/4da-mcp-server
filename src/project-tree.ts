@@ -52,6 +52,7 @@ import { IgnoreRules } from "./gitignore.js";
 import { readTextFile } from "./live/text-file.js";
 import { parsePyprojectDependencies, tomlTable } from "./project-manifests.js";
 import { scanCurrentProject, type ProjectScanResult } from "./project-scanner.js";
+import { startWalkBudget, walkBudgetNote } from "./walk-budget.js";
 
 const LOCK_MARKERS = [
   "package-lock.json",
@@ -217,6 +218,8 @@ export interface TreeDiscovery {
   skippedCount: number;
   /** True when the walk itself stopped at MAX_WALK_DIRS: lockfiles beyond it were not even counted. */
   walkTruncated: boolean;
+  /** Set when the walk stopped on its time budget rather than at MAX_WALK_DIRS (walk-budget.ts). */
+  walkStopped?: "time_budget";
   /** True when the search inside gitignored directories stopped at MAX_IGNORED_WALK_DIRS. */
   ignoredWalkTruncated?: boolean;
   /** Manifests and lockfiles of ecosystems this server does not read (the first MAX_LISTED_NOT_COVERED), relative to the root. */
@@ -514,6 +517,7 @@ export function scanProjectTree(
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
   const entries: ProjectTreeEntry[] = [{ dir: root, scan: scanCurrentProject(root) }];
   const ignore = new IgnoreRules(root);
+  const budget = startWalkBudget(ignore);
   const skipped: TreeDiscovery["skipped"] = [];
   let skippedCount = 0;
   let visited = 0;
@@ -552,7 +556,7 @@ export function scanProjectTree(
   const countFixtures = (dir: string, children: fs.Dirent[]) => {
     for (const child of children) {
       if (!child.isDirectory() || SKIP_DIRS.has(child.name)) continue;
-      if (++visited > MAX_WALK_DIRS) {
+      if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
       }
@@ -566,6 +570,10 @@ export function scanProjectTree(
   };
   // A directory .gitignore excludes: not scanned, but every lockfile in it is named.
   const listIgnored = (dir: string, rel: string) => {
+    if (budget.spent()) {
+      walkTruncated = true;
+      return;
+    }
     if (++ignoredVisited > MAX_IGNORED_WALK_DIRS) {
       ignoredWalkTruncated = true;
       return;
@@ -576,7 +584,7 @@ export function scanProjectTree(
     for (const child of children) {
       if (!child.isDirectory() || SKIP_DIRS.has(child.name)) continue;
       listIgnored(path.join(dir, child.name), `${rel}/${child.name}`);
-      if (ignoredWalkTruncated) return;
+      if (ignoredWalkTruncated || walkTruncated) return;
     }
   };
   // A build-output name that may be an ordinary folder: one look, no descent.
@@ -595,7 +603,7 @@ export function scanProjectTree(
         if (AMBIGUOUS_OUTPUT_DIRS.has(child.name)) peekOutputDir(sub, childRel);
         continue;
       }
-      if (++visited > MAX_WALK_DIRS) {
+      if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
       }
@@ -654,6 +662,7 @@ export function scanProjectTree(
       skipped,
       skippedCount,
       walkTruncated,
+      ...(budget.stopped ? { walkStopped: "time_budget" as const } : {}),
       ...(ignoredWalkTruncated ? { ignoredWalkTruncated } : {}),
       ...(notCoveredCount > 0 ? { notCovered, notCoveredCount } : {}),
       ...(fixtures.count > 0 ? { fixtures } : {}),
@@ -788,7 +797,7 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
       `${unlocked} manifest${unlocked === 1 ? " has" : "s have"} no lockfile beside ${unlocked === 1 ? "it" : "them"} and ${unlocked === 1 ? "is" : "are"} no workspace member of one above (${listed}${unlocked > 5 ? ", ..." : ""}), so the dependencies ${unlocked === 1 ? "it declares" : "they declare"} were not resolved and NOT checked; generate a lockfile there`,
     );
   }
-  if (discovery.walkTruncated) parts.push(`the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
+  if (discovery.walkTruncated) parts.push(discovery.walkStopped ? walkBudgetNote() : `the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
   if (discovery.ignoredWalkTruncated) {
     parts.push(`the search of gitignored directories stopped after ${MAX_IGNORED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`);
   }

@@ -20,6 +20,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { oversize, tooLargeText } from "./bounded-read.js";
 import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
 import { checkInstallState } from "./install-state.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSource } from "./lockfile-parsers.js";
@@ -74,6 +75,31 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     ...lockfileCandidates(group.dir, ecosystem),
     ...(manifest ? [manifest] : []),
   ]);
+
+  // A lockfile or manifest over the size cap is not read (bounded-read.ts): the group resolves to
+  // nothing and says why, so its dependencies are reported as not checked. Its signature is kept,
+  // so the group is resolved again once the file changes.
+  const tooLarge: LockfileProblem[] = [...signatures.keys()].flatMap((file) => {
+    const size = oversize(file);
+    return size === null ? [] : [{ file, error: tooLargeText(size), ecosystem }];
+  });
+  if (tooLarge.length > 0) {
+    return {
+      group,
+      resolved: [],
+      audit: [],
+      drift: [],
+      source: null,
+      sources: [],
+      unresolved: null,
+      problems: tooLarge,
+      // Nothing was read, so nothing is known to be uncheckable or unpinned: the problem says it was not checked.
+      uncheckable: [],
+      unpinned: [],
+      signatures,
+      resolvedAt,
+    };
+  }
 
   const read = resolveVersionSource(group.dir, ecosystem);
   const readFiles = read.source ? [read.source, ...(read.extraSources ?? [])] : [];

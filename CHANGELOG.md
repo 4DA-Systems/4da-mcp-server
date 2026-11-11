@@ -216,6 +216,103 @@
 - **Every page of an OSV answer is read.** `next_page_token` from querybatch
   was ignored. It is followed; a dependency whose later pages cannot be had is
   unanswered, not recorded with its first page.
+- **A cloned repository can no longer hang the server.** Two lines of
+  `.gitignore` (`a*a*...*b`, 20 stars) beside a 40-character directory name made
+  6.2.7 stop answering: `dependency_check`, then `tools/list`, for as long as
+  the process lived. Patterns were translated to regular expressions and
+  matched during the synchronous startup walk. They are now matched without
+  backtracking (each `*`-separated piece is located once, left to right; a
+  path is one forward pass over its segments), `**` is read as git reads it
+  (`src/**/fixtures` no longer matches `src/notfixtures`), and a file's size,
+  its rule count and each pattern's length are capped. Anything over a cap is
+  not applied as an ignore rule, and a negation that cannot be applied
+  re-includes everything below its file, so a cap can only make the walk scan
+  more. The walk itself has a time budget (10 s, `FOURDA_WALK_BUDGET_MS`):
+  past it the answer is a partial scan that says so ("the directory walk
+  stopped at its 10 s time budget"), with `coverage.complete: false`. A lockfile
+  or manifest over 64 MB is not read and is reported as UNREADABLE, "its
+  dependencies were not checked". A 200 KB `Cargo.toml` of repeated `[package]`
+  headers, which took 3.8 s to read, takes under a millisecond.
+- **An over-long argument is refused, and a long constraint no longer blocks
+  the server.** A `to` of 8 KB (`>=` and 4,000 one-digit tokens) took 7 s and
+  held up a concurrent `tools/list`; 40 KB never answered. A version or
+  constraint is limited to 256 characters and a package name to 512, with an
+  error that says which argument, how long it was and how it starts. The range
+  parser is one pass and each constraint is parsed once, not once per
+  published release.
+- **Every tool call has a time budget of 20 s** (`FOURDA_CALL_BUDGET_MS`),
+  counted from the moment the request arrives. A cold `dependency_check` for
+  litellm or Django took 21 to 37 s, and with OSV.dev stalled 49 s, after which
+  it said OSV "did not answer within 15 s". `vulnerability_scan`,
+  `dependency_health` and `upgrade_planner` size their own waits from what is
+  left and answer with what they have, the rest NOT CHECKED. A call still
+  running at its budget is answered in its place: every `dependency_check` item
+  `unknown` ("did not finish within 20 s ... This is not a proceed"), any other
+  tool an error that starts NOT CHECKED. Nothing is aborted: the lookups run on
+  and are cached, so the same call made again answers from them. OSV's own
+  message now says "did not answer within 15 s on either of 2 attempts".
+- **A fix target must exist for that exact package or module path.**
+  `go.etcd.io/etcd` was sent to "v3.4.44", a fixed version OSV names for the
+  import path that the Go proxy does not serve for that module (Go major 3 is
+  `go.etcd.io/etcd/v3`). A target above every release the registry listed is
+  now asked for by name (the proxy's `.info`, the npm registry, PyPI, the
+  crates.io index). Served: it is the target, without the "confirm it is
+  published" caveat. Not served: no release is named, the step is
+  `no_fix_available`, and the reason says "No installable fix on this module
+  path" and where the fix lives ("Go major 3 is a different module,
+  go.etcd.io/etcd/v3 (the proxy serves it, ...), and moving to it changes the
+  import path"). The advisory's own row says the same. Unanswered: the caveat
+  stands.
+- **A release its maintainer deprecated by itself is never the target.**
+  lodash.template 4.5.0 was sent to 4.18.0 ("Bad release. Please use
+  lodash.template@4.5.0 instead.") past 4.18.1, because the package is retired
+  and every release is deprecated, which the rule read as one line-wide notice.
+  A release whose `deprecated` message is not the notice the rest of its line
+  carries is now withdrawn like any other: the target is 4.18.1, with 4.18.0
+  named as passed and 4.18.1's own retirement notice still said. A line whose
+  releases all say one thing is unchanged (glob 10.x keeps 10.5.0).
+- **No parent upgrade when a lockfile refresh is enough.** "tailwindcss 3.4.19
+  is the smallest tailwindcss release that brings in sucrase 3.35.1" was said of
+  a project whose installed tailwindcss 3.4.18 already requires `sucrase
+  ^3.35.0` (2 of 9 sampled claims; the same for `@azure/identity` under
+  `@vscode/vsce`, which was told to cross a major). When every installed parent
+  of the blocking parent already admits a release of it that fixes the package,
+  the step is `lockfile_refresh` with the exact command (`npm update sucrase`),
+  names no upgrade of anything the project declares, and carries no
+  `parentUpgrades`. A parent that does not admit it is still named, as before.
+- **An override the project already has is read.** With `"overrides": { "qs":
+  "^6.16.0" }` the plan read request's own `~6.5.2`, called the parent stuck
+  and said to add an override. npm `overrides`, pnpm `pnpm.overrides` (and
+  `overrides:` in pnpm-workspace.yaml) and Yarn `resolutions` are now the
+  effective requirement, each for its own tool: an entry that admits the fix
+  makes the step `npm update qs`; one that excludes it makes the step "change
+  that entry", with no parent blamed and no second override suggested.
+- **Platform activity is tracked per lockfile.** One lockfile that cargo cannot
+  resolve (a stale example) made every crate it shares with the project's real
+  lockfile count as built on this host. A finding now carries
+  `platform_inactive_in`: the directories that lock that copy without building
+  it here, and `upgrade_planner` aims its commands at the others and says which
+  lockfile the step is not about. Nothing a lockfile may build is hidden.
+- **Operating-system directories are not scanned.** `project_path` (and the
+  directory a host starts the server in) was unconfined: a scan of
+  `C:\Windows\System32` read the clones that had landed there and sent 2,122
+  package pairs. Drive and filesystem roots, the Windows directory and
+  everything below it, the roots of Program Files, ProgramData and Users, and
+  on Linux and macOS the system's own directories (`/usr`, `/etc`, `/System`,
+  ...) are refused with an error that says why and asks for the project's
+  root; a server started in one scans nothing and each tool says so.
+- **Three answers that read as fine when nothing was checked.**
+  `dependency_health` with an `ecosystem_filter` that matches nothing returned
+  100/100 over 0 dependencies; it now returns no score and says what the
+  project does hold. A `vulnerability_scan` served whole from the advisory
+  cache said `_meta.offline: false` with the network dead; `offline` is now
+  `null` there, with `osv_contacted: false` and a note. `HTTPS_PROXY` /
+  `HTTP_PROXY` / `NO_PROXY` were ignored in silence: they are honoured on Node
+  24.14 and later, and on Node 22.21 and later when the server is started with
+  `NODE_USE_ENV_PROXY=1`; otherwise the startup log and `--doctor` say that the
+  proxy is not used and what to set. Older Node cannot use a proxy.
+- **The fix-path cache moves to version 13**, since entries written before hold
+  the releases a maintainer flagged as candidates.
 
 ## 6.2.7 — 2026-11-08
 
