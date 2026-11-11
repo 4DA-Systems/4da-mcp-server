@@ -12,9 +12,10 @@
  *
  * Hygiene: results carry third-party text — advisory summaries, changelog
  * entries, headlines, package deprecation messages. Characters that render as
- * nothing (zero-width, bidi overrides, Unicode tag characters) and control
- * characters are the raw material of hidden prompt-injection payloads and have
- * no legitimate use in this data, so they are removed from every string.
+ * nothing (zero-width, bidi controls, variation selectors, the soft hyphen,
+ * Unicode tag characters) and control characters (C0 and C1) are the raw
+ * material of hidden prompt-injection payloads and have no legitimate use in
+ * this data, so they are removed from every string.
  */
 
 interface PropertySchema {
@@ -80,15 +81,24 @@ export function validateToolArgs(toolName: string, schema: InputSchema, args: Re
   return null;
 }
 
-// Control characters except tab/newline/carriage return; zero-width and joiner
-// characters; bidi embeddings, overrides and isolates; word joiner and
-// invisible operators; the BOM; Unicode tag characters (U+E0000..U+E007F).
+// Characters that render as nothing, or that reorder or restyle what is shown, written as escapes so
+// the source shows what it matches (the earlier literal characters were invisible in an editor):
+// - C0 controls except tab / newline / carriage return, DEL, and the C1 controls (U+0080..U+009F);
+// - the soft hyphen (U+00AD), the Arabic letter mark (U+061C), the Mongolian vowel separator (U+180E);
+// - zero-width spaces and joiners and the left-to-right / right-to-left marks (U+200B..U+200F);
+// - bidi embeddings, overrides and isolates (U+202A..U+202E, U+2066..U+2069), the word joiner,
+//   invisible operators and deprecated format characters (U+2060..U+206F);
+// - variation selectors (U+FE00..U+FE0F, U+E0100..U+E01EF), which change a glyph and can carry
+//   hidden bits; the BOM (U+FEFF); Unicode tag characters (U+E0000..U+E007F).
 const INVISIBLE =
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F​-‏‪-‮⁠-⁤⁦-⁩﻿]|\uDB40[\uDC00-\uDC7F]/g;
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\uFEFF\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+
+// The line and paragraph separators (U+2028, U+2029) break a line where no "\n" shows: a space.
+const LINE_SEPARATORS = /[\u2028-\u2029]/g;
 
 /** Remove invisible and control characters from one string. */
 export function cleanText(text: string): string {
-  return text.replace(INVISIBLE, "");
+  return text.replace(LINE_SEPARATORS, " ").replace(INVISIBLE, "");
 }
 
 /** Deep copy of a JSON-like value with every string cleaned. */

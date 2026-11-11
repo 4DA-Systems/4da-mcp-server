@@ -288,7 +288,10 @@ describe("dependency_check's smallest and newest safe release", () => {
     const r = (await check([{ ecosystem: "npm", package: "lodash", from: "4.17.20", to: "^4.17.20" }])).results[0];
     expect(r).toMatchObject({ to: "4.18.1" });
     expect(r.range_check).toMatchObject({ smallest_safe_upgrade: "4.18.1", withheld: ["4.18.0"] });
-    expect(r.reason).toContain('4.18.0 is deprecated on npm ("Bad release. Please use lodash@4.17.21 instead."); 4.18.1 is the smallest clean release');
+    // Named in this server's words; the registry's own are quoted beside it, never inside `reason`.
+    expect(r.reason).toContain("4.18.0 is deprecated on npm; 4.18.1 is the smallest clean release. The registry's message is in range_check.quoted_from_registry.");
+    expect(r.reason).not.toContain("Bad release");
+    expect(r.range_check.quoted_from_registry).toEqual({ "4.18.0": "Bad release. Please use lodash@4.17.21 instead." });
     // The withdrawn release itself, asked for directly: avoid.
     const direct = (await check([{ ecosystem: "npm", package: "lodash", to: "4.18.0" }])).results[0];
     expect(direct.verdict).toBe("avoid");
