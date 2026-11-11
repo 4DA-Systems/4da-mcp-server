@@ -151,6 +151,14 @@ export interface VulnerabilityEntry {
    * bounds changed what an entry holds).
    */
   maintenance?: boolean;
+  /**
+   * Set when OSV matched this advisory but its record could not be fetched:
+   * only the id is known. `severity` is then `unknown` and `fixedVersion`
+   * null because nothing was read, not because the advisory is ungraded or
+   * unfixed. Such a row is never cached, never dropped by a severity filter,
+   * and never worded as "no fix published".
+   */
+  detailUnavailable?: true;
   summary: string;
   fixedVersion: string | null;
   published: string;
@@ -205,6 +213,12 @@ export interface VulnerabilityScanResult {
   staleReason?: string;
   /** fetched_at (SQLite UTC, "YYYY-MM-DD HH:MM:SS") of the oldest stale answer used. */
   staleOldestFetchedAt?: string | null;
+  /**
+   * Ids of advisories OSV matched whose record it did not return (rows with
+   * `detailUnavailable`). Their severity and fix version are not known, so
+   * the scan is not a complete answer: absent when every record was read.
+   */
+  detailsUnchecked?: string[];
   /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
   aliasSeverity?: AliasSeverityReport;
 }
@@ -231,6 +245,8 @@ export interface VulnerabilityCoverage {
   unchecked_dependencies: number;
   /** Dependencies answered only from an expired cached answer (a fresh query failed); present when any were. */
   stale_dependencies?: number;
+  /** Advisories matched whose record OSV did not return: severity and fix version unknown; present when any were. */
+  details_unchecked?: number;
   /** Why, in words ("OSV.dev unreachable (fetch failed)", "live lookups disabled (FOURDA_OFFLINE=true)"). */
   reason: string;
   /** One line to read first; never a clean result. */

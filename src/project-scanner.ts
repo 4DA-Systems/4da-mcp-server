@@ -20,6 +20,7 @@ import {
   parsePyprojectDependencies,
   requirementNamesWithIncludes,
 } from "./project-manifests.js";
+import { readTextFile } from "./live/text-file.js";
 
 // =============================================================================
 // Types
@@ -156,7 +157,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   const pkgPath = path.join(cwd, "package.json");
   if (fs.existsSync(pkgPath)) {
     try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const pkg = JSON.parse(readTextFile(pkgPath));
       langSet.add("javascript");
 
       if (pkg.name) {
@@ -217,7 +218,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   const cargoPath = path.join(cwd, "Cargo.toml");
   if (fs.existsSync(cargoPath)) {
     try {
-      const content = fs.readFileSync(cargoPath, "utf-8");
+      const content = readTextFile(cargoPath);
       langSet.add("rust");
 
       // Extract project name from [package] section
@@ -274,7 +275,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   if (fs.existsSync(pyprojectPath)) {
     langSet.add("python");
     try {
-      const parsed = parsePyprojectDependencies(fs.readFileSync(pyprojectPath, "utf-8"));
+      const parsed = parsePyprojectDependencies(readTextFile(pyprojectPath));
       parsed.deps.forEach((d) => pyDeps.add(d));
       parsed.devDeps.forEach((d) => pyDevDeps.add(d));
     } catch {
@@ -311,7 +312,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
     langSet.add("go");
     const goDeps: string[] = [];
     try {
-      const content = fs.readFileSync(goModPath, "utf-8");
+      const content = readTextFile(goModPath);
       // Extract module name
       const moduleMatch = content.match(/^module\s+(\S+)/m);
       if (moduleMatch) {

@@ -16,6 +16,7 @@
  * github entries do not name a registry version and are skipped.
  */
 
+import { nonRegistrySource, type LockReadReport } from "./js-lockfile-readers.js";
 import type { InstanceSet } from "./lockfile-types.js";
 
 interface BunWorkspace {
@@ -73,9 +74,19 @@ function keySegments(key: string): string[] {
  * the workspaces' devDependencies reach it, runtime when a dependency or
  * optionalDependency does.
  */
-export function readBunLock(content: string, versions: Map<string, string>, instances?: InstanceSet): void {
+export function readBunLock(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): void {
   const lock = JSON.parse(stripTrailingCommas(content)) as BunLock;
   const packages = lock.packages ?? {};
+  if (report) {
+    // `name@github:user/repo#sha`, `name@git+ssh://…`, `name@https://…/x.tgz`: installed, but not a registry release.
+    for (const value of Object.values(packages)) {
+      if (!Array.isArray(value) || typeof value[0] !== "string") continue;
+      const at = value[0].indexOf("@", value[0].startsWith("@") ? 1 : 0);
+      if (at <= 0) continue;
+      const kind = nonRegistrySource(value[0].slice(at + 1), value[0].slice(at + 1));
+      if (kind && kind !== "local") report.uncheckable.push({ name: value[0].slice(0, at), version: null, kind });
+    }
+  }
 
   const entry = (key: string): { name: string; version: string; meta: BunMeta } | null => {
     const value = packages[key];

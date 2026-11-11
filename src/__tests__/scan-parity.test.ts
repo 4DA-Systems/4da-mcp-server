@@ -414,7 +414,7 @@ describe("project discovery", () => {
     expect(deps.devDeps).toEqual(["tempfile"]);
   });
 
-  it("skips directories and lockfiles the repository ignores, nested .gitignore and info/exclude included", () => {
+  it("does not scan directories the repository ignores (nested .gitignore and info/exclude included), and lists their lockfiles", () => {
     write(".gitignore", "# scratch\ncli/\n/victauri-gauntlet\n*.tmp\n!keep.tmp\n");
     write(".git/info/exclude", "scratch-clone/\n");
     write("cli/pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
@@ -424,8 +424,19 @@ describe("project discovery", () => {
     write("proto/Cargo.lock", "");
     write("proto/Cargo.toml", '[package]\nname = "proto"\n');
     write("relay/Cargo.lock", '[[package]]\nname = "rsa"\nversion = "0.9.10"\nsource = "registry+x"\n');
-    const rel = scanProjectTree(dir).entries.map((t) => path.relative(dir, t.dir).replace(/\\/g, "/") || ".").sort();
-    expect(rel).toEqual([".", "relay"]);
+    const { entries, discovery } = scanProjectTree(dir);
+    const rel = entries.map((t) => path.relative(dir, t.dir).replace(/\\/g, "/") || ".").sort();
+    // An ignored DIRECTORY is not this project's (victauri-gauntlet/ and cli/ were reported as 4DA's
+    // own, 2026-10-02). An ignored LOCKFILE in an ordinary directory is what is installed there:
+    // proto/ is scanned (until 2026-11-11 it was skipped with no trace, audit T2).
+    expect(rel).toEqual([".", "proto", "relay"]);
+    expect(discovery.gitignoredScanned).toEqual(["proto/Cargo.lock"]);
+    // And nothing found is passed over in silence: each ignored directory's lockfile is named.
+    expect(discovery.skipped.sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: "cli/pnpm-lock.yaml", reason: "gitignored_directory" },
+      { path: "scratch-clone/package-lock.json", reason: "gitignored_directory" },
+      { path: "victauri-gauntlet/Cargo.lock", reason: "gitignored_directory" },
+    ]);
   });
 
   it("desktop mode: an app-indexed project inside an ignored directory is not this project's", () => {

@@ -37,9 +37,43 @@ export interface VersionSource {
   direct?: { deps: string[]; devDeps: string[] };
   /** Lockfiles present here that could not be read, and why: never a silent "no lockfile". */
   problems?: LockfileProblem[];
+  /**
+   * Dependencies the lockfile installs from git, a URL or a local archive.
+   * They are not registry releases, so the registry package's advisories do
+   * not describe them: never sent to OSV under that name, always listed.
+   */
+  uncheckable?: UncheckableDependency[];
+  /**
+   * npm aliases the lockfile installs at the top level: the name the manifest
+   * declares (`my-lodash`) to the registry package it is (`lodash`).
+   */
+  aliases?: Map<string, string>;
+  /**
+   * PyPI: requirement names with no exact version anywhere in this directory
+   * (`pydantic>=2.0.0`, a bare `requests`), by the file that lists them.
+   * There is no installed version to ask about, so they are not checked.
+   */
+  unpinned?: UnpinnedRequirements[];
 }
 
-/** A lockfile that exists but could not be read. */
+/** A dependency that is not a registry release (see VersionSource.uncheckable). */
+export interface UncheckableDependency {
+  name: string;
+  /** The version its own manifest states, when the lockfile records one. It is not a registry release of that version. */
+  version: string | null;
+  kind: "git" | "url" | "file";
+  /** Absolute path of the lockfile or requirements file that names it. */
+  file: string;
+}
+
+/** Requirements with no pinned version, per file (see VersionSource.unpinned). */
+export interface UnpinnedRequirements {
+  /** Absolute path. */
+  file: string;
+  names: string[];
+}
+
+/** A lockfile that exists but could not be read, or not all of it, or that disagrees with the one that was read. */
 export interface LockfileProblem {
   /** Absolute path. */
   file: string;
@@ -50,6 +84,17 @@ export interface LockfileProblem {
    * past the length cap): a partial read, not an unreadable file.
    */
   skipped?: number;
+  /**
+   * Set when the file was read but not to its end: truncated or damaged. How
+   * many entries were lost is not known (`skipped`, when set, is a lower bound).
+   */
+  partial?: true;
+  /**
+   * Set when nothing is wrong with reading: another lockfile in the same
+   * directory was read instead, and this one pins a different set (or could
+   * not be compared). One of the two is stale; the scan cannot tell which.
+   */
+  conflict?: true;
   /** Set for a requirements include refused because it points outside the project (B-11): a policy, not damage. */
   refused?: true;
   /** The ecosystem whose resolution reported it (stamped by resolveVersionSource), for ecosystem_filter. */
@@ -95,7 +140,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems"> = {},
 ): VersionSource {
   return {
     versions,
