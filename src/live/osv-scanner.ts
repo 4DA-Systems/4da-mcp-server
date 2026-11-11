@@ -74,11 +74,21 @@ async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<
 interface OsvBatchQuery {
   package: { name: string; ecosystem: string };
   version?: string;
+  /** Asks for the next page of this query's answer (the `next_page_token` of its previous one). */
+  page_token?: string;
 }
 
 interface OsvBatchResponse {
-  results: Array<{ vulns?: OsvVulnerability[] }>;
+  results: Array<{ vulns?: OsvVulnerability[]; next_page_token?: string }>;
 }
+
+/**
+ * Pages read for one querybatch request before the queries still open are
+ * left unanswered. OSV pages a long answer (`next_page_token`); the token was
+ * ignored, so a dependency with more advisories than one page holds was
+ * recorded with the first page only (audit 2026-11-11).
+ */
+const MAX_RESULT_PAGES = 20;
 
 /** Per-dependency advisory ids, null where there is no answer, and why. */
 export interface AdvisoryAnswer {
@@ -162,7 +172,9 @@ export class OsvHttpSource implements AdvisorySource {
         return chunk.map(() => null);
       }
       try {
-        return await this.sendBatch(chunk);
+        const sent = await this.sendBatch(chunk, deadline);
+        if (sent.incomplete) failure ??= sent.incomplete;
+        return sent.ids;
       } catch (error) {
         failure = describeFailure(error);
         outage = true;
@@ -172,12 +184,58 @@ export class OsvHttpSource implements AdvisorySource {
     return { ids: answered.flat(), failure };
   }
 
-  /** One querybatch request, retried once after a throttle, a server error, a timeout or a network failure. */
-  private async sendBatch(chunk: ResolvedDependency[]): Promise<string[][]> {
+  /**
+   * The advisory ids for one chunk, every page of them. A query whose answer
+   * OSV cut short carries a `next_page_token`; it is asked again with that
+   * token until none comes back. A query whose later pages cannot be had (the
+   * request fails, the budget runs out, MAX_RESULT_PAGES pages were not
+   * enough) is unanswered, null: a first page alone is not the answer.
+   */
+  private async sendBatch(chunk: ResolvedDependency[], deadline: number): Promise<{ ids: Array<string[] | null>; incomplete: string | null }> {
     const queries: OsvBatchQuery[] = chunk.map((d) => ({
       package: { name: d.name, ecosystem: d.ecosystem },
       ...(d.version ? { version: d.version } : {}),
     }));
+    const first = await this.postBatch(queries);
+    const ids: Array<string[] | null> = first.map((r) => (r.vulns ?? []).map((v) => v.id));
+    let open = first.flatMap((r, index) => (r.next_page_token ? [{ index, token: r.next_page_token }] : []));
+    let incomplete: string | null = null;
+    for (let page = 2; open.length > 0; page++) {
+      const abandon = (why: string) => {
+        for (const { index } of open) ids[index] = null;
+        incomplete = why;
+        open = [];
+      };
+      if (page > MAX_RESULT_PAGES) {
+        abandon(`OSV.dev's answer ran past ${MAX_RESULT_PAGES} pages`);
+        break;
+      }
+      if (!(await this.rateLimiter.acquire("osv", deadline))) {
+        abandon("the OSV.dev query budget ran out before every page of the answer was read");
+        break;
+      }
+      let more: OsvBatchResponse["results"];
+      try {
+        more = await this.postBatch(open.map(({ index, token }) => ({ ...queries[index], page_token: token })));
+      } catch (error) {
+        abandon(`${describeFailure(error)} while reading page ${page} of the answer`);
+        break;
+      }
+      const next: typeof open = [];
+      more.forEach((r, k) => {
+        const { index } = open[k];
+        const seen = new Set(ids[index] ?? []);
+        for (const v of r.vulns ?? []) seen.add(v.id);
+        ids[index] = [...seen];
+        if (r.next_page_token) next.push({ index, token: r.next_page_token });
+      });
+      open = next;
+    }
+    return { ids, incomplete };
+  }
+
+  /** One querybatch request, retried once after a throttle, a server error, a timeout or a network failure. */
+  private async postBatch(queries: OsvBatchQuery[]): Promise<OsvBatchResponse["results"]> {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, BATCH_RETRY_DELAY_MS));
@@ -194,15 +252,24 @@ export class OsvHttpSource implements AdvisorySource {
           continue;
         }
         const data = (await response.json()) as OsvBatchResponse;
-        if (!Array.isArray(data?.results) || data.results.length !== chunk.length) {
-          throw new Error(`OSV.dev answered ${Array.isArray(data?.results) ? data.results.length : "no"} results for ${chunk.length} queries`);
+        if (!Array.isArray(data?.results) || data.results.length !== queries.length) {
+          throw new Error(`OSV.dev answered ${Array.isArray(data?.results) ? data.results.length : "no"} results for ${queries.length} queries`);
         }
         // `{}` is OSV's own "nothing found"; null, a string or a non-array `vulns` is not an answer
-        // and was read as clean, then cached for an hour (audit 6.2.5 B-4).
-        if (data.results.some((r) => r === null || typeof r !== "object" || ("vulns" in r && !Array.isArray(r.vulns)))) {
+        // and was read as clean, then cached for an hour (audit 6.2.5 B-4). A page token that is
+        // not a string cannot be followed, so the answer it belongs to is not one either.
+        if (
+          data.results.some(
+            (r) =>
+              r === null ||
+              typeof r !== "object" ||
+              ("vulns" in r && !Array.isArray(r.vulns)) ||
+              (r.next_page_token !== undefined && r.next_page_token !== null && typeof r.next_page_token !== "string"),
+          )
+        ) {
           throw new Error("OSV.dev answered a malformed result");
         }
-        return chunk.map((_, i) => (data.results[i]?.vulns ?? []).map((v) => v.id));
+        return data.results;
       } catch (error) {
         lastError = error;
       }
@@ -356,6 +423,8 @@ export class OsvScanner {
     for (const v of allVulns) {
       bySeverity[v.severity]++;
     }
+    // Advisories matched whose record OSV did not return: known by id only (unhydratedEntry).
+    const detailsUnchecked = [...new Set(allVulns.filter((v) => v.detailUnavailable).map((v) => v.vulnId))].sort();
 
     return {
       scannedAt: new Date().toISOString(),
@@ -376,6 +445,7 @@ export class OsvScanner {
       staleAnswers,
       // An expired answer is not a current one: every consumer says so (audit 6.2.5 B-2).
       ...(staleAnswers > 0 ? { staleReason: failure ?? "OSV.dev could not be queried", staleOldestFetchedAt: staleOldest } : {}),
+      ...(detailsUnchecked.length > 0 ? { detailsUnchecked } : {}),
       ...(rated.report ? { aliasSeverity: rated.report } : {}),
     };
   }
@@ -479,8 +549,19 @@ export class OsvScanner {
       // positive. Un-hydrated ids (detail fetch failed) are kept: we can't know,
       // and dropping a real advisory is worse than keeping an un-enriched one.
       const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
-      const depVulns = liveIds.map((id) => mapVulnerability(detailById.get(id) ?? { id }, dep));
-      rows.push([`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      const mapped = liveIds.map((id) => {
+        const detail = detailById.get(id);
+        return detail ? mapVulnerability(detail, dep) : unhydratedEntry(id, dep);
+      });
+      // An id whose record is missing but which a record that WAS read names as its alias is the
+      // same advisory, already described: the stub adds nothing.
+      const readAliases = new Set(mapped.filter((v) => !v.detailUnavailable).flatMap((v) => v.aliases));
+      const depVulns = mapped.filter((v) => !v.detailUnavailable || !readAliases.has(v.vulnId));
+      // An advisory whose record did not arrive is known by its id alone: no severity, no fix
+      // version. Cached, that stub answered for the next hour, so one failed fetch turned a
+      // critical into "unknown, no fix" for every scan in it (audit 2026-11-11, T7). Only a
+      // dependency whose every advisory was read is cached; the rest are asked again next time.
+      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
@@ -564,6 +645,22 @@ function mapVulnerability(
     ...(dep.platformInactiveDirs ? { platformInactiveDirs: dep.platformInactiveDirs } : {}),
     installDriftOf: dep.installDriftOf,
     installFix: dep.installFix,
+  };
+}
+
+/**
+ * An advisory OSV matched to this dependency whose record could not be
+ * fetched: the id is all that is known. Its severity is unknown and it names
+ * no fix, and both of those are gaps, not facts: `detailUnavailable` says so,
+ * so no filter drops it for being "below" a severity and no advice reads its
+ * missing fix as "no fix published". A malicious-package id (MAL-) is still
+ * critical on the id alone.
+ */
+function unhydratedEntry(id: string, dep: ResolvedDependency): VulnerabilityEntry {
+  return {
+    ...mapVulnerability({ id }, dep),
+    detailUnavailable: true,
+    summary: `${id}: advisory details NOT CHECKED (OSV.dev did not return the record), so its severity and fix version are unknown`,
   };
 }
 

@@ -13,6 +13,17 @@
  * Constraint syntax is the ecosystem's own (npm ranges, Cargo requirements,
  * PEP 440 specifiers), plus the shorthand every agent writes: "7.x", "3.1.*",
  * "v1" for a Go major. Pure functions, no I/O.
+ *
+ * How a bare number is read is the ecosystem's own reading too, and every answer says which it
+ * was (`to_read_as`, describeReading), because the two readings give different answers:
+ * - PyPI: a bare version is ONE release. `Jinja2` "3.1" is 3.1.0, as pip reads `==3.1`. It was
+ *   read as the 3.1 series and came back proceed (for 3.1.6) while "==3.1" was avoid (3.1.0 has
+ *   ten OSV ids); an agent then wrote `Jinja2==3.1` and installed 3.1.0 (audit 2026-11-11, M13).
+ *   Only constraint syntax is a range: "3.1.*", "~=3.1", ">=3.1,<3.2".
+ * - npm: a bare "7" or "7.5" is a range, as package.json and `npm install pkg@7` read it.
+ * - crates.io: a bare "1" or "0.17" is a caret requirement, as Cargo.toml reads it.
+ * - Go: a bare "v1" or "v1.2" is a version query prefix, as `go get module@v1` reads it.
+ * A full version ("7.5.10", "1.0.229", "v0.23.0") is that release in every ecosystem.
  */
 
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
@@ -21,14 +32,13 @@ import { compareVersions, parsePep440 } from "../live/version-compare.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
-import { excludedReleases, withheldNote } from "../live/withdrawn-releases.js";
+import { excludedReleases, withdrawalText, withheldNote } from "../live/withdrawn-releases.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 
 export type Target =
   | { kind: "exact"; version: string }
   | { kind: "latest" }
-  | { kind: "range"; range: string }
-  /** PyPI "3.1": the release 3.1 when it is published, else the 3.1.* series. */
-  | { kind: "exact_or_series"; version: string; range: string };
+  | { kind: "range"; range: string };
 
 const FULL_SEMVER = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
@@ -48,12 +58,9 @@ export function parseTarget(ecosystem: CheckEcosystem, raw: string): Target | nu
     case "PyPI": {
       const pinned = /^={2,3}\s*([^,*\s]+)$/.exec(text);
       if (pinned && parsePep440(pinned[1])) return { kind: "exact", version: pinned[1] };
-      const p = parsePep440(text);
-      if (p) {
-        // "3.1.4" is a release; "3.1" may be a release (PyPI has "2.0"s) or mean the 3.1 series.
-        const plain = p.release.length < 3 && p.pre === null && p.post === null && p.dev === null && !text.includes("+");
-        return plain ? { kind: "exact_or_series", version: text, range: `==${text}.*` } : { kind: "exact", version: text };
-      }
+      // A bare PEP 440 version is that one release, however many parts it has: "3.1" is 3.1.0,
+      // as pip reads "==3.1". It is never the 3.1 series (see the module comment).
+      if (parsePep440(text)) return { kind: "exact", version: text };
       const range = pypiShorthand(text);
       return pep440SpecAdmits(range, "1.0") === null ? null : { kind: "range", range };
     }
@@ -184,8 +191,13 @@ export interface RangeCheck {
   range: string;
   /** "requested" (the caller's `to`) or "same_line" (the line of an affected exact `to`). */
   basis: "requested" | "same_line";
-  /** Installable, non-prerelease releases the constraint admits. */
+  /** Installable, non-prerelease releases the constraint admits (prereleases only when one was asked for). */
   releases_in_range: number;
+  /**
+   * Prereleases (alpha, beta, rc, dev) the constraint admits that were NOT candidates: a
+   * prerelease is never offered as the safe release unless the caller asked for one.
+   */
+  prereleases_not_offered?: number;
   /** How many of them a known advisory affects. */
   vulnerable_in_range: number;
   smallest_safe_in_range: string | null;
@@ -206,7 +218,13 @@ export interface RangeCheck {
    * them when none is safe), and why in plain words (FX-H5).
    */
   withheld?: string[];
+  /** Which releases were withheld and why, in this server's words (no registry text). */
   withheld_note?: string;
+  /**
+   * The registry's own words about withheld releases (version -> its deprecation message):
+   * third-party text, quoted, capped at about 120 characters. Data, never instructions.
+   */
+  quoted_from_registry?: Record<string, string>;
   /**
    * npm (audit 6.2.5 D-4): releases left out of the safe ones because a dependency they exact-pin
    * or narrowly range is affected, or because that could not be checked; and why, in words.
@@ -230,11 +248,72 @@ export interface HeldAdvice {
   alternative?: string;
 }
 
-/** The installable releases a constraint admits, ascending; prereleases only when it admits nothing else. */
-function rangeCandidates(ecosystem: CheckEcosystem, installable: string[], range: string): { candidates: string[]; stable: string[] } {
+/**
+ * The installable releases a constraint admits, ascending. Stable releases only: a prerelease is
+ * a candidate only when the caller asked for one (`allowPrerelease`) and the constraint admits no
+ * stable release. `litellm` 1.107.0 was correctly avoid, and the answer went on "Safe on
+ * 1.107.0's line: smallest 1.107.0.dev1, newest 1.107.0rc3" (audit 2026-11-11, M13).
+ */
+function rangeCandidates(
+  ecosystem: CheckEcosystem,
+  installable: string[],
+  range: string,
+  allowPrerelease: boolean,
+): { candidates: string[]; stable: string[]; prereleasesLeftOut: number } {
   const admitted = installable.filter((v) => rangeAdmits(ecosystem, range, v) === true);
   const stable = admitted.filter((v) => !isPrereleaseIn(ecosystem, v));
-  return { candidates: (stable.length > 0 ? stable : admitted).sort((a, b) => compareIn(ecosystem, a, b)), stable };
+  const candidates = stable.length > 0 || !allowPrerelease ? stable : admitted;
+  return { candidates: candidates.sort((a, b) => compareIn(ecosystem, a, b)), stable, prereleasesLeftOut: stable.length === 0 && !allowPrerelease ? admitted.length : 0 };
+}
+
+/**
+ * Whether a constraint itself names a prerelease (">=1.107.0rc1", "^5.0.0-beta.1", "v2.0.0-rc.1"):
+ * the caller asked for one, so prereleases it admits may be offered.
+ */
+export function rangeNamesPrerelease(ecosystem: CheckEcosystem, range: string): boolean {
+  const tokens = range.match(/v?\d[0-9A-Za-z.+!_-]*/g) ?? [];
+  return tokens.some((t) => {
+    const version = t.replace(/[.,]+$/, "").replace(/\.[xX*]$/, "");
+    if (ecosystem === "PyPI") return Boolean(parsePep440(version)) && isPrereleaseIn("PyPI", version);
+    return /-[0-9A-Za-z]/.test(version) && isPrereleaseIn(ecosystem, ecosystem === "Go" ? goVersion(version) : version);
+  });
+}
+
+/**
+ * How `to` was read, in one sentence, so an agent that writes the version knows what the verdict
+ * is about (see the module comment for why each ecosystem's own reading is used).
+ */
+export function describeReading(ecosystem: CheckEcosystem, raw: string, target: Target): string {
+  const asked = JSON.stringify(raw);
+  if (target.kind === "latest") return "latest: the newest stable release the registry has not withdrawn";
+  if (target.kind === "range") {
+    switch (ecosystem) {
+      case "npm":
+        return `range: npm reads ${asked} as a version range, as package.json and "npm install <pkg>@<range>" do; every stable release it admits was judged`;
+      case "crates.io":
+        return `range: ${asked} is read as a Cargo requirement (a bare "1" or "0.17" is a caret requirement, as Cargo.toml reads it); every stable release it admits was judged`;
+      case "PyPI":
+        return `range: ${asked} is read as a PEP 440 specifier; every stable release it admits was judged`;
+      case "Go":
+        return `range: ${asked} is read as a version query (a bare "v1" or "v1.2" is a prefix, as "go get <module>@v1" reads it); every stable release it admits was judged`;
+    }
+  }
+  const version = target.version;
+  switch (ecosystem) {
+    case "PyPI": {
+      const p = parsePep440(version);
+      const bare = p !== null && p.release.length < 3 && p.pre === null && p.post === null && p.dev === null && !/[=*]/.test(raw);
+      return bare
+        ? `exact version: a bare ${asked} is the one release ${[...p.release, 0, 0].slice(0, 3).join(".")}, as pip reads ==${version}; it is not the ${version} series. For the series ask "${version}.*" or "~=${version}.0"`
+        : "exact version: this one release was judged";
+    }
+    case "crates.io":
+      return `exact version: ${version} itself was judged. In Cargo.toml a bare "${version}" is the caret requirement ^${version} and Cargo.lock pins what it resolved; write "=${version}" to require exactly this release`;
+    case "npm":
+      return `exact version: ${version} itself was judged (package.json "${version}" and "npm install <pkg>@${version}" both mean this release)`;
+    case "Go":
+      return `exact version: ${version} itself was judged`;
+  }
 }
 
 /**
@@ -242,19 +321,23 @@ function rangeCandidates(ecosystem: CheckEcosystem, installable: string[], range
  * would call safe before held dependencies are judged. dependency_check judges the held
  * dependencies of the smallest and newest of these (audit 6.2.5 D-4).
  */
-export function ownSafeInRange(input: { ecosystem: CheckEcosystem; index: PackageReleaseIndex; range: string; advisories: AdvisoryRanges[] }): string[] {
+export function ownSafeInRange(input: { ecosystem: CheckEcosystem; index: PackageReleaseIndex; range: string; advisories: AdvisoryRanges[]; allowPrerelease?: boolean }): string[] {
   const excluded = excludedReleases(input.index);
   const installable = Object.values(input.index.releases).filter((r) => !excluded.has(r.version)).map((r) => r.version);
-  return rangeCandidates(input.ecosystem, installable, input.range).candidates.filter((v) => advisoriesAffecting(input.advisories, v, input.ecosystem).length === 0);
+  return rangeCandidates(input.ecosystem, installable, input.range, input.allowPrerelease ?? false).candidates.filter(
+    (v) => advisoriesAffecting(input.advisories, v, input.ecosystem).length === 0,
+  );
 }
 
 /**
  * The releases a constraint admits, judged against every advisory OSV.dev
  * lists for the package. Withdrawn releases (yanked / unpublished /
  * retracted, and npm deprecations the 4DA rule withdraws: withdrawn-releases.ts)
- * are not candidates; neither are prereleases, unless the constraint admits
- * nothing else. A whole-line npm deprecation notice (glob 10.x, tar 6.x)
- * withdraws nothing. Maintenance notices do not make a release unsafe.
+ * are not candidates; neither are prereleases, unless the caller asked for one
+ * (`allowPrerelease`: the requested version or constraint names a prerelease)
+ * and the constraint admits nothing else. A whole-line npm deprecation notice
+ * (glob 10.x, tar 6.x) withdraws nothing. Maintenance notices do not make a
+ * release unsafe.
  */
 export function checkRange(input: {
   ecosystem: CheckEcosystem;
@@ -268,11 +351,13 @@ export function checkRange(input: {
    * be judged is not safe either (audit 6.2.5 D-4), and `heldNote` says why when any is left out.
    */
   held?: { unsafe: (version: string) => boolean; note: string };
+  /** The caller asked for a prerelease (an exact prerelease `to`, or a constraint that names one). */
+  allowPrerelease?: boolean;
 }): RangeCheck {
   const { ecosystem, index, range, basis } = input;
   const excluded = excludedReleases(index);
   const installable = Object.values(index.releases).filter((r) => !excluded.has(r.version)).map((r) => r.version);
-  const { candidates, stable } = rangeCandidates(ecosystem, installable, range);
+  const { candidates, stable, prereleasesLeftOut } = rangeCandidates(ecosystem, installable, range, input.allowPrerelease ?? false);
   // The same predicate every tool runs on a release it offers (osv-ranges.ts advisoriesAffecting).
   const affecting = (v: string) => advisoriesAffecting(input.advisories, v, ecosystem);
   const ownSafe = candidates.filter((v) => affecting(v).length === 0);
@@ -285,8 +370,9 @@ export function checkRange(input: {
     smallest_safe_in_range: safe[0] ?? null,
     newest_safe_in_range: safe[safe.length - 1] ?? null,
     safe_versions: safe.slice(-8),
+    ...(prereleasesLeftOut > 0 ? { prereleases_not_offered: prereleasesLeftOut } : {}),
   };
-  if (candidates.length > 0 && safe.length === 0) {
+  if ((candidates.length > 0 || prereleasesLeftOut > 0) && safe.length === 0) {
     const every = [...new Set(candidates.flatMap(affecting))].filter((id) => candidates.every((v) => affecting(v).includes(id)));
     // A GHSA record and its PYSEC twin are one advisory, counted once (pyjwt 2.9.* read 32 for 17).
     const all = oneIdPerAdvisory(every, input.advisories);
@@ -318,7 +404,17 @@ export function checkRange(input: {
     .sort((a, b) => compareIn(ecosystem, a, b));
   if (withheld.length > 0) {
     out.withheld = withheld;
-    out.withheld_note = withheldNote(withheld, pick ?? null, Object.fromEntries(excluded), ecosystem)!;
+    // In this server's words only: "4.18.0 is deprecated on npm; 4.18.1 is the smallest clean
+    // release". The registry's own message goes beside it, quoted and capped.
+    const why = Object.fromEntries(withheld.map((v) => [v, index.releases[v]?.withdrawn ? excluded.get(v)! : withdrawalText(ecosystem, v)]));
+    out.withheld_note = withheldNote(withheld, pick ?? null, why, ecosystem)!;
+    const quoted = Object.fromEntries(
+      withheld.flatMap((v) => {
+        const words = quoteThirdParty(index.releases[v]?.deprecated);
+        return words ? [[v, words] as const] : [];
+      }),
+    );
+    if (Object.keys(quoted).length > 0) out.quoted_from_registry = quoted;
   }
   return out;
 }

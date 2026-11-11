@@ -17,6 +17,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { compiledIndirect, compiledRequirements, confinedInclude, normalizePythonName, parseGoMod, requirementOptions } from "./live/lockfile-parsers-pygo.js";
+import { readTextFile } from "./live/text-file.js";
 
 /** The body of a TOML table (`[name]`) up to the next table header, or null. */
 export function tomlTable(content: string, name: string): string | null {
@@ -136,7 +137,7 @@ export function requirementNamesWithIncludes(file: string, root: string = path.d
   visited.add(key);
   let content: string;
   try {
-    content = fs.readFileSync(file, "utf-8");
+    content = readTextFile(file);
   } catch {
     return [];
   }
@@ -177,7 +178,7 @@ export function cargoWorkspaceDeps(root: string, content: string): { deps: strin
     for (const dir of expandMemberGlob(root, pattern)) {
       let manifest: string;
       try {
-        manifest = fs.readFileSync(path.join(dir, "Cargo.toml"), "utf-8");
+        manifest = readTextFile(path.join(dir, "Cargo.toml"));
       } catch {
         continue;
       }

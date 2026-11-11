@@ -22,6 +22,59 @@ import type { InstanceSet } from "./lockfile-types.js";
 
 const DEPENDENCY_BLOCKS = new Set(["dependencies:", "devDependencies:", "optionalDependencies:"]);
 
+/** A dependency a JS lockfile installs from somewhere other than a registry, as its reader reports it. */
+export interface NonRegistryEntry {
+  name: string;
+  /** The version its own package.json states, when the lockfile records one. */
+  version: string | null;
+  kind: "git" | "url" | "file";
+}
+
+/** What a reader could not turn into packages, beyond the packages themselves. */
+export interface LockReadReport {
+  /** Git, URL and local-archive dependencies: not registry releases, never matched as one. */
+  uncheckable: NonRegistryEntry[];
+  /** Entries that name a package but no version: the file stops mid-entry or is damaged. */
+  incomplete: number;
+  /** pnpm: direct dependencies an importer pins that have no `packages:` entry. */
+  missingDirect: string[];
+}
+
+export function emptyReadReport(): LockReadReport {
+  return { uncheckable: [], incomplete: 0, missingDirect: [] };
+}
+
+const GIT_LOCATION = /^(?:git\+|git:\/\/|git@|ssh:\/\/|github:|gitlab:|bitbucket:|gist:)/i;
+const CODE_HOST = /^https?:\/\/(?:[^/@\s]*@)?(?:codeload\.github\.com|github\.com|api\.github\.com|raw\.githubusercontent\.com|gist\.github\.com|gitlab\.com|bitbucket\.org)\//i;
+const ARCHIVE_FILE = /\.(?:tgz|tar\.gz|tar|zip)$/i;
+
+/**
+ * What a lockfile's `resolved` location (or a dependency spec) is when it is
+ * NOT a registry release: a git checkout, an archive fetched from a URL, a
+ * local archive (`file:`), or local source (`local`: a directory, never a
+ * release). Null for a registry release.
+ *
+ * A `git+ssh://…` checkout keeps the version number its package.json states,
+ * so `bignumber.js@2.0.7` from a fork was sent to OSV as npm's
+ * `bignumber.js 2.0.7` (audit 2026-11-11). The registry package's advisories
+ * do not describe a fork or an arbitrary commit, in either direction.
+ *
+ * A URL that is not registry-shaped is only called a URL dependency when it
+ * is on a code host or `requested` (the spec that asked for it) is itself a
+ * URL: private registries serve tarballs from paths of their own.
+ */
+export function nonRegistrySource(location: string, requested?: string): "git" | "url" | "file" | "local" | null {
+  const where = location.trim();
+  if (GIT_LOCATION.test(where)) return "git";
+  if (/^file:/i.test(where)) return ARCHIVE_FILE.test(where.split(/[?#]/)[0]) ? "file" : "local";
+  if (/^(?:link|workspace|portal|exec):/i.test(where)) return "local";
+  if (!/^https?:\/\//i.test(where)) return null;
+  if (isRegistryTarball(where)) return null;
+  if (/\.git$/i.test(where.split(/[?#]/)[0]) || CODE_HOST.test(where)) return "git";
+  const asked = requested?.trim() ?? "";
+  return GIT_LOCATION.test(asked) || /^https?:\/\//i.test(asked) ? "url" : null;
+}
+
 /** A bare npm package name, scoped or not: no whitespace, no `/` beyond the scope, no version. */
 const PACKAGE_NAME = /^(?:@[^\s/@]+\/)?[^\s/@]+$/;
 
@@ -72,6 +125,8 @@ interface PnpmEntry {
   tarball?: string;
   /** A git or directory resolution (`commit:`, `repo:`, `directory:`): not a registry release. */
   local: boolean;
+  /** A git resolution (`commit:`, `repo:`): somebody else's code, unlike a `directory:`. */
+  git?: boolean;
   dev?: boolean;
   inResolution: boolean;
 }
@@ -101,12 +156,15 @@ function pnpmResolutionText(entry: PnpmEntry, text: string): void {
   for (const part of text.split(/[,{}]/)) {
     const field = part.trim();
     if (field.startsWith("tarball:")) entry.tarball = unquote(field.slice("tarball:".length).trim());
-    else if (/^(?:commit|repo|directory):/.test(field)) entry.local = true;
+    else if (/^(?:commit|repo|directory):/.test(field)) {
+      entry.local = true;
+      if (!field.startsWith("directory:")) entry.git = true;
+    }
   }
 }
 
 /** A registry tarball (`https://<registry>/<name>/-/<name>-<version>.tgz`, query allowed), not a codeload/git/arbitrary archive. */
-function isRegistryTarball(url: string): boolean {
+export function isRegistryTarball(url: string): boolean {
   const pathPart = url.split(/[?#]/)[0];
   return pathPart.includes("/-/") && /\.tgz$/i.test(pathPart);
 }
@@ -132,6 +190,25 @@ function pnpmEntryIdentity(entry: PnpmEntry): [string, string] | null {
   return parsed;
 }
 
+/**
+ * An entry that installs something, but not a registry release: a git
+ * checkout or an archive from a URL. Null for a directory (local source) and
+ * for a key that names nothing at all.
+ */
+function pnpmNonRegistry(entry: PnpmEntry): NonRegistryEntry | null {
+  const gitHosted = entry.tarball !== undefined && !isRegistryTarball(entry.tarball);
+  if (!entry.git && !gitHosted) return null;
+  let key = unquote(entry.key.trim()).replace(/^\//, "");
+  const peers = key.indexOf("(");
+  if (peers >= 0) key = key.slice(0, peers);
+  const at = key.indexOf("@", key.startsWith("@") ? 1 : 0);
+  const keyName = at > 0 ? key.slice(0, at) : null;
+  const name = entry.name && PACKAGE_NAME.test(entry.name) ? entry.name : keyName && PACKAGE_NAME.test(keyName) ? keyName : null;
+  if (!name) return null;
+  const kind = entry.git || nonRegistrySource(entry.tarball ?? "") === "git" ? "git" : "url";
+  return { name, version: entry.version ?? null, kind };
+}
+
 /** A `packages:`/`snapshots:` key, or a dependency value that points at one, in one spelling: unquoted, no leading `/`. */
 export function pnpmKeyRef(raw: string): string {
   return unquote(raw.trim()).replace(/^\//, "");
@@ -149,11 +226,18 @@ export interface PnpmEntryReader {
  * registry (name, version) each installs (see pnpmEntryIdentity); entries
  * that install no registry release are not reported.
  */
-export function pnpmEntryReader(onEntry: (key: string, id: [string, string], dev: boolean | undefined) => void): PnpmEntryReader {
+export function pnpmEntryReader(
+  onEntry: (key: string, id: [string, string], dev: boolean | undefined) => void,
+  onNonRegistry?: (entry: NonRegistryEntry) => void,
+): PnpmEntryReader {
   let entry: PnpmEntry | null = null;
   const finish = () => {
     const id = entry ? pnpmEntryIdentity(entry) : null;
     if (entry && id) onEntry(entry.key, id, entry.dev);
+    else if (entry && onNonRegistry) {
+      const other = pnpmNonRegistry(entry);
+      if (other) onNonRegistry(other);
+    }
     entry = null;
   };
   return {
@@ -204,19 +288,25 @@ export function pnpmEntryIdentities(content: string): Map<string, [string, strin
  * two copies), with the `dev: true|false` that v5/v6 lockfiles write under each
  * package key. pnpm 9 dropped that field, so its copies have unknown scope.
  */
-export function readPnpmLock(content: string, versions: Map<string, string>, instances?: InstanceSet): void {
+export function readPnpmLock(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): void {
   const transitive: Array<[string, string]> = [];
   const devByKey = new Map<string, boolean>();
+  // Every (name, version) an importer pins, for the check that each has a `packages:` entry.
+  const directPins = new Map<string, string>();
   const setFirst = (name: string, version: string): void => {
+    directPins.set(`${name}@${version}`, name);
     if (!versions.has(name)) versions.set(name, version);
   };
   let section = "";
   let blockIndent = -1; // column of the dependency block being read, or -1
   let pending: string | null = null; // v6/v9: a name whose `version:` line follows
-  const entries = pnpmEntryReader((_key, id, dev) => {
-    transitive.push(id);
-    if (dev !== undefined) devByKey.set(`${id[0]}\0${id[1]}`, dev);
-  });
+  const entries = pnpmEntryReader(
+    (_key, id, dev) => {
+      transitive.push(id);
+      if (dev !== undefined) devByKey.set(`${id[0]}\0${id[1]}`, dev);
+    },
+    report ? (other) => report.uncheckable.push(other) : undefined,
+  );
 
   for (const line of content.split(/\r?\n/)) {
     const text = line.trim();
@@ -261,15 +351,138 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   }
 
   entries.finish();
-  for (const [name, version] of transitive) setFirst(name, version);
-  if (!instances) return;
   // A Set, not `transitive.some` per entry: that was O(n²), and a 200k-entry pnpm-lock.yaml
   // held the single-threaded stdio server for 409 s (audit 6.2.5 C-8).
-  const seen = new Set(transitive.map(([n, v]) => `${n} ${v}`));
+  const seen = new Set(transitive.map(([n, v]) => `${n}\0${v}`));
+  if (report) {
+    // In a whole lockfile every version an importer pins has a `packages:` entry: one without lies past where the file stops.
+    for (const [pin, name] of directPins) {
+      if (!seen.has(`${name}\0${pin.slice(name.length + 1)}`)) report.missingDirect.push(pin);
+    }
+  }
+  for (const [name, version] of transitive) {
+    if (!versions.has(name)) versions.set(name, version);
+  }
+  if (!instances) return;
   for (const [name, version] of versions) {
-    if (!seen.has(`${name} ${version}`)) instances.add(name, version);
+    if (!seen.has(`${name}\0${version}`)) instances.add(name, version);
   }
   for (const [name, version] of transitive) instances.add(name, version, devByKey.get(`${name}\0${version}`));
+}
+
+/** What is wrong with a lockfile that was read: how to say it, and how many packages are known to be missing (a lower bound). */
+export interface LockDamage {
+  reason: string;
+  missing: number;
+}
+
+function listed(items: string[], limit = 3): string {
+  return `${items.slice(0, limit).join(", ")}${items.length > limit ? ", ..." : ""}`;
+}
+
+/**
+ * Why a pnpm-lock.yaml is not the whole file pnpm wrote, or null when nothing
+ * says so. A lockfile cut short (a failed checkout, a disk that filled, a bad
+ * merge) still reads: the reader takes every entry up to the cut and stops, and
+ * a 93-package project scanned as 17 with no notice (audit 2026-11-11, M12).
+ *
+ * Checked, each a property every lockfile pnpm writes has:
+ * - indentation is spaces, and a flow value (`{…}`, `[…]`) closes on its line;
+ * - every version an importer pins has a `packages:` entry (`missingDirect`,
+ *   from readPnpmLock);
+ * - every `packages:` entry has a `resolution:`;
+ * - every dependency an entry names with a plain version has an entry;
+ * - lockfile 9: `packages:` comes with `snapshots:`, one or more per package.
+ */
+export function pnpmLockDamage(content: string, missingDirect: string[] = []): LockDamage | null {
+  const lockMajor = Number(/^lockfileVersion:[ \t]*['"]?(\d+)/m.exec(content)?.[1] ?? "0");
+  const sections = new Set<string>();
+  const packageKeys = new Set<string>();
+  const snapshotKeys = new Set<string>();
+  // Every entry, as written and as the registry (name@version) it installs.
+  const known = new Set<string>([...pnpmEntryIdentities(content).values()].map(([n, v]) => `${n}@${v}`));
+  const refs: Array<{ name: string; value: string }> = [];
+  const malformed: number[] = [];
+  let section = "";
+  let unresolvedEntries = 0;
+  let entryOpen = false;
+  let entryResolved = false;
+  let inDependencies = false;
+  const closeEntry = () => {
+    if (entryOpen && section === "packages" && !entryResolved) unresolvedEntries++;
+    entryOpen = false;
+  };
+
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length > MAX_LOCKFILE_LINE) continue;
+    const text = line.trim();
+    if (text === "" || text.startsWith("#")) continue;
+    if (/^[ ]*\t/.test(line)) {
+      malformed.push(i + 1);
+      continue;
+    }
+    const flow = /^(?:- |(?:'[^']*'|"[^"]*"|[^\s:'"][^:]*):[ ]+)([{[].*)$/.exec(text)?.[1];
+    if (flow && !flow.endsWith(flow[0] === "{" ? "}" : "]")) malformed.push(i + 1);
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0) {
+      closeEntry();
+      section = text.endsWith(":") ? text.slice(0, -1) : "";
+      if (section) sections.add(section);
+      continue;
+    }
+    if (section !== "packages" && section !== "snapshots") continue;
+    if (indent === 2) {
+      closeEntry();
+      const key = /^(.*?):(?:[ ]*\{\})?$/.exec(text)?.[1];
+      if (!key) continue;
+      const ref = pnpmKeyRef(key);
+      (section === "packages" ? packageKeys : snapshotKeys).add(ref);
+      known.add(ref);
+      entryOpen = true;
+      entryResolved = false;
+      inDependencies = false;
+    } else if (indent === 4) {
+      if (text.startsWith("resolution:")) entryResolved = true;
+      inDependencies = text === "dependencies:";
+    } else if (indent === 6 && inDependencies) {
+      const dep = /^(?:'([^']+)'|"([^"]+)"|([^\s:'"]+)):[ ]+(.+)$/.exec(text);
+      if (dep) refs.push({ name: dep[1] ?? dep[2] ?? dep[3], value: unquote(dep[4].trim()) });
+    }
+  }
+  closeEntry();
+
+  // Only a plain version is checked: an alias, a link or a git reference points at an entry in a spelling of its own.
+  const dangling = new Set<string>();
+  for (const { name, value } of refs) {
+    if (!/^\d/.test(value)) continue;
+    const version = exactVersion(value) ?? value;
+    const candidates = [`${name}@${value}`, `${name}/${value}`, `${name}@${version}`];
+    if (!candidates.some((c) => known.has(c))) dangling.add(`${name}@${version}`);
+  }
+  const snapshotBases = new Set([...snapshotKeys].map((k) => k.split("(")[0]));
+  const noSnapshots = lockMajor >= 9 && packageKeys.size > 0 && !sections.has("snapshots");
+  const unsnapshotted = lockMajor >= 9 && !noSnapshots ? [...packageKeys].filter((k) => !snapshotBases.has(k)) : [];
+
+  const parts: string[] = [];
+  if (malformed.length > 0) {
+    parts.push(`line${malformed.length === 1 ? "" : "s"} ${listed(malformed.map(String), 5)} ${malformed.length === 1 ? "is" : "are"} not lockfile syntax`);
+  }
+  if (missingDirect.length > 0) {
+    parts.push(`${missingDirect.length} version${missingDirect.length === 1 ? "" : "s"} its importers pin ${missingDirect.length === 1 ? "has" : "have"} no \`packages:\` entry (${listed(missingDirect)})`);
+  }
+  if (unresolvedEntries > 0) parts.push(`${unresolvedEntries} \`packages:\` entr${unresolvedEntries === 1 ? "y has" : "ies have"} no \`resolution:\``);
+  if (dangling.size > 0) {
+    parts.push(`${dangling.size} package${dangling.size === 1 ? "" : "s"} named as ${dangling.size === 1 ? "a dependency has" : "dependencies have"} no entry (${listed([...dangling])})`);
+  }
+  if (noSnapshots) parts.push("it has `packages:` but no `snapshots:` section, which lockfile 9 always writes");
+  if (unsnapshotted.length > 0) {
+    parts.push(`${unsnapshotted.length} \`packages:\` entr${unsnapshotted.length === 1 ? "y has" : "ies have"} no \`snapshots:\` entry (${listed(unsnapshotted)})`);
+  }
+  if (parts.length === 0) return null;
+  const missing = new Set([...missingDirect, ...dangling, ...unsnapshotted]).size;
+  return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing };
 }
 
 /**
@@ -311,6 +524,25 @@ export function yarnBlockVersion(block: string): string | null {
 }
 
 /**
+ * Where a yarn block installs from when that is not a registry: berry states
+ * it in `resolution:` (`name@npm:1.2.3` is the registry; a git or https
+ * locator is not), v1 in `resolved`. Null for a registry release.
+ */
+function yarnNonRegistry(block: string, firstLine: string): "git" | "url" | "file" | "local" | null {
+  const resolution = yarnBlockField(block, /^[ \t]+resolution:[ \t]+"?([^"\s]+)"?[ \t]*$/);
+  if (resolution) {
+    const at = resolution.indexOf("@", resolution.startsWith("@") ? 1 : 0);
+    const locator = at > 0 ? resolution.slice(at + 1) : "";
+    return locator.startsWith("npm:") ? null : nonRegistrySource(locator, locator);
+  }
+  const resolved = yarnBlockField(block, /^[ \t]+resolved[ \t]+"([^"]+)"/);
+  if (!resolved) return null;
+  const spec = unquote(firstLine.replace(/:\s*$/, "").split(",")[0].trim());
+  const at = spec.indexOf("@", spec.startsWith("@") ? 1 : 0);
+  return nonRegistrySource(resolved, at > 0 ? spec.slice(at + 1) : undefined);
+}
+
+/**
  * Reads a yarn lockfile (v1 or berry) into `versions`.
  * v1: `"@scope/pkg@^1.0.0", "@scope/pkg@^1.1.0":` then `  version "1.2.3"`.
  * berry: `"@scope/pkg@npm:^1.0.0":` then `  version: 1.2.3`.
@@ -324,6 +556,7 @@ export function readYarnLock(
   versions: Map<string, string>,
   instances?: InstanceSet,
   specs?: Map<string, string>,
+  report?: LockReadReport,
 ): number {
   let skipped = 0;
   for (const block of content.split(/\r?\n(?=\S)/)) {
@@ -339,6 +572,14 @@ export function readYarnLock(
     const version = raw ? exactVersion(raw) : null;
     if (!version) {
       if (block.split(/\r?\n/).some((line) => line.length > MAX_LOCKFILE_LINE)) skipped++;
+      // A package entry always states its version: one without is where the file stops, or damage.
+      else if (report) report.incomplete++;
+      continue;
+    }
+    // A git checkout or a URL archive keeps a version number, but it is not that release of the registry package.
+    const other = yarnNonRegistry(block, firstLine);
+    if (other) {
+      if (other !== "local") report?.uncheckable.push({ name: header[1], version, kind: other });
       continue;
     }
     const name = yarnPackageName(block, firstLine, header[1]);

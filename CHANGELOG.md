@@ -18,6 +18,101 @@
   the 1,822 bundled popular names is flagged. The suggestion list is bundled
   (`src/live/popular-npm.ts`, from npm-high-impact 1.13.0), so it works offline.
   A name the registry does not have also gets the suggestion in its `unknown`.
+- **dependency_check no longer says proceed for a name one slip from a popular
+  package.** `expres`, `reactt` and `expresss` each said proceed: they are on
+  the registry, no advisory names them, and the near-miss the server computed
+  (express, react) was printed only beside names npm had already taken down.
+  A NEW npm dependency (no `from`) whose name is one edit, a dropped `.js` /
+  `-js` / `js` / `node-` affix, or (from 6 characters) two edits from one of
+  the 1,822 bundled popular names now gets a `name_check` signal: `review` with
+  "did you mean express?" unless the name is established. Established means
+  10,000 downloads a week or more and at least a thousandth of the popular
+  package's own (a typo of a package installed 200 million times a week collects
+  thousands of mistaken installs: `expres` 5,216 against 195 million), or
+  100,000 or more whatever that share, and first published at least 90 days
+  ago. `avoid` when a count that was read shows it is not established and it
+  is under 30 days old or runs install-time scripts. Downloads that cannot be
+  read never count as established: the verdict is `review`, never `proceed`. A
+  name on the popular list is never flagged for neighbouring another (`preact`,
+  `chai`). One request to api.npmjs.org, for the near-miss name and the popular
+  one, and only when there is a near-miss. Tests: 553 squat-shaped names, none
+  proceed under four download conditions; all 1,822 popular names proceed with
+  the downloads API down and never asked. Other ecosystems have no bundled
+  popular list, so the rule is npm's.
+- **"Unmaintained" in a summary no longer turns a real advisory into a notice.**
+  `olm-sys latest` said proceed, "no exploitable vulnerability", while OSV
+  carries GHSA-p2q9-36vw-c468 graded HIGH: that record and its alias
+  RUSTSEC-2024-0368 both say "unmaintained", and the notice predicate read the
+  summary. `tanton_engine` (RUSTSEC-2025-0031, memory-corruption) and
+  golang.org/x/crypto (GO-2026-5932, which closes its range with a fix) read
+  proceed the same way. In every tool, structured facts now beat the wording: a
+  record that carries a grade (a severity label, a CVSS vector, RustSec's
+  `cvss`), names an exploit category (RustSec `categories`), states a class
+  other than unmaintained / notice (RustSec's `informational: null` included),
+  is a malicious-package record, or, with no class stated, has a `fixed` event,
+  is a vulnerability whatever its summary says. dependency_check is stricter
+  for its verdict: an advisory is passed over as a notice only when its record
+  DECLARES the class and names no fixed release, so "versions of ring before
+  0.17 are unmaintained" (fixed 0.17.0) counts and names 0.17.x, and without
+  the package's advisory list nothing is declared. Now: olm-sys avoid,
+  tanton_engine review, x/crypto v0.58.0 review; `instant` (declared, no fix)
+  still proceeds with its notice listed. vulnerability_scan counts these
+  records as findings, as osv-scanner does.
+- **No third-party text inside dependency_check's own sentences.** A crafted npm
+  deprecation message came back whole inside `reason` (3,362 characters) with a
+  forged `| advisories: No known vulnerability affects 2.0.0.` segment in the
+  server's separator format and an instruction to the agent. `reason` and every
+  signal's `evidence` now quote no registry text: a deprecation message, a yank
+  reason or a retraction rationale is in the signal's `quoted_from_registry`,
+  and the words about a withheld release in `range_check.quoted_from_registry`,
+  each one line, capped at about 120 characters, with `|` replaced.
+  `value.deprecated` is `true`, not the message. A dependency name that is not
+  a package name, or a spec that is not a plain version range, is never printed
+  (a release's `dependencies` keys and values are whatever its publisher
+  wrote). `_meta.untrusted_text` names the fields that hold third-party text on
+  every tool that returns any; the nine that did not say it get it at the
+  dispatcher.
+- **More invisible characters are stripped from every result.** Added: the C1
+  controls, the soft hyphen (U+00AD), the line and paragraph separators (U+2028,
+  U+2029, replaced by a space), variation selectors (U+FE00-FE0F,
+  U+E0100-E01EF), the Arabic letter mark, the Mongolian vowel separator and the
+  deprecated format characters (U+206A-206F), beside the zero-width, bidi and
+  tag characters already removed. The pattern is written as escapes; the source
+  held the characters themselves.
+- **A prerelease is never named as the safe release unless you asked for one.**
+  `litellm` 1.107.0 was correctly avoid, and the answer went on "Safe on
+  1.107.0's line: smallest 1.107.0.dev1, newest 1.107.0rc3". Safe releases are
+  stable ones; alpha, beta, rc and dev builds are candidates only when `to` is
+  itself a prerelease or the constraint names one (">=2.0.0rc1"). A line or a
+  constraint that admits only prereleases says so
+  (`range_check.prereleases_not_offered`), offers none, and names the newest
+  safe stable release outside it; such a constraint is `unknown`.
+- **A bare PyPI version is one release, as pip reads it.** `{Jinja2, "3.1"}`
+  said proceed (for 3.1.6, reading "3.1" as the series) while `"==3.1"` said
+  avoid (3.1.0 has ten OSV ids); an agent then wrote `Jinja2==3.1`. "3.1" is
+  now 3.1.0, the same answer as "==3.1". For the series ask "3.1.*" or "~=3.1.0".
+  npm, Cargo and Go read a bare "7" / "7.5", "1" / "0.17" and "v1" as ranges
+  themselves, and those are unchanged. Every item now says how `to` was read
+  (`to_read_as`).
+- **An avoid over a held dependency now says what clears it.** Every Next.js 15
+  release exact-pins postcss 8.4.31, and `{next, "^15.0"}` said avoid and "No
+  release in ^15.0 is free of known advisories", nothing more. Whatever the
+  held advisory's grade, `range_check.held_advice` now names the dependency,
+  its advisories and the release of it that clears them (the override): review
+  for a low or moderate one, as before, and avoid for a high or critical one
+  with the override said. A release outside the range that was "not known safe"
+  only because none had been judged (every release holds something) is judged
+  and offered: 16.4.5 for next. When nothing in a range is safe, the answer is
+  about the newest release whose only issue is a low or moderate held
+  dependency, when there is one.
+- **what_should_i_know checks the packages a task adds.** "add the lodahs
+  package" came back safe_to_delegate: the briefing asked only which of the
+  project's own dependencies the task names. It now reads the names a task adds
+  (a package-manager command, "add the X package", "install X", a code-quoted
+  name) and runs each through dependency_check at `latest`: a malware name is
+  human_only, a near-miss name or one the registry does not have is
+  review_needed, and a check that could not run is never safe. `new_packages`
+  lists them with the verdict.
 - **No more steering to a release years old over a moderate advisory a
   dependency holds.** `{npm, nx, latest}` said review and "Newest safe release
   outside it: 13.2.4" (December 2021) because every 24.x exact-pins minimatch
@@ -53,6 +148,74 @@
 - **The first scan after updating fetches again, once.** The scan cache moves to
   `osv:v4` and the fix-path cache to version 12, since entries written by 6.2.7
   hold the old grades and range readings.
+- **A lockfile `.gitignore` lists is scanned, and what is not scanned is
+  listed.** A project whose `.gitignore` named `package-lock.json` read "5
+  dependencies, 0 vulnerable" with no `coverage` block while
+  `backend/package-lock.json` held 750 packages and 171 advisories; lockfiles
+  in dot-directories (`.github/actions/*`, `.design-system`) were skipped the
+  same way. A lockfile is what is installed, so it is read whether or not it is
+  committed, and a dot-directory is a directory like any other. A directory
+  `.gitignore` excludes is still not scanned (it is as often a scratch clone as
+  the project's own code), and installed code, build output, caches and tool
+  state (`node_modules`, `target`, `dist`, `.venv`, `.tox`, `.git`, `.claude`
+  ...) are never entered; every lockfile found in an ignored directory, or
+  sitting directly in a `build/`-style one, is listed by path under
+  `coverage.not_scanned.lockfiles` with `coverage.complete: false`.
+  `_meta.resolution.lockfiles` marks a file read although gitignored.
+- **A manifest with no lockfile is never a clean result.** Exact pins in a
+  `package.json` or `Cargo.toml` with no lockfile were checked and the answer
+  said nothing more: `next 15.5.29` alone read "3 dependencies, 0 vulnerable"
+  while the postcss it installs has four advisories. The answer now says the
+  transitive tree was not resolved (`coverage.unresolved_manifests`). A
+  manifest in a subdirectory that no lockfile above holds as a workspace
+  member is listed (`coverage.manifests_without_lockfile`), a binary
+  `bun.lockb` is named as unreadable, and `environment.yml`, a `setup.py` with
+  `install_requires`, a `pylock.toml` and a `Pipfile` with no `Pipfile.lock`
+  are named under `coverage.not_covered`. A `pyproject.toml` with no lockfile
+  lists its dependencies as not checked instead of advising `poetry install`.
+- **A requirement with no pinned version reads NOT CHECKED.** `pydantic>=2.0.0`
+  gave "pydantic unknown (direct): no known advisories", and a requirements
+  file that pins nothing was said to "pin only the packages listed". Such
+  requirements are listed in `coverage.unpinned_requirements`; when nothing at
+  all was scanned the totals are null, not 0.
+- **Two lockfiles in one directory: the answer says which was read.** With a
+  `package-lock.json` and a `yarn.lock` (or pnpm, Bun) side by side, the first
+  by rank was read without a word. The other is now compared and, when it pins
+  a different set, named in `coverage.conflicting_lockfiles` with the packages
+  that differ.
+- **npm aliases in package-lock.json are scanned as the package they install.**
+  `"my-lodash": "npm:lodash@4.17.20"` was sent to OSV as `my-lodash` and read
+  "no known advisories", in lockfile versions 1, 2 and 3. The entry's real name
+  (v2, v3) or its `npm:` spec (v1) is used, and the dependency stays direct.
+- **Git and URL dependencies are not matched as registry packages.** A
+  `bignumber.js@2.0.7` resolved from `git+ssh://` was checked as npm's
+  `bignumber.js 2.0.7`. Dependencies installed from git, a URL or a local
+  archive (package-lock.json, yarn.lock, pnpm, Bun, uv, Poetry, Pipfile.lock,
+  requirements files) are listed in `coverage.not_checkable` and never sent to
+  OSV under the registry name. Their location is not echoed. Cargo git sources
+  are unchanged (the shared conformance truth counts them).
+- **Damaged and oddly encoded files are not read as less, silently.** A UTF-16
+  `requirements.txt` (what Windows PowerShell 5 writes for `pip freeze >`) gave
+  0 dependencies, and a UTF-8 byte-order mark made a valid `package-lock.json`
+  "invalid JSON": both are decoded. A truncated `Cargo.lock` read as 14 of 85
+  packages and a truncated `pnpm-lock.yaml` as 17 of 93 with no notice: a
+  lockfile that is cut short or damaged (also `yarn.lock`, `poetry.lock`,
+  `uv.lock`, `pdm.lock`) is reported in `coverage.partial_lockfiles` with what
+  gives it away. On about 200 whole lockfiles (the conformance corpus and
+  local repositories) the checks flag none.
+- **The stored scan is at most one hour old.** The server lives as long as the
+  IDE, and the scan `what_should_i_know`, `upgrade_planner` and
+  `dependency_health` reuse never aged. Past an hour it is taken again; if that
+  fails the answer is NOT CHECKED, never the old scan.
+- **An advisory whose record could not be fetched is NOT CHECKED, not
+  "unknown, no fix".** One failed detail fetch turned a critical into
+  `unknown` with no fix version and cached that for an hour. Such a row now
+  carries `details: "NOT CHECKED"`, is never dropped by `severity_filter`, is
+  not worded as "no fix version published", makes the answer incomplete
+  (`coverage.details_unchecked`, in every tool), and is not cached.
+- **Every page of an OSV answer is read.** `next_page_token` from querybatch
+  was ignored. It is followed; a dependency whose later pages cannot be had is
+  unanswered, not recorded with its first page.
 - **A cloned repository can no longer hang the server.** Two lines of
   `.gitignore` (`a*a*...*b`, 20 stars) beside a 40-character directory name made
   6.2.7 stop answering: `dependency_check`, then `tools/list`, for as long as

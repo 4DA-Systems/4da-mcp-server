@@ -23,7 +23,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readTextBounded } from "./bounded-read.js";
+import { readTextFile } from "./text-file.js";
 import type { LockfileFormat } from "./lockfile-parents.js";
 
 export interface ProjectOverride {
@@ -97,7 +97,7 @@ export function workspaceYamlOverride(content: string, name: string): string | n
 export function projectOverride(dir: string, name: string, format: LockfileFormat): ProjectOverride | null {
   if (format === "cargo") return null;
   try {
-    const found = manifestOverride(JSON.parse(readTextBounded(path.join(dir, "package.json"))), name, format);
+    const found = manifestOverride(JSON.parse(readTextFile(path.join(dir, "package.json"))), name, format);
     if (found) return found;
   } catch {
     // no package.json, or not JSON: no override is known
@@ -106,7 +106,7 @@ export function projectOverride(dir: string, name: string, format: LockfileForma
     try {
       const file = path.join(dir, "pnpm-workspace.yaml");
       if (fs.existsSync(file)) {
-        const spec = workspaceYamlOverride(readTextBounded(file), name);
+        const spec = workspaceYamlOverride(readTextFile(file), name);
         if (spec) return { spec, where: `"overrides" in pnpm-workspace.yaml` };
       }
     } catch {

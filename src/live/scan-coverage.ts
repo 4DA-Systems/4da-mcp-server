@@ -33,24 +33,49 @@ export function vulnerabilityCoverage(
   // A stub or an older result that says offline without a count answered for nothing.
   const unchecked = result.unchecked ?? (result.offline ? result.totalScanned : 0);
   const stale = result.staleAnswers ?? 0;
-  if (unchecked <= 0 && stale <= 0) return null;
+  // Advisories matched whose record never arrived: their severity and fix version are gaps (T7).
+  const details = result.detailsUnchecked ?? [];
+  if (unchecked <= 0 && stale <= 0 && details.length === 0) return null;
+  const detailsGap = details.length > 0 ? { details_unchecked: details.length } : {};
+  const withDetails = (note: string) => (details.length > 0 ? `${note} ${detailsLine(details)}` : note);
   if (unchecked > 0) {
     const gap = build(result.totalScanned, unchecked, result.uncheckedReason ?? "OSV.dev could not be queried");
-    return stale > 0 ? { ...gap, stale_dependencies: stale, note: `${gap.note} ${staleLine(result, stale)}` } : gap;
+    const note = withDetails(stale > 0 ? `${gap.note} ${staleLine(result, stale)}` : gap.note);
+    return { ...gap, ...(stale > 0 ? { stale_dependencies: stale } : {}), ...detailsGap, note };
   }
-  // Every dependency has an answer, but some only from an expired cache because the fresh query
-  // failed. That answer can predate an advisory, so it is not a current all-clear (audit 6.2.5
-  // B-2: dependency_check said `proceed` and the scan "0 vulnerable" on a 1 h old answer).
-  const reason = result.staleReason ?? "OSV.dev could not be queried";
+  if (stale > 0) {
+    // Every dependency has an answer, but some only from an expired cache because the fresh query
+    // failed. That answer can predate an advisory, so it is not a current all-clear (audit 6.2.5
+    // B-2: dependency_check said `proceed` and the scan "0 vulnerable" on a 1 h old answer).
+    const reason = result.staleReason ?? "OSV.dev could not be queried";
+    return {
+      complete: false,
+      total_dependencies: result.totalScanned,
+      checked_dependencies: result.totalScanned,
+      unchecked_dependencies: 0,
+      stale_dependencies: stale,
+      ...detailsGap,
+      reason,
+      note: withDetails(`STALE: ${reason}. ${staleLine(result, stale)}`),
+    };
+  }
+  // Every dependency was matched against OSV, but some matched advisories are known by id only.
   return {
     complete: false,
     total_dependencies: result.totalScanned,
     checked_dependencies: result.totalScanned,
     unchecked_dependencies: 0,
-    stale_dependencies: stale,
-    reason,
-    note: `STALE: ${reason}. ${staleLine(result, stale)}`,
+    ...detailsGap,
+    reason: `OSV.dev did not return the record of ${details.length} matched advisor${details.length === 1 ? "y" : "ies"}`,
+    note: `NOT CHECKED (advisory details): ${detailsLine(details)}`,
   };
+}
+
+/** "OSV.dev matched N advisories (ids) but did not return their records ..." */
+function detailsLine(ids: string[]): string {
+  const one = ids.length === 1;
+  const listed = `${ids.slice(0, 5).join(", ")}${ids.length > 5 ? ", ..." : ""}`;
+  return `OSV.dev matched ${ids.length.toLocaleString("en-US")} advisor${one ? "y" : "ies"} (${listed}) but did not return ${one ? "its record" : "their records"}, so ${one ? "its" : "their"} severity and fix version are unknown: unknown is not low, and no fix version listed is not "no fix published". Call again (force_refresh), or read https://osv.dev/vulnerability/<id>.`;
 }
 
 /** "N dependencies were answered only from an expired cached answer (the oldest fetched ...)". */

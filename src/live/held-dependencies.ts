@@ -32,6 +32,7 @@ import { npmRangeAdmits } from "./range-satisfies.js";
 import { SEVERITY_RANK } from "./severity-scope.js";
 import { compareVersions } from "./version-compare.js";
 import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "./types.js";
+import { isNpmPackageName, isReadableNpmSpec } from "../untrusted-text.js";
 
 /** The registry facts this module reads (fix-paths.ts PackageReleaseFacts; a type only, no import cycle). */
 export interface HeldFacts {
@@ -99,6 +100,10 @@ export function heldSpecsOf(dependencies?: Record<string, unknown>, optionalDepe
   // An optional dependency's spec wins over the same name in dependencies, as npm reads it.
   for (const [name, spec] of Object.entries({ ...dependencies, ...optionalDependencies })) {
     if (typeof spec !== "string") continue;
+    // Names and specs are whatever the publisher wrote, and both are printed ("requires qs
+    // "~6.14.0""). Only a real package name with a plain version range is a held dependency: a
+    // key or a "range" that is free text installs nothing from the registry and is never shown.
+    if (!isNpmPackageName(name) || !isReadableNpmSpec(spec)) continue;
     if (exactPinVersion(spec) !== null || isNarrowRange(spec)) out[name] = spec.trim();
   }
   return out;

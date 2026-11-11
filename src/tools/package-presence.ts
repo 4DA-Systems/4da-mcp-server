@@ -39,7 +39,14 @@ export function packagePresence(query: string, liveIntel: LiveIntelligence): Pac
 export function emptyAnswerNote(query: string, liveIntel: LiveIntelligence, includeDev: boolean, checked: string): string {
   const p = packagePresence(query, liveIntel);
   if (!p.name) return `"${query}" is not in this project's lockfiles`;
-  const held = `${p.name} ${p.versions.join(", ")} (${p.scope})`;
+  // Declared, but no file pins a version for it (`pydantic>=2.0.0`, no lockfile): there was nothing to
+  // look up, which is not the same as nothing found. It read "pydantic unknown (direct): no known
+  // advisories" (audit 2026-11-11, T4).
+  const pinned = p.versions.filter((v) => v !== "unknown");
+  if (pinned.length === 0) {
+    return `${p.name} (${p.scope}) is declared but no lockfile or exact pin gives it a version in this project, so it was NOT CHECKED (no version to look up)`;
+  }
+  const held = `${p.name} ${pinned.join(", ")} (${p.scope})`;
   if (!includeDev && p.directDevOnly) return `${held} is a direct devDependency, left out at this scope: pass include_dev: true`;
   return `${held}: ${checked}`;
 }

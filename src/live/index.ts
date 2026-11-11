@@ -32,7 +32,7 @@ import { mapEcosystem } from "./version-resolver.js";
 import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
-import type { LockfileProblem } from "./lockfile-types.js";
+import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -57,6 +57,17 @@ export type {
 
 /** Minimum gap between vulnerability warmup attempts after an offline result. */
 const WARMUP_RETRY_MS = 60_000;
+
+/**
+ * How long a finished scan may stand in for a new one. The server lives as
+ * long as the IDE that started it: with no limit, a scan taken on Monday
+ * morning answered `what_should_i_know`, `upgrade_planner` and
+ * `dependency_health` on Friday as long as no lockfile had changed, however
+ * many advisories OSV published in between (audit 2026-11-11, T7). One hour
+ * is the life of an OSV answer in the cache (osv-scanner.ts OSV_CACHE_TTL):
+ * past it the scan is taken again.
+ */
+export const MAX_STORED_SCAN_AGE_MS = 60 * 60 * 1000;
 
 export class LiveIntelligence {
   private db: SqliteDatabase | null;
@@ -115,6 +126,8 @@ export class LiveIntelligence {
   private warmup: Promise<VulnerabilityScanResult> | null = null;
   /** When the last warmup came back offline; gates the retry so an offline host is not re-probed on every call. */
   private warmupFailedAt: number | null = null;
+  /** When the warmup in `warmup` was started: one older than MAX_STORED_SCAN_AGE_MS is not reused. */
+  private warmupStartedAt: number | null = null;
 
   /**
    * `advisorySource` replaces OSV.dev for vulnerability scans (the conformance
@@ -203,8 +216,37 @@ export class LiveIntelligence {
    * Manifests with no lockfile beside them, whose ranged dependencies were not
    * scanned: their versions are declared ranges, not installs.
    */
-  getUnresolvedManifests(): Array<{ dir: string; manifest: string; ranges: number }> {
+  getUnresolvedManifests(): Array<{ dir: string; manifest: string; ranges: number; pinned: number }> {
     return this.groupResults.flatMap((r) => (r.unresolved ? [{ dir: r.group.dir, ...r.unresolved }] : []));
+  }
+
+  /**
+   * Dependencies the lockfiles install from git, a URL or a local archive.
+   * They are not registry releases, so they were never sent to OSV under the
+   * registry package's name: listed so their absence from the findings is not
+   * read as "no advisories".
+   */
+  getUncheckableDependencies(): UncheckableDependency[] {
+    const seen = new Set<string>();
+    return this.groupResults
+      .flatMap((r) => r.uncheckable ?? [])
+      .filter((u) => {
+        const key = `${u.file.toLowerCase()}|${u.name}|${u.version ?? ""}|${u.kind}`;
+        return !seen.has(key) && (seen.add(key), true);
+      });
+  }
+
+  /** PyPI requirements with no pinned version anywhere in their directory (`pydantic>=2.0.0`): nothing to check, by file. */
+  getUnpinnedRequirements(): UnpinnedRequirements[] {
+    const byFile = new Map<string, Set<string>>();
+    for (const r of this.groupResults) {
+      for (const { file, names } of r.unpinned ?? []) {
+        const set = byFile.get(file) ?? new Set<string>();
+        for (const name of names) set.add(name);
+        byFile.set(file, set);
+      }
+    }
+    return [...byFile].map(([file, names]) => ({ file, names: [...names] }));
   }
 
   /** Lockfiles present in a resolved directory that could not be read, each with the reason. */
@@ -385,6 +427,7 @@ export class LiveIntelligence {
   startVulnerabilityWarmup(projectPath: string): void {
     if (this.warmup) return;
     this.warmupFailedAt = null;
+    this.warmupStartedAt = Date.now();
     this.warmup = this.scanVulnerabilities(projectPath).catch((error) =>
       emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: `the scan failed (${String(error).slice(0, 120)})` }),
     );
@@ -407,6 +450,8 @@ export class LiveIntelligence {
   ): Promise<VulnerabilityScanResult | null> {
     if (!this.enabled) return null;
     this.refreshIfLockfilesChanged();
+    // A scan past its hour is not an answer about today's advisories: scan again (bounded, below).
+    this.dropExpiredScan();
     const wantDev = options?.includeDev ?? false;
     if (this.lastVulnScan && !this.lastVulnScan.offline && (!wantDev || this.lastVulnScanIncludesDev)) {
       return this.lastVulnScan;
@@ -487,15 +532,32 @@ export class LiveIntelligence {
   }
 
   /**
-   * Get last vulnerability scan result (from cache/memory, no network).
+   * The last vulnerability scan (from memory, no network), or null when there
+   * is none or it is older than MAX_STORED_SCAN_AGE_MS: an expired scan is
+   * never handed out as the current state.
    */
   getVulnerabilities(): VulnerabilityScanResult | null {
-    return this.lastVulnScan;
+    return this.lastVulnScan && !this.scanExpired(this.lastVulnScan) ? this.lastVulnScan : null;
   }
 
   /** Whether the stored scan covered direct devDependencies (false when there is none). */
   lastScanIncludesDev(): boolean {
-    return this.lastVulnScan !== null && this.lastVulnScanIncludesDev;
+    return this.getVulnerabilities() !== null && this.lastVulnScanIncludesDev;
+  }
+
+  /** True when a scan was taken more than MAX_STORED_SCAN_AGE_MS ago (or carries no readable time). */
+  private scanExpired(scan: VulnerabilityScanResult): boolean {
+    const takenAt = Date.parse(scan.scannedAt);
+    return !Number.isFinite(takenAt) || Date.now() - takenAt > MAX_STORED_SCAN_AGE_MS;
+  }
+
+  /** Forget the stored scan, and the warmup behind it, once they have outlived MAX_STORED_SCAN_AGE_MS. */
+  private dropExpiredScan(): void {
+    if (this.lastVulnScan && this.scanExpired(this.lastVulnScan)) this.lastVulnScan = null;
+    if (this.warmup && this.warmupStartedAt !== null && Date.now() - this.warmupStartedAt > MAX_STORED_SCAN_AGE_MS) {
+      this.warmup = null;
+      this.warmupFailedAt = null;
+    }
   }
 
   /**

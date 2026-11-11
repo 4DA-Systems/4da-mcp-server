@@ -9,6 +9,8 @@
  * real lockfiles measured are tens of megabytes (a pnpm-lock.yaml of a large
  * monorepo); MAX_LOCKFILE_BYTES leaves room above that.
  *
+ * The cap is applied by readTextFile (text-file.ts), the one reader for these files.
+ *
  * A file over the cap is not read and is REPORTED: the resolution that would
  * have read it returns a lockfile problem, which every tool prints as
  * UNREADABLE with "its dependencies were not checked". It is never a silent
@@ -44,11 +46,4 @@ export function oversize(file: string): number | null {
   } catch {
     return null;
   }
-}
-
-/** `fs.readFileSync(file, "utf-8")`, refused (thrown) for a file over the cap. */
-export function readTextBounded(file: string): string {
-  const size = oversize(file);
-  if (size !== null) throw new Error(`${file} ${tooLargeText(size)}`);
-  return fs.readFileSync(file, "utf-8");
 }

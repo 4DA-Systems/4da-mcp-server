@@ -34,11 +34,16 @@ type Window = { introduced: string; fixed?: string; last_affected?: string };
 /** `{id, ranges: [{introduced, fixed | last_affected}]}` as an OSV record for `name`. */
 function record(id: string, name: string, ranges: Window[], ecosystem = "npm", extra: Json = {}): OsvVulnerability {
   // A line's optional aliases, cwe_ids and summary reach the malware predicate as OSV gives them.
+  // A line that words its own record states everything about it: only a line with no summary of
+  // its own gets the stand-in HIGH label. ft-092's notice ("b is unmaintained", no fix) states no
+  // grade, and a record that carries one is a vulnerability whatever its summary says
+  // (maintenance.ts, rule 2: GHSA-p2q9-36vw-c468 is HIGH and says "unmaintained").
+  const label = typeof extra.severity === "string" ? extra.severity : typeof extra.summary === "string" ? null : "HIGH";
   return {
     id,
     summary: typeof extra.summary === "string" ? extra.summary : `${name} advisory ${id}`,
     ...(Array.isArray(extra.aliases) ? { aliases: extra.aliases } : {}),
-    database_specific: { severity: "HIGH", ...(Array.isArray(extra.cwe_ids) ? { cwe_ids: extra.cwe_ids } : {}) },
+    database_specific: { ...(label ? { severity: label } : {}), ...(Array.isArray(extra.cwe_ids) ? { cwe_ids: extra.cwe_ids } : {}) },
     affected: [
       {
         package: { name, ecosystem },

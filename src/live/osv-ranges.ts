@@ -15,7 +15,7 @@
 import type { OsvVulnerability } from "./types.js";
 import { compareToLowerBound, compareVersions, isComparable, isComposerOrGemPrerelease, parsePep440, samePackageName } from "./version-compare.js";
 import { parseSemverPrecedence } from "./semver-precedence.js";
-import { isMaintenanceRecord } from "./maintenance.js";
+import { isDeclaredNotice, isMaintenanceRecord } from "./maintenance.js";
 import { cweIdsOf, isMalware } from "./malware.js";
 
 /**
@@ -39,6 +39,13 @@ export interface AdvisoryRanges {
    * before 6.2.
    */
   maintenance?: boolean;
+  /**
+   * The notice is one the record itself declares (an `informational` class of unmaintained / notice)
+   * and it has no `fixed` event: the only notices dependency_check lets a verdict pass over
+   * (maintenance.ts isDeclaredNotice). Absent on a notice read from the summary wording alone and on
+   * entries cached before 6.3.
+   */
+  declaredNotice?: boolean;
   /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
   malware?: boolean;
   /** The record's `aliases`: the same issue's ids elsewhere (GHSA, PYSEC, CVE). Absent on entries cached by earlier versions. */
@@ -134,6 +141,7 @@ export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecos
     spans: collectAffectedSpans(vuln.affected, packageName, ecosystem),
     versions: listedVersions(vuln.affected, packageName, ecosystem),
     maintenance: isMaintenanceRecord(vuln, packageName, ecosystem),
+    ...(isDeclaredNotice(vuln, packageName, ecosystem) ? { declaredNotice: true } : {}),
     ...(malware ? { malware: true } : {}),
     ...(vuln.aliases && vuln.aliases.length > 0 ? { aliases: [...vuln.aliases] } : {}),
   };

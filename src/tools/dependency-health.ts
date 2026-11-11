@@ -242,7 +242,7 @@ export async function executeDependencyHealth(
   // (scoreCoverage), so a refusal that is permanent by design does not
   // withhold the score forever. ecosystem_filter narrows these too.
   const problems = liveIntel.getLockfileProblems().filter((p) => !params.ecosystem_filter || !p.ecosystem || p.ecosystem === params.ecosystem_filter);
-  const { unreadable, partial: partialReads, refused } = splitLockfileProblems(problems);
+  const { unreadable, partial: partialReads, refused, conflicts } = splitLockfileProblems(problems);
   const readGap = unreadable.length > 0 ? `NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")} This is not a complete result.` : null;
   const withheld = coverage !== null || readGap !== null;
   // Direct dependencies whose registry did not answer: their outdated and deprecated state is
@@ -255,7 +255,7 @@ export async function executeDependencyHealth(
           `PARTIAL: ${registryFailed.length} of ${registryData.length} direct dependenc${registryData.length === 1 ? "y" : "ies"} could not be checked against ${registryFailed.length === 1 ? "its registry" : "their registries"} (${String(registryFailed[0].fetchError).slice(0, 120)}); whether ${registryFailed.length === 1 ? "it is" : "they are"} outdated or deprecated is unknown, not current.`,
         ]
       : [];
-  const partialNotes = [...lockfileProblemNotes([...partialReads, ...refused]), ...registryNote];
+  const partialNotes = [...lockfileProblemNotes([...partialReads, ...refused, ...conflicts]), ...registryNote];
   const scorePartial = !withheld && partialNotes.length > 0;
   // One population for every count: the stored scan can be vulnerability_scan's,
   // which includes direct devDependencies by default, while the registry rows

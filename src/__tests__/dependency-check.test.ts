@@ -175,7 +175,12 @@ describe("dependency_check verdicts (fixtures)", () => {
   it("(e) a deprecated target -> avoid", async () => {
     const out = await check([{ ecosystem: "npm", package: "steady-lib", from: "1.0.1", to: "1.0.3" }]);
     expect(out.results[0].verdict).toBe("avoid");
-    expect(signal(out.results[0], "yanked_or_deprecated")!.evidence).toContain("Critical bug in 1.0.3");
+    // The registry's message is quoted in its own field; `evidence` and `reason` are this server's words.
+    const sig = signal(out.results[0], "yanked_or_deprecated")! as { evidence: string; quoted_from_registry?: string };
+    expect(sig.quoted_from_registry).toContain("Critical bug in 1.0.3");
+    expect(sig.evidence).not.toContain("Critical bug");
+    expect(out.results[0].reason).not.toContain("Critical bug");
+    expect(out.results[0].reason).toContain("1.0.3 is deprecated on the registry");
   });
 
   it("(f) registry unreachable -> unknown, never proceed", async () => {

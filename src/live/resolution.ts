@@ -18,13 +18,17 @@
  * when a signature moves. Stat calls only: no timers, no watchers.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { oversize, tooLargeText } from "./bounded-read.js";
 import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
 import { checkInstallState } from "./install-state.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSource } from "./lockfile-parsers.js";
 import { mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
+import { parsePyprojectDependencies } from "../project-manifests.js";
+import { readTextFile } from "./text-file.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
-import type { LockfileProblem } from "./lockfile-types.js";
+import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 
 /** The inputs of one resolution, kept so the same resolution can be re-run. */
 export interface ResolutionGroup {
@@ -47,10 +51,16 @@ export interface GroupResolution {
   /** Every file read, `source` first (Python merges its lockfiles and requirement files). */
   sources: ResolutionSourceRecord[];
   /**
-   * Set when no lockfile pins this group's versions: the manifest and how many
-   * of its dependencies are declared ranges, which are not sent to OSV.
+   * Set when no lockfile pins this group's versions: the manifest, how many
+   * of its dependencies are declared ranges (not sent to OSV), and how many
+   * are exact pins (checked as declared; what they depend on is resolved
+   * nowhere, so the transitive tree was not checked).
    */
-  unresolved: { manifest: string; ranges: number } | null;
+  unresolved: { manifest: string; ranges: number; pinned: number } | null;
+  /** Dependencies installed from git, a URL or a local archive: listed, never matched as registry releases. */
+  uncheckable: UncheckableDependency[];
+  /** PyPI: requirements with no pinned version anywhere in this directory, by the file that lists them. */
+  unpinned: UnpinnedRequirements[];
   /** Lockfiles present in this directory that could not be read, with the reason. */
   problems: LockfileProblem[];
   signatures: Map<string, FileSignature>;
@@ -74,7 +84,21 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     return size === null ? [] : [{ file, error: tooLargeText(size), ecosystem }];
   });
   if (tooLarge.length > 0) {
-    return { group, resolved: [], audit: [], drift: [], source: null, sources: [], unresolved: null, problems: tooLarge, signatures, resolvedAt };
+    return {
+      group,
+      resolved: [],
+      audit: [],
+      drift: [],
+      source: null,
+      sources: [],
+      unresolved: null,
+      problems: tooLarge,
+      // Nothing was read, so nothing is known to be uncheckable or unpinned: the problem says it was not checked.
+      uncheckable: [],
+      unpinned: [],
+      signatures,
+      resolvedAt,
+    };
   }
 
   const read = resolveVersionSource(group.dir, ecosystem);
@@ -84,8 +108,11 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
   if (manifest && !readFiles.includes(manifest)) signatures.delete(manifest);
 
   // Ruby and PHP: the lockfile (and composer.json) name the direct dependencies; the project scanner does not.
-  const deps = group.deps.length === 0 && group.devDeps.length === 0 && read.direct ? read.direct.deps : group.deps;
-  const devDeps = group.deps.length === 0 && group.devDeps.length === 0 && read.direct ? read.direct.devDeps : group.devDeps;
+  const fromLock = group.deps.length === 0 && group.devDeps.length === 0 && read.direct;
+  // An npm alias is declared under the folder name it installs into; the dependency is the package behind it.
+  const real = (names: string[]) => (read.aliases ? [...new Set(names.map((name) => read.aliases?.get(name) ?? name))] : names);
+  const deps = real(fromLock ? fromLock.deps : group.deps);
+  const devDeps = real(fromLock ? fromLock.devDeps : group.devDeps);
   let resolved = resolveVersionsFrom(group.dir, deps, devDeps, ecosystem, read.versions, group.targets);
   // No lockfile: a ranged dependency's version is the range's floor, a label.
   const ranges = read.kind === "declared_ranges" ? read.ranges ?? new Map<string, string>() : null;
@@ -124,9 +151,57 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
   const sources: ResolutionSourceRecord[] = read.kind
     ? readFiles.map((file) => ({ path: file, kind: read.kind!, mtimeMs: signatureMtime(signatures.get(file)) }))
     : [];
-  const unresolved = ranges && ranges.size > 0 && read.source ? { manifest: read.source, ranges: ranges.size } : null;
+  // A manifest read with no lockfile: its ranges are not installs, and even its exact pins are
+  // only themselves. What they pull in is resolved nowhere, so it was never checked.
+  const pinned = ranges ? read.instances.length : 0;
+  const unresolved = ranges && read.source && ranges.size + pinned > 0 ? { manifest: read.source, ranges: ranges.size, pinned } : null;
+  const unpinned = [...(read.unpinned ?? []), ...(ecosystem === "PyPI" && !read.source ? pyprojectUnpinned(group.dir, read.uncheckable ?? []) : [])];
 
-  return { group, resolved, audit, drift, source: sources[0] ?? null, sources, unresolved, problems: read.problems ?? [], signatures, resolvedAt };
+  return {
+    group,
+    resolved,
+    audit,
+    drift,
+    source: sources[0] ?? null,
+    sources,
+    unresolved,
+    uncheckable: read.uncheckable ?? [],
+    unpinned,
+    problems: read.problems ?? [],
+    signatures,
+    resolvedAt,
+  };
+}
+
+/** Parent directories searched for a Python lockfile that covers a workspace member. */
+const MAX_LOCK_PARENTS = 6;
+
+/**
+ * The dependencies a pyproject.toml declares when NO file in its directory
+ * pins anything (no lockfile, no requirements file): none of them has a
+ * version to check. Such a project scanned as "0 dependencies" with only a
+ * hint to run `poetry install`, whatever tool it used (audit 2026-11-11,
+ * M10). A uv or Poetry workspace member is pinned by a lockfile above it and
+ * is left alone.
+ */
+function pyprojectUnpinned(dir: string, uncheckable: UncheckableDependency[]): UnpinnedRequirements[] {
+  const file = path.join(dir, "pyproject.toml");
+  let declared: string[];
+  try {
+    const parsed = parsePyprojectDependencies(readTextFile(file));
+    declared = [...parsed.deps, ...parsed.devDeps];
+  } catch {
+    return [];
+  }
+  let parent = path.dirname(path.resolve(dir));
+  for (let level = 0; level < MAX_LOCK_PARENTS; level++) {
+    if (["uv.lock", "poetry.lock", "pdm.lock"].some((lock) => fs.existsSync(path.join(parent, lock)))) return [];
+    if (fs.existsSync(path.join(parent, ".git")) || path.dirname(parent) === parent) break;
+    parent = path.dirname(parent);
+  }
+  const elsewhere = new Set(uncheckable.map((u) => u.name));
+  const names = declared.filter((name) => !elsewhere.has(name));
+  return names.length > 0 ? [{ file, names }] : [];
 }
 
 /** True when any file the resolution depended on changed, appeared, or vanished. */

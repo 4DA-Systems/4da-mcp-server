@@ -23,6 +23,7 @@ import type {
   ReleaseRecord,
   TrustLevel,
 } from "./release-metadata.js";
+import { readableNpmName } from "../untrusted-text.js";
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 // Full packuments can be large; 8 s (the abbreviated reader's budget) is not enough.
@@ -136,8 +137,11 @@ export function projectPackument(name: string, doc: NpmPackument): PackageReleas
       // `deprecated: true` (no message) counts too, as in the 4DA app.
       deprecated: typeof v.deprecated === "string" && v.deprecated.length > 0 ? v.deprecated : v.deprecated === true ? "deprecated" : null,
       withdrawn: null,
+      // A dependency key is whatever the publisher wrote. One that is not a package name is kept
+      // as a placeholder (it still counts as a new dependency, and resolves to nothing) so that
+      // free text never reaches a sentence through a "name" (untrusted-text.ts).
       dependencies: [
-        ...new Set([...Object.keys(v.dependencies ?? {}), ...Object.keys(v.optionalDependencies ?? {})]),
+        ...new Set([...Object.keys(v.dependencies ?? {}), ...Object.keys(v.optionalDependencies ?? {})].map(readableNpmName)),
       ],
     };
   }
@@ -176,10 +180,13 @@ export function projectPackument(name: string, doc: NpmPackument): PackageReleas
 }
 
 function npmTrust(v: NpmVersionDoc): { trust: TrustLevel; trustEvidence: string } {
+  // Publisher identifiers are printed only in the shape npm gives them (a login, a provider id).
+  const identifier = (text: unknown) => (typeof text === "string" && /^[\w.~@/-]{1,64}$/.test(text) ? text : null);
   const tp = v._npmUser?.trustedPublisher;
-  if (tp) return { trust: 2, trustEvidence: `trusted publisher (${tp.id ?? "OIDC"})` };
+  if (tp) return { trust: 2, trustEvidence: `trusted publisher (${identifier(tp.id) ?? "OIDC"})` };
   if (v.dist?.attestations) return { trust: 1, trustEvidence: "provenance attestation, no trusted publisher" };
-  const who = v._npmUser?.name ? ` (published by npm user "${v._npmUser.name}")` : "";
+  const user = identifier(v._npmUser?.name);
+  const who = user ? ` (published by npm user "${user}")` : "";
   return { trust: 0, trustEvidence: `no trusted publisher or provenance attestation${who}` };
 }
 
