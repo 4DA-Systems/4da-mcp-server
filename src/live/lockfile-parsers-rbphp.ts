@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { emptySource, found, InstanceSet, type VersionSource } from "./lockfile-types.js";
+import { readTextFile } from "./text-file.js";
 
 /** Lines longer than this are not lockfile syntax; skipping them keeps every pattern below linear. */
 const MAX_LINE = 4096;
@@ -95,7 +96,7 @@ export function readComposerLock(lock: { packages?: unknown; "packages-dev"?: un
 export function resolveRuby(cwd: string): VersionSource {
   const lockPath = path.join(cwd, "Gemfile.lock");
   if (!fs.existsSync(lockPath)) return emptySource();
-  const read = readGemfileLock(fs.readFileSync(lockPath, "utf-8"));
+  const read = readGemfileLock(readTextFile(lockPath));
   if (read.instances.size === 0) return emptySource();
   return found(read.versions, read.instances, lockPath, "lockfile", { direct: { deps: read.direct, devDeps: [] } });
 }
@@ -103,7 +104,7 @@ export function resolveRuby(cwd: string): VersionSource {
 export function resolvePhp(cwd: string): VersionSource {
   const lockPath = path.join(cwd, "composer.lock");
   if (!fs.existsSync(lockPath)) return emptySource();
-  const read = readComposerLock(JSON.parse(fs.readFileSync(lockPath, "utf-8")) as Record<string, unknown>);
+  const read = readComposerLock(JSON.parse(readTextFile(lockPath)) as Record<string, unknown>);
   if (read.instances.size === 0) return emptySource();
   return found(read.versions, read.instances, lockPath, "lockfile", { direct: composerDirect(cwd) });
 }
@@ -111,7 +112,7 @@ export function resolvePhp(cwd: string): VersionSource {
 /** composer.json `require` / `require-dev` package names (platform requirements such as `php` and `ext-*` left out). */
 function composerDirect(cwd: string): { deps: string[]; devDeps: string[] } {
   try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(cwd, "composer.json"), "utf-8")) as Record<string, unknown>;
+    const manifest = JSON.parse(readTextFile(path.join(cwd, "composer.json"))) as Record<string, unknown>;
     const names = (field: string) =>
       Object.keys((manifest[field] as Record<string, unknown> | undefined) ?? {}).filter((n) => n.includes("/"));
     return { deps: names("require"), devDeps: names("require-dev") };

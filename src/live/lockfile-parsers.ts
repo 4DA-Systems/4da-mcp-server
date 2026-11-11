@@ -27,10 +27,20 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readBunLock } from "./bun-lockfile.js";
-import { MAX_LOCKFILE_LINE, readPnpmLock, readYarnLock } from "./js-lockfile-readers.js";
-import { requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
+import {
+  emptyReadReport,
+  MAX_LOCKFILE_LINE,
+  nonRegistrySource,
+  pnpmLockDamage,
+  readPnpmLock,
+  readYarnLock,
+  type LockDamage,
+  type NonRegistryEntry,
+} from "./js-lockfile-readers.js";
+import { requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
 import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
+import { readTextFile } from "./text-file.js";
 import type { OsvEcosystem } from "./types.js";
 
 export type { PackageInstance, VersionSource } from "./lockfile-types.js";
@@ -55,8 +65,13 @@ const MANIFESTS: Partial<Record<OsvEcosystem, string>> = {
  */
 export function lockfileCandidates(cwd: string, ecosystem: OsvEcosystem): string[] {
   const fixed = (LOCKFILES[ecosystem] ?? []).map((name) => path.join(cwd, name));
+  // bun.lockb cannot be read, but its arrival or removal changes what the answer must say.
+  if (ecosystem === "npm") return [...fixed, path.join(cwd, BUN_BINARY_LOCK)];
   return ecosystem === "PyPI" ? [...fixed, ...requirementFiles(cwd)] : fixed;
 }
+
+/** Bun's binary lockfile (before Bun 1.2, and still written beside bun.lock by some setups). Not readable here. */
+const BUN_BINARY_LOCK = "bun.lockb";
 
 /** The manifest the resolver falls back to for this ecosystem, or null when it has none. */
 export function manifestCandidate(cwd: string, ecosystem: OsvEcosystem): string | null {
@@ -120,10 +135,24 @@ function yarnSkippedProblem(file: string, skipped: number): LockfileProblem {
 
 function yarnSkips(file: string): number {
   try {
-    return readYarnLock(fs.readFileSync(file, "utf-8"), new Map());
+    return readYarnLock(readTextFile(file), new Map());
   } catch {
     return 0;
   }
+}
+
+/**
+ * A lockfile that was read, but not all of it: truncated or damaged. The
+ * packages before the damage were checked; the rest were not, and how many
+ * that is can only be bounded from below (`missing`).
+ */
+function damagedProblem(file: string, damage: LockDamage): LockfileProblem {
+  return {
+    file,
+    partial: true,
+    ...(damage.missing > 0 ? { skipped: damage.missing } : {}),
+    error: `${damage.reason}. It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile`,
+  };
 }
 
 /** Lines git writes into a file it could not merge. */
@@ -140,7 +169,11 @@ function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSour
   for (const name of LOCKFILES[ecosystem] ?? []) {
     if (name === "go.sum") continue; // read with go.mod, never on its own
     const file = path.join(cwd, name);
-    if (readFiles.has(path.resolve(file))) break; // everything after it ranks lower
+    if (readFiles.has(path.resolve(file))) {
+      // Python merges every lockfile it finds, so one that was read says nothing about the next.
+      if (ecosystem === "PyPI") continue;
+      break; // everything after it ranks lower (resolveNpm compares those itself)
+    }
     if (!fs.existsSync(file)) continue;
     // A yarn.lock whose entries were all skipped for length: named with the count, even when the file is short (L5).
     const skipped = name === "yarn.lock" ? yarnSkips(file) : 0;
@@ -161,7 +194,7 @@ function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSour
 function describeParseError(file: string, error: unknown): string | null {
   let content: string;
   try {
-    content = fs.readFileSync(file, "utf-8");
+    content = readTextFile(file);
   } catch (readError) {
     return `could not be read (${readError instanceof Error ? readError.message : String(readError)})`;
   }
@@ -212,73 +245,211 @@ function declaredRanges(declared: Map<string, string>, exact: (spec: string) => 
 // npm: package-lock.json > npm-shrinkwrap.json > pnpm-lock.yaml > yarn.lock > bun.lock > package.json ranges
 // =============================================================================
 
-function resolveNpm(cwd: string): VersionSource {
-  for (const name of ["package-lock.json", "npm-shrinkwrap.json"]) {
-    const lockPath = path.join(cwd, name);
-    if (!fs.existsSync(lockPath)) continue;
-    try {
-      const read = readPackageLock(JSON.parse(fs.readFileSync(lockPath, "utf-8")));
-      if (read.instances.size > 0) return found(read.versions, read.instances, lockPath, "lockfile");
-    } catch { /* fall through */ }
-  }
+/** What one npm-family lockfile holds, as its reader reports it. */
+interface NpmLockRead {
+  versions: Map<string, string>;
+  instances: InstanceSet;
+  uncheckable: NonRegistryEntry[];
+  aliases?: Map<string, string>;
+  problems: LockfileProblem[];
+}
 
-  // pnpm-lock.yaml (v5.x, v6 and v9, read by column; see js-lockfile-readers.ts)
-  const pnpmLockPath = path.join(cwd, "pnpm-lock.yaml");
-  if (fs.existsSync(pnpmLockPath)) {
-    try {
+/**
+ * The npm-family lockfiles in the order they are preferred, each with its
+ * reader. A reader returns null for a file that holds no package at all and
+ * throws for one it cannot parse.
+ */
+const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) => NpmLockRead | null }> = [
+  { name: "package-lock.json", read: readNpmLockFile },
+  { name: "npm-shrinkwrap.json", read: readNpmLockFile },
+  {
+    // v5.x, v6 and v9, read by column; see js-lockfile-readers.ts
+    name: "pnpm-lock.yaml",
+    read(file) {
+      const content = readTextFile(file);
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
-      readPnpmLock(fs.readFileSync(pnpmLockPath, "utf-8"), versions, instances);
-      if (versions.size > 0) return found(versions, instances, pnpmLockPath, "lockfile");
-    } catch { /* fall through */ }
-  }
-
-  // yarn.lock (v1 and berry)
-  const yarnLockPath = path.join(cwd, "yarn.lock");
-  if (fs.existsSync(yarnLockPath)) {
-    try {
+      const report = emptyReadReport();
+      readPnpmLock(content, versions, instances, report);
+      if (versions.size === 0) return null;
+      const damage = pnpmLockDamage(content, report.missingDirect);
+      return { versions, instances, uncheckable: report.uncheckable, problems: damage ? [damagedProblem(file, damage)] : [] };
+    },
+  },
+  {
+    // v1 and berry
+    name: "yarn.lock",
+    read(file, cwd) {
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const specs = new Map<string, string>();
-      const skipped = readYarnLock(fs.readFileSync(yarnLockPath, "utf-8"), versions, instances, specs);
+      const report = emptyReadReport();
+      const skipped = readYarnLock(readTextFile(file), versions, instances, specs, report);
       // The copy a direct dependency resolves to is the one its package.json range names.
       for (const [name, range] of manifestRanges(cwd)) {
         const version = specs.get(`${name}@${range}`);
         if (version) versions.set(name, version);
       }
-      if (versions.size > 0) {
-        const read = found(versions, instances, yarnLockPath, "lockfile");
-        return skipped > 0 ? { ...read, problems: [yarnSkippedProblem(yarnLockPath, skipped)] } : read;
+      if (versions.size === 0) return null;
+      const problems: LockfileProblem[] = skipped > 0 ? [yarnSkippedProblem(file, skipped)] : [];
+      if (report.incomplete > 0) {
+        const entries = report.incomplete === 1 ? "1 entry names a package but no version" : `${report.incomplete} entries name a package but no version`;
+        problems.push(damagedProblem(file, { reason: `it is truncated or damaged: ${entries}`, missing: report.incomplete }));
       }
-    } catch { /* fall through */ }
-  }
-
-  // bun.lock (Bun 1.2+ text lockfile; the binary bun.lockb is not readable)
-  const bunLockPath = path.join(cwd, "bun.lock");
-  if (fs.existsSync(bunLockPath)) {
-    try {
+      return { versions, instances, uncheckable: report.uncheckable, problems };
+    },
+  },
+  {
+    // Bun 1.2+ text lockfile; the binary bun.lockb is not readable (binaryBunLock)
+    name: "bun.lock",
+    read(file) {
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
-      readBunLock(fs.readFileSync(bunLockPath, "utf-8"), versions, instances);
-      if (versions.size > 0) return found(versions, instances, bunLockPath, "lockfile");
-    } catch { /* fall through */ }
+      const report = emptyReadReport();
+      readBunLock(readTextFile(file), versions, instances, report);
+      return versions.size > 0 ? { versions, instances, uncheckable: report.uncheckable, problems: [] } : null;
+    },
+  },
+];
+
+function readNpmLockFile(file: string): NpmLockRead | null {
+  const read = readPackageLock(JSON.parse(readTextFile(file)));
+  if (read.instances.size === 0 && read.uncheckable.length === 0) return null;
+  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [] };
+}
+
+function resolveNpm(cwd: string): VersionSource {
+  let chosen: { name: string; file: string; read: NpmLockRead } | null = null;
+  const others: string[] = [];
+  for (const reader of NPM_LOCK_READERS) {
+    const file = path.join(cwd, reader.name);
+    if (!fs.existsSync(file)) continue;
+    if (chosen) {
+      others.push(reader.name);
+      continue;
+    }
+    try {
+      const read = reader.read(file, cwd);
+      if (read) chosen = { name: reader.name, file, read };
+    } catch { /* unreadable: the next lockfile; unreadLockfiles names this one and why */ }
   }
+
+  if (chosen) {
+    const { file, read } = chosen;
+    const problems = [...read.problems, ...lockfileConflicts(cwd, chosen, others)];
+    return found(read.versions, read.instances, file, "lockfile", {
+      ...(read.uncheckable.length > 0 ? { uncheckable: read.uncheckable.map((u) => ({ ...u, file })) } : {}),
+      ...(read.aliases && read.aliases.size > 0 ? { aliases: read.aliases } : {}),
+      ...(problems.length > 0 ? { problems } : {}),
+    });
+  }
+
+  // No readable lockfile. A binary bun.lockb pins everything, but not in a form this server reads.
+  const bunBinary = path.join(cwd, BUN_BINARY_LOCK);
+  const problems: LockfileProblem[] = fs.existsSync(bunBinary)
+    ? [
+        {
+          file: bunBinary,
+          error:
+            "bun.lockb is Bun's binary lockfile, which this server cannot read: run `bun install --save-text-lockfile` (Bun 1.2 or later) to write bun.lock, then scan again",
+        },
+      ]
+    : [];
 
   // No lockfile: package.json declares ranges, not installed versions.
   const pkgPath = path.join(cwd, "package.json");
   if (fs.existsSync(pkgPath)) {
     const declared = new Map<string, string>();
+    const uncheckable: NonRegistryEntry[] = [];
+    const aliases = new Map<string, string>();
     try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const pkg = JSON.parse(readTextFile(pkgPath));
       for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
-        if (typeof spec === "string") declared.set(name, spec);
+        if (typeof spec !== "string") continue;
+        // `"x": "github:user/repo"` or a tarball URL is not a version of the registry's x.
+        const other = nonRegistrySource(spec, spec);
+        if (other === "local") continue;
+        // `"my-lodash": "npm:lodash@4.17.20"` declares lodash, under another folder name.
+        const alias = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(.+)$/.exec(spec.trim());
+        if (other) uncheckable.push({ name, version: null, kind: other });
+        else if (alias && NPM_NAME.test(alias[1])) {
+          declared.set(alias[1], alias[2]);
+          aliases.set(name, alias[1]);
+        } else declared.set(name, spec);
       }
     } catch { /* skip */ }
     // npm installs exactly "1.2.3" (or "=1.2.3"); anything else is a range.
-    return declaredRanges(declared, (spec) => /^=?v?\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(spec.trim()), pkgPath);
+    const read = declaredRanges(declared, (spec) => /^=?v?\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(spec.trim()), pkgPath);
+    return {
+      ...read,
+      ...(uncheckable.length > 0 ? { uncheckable: uncheckable.map((u) => ({ ...u, file: pkgPath })) } : {}),
+      ...(aliases.size > 0 ? { aliases } : {}),
+      ...(problems.length > 0 ? { problems } : {}),
+    };
   }
 
-  return emptySource();
+  return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
+}
+
+/** How many differing names a conflict note spells out. */
+const CONFLICT_EXAMPLES = 3;
+
+/**
+ * The other lockfiles in a directory whose lockfile was read, when they do
+ * not agree with it. One directory, two package managers' lockfiles: only one
+ * of them is what gets installed, and the reader took the first by rank
+ * without a word. Now the answer says which was read and that the other
+ * exists and pins something else (audit 2026-11-11).
+ *
+ * An empty lockfile beside a full one hides nothing and is not reported; one
+ * that cannot be parsed is, because it could not be compared.
+ */
+function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRead }, others: string[]): LockfileProblem[] {
+  const problems: LockfileProblem[] = [];
+  const pins = (read: NpmLockRead) => {
+    const byName = new Map<string, Set<string>>();
+    for (const i of read.instances.toArray()) byName.set(i.name, (byName.get(i.name) ?? new Set()).add(i.version));
+    return byName;
+  };
+  const mine = pins(chosen.read);
+  for (const name of others) {
+    const file = path.join(cwd, name);
+    let other: NpmLockRead | null = null;
+    let failure: string | null = null;
+    try {
+      other = NPM_LOCK_READERS.find((r) => r.name === name)?.read(file, cwd) ?? null;
+      if (!other) failure = describeParseError(file, null);
+    } catch (error) {
+      failure = describeParseError(file, error) ?? "could not be parsed";
+    }
+    if (!other) {
+      if (failure) problems.push({ file, conflict: true, error: `${chosen.name} was read instead, and this lockfile could not be compared with it: ${failure}` });
+      continue;
+    }
+    const theirs = pins(other);
+    const differing: string[] = [];
+    for (const pkg of new Set([...mine.keys(), ...theirs.keys()])) {
+      const a = [...(mine.get(pkg) ?? [])].sort();
+      const b = [...(theirs.get(pkg) ?? [])].sort();
+      if (a.join(",") !== b.join(",")) differing.push(`${pkg} ${b.join("/") || "absent"} here, ${a.join("/") || "absent"} in ${chosen.name}`);
+    }
+    if (differing.length === 0) continue;
+    differing.sort();
+    problems.push({
+      file,
+      conflict: true,
+      error: `${chosen.name} was read instead (it ranks first), and this lockfile pins a different set: ${differing.length} package${differing.length === 1 ? "" : "s"} differ (${differing.slice(0, CONFLICT_EXAMPLES).join("; ")}${differing.length > CONFLICT_EXAMPLES ? "; ..." : ""}). One of the two is stale and the scan cannot tell which: delete the one your package manager does not write`,
+    });
+  }
+  const bunBinary = path.join(cwd, BUN_BINARY_LOCK);
+  if (chosen.name !== "bun.lock" && fs.existsSync(bunBinary)) {
+    problems.push({
+      file: bunBinary,
+      conflict: true,
+      error: `${chosen.name} was read instead; bun.lockb is Bun's binary lockfile, which this server cannot read, so it could not be compared. If Bun installs this project, ${chosen.name} may be stale`,
+    });
+  }
+  return problems;
 }
 
 /** The package name a package-lock `packages` key installs: the segment after its LAST `node_modules/`. */
@@ -289,11 +460,23 @@ export function packageNameFromNodeModulesPath(lockPath: string): string {
 }
 
 interface LockEntry {
+  /** v2/v3: the package's real name, written when it differs from the folder (an alias, a git dependency). */
+  name?: string;
   version?: string;
+  resolved?: string;
   dev?: boolean;
   link?: boolean;
-  dependencies?: Record<string, LockEntry>;
+  dependencies?: Record<string, LockEntry | string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 }
+
+/** A registry package name, scoped or not. */
+const NPM_NAME = /^(?:@[a-z0-9~][a-z0-9._~-]*\/)?[a-z0-9~][a-z0-9._~-]*$/i;
+
+/** v1: `"version": "npm:lodash@4.17.20"` under the alias's key. */
+const V1_ALIAS = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(\d\S*)$/;
 
 /**
  * package-lock.json / npm-shrinkwrap.json, lockfile v1, v2 and v3.
@@ -304,21 +487,62 @@ interface LockEntry {
  * devDependencies (`devOptional` = also reachable as an optional runtime dep,
  * so runtime), which makes the dev scope of a TRANSITIVE known. v1 nests the
  * same information under `dependencies`.
+ *
+ * The folder is not always the package. An alias (`"my-lodash":
+ * "npm:lodash@4.17.20"`) installs lodash into node_modules/my-lodash: v2/v3
+ * write the real `name` on the entry, v1 writes the spec as the version. Both
+ * were read under the alias, so OSV was asked about `my-lodash` and answered
+ * "no advisories" for a vulnerable lodash (audit 2026-11-11, M9). And an entry
+ * resolved from git or an arbitrary URL is not a registry release at all:
+ * `uncheckable`, never an instance.
  */
 export function readPackageLock(lock: {
   packages?: Record<string, LockEntry>;
   dependencies?: Record<string, LockEntry>;
-}): { versions: Map<string, string>; instances: InstanceSet } {
+}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string> } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
+  const uncheckable: NonRegistryEntry[] = [];
+  const aliases = new Map<string, string>();
 
   if (lock.packages) {
+    // What asked for each name, to tell a URL dependency from a registry with tarball paths of its own.
+    const requested = new Map<string, string[]>();
+    for (const entry of Object.values(lock.packages)) {
+      for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const) {
+        for (const [name, spec] of Object.entries(entry?.[field] ?? {})) {
+          if (typeof spec === "string") requested.set(name, [...(requested.get(name) ?? []), spec]);
+        }
+      }
+    }
+    const urlRequested = (folder: string): string | undefined => {
+      const specs = requested.get(folder) ?? [];
+      return specs.length > 0 && specs.every((s) => nonRegistrySource(s, s) !== null) ? specs[0] : undefined;
+    };
+
+    const hoistedAliases: Array<[string, string]> = [];
     for (const [key, value] of Object.entries(lock.packages)) {
-      const name = packageNameFromNodeModulesPath(key);
-      if (!name || !value || value.link || !value.version) continue;
+      const folder = packageNameFromNodeModulesPath(key);
+      if (!folder || !value || value.link) continue;
+      const name = typeof value.name === "string" && NPM_NAME.test(value.name) ? value.name : folder;
+      const other = typeof value.resolved === "string" ? nonRegistrySource(value.resolved, urlRequested(folder)) : null;
+      if (other) {
+        if (other !== "local") uncheckable.push({ name, version: value.version ?? null, kind: other });
+        continue;
+      }
+      if (!value.version) continue;
       instances.add(name, value.version, value.dev === true);
       // The hoisted root copy is what `require(name)` from the project resolves to.
-      if (key === `node_modules/${name}`) versions.set(name, value.version);
+      if (key !== `node_modules/${folder}`) continue;
+      if (name === folder) versions.set(name, value.version);
+      else {
+        aliases.set(folder, name);
+        hoistedAliases.push([name, value.version]);
+      }
+    }
+    // An aliased copy speaks for its package only when the package is not also installed under its own name.
+    for (const [name, version] of hoistedAliases) {
+      if (!versions.has(name)) versions.set(name, version);
     }
     // A workspace package's own nested copy (packages/x/node_modules/a) when nothing is hoisted.
     for (const instance of instances.toArray()) {
@@ -326,20 +550,37 @@ export function readPackageLock(lock: {
     }
   }
 
-  if (instances.size === 0 && lock.dependencies) {
-    const walk = (deps: Record<string, LockEntry>, topLevel: boolean) => {
-      for (const [name, value] of Object.entries(deps)) {
-        if (value?.version && /^\d/.test(value.version)) {
-          instances.add(name, value.version, value.dev === true);
-          if (topLevel) versions.set(name, value.version);
+  if (instances.size === 0 && uncheckable.length === 0 && lock.dependencies) {
+    const topAliases: Array<[string, string]> = [];
+    const walk = (deps: Record<string, LockEntry | string>, topLevel: boolean) => {
+      for (const [folder, value] of Object.entries(deps)) {
+        if (!value || typeof value !== "object") continue;
+        const version = typeof value.version === "string" ? value.version : "";
+        const alias = V1_ALIAS.exec(version);
+        if (alias && NPM_NAME.test(alias[1])) {
+          instances.add(alias[1], alias[2], value.dev === true);
+          if (topLevel) {
+            aliases.set(folder, alias[1]);
+            topAliases.push([alias[1], alias[2]]);
+          }
+        } else if (/^\d/.test(version)) {
+          instances.add(folder, version, value.dev === true);
+          if (topLevel) versions.set(folder, version);
+        } else if (version) {
+          // v1 writes a git or URL dependency's location as its version.
+          const other = nonRegistrySource(version, version);
+          if (other && other !== "local") uncheckable.push({ name: folder, version: null, kind: other });
         }
-        if (value?.dependencies) walk(value.dependencies, false);
+        if (value.dependencies) walk(value.dependencies, false);
       }
     };
     walk(lock.dependencies, true);
+    for (const [name, version] of topAliases) {
+      if (!versions.has(name)) versions.set(name, version);
+    }
   }
 
-  return { versions, instances };
+  return { versions, instances, uncheckable, aliases };
 }
 
 // =============================================================================
@@ -373,6 +614,64 @@ export function parseCargoLockPackages(content: string): CargoPackage[] {
   return packages;
 }
 
+/** The line shapes cargo writes into a Cargo.lock (lockfile 1 to 4), trimmed. Anything else is not lockfile syntax. */
+const CARGO_LOCK_LINES = [
+  /^#/,
+  /^version\s*=\s*\d+$/,
+  /^\[\[[A-Za-z0-9_.-]+\]\]$/,
+  /^\[[A-Za-z0-9_.-]+\]$/,
+  /^(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*")\s*=\s*"(?:[^"\\]|\\.)*"$/,
+  /^[A-Za-z0-9_-]+\s*=\s*\[(?:.*\])?$/,
+  /^"(?:[^"\\]|\\.)*",?$/,
+  /^\]$/,
+];
+
+/**
+ * Why a Cargo.lock is not the whole file cargo wrote, or null when nothing
+ * says so. A lockfile cut short still parses table by table, so a truncated
+ * one read as 14 of its 85 packages with no notice (audit 2026-11-11, M12).
+ *
+ * Three signs, each absent from every file cargo writes: a line that is not
+ * lockfile syntax (an unterminated string, a half-written table header), a
+ * `[[package]]` table with no name or version, and a package named in some
+ * `dependencies` list that has no table of its own. The last one catches a
+ * file cut cleanly between two tables.
+ */
+export function cargoLockDamage(content: string, packages: CargoPackage[] = parseCargoLockPackages(content)): LockDamage | null {
+  const malformed: number[] = [];
+  let arrayOpen = false;
+  content.split(/\r?\n/).forEach((raw, index) => {
+    const text = raw.trim();
+    if (text === "" || text.length > MAX_LOCKFILE_LINE) return;
+    if (!CARGO_LOCK_LINES.some((shape) => shape.test(text))) malformed.push(index + 1);
+    else if (/=\s*\[$/.test(text)) arrayOpen = true;
+    else if (text === "]") arrayOpen = false;
+  });
+  const tables = content.split(/^\[\[package\]\]\s*$/m).length - 1;
+  const nameless = tables - packages.length;
+  const names = new Set(packages.map((pkg) => pkg.name));
+  const dangling = new Set<string>();
+  for (const pkg of packages) {
+    for (const dep of pkg.dependencies) {
+      const name = dep.split(" ")[0];
+      if (name && !names.has(name)) dangling.add(name);
+    }
+  }
+
+  const parts: string[] = [];
+  if (malformed.length > 0) {
+    parts.push(`line${malformed.length === 1 ? "" : "s"} ${malformed.slice(0, 5).join(", ")}${malformed.length > 5 ? ", ..." : ""} ${malformed.length === 1 ? "is" : "are"} not lockfile syntax`);
+  }
+  if (arrayOpen) parts.push("its last `dependencies` list is not closed");
+  if (nameless > 0) parts.push(`${nameless} [[package]] table${nameless === 1 ? " has" : "s have"} no name or version`);
+  if (dangling.size > 0) {
+    const list = [...dangling].sort();
+    parts.push(`${dangling.size} package${dangling.size === 1 ? "" : "s"} named as ${dangling.size === 1 ? "a dependency has" : "dependencies have"} no [[package]] table (${list.slice(0, 3).join(", ")}${list.length > 3 ? ", ..." : ""})`);
+  }
+  if (parts.length === 0) return null;
+  return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: dangling.size + Math.max(0, nameless) };
+}
+
 function resolveRust(cwd: string): VersionSource {
   const lockPath = path.join(cwd, "Cargo.lock");
   if (!fs.existsSync(lockPath)) {
@@ -381,8 +680,12 @@ function resolveRust(cwd: string): VersionSource {
 
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
+  const problems: LockfileProblem[] = [];
   try {
-    const packages = parseCargoLockPackages(fs.readFileSync(lockPath, "utf-8"));
+    const content = readTextFile(lockPath);
+    const packages = parseCargoLockPackages(content);
+    const damage = cargoLockDamage(content, packages);
+    if (damage) problems.push(damagedProblem(lockPath, damage));
     const versionsByName = new Map<string, string[]>();
     // Cargo writes `source` on every registry or git package. In a file it
     // wrote, a package with none is a workspace member or path dependency:
@@ -411,7 +714,7 @@ function resolveRust(cwd: string): VersionSource {
     }
   } catch { /* skip */ }
 
-  return found(versions, instances, lockPath, "lockfile");
+  return found(versions, instances, lockPath, "lockfile", problems.length > 0 ? { problems } : {});
 }
 
 function resolveRustFromManifest(cwd: string): VersionSource {
@@ -424,7 +727,7 @@ function resolveRustFromManifest(cwd: string): VersionSource {
     // only: [package]'s own `version = "0.1.0"` and `edition = "2021"` were read
     // as crates named "version" and "edition".
     let inDeps = false;
-    for (const line of fs.readFileSync(cargoPath, "utf-8").split(/\r?\n/)) {
+    for (const line of readTextFile(cargoPath).split(/\r?\n/)) {
       const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
       if (header) {
         inDeps = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(header[1].trim());
@@ -448,7 +751,7 @@ function resolveRustFromManifest(cwd: string): VersionSource {
 /** package.json dependency ranges (all dependency fields), or none when unreadable. */
 function manifestRanges(cwd: string): Array<[string, string]> {
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8"));
+    const pkg = JSON.parse(readTextFile(path.join(cwd, "package.json")));
     const out: Array<[string, string]> = [];
     for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
       for (const [name, range] of Object.entries(pkg[field] ?? {})) {

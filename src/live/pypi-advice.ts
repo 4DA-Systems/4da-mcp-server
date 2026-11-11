@@ -33,6 +33,7 @@ import {
   type CompiledRequirements,
 } from "./lockfile-parsers-pygo.js";
 import { isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
+import { readTextFile } from "./text-file.js";
 
 /** A relative path of plain segments (`requirements.in`, `requirements/dev.txt`): no `..`, no root, no drive, nothing a shell expands. */
 function isPlainPath(file: string): boolean {
@@ -41,7 +42,7 @@ function isPlainPath(file: string): boolean {
 
 function readText(file: string): string | null {
   try {
-    return fs.readFileSync(file, "utf-8");
+    return readTextFile(file);
   } catch {
     return null;
   }
