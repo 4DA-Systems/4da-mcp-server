@@ -53,6 +53,74 @@
 - **The first scan after updating fetches again, once.** The scan cache moves to
   `osv:v4` and the fix-path cache to version 12, since entries written by 6.2.7
   hold the old grades and range readings.
+- **A lockfile `.gitignore` lists is scanned, and what is not scanned is
+  listed.** A project whose `.gitignore` named `package-lock.json` read "5
+  dependencies, 0 vulnerable" with no `coverage` block while
+  `backend/package-lock.json` held 750 packages and 171 advisories; lockfiles
+  in dot-directories (`.github/actions/*`, `.design-system`) were skipped the
+  same way. A lockfile is what is installed, so it is read whether or not it is
+  committed, and a dot-directory is a directory like any other. A directory
+  `.gitignore` excludes is still not scanned (it is as often a scratch clone as
+  the project's own code), and installed code, build output, caches and tool
+  state (`node_modules`, `target`, `dist`, `.venv`, `.tox`, `.git`, `.claude`
+  ...) are never entered; every lockfile found in an ignored directory, or
+  sitting directly in a `build/`-style one, is listed by path under
+  `coverage.not_scanned.lockfiles` with `coverage.complete: false`.
+  `_meta.resolution.lockfiles` marks a file read although gitignored.
+- **A manifest with no lockfile is never a clean result.** Exact pins in a
+  `package.json` or `Cargo.toml` with no lockfile were checked and the answer
+  said nothing more: `next 15.5.29` alone read "3 dependencies, 0 vulnerable"
+  while the postcss it installs has four advisories. The answer now says the
+  transitive tree was not resolved (`coverage.unresolved_manifests`). A
+  manifest in a subdirectory that no lockfile above holds as a workspace
+  member is listed (`coverage.manifests_without_lockfile`), a binary
+  `bun.lockb` is named as unreadable, and `environment.yml`, a `setup.py` with
+  `install_requires`, a `pylock.toml` and a `Pipfile` with no `Pipfile.lock`
+  are named under `coverage.not_covered`. A `pyproject.toml` with no lockfile
+  lists its dependencies as not checked instead of advising `poetry install`.
+- **A requirement with no pinned version reads NOT CHECKED.** `pydantic>=2.0.0`
+  gave "pydantic unknown (direct): no known advisories", and a requirements
+  file that pins nothing was said to "pin only the packages listed". Such
+  requirements are listed in `coverage.unpinned_requirements`; when nothing at
+  all was scanned the totals are null, not 0.
+- **Two lockfiles in one directory: the answer says which was read.** With a
+  `package-lock.json` and a `yarn.lock` (or pnpm, Bun) side by side, the first
+  by rank was read without a word. The other is now compared and, when it pins
+  a different set, named in `coverage.conflicting_lockfiles` with the packages
+  that differ.
+- **npm aliases in package-lock.json are scanned as the package they install.**
+  `"my-lodash": "npm:lodash@4.17.20"` was sent to OSV as `my-lodash` and read
+  "no known advisories", in lockfile versions 1, 2 and 3. The entry's real name
+  (v2, v3) or its `npm:` spec (v1) is used, and the dependency stays direct.
+- **Git and URL dependencies are not matched as registry packages.** A
+  `bignumber.js@2.0.7` resolved from `git+ssh://` was checked as npm's
+  `bignumber.js 2.0.7`. Dependencies installed from git, a URL or a local
+  archive (package-lock.json, yarn.lock, pnpm, Bun, uv, Poetry, Pipfile.lock,
+  requirements files) are listed in `coverage.not_checkable` and never sent to
+  OSV under the registry name. Their location is not echoed. Cargo git sources
+  are unchanged (the shared conformance truth counts them).
+- **Damaged and oddly encoded files are not read as less, silently.** A UTF-16
+  `requirements.txt` (what Windows PowerShell 5 writes for `pip freeze >`) gave
+  0 dependencies, and a UTF-8 byte-order mark made a valid `package-lock.json`
+  "invalid JSON": both are decoded. A truncated `Cargo.lock` read as 14 of 85
+  packages and a truncated `pnpm-lock.yaml` as 17 of 93 with no notice: a
+  lockfile that is cut short or damaged (also `yarn.lock`, `poetry.lock`,
+  `uv.lock`, `pdm.lock`) is reported in `coverage.partial_lockfiles` with what
+  gives it away. On about 200 whole lockfiles (the conformance corpus and
+  local repositories) the checks flag none.
+- **The stored scan is at most one hour old.** The server lives as long as the
+  IDE, and the scan `what_should_i_know`, `upgrade_planner` and
+  `dependency_health` reuse never aged. Past an hour it is taken again; if that
+  fails the answer is NOT CHECKED, never the old scan.
+- **An advisory whose record could not be fetched is NOT CHECKED, not
+  "unknown, no fix".** One failed detail fetch turned a critical into
+  `unknown` with no fix version and cached that for an hour. Such a row now
+  carries `details: "NOT CHECKED"`, is never dropped by `severity_filter`, is
+  not worded as "no fix version published", makes the answer incomplete
+  (`coverage.details_unchecked`, in every tool), and is not cached.
+- **Every page of an OSV answer is read.** `next_page_token` from querybatch
+  was ignored. It is followed; a dependency whose later pages cannot be had is
+  unanswered, not recorded with its first page.
 
 ## 6.2.7 — 2026-11-08
 

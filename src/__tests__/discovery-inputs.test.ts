@@ -166,7 +166,8 @@ describe("no lockfile: declared ranges are labelled, never scanned as installs",
     const group = resolveGroup({ dir, language: "rust", deps: ["wasm-bindgen", "futures", "once"], devDeps: [], targets: {} });
     expect(group.audit.map((d) => `${d.name}@${d.version}`)).toEqual(["once@1.2.3"]);
     expect(group.resolved.find((d) => d.name === "wasm-bindgen")).toMatchObject({ version: "0.2.63", declaredRange: "0.2.63" });
-    expect(group.unresolved).toEqual({ manifest: path.join(dir, "Cargo.toml"), ranges: 2 });
+    // The exact pin is checked as declared; what it depends on is resolved nowhere (`pinned`, audit 2026-11-11 M10).
+    expect(group.unresolved).toEqual({ manifest: path.join(dir, "Cargo.toml"), ranges: 2, pinned: 1 });
     expect(group.source?.kind).toBe("declared_ranges");
   });
 

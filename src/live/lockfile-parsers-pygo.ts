@@ -18,7 +18,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { emptySource, found, InstanceSet, type LockfileProblem, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
+import { readTextFile } from "./text-file.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -73,7 +74,7 @@ function includesRequirements(file: string): boolean {
   try {
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > MAX_SNIFF_BYTES) return false;
-    const content = fs.readFileSync(file, "utf-8");
+    const content = readTextFile(file);
     return /^\s*(?:-r|--requirement)[\s=]+\S+\.txt\s*$/m.test(content) && parseRequirements(content).length > 0;
   } catch {
     return false;
@@ -102,6 +103,8 @@ export function resolvePython(cwd: string): VersionSource {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const sources: string[] = [];
+  const uncheckable: UncheckableDependency[] = [];
+  const damaged: LockfileProblem[] = [];
   let lockfile = false;
   const take = (name: string, version: string, dev: boolean | undefined) => {
     instances.add(name, version, dev);
@@ -112,23 +115,40 @@ export function resolvePython(cwd: string): VersionSource {
     const lockPath = path.join(cwd, file);
     if (!fs.existsSync(lockPath)) continue;
     try {
-      const read = readTomlPackageLock(fs.readFileSync(lockPath, "utf-8"));
+      const content = readTextFile(lockPath);
+      const read = readTomlPackageLock(content);
+      for (const other of read.uncheckable) uncheckable.push({ ...other, file: lockPath });
       if (read.instances.size === 0) continue;
       for (const i of read.instances.toArray()) take(i.name, i.version, i.dev);
       sources.push(lockPath);
       lockfile = true;
+      const damage = tomlLockDamage(content);
+      if (damage) {
+        damaged.push({
+          file: lockPath,
+          partial: true,
+          ...(damage.missing > 0 ? { skipped: damage.missing } : {}),
+          error: `${damage.reason}. It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile`,
+        });
+      }
     } catch { /* unreadable: the next source */ }
   }
 
   const pipfileLock = path.join(cwd, "Pipfile.lock");
   if (fs.existsSync(pipfileLock)) {
     try {
-      const lock = JSON.parse(fs.readFileSync(pipfileLock, "utf-8"));
+      const lock = JSON.parse(readTextFile(pipfileLock));
       let any = false;
       for (const [section, dev] of [["default", false], ["develop", true]] as const) {
         for (const [name, info] of Object.entries(lock[section] ?? {})) {
-          const version = (info as { version?: string }).version?.replace(/^===?/, "");
-          if (!version) continue;
+          const entry = info as { version?: string; git?: string; file?: string; path?: string };
+          const version = entry.version?.replace(/^===?/, "");
+          if (!version) {
+            // `{"git": "https://…", "ref": "…"}` or `{"file": "https://…/x.whl"}`: installed, but not an index release.
+            if (typeof entry.git === "string") uncheckable.push({ name: normalizePythonName(name), version: null, kind: "git", file: pipfileLock });
+            else if (typeof entry.file === "string" && /^https?:/i.test(entry.file)) uncheckable.push({ name: normalizePythonName(name), version: null, kind: "url", file: pipfileLock });
+            continue;
+          }
           take(normalizePythonName(name), version, dev);
           any = true;
         }
@@ -141,19 +161,36 @@ export function resolvePython(cwd: string): VersionSource {
   }
 
   const collected: LockfileProblem[] = [];
+  const extras: RequirementExtras = { unpinned: [], uncheckable: [] };
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
-    const pins = readRequirementsFile(file, new Set(), cwd, collected);
+    const pins = readRequirementsFile(file, new Set(), cwd, collected, extras);
     if (pins === null) continue;
     for (const { name, version } of pins) take(name, version, dev);
     sources.push(file);
   }
+  uncheckable.push(...extras.uncheckable);
   // One problem per file, however many requirement files name it.
-  const problems = [...new Map(collected.map((p) => [p.file.toLowerCase(), p])).values()];
+  const problems = [...new Map([...damaged, ...collected].map((p) => [p.file.toLowerCase(), p])).values()];
+  // A name some other file here pins exactly has a version to check: only what nothing pins is unpinned.
+  const unpinnedByFile = new Map<string, Set<string>>();
+  for (const { file, name } of extras.unpinned) {
+    if (versions.has(name)) continue;
+    unpinnedByFile.set(file, (unpinnedByFile.get(file) ?? new Set()).add(name));
+  }
+  const unpinned = [...unpinnedByFile].map(([file, names]) => ({ file, names: [...names] }));
+  const extra = {
+    ...(uncheckable.length > 0 ? { uncheckable: dedupeUncheckable(uncheckable) } : {}),
+    ...(unpinned.length > 0 ? { unpinned } : {}),
+    ...(problems.length > 0 ? { problems } : {}),
+  };
 
-  if (sources.length === 0) return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
-  const read = found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1) });
-  return problems.length > 0 ? { ...read, problems } : read;
+  if (sources.length === 0) return { ...emptySource(), ...extra };
+  return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1), ...extra });
+}
+
+function dedupeUncheckable(list: UncheckableDependency[]): UncheckableDependency[] {
+  return [...new Map(list.map((u) => [`${u.file.toLowerCase()}|${u.name}|${u.version ?? ""}|${u.kind}`, u])).values()];
 }
 
 /**
@@ -176,18 +213,25 @@ export function readRequirementsFile(
   visited: Set<string> = new Set(),
   root: string = path.dirname(path.resolve(file)),
   problems: LockfileProblem[] = [],
+  extras?: RequirementExtras,
 ): Array<{ name: string; version: string }> | null {
   const key = path.resolve(file).toLowerCase();
   if (visited.has(key)) return [];
   visited.add(key);
   let content: string;
   try {
-    content = fs.readFileSync(file, "utf-8");
+    content = readTextFile(file);
   } catch {
     return null;
   }
   const dir = path.dirname(file);
   const out = parseRequirements(content);
+  if (extras) {
+    // What this file lists but does not pin: a name with a range or no version, a git or URL requirement.
+    const listed = unpinnedRequirements(content);
+    for (const name of listed.names) extras.unpinned.push({ file: path.resolve(file), name });
+    for (const other of listed.direct) extras.uncheckable.push({ ...other, version: null, file: path.resolve(file) });
+  }
   const overlong = overlongRequirementLines(content);
   if (overlong > 0) {
     problems.push({
@@ -203,12 +247,12 @@ export function readRequirementsFile(
       problems.push(refusedInclude(file, option, target));
       continue;
     }
-    if (option === "r") out.push(...(readRequirementsFile(included, visited, root, problems) ?? []));
+    if (option === "r") out.push(...(readRequirementsFile(included, visited, root, problems, extras) ?? []));
     else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {
     const pinned = new Set(out.map((p) => p.name));
-    for (const name of unpinnedRequirementNames(content)) {
+    for (const name of unpinnedRequirements(content).names) {
       const version = constraints.get(name);
       if (version && !pinned.has(name)) out.push({ name, version });
     }
@@ -297,7 +341,7 @@ function overlongRequirementLines(content: string): number {
 
 function safeRead(file: string): string {
   try {
-    return fs.readFileSync(file, "utf-8");
+    return readTextFile(file);
   } catch {
     return "";
   }
@@ -438,18 +482,68 @@ function viaInput(via: Map<string, string[]>): string | null {
   return sources.size === 1 ? [...sources][0] : null;
 }
 
-/** Names a requirements file lists with no exact pin ("flask", "flask>=2"), PEP 503 normalised. */
-function unpinnedRequirementNames(content: string): string[] {
-  const out: string[] = [];
+/** What requirement files list without pinning, gathered while they are read (resolvePython). */
+export interface RequirementExtras {
+  /** A name with a range or no version at all: nothing installed can be read from the line. */
+  unpinned: Array<{ file: string; name: string }>;
+  /** A requirement installed from git or a URL: not a release of the index package. */
+  uncheckable: UncheckableDependency[];
+}
+
+/**
+ * What a requirements file lists with no exact pin, PEP 503 normalised:
+ * `names` ("flask", "flask>=2", "urllib3~=1.26.0") and `direct` references,
+ * which install from git or a URL (`pkg @ git+https://…`, `-e git+…#egg=pkg`,
+ * a bare archive URL) and are no release of the index package.
+ *
+ * `pydantic>=2.0.0` used to vanish here: no pin, so nothing was sent to OSV,
+ * and the answer read "pydantic unknown (direct): no known advisories" (audit
+ * 2026-11-11, T4). The line names a dependency with no installed version to
+ * check; that is "not checked", never "no advisories".
+ */
+export function unpinnedRequirements(content: string): { names: string[]; direct: Array<{ name: string; kind: "git" | "url" }> } {
+  const names: string[] = [];
+  const direct: Array<{ name: string; kind: "git" | "url" }> = [];
+  const kindOf = (location: string): "git" | "url" => (/^git\+|\.git(?:[@#]|$)/i.test(location) ? "git" : "url");
   for (const raw of requirementLines(content)) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
-    if (!line || line.startsWith("-")) continue;
+    if (!line) continue;
+    // `-e git+https://host/repo.git#egg=name` / `--editable <url>`: the egg fragment names it. A local path is the project's own code.
+    const editable = /^(?:-e|--editable)[\s=]+(\S+)/.exec(raw.trim());
+    if (editable) {
+      const egg = /[#&]egg=([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(editable[1]);
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(editable[1]) && !/^file:/i.test(editable[1])) {
+        direct.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1])), kind: kindOf(editable[1]) });
+      }
+      continue;
+    }
+    if (line.startsWith("-")) continue;
     const spec = line.split(";")[0].trim();
-    if (/===?/.test(spec)) continue;
-    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(spec);
-    if (m) out.push(normalizePythonName(m[1]));
+    // A bare URL requirement: the archive's name is all there is.
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(spec)) {
+      if (!/^file:/i.test(spec)) direct.push({ name: normalizePythonName(archiveName(spec)), kind: kindOf(spec) });
+      continue;
+    }
+    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(spec);
+    if (!m) continue;
+    // PEP 508 direct reference: `name @ https://…` or `name @ git+https://…`.
+    const reference = /^@\s*(\S+)/.exec(m[2]);
+    if (reference) {
+      if (!/^file:/i.test(reference[1])) direct.push({ name: normalizePythonName(m[1]), kind: kindOf(reference[1]) });
+      continue;
+    }
+    // `vendor/pkg.whl`: a local path, not a name.
+    if (/===?/.test(m[2]) || /^[\\/]/.test(m[2])) continue;
+    names.push(normalizePythonName(m[1]));
   }
-  return out;
+  return { names: [...new Set(names)], direct };
+}
+
+/** The package name an archive or repository URL ends in: `…/requests-2.25.0-py3-none-any.whl` -> requests, `…/repo.git@v1` -> repo. */
+function archiveName(url: string): string {
+  const last = url.split(/[?#]/)[0].replace(/\/+$/, "").split("/").pop() ?? url;
+  const stem = last.replace(/\.git(?:@.*)?$/i, "").replace(/@.*$/, "").replace(/\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar)$/i, "");
+  return /^([A-Za-z0-9][A-Za-z0-9._]*?)(?:-\d.*)?$/.exec(stem)?.[1] ?? stem;
 }
 
 /**
@@ -462,22 +556,30 @@ function unpinnedRequirementNames(content: string): string[] {
  * pydantic-extra-types 2.10.0 from git `main` (4DA conformance corpus).
  * poetry's `legacy` source is a private index, so its packages are releases.
  */
-function fromPackageIndex(block: string, body: string): boolean {
+function packageOrigin(block: string, body: string): "index" | "git" | "url" | "file" | "local" {
   const uv = /^source\s*=\s*\{\s*([a-z-]+)\s*=/m.exec(body)?.[1];
-  if (uv && uv !== "registry") return false;
+  if (uv && uv !== "registry") return uv === "git" ? "git" : uv === "url" ? "url" : uv === "path" ? "file" : "local";
   const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
   const poetryType = /^type\s*=\s*"([^"]*)"/m.exec(poetrySource)?.[1];
-  return !(poetryType && ["git", "url", "file", "directory"].includes(poetryType));
+  if (poetryType === "git" || poetryType === "url" || poetryType === "file") return poetryType;
+  return poetryType === "directory" ? "local" : "index";
 }
 
 /**
  * [[package]] tables from poetry.lock (any version) or uv.lock. A pre-1.2
  * poetry.lock records `category = "dev"` for dev-only packages; newer files
- * and uv.lock do not record scope here, so it stays unknown.
+ * and uv.lock do not record scope here, so it stays unknown. A package from
+ * git, a URL or a local archive is no index release: it is returned in
+ * `uncheckable`, never as an instance.
  */
-export function readTomlPackageLock(content: string): { versions: Map<string, string>; instances: InstanceSet } {
+export function readTomlPackageLock(content: string): {
+  versions: Map<string, string>;
+  instances: InstanceSet;
+  uncheckable: Array<{ name: string; version: string | null; kind: "git" | "url" | "file" }>;
+} {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
+  const uncheckable: Array<{ name: string; version: string | null; kind: "git" | "url" | "file" }> = [];
   for (const block of content.split(/^\[\[package\]\]\s*$/m).slice(1)) {
     // Stop at the next table header (e.g. [package.dependencies], [metadata]).
     const body = block.split(/^\[/m)[0];
@@ -485,13 +587,63 @@ export function readTomlPackageLock(content: string): { versions: Map<string, st
     const name = field("name");
     const version = field("version");
     if (!name || !version) continue;
-    if (!fromPackageIndex(block, body)) continue;
-    const category = field("category");
     const normalized = normalizePythonName(name);
+    const origin = packageOrigin(block, body);
+    if (origin !== "index") {
+      if (origin !== "local") uncheckable.push({ name: normalized, version, kind: origin });
+      continue;
+    }
+    const category = field("category");
     instances.add(normalized, version, category === null ? undefined : category === "dev");
     if (!versions.has(normalized)) versions.set(normalized, version);
   }
-  return { versions, instances };
+  return { versions, instances, uncheckable };
+}
+
+/**
+ * Why a poetry.lock, uv.lock or pdm.lock is not the whole file its tool
+ * wrote, or null when nothing says so: a `[[package]]` table with no name or
+ * version, or a string, array or inline table still open where the file ends.
+ * A lockfile cut short reads as fewer packages, with nothing else to show for
+ * it (audit 2026-11-11, M12).
+ */
+export function tomlLockDamage(content: string): { reason: string; missing: number } | null {
+  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1);
+  let nameless = 0;
+  for (const block of blocks) {
+    const body = block.split(/^\[/m)[0];
+    const named = /^name\s*=\s*"[^"]*"/m.test(body);
+    // uv writes no version for a project whose version is dynamic; that table is local code, never an index release.
+    const versioned = /^version\s*=\s*"[^"]*"/m.test(body) || packageOrigin(block, body) !== "index";
+    if (!named || !versioned) nameless++;
+  }
+  // Brackets and quotes over the file's last table: an open one means the file stops mid-value.
+  const tail = content.slice(Math.max(0, content.lastIndexOf("\n[")));
+  let depth = 0;
+  let quote: string | null = null;
+  let openString = false;
+  for (const line of tail.split(/\r?\n/)) {
+    if (line.trim() === "" || line.length > MAX_REQUIREMENT_LINE * 4) continue;
+    quote = null;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quote) {
+        if (ch === "\\" && quote === '"') i++;
+        else if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === "#") break;
+      else if (ch === "[" || ch === "{") depth++;
+      else if (ch === "]" || ch === "}") depth--;
+    }
+    // TOML basic strings do not span lines in a lockfile: a quote still open at the line's end is a cut.
+    openString = quote !== null;
+  }
+  // The table header's own brackets balance, so anything left open is a value.
+  const parts: string[] = [];
+  if (nameless > 0) parts.push(`${nameless} [[package]] table${nameless === 1 ? " has" : "s have"} no name or version`);
+  if (openString) parts.push("its last line ends inside a string");
+  else if (depth > 0) parts.push("its last array or table is not closed");
+  return parts.length > 0 ? { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: nameless } : null;
 }
 
 /**
@@ -533,7 +685,7 @@ export function resolveGo(cwd: string): VersionSource {
 
   let mod: ReturnType<typeof parseGoMod>;
   try {
-    mod = parseGoMod(fs.readFileSync(goModPath, "utf-8"));
+    mod = parseGoMod(readTextFile(goModPath));
   } catch {
     return emptySource();
   }
@@ -549,7 +701,7 @@ export function resolveGo(cwd: string): VersionSource {
     const goSumPath = path.join(cwd, "go.sum");
     if (fs.existsSync(goSumPath)) {
       try {
-        for (const [module, version] of selectedFromGoSum(fs.readFileSync(goSumPath, "utf-8"))) {
+        for (const [module, version] of selectedFromGoSum(readTextFile(goSumPath))) {
           if (!selected.has(module)) selected.set(module, version);
         }
       } catch { /* skip */ }
