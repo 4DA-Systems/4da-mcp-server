@@ -390,6 +390,13 @@ export function smallestCleanVersion(input: {
    * version does not have (the 4DA lead, 2026-10-18). Without it, as before (vectors that name none).
    */
   installed?: string | null;
+  /**
+   * Versions the registry was asked for by name and does not serve (fix-paths.ts versionExists): an
+   * advisory's fixed version above every listed release that turned out not to exist for this
+   * package or module path (go.etcd.io/etcd "3.4.44": Go major 3 is another module). Never a
+   * candidate, and named in `withheld`. Without it, as before (the shared vectors name none).
+   */
+  absent?: readonly string[];
 }): CleanTarget | null {
   // #994 review (both engines): a maintenance notice (unmaintained / deprecated package) never
   // blocks a target, never makes a release unclean, and never "introduces": it is not judged here.
@@ -411,9 +418,12 @@ export function smallestCleanVersion(input: {
   const listed = fromRegistry ? input.published!.filter((v) => isComparable(v, ecosystem)) : [];
   const ceiling = listed.length > 0 ? listed.reduce((max, v) => (cmp(v, max) > 0 ? v : max), listed[0]) : null;
   // A Go pseudo-version is never in the proxy's list, yet installable: never "unlisted" (second review W2).
-  const unlisted = (v: string) => ceiling !== null && cmp(v, ceiling) <= 0 && !isListedVersion(listed, v, ecosystem) && !isGoPseudoVersion(v, ecosystem);
+  const absent = input.absent ?? [];
+  const isAbsent = (v: string) => absent.length > 0 && isListedVersion(absent, v, ecosystem);
+  const unlisted = (v: string) =>
+    isAbsent(v) || (ceiling !== null && cmp(v, ceiling) <= 0 && !isListedVersion(listed, v, ecosystem) && !isGoPseudoVersion(v, ecosystem));
   const pool = fromRegistry
-    ? [...input.published!, ...fixes.filter((f) => ceiling !== null && cmp(f, ceiling) > 0)]
+    ? [...input.published!, ...fixes.filter((f) => ceiling !== null && cmp(f, ceiling) > 0 && !isAbsent(f))]
     : [floor, ...input.advisories.flatMap((a) => a.spans.map((s) => s.fixed).filter((f): f is string => f !== null))];
   const releases = [...new Set(pool)]
     .filter((v) => isComparable(v, ecosystem) && cmp(v, floor) >= 0 && (allowPre || !isPrereleaseVersion(v, ecosystem)))

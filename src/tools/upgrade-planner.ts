@@ -33,7 +33,7 @@ import { formatAppPlan, readAppPlan, scopeAppPlanSteps, type AppPlanResult } fro
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
-import { appTracksProject, liveIntelFor, resolveProjectScope } from "./project-scope.js";
+import { appTracksProject, liveIntelFor, resolveProjectScope, systemDirectoryProblem } from "./project-scope.js";
 import { reconcileDirectTargets, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
@@ -42,6 +42,7 @@ import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
+import { secondsText, withinCallBudget } from "../call-budget.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -203,8 +204,13 @@ function offeredUpgrade(dep: { ecosystem: string; currentVersion: string | null;
   return compareVersions(latest, dep.currentVersion, dep.ecosystem) > 0 ? latest : null;
 }
 
-/** How long a plan waits for its own OSV scan before answering CVE-blind (the scan keeps running). */
+/**
+ * How long a plan waits for its own OSV scan before answering CVE-blind (the scan keeps running).
+ * Inside a tool call the wait is what the call's budget has left (call-budget.ts), less
+ * PLAN_RESERVE_MS for the registry rows and fix paths that follow.
+ */
 const PLANNER_SCAN_TIMEOUT_MS = 60_000;
+const PLAN_RESERVE_MS = 9_000;
 
 const PROVENANCE_NOTE =
   "Point-in-time heuristic from local lockfiles plus live registry/OSV lookups. " +
@@ -322,13 +328,17 @@ async function executeStandalonePlanner(
   params: UpgradePlannerParams,
   liveIntel: LiveIntelligence | null,
 ): Promise<UpgradePlanResult> {
-  if (!liveIntel || !liveIntel.isInitialized()) {
+  // A server started in an operating-system directory scanned nothing (project-scope.ts): said, not "0 recommendations".
+  const refused = liveIntel?.getProjectRoot() ? systemDirectoryProblem(liveIntel.getProjectRoot()!) : null;
+  if (!liveIntel || !liveIntel.isInitialized() || refused) {
     return {
       generatedAt: new Date().toISOString(),
-      projectPath: process.cwd(),
+      projectPath: liveIntel?.getProjectRoot() ?? process.cwd(),
       totalDeps: 0,
       recommendations: [],
-      summary: "No project detected. Run from a directory with package.json, Cargo.toml, pyproject.toml, or go.mod.",
+      summary: refused
+        ? `Nothing was planned: the server was started in ${refused}`
+        : "No project detected. Run from a directory with package.json, Cargo.toml, pyproject.toml, or go.mod.",
       quickWins: 0,
       breakingChanges: 0,
       waitingOnUpstream: 0,
@@ -360,8 +370,8 @@ async function executeStandalonePlanner(
   // plan of every session CVE-blind (2026-10-03 agent eval). A plan that
   // includes dev dependencies must not read a scan that left them out, so
   // ensureVulnerabilities rescans at the wider scope when needed.
-  const vulnResult =
-    (await liveIntel.ensureVulnerabilities(root, PLANNER_SCAN_TIMEOUT_MS, { includeDev })) ?? liveIntel.getVulnerabilities();
+  const scanWaitMs = withinCallBudget(PLANNER_SCAN_TIMEOUT_MS, PLAN_RESERVE_MS);
+  const vulnResult = (await liveIntel.ensureVulnerabilities(root, scanWaitMs, { includeDev })) ?? liveIntel.getVulnerabilities();
   // include_dev: false: the summary counts the vulnerable devDependencies it left out, when the
   // scan read them; otherwise how many it did not check (readiness review 2026-10-17, finding 10).
   const devScanned = devDirect.length > 0 && liveIntel.lastScanIncludesDev();
@@ -389,7 +399,7 @@ async function executeStandalonePlanner(
     registryData
       .filter((d) => offeredUpgrade(d) !== null)
       .map((d) => ({ key: `${d.ecosystem}\0${d.name}\0${d.currentVersion ?? "unknown"}`, ecosystem: d.ecosystem, name: d.name, installed: d.currentVersion, offered: offeredUpgrade(d)! })),
-    OFFER_CHECK_BUDGET_MS,
+    withinCallBudget(OFFER_CHECK_BUDGET_MS, PLAN_RESERVE_MS / 2),
   );
   // Complete vulnerability data only: a partial scan (OSV.dev unreachable or
   // rate limited for some dependencies) ranks what it found and says the rest
@@ -399,7 +409,7 @@ async function executeStandalonePlanner(
   const coverage = vulnerabilityCoverage(vulnResult, {
     enabled: liveIntel.isEnabled(),
     expectedTotal: scopeTotal,
-    notLoaded: `the OSV.dev scan did not finish within ${PLANNER_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
+    notLoaded: `the OSV.dev scan did not finish within ${secondsText(scanWaitMs)} or OSV.dev was unreachable`,
   });
   // A project whose only manifests are ones this server does not read (pom.xml) has no data at all (audit 6.2.5 A-6).
   const nothingReadable = (vulnResult?.totalScanned ?? 0) === 0 && (liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0;
@@ -468,6 +478,9 @@ async function executeStandalonePlanner(
       } else {
         risk = riskOf(vulns.filter((v) => v.platformActive));
       }
+
+      const elsewhere = notBuiltIn(vulns, root);
+      if (platformActive && elsewhere) reasons.push(elsewhere);
 
       // The smallest version that fixes every fixable advisory: each
       // fixedVersion is already the fix on the installed release line.
@@ -595,7 +608,7 @@ async function executeStandalonePlanner(
       // The manifest directories that declare it: where its upgrade command runs (audit E8).
       fixPathInputs.set(rec, {
         fixes: vulns.map((v) => v.fixedVersion).filter((f): f is string => Boolean(f)),
-        sourceDirs: [...new Set(vulns.flatMap((v) => v.sourceDirs ?? []))],
+        sourceDirs: builtDirs(vulns),
         unfixed: unfixedGroups.map((g) => ({ id: g.best.vulnId, ids: [...g.ids] })),
       });
     } else if (vulnerable && action === "no_fix_available") {
@@ -640,6 +653,8 @@ async function executeStandalonePlanner(
         reasons.push("Affected code is gated behind a target not active on this platform");
       }
       const target = fixedVersions.length > 0 ? maxVersion(fixedVersions, first.ecosystem) : null;
+      const elsewhere = notBuiltIn(entries, root);
+      if (platformActive && elsewhere) reasons.push(elsewhere);
 
       const rec: UpgradeRecommendation = {
         package: first.package,
@@ -660,7 +675,7 @@ async function executeStandalonePlanner(
         const unfixed = groups.filter((g) => !g.members.some((m) => m.fixedVersion));
         fixPathInputs.set(rec, {
           fixes: fixedVersions,
-          sourceDirs: [...new Set(entries.flatMap((e) => e.sourceDirs ?? []))],
+          sourceDirs: builtDirs(entries),
           unfixed: unfixed.map((g) => ({ id: g.best.vulnId, ids: [...g.ids] })),
         });
       }
@@ -815,6 +830,26 @@ function populationNote(
   const total = includeDev ? versioned.length : versioned.length - devOnly;
   const dev = devOnly > 0 ? (includeDev ? "; dev-only copies included" : `; ${devOnly.toLocaleString("en-US")} dev-only cop${devOnly === 1 ? "y" : "ies"} left out`) : "";
   return `Planned over ${packages} vulnerable package${packages !== 1 ? "s" : ""} (${copies} installed cop${copies !== 1 ? "ies" : "y"}) in the full tree of ${total.toLocaleString("en-US")} installed${dev ? ` (${dev.slice(2)})` : ""}`;
+}
+
+/**
+ * Platform activity is per lockfile (dependency-set.ts): the directories that lock this copy
+ * without building it on this host, so the row's commands are read as being for the others.
+ */
+function notBuiltIn(entries: VulnerabilityEntry[], root: string): string | null {
+  const unbuilt = new Set(entries.flatMap((e) => e.platformInactiveDirs ?? []));
+  if (unbuilt.size === 0) return null;
+  const dirs = [...unbuilt].map((d) => relativeDir(d, root)).sort();
+  const built = builtDirs(entries).map((d) => relativeDir(d, root)).sort();
+  return `Built on this host in ${dirsLabel(built, (d) => d)} only: ${dirsLabel(dirs, (d) => d)} lock${dirs.length === 1 ? "s" : ""} the same version without building it here, so this step is not about ${dirs.length === 1 ? "it" : "them"}`;
+}
+
+/** The directories that pin these copies AND build them on this host: where a fix for this host applies. */
+function builtDirs(entries: VulnerabilityEntry[]): string[] {
+  const unbuilt = new Set(entries.flatMap((e) => e.platformInactiveDirs ?? []));
+  const all = [...new Set(entries.flatMap((e) => e.sourceDirs ?? []))];
+  const built = all.filter((d) => !unbuilt.has(d));
+  return built.length > 0 ? built : all;
 }
 
 /** "N known vulnerabilities (ids)", one per alias group. */

@@ -25,8 +25,27 @@ export function commonPathRoot(dirs: string[]): string | null {
   return common.length > 0 ? common.join("/") : null;
 }
 
+/**
+ * One entry per (ecosystem, name, version), with platform activity kept PER LOCKFILE.
+ *
+ * Whether a crate is built on this host is a fact about one lockfile's resolution, not about a
+ * name and a version. The merge ORs it across directories (a crate reachable via any active path
+ * is active: nothing a host may build is hidden), and it used to keep nothing else, so the entry
+ * could not say WHICH lockfile builds it. One lockfile that cannot be platform-resolved (a stale
+ * example lockfile: `cargo tree --locked` fails, so every crate there stays active) then switched
+ * the host-platform filter off for every crate it shares with the project's real lockfile, and the
+ * finding read as the project's (audit 2026-11-11).
+ *
+ * `sourceDirs` is still every directory that locks the copy (the inventory the conformance corpus
+ * scores per directory). `platformInactiveDirs` now names the ones among them that lock it WITHOUT
+ * building it here, so every answer can say where the copy counts and where it does not, and a fix
+ * is aimed at the directories that build it.
+ */
 export function dedupeDependencies(deps: ResolvedDependency[]): ResolvedDependency[] {
   const unique = new Map<string, ResolvedDependency>();
+  const add = (list: string[], dirs: readonly string[] | undefined) => {
+    for (const dir of dirs ?? []) if (!list.includes(dir)) list.push(dir);
+  };
   for (const dep of deps) {
     const key = `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
     const existing = unique.get(key);
@@ -40,16 +59,19 @@ export function dedupeDependencies(deps: ResolvedDependency[]): ResolvedDependen
       // beside platform_active: true (2026-10-02 agent eval).
       if (dep.platformActive && !existing.platformActive) existing.target = dep.target;
       else if (existing.platformActive === dep.platformActive) existing.target = existing.target ?? dep.target;
+      // The side that does not build it, when the two disagree: the directories seen so far, or this one's.
+      if (existing.platformActive !== dep.platformActive) {
+        add((existing.platformInactiveDirs ??= []), existing.platformActive ? dep.sourceDirs : existing.sourceDirs);
+      }
+      if (dep.platformInactiveDirs) add((existing.platformInactiveDirs ??= []), dep.platformInactiveDirs);
       existing.platformActive ||= dep.platformActive;
       // Union the provenance rather than discarding it — the same version can
       // legitimately be pinned by several workspaces, and the reader needs all
       // of them to know where to apply the fix.
-      for (const dir of dep.sourceDirs ?? []) {
-        if (!existing.sourceDirs.includes(dir)) existing.sourceDirs.push(dir);
-      }
+      add(existing.sourceDirs, dep.sourceDirs);
       mergeInstallContext(existing, dep);
     } else {
-      unique.set(key, { ...dep, sourceDirs: [...(dep.sourceDirs ?? [])] });
+      unique.set(key, { ...dep, sourceDirs: [...(dep.sourceDirs ?? [])], ...(dep.platformInactiveDirs ? { platformInactiveDirs: [...dep.platformInactiveDirs] } : {}) });
     }
   }
   return [...unique.values()];

@@ -65,6 +65,9 @@ import { DATABASE_FREE_TOOLS, dispatchTool } from "./tool-dispatch.js";
 import { SqliteUnavailableError, sqliteDriverStatus } from "./sqlite-driver.js";
 import { getPrompt, listPrompts } from "./prompts.js";
 import { checkBuildStaleness } from "./build-staleness.js";
+import { configureProxy } from "./proxy.js";
+import { systemDirectoryProblem } from "./tools/project-scope.js";
+import { MAX_DEPTH, MAX_PROJECTS } from "./project-tree.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -134,7 +137,12 @@ function getDatabase(): FourDADatabase {
       const cwd = resolveProjectDir();
       // The root and every independently-locked project below it
       // (project-tree.ts): a repo root's own lockfile is often not the only one.
-      const { entries: tree, discovery } = scanProjectTree(cwd);
+      const { entries: tree, discovery } = projectTreeFor(cwd);
+      if (tree.length === 0) {
+        // A system directory: nothing is scanned (projectTreeFor). The tools say so and ask for project_path.
+        liveIntel.initFromProjectTree(cwd, [], discovery);
+        return db;
+      }
       const scan = tree[0].scan;
       db.populateFromScan(scan);
       const groups = treeResolutionGroups(tree);
@@ -222,7 +230,7 @@ function getDatabase(): FourDADatabase {
           // app's database. Without this every tool read the project as empty
           // and the planner answered "0 steps" (audit 6.2.5 D-1).
           const root = resolveProjectDir();
-          const { entries: tree, discovery } = scanProjectTree(root);
+          const { entries: tree, discovery } = projectTreeFor(root);
           liveIntel.initFromProjectTree(root, treeResolutionGroups(tree), discovery);
           console.error(`[4DA]   The 4DA app tracks no project at ${root}; reading its lockfiles directly.`);
         }
@@ -267,7 +275,7 @@ function initWithoutDatabase(): void {
   liveIntel = new LiveIntelligence(null);
   setLiveIntelligence(liveIntel);
   const cwd = resolveProjectDir();
-  const { entries, discovery } = scanProjectTree(cwd);
+  const { entries, discovery } = projectTreeFor(cwd);
   const groups = treeResolutionGroups(entries);
   console.error(`[4DA] No SQLite driver: the dependency tools run without a database (${cwd}).`);
   // Kept with no groups too: the coverage notes come from the walk (H3).
@@ -296,6 +304,20 @@ function databaseFor(tool: string): FourDADatabase | null {
     initWithoutDatabase();
     return null;
   }
+}
+
+/**
+ * The project tree under `dir`, or nothing when `dir` is an operating-system directory. Hosts
+ * start servers wherever they happen to be: `C:\Windows\System32`, `/`. Walking one read every
+ * lockfile below it and sent each package to OSV.dev and the registries (audit 2026-11-11, M15:
+ * 2,122 package pairs from System32). Nothing is scanned there; the tools say why and ask for
+ * `project_path`.
+ */
+function projectTreeFor(dir: string): ReturnType<typeof scanProjectTree> {
+  const refused = systemDirectoryProblem(dir);
+  if (!refused) return scanProjectTree(dir);
+  console.error(`[4DA] ${refused}`);
+  return { entries: [], discovery: { projects: 0, maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS, skipped: [], skippedCount: 0, walkTruncated: false } };
 }
 
 /** Standalone vs desktop-app database, decided once by the cheap probe (no scan, no resolution). */
@@ -389,6 +411,8 @@ export function buildServer(): Server {
 
   // Execute a tool
   server.setRequestHandler("tools/call", async (request) => {
+    // The call's time budget counts from here: the first call of a session also pays for the project scan.
+    const startedAt = Date.now();
     const { name, arguments: args } = request.params;
 
     // An unknown tool NAME is a JSON-RPC Invalid Params error (MCP spec), not
@@ -410,7 +434,7 @@ export function buildServer(): Server {
 
     try {
       const database = databaseFor(name);
-      const result = await dispatchTool(name, database, args as Record<string, unknown> | undefined);
+      const result = await dispatchTool(name, database, args as Record<string, unknown> | undefined, { startedAt });
       const note = database?.takeCreationNote() ?? null;
       return note ? withDatabaseNote(result, note) : result;
     } catch (error) {
@@ -511,6 +535,10 @@ async function main() {
   Environment:
     FOURDA_DB_PATH      Path to 4DA's SQLite database (auto-detected if omitted)
     FOURDA_OFFLINE      Set to "true" to disable all network calls (OSV.dev, HN)
+    FOURDA_CALL_BUDGET_MS  Time one tool call may take (default 20000). Past it the
+                        call is answered NOT CHECKED; its lookups run on and are cached.
+    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Used on Node 24.14+; on Node 22.21+ when the
+                        server is started with NODE_USE_ENV_PROXY=1 (see the README).
     MCP_AUTH_SECRET     Shared secret for verifying relay-issued Bearer tokens
                         (HMAC-SHA256). Falls back to JWT_SECRET. Without it, no
                         token is accepted.
@@ -538,6 +566,10 @@ async function main() {
     runDoctor();
     return;
   }
+
+  // HTTPS_PROXY / HTTP_PROXY: turned on where this Node can, and said either way (proxy.ts).
+  const proxy = configureProxy();
+  if (proxy.note) console.error(`[4DA] ${proxy.note}`);
 
   // HTTP transport mode
   if (args.includes("--http")) {

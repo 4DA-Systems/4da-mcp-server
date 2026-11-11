@@ -64,6 +64,67 @@ export function npmExcludedVersions(deprecation: Record<string, unknown>, latest
     .map(([v]) => v);
 }
 
+/**
+ * npm releases whose maintainer deprecated THAT RELEASE, on a line that carries a different notice
+ * (or none): never a fix target either.
+ *
+ * `npmExcludedVersions` withdraws a deprecated release only when a later release on its line is
+ * not deprecated at all, and nothing when `latest` is deprecated. That reads every deprecation of
+ * a retired package as one whole-line notice. lodash.template is retired ("This package is
+ * deprecated. Use ...eta instead." on every release) and 4.18.0 alone says "Bad release. Please
+ * use lodash.template@4.5.0 instead.": the plan sent 4.5.0 to 4.18.0, the one release its
+ * maintainer flagged, past 4.18.1, which carries only the package notice (audit 2026-11-11, M6).
+ *
+ * A release is flagged when its `deprecated` message is not the notice of its caret line, where
+ * the line's notice is, in order: the message `latest` carries, when a release on the line carries
+ * it too (the package's own retirement notice); else what the line's newest stable release says,
+ * when another release on the line says the same; else what most of the line's stable releases
+ * say (a tie goes to the newest). A line whose releases all say one thing flags nothing (glob
+ * 10.x, "Old versions of glob are not supported"), and neither does a release that is not
+ * deprecated. Prereleases are left to the rule above.
+ */
+export function npmFlaggedReleases(deprecation: Record<string, unknown>, latest: string | null | undefined): string[] {
+  const state = (v: string): string | null => {
+    const d = deprecation[v];
+    return isNpmDeprecated(d) ? (typeof d === "string" ? d.trim() : "deprecated") : null;
+  };
+  const packageNotice = latest && latest in deprecation ? state(latest) : null;
+  const lines = new Map<string, Array<{ version: string; parsed: NonNullable<ReturnType<typeof parseSemverPrecedence>> }>>();
+  for (const version of Object.keys(deprecation)) {
+    const parsed = parseSemverPrecedence(version);
+    if (!parsed || parsed.prerelease.length > 0) continue;
+    const line = parsed.major > 0 ? `${parsed.major}` : `0.${parsed.minor}`;
+    const at = lines.get(line);
+    if (at) at.push({ version, parsed });
+    else lines.set(line, [{ version, parsed }]);
+  }
+  const flagged: string[] = [];
+  for (const releases of lines.values()) {
+    if (releases.length < 2) continue;
+    releases.sort((a, b) => comparePrecedence(a.parsed, b.parsed));
+    const states = releases.map((r) => state(r.version));
+    if (states.every((x) => x === states[0])) continue;
+    const count = (x: string | null) => states.filter((y) => y === x).length;
+    const newest = states[states.length - 1];
+    let notice: string | null;
+    if (packageNotice !== null && states.includes(packageNotice)) notice = packageNotice;
+    else if (count(newest) >= 2) notice = newest;
+    else {
+      // Most of the line; on a tie the later release's.
+      notice = newest;
+      let best = count(newest);
+      for (let i = states.length - 2; i >= 0; i--) {
+        if (count(states[i]) > best) {
+          notice = states[i];
+          best = count(states[i]);
+        }
+      }
+    }
+    for (const [i, r] of releases.entries()) if (states[i] !== null && states[i] !== notice) flagged.push(r.version);
+  }
+  return flagged;
+}
+
 /** How a registry names a withdrawal, for the release `version`. */
 export function withdrawalText(ecosystem: string, version: string, detail?: string | null): string {
   const quoted = detail?.trim() ? ` ("${clip(detail.trim(), 120)}")` : "";

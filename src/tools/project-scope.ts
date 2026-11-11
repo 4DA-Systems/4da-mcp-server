@@ -87,6 +87,55 @@ export function appTracksProject(db: FourDADatabase, root: string): boolean {
   }
 }
 
+/** POSIX directories that are the system's own, by exact path (a project may well live below /opt, /var or /usr/local/src). */
+const POSIX_SYSTEM_DIRS = [
+  "/usr", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/usr/include", "/usr/local",
+  "/bin", "/sbin", "/lib", "/lib64", "/etc", "/var", "/opt", "/home", "/mnt", "/media",
+  "/Users", "/Library", "/Applications", "/Volumes", "/private", "/private/var", "/private/etc", "/cores",
+];
+/** POSIX trees no project lives in: the directory and everything below it. */
+const POSIX_SYSTEM_TREES = ["/proc", "/sys", "/dev", "/boot", "/run", "/System"];
+
+/**
+ * Why `dir` is not scanned, when it is an operating-system directory or a filesystem root; null
+ * for anything else. The sentence starts with the quoted path, so a caller can put "project_path"
+ * or nothing before it.
+ *
+ * `project_path` was unconfined, and a server is started wherever its host happens to be
+ * (`C:\Windows\System32` for many Windows hosts, `/` for a macOS app). A scan of System32 read
+ * the clones that had landed there and sent 2,122 package pairs to OSV.dev and the registries
+ * (audit 2026-11-11, M15). Refused: a drive or filesystem root; Windows' own directory and
+ * everything below it; the roots of Program Files, ProgramData and Users; on POSIX the system's
+ * own directories by exact path and the kernel/system trees whole.
+ */
+export function systemDirectoryProblem(dir: string, options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): string | null {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const p = platform === "win32" ? path.win32 : path.posix;
+  if (!p.isAbsolute(dir)) return null;
+  const caseless = platform === "win32" || platform === "darwin";
+  const norm = (x: string) => {
+    const clean = p.normalize(x).replace(/[\\/]+$/, "");
+    return caseless ? clean.toLowerCase() : clean;
+  };
+  const at = norm(dir);
+  const within = (root: string) => at === norm(root) || at.startsWith(`${norm(root)}${p.sep}`);
+  let what: string | null = null;
+  if (at === norm(p.parse(p.normalize(dir)).root)) what = platform === "win32" ? "a drive root" : "the filesystem root";
+  else if (platform === "win32") {
+    const drive = env.SystemDrive || "C:";
+    const windows = env.SystemRoot || env.windir || `${drive}\\Windows`;
+    const exact = [env.ProgramFiles || `${drive}\\Program Files`, env["ProgramFiles(x86)"] || `${drive}\\Program Files (x86)`, env.ProgramData || `${drive}\\ProgramData`, `${drive}\\Users`];
+    if (within(windows)) what = at === norm(windows) ? "the Windows directory" : `an operating-system directory (inside ${windows})`;
+    else if (exact.some((d) => at === norm(d))) what = "an operating-system directory";
+  } else if (POSIX_SYSTEM_TREES.some(within)) what = `an operating-system directory (inside ${POSIX_SYSTEM_TREES.find(within)})`;
+  else if (POSIX_SYSTEM_DIRS.some((d) => at === norm(d))) what = "an operating-system directory";
+  // WSL mounts each Windows drive at /mnt/<letter>.
+  else if (/^\/mnt\/[a-z]$/.test(at)) what = "a drive root";
+  if (!what) return null;
+  return `"${dir}" is ${what}, not a project, so it is not scanned: a scan there would read every lockfile below it and send each package name and version to OSV.dev and the registries. Pass project_path with the absolute path of your project's root (or set FOURDA_PROJECT_DIR for the server).`;
+}
+
 export type ProjectScope =
   | { kind: "project"; path: string; source: "argument" | "server_project" }
   | { kind: "all"; reason: string }
@@ -115,6 +164,8 @@ export function resolveProjectScope(projectPath: string | undefined): ProjectSco
         error: `project_path "${given}" is not a directory on this machine. Pass the absolute path of a project root, "*" for every project, or omit it for ${serverProjectDir()}.`,
       };
     }
+    const refused = systemDirectoryProblem(abs);
+    if (refused) return { kind: "error", error: `project_path ${refused}` };
     return { kind: "project", path: abs, source: "argument" };
   }
   const own = serverProjectDir();

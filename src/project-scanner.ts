@@ -14,6 +14,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readTextBounded } from "./live/bounded-read.js";
 import {
   cargoWorkspaceDeps,
   parseGoModDirectDeps,
@@ -156,7 +157,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   const pkgPath = path.join(cwd, "package.json");
   if (fs.existsSync(pkgPath)) {
     try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const pkg = JSON.parse(readTextBounded(pkgPath));
       langSet.add("javascript");
 
       if (pkg.name) {
@@ -217,14 +218,12 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   const cargoPath = path.join(cwd, "Cargo.toml");
   if (fs.existsSync(cargoPath)) {
     try {
-      const content = fs.readFileSync(cargoPath, "utf-8");
+      const content = readTextBounded(cargoPath);
       langSet.add("rust");
 
       // Extract project name from [package] section
-      const nameMatch = content.match(/^\[package\]\s*\n(?:.*\n)*?name\s*=\s*"([^"]+)"/m);
-      if (nameMatch) {
-        result.projectName = nameMatch[1];
-      }
+      const crateName = cargoPackageName(content);
+      if (crateName) result.projectName = crateName;
 
       // Parse [dependencies] and [dev-dependencies] sections
       const rustDeps: string[] = [];
@@ -274,7 +273,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   if (fs.existsSync(pyprojectPath)) {
     langSet.add("python");
     try {
-      const parsed = parsePyprojectDependencies(fs.readFileSync(pyprojectPath, "utf-8"));
+      const parsed = parsePyprojectDependencies(readTextBounded(pyprojectPath));
       parsed.deps.forEach((d) => pyDeps.add(d));
       parsed.devDeps.forEach((d) => pyDevDeps.add(d));
     } catch {
@@ -311,7 +310,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
     langSet.add("go");
     const goDeps: string[] = [];
     try {
-      const content = fs.readFileSync(goModPath, "utf-8");
+      const content = readTextBounded(goModPath);
       // Extract module name
       const moduleMatch = content.match(/^module\s+(\S+)/m);
       if (moduleMatch) {
@@ -376,6 +375,38 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/**
+ * The crate name: the first `name = "..."` line of the `[package]` table.
+ *
+ * One pass over the lines. This was a single multi-line regular expression
+ * (`^\[package\]\s*\n(?:.*\n)*?name...`), which re-scanned the rest of the file
+ * from every `[package]` line: a 200 KB Cargo.toml of repeated `[package]`
+ * headers took 3.8 s, synchronously, in the startup walk, and 2 MB would take
+ * minutes (measured 2026-11-11). A scanned repository's manifest is its own text.
+ */
+export function cargoPackageName(content: string): string | null {
+  let inPackage = false;
+  let start = 0;
+  while (start <= content.length) {
+    let end = content.indexOf("\n", start);
+    if (end < 0) end = content.length;
+    const line = content.slice(start, end).trim();
+    start = end + 1;
+    if (line.startsWith("[")) {
+      if (inPackage) return null; // the [package] table ended without a name
+      inPackage = line === "[package]";
+      continue;
+    }
+    if (!inPackage || !line.startsWith("name")) continue;
+    const eq = line.indexOf("=");
+    if (eq < 0 || line.slice(4, eq).trim() !== "") continue;
+    const value = line.slice(eq + 1).trim();
+    const close = value.startsWith('"') ? value.indexOf('"', 1) : -1;
+    if (close > 1) return value.slice(1, close);
+  }
+  return null;
+}
 
 /**
  * Parse a TOML section for dependency names.

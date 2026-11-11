@@ -95,7 +95,7 @@ const BATCH_RETRY_DELAY_MS = 1_000;
 function describeFailure(error: unknown): string {
   if (error instanceof OsvHttpError) return `OSV.dev returned HTTP ${error.status}`;
   const name = (error as { name?: string } | null)?.name;
-  if (name === "TimeoutError" || name === "AbortError") return `OSV.dev did not answer within ${OSV_TIMEOUT_MS / 1000} s`;
+  if (name === "TimeoutError" || name === "AbortError") return `OSV.dev did not answer within ${OSV_TIMEOUT_MS / 1000} s on either of 2 attempts`;
   const message = error instanceof Error ? error.message : String(error);
   return `OSV.dev unreachable (${message.slice(0, 120)})`;
 }
@@ -519,6 +519,7 @@ export function restampDepContext(
     target: dep.target,
     platformActive: dep.platformActive,
     sourceDirs: dep.sourceDirs ?? [],
+    platformInactiveDirs: dep.platformInactiveDirs,
     // Install drift is today's node_modules state, not an advisory fact:
     // stamped from the current dep, so a cached row never carries it forward.
     installDriftOf: dep.installDriftOf,
@@ -560,6 +561,7 @@ function mapVulnerability(
     target: dep.target,
     platformActive: dep.platformActive,
     sourceDirs: dep.sourceDirs ?? [],
+    ...(dep.platformInactiveDirs ? { platformInactiveDirs: dep.platformInactiveDirs } : {}),
     installDriftOf: dep.installDriftOf,
     installFix: dep.installFix,
   };

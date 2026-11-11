@@ -276,12 +276,34 @@ npx @4da/mcp-server --version    # Print version
 | `FOURDA_DB_PATH` | Path to 4DA's SQLite database. An existing file is used. A relative path (resolved against the working directory) that names no file is refused. An absolute path that names no file is created as a standalone database if its directory exists (one stderr line and `_meta.database_note` in the first tool answer say so), and refused if the directory does not exist. | The desktop app's database, else the server's own |
 | `FOURDA_SETTINGS_PATH` | `settings.json` holding the optional `embedding` block for semantic recall | Beside `FOURDA_DB_PATH`, else the desktop app's data directory |
 | `FOURDA_OFFLINE` | Disable all network calls | `false` |
+| `FOURDA_CALL_BUDGET_MS` | The time one tool call may take, counted from the request. A call still running then is answered NOT CHECKED (`dependency_check`: every item `unknown`); its lookups run on and are cached, so the same call made again answers from them. | `20000` |
+| `FOURDA_WALK_BUDGET_MS` | The time the startup walk of the project tree may take. Past it the scan is partial and says so. | `10000` |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Used on Node 24.14+; on Node 22.21+ only when the server is started with `NODE_USE_ENV_PROXY=1`. See "Behind a proxy". | Unset |
 | `FOURDA_GITHUB_CHANGELOG` | `upgrade_impact`: read GitHub release notes when the registry archive has no changelog for the range (`true` / `1` / `yes` / `on`) | Off |
 | `GITHUB_TOKEN` | Used only with `FOURDA_GITHUB_CHANGELOG`: raises GitHub's rate limit from 60 to 5,000 requests an hour | Unset |
 | `FOURDA_MCP_HOME` | Folder for the files the server writes (`cache.db`, `standalone.db`) | Your user data folder + `4da-mcp` |
 | `MCP_AUTH_SECRET` | Shared secret for verifying Bearer tokens on `--http` (HMAC-SHA256). Falls back to `JWT_SECRET`. Unset means no token is accepted. | Unset |
 | `MCP_AUTH_REQUIRED` | Require auth on a **loopback** `--http` bind. Always required on a non-loopback bind. | `false` |
 | `MCP_ALLOWED_HOSTS` | Extra comma-separated hostnames accepted in `Host`/`Origin` (needed when binding to `0.0.0.0`). | localhost only |
+
+## Limits
+
+The server reads repositories it did not write, so everything it reads is bounded, and a bound that is hit is reported, never passed off as a clean result.
+
+- **Time.** A tool call has 20 s (`FOURDA_CALL_BUDGET_MS`); the walk that finds a project's lockfiles has 10 s (`FOURDA_WALK_BUDGET_MS`), 20,000 directories, 4 levels and 256 projects. Past a walk bound the answer is a partial scan (`coverage.complete: false`).
+- **Size.** A lockfile or manifest over 64 MB is not read and is reported as UNREADABLE. A `.gitignore` over 1 MB, its rules past 5,000, and a pattern over 1,024 characters are not applied; a negation that cannot be applied re-includes everything below its file, so a limit can only make the scan cover more.
+- **Arguments.** A version or constraint is at most 256 characters, a package name 512.
+- **Place.** A drive or filesystem root and the operating system's own directories (`C:\Windows` and below, `/usr`, `/etc`, `/System` and the like) are not scanned: pass `project_path` with your project's root, or set `FOURDA_PROJECT_DIR`.
+
+## Behind a proxy
+
+Every lookup uses Node's own `fetch`, and no proxy library is bundled, so whether `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` are used depends on the Node that runs the server:
+
+- **Node 24.14 or later:** used, nothing else to set.
+- **Node 22.21 or later:** used when Node itself is started with them, which takes `NODE_USE_ENV_PROXY=1` in the server's environment (the `env` block of the MCP server entry).
+- **Older Node:** not supported; lookups go direct and, where the proxy is required, every answer is NOT CHECKED.
+
+The first lines of the server's stderr, and `npx @4da/mcp-server --doctor`, say which case applies whenever a proxy variable is set.
 
 ## FAQ
 

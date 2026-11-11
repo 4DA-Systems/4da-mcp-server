@@ -36,6 +36,12 @@ export interface ResolvedDependency {
    */
   sourceDirs: string[];
   /**
+   * The `sourceDirs` whose own lockfile holds this exact copy WITHOUT building it on this host,
+   * while another directory's does (dependency-set.ts): platform activity is a fact about one
+   * lockfile, not about a name and a version. Absent when every directory agrees.
+   */
+  platformInactiveDirs?: string[];
+  /**
    * npm DIRECT deps resolved from a lockfile only: the version node_modules
    * actually holds (walking up for hoisted workspaces), or null when it is not
    * installed or unreadable. Undefined when the check did not run (another
@@ -162,6 +168,8 @@ export interface VulnerabilityEntry {
    * package-name list cannot.
    */
   sourceDirs: string[];
+  /** The `sourceDirs` that lock this copy without building it on this host (ResolvedDependency.platformInactiveDirs). */
+  platformInactiveDirs?: string[];
   /**
    * Set when this row is about an INSTALLED version the lockfile does not pin
    * (node_modules drift): the lockfile's version of the same package.

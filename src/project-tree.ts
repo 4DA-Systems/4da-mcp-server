@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { IgnoreRules } from "./gitignore.js";
 import { scanCurrentProject, type ProjectScanResult } from "./project-scanner.js";
+import { startWalkBudget, walkBudgetNote } from "./walk-budget.js";
 
 const LOCK_MARKERS = [
   "package-lock.json",
@@ -114,6 +115,8 @@ export interface TreeDiscovery {
   skippedCount: number;
   /** True when the walk itself stopped at MAX_WALK_DIRS: lockfiles beyond it were not even counted. */
   walkTruncated: boolean;
+  /** Set when the walk stopped on its time budget rather than at MAX_WALK_DIRS (walk-budget.ts). */
+  walkStopped?: "time_budget";
   /** Manifests and lockfiles of ecosystems this server does not read (the first MAX_LISTED_NOT_COVERED), relative to the root. */
   notCovered?: Array<{ path: string; ecosystem: string }>;
   /** Every such file found (`notCovered` may list fewer). */
@@ -160,6 +163,7 @@ export function scanProjectTree(
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
   const entries: ProjectTreeEntry[] = [{ dir: root, scan: scanCurrentProject(root) }];
   const ignore = new IgnoreRules(root);
+  const budget = startWalkBudget(ignore);
   const skipped: TreeDiscovery["skipped"] = [];
   let skippedCount = 0;
   let visited = 0;
@@ -188,7 +192,7 @@ export function scanProjectTree(
   const countFixtures = (dir: string, children: fs.Dirent[]) => {
     for (const child of children) {
       if (!child.isDirectory() || SKIP_DIRS.has(child.name) || child.name.startsWith(".")) continue;
-      if (++visited > MAX_WALK_DIRS) {
+      if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
       }
@@ -203,7 +207,7 @@ export function scanProjectTree(
   const walk = (dir: string, rel: string, depth: number, children: fs.Dirent[]) => {
     for (const child of children) {
       if (!child.isDirectory() || SKIP_DIRS.has(child.name) || child.name.startsWith(".")) continue;
-      if (++visited > MAX_WALK_DIRS) {
+      if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
       }
@@ -250,6 +254,7 @@ export function scanProjectTree(
       skipped,
       skippedCount,
       walkTruncated,
+      ...(budget.stopped ? { walkStopped: "time_budget" as const } : {}),
       ...(notCoveredCount > 0 ? { notCovered, notCoveredCount } : {}),
       ...(fixtures.count > 0 ? { fixtures } : {}),
     },
@@ -355,7 +360,7 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
       `${discovery.skippedCount} lockfile${discovery.skippedCount === 1 ? " was" : "s were"} found but NOT scanned (${why}): ${listed}${discovery.skippedCount > 5 ? ", ..." : ""}; pass project_path to scan one of them`,
     );
   }
-  if (discovery.walkTruncated) parts.push(`the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
+  if (discovery.walkTruncated) parts.push(discovery.walkStopped ? walkBudgetNote() : `the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
   return `Partial scan: ${parts.join("; ")}.`;
 }
 

@@ -139,6 +139,73 @@ function test(set: Comparator[], version: SemverPrecedence): boolean {
 }
 
 /**
+ * A requirement longer than this is not read (null, "unreadable", like any unknown syntax). Real
+ * ones are a few dozen characters; the longest `||` chains in the registries stay under a few hundred.
+ */
+export const MAX_REQUIREMENT_LENGTH = 1_024;
+
+/**
+ * A requirement read once: one comparator set per `||` alternative, in order; a null entry is an
+ * alternative that could not be read. Null for the whole when it is not a registry semver range.
+ */
+type Compiled = Array<Comparator[] | null> | null;
+
+/**
+ * Requirements already read, by dialect and text. `dependency_check` asks whether one constraint
+ * admits each of a package's releases, hundreds or thousands of them, and every call used to parse
+ * the constraint again, building its comparator list with `concat` (a copy per token): an 8 KB
+ * constraint of 4,000 tokens cost 16 million copies per release and held the event loop for 7 s
+ * (audit 2026-11-11, M15). Now a constraint is parsed once, in one pass, and each release costs one
+ * comparison per comparator.
+ */
+const compiled = new Map<string, Compiled>();
+const MAX_COMPILED = 512;
+
+function remember(key: string, value: Compiled): Compiled {
+  if (compiled.size >= MAX_COMPILED) compiled.clear();
+  compiled.set(key, value);
+  return value;
+}
+
+function compileNpmRange(range: string): Compiled {
+  // yarn berry writes "npm:^1.2.0"; an alias writes "npm:<name>@<range>" (scoped names too).
+  const text = range.trim().replace(/^npm:(?:(?:@[^@\s/]+\/)?[^@\s/]+@)?(?=[\^~<>=\dvxX*\s]|$)/, "");
+  // Protocols (git+https:, file:, link:, workspace:), paths, GitHub shorthand.
+  if (/^[a-z][a-z+]*:/i.test(text) || text.includes("/")) return null;
+  // A dist-tag ("latest", "next", "beta").
+  if (/^[a-z][\w.-]*$/i.test(text) && !WILD.test(text)) return null;
+  const alternatives: Array<Comparator[] | null> = [];
+  for (const alt of text.split("||")) {
+    const part = alt.trim();
+    const set: Comparator[] = [];
+    let readable = true;
+    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(part);
+    if (hyphen) {
+      const lo = parsePartial(hyphen[1]);
+      const hi = parsePartial(hyphen[2]);
+      const upper = lo && hi ? (hi.patch !== null ? [{ op: "<=" as Op, v: floorOf(hi) }] : primitive("<=", hi)) : null;
+      if (!lo || !upper) readable = false;
+      else set.push({ op: ">=", v: floorOf(lo) }, ...upper);
+    } else {
+      // ">= 1.2.3" with a space after the operator is one comparator.
+      for (const token of part.replace(/([<>=~^])\s+/g, "$1").split(/\s+/)) {
+        if (!token) continue;
+        const c = comparatorSet(token, false);
+        if (c === null) {
+          readable = false;
+          break;
+        }
+        for (const comparator of c) set.push(comparator);
+      }
+    }
+    alternatives.push(readable ? set : null);
+    // Nothing after an unreadable alternative is ever consulted (see npmRangeAdmits).
+    if (!readable) break;
+  }
+  return alternatives;
+}
+
+/**
  * Whether an npm range admits `version`. Null when the range is not a
  * registry semver range (git, file, link, workspace, tag) or the version is
  * unreadable. An npm alias ("npm:string-width@^4.2.0", the spec a lockfile
@@ -148,46 +215,36 @@ function test(set: Comparator[], version: SemverPrecedence): boolean {
 export function npmRangeAdmits(range: string, version: string): boolean | null {
   const v = parseSemverPrecedence(version);
   if (!v) return null;
-  // yarn berry writes "npm:^1.2.0"; an alias writes "npm:<name>@<range>" (scoped names too).
-  const text = range.trim().replace(/^npm:(?:(?:@[^@\s/]+\/)?[^@\s/]+@)?(?=[\^~<>=\dvxX*\s]|$)/, "");
-  // Protocols (git+https:, file:, link:, workspace:), paths, GitHub shorthand.
-  if (/^[a-z][a-z+]*:/i.test(text) || text.includes("/")) return null;
-  // A dist-tag ("latest", "next", "beta").
-  if (/^[a-z][\w.-]*$/i.test(text) && !WILD.test(text)) return null;
-  for (const alt of text.split("||")) {
-    const part = alt.trim();
-    let set: Comparator[] = [];
-    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(part);
-    if (hyphen) {
-      const lo = parsePartial(hyphen[1]);
-      const hi = parsePartial(hyphen[2]);
-      if (!lo || !hi) return null;
-      set.push({ op: ">=", v: floorOf(lo) });
-      const upper = hi.patch !== null ? [{ op: "<=" as Op, v: floorOf(hi) }] : primitive("<=", hi);
-      if (!upper) return null;
-      set.push(...upper);
-    } else {
-      // ">= 1.2.3" with a space after the operator is one comparator.
-      for (const token of part.replace(/([<>=~^])\s+/g, "$1").split(/\s+/).filter(Boolean)) {
-        const c = comparatorSet(token, false);
-        if (c === null) return null;
-        set = set.concat(c);
-      }
-    }
+  if (range.length > MAX_REQUIREMENT_LENGTH) return null;
+  const key = `npm\0${range}`;
+  const alternatives = compiled.has(key) ? compiled.get(key)! : remember(key, compileNpmRange(range));
+  if (alternatives === null) return null;
+  // In order, as written: an alternative that admits the version answers before a later unreadable one is reached.
+  for (const set of alternatives) {
+    if (set === null) return null;
     if (test(set, v)) return true;
   }
   return false;
+}
+
+function compileCargoReq(req: string): Compiled {
+  const set: Comparator[] = [];
+  for (const raw of req.split(",")) {
+    const token = raw.trim();
+    if (!token) continue;
+    const c = comparatorSet(token, true);
+    if (c === null) return null;
+    for (const comparator of c) set.push(comparator);
+  }
+  return [set];
 }
 
 /** Whether a Cargo version requirement ("0.8", "^1.2", ">=0.10, <0.11", "=1.0.5") admits `version`. Null when unreadable. */
 export function cargoReqAdmits(req: string, version: string): boolean | null {
   const v = parseSemverPrecedence(version);
   if (!v) return null;
-  let set: Comparator[] = [];
-  for (const token of req.split(",").map((t) => t.trim()).filter(Boolean)) {
-    const c = comparatorSet(token, true);
-    if (c === null) return null;
-    set = set.concat(c);
-  }
-  return test(set, v);
+  if (req.length > MAX_REQUIREMENT_LENGTH) return null;
+  const key = `cargo\0${req}`;
+  const sets = compiled.has(key) ? compiled.get(key)! : remember(key, compileCargoReq(req));
+  return sets === null ? null : test(sets[0]!, v);
 }

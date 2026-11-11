@@ -60,6 +60,7 @@ import {
   type ParentEdge,
 } from "../live/lockfile-parents.js";
 import { advisoriesAffecting, advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { projectOverride } from "../live/overrides.js";
 import { pypiCompiledInstruction, pypiPinnedTogether } from "../live/pypi-advice.js";
 import { requirementAdmits, type RequirementDialect } from "../live/refresh-rule.js";
 import { compareVersions } from "../live/version-compare.js";
@@ -68,6 +69,7 @@ import type { OsvEcosystem } from "../live/types.js";
 import { withHeldTargets } from "../live/held-targets.js";
 import type { AdvisoryQuery } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
+import { withinCallBudget } from "../call-budget.js";
 
 /** One dependency the project declares that moves a blocking parent. */
 export interface ParentLever {
@@ -136,8 +138,14 @@ export interface ParentUpgrade {
   /**
    * The refresh to run after the lever's install: the new requirement still admits the
    * installed copy, which an install keeps (npm 10.9.2), so the install alone does not fix it.
+   * With `refreshOnly`: the whole move, first the parent's own refresh.
    */
   refreshCommands?: Array<{ dir: string; command: string }>;
+  /**
+   * True when every installed parent of `parent` already admits `to` (parentRefresh): nothing the
+   * project declares is upgraded, `levers` is empty, and `refreshCommands` is the fix.
+   */
+  refreshOnly?: true;
 }
 
 /** The planner fields this step reads and rewrites. */
@@ -188,7 +196,10 @@ type Intel = Pick<LiveIntelligence, "getFixPathSources" | "lockfileFor" | "getPr
 /** Time one npm step may spend judging what its target holds at a fixed version (audit 6.2.5 D-4). */
 const HELD_BUDGET_MS = 5_000;
 
-/** Total time the plan spends verifying fix paths before answering with what it has. */
+/**
+ * Total time the plan spends verifying fix paths before answering with what it has; less when the
+ * tool call's own budget has less left (call-budget.ts), so the plan answers inside it.
+ */
 const FIX_PATH_BUDGET_MS = 25_000;
 /** Time the direct targets may spend on their own advisories when one is raised for a transitive. */
 const RECONCILE_BUDGET_MS = 5_000;
@@ -214,7 +225,7 @@ const LEVER_ADMITS = new WeakMap<ParentLever, (version: string) => { requirement
 type Outcome = "verified" | "unverified" | "held" | "failed";
 
 /** Verify and rewrite the steps in place. Returns how many could not be verified (offline, failure, budget). */
-export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, budgetMs = FIX_PATH_BUDGET_MS): Promise<number> {
+export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, budgetMs = withinCallBudget(FIX_PATH_BUDGET_MS, RECONCILE_BUDGET_MS / 2)): Promise<number> {
   const sources = liveIntel.getFixPathSources();
   // A step with no per-advisory fix ("no_fix_available") is still looked up: its advisories
   // may give only a last_affected bound with a clean release above it (A6).
@@ -593,6 +604,23 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     else step.reasons.push(text);
   };
 
+  // The project's own override decides, and it excludes the fix: no parent to move and no override
+  // to add. The one that is there has to change (the app's parent_override; audit 2026-11-11).
+  const overrideBlocked = verdicts.filter((v) => v.verdict.override && !v.verdict.override.reaches);
+  if (overrideBlocked.length > 0) {
+    step.action = "override_or_replace";
+    delete step.refreshCommands;
+    replaceReason(
+      `Transitive dependency: ${overrideBlocked
+        .map((v) => {
+          const o = v.verdict.override!;
+          const effect = o.admits ? `admits ${target}, but a refresh under it resolves to a newer release that an advisory affects` : `excludes ${target}`;
+          return `${o.where}${verdicts.length > 1 ? ` (${where(v.dir)})` : ""} already forces ${step.package} to "${o.spec}", which replaces every parent's own requirement and ${effect}`;
+        })
+        .join("; ")}. Change that entry to "${target}" (or a range whose newest release is clean), then reinstall; no parent needs to move and no new override is needed`,
+    );
+    return;
+  }
   if (verdicts.every((v) => v.verdict.refreshFixes)) {
     step.action = "lockfile_refresh";
     step.refreshCommands = verdicts.map((v) => ({ dir: where(v.dir), command: v.verdict.command }));
@@ -606,6 +634,15 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     }
     const resolves = verdicts.map((v) => v.verdict.resolvesTo).filter((v): v is string => v !== null);
     const to = resolves.length > 0 ? ` (a refresh resolves it to ${[...new Set(resolves)].join(", ")})` : "";
+    const forced = verdicts.filter((v) => v.verdict.override);
+    if (forced.length === verdicts.length) {
+      // Said as what it is: the override is the requirement, whatever the parents declare.
+      const entries = [...new Set(forced.map((v) => `${v.verdict.override!.where} forces ${step.package} to "${v.verdict.override!.spec}"`))];
+      replaceReason(
+        `Transitive dependency: ${entries.join("; ")}, which replaces every parent's own requirement and already admits ${target}${to}, so a lockfile refresh is enough, no parent upgrade and no new override: ${verdicts.map((v) => `\`${v.verdict.command}\` in ${where(v.dir)}`).join("; ")}`,
+      );
+      return;
+    }
     replaceReason(
       `Transitive dependency: every parent's declared requirement already admits ${target}${to}, so a lockfile refresh is enough, no parent upgrade: ${verdicts.map((v) => `\`${v.verdict.command}\` in ${where(v.dir)}`).join("; ")}`,
     );
@@ -697,11 +734,22 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     );
     return;
   }
+  if (moves.length > 0 && moves.length === blocking.length && moves.every((m) => m.refresh)) {
+    // Every blocking parent is itself moved by a refresh: the step is a lockfile refresh, with the
+    // exact commands, never a parent upgrade (audit 2026-11-11, M7).
+    step.action = "lockfile_refresh";
+    const commands: Array<{ dir: string; command: string }> = [];
+    for (const m of moves) for (const c of m.upgrade.refreshCommands ?? []) if (!commands.some((x) => x.dir === c.dir && x.command === c.command)) commands.push(c);
+    step.refreshCommands = commands;
+    delete step.parentUpgrades;
+    replaceReason(`Transitive dependency: ${moves.map((m) => m.text).join("; ")}`);
+    return;
+  }
   if (moves.length > 0 && moves.length === blocking.length) {
     // Fixed by upgrading the parent only when every move names the release of what the project
     // declares; a lever with no release (to: null) is a check, not a fix (final audit 7c: victauri
     // rand through tauri, NodeGoat braces and nconf through forever).
-    const verified = moves.every((m) => m.upgrade.levers.length > 0 && m.upgrade.levers.every((l) => l.to !== null));
+    const verified = moves.every((m) => m.refresh || (m.upgrade.levers.length > 0 && m.upgrade.levers.every((l) => l.to !== null)));
     step.action = verified ? "upgrade_parent" : "upgrade_parent_unverified";
     replaceReason(
       verified
@@ -803,7 +851,8 @@ export type StuckOutcome = "deprecated" | "latest" | "none_admits" | "introduces
 
 type Standing =
   | { kind: "stuck"; text: string; outcome?: StuckOutcome }
-  | { kind: "move"; upgrade: ParentUpgrade; text: string }
+  /** `refresh`: the parent moves by a lockfile refresh alone (parentRefresh); no declared dependency is upgraded. */
+  | { kind: "move"; upgrade: ParentUpgrade; text: string; refresh?: true }
   | { kind: "unknown"; text?: string; undecided?: boolean }
   /** The installed parent or lever is flagged malicious: the row names no release (#981 round 3). */
   | { kind: "malicious"; text: string };
@@ -1120,6 +1169,35 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       : ` (${parent} ${v} requires "${at.requirement}", which ${admitsWords(ctx, at.requirement, dialect, at.resolvesTo)})`;
   };
 
+  // The rule (audit 2026-11-11, M7): when every installed parent of this parent already admits a
+  // release of it that fixes the package, the parent moves by a lockfile refresh, and nothing the
+  // project declares is upgraded. The search below starts ABOVE each installed lever, so it named
+  // "tailwindcss 3.4.19 is the smallest tailwindcss release that brings in sucrase 3.35.1" while
+  // the installed tailwindcss 3.4.18 requires sucrase ^3.35.0 and `npm update sucrase` fixes it.
+  // Not for a parent the project declares itself: its move is already worded from its own
+  // declaration, run where it is declared, with the in-range refresh when the range admits it
+  // (the app's parent_release pr-001: `npm update express`).
+  const viaRefresh = route.kind === "direct" ? null : await parentRefresh(ctx, b, parent, from, facts, (v) => pkgAt(v) !== null);
+  if (viaRefresh) {
+    setParentAt(viaRefresh.resolvesTo);
+    upgrade.refreshOnly = true;
+    const refreshes = [viaRefresh.command];
+    for (const r of refreshAt(viaRefresh.resolvesTo)) if (!refreshes.some((x) => x.dir === r.dir && x.command === r.command)) refreshes.push(r);
+    upgrade.refreshCommands = refreshes;
+    const at = pkgAt(viaRefresh.resolvesTo);
+    const resolved = viaRefresh.resolvesTo === found.version ? "" : ` (a refresh resolves ${parent} to ${viaRefresh.resolvesTo}${atText(viaRefresh.resolvesTo).replace(/^ \(/, ": ").replace(/\)$/, "")})`;
+    const after =
+      refreshes.length > 1
+        ? `; ${at?.requirement == null ? `another parent still holds ${pkg} ${ctx.installed}` : `${pkg} ${ctx.installed} still satisfies "${at.requirement}", and an install keeps a copy that satisfies it`}, so then run ${refreshes.slice(1).map((c) => `\`${c.command}\``).join(", then ")}`
+        : "";
+    return {
+      kind: "move",
+      upgrade,
+      refresh: true,
+      text: `${head}; ${requirementClause}${ownClause}. ${viaRefresh.clause}${resolved}, so a lockfile refresh is enough and nothing this project declares has to be upgraded: \`${viaRefresh.command.command}\` in ${viaRefresh.command.dir}${after}`,
+    };
+  }
+
   if (route.kind === "direct") {
     const render = (lifts: ReadonlyMap<string, string>): string | null => {
       const v = lifts.get(parent) ?? found.version;
@@ -1246,6 +1324,72 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   const text = render(new Map())!;
   MOVES.set(upgrade, { text, render });
   return { kind: "move", upgrade, text };
+}
+
+/**
+ * Whether a lockfile refresh alone moves the blocking parent to a release that fixes the package:
+ * every installed parent of it (every lockfile edge: a dependency's declared requirement, the
+ * project's or a workspace member's own declaration, or the project's override) admits one.
+ *
+ * npm, pnpm, Yarn and Bun resolve each requirement to its newest match, so each newest match must
+ * be above the installed parent and `fixes` (clear of the parent's own advisories, with a
+ * requirement that admits a clean package or none at all). Cargo moves to exactly one version: the
+ * smallest fixing release every requirement admits, through refreshVerdict (which also names the
+ * crates `--precise` needs moved first). Null when any requirement is unread, a copy is bundled, or
+ * one holder does not admit a fixing release: the caller then looks for what must be upgraded.
+ */
+async function parentRefresh(
+  ctx: MoveContext,
+  b: Blocking,
+  parent: string,
+  from: string,
+  facts: PackageReleaseFacts,
+  fixes: (version: string) => boolean,
+): Promise<{ resolvesTo: string; clause: string; command: { dir: string; command: string } } | null> {
+  const edges = parentsReader(ctx, b.lockfile)?.(parent, from) ?? [];
+  if (edges.length === 0 || edges.some((e) => e.bundled)) return null;
+  const isCargo = b.format === "cargo";
+  const dialect: RequirementDialect = isCargo ? "cargo" : "npm";
+  const declared = isCargo ? null : projectOverride(path.dirname(b.lockfile), parent, b.format);
+  const forced = declared && requirementAdmits({ parent, text: declared.spec, dialect }, from) !== null ? declared : null;
+  const releases = facts.versions.filter((v) => !isPrereleaseVersion(v, ctx.ecosystem) && compareVersions(v, from, ctx.ecosystem) > 0);
+  const held: Array<{ text: string; words: string }> = [];
+  if (forced) held.push({ text: forced.spec, words: `${forced.where} forces ${parent} to "${forced.spec}"` });
+  else {
+    for (const e of edges) {
+      const all = e.range !== null ? [e.range] : e.parentVersion !== null ? await ctx.sources.parentRequirements(ctx.ecosystem, e.parent, e.parentVersion, parent).catch(() => null) : null;
+      if (!all || all.length === 0) return null;
+      // A parent can declare the same crate twice under different names: the requirements this copy satisfies apply.
+      const matching = all.filter((text) => requirementAdmits({ parent: e.parent, text, dialect }, from) === true);
+      for (const text of new Set(matching.length > 0 ? matching : all)) {
+        held.push({ text, words: e.local ? `this project's own declaration "${text}"` : `${e.parent}${e.parentVersion ? ` ${e.parentVersion}` : ""} requires "${text}"` });
+      }
+    }
+  }
+  const admits = (text: string, v: string) => requirementAdmits({ parent, text, dialect }, v) === true;
+  let resolvesTo: string | null = null;
+  if (isCargo) {
+    resolvesTo = releases.sort((x, y) => compareVersions(x, y, ctx.ecosystem)).find((v) => fixes(v) && held.every((h) => admits(h.text, v))) ?? null;
+  } else {
+    for (const h of held) {
+      const newest = releases.filter((v) => admits(h.text, v)).sort((x, y) => compareVersions(y, x, ctx.ecosystem))[0];
+      if (!newest || !fixes(newest)) return null;
+      if (resolvesTo === null || compareVersions(newest, resolvesTo, ctx.ecosystem) < 0) resolvesTo = newest;
+    }
+  }
+  if (resolvesTo === null) return null;
+  let command = refreshFor(ctx, b, parent, from, resolvesTo);
+  if (isCargo) {
+    const verdict = await refreshVerdict(ctx.sources, ctx.ecosystem, b.lockfile, parent, from, resolvesTo, null, facts.versions).catch(() => null);
+    if (!verdict?.refreshFixes || verdict.inferred) return null;
+    command = { dir: command.dir, command: verdict.command };
+  }
+  const words = [...new Set(held.map((h) => h.words))];
+  const shown = words.slice(0, 3).join(", ");
+  const clause = forced
+    ? `${shown}, which replaces every parent's own requirement and admits it`
+    : `${words.length === 1 ? "The one installed parent" : "Every installed parent"} of ${parent} already admits it (${shown}${words.length > 3 ? `, and ${words.length - 3} more` : ""})`;
+  return { resolvesTo, clause, command };
 }
 
 function leverList(route: Extract<Route, { kind: "through" }>): string {
@@ -1476,7 +1620,7 @@ function findRoute(ctx: MoveContext, lockfile: string, parent: string, version: 
  * The advisory lookups are bounded (RECONCILE_BUDGET_MS); a release that could not be checked in
  * time is not chosen, and nothing is written after the budget runs out.
  */
-export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs = RECONCILE_BUDGET_MS): Promise<void> {
+export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs = withinCallBudget(RECONCILE_BUDGET_MS, 500)): Promise<void> {
   const sources = liveIntel.getFixPathSources();
   const key = (eco: string, name: string, version: string) => `${eco}\0${name}\0${version}`;
   type Use = { step: FixPathStep; lever: ParentLever; upgrade: ParentUpgrade };

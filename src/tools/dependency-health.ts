@@ -19,6 +19,8 @@ import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { isDevOnlyCopy } from "../live/severity-scope.js";
 import { compareVersions } from "../live/version-compare.js";
+import { secondsText, withinCallBudget } from "../call-budget.js";
+import { systemDirectoryProblem } from "./project-scope.js";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -33,7 +35,10 @@ export interface DependencyHealthParams {
 const HEALTH_SCORE_BASIS =
   "100 minus three capped penalties. Vulnerabilities: per advisory on the full installed tree (platform-inactive and maintenance notices excluded), critical 20, high 10, medium 4, low 1, unknown 2, a transitive one at a third, capped at 55. Outdated: over the direct dependencies, a major behind 1, a minor 0.35, a patch 0.1, as a share of them times 60, capped at 30. Deprecated: 8 per deprecated direct dependency, capped at 15.";
 
-/** How long a health check waits for its own OSV scan before answering without CVE data (the scan keeps running). */
+/**
+ * How long a health check waits for its own OSV scan before answering without CVE data (the scan
+ * keeps running). Inside a tool call, no longer than the call's budget has left (call-budget.ts).
+ */
 const HEALTH_SCAN_TIMEOUT_MS = 60_000;
 
 export const dependencyHealthTool = {
@@ -97,7 +102,7 @@ async function vetLatest(liveIntel: LiveIntelligence, rows: RegistryPackageInfo[
   const vets = await vetOfferedReleases(
     sources,
     rows.filter((r) => offered(r) !== null).map((r) => ({ key: key(r), ecosystem: r.ecosystem, name: r.name, installed: r.currentVersion, offered: offered(r)! })),
-    OFFER_CHECK_BUDGET_MS,
+    withinCallBudget(OFFER_CHECK_BUDGET_MS, 6_000),
   );
   return rows.map((r) => {
     const latest = offered(r);
@@ -127,12 +132,20 @@ function advisoriesPerCopy(rows: VulnerabilityEntry[]): VulnerabilityEntry[] {
  * lockfiles, unreadable lockfiles). Started inside spring-petclinic, 6.2.5
  * said "No project manifests detected" beside a pom.xml (audit H3).
  */
-function nothingChecked(start: number, liveIntel: LiveIntelligence | null): DependencyHealthResult {
+function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?: { ecosystem: string }): DependencyHealthResult {
   const root = liveIntel?.getProjectRoot() ?? process.cwd();
-  const discovery = liveIntel?.getDiscovery() ?? discoveryFor(root);
+  // A system directory is not scanned at all (project-scope.ts): say that, and walk nothing.
+  const refused = systemDirectoryProblem(root);
+  const discovery = refused ? null : (liveIntel?.getDiscovery() ?? discoveryFor(root));
+  // ecosystem_filter left nothing: the project has dependencies, none of them in that ecosystem.
+  // That is "nothing was checked", not a perfect score (it read 100/100 over 0 dependencies).
+  const elsewhere = only
+    ? [...new Set((liveIntel?.getAuditDeps() ?? []).map((d) => d.ecosystem))].sort()
+    : [];
+  const problems = (liveIntel?.getLockfileProblems() ?? []).filter((p) => !only || !p.ecosystem || p.ecosystem === only.ecosystem);
   const notes = [
     ...exclusionNotes(discovery),
-    ...lockfileProblemNotes(liveIntel?.getLockfileProblems() ?? []),
+    ...lockfileProblemNotes(problems),
     ...[discoveryNote(discovery)].filter((n): n is string => n !== null),
   ];
   return {
@@ -148,10 +161,15 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null): Depe
     withheldReason: "nothing_checked",
     dependencies: [],
     vulnerabilitySummary: null,
-    summary:
-      notes.length > 0
-        ? `Nothing was checked, so there is no health score; this is not a healthy result. ${notes.join(" ")}`
-        : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, composer.lock), and none of an unsupported one either; no health score.`,
+    summary: refused
+      ? `Nothing was checked, so there is no health score; this is not a healthy result. The server was started in ${refused}`
+      : only
+        ? `Nothing was checked, so there is no health score; this is not a healthy result: no ${only.ecosystem} dependency was read in this project (ecosystem_filter: "${only.ecosystem}"). ${
+            elsewhere.length > 0 ? `What was read is ${elsewhere.join(", ")}: drop the filter or pass one of those.` : "No dependency of any ecosystem was read."
+          }${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`
+        : notes.length > 0
+          ? `Nothing was checked, so there is no health score; this is not a healthy result. ${notes.join(" ")}`
+          : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, composer.lock), and none of an unsupported one either; no health score.`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };
@@ -178,7 +196,11 @@ export async function executeDependencyHealth(
     deps = deps.filter((d) => !d.isDev);
   }
   if (params.ecosystem_filter) {
-    deps = deps.filter((d) => d.ecosystem === params.ecosystem_filter);
+    const wanted = params.ecosystem_filter;
+    deps = deps.filter((d) => d.ecosystem === wanted);
+    // Nothing of that ecosystem anywhere in the tree, declared or installed: nothing to score.
+    const present = liveIntel.getResolvedDeps().some((d) => d.ecosystem === wanted) || liveIntel.getAuditDeps().some((d) => d.ecosystem === wanted);
+    if (!present) return nothingChecked(start, liveIntel, { ecosystem: wanted });
   }
 
   const ecosystems = [...new Set(deps.map((d) => d.ecosystem))];
@@ -200,7 +222,8 @@ export async function executeDependencyHealth(
   // Loaded here (bounded) when no scan has run: telling the agent to "run
   // vulnerability_scan first" left a session's first health check CVE-blind.
   const root = liveIntel.getProjectRoot() ?? process.cwd();
-  const vulnResult = (await liveIntel.ensureVulnerabilities(root, HEALTH_SCAN_TIMEOUT_MS, { includeDev })) ?? liveIntel.getVulnerabilities();
+  const scanWaitMs = withinCallBudget(HEALTH_SCAN_TIMEOUT_MS, 1_000);
+  const vulnResult = (await liveIntel.ensureVulnerabilities(root, scanWaitMs, { includeDev })) ?? liveIntel.getVulnerabilities();
   // What OSV did NOT answer for. A score or a vulnerable count computed
   // without it reads as healthier than the project is (6.2.4 scored 75/100
   // with 10,568 dependencies unchecked), so both are withheld.
@@ -208,7 +231,7 @@ export async function executeDependencyHealth(
   const coverage = vulnerabilityCoverage(vulnResult, {
     enabled: liveIntel.isEnabled(),
     expectedTotal: scopeTotal,
-    notLoaded: `the OSV.dev scan did not finish within ${HEALTH_SCAN_TIMEOUT_MS / 1000} s or OSV.dev was unreachable`,
+    notLoaded: `the OSV.dev scan did not finish within ${secondsText(scanWaitMs)} or OSV.dev was unreachable`,
   });
   // A lockfile that could not be read is a gap of the same kind: nothing it
   // pins was sent to OSV. 6.2.5 scored a merge-conflicted package-lock.json

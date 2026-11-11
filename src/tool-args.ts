@@ -43,6 +43,38 @@ function matchesType(value: unknown, type: string | undefined): boolean {
   return typeOf(value) === type;
 }
 
+/**
+ * Length limits for string arguments, by parameter name.
+ *
+ * A version or constraint is a few dozen characters and a package name at most a few hundred
+ * (npm allows 214). Nothing bounded them: a `to` of 8 KB (">=" and 4,000 one-digit tokens) was
+ * parsed once per published release and held the event loop for 7 s, so a concurrent `tools/list`
+ * waited with it, and 40 KB never answered (audit 2026-11-11, M15). The parser is linear now
+ * (live/range-satisfies.ts); the limit keeps every later step bounded as well, and the error says
+ * what was too long instead of echoing kilobytes back.
+ */
+export const MAX_VERSION_ARG_LENGTH = 256;
+export const MAX_NAME_ARG_LENGTH = 512;
+const MAX_PATH_ARG_LENGTH = 4_096;
+/** Free text (a task, a decision, a memory entry). */
+const MAX_TEXT_ARG_LENGTH = 200_000;
+
+const STRING_LIMITS: Record<string, number> = {
+  to: MAX_VERSION_ARG_LENGTH,
+  from: MAX_VERSION_ARG_LENGTH,
+  to_version: MAX_VERSION_ARG_LENGTH,
+  from_version: MAX_VERSION_ARG_LENGTH,
+  package: MAX_NAME_ARG_LENGTH,
+  project_path: MAX_PATH_ARG_LENGTH,
+};
+
+/** The message for a string argument over its limit, or null. `where` names it ("dependency_check: items[0].to"). */
+export function lengthProblem(where: string, name: string, value: string): string | null {
+  const max = STRING_LIMITS[name] ?? MAX_TEXT_ARG_LENGTH;
+  if (value.length <= max) return null;
+  return `${where} is ${value.length.toLocaleString("en-US")} characters long; the limit is ${max.toLocaleString("en-US")}. It starts ${JSON.stringify(value.slice(0, 40))}.`;
+}
+
 /** An actionable message for the first problem with `args`, or null when they are valid. */
 export function validateToolArgs(toolName: string, schema: InputSchema, args: Record<string, unknown>): string | null {
   const properties = (schema.properties ?? {}) as Record<string, PropertySchema>;
@@ -62,6 +94,10 @@ export function validateToolArgs(toolName: string, schema: InputSchema, args: Re
     if (value === undefined || value === null) continue;
     if (!matchesType(value, prop.type)) {
       return `${toolName}: "${name}" must be ${prop.type === "array" ? "an array" : `a ${prop.type}`}, got ${typeOf(value)} ${JSON.stringify(value)}.`;
+    }
+    if (typeof value === "string") {
+      const long = lengthProblem(`${toolName}: "${name}"`, name, value);
+      if (long) return long;
     }
     if (prop.enum && !prop.enum.includes(value)) {
       return `${toolName}: "${name}" must be one of ${prop.enum.map((e) => JSON.stringify(e)).join(", ")}; got ${JSON.stringify(value)}.`;
