@@ -12,6 +12,7 @@ import type { FourDADatabase } from "./db.js";
 import { assertToolPermission } from "./auth-context.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { cleanStrings } from "./tool-args.js";
+import { withUntrustedTextNote } from "./untrusted-text.js";
 import { TOOL_REGISTRY } from "./schema-registry.js";
 
 import {
@@ -149,8 +150,10 @@ export async function dispatchTool(
   // answer `[]`, which reads as "nothing relevant" rather than "no app".
   const desktopOnly = db !== null && db.isStandalone && Object.hasOwn(TOOL_REGISTRY, name) && TOOL_REGISTRY[name].standalone === false;
   const annotated = withFreshness ? attachFreshness(db!, result) : desktopOnly ? attachDesktopAppNote(name, result) : result;
+  // Every tool that returns third-party text says which fields hold it (`_meta.untrusted_text`),
+  // here when the tool does not say it itself.
   const payload = cleanStrings(
-    db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated,
+    withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated),
   );
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.

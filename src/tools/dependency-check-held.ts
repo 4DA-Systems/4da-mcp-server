@@ -74,6 +74,17 @@ export class HeldJudge {
     return c?.status === "checked" && c.affected.length > 0;
   }
 
+  /** Whether a judged release holds something affected, and nothing worse than a low or moderate advisory. */
+  minorOnly(pkg: string, version: string): boolean {
+    return minorOnly(this.at(pkg, version));
+  }
+
+  /** Whether a release was judged and holds nothing affected. */
+  clean(pkg: string, version: string): boolean {
+    const c = this.at(pkg, version);
+    return c?.status === "checked" && c.affected.length === 0;
+  }
+
   /**
    * checkRange's held filter for one package, or undefined when nothing about it could be judged
    * (registry or OSV down): the safe releases then stay as its own advisories decide, and `to`
@@ -120,6 +131,17 @@ const DAY_MS = 86_400_000;
  *     when it is newer than the far-back one: it is the alternative instead, with its override.
  * A high or critical held advisory is avoid, and is never offered around: there the age of a
  * clean release is no reason to keep the vulnerable one, and the far-back release stays offered.
+ *
+ * Audit 2026-11-11 (M13): every Next.js 15 release exact-pins postcss 8.4.31, and `{next, "^15.0"}`
+ * said avoid and "No release in ^15.0 is free of known advisories", full stop: no word on which
+ * dependency, what clears it, or that 16.x is clean. So, whatever the held advisory's grade:
+ * - when only what the releases hold keeps the range unsafe, the answer names the dependency,
+ *   its advisories and the release of it that clears them (the override), as it did for a low or
+ *   moderate one. The verdict still follows the grade: review for low or moderate, avoid for
+ *   high or critical, and an avoid says the override is what makes the release installable;
+ * - when no clean release outside the range was known only because none had been judged (every
+ *   release holds something), the newest settled releases the package's own advisories leave
+ *   clean are judged, and the first that holds nothing affected is offered.
  */
 export async function adviseNoSafeRelease(input: {
   judge: HeldJudge;
@@ -133,8 +155,10 @@ export async function adviseNoSafeRelease(input: {
 }): Promise<void> {
   const { rc, judge, pkg } = input;
   if (rc.smallest_safe_in_range !== null) return;
-  const outside = rc.newest_safe_outside_range ?? null;
   const published = (v: string) => input.index.releases[v]?.publishedAt ?? null;
+  // "None known" may only mean none was judged: judge the newest ones before saying there is none.
+  if (!rc.newest_safe_outside_range && input.advisories) await offerJudgedOutside(input, published);
+  const outside = rc.newest_safe_outside_range ?? null;
   const why = outside ? tooFarBack(input.to, outside, published(outside), input.now) : null;
   const notOffered = outside && why ? { version: outside, published: published(outside), reason: why } : undefined;
 
@@ -144,6 +168,11 @@ export async function adviseNoSafeRelease(input: {
     rc.held_advice = { dependencies: await describe(own, input.sources), ...(notOffered ? { not_offered: notOffered } : {}) };
     if (notOffered) rc.newest_safe_outside_range = null;
     return;
+  }
+  // The same, for a high or critical held advisory: named with its override. The verdict stays
+  // avoid, and an alternative outside the range stays on offer.
+  if (rc.held_excluded && (rc.affecting_all_total ?? 0) === 0 && own?.status === "checked" && own.affected.length > 0) {
+    rc.held_advice = { dependencies: await describe(own, input.sources) };
   }
   if (!notOffered || !input.advisories) return;
 
@@ -172,6 +201,47 @@ export async function adviseNoSafeRelease(input: {
   if (!minorOnly(check)) return;
   rc.held_advice = { dependencies: await describe(check, input.sources), alternative: candidate, not_offered: notOffered };
   rc.newest_safe_outside_range = null;
+}
+
+/** How many releases outside the range are judged, newest first, looking for one that holds nothing affected. */
+const OUTSIDE_JUDGED = 4;
+/** A release younger than this is not offered as the alternative (dependency_check's release-age hold). */
+const SETTLED_DAYS = 3;
+
+/**
+ * No release outside the range was known to be safe. That is also what "none was judged" looks
+ * like: checkRange calls a release that holds anything unsafe until its held dependencies have
+ * been checked, and a package whose every release pins something (next: postcss) has no judged
+ * release outside the range at all. Judge the newest settled, stable releases that the package's
+ * own advisories leave clean, and offer the first that holds nothing affected.
+ */
+async function offerJudgedOutside(
+  input: { judge: HeldJudge; pkg: string; to: string; rc: RangeCheck; index: PackageReleaseIndex; advisories: readonly AdvisoryRanges[] | null | undefined; now: Date },
+  published: (v: string) => string | null,
+): Promise<void> {
+  const { rc, judge, pkg } = input;
+  const excluded = excludedReleases(input.index);
+  const settled = (v: string) => {
+    const at = published(v);
+    return !at || (input.now.getTime() - Date.parse(at)) / DAY_MS >= SETTLED_DAYS;
+  };
+  const candidates = Object.values(input.index.releases)
+    .map((r) => r.version)
+    .filter(
+      (v) =>
+        !excluded.has(v) &&
+        !isPrereleaseIn("npm", v) &&
+        rangeAdmits("npm", rc.range, v) !== true &&
+        settled(v) &&
+        advisoriesAffecting(input.advisories!, v, "npm").length === 0,
+    )
+    .sort((a, b) => compareVersions(b, a, "npm"))
+    .slice(0, OUTSIDE_JUDGED);
+  if (candidates.length === 0) return;
+  await judge.judge([{ pkg, versions: candidates }]);
+  // Never one that is too far back to be an alternative (the same bar as a release that needed no judging).
+  const clean = candidates.find((v) => judge.clean(pkg, v) && tooFarBack(input.to, v, published(v), input.now) === null);
+  if (clean) rc.newest_safe_outside_range = clean;
 }
 
 /** A held check whose affected dependencies carry only low or moderate advisories. */

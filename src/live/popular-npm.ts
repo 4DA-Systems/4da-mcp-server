@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
  * The npm packages a typo-squat imitates: a fixed, bundled list, so a "did you mean" is offline and
- * the same on every run. Used only to name the likely intended package beside an `avoid` for a name
- * taken down as malware (or a name the registry does not have); it never decides a verdict.
+ * the same on every run. It names the likely intended package beside an `avoid` for a name taken
+ * down as malware (or a name the registry does not have), and it starts dependency_check's name
+ * check: a NEW dependency one or two edits from a name here is `review` (or `avoid`) unless its own
+ * downloads and age show it is established (dependency-check-nearmiss.ts). A name on this list is
+ * never flagged for neighbouring another one.
  *
  * Source: npm-high-impact 1.13.0 (github.com/wooorm/npm-high-impact, MIT, published 2026-06-08),
  * the first 1,000 names of its `topDownload` list and the first 1,000 of its `topDependent` list,

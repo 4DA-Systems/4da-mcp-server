@@ -280,14 +280,25 @@ describe("PyPI", () => {
     expect(signal(r, "release_age")).toMatchObject({ effect: "proceed", value: { published_at: "2025-03-05T20:05:00.369721Z" } });
   });
 
-  it("~=3.1, a bare 3.1 (no such release: the 3.1 series) and ==3.1.4 all resolve on the PEP 440 line", async () => {
+  it("~=3.1 is the series; a bare 3.1 is the release 3.1.0, as ==3.1 is; ==3.1.4 resolves on the PEP 440 line", async () => {
     const out = await check([
       { ecosystem: "PyPI", package: "jinja2", to: "~=3.1" },
       { ecosystem: "PyPI", package: "jinja2", to: "3.1" },
       { ecosystem: "PyPI", package: "jinja2", to: "==3.1.4" },
+      { ecosystem: "PyPI", package: "jinja2", to: "==3.1" },
+      { ecosystem: "PyPI", package: "jinja2", to: "3.1.*" },
     ]);
     expect(out.results[0]).toMatchObject({ to: "3.1.6", verdict: "proceed" });
-    expect(out.results[1]).toMatchObject({ to: "3.1.6", to_requested: "3.1", verdict: "proceed" });
+    // Audit 2026-11-11 (M13): "3.1" read as the 3.1 series said proceed (3.1.6) while "==3.1" said
+    // avoid, and an agent writes `Jinja2==3.1`, which installs 3.1.0. A bare version is that release.
+    expect(out.results[1]).toMatchObject({ to: "3.1.0", to_requested: "3.1" });
+    expect(out.results[1].verdict).toBe(out.results[3].verdict);
+    expect(out.results[1].verdict).not.toBe("proceed");
+    expect(out.results[1].to_read_as).toMatch(/^exact version: a bare "3\.1" is the one release 3\.1\.0, as pip reads ==3\.1; it is not the 3\.1 series/);
+    expect(out.results[1].range_check).toMatchObject({ basis: "same_line", range: "==3.1.*", smallest_safe_in_range: "3.1.6" });
+    expect(out.results[3]).toMatchObject({ to: "3.1.0", to_requested: "==3.1" });
+    expect(out.results[4]).toMatchObject({ to: "3.1.6", to_requested: "3.1.*", verdict: "proceed" });
+    expect(out.results[4].to_read_as).toMatch(/^range: "3\.1\.\*" is read as a PEP 440 specifier/);
     expect(out.results[2].to).toBe("3.1.4");
     expect(["avoid", "review"]).toContain(out.results[2].verdict);
     expect(out.results[2].range_check).toMatchObject({ basis: "same_line", range: "==3.1.*", smallest_safe_in_range: "3.1.6" });
@@ -470,13 +481,21 @@ describe("version and constraint parsing", () => {
     expect(pep440SpecAdmits("^3.1", "3.1")).toBeNull();
   });
 
-  it("targets: exact, latest, constraint, and PyPI's two-part ambiguity", () => {
+  it("targets: exact, latest, constraint; a bare PyPI version is one release, never a series", () => {
     expect(parseTarget("npm", "7.5.10")).toEqual({ kind: "exact", version: "7.5.10" });
     expect(parseTarget("crates.io", "=0.17.8")).toEqual({ kind: "exact", version: "0.17.8" });
     expect(parseTarget("crates.io", "0.17")).toEqual({ kind: "range", range: "0.17" });
     expect(parseTarget("npm", "LATEST")).toEqual({ kind: "latest" });
     expect(parseTarget("PyPI", "==2.0")).toEqual({ kind: "exact", version: "2.0" });
-    expect(parseTarget("PyPI", "2.0")).toEqual({ kind: "exact_or_series", version: "2.0", range: "==2.0.*" });
+    expect(parseTarget("PyPI", "2.0")).toEqual({ kind: "exact", version: "2.0" });
+    expect(parseTarget("PyPI", "3")).toEqual({ kind: "exact", version: "3" });
+    expect(parseTarget("PyPI", "3.1.*")).toEqual({ kind: "range", range: "==3.1.*" });
+    expect(parseTarget("PyPI", "~=3.1")).toEqual({ kind: "range", range: "~=3.1" });
+    // npm, Cargo and Go read a bare major or major.minor as a range themselves.
+    expect(parseTarget("npm", "7")).toEqual({ kind: "range", range: "7" });
+    expect(parseTarget("npm", "7.5")).toEqual({ kind: "range", range: "7.5" });
+    expect(parseTarget("crates.io", "1")).toEqual({ kind: "range", range: "1" });
+    expect(parseTarget("Go", "v1.2")).toEqual({ kind: "range", range: "v1.2" });
     expect(parseTarget("PyPI", "3.1.x")).toEqual({ kind: "range", range: "==3.1.*" });
     expect(parseTarget("Go", "1.2.3")).toEqual({ kind: "exact", version: "v1.2.3" });
     expect(parseTarget("Go", "v2.0.0+incompatible")).toEqual({ kind: "exact", version: "v2.0.0+incompatible" });

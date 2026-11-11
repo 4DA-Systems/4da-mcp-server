@@ -108,12 +108,15 @@ export interface OsvVulnerability {
     }>;
     /** Versions listed explicitly, in addition to (or instead of) the ranges. */
     versions?: string[];
-    /** RustSec puts `informational` (unmaintained | unsound | notice) here, per package. */
-    database_specific?: { informational?: string };
+    /**
+     * RustSec puts `informational` (unmaintained | unsound | notice; null for a vulnerability) here, per
+     * package, with the exploit `categories` it files the advisory under and its `cvss` vector.
+     */
+    database_specific?: { informational?: string | null; categories?: string[] | null; cvss?: string | null };
   }>;
   references?: Array<{ type: string; url: string }>;
   /** GitHub-advisory severity label: LOW | MODERATE | HIGH | CRITICAL; `cwe_ids` (CWE-506 = malicious code). */
-  database_specific?: { severity?: string; cwe_ids?: string[]; informational?: string };
+  database_specific?: { severity?: string; cwe_ids?: string[]; informational?: string | null };
   /** Set (to an RFC3339 timestamp) when the advisory has been withdrawn/retracted. */
   withdrawn?: string;
   published?: string;

@@ -318,12 +318,20 @@ describe("Y3: a moderate advisory a release holds never steers to a release year
     expect(r.reason).toMatch(/Newest safe release outside it: 23\.3\.1\./);
   });
 
-  it("a high held advisory stays avoid, and its alternatives are left as they were", async () => {
+  it("a high held advisory stays avoid and keeps its alternative; it is named with the override that clears it", async () => {
     nxShape("HIGH");
     const [r] = (await check([{ ecosystem: "npm", package: "nx", to: "latest" }])).results;
     expect(r.verdict).toBe("avoid");
-    expect(r.range_check.held_advice).toBeUndefined();
+    // Audit 2026-11-11 (M13): an avoid that names nothing ("No release ... is free of known
+    // advisories") left an agent with no route. The dependency and its override are named whatever
+    // the grade; only a low or moderate one turns the verdict to review.
+    expect(r.range_check.held_advice.dependencies).toEqual([
+      { package: "minimatch", installs: "10.2.5", advisories: ["GHSA-g3hv-75wg-m249"], severity: "high", fixed_in: "11.0.1" },
+    ]);
+    expect(r.range_check.held_advice.not_offered).toBeUndefined();
     expect(r.range_check.newest_safe_outside_range).toBe("13.2.4");
+    expect(r.reason).toMatch(/A high or critical advisory, so 24\.0\.5 as published stays avoid\./);
+    expect(r.reason).toMatch(/To install 24\.0\.5 without it, override minimatch to 11\.0\.1/);
   });
 
   it("a release with its own high advisory stays avoid; the alternative is the newest release clear of its own advisories", async () => {
