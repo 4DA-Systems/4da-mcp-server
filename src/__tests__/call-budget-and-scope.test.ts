@@ -36,7 +36,7 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { formatScanResult } from "../tools/vulnerability-scan-format.js";
 import type { FourDADatabase } from "../db.js";
-import { resultText, stdioSession } from "./helpers/stdio-session.js";
+import { resultText, serverEntry, stdioSession } from "./helpers/stdio-session.js";
 
 const noDb = null as unknown as FourDADatabase;
 
@@ -251,7 +251,9 @@ describe("an operating-system directory is never scanned", () => {
     expect(requests).toEqual([]);
   });
 
-  it("a server STARTED in one scans nothing, says so on stderr, and each tool says why", async () => {
+  // The built server is needed: skipped where only the source is checked out (the 4DA repo's
+  // MCP schema contract job runs this suite without building it). MCP CI builds first, so it runs there.
+  it.skipIf(!fs.existsSync(serverEntry))("a server STARTED in one scans nothing, says so on stderr, and each tool says why", async () => {
     const { results, stderr, timings } = await stdioSession(SYSTEM_DIR, [["vulnerability_scan", {}], ["dependency_health", {}]], {}, { requestTimeoutMs: REQUEST_BOUND_MS });
     expect(stderr).toMatch(/\[4DA\] ".*" is an operating-system directory.*not a project, so it is not scanned/);
     expect(results[0].isError).toBe(true);

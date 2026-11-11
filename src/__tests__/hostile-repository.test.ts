@@ -23,7 +23,7 @@ import { startWalkBudget } from "../walk-budget.js";
 import { LiveIntelligence } from "../live/index.js";
 import { resolveGroup } from "../live/resolution.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
-import { resultText, stdioSession } from "./helpers/stdio-session.js";
+import { resultText, serverEntry, stdioSession } from "./helpers/stdio-session.js";
 
 let dir: string;
 beforeEach(() => {
@@ -376,7 +376,9 @@ describe("Cargo.toml: the crate name is read in one pass", () => {
  */
 const REQUEST_BOUND_MS = 45_000;
 
-describe("the built server, started inside a hostile repository, answers every request", () => {
+// The built server is needed: skipped where only the source is checked out (the 4DA repo's
+// MCP schema contract job runs this suite without building it). MCP CI builds first, so it runs there.
+describe.skipIf(!fs.existsSync(serverEntry))("the built server, started inside a hostile repository, answers every request", () => {
   it("two lines of .gitignore and a 40-character directory: tool calls and tools/list all answer", async () => {
     write(".gitignore", STARS);
     write(`${LONG_NAME}/README.md`, "x");
