@@ -318,12 +318,15 @@ describe("the project-tree walk has a time budget", () => {
     for (let i = 0; i < 4; i++) project(`apps/p${i}`);
     write(".gitignore", `${Array.from({ length: MAX_RULES_PER_FILE }, (_, i) => `${"a?".repeat(30)}*${"?a".repeat(30)}*z${i}`).join("\n")}\n`);
     for (let i = 0; i < 80; i++) write(`big/${"a".repeat(240)}${i}/keep.txt`, "");
-    process.env.FOURDA_WALK_BUDGET_MS = "150";
+    // A budget that is certainly spent before the walk ends, on any machine: what is under test is
+    // that the walk STOPS promptly once it is spent, with 5,000 of the costliest rules to match at
+    // every directory. (A 150 ms budget made this depend on runner speed: CI walked the tree in 119 ms.)
+    process.env.FOURDA_WALK_BUDGET_MS = "1";
     const run = timed(() => scanProjectTree(dir));
     // Stopped, and said so: never a silent drop, never a hang.
     expect(run.value.discovery.walkTruncated).toBe(true);
     expect(run.value.discovery.walkStopped).toBe("time_budget");
-    expect(discoveryNote(run.value.discovery)).toContain("stopped at its 0.2 s time budget");
+    expect(discoveryNote(run.value.discovery)).toMatch(/stopped at its [\d.]+ s time budget/);
     expect(run.ms).toBeLessThan(5_000);
   });
 });
