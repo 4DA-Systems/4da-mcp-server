@@ -287,6 +287,51 @@
   effective requirement, each for its own tool: an entry that admits the fix
   makes the step `npm update qs`; one that excludes it makes the step "change
   that entry", with no parent blamed and no second override suggested.
+- **vulnerability_scan and upgrade_planner give one answer per finding.** On
+  4DA's own src-tauri the scan said "Upgrade zip 8.6.0 → 9.0.5" while the
+  planner said, correctly, that docx-rs 0.4.22 (its newest release) requires
+  `^8.6.0`. The scan now runs the planner's fix-path verification on every
+  vulnerable copy it lists, and a transitive copy's recommendation is that
+  verdict in the planner's words: "Refresh ... with a lockfile refresh",
+  "Upgrade the parent that pins ...", "Blocked upstream: ... it takes an
+  override or replacing the parent", or "Waiting on upstream". A copy whose fix
+  path could not be read in time says so (NOT CHECKED) instead of naming a bare
+  version. `fix_targets` carries the planner's `action`, `breaking` and
+  `commands`; a concise row carries `fix_action` and `fix_breaking` for a
+  transitive copy.
+- **A yanked release is never named for code this host does not build.** The
+  plan named crypto-bigint 0.7.6 (yanked on crates.io) for a crate not built on
+  Windows: those rows were never checked. They are now checked like any other
+  (after the findings that count): the target is 0.7.9, with 0.7.6 to 0.7.8
+  named as yanked, in the plan and in the scan's platform-inactive rows.
+- **"breaking" is honest about forced versions.** "Force uuid to 11.1.1" under
+  request 2.88.2 (`^3.3.2`) said `breaking: false`; request does
+  `require('uuid/v4')` and uuid 11 removed that export. A forced override,
+  resolution or Cargo `[patch]` that crosses a major version of what the parent
+  declares is now `breaking: true`, and the step says why (zip 8 → 9 under
+  docx-rs is one). A transitive step whose only move is a major upgrade of what
+  the project declares is breaking too.
+- **A dead installed line names the smallest safe release and the newest.**
+  "No 8.x release clears every advisory: 9.0.0 is the smallest safe release, on
+  the nearest later line that has one; 9.0.3 is the newest safe release"
+  (jsonwebtoken 8.5.1; Django 3.2 → 5.2.17, newest 6.1.3), in the plan's
+  reasons (with `latestVersion`) and in the scan's recommendation and
+  `fix_targets.newest_safe`. Only where the project picks the release (a direct
+  copy, or one it must force).
+- **Python and Go transitive fixes say the step.** Every one was "waiting on
+  upstream" with no command. PyPI: the parents' requirements are read from
+  poetry.lock, or from each parent release's `requires_dist` on PyPI (uv.lock,
+  compiled requirements files); when every parent admits the fix and the newest
+  release they admit is clean, the step is `lockfile_refresh` with `poetry update
+  certifi`, `uv lock --upgrade-package certifi` or the `--upgrade-package`
+  re-compile; when one excludes it, "blocked upstream" names the parent and
+  whether its newest release admits the fix (requests 2.25.0 requires
+  `idna<3`; 2.34.2 admits 3.15). A fix that drops the project's lowest Python
+  is said as that: sqlparse 0.6.0 requires Python >= 3.10, so a `^3.8` lock
+  keeps 0.5.x whatever Django declares. Go: no requirement sets an upper bound,
+  so an `// indirect` module is raised with `go get module@vX && go mod tidy`
+  (not when go.mod replaces or excludes it). A requirement that cannot be read
+  leaves the old label: never a refresh on a guess.
 - **Platform activity is tracked per lockfile.** One lockfile that cargo cannot
   resolve (a stale example) made every crate it shares with the project's real
   lockfile count as built on this host. A finding now carries

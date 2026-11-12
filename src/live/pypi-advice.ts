@@ -87,6 +87,20 @@ function compileCommand(tool: "uv" | "pip-compile", input: string, output: strin
 }
 
 /**
+ * The re-compile command that moves `name` from `installed` to `target` in the compiled file that
+ * pins it, when the file names its tool and an input that is present; null otherwise.
+ */
+export function pypiCompileCommand(projectDir: string, name: string, installed: string, target: string): string | null {
+  for (const { file, body } of filesPinning(projectDir, name, installed)) {
+    const compiled = compiledRequirements(body);
+    if (!compiled) continue;
+    const input = presentInput(projectDir, compiled);
+    return input && compiled.tool && isPlainPath(file) ? compileCommand(compiled.tool, input, file, name, target) : null;
+  }
+  return null;
+}
+
+/**
  * The advice for `name` at `installed` when a compiled requirements file in `projectDir` pins it;
  * null when no compiled file does (the caller keeps its own advice). Both a declared pin and an
  * indirect one are moved by re-compiling, never by editing the output.

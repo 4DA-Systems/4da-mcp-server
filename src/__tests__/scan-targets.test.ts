@@ -84,7 +84,11 @@ describe("vulnerability_scan upgrade targets", () => {
   it("recommends 0.10.80, not the affected 0.10.79, in both formats", async () => {
     const concise = await scan({}, sources());
     expect(concise.vulnerable_packages[0]).toMatchObject({ package: "openssl", fixed_version: "0.10.80", fix_checked: "all_advisories" });
-    expect(concise.recommendations[0]).toMatch(/^Upgrade openssl 0\.10\.38 → 0\.10\.80 .*0\.10\.79, the highest per-advisory fix, is itself affected by GHSA-phqj-4mhp-q6mq/);
+    // A transitive copy (no manifest here declares it) is never a bare "Upgrade": it carries upgrade_planner's
+    // verdict, which here cannot be read (the lockfile names no parent), and says so (Wave 1: one answer per finding).
+    expect(concise.recommendations[0]).toMatch(
+      /^openssl 0\.10\.38 in \. is transitive .*0\.10\.80 would resolve 2 CVEs; whether a lockfile refresh reaches it or a parent has to move was NOT CHECKED.*0\.10\.79, the highest per-advisory fix, is itself affected by GHSA-phqj-4mhp-q6mq/,
+    );
     const detailed = await scan({ response_format: "detailed" }, sources());
     expect(detailed.fix_targets["openssl@0.10.38"]).toMatchObject({ target: "0.10.80", checked: "all_advisories" });
     // Each advisory row keeps its own fix: that is still true of that advisory.
