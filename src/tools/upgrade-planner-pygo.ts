@@ -22,6 +22,7 @@ import {
   pythonRefreshCommand,
   pythonSpecAdmits,
   requirementsOn,
+  requirementsOnGated,
   type PythonParents,
 } from "../live/pygo-parents.js";
 import { readTextFile } from "../live/text-file.js";
@@ -77,22 +78,30 @@ export async function pygoRefreshOrUpstream(
   }
 
   const facts = await sources.releaseFacts("PyPI", step.package).catch(() => null);
-  const edges: Array<{ parent: string; parentVersion: string | null; specs: string[] }> = [];
+  const edges: Array<{ parent: string; parentVersion: string | null; specs: string[]; gated: boolean }> = [];
   for (const { parents } of read) {
     for (const e of parents.edges) {
       let specs = e.specs;
+      let gated = e.gated === true;
       if (specs === null && e.parentVersion !== null) {
         const dist = await sources.pypiRequiresDist(e.parent, e.parentVersion).catch(() => null);
-        const on = dist ? requirementsOn(dist, step.package) : null;
-        specs = on && on.length > 0 ? on : null;
+        const on = dist ? requirementsOnGated(dist, step.package) : null;
+        specs = on && on.specs.length > 0 ? on.specs : null;
+        gated ||= on?.gated === true;
       }
       // A requirement that cannot be read leaves the step as it was: never a refresh on a guess.
       if (specs === null) return false;
-      if (!edges.some((x) => x.parent === e.parent && x.parentVersion === e.parentVersion)) edges.push({ parent: e.parent, parentVersion: e.parentVersion, specs });
+      if (!edges.some((x) => x.parent === e.parent && x.parentVersion === e.parentVersion)) edges.push({ parent: e.parent, parentVersion: e.parentVersion, specs, gated });
     }
   }
   const admits = (specs: string[], v: string) => specs.map((s) => pythonSpecAdmits(s, v));
   if (edges.some((e) => admits(e.specs, target).every((ok) => ok === null))) return false;
+  // A requirement that holds on some Pythons only (an environment marker): its branches decide only
+  // when every one admits the fix. One that excludes it may not apply to the project's Pythons, and
+  // one that admits it says nothing of the others, so neither a refresh nor "blocked" is claimed.
+  if (edges.some((e) => e.gated && !admits(e.specs, target).every((ok) => ok === true))) return false;
+  /** Whether every requirement of an edge admits v (a gated edge), or any one does (alternatives of one requirement). */
+  const edgeAdmits = (e: (typeof edges)[number], v: string) => (e.gated ? admits(e.specs, v).every((ok) => ok === true) : admits(e.specs, v).some((ok) => ok === true));
   const label = (e: (typeof edges)[number]) => `${e.parentVersion === null ? "the project" : `${e.parent} ${e.parentVersion}`} requires ${step.package} "${e.specs.join('" or "') || "any version"}"`;
 
   // A parent whose every requirement excludes the fix: blocked upstream, named.
@@ -131,7 +140,7 @@ export async function pygoRefreshOrUpstream(
   // lowest Python), which must be the fix or above it, and clean.
   const clean = (v: string) => !advisories || !advisories.some((a) => !a.maintenance && advisoryAffects(a, v, "PyPI"));
   const candidates = facts.versions
-    .filter((v) => !isPrereleaseVersion(v, "PyPI") && edges.every((e) => admits(e.specs, v).some((ok) => ok === true)) && supports(v))
+    .filter((v) => !isPrereleaseVersion(v, "PyPI") && edges.every((e) => edgeAdmits(e, v)) && supports(v))
     .sort((a, b) => compareVersions(b, a, "PyPI"));
   const resolvesTo = candidates[0] ?? null;
   // A compiled file is re-compiled with `--upgrade-package "x==target"`: the fix itself, not the newest.
@@ -186,7 +195,8 @@ async function goRaise(step: PyGoStep, dirs: string[], root: string, installed: 
     const goMod = path.join(dir, "go.mod");
     const command = goIndirectRaise(goMod, step.package, installed, target);
     if (!command) return false;
-    commands.push({ dir: relativeDir(dir, root), command });
+    // Two entries, run in order: `&&` is not a statement separator in Windows PowerShell 5.1.
+    commands.push({ dir: relativeDir(dir, root), command }, { dir: relativeDir(dir, root), command: "go mod tidy" });
     const own = goDirectiveOf(goMod);
     if (own) directives.push(own);
   }
@@ -200,7 +210,7 @@ async function goRaise(step: PyGoStep, dirs: string[], root: string, installed: 
   step.refreshCommands = commands;
   replaceReason(
     step,
-    `Transitive dependency: Go selects the highest version any module requires and no requirement sets an upper bound, so raising it in go.mod reaches ${target} with no parent moving: ${commands.map((c) => `\`${c.command}\` in ${c.dir}`).join("; ")} (go get also raises what that release itself requires)${newerGo}`,
+    `Transitive dependency: Go selects the highest version any module requires and no requirement sets an upper bound, so raising it in go.mod reaches ${target} with no parent moving: ${[...new Set(commands.map((c) => c.dir))].map((d) => `${commands.filter((c) => c.dir === d).map((c) => `\`${c.command}\``).join(", then ")} in ${d}`).join("; ")} (go get also raises what that release itself requires)${newerGo}`,
   );
   return true;
 }

@@ -464,9 +464,99 @@ describe("5. Python transitive copies: refresh when every parent admits, blocked
     expect(step("certifi").refreshCommands).toBeUndefined();
   });
 
+  /** uv.lock for a project on requests 2.25.0, with an optional [manifest] table. */
+  function uvLock(manifest = "") {
+    write("pyproject.toml", '[project]\nname = "x"\nversion = "0.1.0"\nrequires-python = ">=3.8"\ndependencies = ["requests==2.25.0"]\n');
+    write("uv.lock", [
+      'version = 1\nrequires-python = ">=3.8"\n',
+      ...(manifest ? [manifest] : []),
+      '[[package]]\nname = "certifi"\nversion = "2020.12.5"\nsource = { registry = "https://pypi.org/simple" }\n',
+      '[[package]]\nname = "requests"\nversion = "2.25.0"\nsource = { registry = "https://pypi.org/simple" }\ndependencies = [\n    { name = "certifi" },\n]\n',
+    ].join("\n"));
+  }
+
+  it("a uv [manifest] constraint on the package decides what a refresh reaches: no refresh is claimed from the parents", async () => {
+    pythonRegistry();
+    uvLock('[manifest]\nconstraints = [{ name = "certifi", specifier = "<2023" }]\n');
+    const { step } = await plan();
+    expect(step("certifi").action).not.toBe("lockfile_refresh");
+    expect(JSON.stringify(step("certifi"))).not.toMatch(/uv lock --upgrade-package certifi/);
+  });
+
+  it("a [manifest] entry for another package changes nothing", async () => {
+    pythonRegistry();
+    uvLock('[manifest]\noverrides = [{ name = "urllib3", specifier = "<2" }]\n');
+    const { step } = await plan();
+    expect(step("certifi")).toMatchObject({ action: "lockfile_refresh" });
+  });
+
+  it("marker-gated requirements that disagree on the fix decide nothing (requires_dist)", async () => {
+    pythonRegistry();
+    // On Python >= 3.8 requests would exclude the fix; on older ones it admits it.
+    PYPI.requests["2.25.0"].requiresDist = ['certifi>=2017.4.17 ; python_version < "3.8"', 'certifi<2023 ; python_version >= "3.8"'];
+    uvLock();
+    const { step } = await plan();
+    expect(step("certifi").action).not.toBe("lockfile_refresh");
+    expect(step("certifi").refreshCommands).toBeUndefined();
+    expect(step("certifi").reasons.join(" ")).not.toMatch(/blocked upstream/);
+  });
+
+  it("marker-gated requirements that all admit the fix are still a refresh", async () => {
+    pythonRegistry();
+    PYPI.requests["2.25.0"].requiresDist = ['certifi>=2017.4.17 ; python_version < "3.8"', 'certifi>=2020 ; python_version >= "3.8"'];
+    uvLock();
+    const { step } = await plan();
+    expect(step("certifi")).toMatchObject({ action: "lockfile_refresh" });
+  });
+
+  it("a poetry.lock array of marker-gated requirements that disagree decides nothing", async () => {
+    pythonRegistry();
+    write("pyproject.toml", '[tool.poetry]\nname = "x"\nversion = "0.1.0"\n\n[tool.poetry.dependencies]\npython = "^3.8"\nrequests = "2.25.0"\n');
+    write("poetry.lock", [
+      '[[package]]\nname = "requests"\nversion = "2.25.0"\ndescription = ""\noptional = false\npython-versions = ">=3.6"\n\n[package.dependencies]\ncertifi = [\n    {version = ">=2017.4.17", markers = "python_version < \\"3.8\\""},\n    {version = "<2023", markers = "python_version >= \\"3.8\\""},\n]\n',
+      '[[package]]\nname = "certifi"\nversion = "2020.12.5"\ndescription = ""\noptional = false\npython-versions = "*"\n',
+      '[metadata]\nlock-version = "2.0"\npython-versions = "^3.8"\ncontent-hash = "x"\n',
+    ].join("\n"));
+    const { step } = await plan();
+    expect(step("certifi").action).not.toBe("lockfile_refresh");
+    expect(JSON.stringify(step("certifi"))).not.toMatch(/poetry update certifi/);
+  });
 });
 
-describe("5. Go transitive modules: `go get module@v && go mod tidy` (no requirement sets an upper bound)", () => {
+describe("review fixes: the version a verdict names is the checked one", () => {
+  it("a transitive copy whose fix-path check did not finish names the checked target (lodash 4.18.1), never the withdrawn advisory fix (4.18.0)", async () => {
+    const { formatScanResult } = await import("../tools/vulnerability-scan-format.js");
+    const { TRANSITIVE_PENDING } = await import("../tools/fix-verdicts.js");
+    const vuln = {
+      package: "lodash", currentVersion: "4.17.20", ecosystem: "npm", isDev: false, isDirect: false, devScopeKnown: true,
+      vulnId: "GHSA-35jh-r3h4-6jhm", aliases: [], severity: "high", cvssScore: 7.2, summary: "lodash", fixedVersion: "4.18.0",
+      published: "2026-01-01T00:00:00Z", references: [], target: null, platformActive: true, sourceDirs: [dir],
+    } as unknown as VulnerabilityEntry;
+    const result = {
+      scannedAt: new Date().toISOString(), projectPath: dir, ecosystemsScanned: ["npm"], totalScanned: 1, totalVulnerable: 1,
+      platformInactiveVulnerable: 0, bySeverity: { critical: 0, high: 1, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [vuln],
+      cleanCount: 0, scanDurationMs: 1, cached: false, offline: false,
+    } as unknown as VulnerabilityScanResult;
+    const key = ["npm", "lodash", "4.17.20"].join("\u0000");
+    // The target check finished: 4.18.0 is withdrawn, 4.18.1 the target.
+    const clean = { target: "4.18.1", basis: "registry", floor: "4.18.0", floorAffectedBy: [], stillAffectedBy: [], unfixable: [], withheld: ["4.18.0"], withheldWhy: { "4.18.0": '4.18.0 is deprecated on npm ("Bad release")' } };
+    // The planner's fix-path check did not: its step still holds the raw highest advisory fix.
+    const pending = {
+      package: "lodash", ecosystem: "npm", currentVersion: "4.17.20", targetVersion: "4.18.0", upgradeType: "minor", reasons: [TRANSITIVE_PENDING],
+      breaking: false, scope: "transitive", action: "waiting_on_upstream", fixPathChecked: "installed_advisories_only",
+    };
+    const out = formatScanResult(result, undefined, {
+      resolution: null, reResolvedThisCall: false, drift: [], includeDev: true,
+      verifiedTargets: new Map([[key, clean as never]]), verdicts: new Map([[key, pending as never]]),
+    });
+    const line = out.recommendations.find((r: string) => r.includes("lodash 4.17.20"))!;
+    expect(line).toMatch(/4\.18\.1 would resolve 1 CVE/);
+    expect(line).not.toMatch(/4\.18\.0 would resolve/);
+    expect(out.fix_targets["lodash@4.17.20"].target).toBe("4.18.1");
+  });
+});
+
+describe("5. Go transitive modules: `go get module@v`, then `go mod tidy` (no requirement sets an upper bound)", () => {
   function goProject(extra = "") {
     write("go.mod", `module example.com/app\n\ngo 1.21\n\nrequire (\n\tgithub.com/gin-gonic/gin v1.9.1\n)\n\nrequire (\n\tgolang.org/x/text v0.3.0 // indirect\n)\n${extra}`);
     write("go.sum", "github.com/gin-gonic/gin v1.9.1 h1:a=\ngithub.com/gin-gonic/gin v1.9.1/go.mod h1:b=\ngolang.org/x/text v0.3.0 h1:c=\ngolang.org/x/text v0.3.0/go.mod h1:d=\n");
@@ -479,9 +569,13 @@ describe("5. Go transitive modules: `go get module@v && go mod tidy` (no require
     goProject();
     const { step } = await plan();
     const text = step("golang.org/x/text");
-    expect(text).toMatchObject({ action: "lockfile_refresh", scope: "transitive", targetVersion: "v0.3.7", refreshCommands: [{ dir: ".", command: "go get golang.org/x/text@v0.3.7 && go mod tidy" }] });
+    expect(text).toMatchObject({ action: "lockfile_refresh", scope: "transitive", targetVersion: "v0.3.7", refreshCommands: [{ dir: ".", command: "go get golang.org/x/text@v0.3.7" }, { dir: ".", command: "go mod tidy" }] });
+    // Two commands, never joined with `&&` (not a statement separator in Windows PowerShell 5.1).
+    expect(JSON.stringify(text)).not.toMatch(/&&/);
     const concise = await scan();
-    expect(lineFor(concise, "golang.org/x/text", "v0.3.0")).toMatch(/^Refresh golang\.org\/x\/text v0\.3\.0 → v0\.3\.7 .*`go get golang\.org\/x\/text@v0\.3\.7 && go mod tidy`/);
+    expect(lineFor(concise, "golang.org/x/text", "v0.3.0")).toMatch(/^Refresh golang\.org\/x\/text v0\.3\.0 → v0\.3\.7 .*`go get golang\.org\/x\/text@v0\.3\.7`, then `go mod tidy` in \./);
+    const detailed = await scan("detailed");
+    expect(detailed.fix_targets["golang.org/x/text@v0.3.0"].commands).toEqual([{ dir: ".", command: "go get golang.org/x/text@v0.3.7" }, { dir: ".", command: "go mod tidy" }]);
   });
 
   it("a fix that needs a newer Go says so (x/text v0.41.0 requires go >= 1.25.0)", async () => {

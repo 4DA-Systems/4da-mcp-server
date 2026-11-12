@@ -329,9 +329,15 @@
   `idna<3`; 2.34.2 admits 3.15). A fix that drops the project's lowest Python
   is said as that: sqlparse 0.6.0 requires Python >= 3.10, so a `^3.8` lock
   keeps 0.5.x whatever Django declares. Go: no requirement sets an upper bound,
-  so an `// indirect` module is raised with `go get module@vX && go mod tidy`
-  (not when go.mod replaces or excludes it). A requirement that cannot be read
-  leaves the old label: never a refresh on a guess.
+  so an `// indirect` module is raised with `go get module@vX`, then `go mod
+  tidy` (two command entries: `&&` does not chain commands in Windows
+  PowerShell 5.1; not when go.mod replaces or excludes the module). A
+  requirement that cannot be read leaves the old label: never a refresh on a
+  guess. Nor is one decided when a uv.lock `[manifest]` constraint or override
+  names the package, or when a parent's requirements on it are gated by
+  environment markers (`python_version`) and do not all admit the fix. The
+  dead-line wording is not used for calendar (certifi 2020.12.5) or epoch
+  versions.
 - **Platform activity is tracked per lockfile.** One lockfile that cargo cannot
   resolve (a stale example) made every crate it shares with the project's real
   lockfile count as built on this host. A finding now carries

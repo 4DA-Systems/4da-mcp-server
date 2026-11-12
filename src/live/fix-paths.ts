@@ -746,8 +746,10 @@ function withLineFacts(
 
 /** "8.x", "0.21.x" or "3.x": the release line a version is on (its caret line); null when unreadable or 0.0.x. */
 export function lineLabel(version: string): string | null {
+  // An epoch (PEP 440 `1!2.0`) or a calendar version (certifi 2020.12.5) has no caret line: "2020.x" says nothing.
+  if (version.includes("!")) return null;
   const m = /^v?(\d+)(?:\.(\d+))?/.exec(version);
-  if (!m) return null;
+  if (!m || Number(m[1]) >= 1000) return null;
   if (m[1] !== "0") return `${m[1]}.x`;
   return m[2] && m[2] !== "0" ? `0.${m[2]}.x` : null;
 }

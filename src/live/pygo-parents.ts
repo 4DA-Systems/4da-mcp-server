@@ -16,7 +16,7 @@
  * conservative label stays.
  *
  * Go: minimal version selection takes the highest version any module requires and no `require`
- * sets an upper bound, so `go get module@vX && go mod tidy` raises an indirect requirement with
+ * sets an upper bound, so `go get module@vX` then `go mod tidy` raises an indirect requirement with
  * no parent moving, unless go.mod replaces or excludes that module (then nothing is claimed).
  */
 
@@ -35,6 +35,12 @@ export interface PythonParent {
   parentVersion: string | null;
   /** The requirement(s) as the lockfile records them, PEP 440 ("" = any version); null when it records none (read from PyPI). */
   specs: string[] | null;
+  /**
+   * True when a requirement applies only under an environment marker (`python_version < "3.8"`, a
+   * poetry `markers` / `python` entry): the parent then requires different things on different
+   * Pythons, and a verdict is taken only when every branch admits the fix.
+   */
+  gated?: boolean;
 }
 
 export interface PythonParents {
@@ -107,21 +113,30 @@ export function pythonSpecAdmits(spec: string, version: string): boolean | null 
  * `PySocks (!=1.5.7,>=1.5.6) ; extra == 'socks'`): its normalised name, specifier, and whether a
  * marker gates it behind an extra. Null when it is not one.
  */
-export function parsePep508(requirement: string): { name: string; spec: string; extra: boolean } | null {
+export function parsePep508(requirement: string): { name: string; spec: string; extra: boolean; marker: boolean } | null {
   const [head, marker = ""] = requirement.split(";");
   const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(head);
   if (!m) return null;
   if (m[2].trim().startsWith("@")) return null; // a direct URL reference: no specifier to read
   const spec = m[2].trim().replace(/^\(\s*/, "").replace(/\s*\)$/, "").replace(/\s+/g, "");
-  return { name: normalizePythonName(m[1]), spec, extra: /\bextra\s*==/.test(marker) };
+  return { name: normalizePythonName(m[1]), spec, extra: /\bextra\s*==/.test(marker), marker: ENV_MARKER.test(marker) };
 }
+
+/** An environment marker other than `extra`: the requirement holds on some interpreters or platforms only. */
+const ENV_MARKER = /\b(?:python_version|python_full_version|sys_platform|platform_\w+|os_name|implementation_\w+)\b/;
 
 /** The specifiers a parent's `requires_dist` puts on `name`: the unconditional ones, else the extra-gated ones (the lock shows the edge, so the extra is on). */
 export function requirementsOn(requiresDist: string[], name: string): string[] {
+  return requirementsOnGated(requiresDist, name).specs;
+}
+
+/** requirementsOn, and whether any of those specifiers holds under an environment marker only. */
+export function requirementsOnGated(requiresDist: string[], name: string): { specs: string[]; gated: boolean } {
   const want = normalizePythonName(name);
   const all = requiresDist.map(parsePep508).filter((r): r is NonNullable<ReturnType<typeof parsePep508>> => r !== null && r.name === want);
   const plain = all.filter((r) => !r.extra);
-  return (plain.length > 0 ? plain : all).map((r) => r.spec);
+  const chosen = plain.length > 0 ? plain : all;
+  return { specs: chosen.map((r) => r.spec), gated: chosen.some((r) => r.marker) };
 }
 
 /** poetry.lock: each package whose `[package.dependencies]` names `name`, with the requirement it records. */
@@ -145,7 +160,9 @@ function poetryParents(content: string, name: string): PythonParent[] {
       const quoted = /^"([^"]*)"/.exec(value)?.[1];
       const versions = quoted !== undefined ? [quoted] : [...value.matchAll(/\bversion\s*=\s*"([^"]*)"/g)].map((x) => x[1]);
       const specs = versions.map(poetryToPep440);
-      out.push({ parent: normalizePythonName(parent), parentVersion: version, specs: specs.some((s) => s === null) || specs.length === 0 ? null : (specs as string[]) });
+      // An array of entries, or one carrying `markers` / `python`, applies per environment.
+      const gated = quoted === undefined && (versions.length > 1 || /\b(?:markers|python)\s*=/.test(value));
+      out.push({ parent: normalizePythonName(parent), parentVersion: version, specs: specs.some((s) => s === null) || specs.length === 0 ? null : (specs as string[]), ...(gated ? { gated: true } : {}) });
     }
   }
   return out;
@@ -162,16 +179,19 @@ function uvParents(content: string, name: string, version: string): PythonParent
     const parentVersion = local ? null : headField(block, "version");
     if (!local && !parentVersion) continue;
     let listed = false;
+    let gated = false;
     const specs: string[] = [];
     for (const t of block.matchAll(/\{\s*name\s*=\s*"([^"]+)"([^}]*)\}/g)) {
       if (normalizePythonName(t[1]) !== want) continue;
+      const marker = /\bmarker\s*=\s*"([^"]*)"/.exec(t[2])?.[1] ?? "";
+      if (ENV_MARKER.test(marker)) gated = true;
       const pinned = /\bversion\s*=\s*"([^"]*)"/.exec(t[2])?.[1];
       const specifier = /\bspecifier\s*=\s*"([^"]*)"/.exec(t[2])?.[1];
       if (specifier !== undefined) specs.push(specifier);
       else if (pinned === undefined || pinned === version) listed = true;
     }
     if (!listed && specs.length === 0) continue;
-    out.push({ parent: normalizePythonName(parent), parentVersion, specs: specs.length > 0 ? specs : local ? [""] : null });
+    out.push({ parent: normalizePythonName(parent), parentVersion, specs: specs.length > 0 ? specs : local ? [""] : null, ...(gated ? { gated: true } : {}) });
   }
   return out;
 }
@@ -186,10 +206,27 @@ export function pythonLockParents(lockfile: string, name: string, version: strin
     return { format: "poetry", file: lockfile, edges: poetryParents(content, name), projectPython: python ? poetryToPep440(python) : null };
   }
   if (base === "uv.lock") {
+    // `[manifest]` constraints and overrides narrow or replace every parent's requirement: one that
+    // names the package decides what a refresh can reach, so nothing is decided from the parents.
+    if (uvManifestNames(content).has(normalizePythonName(name))) return null;
     const python = /^requires-python\s*=\s*"([^"]*)"/m.exec(content.split(/^\[\[package\]\]/m)[0])?.[1] ?? null;
     return { format: "uv", file: lockfile, edges: uvParents(content, name, version), projectPython: python };
   }
   return null;
+}
+
+/** The packages a uv.lock `[manifest]` table's `constraints` or `overrides` arrays name. */
+export function uvManifestNames(content: string): Set<string> {
+  const out = new Set<string>();
+  const at = content.search(/^\[manifest\][ \t]*$/m);
+  if (at < 0) return out;
+  const rest = content.slice(at).replace(/^\[manifest\][ \t]*\r?\n/, "");
+  const end = rest.search(/^\[/m);
+  const table = end < 0 ? rest : rest.slice(0, end);
+  for (const list of table.matchAll(/^(?:constraints|overrides)\s*=\s*\[([\s\S]*?)\]\s*$/gm)) {
+    for (const n of list[1].matchAll(/\bname\s*=\s*"([^"]+)"/g)) out.add(normalizePythonName(n[1]));
+  }
+  return out;
 }
 
 /**
@@ -247,7 +284,7 @@ export function goIndirectRaise(goModPath: string, module: string, installed: st
   const direct = mod.rawRequires.find((r) => r.module === module && !r.indirect);
   if (direct) return null;
   const v = target.startsWith("v") ? target : `v${target}`;
-  return `go get ${module}@${v} && go mod tidy`;
+  return `go get ${module}@${v}`;
 }
 
 /** The modules a go.mod `exclude` directive names (single and block form). */
