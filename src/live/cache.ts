@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { openDatabase, sqliteDriverStatus, type SqliteDatabase } from "../sqlite-driver.js";
 
-import { serverCacheDbPath } from "../db.js";
+import { serverCacheDbPath, standaloneDbPath } from "../db.js";
 
 let serverCache: SqliteDatabase | null = null;
 
@@ -59,13 +59,34 @@ interface CacheRow {
   expires_at: string;
 }
 
+/** An in-memory database (tests, the no-driver fallback): the only kind a cache may live in besides cache.db. */
+function inMemory(db: SqliteDatabase): boolean {
+  return !db.name || db.name === ":memory:";
+}
+
+/**
+ * The `live_cache` table a server before 6.3.0 left in its own `standalone.db`: disposable rows
+ * nothing reads any more. Dropped once, from that file only (never from a database the server
+ * does not own); a failure leaves it in place.
+ */
+function dropLegacyCacheTable(db: SqliteDatabase): void {
+  try {
+    if (path.resolve(db.name) !== path.resolve(standaloneDbPath())) return;
+    db.exec("DROP TABLE IF EXISTS live_cache");
+  } catch {
+    // Locked or read-only after all: harmless, it is only unused space.
+  }
+}
+
 /**
  * Registry, OSV and changelog responses with a TTL.
  *
- * The cache never lives in the desktop app's database. A read-only connection
- * (the app's `4da.db`, see FourDADatabase) is replaced by the server's own
- * cache file; until 6.0.2 the server created a `live_cache` table inside the
- * app's database and filled it.
+ * The cache lives in its own disposable file, `cache.db` (serverCacheDbPath()), never in a
+ * database that holds records: not in the desktop app's `4da.db` (until 6.0.2 the server created
+ * a `live_cache` table inside it), and not in the server's own `standalone.db`, which holds the
+ * user's decisions and memories (until 6.3.0 standalone mode cached there, while the README
+ * said `cache.db`). Deleting cache.db costs refetches only. An in-memory database passed in
+ * (tests) is used as is.
  */
 export class LiveCache {
   private db: SqliteDatabase | null;
@@ -73,7 +94,8 @@ export class LiveCache {
   private memory: Map<string, CacheRow> | null = null;
 
   constructor(db: SqliteDatabase | null) {
-    this.db = !db || db.readonly ? getServerCacheDb() : db;
+    if (db && !db.readonly && !inMemory(db)) dropLegacyCacheTable(db);
+    this.db = !db || db.readonly || !inMemory(db) ? getServerCacheDb() : db;
     if (!this.db) {
       this.memory = new Map();
       return;
