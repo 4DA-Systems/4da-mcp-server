@@ -194,6 +194,8 @@ interface ItemResult {
   range_check?: RangeCheck;
   /** Unmaintained-package notices on `to`: reported, never part of the verdict (audit L3). */
   maintenance_notices?: string[];
+  /** "private": the package name is private and was never looked up (live/private-packages.ts). */
+  not_checked?: "private";
 }
 
 /** A validated request item. */
@@ -227,16 +229,40 @@ export async function executeDependencyCheck(
   liveIntel: LiveIntelligence | null,
   opts: { now?: Date } = {},
 ) {
-  const requested = validateItems(params.items);
+  const all = validateItems(params.items);
   const now = opts.now ?? new Date();
   const checkedAt = now.toISOString();
+
+  // A private package name is never sent anywhere (live/private-packages.ts): such an item is
+  // "not checked (private)", never clean, and nothing below sees it.
+  const privateWhy = all.map((r) => liveIntel?.privateReason?.(r.ecosystem, r.package) ?? null);
+  const requested = all.filter((_, i) => !privateWhy[i]);
+  const privateItems = all.flatMap((r, i) => {
+    const why = privateWhy[i];
+    return why ? [{ at: i, result: privateResult(r, why) }] : [];
+  });
+  /** The results in the order asked, private items in their places. */
+  const inOrder = (checked: ItemResult[]): ItemResult[] => {
+    const out: ItemResult[] = [];
+    let next = 0;
+    for (let i = 0; i < all.length; i++) {
+      const p = privateItems.find((x) => x.at === i);
+      out.push(p ? p.result : checked[next++]);
+    }
+    return out;
+  };
+  const privateMeta = privateItems.length > 0 ? { private: privateItems.length } : {};
+
+  if (requested.length === 0) {
+    return finish(checkedAt, inOrder([]), { offline: false, osvCached: false, ...privateMeta });
+  }
 
   if (!liveIntel || !liveIntel.isEnabled()) {
     const reason = "Live lookups are disabled (FOURDA_OFFLINE=true); nothing about these versions could be checked.";
     return finish(
       checkedAt,
-      requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason, signals: [] })),
-      { offline: true, osvCached: false },
+      inOrder(requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason, signals: [] }))),
+      { offline: true, osvCached: false, ...privateMeta },
     );
   }
 
@@ -473,7 +499,21 @@ export async function executeDependencyCheck(
     return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, unsafe), signals, ...extra, ...noticesOf(advisories) };
   });
 
-  return finish(checkedAt, results, { offline: scan.offline, osvCached: scan.cached });
+  return finish(checkedAt, inOrder(results), { offline: scan.offline, osvCached: scan.cached, ...privateMeta });
+}
+
+/**
+ * An item whose package is private: unknown, with why, and nothing about it looked up. The
+ * agent is told how to check it instead (the private registry's own tooling).
+ */
+function privateResult(r: Requested, why: string): ItemResult {
+  return {
+    ...head(provisional(r)),
+    verdict: "unknown",
+    reason: `NOT CHECKED (private): ${r.package} is a private package (${why}), so nothing about it was sent to OSV.dev or a public registry, and nothing about ${provisional(r).to} is known. This is not a clean result: check it with your private registry's own tooling.`,
+    signals: [],
+    not_checked: "private",
+  };
 }
 
 /** The reason, plus the safe releases to write instead when the verdict is against `to`. */
@@ -1011,7 +1051,7 @@ const head = (item: Resolved) => ({
   ...(item.readAs ? { to_read_as: item.readAs } : {}),
 });
 
-function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean }) {
+function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number }) {
   const counts = new Map<Verdict, number>();
   for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
   const order: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
@@ -1027,6 +1067,9 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       privacy: PRIVACY_NOTE,
       offline: meta.offline,
       osv_cached: meta.osvCached,
+      ...(meta.private
+        ? { private_packages: `${meta.private} item${meta.private === 1 ? " names a private package" : "s name private packages"}: not looked up anywhere, verdict unknown (not_checked: "private").` }
+        : {}),
       provenance: {
         mode: "live_registry_check",
         note: "Point-in-time facts from the public registries and OSV.dev at checked_at. Says nothing about code behaviour; a proceed is the absence of known warning signs, not a review of the release.",

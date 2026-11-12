@@ -207,7 +207,9 @@ export async function runEngine(cases: Case[], source: PinnedRecordsSource, cano
     const live = new LiveIntelligence(null, { advisorySource: source });
     live.initFromProjectTree(c.dir, treeResolutionGroups(entries), discovery);
     const inv = new Set<string>();
-    for (const dep of live.getAuditDeps()) {
+    // The inventory is what the engine READ. A private copy (a git-sourced crate in this corpus,
+    // live/private-packages.ts) is read like any other and only kept out of the lookups.
+    for (const dep of [...live.getAuditDeps(), ...live.getPrivateAuditDeps()]) {
       if (dep.version === null) continue;
       for (const dir of dep.sourceDirs) inv.add(invKey(dep.ecosystem, relDir(c.dir, dir), dep.name, dep.version));
     }

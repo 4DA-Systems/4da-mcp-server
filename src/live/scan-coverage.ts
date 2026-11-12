@@ -11,6 +11,7 @@
  * answer with what was not checked.
  */
 
+import { privateLine } from "./private-packages.js";
 import type { VulnerabilityCoverage, VulnerabilityScanResult } from "./types.js";
 
 /** The reason given when live lookups are switched off. */
@@ -22,6 +23,32 @@ export const LOOKUPS_DISABLED = "live lookups are disabled (FOURDA_OFFLINE=true)
  * the answer at all: `expectedTotal` dependencies are then all unchecked.
  */
 export function vulnerabilityCoverage(
+  result: VulnerabilityScanResult | null,
+  opts: { enabled: boolean; expectedTotal?: number; notLoaded?: string },
+): VulnerabilityCoverage | null {
+  const coverage = osvCoverage(result, opts);
+  const priv = result?.privateExcluded;
+  if (!priv || priv.count <= 0) return coverage;
+  // Private names were never sent (private-packages.ts): not checked, never clean. Counted apart
+  // from the OSV answer, so an incomplete answer here does not read as an OSV.dev outage.
+  const line = privateLine(priv.count, priv.dependencies.map((d) => d.name));
+  const base: VulnerabilityCoverage = coverage ?? {
+    complete: false,
+    total_dependencies: result!.totalScanned,
+    checked_dependencies: result!.totalScanned,
+    unchecked_dependencies: 0,
+    reason: "private dependencies were not sent",
+    note: line,
+  };
+  return {
+    ...base,
+    private_dependencies: priv.count,
+    private_dependency_list: priv.dependencies,
+    note: coverage ? `${coverage.note} ${line}` : line,
+  };
+}
+
+function osvCoverage(
   result: VulnerabilityScanResult | null,
   opts: { enabled: boolean; expectedTotal?: number; notLoaded?: string },
 ): VulnerabilityCoverage | null {

@@ -41,6 +41,7 @@ import { requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lo
 import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import { readTextFile } from "./text-file.js";
+import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import type { OsvEcosystem } from "./types.js";
 
 export type { PackageInstance, VersionSource } from "./lockfile-types.js";
@@ -681,6 +682,7 @@ function resolveRust(cwd: string): VersionSource {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const problems: LockfileProblem[] = [];
+  const privateIndex: PrivateIndexEntry[] = [];
   try {
     const content = readTextFile(lockPath);
     const packages = parseCargoLockPackages(content);
@@ -695,6 +697,9 @@ function resolveRust(cwd: string): VersionSource {
     const isLocal = (pkg: CargoPackage) => cargoWritten && pkg.source === null;
     for (const pkg of packages) {
       if (isLocal(pkg)) continue;
+      // From a registry other than crates.io, or from git: private (private-packages.ts). Kept as
+      // an instance so the set is whole; the live layer leaves it out of every lookup.
+      if (pkg.source && !isPublicCratesSource(pkg.source)) privateIndex.push({ name: pkg.name, version: pkg.version, registry: sourceLabel(pkg.source), file: lockPath });
       instances.add(pkg.name, pkg.version);
       versionsByName.set(pkg.name, [...(versionsByName.get(pkg.name) ?? []), pkg.version]);
     }
@@ -714,7 +719,10 @@ function resolveRust(cwd: string): VersionSource {
     }
   } catch { /* skip */ }
 
-  return found(versions, instances, lockPath, "lockfile", problems.length > 0 ? { problems } : {});
+  return found(versions, instances, lockPath, "lockfile", {
+    ...(problems.length > 0 ? { problems } : {}),
+    ...(privateIndex.length > 0 ? { privateIndex } : {}),
+  });
 }
 
 function resolveRustFromManifest(cwd: string): VersionSource {

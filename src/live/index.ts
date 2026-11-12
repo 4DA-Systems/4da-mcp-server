@@ -5,8 +5,9 @@
  * Orchestrates vulnerability scanning and headline fetching.
  * Manages cache lifecycle and offline fallback.
  *
- * Privacy: Only sends package names/versions (public) and tech keywords (generic).
- * Set FOURDA_OFFLINE=true to disable all network calls.
+ * Privacy: sends package names/versions and tech keywords, never a private package name
+ * (private-packages.ts: a scope mapped to a private registry, GOPRIVATE, a private Cargo or PyPI
+ * index, FOURDA_PRIVATE_PACKAGES). Set FOURDA_OFFLINE=true to disable all network calls.
  */
 
 import type { SqliteDatabase } from "../sqlite-driver.js";
@@ -33,6 +34,7 @@ import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
+import { PrivatePackageRules, type PrivateDependency } from "./private-packages.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -104,6 +106,12 @@ export class LiveIntelligence {
   private lastHeadlines: LiveHeadline[] = [];
   private resolvedDeps: ResolvedDependency[] = [];
   private auditDeps: ResolvedDependency[] = [];
+  /** What the machine says is private (private-packages.ts), for the project in use. */
+  private privateRules: PrivatePackageRules;
+  /** Audit copies left out of every lookup because their names are private, each with why. */
+  private privateDeps: PrivateDependency[] = [];
+  /** The same copies as resolved (dev scope and all), for scoping them like a scan. */
+  private privateAudit: ResolvedDependency[] = [];
   private initialized = false;
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
@@ -138,6 +146,7 @@ export class LiveIntelligence {
     this.db = db;
     this.enabled = process.env.FOURDA_OFFLINE !== "true" || options.advisorySource?.network === false;
     this.cache = new LiveCache(db);
+    this.privateRules = new PrivatePackageRules([]);
     this.rateLimiter = new RateLimiter(DEFAULT_RATE_LIMITS);
     this.osvScanner = new OsvScanner(this.cache, this.rateLimiter, options.advisorySource);
     this.hnFetcher = new HNFetcher(this.cache, this.rateLimiter);
@@ -282,16 +291,91 @@ export class LiveIntelligence {
   }
 
   private applyGroups(groups: ResolutionGroup[], projectRoot: string | null): void {
+    this.privateRules = new PrivatePackageRules([...new Set([...(projectRoot ? [projectRoot] : []), ...groups.map((g) => g.dir)])]);
     this.groupResults = groups.map(resolveGroup);
     this.rebuildDependencySet();
     this.projectRoot = projectRoot;
     this.initialized = true;
   }
 
+  /**
+   * The dependency set, private names taken out of it (private-packages.ts): what no lookup may
+   * send. They are kept in `privateDeps` so every answer says they were not checked.
+   */
   private rebuildDependencySet(): void {
-    this.resolvedDeps = dedupeDependencies(this.groupResults.flatMap((r) => r.resolved));
-    this.auditDeps = dedupeDependencies(this.groupResults.flatMap((r) => r.audit));
+    const key = (dep: { ecosystem: string; name: string; version: string | null }) => `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
+    const privateWhy = new Map<string, string>();
+    const isPublic = (r: GroupResolution, dep: ResolvedDependency) => {
+      const why = this.privateReasonIn(r, dep.ecosystem, dep.name, dep.version);
+      if (why && !privateWhy.has(key(dep))) privateWhy.set(key(dep), why);
+      return !why;
+    };
+    this.resolvedDeps = dedupeDependencies(this.groupResults.flatMap((r) => r.resolved.filter((dep) => isPublic(r, dep))));
+    const audit = this.groupResults.flatMap((r) => r.audit.map((dep) => ({ dep, open: isPublic(r, dep) })));
+    this.auditDeps = dedupeDependencies(audit.filter((a) => a.open).map((a) => a.dep));
+    this.privateAudit = dedupeDependencies(audit.filter((a) => !a.open).map((a) => a.dep));
+    this.privateDeps = this.privateAudit.map((dep) => ({
+      ecosystem: dep.ecosystem,
+      name: dep.name,
+      version: dep.version,
+      why: privateWhy.get(key(dep)) ?? "private",
+    }));
     this.resolvedAt = new Date().toISOString();
+  }
+
+  /** Why a dependency of this group is private, or null: its lockfile's source, then the name rules. */
+  private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): string | null {
+    const fromLock = (r.privateIndex ?? []).find((p) => p.name === name && (p.version === null || version === null || p.version === version));
+    if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
+    return this.privateRules.reasonFor(ecosystem, name);
+  }
+
+  /**
+   * Why a package name is private for this project, or null: the name rules (a scope mapped to a
+   * private registry, GOPRIVATE, FOURDA_PRIVATE_PACKAGES), then any lockfile that installs it
+   * from a private registry or index. dependency_check asks this before any lookup.
+   */
+  privateReason(ecosystem: string, name: string): string | null {
+    const byName = this.privateRules.reasonFor(ecosystem, name);
+    if (byName) return byName;
+    const norm = (n: string) => (ecosystem === "PyPI" ? n.toLowerCase().replace(/[-_.]+/g, "-") : n);
+    for (const r of this.groupResults) {
+      if (mapEcosystem(r.group.language) !== ecosystem) continue;
+      const hit = (r.privateIndex ?? []).find((p) => norm(p.name) === norm(name));
+      if (hit) return `${hit.file} installs it from ${hit.registry}, not the public registry`;
+    }
+    return null;
+  }
+
+  /** Dependencies left out of every lookup because they are private, each with why. */
+  getPrivateDependencies(): PrivateDependency[] {
+    return this.privateDeps;
+  }
+
+  /** The same copies as resolved (with their directories): read from the lockfiles, never sent. */
+  getPrivateAuditDeps(): ResolvedDependency[] {
+    return this.privateAudit;
+  }
+
+  /** The private part of a scan in this scope, attached to its result so every answer reports it. */
+  private withPrivate(result: VulnerabilityScanResult, includeDev: boolean): VulnerabilityScanResult {
+    if (this.privateAudit.length === 0) return result;
+    const scoped = applyInstanceDevScope(this.db, this.privateAudit);
+    const inScope = includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));
+    if (inScope.length === 0) return result;
+    const why = new Map(this.privateDeps.map((p) => [`${p.ecosystem}\0${p.name}\0${p.version ?? ""}`, p.why]));
+    return {
+      ...result,
+      privateExcluded: {
+        count: inScope.length,
+        dependencies: inScope.slice(0, 50).map((d) => ({
+          ecosystem: d.ecosystem,
+          name: d.name,
+          version: d.version,
+          why: why.get(`${d.ecosystem}\0${d.name}\0${d.version ?? ""}`) ?? "private",
+        })),
+      },
+    };
   }
 
   /**
@@ -363,7 +447,7 @@ export class LiveIntelligence {
     options?: { includeDev?: boolean; forceRefresh?: boolean },
   ): Promise<VulnerabilityScanResult> {
     if (!this.enabled) {
-      return emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: LOOKUPS_DISABLED });
+      return this.withPrivate(emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: LOOKUPS_DISABLED }), options?.includeDev ?? false);
     }
 
     // Read at scan time, not init time: the app rewrites its inventory on
@@ -372,7 +456,7 @@ export class LiveIntelligence {
     const deps = options?.includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));
 
     if (deps.length === 0) {
-      return emptyVulnResult(projectPath, false);
+      return this.withPrivate(emptyVulnResult(projectPath, false), options?.includeDev ?? false);
     }
 
     if (options?.forceRefresh) {
@@ -397,7 +481,7 @@ export class LiveIntelligence {
     const generation = this.generation;
     const request = ++this.scanRequests;
     try {
-      const result = await this.osvScanner.scan(deps, projectPath);
+      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath), includeDev);
       if (generation === this.generation && request > this.storedScanRequest) {
         this.lastVulnScan = result;
         this.lastVulnScanIncludesDev = includeDev;
@@ -409,7 +493,7 @@ export class LiveIntelligence {
       // an unexpected failure. Nothing was checked, and the answer says so
       // (it used to hand back the last scan or an empty one, read as clean).
       const reason = `the scan failed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
-      return { ...emptyVulnResult(projectPath, true, { count: deps.length, reason }), ecosystemsScanned: [...new Set(deps.map((d) => d.ecosystem))] };
+      return this.withPrivate({ ...emptyVulnResult(projectPath, true, { count: deps.length, reason }), ecosystemsScanned: [...new Set(deps.map((d) => d.ecosystem))] }, includeDev);
     }
   }
 
@@ -522,9 +606,15 @@ export class LiveIntelligence {
    */
   async fetchHeadlines(techStack: string[]): Promise<LiveHeadline[]> {
     if (!this.enabled) return [];
+    // A private package name is never a search term (private-packages.ts).
+    const privateNames = new Set(this.privateDeps.map((p) => p.name.toLowerCase()));
+    const terms = techStack.filter(
+      (t) => !privateNames.has(t.toLowerCase()) && !["npm", "crates.io", "PyPI", "Go"].some((eco) => this.privateRules.reasonFor(eco, t)),
+    );
+    if (terms.length === 0) return [];
 
     try {
-      this.lastHeadlines = await this.hnFetcher.fetch(techStack);
+      this.lastHeadlines = await this.hnFetcher.fetch(terms);
       return this.lastHeadlines;
     } catch {
       return this.lastHeadlines; // Return last known

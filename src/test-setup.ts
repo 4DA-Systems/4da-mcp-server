@@ -19,6 +19,15 @@ const emptySettings = join(tmpdir(), "4da-test-empty-settings.json");
 writeFileSync(emptySettings, "{}");
 process.env.FOURDA_SETTINGS_PATH = emptySettings;
 
+// Private-package rules (live/private-packages.ts) read the user's ~/.npmrc, the Go env file and
+// GOPRIVATE: a scope or module pattern on the operator's machine must not change what tests send.
+// Tests that exercise them pass their own environment.
+const emptyNpmrc = join(tmpdir(), "4da-test-empty-npmrc");
+writeFileSync(emptyNpmrc, "");
+process.env.NPM_CONFIG_USERCONFIG = emptyNpmrc;
+process.env.GOENV = "off";
+for (const key of ["GOPRIVATE", "GONOPROXY", "GONOSUMDB", "FOURDA_PRIVATE_PACKAGES", "npm_config_userconfig"]) delete process.env[key];
+
 // Every file the server writes (cache.db, and standalone.db as the memory
 // store beside the desktop app's read-only database) goes under FOURDA_MCP_HOME:
 // a per-worker temp directory, never the operator's real data directory.
