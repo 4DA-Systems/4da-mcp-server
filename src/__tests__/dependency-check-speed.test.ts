@@ -20,6 +20,8 @@ import { LiveCache } from "../live/cache.js";
 import { RateLimiter } from "../live/rate-limiter.js";
 import { executeDependencyCheck, runDependencyCheck } from "../tools/dependency-check.js";
 import { shapeDependencyCheck, type DetailedAnswer } from "../tools/dependency-check-concise.js";
+import { HeldJudge } from "../tools/dependency-check-held.js";
+import { emptyVulnResult } from "../live/dependency-set.js";
 import type { FourDADatabase } from "../db.js";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "dependency-check");
@@ -202,5 +204,28 @@ describe("the concise answer (default) keeps every fact an agent acts on", () =>
     expect(concise.results[0].signals).toBeUndefined();
     expect(Array.isArray(full.results[0].signals)).toBe(true);
     expect(concise.results[0].verdict).toBe(full.results[0].verdict);
+  });
+});
+
+describe("the held-dependency budget is not spent by the registry reads before it", () => {
+  it("a judge first called 11 s after the check started still judges (its budget starts at the first judge)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const sources = {
+        releaseFacts: async () => ({ versions: ["4.20.0"], withdrawn: [], withdrawnWhy: {}, latest: "4.20.0", deprecatedLatest: null, heldSpecs: { "4.20.0": { qs: "6.11.0" } } }),
+      } as unknown as ConstructorParameters<typeof HeldJudge>[0];
+      // OSV answers in 20 ms: an exhausted budget gives up on it, a fresh one waits.
+      const judge = new HeldJudge(sources, async (deps) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { ...emptyVulnResult("held", false), totalScanned: deps.length, cleanCount: deps.length };
+      });
+      judge.prefetch(["express"]);
+      // The registry reads of a slow call (next's 31 MB packument, crates.io's pacing) take this long.
+      vi.setSystemTime(Date.now() + 11_000);
+      await judge.judge([{ pkg: "express", versions: ["4.20.0"] }]);
+      expect(judge.at("express", "4.20.0")).toEqual({ status: "checked", affected: [] });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -34,7 +34,14 @@ export class HeldJudge {
   private readonly checks = new Map<string, HeldCheck>();
   /** Per package: every release's held specs, or null when the registry could not be read. */
   private readonly specs = new Map<string, Record<string, Record<string, string>> | null>();
-  private readonly deadline = Date.now() + HELD_CHECK_BUDGET_MS;
+  /**
+   * When the judging budget runs out: set by the first judge(), not by construction, so the
+   * registry reads the call makes first (prefetch() runs beside them) never spend it.
+   */
+  private deadlineAt: number | null = null;
+  private get deadline(): number {
+    return this.deadlineAt ?? Date.now() + HELD_CHECK_BUDGET_MS;
+  }
 
   constructor(
     private readonly sources: FixPathSources | null,
@@ -69,6 +76,7 @@ export class HeldJudge {
   async judge(requests: Array<{ pkg: string; versions: string[] }>): Promise<void> {
     if (!this.sources) return;
     const sources = this.sources;
+    this.deadlineAt ??= Date.now() + HELD_CHECK_BUDGET_MS;
     await Promise.all([...new Set(requests.map((r) => r.pkg))].map((pkg) => this.readSpecs(pkg)));
     const releases: Array<{ key: string; specs: Record<string, string> }> = [];
     for (const { pkg, versions } of requests) {
