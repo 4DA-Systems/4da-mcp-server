@@ -169,12 +169,9 @@ function getDatabase(): FourDADatabase {
         );
 
         if (liveIntel.isEnabled()) {
-          console.error(`[4DA]   Live intelligence: enabled (OSV.dev)`);
-          // The vulnerability scan goes through the warmup so a briefing that
-          // arrives before it finishes can await it instead of reading nothing.
-          // Headlines are fetched only when ecosystem_pulse is called.
-          liveIntel.startVulnerabilityWarmup(cwd);
-          console.error(`[4DA]   Vulnerability scan warming in background (OSV.dev).`);
+          // Nothing is sent at startup (audit 2026-11-11 A1 #7: `initialize` + `tools/list` alone
+          // sent every dependency name to OSV.dev). The first tool that needs the scan starts it.
+          console.error(`[4DA]   Live intelligence: enabled (OSV.dev); no lookup is made until a tool needs one.`);
         }
       } else {
         console.error(`[4DA]   ${noSupportedProjectNote(cwd, discovery)}`);
@@ -235,23 +232,10 @@ function getDatabase(): FourDADatabase {
           console.error(`[4DA]   The 4DA app tracks no project at ${root}; reading its lockfiles directly.`);
         }
 
-        // Headlines are fetched only when ecosystem_pulse is called: the
-        // search terms come from the user's projects.
-        if (liveIntel.isEnabled()) {
-          // Warm the vulnerability scan too. This branch never scanned: the
-          // dependency set was initialised, headlines were prefetched, and
-          // `lastVulnScan` stayed null until some tool called
-          // vulnerability_scan — so the first what_should_i_know of a session
-          // read an empty cache and answered "safe_to_delegate" for a task
-          // that named a package with an open advisory (verified live
-          // 2026-09-07: 0 advisories at t+0, 11 advisories at t+7min).
-          if (liveIntel.isInitialized()) {
-            liveIntel.startVulnerabilityWarmup(resolveProjectDir());
-            console.error(
-              `[4DA]   Vulnerability scan warming in background (OSV.dev) for ${liveIntel.getAuditDeps().length} resolved dependencies.`,
-            );
-          }
-        }
+        // Nothing is looked up here: headlines are fetched only when ecosystem_pulse is called, and
+        // the vulnerability scan only when a tool needs it (what_should_i_know, upgrade_planner and
+        // dependency_health start and await it through ensureVulnerabilities, so the first briefing
+        // of a session still reads a scan, never an empty cache).
       } catch (err) {
         // Non-fatal — live intel just won't have version data — but log to stderr
         // so a silent empty scan (e.g. project_dependencies schema drift) is
@@ -284,7 +268,6 @@ function initWithoutDatabase(): void {
     console.error(`[4DA]   ${noSupportedProjectNote(cwd, discovery)}`);
     return;
   }
-  if (liveIntel.isEnabled()) liveIntel.startVulnerabilityWarmup(cwd);
 }
 
 /** The startup line for a directory with no lockfile this server reads: what it did find, never just "nothing". */
