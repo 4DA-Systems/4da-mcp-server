@@ -79,6 +79,9 @@ write(".claude-plugin/marketplace.json", market);
 const gemini = json("gemini-extension.json");
 gemini.version = next;
 write("gemini-extension.json", gemini);
+// Every install and run command in the README pins the version (manifest-versions.test.ts).
+const readme = readFileSync(join(root, "README.md"), "utf8");
+writeFileSync(join(root, "README.md"), readme.replaceAll(`@4da/mcp-server@${current}`, `@4da/mcp-server@${next}`));
 
 run("pnpm", ["run", "build"]);
 run("pnpm", ["test"]);

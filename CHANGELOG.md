@@ -364,6 +364,53 @@
   proxy is not used and what to set. Older Node cannot use a proxy.
 - **The fix-path cache moves to version 13**, since entries written before hold
   the releases a maintainer flagged as candidates.
+- **Nothing leaves the machine until a tool needs it.** With no tool called,
+  `initialize` and `tools/list` already sent every dependency name in the
+  project to OSV.dev: listing the tools started the background init, and the
+  init started the vulnerability scan. The init now only reads the project;
+  the first tool that needs the scan starts it (a briefing still waits for it,
+  never reading an empty cache).
+- **Private package names are never sent.** Every name, private ones included,
+  went to OSV.dev and the registries; `FOURDA_OFFLINE` was the only off switch.
+  With nothing to configure, a package is private when the machine says so: an
+  npm scope mapped to a non-public registry in the project's or the user's
+  `.npmrc` (or `.yarnrc.yml` `npmScopes`), a Go module matching `GOPRIVATE`,
+  `GONOPROXY` or `GONOSUMDB` (environment or `go env -w`), a crate `Cargo.lock`
+  installs from another registry or from git, a PyPI package `uv.lock`,
+  `poetry.lock` or `Pipfile.lock` installs from an index other than pypi.org.
+  `FOURDA_PRIVATE_PACKAGES` adds globs (`npm:@acme/*, Go:github.com/acme/*`).
+  Such a package is read but never looked up: scans, health and plans lead
+  with `NOT CHECKED (private)` and list why each is private
+  (`coverage.private_dependency_list`), `dependency_check` answers `unknown`
+  with `not_checked: "private"`, `upgrade_impact` refuses it, and
+  `ecosystem_pulse` never searches for it.
+- **The embedding provider never receives file paths.** The README said no
+  file paths leave the machine, but `what_should_i_know` embedded its task
+  together with every path in `files`. The provider now gets the task text;
+  the paths still rank results locally. The README says exactly what an
+  embedding provider receives.
+- **dependency_check is faster, and answers concisely by default.** On 25
+  public packages a check took 32 s cold: the advisory lists started only
+  after every registry read, what npm releases hold was read one package at a
+  time, and crates.io was paged 100 versions a request at one request a second
+  (clap: five pages) while PyPI and Go waited behind it. Lookups that depend
+  only on the names now start together and later phases reuse them, each
+  registry has its own pool, and a whole crates.io version list is one
+  request. Same 25 packages: 12 s cold. The default answer keeps the verdict,
+  the reason (the evidence of every avoid, review, unknown and wait finding),
+  the safe versions (`safe`), advisory ids, a malicious package's records,
+  notices and every registry quote: 42 KB became 10 KB.
+  `response_format: "detailed"` returns every signal as before.
+- **dependency_check no longer reports a publish-trust drop against a later
+  release.** `react@19.2.0` read "Publish trust dropped" against 19.1.10, a
+  backport published a year later. The baseline is now the previous release
+  on the line by version AND by publish time.
+- **The cache is in `cache.db` in standalone mode too**, as the README says;
+  it was inside `standalone.db`, beside your decisions and memories. The old
+  table is dropped once.
+- **README:** every install command pins the version, with how to update it;
+  the Windows paths for Devin and VS Code show their backslashes again; a
+  factual comparison with GitHub's `check_dependency_vulnerabilities`.
 
 ## 6.2.7 — 2026-11-08
 
