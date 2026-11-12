@@ -34,7 +34,8 @@ import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { appTracksProject, liveIntelFor, resolveProjectScope, systemDirectoryProblem } from "./project-scope.js";
-import { reconcileDirectTargets, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
+import { reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
+import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
@@ -613,6 +614,9 @@ async function executeStandalonePlanner(
       });
     } else if (vulnerable && action === "no_fix_available") {
       fixPathInputs.set(rec, { fixes: [], sourceDirs: [] });
+    } else if (vulnerable && action === "not_built_on_this_host" && fixable && vulns) {
+      // Its target is checked like any other: never a yanked or withdrawn release (audit 2026-11-11).
+      fixPathInputs.set(rec, fixInputOf(vulns));
     }
   }
 
@@ -645,10 +649,7 @@ async function executeStandalonePlanner(
       const fixedVersions = entries.map((e) => e.fixedVersion).filter((f): f is string => Boolean(f));
       const platformActive = !entries.every((e) => !e.platformActive);
       const groups = groupAdvisories(entries);
-      const reasons = [
-        vulnerabilitiesReason(groups),
-        "Transitive dependency — not declared in your manifest; the fix arrives via a parent package update or a lockfile refresh",
-      ];
+      const reasons = [vulnerabilitiesReason(groups), TRANSITIVE_PENDING];
       if (!platformActive) {
         reasons.push("Affected code is gated behind a target not active on this platform");
       }
@@ -671,13 +672,10 @@ async function executeStandalonePlanner(
         platformActive,
       };
       recommendations.push(rec);
-      if (rec.action === "waiting_on_upstream" || rec.action === "no_fix_available") {
-        const unfixed = groups.filter((g) => !g.members.some((m) => m.fixedVersion));
-        fixPathInputs.set(rec, {
-          fixes: fixedVersions,
-          sourceDirs: builtDirs(entries),
-          unfixed: unfixed.map((g) => ({ id: g.best.vulnId, ids: [...g.ids] })),
-        });
+      // The same input vulnerability_scan verifies for this copy (fix-verdicts.ts): one answer per finding.
+      // A copy not built on this host is checked too, for its target only (never a yanked release).
+      if (rec.action === "waiting_on_upstream" || rec.action === "no_fix_available" || (rec.action === "not_built_on_this_host" && target)) {
+        fixPathInputs.set(rec, fixInputOf(entries));
       }
     }
   }
@@ -711,6 +709,8 @@ async function executeStandalonePlanner(
   // A direct bump must not stop at a release that still pins a vulnerable transitive a slightly
   // newer release clears (express 4.20.0 still pins path-to-regexp 0.1.10; audit H1).
   await reconcileDirectTargets(limited, verifiedInputs, liveIntel);
+  // A transitive fix that needs a major upgrade of what the project declares is breaking.
+  settleTransitiveBreaking(limited);
   limited.sort(planOrder);
   // Go module versions carry their `v` in every field, as currentVersion does (audit 7e).
   for (const r of limited) {
@@ -842,14 +842,6 @@ function notBuiltIn(entries: VulnerabilityEntry[], root: string): string | null 
   const dirs = [...unbuilt].map((d) => relativeDir(d, root)).sort();
   const built = builtDirs(entries).map((d) => relativeDir(d, root)).sort();
   return `Built on this host in ${dirsLabel(built, (d) => d)} only: ${dirsLabel(dirs, (d) => d)} lock${dirs.length === 1 ? "s" : ""} the same version without building it here, so this step is not about ${dirs.length === 1 ? "it" : "them"}`;
-}
-
-/** The directories that pin these copies AND build them on this host: where a fix for this host applies. */
-function builtDirs(entries: VulnerabilityEntry[]): string[] {
-  const unbuilt = new Set(entries.flatMap((e) => e.platformInactiveDirs ?? []));
-  const all = [...new Set(entries.flatMap((e) => e.sourceDirs ?? []))];
-  const built = all.filter((d) => !unbuilt.has(d));
-  return built.length > 0 ? built : all;
 }
 
 /** "N known vulnerabilities (ids)", one per alias group. */

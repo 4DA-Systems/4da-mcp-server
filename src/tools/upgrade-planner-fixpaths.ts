@@ -32,13 +32,16 @@ import type { LiveIntelligence } from "../live/index.js";
 import {
   aboveListedText,
   cleanFixTarget,
+  deadLineText,
   directFix,
+  lineLabel,
   heldNote,
   manualRefreshSteps,
   overrideReaches,
   refreshCommandFor,
   refreshVerdict,
   REGISTRY_UNREAD_NOTE,
+  targetNote,
   introducesText,
   malwareText,
   unreadableText,
@@ -70,6 +73,7 @@ import { withHeldTargets } from "../live/held-targets.js";
 import type { AdvisoryQuery } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
+import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
 
 /** One dependency the project declares that moves a blocking parent. */
 export interface ParentLever {
@@ -233,7 +237,8 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
   // (audit H4), NodeGoat's 104 dev rows ran express's own steps past the budget.
   const todo = inputs
     .filter((i) => (i.fixes.length > 0 || i.step.action === "no_fix_available") && i.step.currentVersion)
-    .sort((a, b) => Number(a.step.isDev === true) - Number(b.step.isDev === true));
+    // Then code this host does not build: its targets are checked last, when the budget allows.
+    .sort((a, b) => Number(a.step.action === "not_built_on_this_host") - Number(b.step.action === "not_built_on_this_host") || Number(a.step.isDev === true) - Number(b.step.isDev === true));
   if (!sources) {
     for (const i of todo) i.step.fixPathChecked = "installed_advisories_only";
     return todo.length;
@@ -317,6 +322,10 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     clean = held.get("step") ?? clean;
   }
   const heldUnclean = clean ? Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined : false;
+  // Code this host never builds still names a release, and it is checked like any other: the plan
+  // named crypto-bigint 0.7.6, which crates.io yanked, for a crate not built on Windows (audit
+  // 2026-11-11). Only the target is settled; no command or parent move is worked out for this host.
+  if (step.action === "not_built_on_this_host") return inactiveTarget(step, clean, ecosystem);
   if (malicious.length > 0) {
     step.reasons.push(malwareText(step.package, malicious));
     // A malware record with a fixed release (MAL-2023-462: fsevents 1.2.9-1.2.10, clean from
@@ -453,9 +462,46 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   if (step.scope === "transitive" && step.action === "waiting_on_upstream" && step.currentVersion) {
     await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
   }
+  withLineWords(step, clean);
   withUpgradeCommands(input, liveIntel);
   // Held dependencies affected with no clean release found, or not checked: never "all_advisories".
   return heldUnclean ? "held" : "verified";
+}
+
+/**
+ * A dead installed line: the smallest safe release (the target, on the nearest later line) and the
+ * newest safe one, both named (Django 3.2 -> 5.2.17, newest 6.1.3; jsonwebtoken 8.5.1 -> 9.0.0,
+ * newest 9.0.3). `latestVersion` carries the newest safe release when no other row field does.
+ * Only where the project picks the release: a direct row, or a transitive one it must force
+ * (override_or_replace). A refresh or a parent upgrade decides a transitive copy's version, and a
+ * "newest safe" path-to-regexp 9.0.0 beside express's 0.1.13 only invites a wrong bump.
+ */
+function withLineWords(step: FixPathStep, clean: FixTargetResult): void {
+  if (step.scope !== "direct" && step.action !== "override_or_replace") return;
+  const dead = step.currentVersion ? deadLineText(step.currentVersion, clean) : null;
+  if (dead) step.reasons.push(dead.charAt(0).toUpperCase() + dead.slice(1));
+  if (clean.newestSafe && clean.newestSafe !== step.targetVersion && step.latestVersion === undefined) step.latestVersion = clean.newestSafe;
+}
+
+/** A row for code this host does not build: its target checked against every advisory and the registry's withdrawals, nothing else. */
+function inactiveTarget(step: FixPathStep, clean: FixTargetResult | null, ecosystem: OsvEcosystem): Outcome {
+  if (!clean) return "failed";
+  if (clean.withheld.length > 0) step.withheld = clean.withheld;
+  if (clean.target === null) {
+    const why = withheldText(clean, ecosystem) ?? targetNote(clean, ecosystem);
+    step.targetVersion = null;
+    step.upgradeType = "unknown";
+    step.breaking = false;
+    step.reasons.push(why ?? (clean.stillAffectedBy.length > 0 ? `No published version clears every known advisory: ${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")}` : "No release is named"));
+  } else if (step.targetVersion !== clean.target) {
+    const note = targetNote(clean, ecosystem);
+    setTarget(step, clean.target);
+    if (note) step.reasons.push(note.charAt(0).toUpperCase() + note.slice(1));
+  }
+  if (clean.target) withLineWords(step, clean);
+  if (clean.advisoriesUnread) return "unverified";
+  step.fixPathChecked = "all_advisories";
+  return "verified";
 }
 
 /**
@@ -545,7 +591,7 @@ function withUpgradeCommands(input: FixPathInput, liveIntel: Pick<LiveIntelligen
 function withCompiledPypi(input: FixPathInput, liveIntel: Pick<LiveIntelligence, "getProjectRoot">): boolean {
   const { step } = input;
   if (step.ecosystem !== "PyPI" || !step.targetVersion || !step.currentVersion) return false;
-  if (!(step.action === "upgrade_direct" || (step.scope === "transitive" && step.action === "waiting_on_upstream"))) return false;
+  if (!(step.action === "upgrade_direct" || (step.scope === "transitive" && (step.action === "waiting_on_upstream" || step.action === "lockfile_refresh")))) return false;
   const root = liveIntel.getProjectRoot() ?? process.cwd();
   const instructions: Array<{ dir: string; instruction: string }> = [];
   for (const dir of [...new Set(input.sourceDirs)]) {
@@ -559,7 +605,8 @@ function withCompiledPypi(input: FixPathInput, liveIntel: Pick<LiveIntelligence,
     const at = step.reasons.findIndex((r) => TRANSITIVE_REASON.test(r));
     const text = "Transitive dependency — a compiled requirements file pins it only because other packages require it; re-compiling with the upgrade moves it (upgradeInstructions), and the resolver says when a parent blocks it";
     if (at >= 0) step.reasons[at] = text;
-    else step.reasons.push(text);
+    // Already decided from its parents' requirements (upgrade-planner-pygo.ts): that reason stands.
+    else if (!step.reasons.some((r) => r.startsWith("Transitive dependency"))) step.reasons.push(text);
   }
   return true;
 }
@@ -573,6 +620,12 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   const { step } = input;
   const ecosystem = step.ecosystem as OsvEcosystem;
   const installed = step.currentVersion!;
+  if (ecosystem === "PyPI" || ecosystem === "Go") {
+    // Their lockfiles record parents differently (or not at all): upgrade-planner-pygo.ts.
+    const all = await sources.packageAdvisories(ecosystem, step.package).catch(() => null);
+    await pygoRefreshOrUpstream(step, input.sourceDirs, sources, liveIntel, target, all?.filter((a) => !unfixable.includes(a.id)) ?? null);
+    return;
+  }
   const lockfiles = [...new Set(input.sourceDirs)]
     .map((dir) => ({ dir, lockfile: liveIntel.lockfileFor(dir, ecosystem) }))
     .filter((l): l is { dir: string; lockfile: string } => l.lockfile !== null);
@@ -619,6 +672,8 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
         })
         .join("; ")}. Change that entry to "${target}" (or a range whose newest release is clean), then reinstall; no parent needs to move and no new override is needed`,
     );
+    const parentsOf = verdicts.flatMap((v) => readLockfileParents(v.lockfile, step.package, installed)?.edges ?? []).filter((e) => !e.local && e.range);
+    forcedAcrossMajor(step, installed, target, parentsOf.map((e) => `${e.parent}${e.parentVersion ? ` ${e.parentVersion}` : ""} requires "${e.range}"`));
     return;
   }
   if (verdicts.every((v) => v.verdict.refreshFixes)) {
@@ -720,6 +775,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     replaceReason(
       `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace the parent${others}`,
     );
+    forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
   }
   const held = moves.flatMap((m) => m.upgrade.levers.filter((l) => l.outcome !== undefined));
@@ -732,6 +788,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     replaceReason(
       `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
     );
+    forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
   }
   if (moves.length > 0 && moves.length === blocking.length && moves.every((m) => m.refresh)) {
@@ -763,6 +820,44 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   replaceReason(
     `Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version, and the releases of ${standings.length < blocking.length ? "some parents were not checked" : "a parent could not be read"}${known}`,
   );
+}
+
+/** "request 2.88.2 requires "^3.3.2"", or the bundled form. */
+function blockingText(b: Blocking): string {
+  return b.bundled
+    ? `${b.parent}${b.parentVersion ? ` ${b.parentVersion}` : ""} ships it bundled at ${b.requirement}`
+    : `${b.parent}${b.parentVersion ? ` ${b.parentVersion}` : ""} requires "${b.requirement}"`;
+}
+
+/**
+ * A forced version (an override, a resolution, a Cargo [patch]) that crosses a major version of
+ * what the parents declare is breaking, and the step says so: "Force uuid to 11.1.1" under request
+ * 2.88.2 read `breaking: false`, while request does `require('uuid/v4')` and uuid 11 removed that
+ * export (audit 2026-11-11). The parent was written against the old major; nothing checked it runs
+ * on the new one. Below 1.0 a minor bump is a major one (0.21 -> 0.22).
+ */
+function forcedAcrossMajor(step: FixPathStep, installed: string, target: string, declared: string[]): void {
+  if (!isMajor(installed, target)) return;
+  step.breaking = true;
+  const who = [...new Set(declared)].slice(0, 3);
+  const line = lineLabel(installed) ?? installed;
+  const one = who.length === 1;
+  step.reasons.push(
+    `Breaking: forcing ${step.package} from ${installed} to ${target} crosses a major version of what ${one ? "its parent declares" : "its parents declare"}${who.length > 0 ? ` (${who.join(", ")})` : ""}; ${one ? "that parent was" : "they were"} written against ${step.package} ${line}, and an API removed or changed in ${target} breaks ${one ? "it" : "them"} at run time, so test ${one ? "its" : "their"} code paths after forcing it`,
+  );
+}
+
+/**
+ * After the levers are settled (reconcileDirectTargets): a transitive step whose fix needs a
+ * major upgrade of what the project declares is breaking. `breaking` said false for a step whose
+ * only move was "upgrade mongodb 2.2.36 -> 3.1.3 (a major upgrade)".
+ */
+export function settleTransitiveBreaking(steps: FixPathStep[]): void {
+  for (const s of steps) {
+    if (s.scope !== "transitive" || (s.action !== "upgrade_parent" && s.action !== "upgrade_parent_unverified")) continue;
+    const ups = s.parentUpgrades ?? [];
+    if (ups.some((u) => !u.refreshOnly && (u.levers.length > 0 ? u.levers.some((l) => l.breaking) : u.breaking))) s.breaking = true;
+  }
 }
 
 /**

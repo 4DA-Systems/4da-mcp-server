@@ -177,7 +177,9 @@ describe("audit 6.2.5 A-4: a uv-compiled requirements file is re-compiled, never
     const result = await scan();
     const idna = result.vulnerable_packages.find((p: { package: string }) => p.package === "idna");
     expect(idna.is_direct).toBe(false);
-    const line = result.recommendations.find((r: string) => r.startsWith("Upgrade idna"));
+    // A transitive copy carries upgrade_planner's verdict (Wave 1, one answer per finding), and the re-compile note.
+    const line = result.recommendations.find((r: string) => r.includes("idna 2.7"));
+    expect(line).not.toMatch(/^Upgrade idna/);
     expect(line).toMatch(/requirements\.txt is compiled from requirements\.in: re-compile it with --upgrade-package instead of editing it \(it is pinned only because other packages require it\)/);
   });
 });

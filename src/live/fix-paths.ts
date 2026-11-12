@@ -30,7 +30,8 @@ import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { escapeModulePath } from "./go-registry.js";
 import { goBasePath, goPathMajor, goVersionMajor } from "./upgrade-go.js";
-import { advisoryRanges, advisoryAffects, installableFix, isGoPseudoVersion, isListedVersion, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
+import { advisoryRanges, advisoryAffects, cleanReleases, installableFix, isGoPseudoVersion, isListedVersion, remainsText, isPrereleaseVersion, smallestCleanVersion, type AdvisoryRanges, type CleanTarget } from "./osv-ranges.js";
+import { computeSemverDistance } from "./semver-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
@@ -57,9 +58,10 @@ const MAX_OSV_PAGES = 10;
  * Bump when the shape of anything this module caches changes (10: npm facts carry `heldSpecs`, audit 6.2.5 D-4;
  * 11: advisory ranges carry `aliases`, so a GHSA record and its PYSEC twin count once; 12: range bounds
  * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable;
- * 13: npm facts withdraw the releases a maintainer flagged on a line that carries another notice, withdrawn-releases.ts npmFlaggedReleases).
+ * 13: npm facts withdraw the releases a maintainer flagged on a line that carries another notice, withdrawn-releases.ts npmFlaggedReleases;
+ * 14: PyPI facts carry each release's `requiresPython`).
  */
-const CACHE_VERSION = 13;
+const CACHE_VERSION = 14;
 /** How long "the registry does not serve this version" is believed: it may be published later. */
 const ABSENT_TTL = 3600;
 
@@ -92,6 +94,12 @@ export interface PackageReleaseFacts {
    * (audit 6.2.5 D-4: express 4.20.0 exact-pins qs 6.11.0).
    */
   heldSpecs?: Record<string, Record<string, string>>;
+  /**
+   * PyPI: per release, the Python versions it supports (`requires_python` of its files), where
+   * the registry states one. A refresh cannot install a release on a Python it does not support:
+   * sqlparse 0.6.0 requires Python >= 3.10, so a lock for `^3.8` keeps 0.5.x (audit a2 finding 10).
+   */
+  requiresPython?: Record<string, string>;
 }
 
 export interface CrateDepReq {
@@ -395,18 +403,20 @@ export class FixPathSources {
    * PyPI's JSON API: every release with files; one whose every file is yanked is withdrawn
    * (PEP 592, the app's `parse_pypi`). A release with no files cannot be installed and is not listed.
    */
-  private async pypiFacts(name: string): Promise<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string> } | null> {
+  private async pypiFacts(name: string): Promise<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; requiresPython?: Record<string, string> } | null> {
     const key = `fixpath:v${CACHE_VERSION}:pypi-facts:${name}`;
-    const hit = this.cache.get<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string> }>(key);
+    const hit = this.cache.get<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; requiresPython?: Record<string, string> }>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
       const res = await fetchWithTimeout(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, {}, TIMEOUT_MS);
       if (!res.ok) return null;
-      const doc = (await res.json()) as { releases?: Record<string, Array<{ yanked?: boolean; yanked_reason?: string | null }>> };
-      const out = { versions: [] as string[], withdrawn: [] as string[], withdrawnWhy: {} as Record<string, string> };
+      const doc = (await res.json()) as { releases?: Record<string, Array<{ yanked?: boolean; yanked_reason?: string | null; requires_python?: string | null }>> };
+      const out = { versions: [] as string[], withdrawn: [] as string[], withdrawnWhy: {} as Record<string, string>, requiresPython: {} as Record<string, string> };
       for (const [version, files] of Object.entries(doc.releases ?? {})) {
         if (!Array.isArray(files) || files.length === 0) continue;
+        const python = files.find((f) => typeof f.requires_python === "string" && f.requires_python.trim() !== "")?.requires_python;
+        if (python) out.requiresPython[version] = python.trim();
         if (files.every((f) => f.yanked === true)) {
           out.withdrawn.push(version);
           out.withdrawnWhy[version] = withdrawalText("PyPI", version, files.find((f) => f.yanked_reason)?.yanked_reason ?? null);
@@ -416,6 +426,28 @@ export class FixPathSources {
       }
       this.cache.set(key, out, "pypi", VERSIONS_TTL);
       return out;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * PyPI: what one published release declares it requires (`info.requires_dist`, PEP 508 strings),
+   * for the parents a uv.lock or a compiled requirements file names without their requirement.
+   * [] when it declares none; null when the registry could not be read.
+   */
+  async pypiRequiresDist(name: string, version: string): Promise<string[] | null> {
+    const key = `fixpath:v${CACHE_VERSION}:pypi-requires:${name}@${version}`;
+    const hit = this.cache.get<string[]>(key);
+    if (hit) return hit;
+    if (!this.rateLimiter.consume("fixpath-registry")) return null;
+    try {
+      const res = await fetchWithTimeout(`https://pypi.org/pypi/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`, {}, TIMEOUT_MS);
+      if (!res.ok) return null;
+      const doc = (await res.json()) as { info?: { requires_dist?: unknown } };
+      const list = Array.isArray(doc.info?.requires_dist) ? (doc.info!.requires_dist as unknown[]).filter((r): r is string => typeof r === "string") : [];
+      this.cache.set(key, list, "pypi", VERSION_DEPS_TTL);
+      return list;
     } catch {
       return null;
     }
@@ -461,6 +493,28 @@ export class FixPathSources {
       const exists = res.ok ? true : res.status === 404 || res.status === 410 ? false : null;
       if (exists !== null) this.cache.set(key, { exists }, ecosystem === "npm" ? "npm" : ecosystem === "PyPI" ? "pypi" : "go", exists ? VERSION_DEPS_TTL : ABSENT_TTL);
       return exists;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The `go` directive of one module version's go.mod, from the proxy (`@v/<v>.mod`): the oldest Go
+   * that builds it. x/text v0.41.0 says `go 1.25.0`, so `go get` on a Go 1.24 toolchain refuses it
+   * with GOTOOLCHAIN=local and raises the directive otherwise. Null when absent or unreadable.
+   */
+  async goDirective(module: string, version: string): Promise<string | null> {
+    const v = version.startsWith("v") ? version : `v${version}`;
+    const key = `fixpath:v${CACHE_VERSION}:go-directive:${module}@${v}`;
+    const hit = this.cache.get<{ go: string | null }>(key);
+    if (hit) return hit.go;
+    if (!this.rateLimiter.consume("fixpath-registry")) return null;
+    try {
+      const res = await fetchWithTimeout(`https://proxy.golang.org/${escapeModulePath(module)}/@v/${escapeModulePath(v)}.mod`, {}, TIMEOUT_MS);
+      if (!res.ok) return null;
+      const go = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(await res.text())?.[1] ?? null;
+      this.cache.set(key, { go }, "go", VERSION_DEPS_TTL);
+      return go;
     } catch {
       return null;
     }
@@ -559,6 +613,10 @@ export type FixTargetResult = CleanTarget & {
   heldBlocked?: { affected: HeldDependency[]; searched: string[]; unchecked?: string[] };
   /** Whether the target's held dependencies are affected could not be checked, and why: not a clean fix either. */
   heldUnchecked?: string;
+  /** The newest stable release no advisory leaves unclean, when it is above `target` (withLineFacts). */
+  newestSafe?: string;
+  /** No release on the installed version's line clears every advisory: `target` is on the nearest later line that has one (withLineFacts). */
+  lineDead?: true;
 };
 
 /**
@@ -649,13 +707,60 @@ export async function cleanFixTarget(
     if (malware.length > 0) Object.assign(clean, { malware });
     if (clean.target === null && clean.maliciousLanding) Object.assign(clean, { landingNote: malwareText(name, clean.maliciousLanding) });
     const result: FixTargetResult = { ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}), ...(absent.length > 0 ? { absent } : {}) };
-    return withRegistryFacts(result, ecosystem, perAdvisoryFixes, advisories, facts, await absentReasons(sources, ecosystem, name, absent));
+    return withLineFacts(withRegistryFacts(result, ecosystem, perAdvisoryFixes, advisories, facts, await absentReasons(sources, ecosystem, name, absent)), ecosystem, advisories, facts, installed);
   }
   // Only a registry list can show a release past a last_affected bound.
   if (!published || published.length === 0) return null;
   const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published, excluded, installed });
   if (!clean || clean.target === null || clean.target === installed || clean.stillAffectedBy.length > 0) return null;
   return withRegistryFacts({ ...clean, noAdvisoryFix: true }, ecosystem, [], advisories, facts);
+}
+
+/**
+ * The newest safe release, and whether the installed line is dead: no stable release on the
+ * installed version's line above it clears every advisory, so the target is on a later line. Then
+ * the answer names both the smallest safe release (the target, on the nearest line that has one)
+ * and the newest, as GitHub did for Django 3.2 -> 5.2.17 and dependency_check does with its
+ * `newest_safe_outside_range` (audit 2026-11-11, item 4 of the Wave 1 brief). Only when the
+ * registry's list and the advisories were read; never for a Go pseudo-version, which has no line.
+ */
+function withLineFacts(
+  clean: FixTargetResult,
+  ecosystem: OsvEcosystem,
+  advisories: AdvisoryRanges[],
+  facts: PackageReleaseFacts | null,
+  installed: string | null | undefined,
+): FixTargetResult {
+  if (!clean.target || !installed || !facts || isGoPseudoVersion(installed, ecosystem)) return clean;
+  const view = cleanReleases(advisories, ecosystem, facts.versions, installed);
+  const above = facts.versions
+    .filter((v) => isComparable(v, ecosystem) && !isPrereleaseVersion(v, ecosystem) && compareVersions(v, installed, ecosystem) > 0 && view.clean(v))
+    .sort((a, b) => compareVersions(a, b, ecosystem));
+  const newest = above.length > 0 ? above[above.length - 1] : null;
+  const newestSafe = newest && compareVersions(newest, clean.target, ecosystem) > 0 ? newest : null;
+  const crosses = computeSemverDistance(installed, clean.target)?.label === "major";
+  const onLine = above.some((v) => computeSemverDistance(installed, v)?.label !== "major");
+  const lineDead = crosses && !onLine && lineLabel(installed) !== null && above[0] === clean.target;
+  return { ...clean, ...(newestSafe ? { newestSafe } : {}), ...(lineDead ? { lineDead: true as const } : {}) };
+}
+
+/** "8.x", "0.21.x" or "3.x": the release line a version is on (its caret line); null when unreadable or 0.0.x. */
+export function lineLabel(version: string): string | null {
+  // An epoch (PEP 440 `1!2.0`) or a calendar version (certifi 2020.12.5) has no caret line: "2020.x" says nothing.
+  if (version.includes("!")) return null;
+  const m = /^v?(\d+)(?:\.(\d+))?/.exec(version);
+  if (!m || Number(m[1]) >= 1000) return null;
+  if (m[1] !== "0") return `${m[1]}.x`;
+  return m[2] && m[2] !== "0" ? `0.${m[2]}.x` : null;
+}
+
+/** The words for a dead installed line (FixTargetResult.lineDead): the smallest safe release on a later line, and the newest. */
+export function deadLineText(installed: string, clean: FixTargetResult): string | null {
+  if (!clean.lineDead || !clean.target) return null;
+  const line = lineLabel(installed);
+  if (!line) return null;
+  const newest = clean.newestSafe ? `; ${clean.newestSafe} is the newest safe release` : `; it is also the newest safe release`;
+  return `no ${line} release clears every advisory: ${clean.target} is the smallest safe release, on the nearest later line that has one${newest}`;
 }
 
 /** Fix targets above every listed release that are asked for by name, per package (the rest keep the "confirm it is published" note). */
