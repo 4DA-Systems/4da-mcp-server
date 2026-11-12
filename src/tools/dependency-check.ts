@@ -116,7 +116,8 @@ const PRIVACY_NOTE =
   "Registry requests carried package names only (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list); " +
   "installed and target versions were never sent to a registry, except the Go proxy's per-version .info for the versions judged (the list has no dates). " +
   "OSV.dev received package names and versions, as vulnerability_scan does. " +
-  "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads).";
+  "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads). " +
+  "A private package name (see the README, Privacy) was sent nowhere.";
 
 const VERDICT_RULE =
   "avoid > review > unknown > wait > proceed. unknown = a registry or OSV.dev lookup failed (never read as proceed); " +
@@ -140,7 +141,7 @@ export const dependencyCheckTool = {
     "",
     "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed.",
     "",
-    "Privacy: registries get the package name only (Go: also the judged versions' .info, as `go get` does); OSV.dev gets names and versions, as vulnerability_scan does. FOURDA_OFFLINE=true disables lookups (every item unknown).",
+    "Privacy: registries get the package name only (Go: also the judged versions' .info, as `go get` does); OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
   ].join("\n"),
   inputSchema: {
     type: "object" as const,
