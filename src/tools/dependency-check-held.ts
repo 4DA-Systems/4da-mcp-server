@@ -41,15 +41,35 @@ export class HeldJudge {
     private readonly query: AdvisoryQuery,
   ) {}
 
+  /** Each package's held specs, read once: requested by prefetch() or the first judge(), awaited by every later one. */
+  private readonly specsRead = new Map<string, Promise<void>>();
+
+  /**
+   * Start reading what these packages' releases hold, without waiting: the call starts it beside
+   * its registry reads, and judge() awaits the same request (they were read one package after
+   * another, after every registry read had finished).
+   */
+  prefetch(pkgs: string[]): void {
+    for (const pkg of new Set(pkgs)) this.readSpecs(pkg);
+  }
+
+  private readSpecs(pkg: string): Promise<void> {
+    const running = this.specsRead.get(pkg);
+    if (running) return running;
+    const sources = this.sources;
+    const read = (async () => {
+      const facts = sources && Date.now() < this.deadline ? await sources.releaseFacts("npm", pkg).catch(() => null) : null;
+      this.specs.set(pkg, facts?.heldSpecs ?? null);
+    })();
+    this.specsRead.set(pkg, read);
+    return read;
+  }
+
   /** Judge these releases (those not judged yet), in one advisory lookup. */
   async judge(requests: Array<{ pkg: string; versions: string[] }>): Promise<void> {
     if (!this.sources) return;
     const sources = this.sources;
-    for (const pkg of new Set(requests.map((r) => r.pkg))) {
-      if (this.specs.has(pkg)) continue;
-      const facts = Date.now() < this.deadline ? await sources.releaseFacts("npm", pkg).catch(() => null) : null;
-      this.specs.set(pkg, facts?.heldSpecs ?? null);
-    }
+    await Promise.all([...new Set(requests.map((r) => r.pkg))].map((pkg) => this.readSpecs(pkg)));
     const releases: Array<{ key: string; specs: Record<string, string> }> = [];
     for (const { pkg, versions } of requests) {
       const all = this.specs.get(pkg);

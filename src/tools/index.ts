@@ -28,6 +28,7 @@ export {
 export {
   dependencyCheckTool,
   executeDependencyCheck,
+  runDependencyCheck,
 } from "./dependency-check.js";
 
 export {
