@@ -16,6 +16,7 @@ import { LiveIntelligence } from "../live/index.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
 import { executeUpgradeImpact } from "../tools/upgrade-impact.js";
+import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import type { FourDADatabase } from "../db.js";
 
 const noDb = null as unknown as FourDADatabase;
@@ -117,6 +118,23 @@ describe("a scope the project's .npmrc maps to a private registry", () => {
     expect(result.results[0].verdict).toBe("unknown");
     expect(result.results[0].reason).toContain("NOT CHECKED (private)");
     expect(result.results[1].package).toBe("lodash");
+    expect(leaked("secret-billing")).toEqual([]);
+  });
+
+  it("vulnerability_scan's coverage lists each private package with why, concise and detailed", async () => {
+    const live = npmProject("@acme:registry=https://npm.acme.internal/\n");
+    for (const response_format of ["concise", "detailed"] as const) {
+      const out = (await executeVulnerabilityScan(noDb, { response_format }, live)) as {
+        summary?: string;
+        total_vulnerable_packages: number | null;
+        coverage?: { private_dependencies?: number; private_dependency_list?: Array<{ name: string; why: string }> };
+      };
+      expect(out.summary).toContain("NOT CHECKED (private)");
+      expect(out.total_vulnerable_packages).toBeNull();
+      expect(out.coverage?.private_dependencies).toBe(1);
+      expect(out.coverage?.private_dependency_list?.[0]).toMatchObject({ name: "@acme/secret-billing" });
+      expect(out.coverage?.private_dependency_list?.[0].why).toContain(".npmrc");
+    }
     expect(leaked("secret-billing")).toEqual([]);
   });
 
