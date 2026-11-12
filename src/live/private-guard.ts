@@ -9,7 +9,7 @@
  * set, but upgrade_planner's fix-path lookups read parent and lever names straight from the
  * lockfile (`@acme/api` reached registry.npmjs.org). The sources now refuse them too
  * (LiveIntelligence.getFixPathSources), and this guard catches anything that still slips through.
- * `private-guard-choke-point.test.ts` fails on any network call in src/ that bypasses it.
+ * `private-guard.test.ts` fails on any network call in src/ that bypasses it.
  *
  * Every LiveIntelligence registers what it knows is private (its rules and its lockfiles'
  * private names); the union of the instances still alive is applied. Held weakly, so a
@@ -35,7 +35,7 @@ function privateWhy(ecosystem: string | null, name: string): string | null {
       sources.delete(ref);
       continue;
     }
-    for (const eco of ecosystem ? [ecosystem] : ["npm", "crates.io", "PyPI", "Go"]) {
+    for (const eco of ecosystem ? [ecosystem] : ALL_ECOSYSTEMS) {
       const why = source.privateReason(eco, name);
       if (why) return why;
     }
@@ -51,7 +51,36 @@ export class PrivateRequestRefused extends Error {
 /** Go module proxy paths escape capitals as `!x` (golang.org/x/mod/module EscapePath). */
 const goUnescape = (s: string) => s.replace(/!([a-z])/g, (_, c: string) => c.toUpperCase());
 
-const OSV_ECOSYSTEMS: Record<string, string> = { npm: "npm", "crates.io": "crates.io", pypi: "PyPI", go: "Go" };
+const ALL_ECOSYSTEMS = ["npm", "crates.io", "PyPI", "Go", "RubyGems", "Packagist"];
+const OSV_ECOSYSTEMS: Record<string, string> = { npm: "npm", "crates.io": "crates.io", pypi: "PyPI", go: "Go", rubygems: "RubyGems", packagist: "Packagist" };
+/** purl types (`pkg:<type>/...`) as OSV ecosystems. */
+const PURL_TYPES: Record<string, string> = { npm: "npm", cargo: "crates.io", pypi: "PyPI", golang: "Go", gem: "RubyGems", composer: "Packagist" };
+
+/** The (ecosystem, name) a package URL names: `pkg:npm/%40acme/api@1.0.0`, `pkg:golang/github.com/acme/x@v1`. */
+export function purlName(purl: string): [string | null, string] | null {
+  const m = /^pkg:([a-z0-9.+-]+)\/([^?#]+)/i.exec(purl.trim());
+  if (!m) return null;
+  // The version follows the last segment's `@` (`pkg:npm/@acme/api@1.0.0`: the scope's `@` is not one).
+  const parts = m[2].split("/");
+  parts[parts.length - 1] = parts[parts.length - 1].replace(/(?<=.)@.*$/, "");
+  let name: string;
+  try {
+    name = parts.map((s) => decodeURIComponent(s)).join("/");
+  } catch {
+    name = parts.join("/");
+  }
+  return [PURL_TYPES[m[1].toLowerCase()] ?? null, name];
+}
+
+/** A request body as text, whatever form fetch was handed it in. */
+function bodyText(body: unknown): string | null {
+  if (typeof body === "string") return body;
+  if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+  if (body instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(body));
+  if (ArrayBuffer.isView(body)) return new TextDecoder().decode(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
+  if (body instanceof URLSearchParams) return body.toString();
+  return null;
+}
 
 /** The (ecosystem, name) pairs a request names, read per host. Ecosystem null: any. */
 export function namesInRequest(url: string, body: unknown): Array<[string | null, string]> {
@@ -69,7 +98,8 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
     }
   });
   const out: Array<[string | null, string]> = [];
-  const host = u.hostname.toLowerCase();
+  // `registry.npmjs.org.` is the same host.
+  const host = u.hostname.toLowerCase().replace(/\.+$/, "");
   if (host === "registry.npmjs.org" || host === "registry.npmjs.com" || host === "registry.yarnpkg.com") {
     // `/@scope%2fname`, `/@scope/name/1.0.0`, `/name/-/name-1.0.0.tgz`
     const first = segments[0] ?? "";
@@ -99,18 +129,35 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
     const path = goUnescape(segments.join("/"));
     const module = path.replace(/\/@(v|latest)(\/.*)?$/, "").replace(/^lookup\//, "");
     if (module) out.push(["Go", module.replace(/@.*$/, "")]);
+  } else if (host === "rubygems.org" || host === "index.rubygems.org") {
+    // /api/v1/gems/<name>.json, /api/v1/versions/<name>.json, /gems/<name>-<v>.gem, /info/<name>
+    const at = segments.findIndex((s) => s === "gems" || s === "versions" || s === "info");
+    const raw = at >= 0 ? segments[at + 1] : undefined;
+    if (raw) out.push(["RubyGems", raw.replace(/\.json$/, "").replace(/-\d[^/]*\.gem$/, "")]);
+  } else if (host === "repo.packagist.org" || host === "packagist.org") {
+    // /p2/<vendor>/<name>.json, /packages/<vendor>/<name>.json
+    const at = segments.findIndex((s) => s === "p2" || s === "p" || s === "packages");
+    if (at >= 0 && segments[at + 2]) out.push(["Packagist", `${segments[at + 1]}/${segments[at + 2].replace(/(~dev)?\.json$/, "")}`]);
   } else if (host === "hn.algolia.com") {
     for (const term of (u.searchParams.get("query") ?? "").split(/[\s"]+/)) if (term) out.push([null, term]);
   }
-  // OSV.dev (and any JSON body): package names in `package.name` / `queries[].package.name`.
-  const text = typeof body === "string" ? body : null;
-  if (text && text.startsWith("{")) {
+  // OSV.dev (and any JSON body): package names in `package.name` / `queries[].package.name`, or a
+  // `purl`; a body in bytes or with leading whitespace is read the same (review of #64).
+  const text = bodyText(body)?.trim() ?? null;
+  if (text && (text.startsWith("{") || text.startsWith("["))) {
     try {
-      const parsed = JSON.parse(text) as { package?: { name?: unknown; ecosystem?: unknown }; queries?: Array<{ package?: { name?: unknown; ecosystem?: unknown } }> };
-      for (const p of [parsed.package, ...(parsed.queries ?? []).map((q) => q?.package)]) {
-        if (p && typeof p.name === "string") {
+      type Pkg = { name?: unknown; ecosystem?: unknown; purl?: unknown };
+      const parsed = JSON.parse(text) as { package?: Pkg; queries?: Array<{ package?: Pkg }> } | Array<{ package?: Pkg }>;
+      const list = Array.isArray(parsed) ? parsed.map((q) => q?.package) : [parsed.package, ...(parsed.queries ?? []).map((q) => q?.package)];
+      for (const p of list) {
+        if (!p) continue;
+        if (typeof p.name === "string") {
           const eco = typeof p.ecosystem === "string" ? (OSV_ECOSYSTEMS[p.ecosystem.toLowerCase()] ?? null) : null;
           out.push([eco, p.name]);
+        }
+        if (typeof p.purl === "string") {
+          const named = purlName(p.purl);
+          if (named) out.push(named);
         }
       }
     } catch {

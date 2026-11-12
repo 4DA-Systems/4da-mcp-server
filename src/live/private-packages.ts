@@ -308,6 +308,19 @@ export function goPrivateMatch(patterns: string, modulePath: string): string | n
 export const pep503 = (name: string) => name.toLowerCase().replace(/[-_.]+/g, "-");
 
 /**
+ * A package name as its registry compares it, so every spelling of a private name is caught
+ * (review of #64, X1: `acme_core` and `Acme-Core` reached crates.io and OSV for the private
+ * `acme-core`). PyPI: PEP 503. crates.io: case-insensitive, `_` and `-` the same crate. npm,
+ * RubyGems, Packagist: lowercase. Go module paths are case-sensitive (the proxy escapes capitals).
+ */
+export function normName(ecosystem: string, name: string): string {
+  if (ecosystem === "PyPI") return pep503(name);
+  if (ecosystem === "crates.io") return name.toLowerCase().replaceAll("_", "-");
+  if (ecosystem === "Go") return name;
+  return name.toLowerCase();
+}
+
+/**
  * A FOURDA_PRIVATE_PACKAGES entry: `*` matches anything, `/` included; a bare npm scope (`@acme`)
  * is the whole scope (`@acme/*`). PyPI names are compared PEP 503-normalised on both sides.
  */
@@ -332,7 +345,7 @@ const RULE_ENV = ["FOURDA_PRIVATE_PACKAGES", "GOPRIVATE", "GONOPROXY", "GONOSUMD
 export class PrivatePackageRules {
   private readonly npmScopes = new Map<string, string>();
   private readonly goPatterns: Array<{ key: string; value: string; from: string }> = [];
-  private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: RegExp; rePypi: RegExp | null }> = [];
+  private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: RegExp; rePypi: RegExp | null; reCrates: RegExp | null }> = [];
   /** Hosts an `.npmrc` names as its default `registry=`: a mirror of the public registry, so not private. */
   readonly npmMirrorHosts = new Set<string>();
   /** Every file the rules were read from (present or not), with its signature then. */
@@ -375,7 +388,7 @@ export class PrivatePackageRules {
       const ecosystem = m ? ECOSYSTEM_PREFIXES[m[1].toLowerCase()] : null;
       const pattern = m ? m[2] : entry;
       const re = listGlob(pattern);
-      if (re) this.listed.push({ ecosystem, pattern, re, rePypi: listGlob(pattern, pep503) });
+      if (re) this.listed.push({ ecosystem, pattern, re, rePypi: listGlob(pattern, pep503), reCrates: listGlob(pattern, (s) => normName("crates.io", s)) });
     }
   }
 
@@ -393,7 +406,12 @@ export class PrivatePackageRules {
   reasonFor(ecosystem: string, name: string): string | null {
     for (const l of this.listed) {
       if (l.ecosystem !== null && l.ecosystem !== ecosystem) continue;
-      const hit = ecosystem === "PyPI" ? Boolean(l.rePypi?.test(pep503(name))) : l.re.test(name);
+      const hit =
+        ecosystem === "PyPI"
+          ? Boolean(l.rePypi?.test(pep503(name)))
+          : ecosystem === "crates.io"
+            ? Boolean(l.reCrates?.test(normName("crates.io", name)))
+            : l.re.test(name);
       if (hit) return `FOURDA_PRIVATE_PACKAGES lists ${l.ecosystem ? `${l.ecosystem}:` : ""}${l.pattern}`;
     }
     if (ecosystem === "npm" && name.startsWith("@")) {
@@ -408,6 +426,18 @@ export class PrivatePackageRules {
       }
     }
     return null;
+  }
+
+  /**
+   * When an `.npmrc` sets a default `registry=` that is not a public one (Artifactory, Verdaccio,
+   * GitHub Packages): that host is read as a mirror, so unscoped names are still looked up on the
+   * public registry, and one published only there would be sent by name. Said once, in every
+   * coverage note and dependency_check answer that concerns npm (review of #64, S5 decision).
+   */
+  npmRegistryNotice(): string | null {
+    const hosts = [...this.npmMirrorHosts].filter((h) => !PUBLIC_NPM_HOSTS.has(h));
+    if (hosts.length === 0) return null;
+    return `Your npm registry is ${hosts.join(", ")}. Unscoped packages published only there are looked up on the public registry by name; list them in FOURDA_PRIVATE_PACKAGES (or use a scope) to keep them private.`;
   }
 
   /** Whether any rule exists (a project with none skips the per-name checks). */

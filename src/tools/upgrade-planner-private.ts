@@ -9,6 +9,7 @@
  */
 
 import { readLockfileParents } from "../live/lockfile-parents.js";
+import { compiledParents, pythonLockParents } from "../live/pygo-parents.js";
 import type { LiveIntelligence } from "../live/index.js";
 
 interface PlannedStep {
@@ -37,8 +38,17 @@ export function markPrivateParents<T extends PlannedStep>(
     const found = new Map<string, string>();
     for (const dir of dirsOf(step)) {
       const lockfile = live.lockfileFor(dir, step.ecosystem);
-      if (!lockfile) continue;
-      for (const edge of readLockfileParents(lockfile, step.package, step.currentVersion)?.edges ?? []) {
+      // npm and Cargo lockfiles; PyPI's uv.lock / poetry.lock, or a compiled requirements file (`# via`).
+      const edges =
+        step.ecosystem === "PyPI"
+          ? ((lockfile ? pythonLockParents(lockfile, step.package, step.currentVersion) : null) ?? compiledParents(dir, step.package, step.currentVersion))?.edges.map((e) => ({
+              parent: e.parent,
+              local: e.parentVersion === null,
+            }))
+          : lockfile
+            ? readLockfileParents(lockfile, step.package, step.currentVersion)?.edges
+            : undefined;
+      for (const edge of edges ?? []) {
         if (edge.local) continue;
         const why = live.privateReason(step.ecosystem, edge.parent);
         if (why) found.set(edge.parent, why);

@@ -222,6 +222,8 @@ export interface VulnerabilityScanResult {
    * nothing is known about them. `dependencies` lists at most 50, each with why.
    */
   privateExcluded?: { count: number; dependencies: PrivateDependency[] };
+  /** An `.npmrc` default registry that is not public: unscoped names are still looked up publicly (private-packages.ts). */
+  registryNotice?: string;
   /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
   staleAnswers?: number;
   /** Why fresh answers were not had for the `staleAnswers` dependencies. */
@@ -266,6 +268,8 @@ export interface VulnerabilityCoverage {
   private_dependencies?: number;
   /** The first of them, each with why it is private. */
   private_dependency_list?: PrivateDependency[];
+  /** VulnerabilityScanResult.registryNotice, when the answer is incomplete for another reason too. */
+  registry_notice?: string;
   /** Why, in words ("OSV.dev unreachable (fetch failed)", "live lookups disabled (FOURDA_OFFLINE=true)"). */
   reason: string;
   /** One line to read first; never a clean result. */

@@ -34,7 +34,7 @@ import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
-import { npmLockPrivateSources, pep503, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
+import { normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
 import { registerPrivateNames } from "./private-guard.js";
 import type {
@@ -337,7 +337,8 @@ export class LiveIntelligence {
 
   /** Why a dependency of this group is private, or null: its lockfile's source, then the name rules. */
   private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): string | null {
-    const fromLock = this.lockPrivateOf(r).find((p) => p.name === name && (p.version === null || version === null || p.version === version));
+    const n = normName(ecosystem, name);
+    const fromLock = this.lockPrivateOf(r).find((p) => normName(ecosystem, p.name) === n && (p.version === null || version === null || p.version === version));
     if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
     return this.privateRules.reasonFor(ecosystem, name);
   }
@@ -350,7 +351,8 @@ export class LiveIntelligence {
   privateReason(ecosystem: string, name: string): string | null {
     const byName = this.privateRules.reasonFor(ecosystem, name);
     if (byName) return byName;
-    const norm = (n: string) => (ecosystem === "PyPI" ? pep503(n) : n);
+    // Every spelling the registry treats as the same name (`acme_core`, `Acme-Core`; review of #64, X1).
+    const norm = (n: string) => normName(ecosystem, n);
     // A name this project ALSO installs from the public registry is public (a git fork of serde
     // beside serde itself): asking about it reveals nothing.
     if (this.auditDeps.some((d) => d.ecosystem === ecosystem && norm(d.name) === norm(name))) return null;
@@ -391,6 +393,11 @@ export class LiveIntelligence {
     return true;
   }
 
+  /** The notice for an `.npmrc` default registry that is not public (PrivatePackageRules.npmRegistryNotice), or null. */
+  getRegistryNotice(): string | null {
+    return this.privateRules.npmRegistryNotice();
+  }
+
   /** Dependencies left out of every lookup because they are private, each with why. */
   getPrivateDependencies(): PrivateDependency[] {
     return this.privateDeps;
@@ -402,7 +409,9 @@ export class LiveIntelligence {
   }
 
   /** The private part of a scan in this scope, attached to its result so every answer reports it. */
-  private withPrivate(result: VulnerabilityScanResult, includeDev: boolean): VulnerabilityScanResult {
+  private withPrivate(scan: VulnerabilityScanResult, includeDev: boolean): VulnerabilityScanResult {
+    const notice = this.auditDeps.some((d) => d.ecosystem === "npm") ? this.privateRules.npmRegistryNotice() : null;
+    const result = notice ? { ...scan, registryNotice: notice } : scan;
     if (this.privateAudit.length === 0) return result;
     const scoped = applyInstanceDevScope(this.db, this.privateAudit);
     const inScope = includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));

@@ -252,7 +252,8 @@ export async function executeDependencyCheck(
     }
     return out;
   };
-  const privateMeta = privateItems.length > 0 ? { private: privateItems.length } : {};
+  const notice = all.some((r) => r.ecosystem === "npm") ? (liveIntel?.getRegistryNotice?.() ?? null) : null;
+  const privateMeta = { ...(privateItems.length > 0 ? { private: privateItems.length } : {}), ...(notice ? { registryNotice: notice } : {}) };
 
   if (requested.length === 0) {
     return finish(checkedAt, inOrder([]), { offline: false, osvCached: false, ...privateMeta });
@@ -1067,7 +1068,7 @@ function summaryLine(results: ItemResult[], parts: string[]): string {
   return `${checked} checked: ${checkedParts.join(", ")}; ${notChecked}. ${advice}`;
 }
 
-function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number }) {
+function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string }) {
   const counts = new Map<Verdict, number>();
   for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
   const order: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
@@ -1083,6 +1084,7 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       privacy: PRIVACY_NOTE,
       offline: meta.offline,
       osv_cached: meta.osvCached,
+      ...(meta.registryNotice ? { registry_notice: meta.registryNotice } : {}),
       ...(meta.private
         ? { private_packages: `${meta.private} item${meta.private === 1 ? " names a private package" : "s name private packages"}: not looked up anywhere, verdict unknown (not_checked: "private").` }
         : {}),

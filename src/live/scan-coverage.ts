@@ -26,7 +26,9 @@ export function vulnerabilityCoverage(
   result: VulnerabilityScanResult | null,
   opts: { enabled: boolean; expectedTotal?: number; notLoaded?: string },
 ): VulnerabilityCoverage | null {
-  const coverage = osvCoverage(result, opts);
+  const gap = osvCoverage(result, opts);
+  const notice = result?.registryNotice;
+  const coverage = gap && notice ? { ...gap, registry_notice: notice, note: `${gap.note} ${notice}` } : gap;
   const priv = result?.privateExcluded;
   if (!priv || priv.count <= 0) return coverage;
   // Private names were never sent (private-packages.ts): not checked, never clean. Counted apart
@@ -44,7 +46,8 @@ export function vulnerabilityCoverage(
     ...base,
     private_dependencies: priv.count,
     private_dependency_list: priv.dependencies,
-    note: coverage ? `${coverage.note} ${line}` : line,
+    note: coverage ? `${coverage.note} ${line}` : notice ? `${line} ${notice}` : line,
+    ...(notice ? { registry_notice: notice } : {}),
   };
 }
 

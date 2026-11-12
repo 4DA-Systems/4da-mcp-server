@@ -389,7 +389,13 @@
   public `qs` beneath it; its fix-path lookups now refuse private names, the
   step says `NOT CHECKED (private)` with `privateParents`, and every OSV.dev,
   registry and search request passes one check that refuses a request naming
-  a private package (a test fails on any request that bypasses it).
+  a private package (a test fails on any request that bypasses it). Every
+  spelling counts (`acme_core` and `Acme-Core` are the private `acme-core`);
+  Gemfile.lock gems from a non-rubygems.org `remote:` and composer.lock
+  packages from a private host or a declared non-Packagist repository are
+  private too. With an `.npmrc` default `registry=` that is not public (read
+  as a mirror), answers say that unscoped names are still looked up publicly
+  (`registry_notice`).
   Such a package is read but never looked up: scans, health and plans lead
   with `NOT CHECKED (private)` and list why each is private
   (`coverage.private_dependency_list`), `dependency_check` answers `unknown`

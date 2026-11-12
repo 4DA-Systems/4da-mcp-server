@@ -100,6 +100,7 @@ export function shapeDependencyCheck(answer: DetailedAnswer, format: DependencyC
       offline: meta.offline,
       osv_cached: meta.osv_cached,
       ...(meta.private_packages ? { private_packages: meta.private_packages } : {}),
+      ...(meta.registry_notice ? { registry_notice: meta.registry_notice } : {}),
     },
   };
 }
