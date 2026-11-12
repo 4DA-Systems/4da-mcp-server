@@ -12,8 +12,12 @@
  * `private-guard.test.ts` fails on any network call in src/ that bypasses it.
  *
  * Every LiveIntelligence registers what it knows is private (its rules and its lockfiles'
- * private names); the union of the instances still alive is applied. Held weakly, so a
- * per-call instance (a `project_path` scan) is forgotten once collected.
+ * private names); the union is applied. A layer resolved for a project is held strongly under
+ * that project's root, replacing the previous one for the same root, so the registry is bounded
+ * by the projects the process has seen and never depends on the garbage collector. A layer with
+ * no project yet (user-level rules only) is held weakly until it gets one. Holding only weak
+ * references let the collector drop a source still in use: on Node 24 a registered source
+ * vanished before the request it should have refused (CI run 43241199693).
  */
 
 /** What one live layer says is private: why a name is, or null. */
@@ -22,19 +26,29 @@ export interface PrivateNameSource {
 }
 
 const sources = new Set<WeakRef<PrivateNameSource>>();
+const byKey = new Map<string, PrivateNameSource>();
 
-export function registerPrivateNames(source: PrivateNameSource): void {
-  sources.add(new WeakRef(source));
+/** Register a source: strongly under `key` (a project root; it replaces that key's previous source), else weakly. */
+export function registerPrivateNames(source: PrivateNameSource, key?: string): void {
+  if (key === undefined) {
+    sources.add(new WeakRef(source));
+    return;
+  }
+  byKey.set(key, source);
+}
+
+function* liveSources(): Generator<PrivateNameSource> {
+  yield* byKey.values();
+  for (const ref of sources) {
+    const source = ref.deref();
+    if (source) yield source;
+    else sources.delete(ref);
+  }
 }
 
 /** Why `name` (in `ecosystem`, or any ecosystem when null) is private to some live layer, or null. */
 function privateWhy(ecosystem: string | null, name: string): string | null {
-  for (const ref of sources) {
-    const source = ref.deref();
-    if (!source) {
-      sources.delete(ref);
-      continue;
-    }
+  for (const source of liveSources()) {
     for (const eco of ecosystem ? [ecosystem] : ALL_ECOSYSTEMS) {
       const why = source.privateReason(eco, name);
       if (why) return why;
@@ -169,7 +183,7 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
 
 /** Throws PrivateRequestRefused when the request names a private package; returns otherwise. */
 export function refusePrivateRequest(url: string, init?: { body?: unknown }): void {
-  if (sources.size === 0) return;
+  if (sources.size === 0 && byKey.size === 0) return;
   for (const [eco, name] of namesInRequest(url, init?.body)) {
     const why = privateWhy(eco, name);
     if (why) {

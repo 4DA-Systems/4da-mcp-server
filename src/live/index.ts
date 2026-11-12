@@ -10,6 +10,8 @@
  * index, FOURDA_PRIVATE_PACKAGES). Set FOURDA_OFFLINE=true to disable all network calls.
  */
 
+import * as path from "node:path";
+
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import { LiveCache } from "./cache.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
@@ -299,6 +301,9 @@ export class LiveIntelligence {
 
   private applyGroups(groups: ResolutionGroup[], projectRoot: string | null): void {
     this.privateRules = new PrivatePackageRules([...new Set([...(projectRoot ? [projectRoot] : []), ...groups.map((g) => g.dir)])]);
+    // Held strongly under the project from now on (private-guard.ts): the choke point never loses it.
+    const root = path.resolve(projectRoot ?? groups[0]?.dir ?? ".");
+    registerPrivateNames(this, `project:${process.platform === "win32" ? root.toLowerCase() : root}`);
     this.groupResults = groups.map(resolveGroup);
     this.rebuildDependencySet();
     this.projectRoot = projectRoot;

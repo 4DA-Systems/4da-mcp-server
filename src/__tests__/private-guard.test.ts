@@ -18,7 +18,7 @@ const keep: PrivateNameSource[] = [];
 function privateNames(map: Record<string, string[]>): void {
   const source: PrivateNameSource = { privateReason: (eco, name) => (map[eco]?.includes(name) ? "test rule" : null) };
   keep.push(source);
-  registerPrivateNames(source);
+  registerPrivateNames(source, "test:private-guard");
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -104,5 +104,22 @@ describe("every fix-path lookup is guarded at the source", () => {
     // Private helpers of FixPathSources (no package name of their own) are listed here, with why.
     const internal = new Set(["npmDocument", "npmFacts", "pypiFacts", "goVersions"]);
     expect(lookups.filter((n) => !guarded.has(n) && !internal.has(n))).toEqual([]);
+  });
+});
+
+describe("a live layer's registration survives garbage collection", () => {
+  it("a project's live layer still refuses its private names after a gc, though nothing else holds it", async () => {
+    const os = await import("node:os");
+    const { LiveIntelligence } = await import("../live/index.js");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-guard-gc-"));
+    fs.writeFileSync(path.join(dir, ".npmrc"), "@gcscope:registry=https://npm.gcscope.internal/\n");
+    (() => {
+      // Created and dropped: only the guard's registry can still reach it.
+      new LiveIntelligence(null).initFromProject(dir, [], [], "javascript");
+    })();
+    (globalThis as { gc?: () => void }).gc?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    (globalThis as { gc?: () => void }).gc?.();
+    await expect(fetchWithTimeout("https://registry.npmjs.org/@gcscope/x")).rejects.toBeInstanceOf(PrivateRequestRefused);
   });
 });
