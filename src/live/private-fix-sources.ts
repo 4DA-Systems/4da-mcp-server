@@ -64,6 +64,14 @@ export class PrivateAwareFixPathSources extends FixPathSources {
     return this.refused("crates.io", name) ? null : super.cratesSparse(name, fresh);
   }
 
+  override async pypiRequiresDist(name: string, version: string): Promise<string[] | null> {
+    return this.refused("PyPI", name) ? null : super.pypiRequiresDist(name, version);
+  }
+
+  override async goDirective(module: string, version: string): Promise<string | null> {
+    return this.refused("Go", module) ? null : super.goDirective(module, version);
+  }
+
   override async versionExists(ecosystem: OsvEcosystem, name: string, version: string): Promise<boolean | null> {
     return this.refused(ecosystem, name) ? null : super.versionExists(ecosystem, name, version);
   }

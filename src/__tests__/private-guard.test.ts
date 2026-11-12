@@ -94,3 +94,15 @@ describe("nothing in src/ reaches the network around the choke point", () => {
     expect(fs.readFileSync(path.join(src, "live/package-archive.ts"), "utf8")).toMatch(/defaultFetch: FetchFn = \(url, init, timeoutMs\) => fetchWithTimeout\(/);
   });
 });
+
+describe("every fix-path lookup is guarded at the source", () => {
+  it("PrivateAwareFixPathSources overrides every async lookup FixPathSources has", async () => {
+    const { FixPathSources } = await import("../live/fix-paths.js");
+    const { PrivateAwareFixPathSources } = await import("../live/private-fix-sources.js");
+    const lookups = Object.getOwnPropertyNames(FixPathSources.prototype).filter((n) => n !== "constructor" && typeof (FixPathSources.prototype as unknown as Record<string, unknown>)[n] === "function");
+    const guarded = new Set(Object.getOwnPropertyNames(PrivateAwareFixPathSources.prototype));
+    // Private helpers of FixPathSources (no package name of their own) are listed here, with why.
+    const internal = new Set(["npmDocument", "npmFacts", "pypiFacts", "goVersions"]);
+    expect(lookups.filter((n) => !guarded.has(n) && !internal.has(n))).toEqual([]);
+  });
+});

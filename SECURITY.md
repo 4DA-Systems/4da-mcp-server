@@ -34,10 +34,13 @@ five business days.
   package registries (npm, crates.io, PyPI, the Go proxy), and `ecosystem_pulse`
   sends a few dependency names to the Hacker News search API. A private
   package's name is never sent: a scope your `.npmrc` maps to a private
-  registry, a module matching `GOPRIVATE`, a crate or PyPI package your
-  lockfile installs from a private index (or, for Cargo, git), and anything in
-  `FOURDA_PRIVATE_PACKAGES`; such a package is reported as not checked
-  (private), never as clean. An embedding provider you configure receives the
+  registry, a module matching `GOPRIVATE`, a package your lockfile installs
+  from a private registry or index (npm `resolved`, Cargo `source`, uv /
+  poetry / Pipfile index; for Cargo, git too), and anything in
+  `FOURDA_PRIVATE_PACKAGES`, as a dependency or as the parent of one; such a
+  package is reported as not checked (private), never as clean. Every
+  OSV.dev, registry and search request passes one check that refuses it when
+  it names a private package. An embedding provider you configure receives the
   stored decision and memory text and the search text, never file paths.
   `FOURDA_OFFLINE=true` turns all of it off.
 - **`--http`** binds to `127.0.0.1` with a DNS-rebinding `Host` check. A

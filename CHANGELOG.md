@@ -379,6 +379,17 @@
   installs from another registry or from git, a PyPI package `uv.lock`,
   `poetry.lock` or `Pipfile.lock` installs from an index other than pypi.org.
   `FOURDA_PRIVATE_PACKAGES` adds globs (`npm:@acme/*, Go:github.com/acme/*`).
+  The scope rule reads `.yarnrc.yml` at any indentation and in flow style; a
+  bare `@acme` covers the scope; PyPI names compare PEP 503-normalised; an
+  empty `GOPRIVATE` falls back to `go env -w`; an npm lockfile `resolved` /
+  `tarball` host other than the public registry (or the `.npmrc` default, read
+  as a mirror) makes a package private; the rules are re-read when their files
+  or the environment change. A private PARENT is never looked up either:
+  `upgrade_planner` named `@acme/api` to registry.npmjs.org while planning the
+  public `qs` beneath it; its fix-path lookups now refuse private names, the
+  step says `NOT CHECKED (private)` with `privateParents`, and every OSV.dev,
+  registry and search request passes one check that refuses a request naming
+  a private package (a test fails on any request that bypasses it).
   Such a package is read but never looked up: scans, health and plans lead
   with `NOT CHECKED (private)` and list why each is private
   (`coverage.private_dependency_list`), `dependency_check` answers `unknown`
