@@ -53,6 +53,8 @@ let CRATES: Record<string, Array<{ vers: string; yanked?: boolean; deps?: Array<
 /** pypi.org: project -> release -> what the JSON API says of it. */
 let PYPI: Record<string, Record<string, { requiresPython?: string; requiresDist?: string[]; yanked?: boolean }>> = {};
 let GO: Record<string, string[]> = {};
+/** proxy.golang.org: "module@vX" -> the go directive of that version's go.mod. */
+let GOMOD: Record<string, string> = {};
 
 const cmp = (a: string, b: string) => a.replace(/^v/, "").localeCompare(b.replace(/^v/, ""), undefined, { numeric: true });
 const affects = (v: OsvVulnerability, version: string) => {
@@ -115,6 +117,11 @@ function stubNetwork() {
       );
       return json({ info: { name, version: versions[versions.length - 1], license: "", classifiers: [], summary: "", yanked: false, yanked_reason: null }, releases });
     }
+    const goMod = /^https:\/\/proxy\.golang\.org\/(.+)\/@v\/(v[^/]+)\.mod$/.exec(url);
+    if (goMod) {
+      const directive = GOMOD[`${goMod[1]}@${goMod[2]}`];
+      return directive ? new Response(`module ${goMod[1]}\n\ngo ${directive}\n`, { status: 200 }) : new Response("not found", { status: 404 });
+    }
     const go = /^https:\/\/proxy\.golang\.org\/(.+)\/@v\/(list|v[^/]+\.info)$/.exec(url);
     if (go) {
       const versions = GO[go[1]];
@@ -139,6 +146,7 @@ beforeEach(() => {
   CRATES = {};
   PYPI = {};
   GO = {};
+  GOMOD = {};
   stubNetwork();
 });
 
@@ -474,6 +482,22 @@ describe("5. Go transitive modules: `go get module@v && go mod tidy` (no require
     expect(text).toMatchObject({ action: "lockfile_refresh", scope: "transitive", targetVersion: "v0.3.7", refreshCommands: [{ dir: ".", command: "go get golang.org/x/text@v0.3.7 && go mod tidy" }] });
     const concise = await scan();
     expect(lineFor(concise, "golang.org/x/text", "v0.3.0")).toMatch(/^Refresh golang\.org\/x\/text v0\.3\.0 → v0\.3\.7 .*`go get golang\.org\/x\/text@v0\.3\.7 && go mod tidy`/);
+  });
+
+  it("a fix that needs a newer Go says so (x/text v0.41.0 requires go >= 1.25.0)", async () => {
+    goProject();
+    GOMOD["golang.org/x/text@v0.3.7"] = "1.25.0";
+    const { step } = await plan();
+    expect(step("golang.org/x/text").reasons.join(" ")).toMatch(
+      "golang.org/x/text v0.3.7 requires go >= 1.25.0 and go.mod says go 1.21, so go get also raises the go directive to 1.25.0 (a Go older than 1.25.0 with GOTOOLCHAIN=local refuses it: install Go 1.25.0 or later first)",
+    );
+  });
+
+  it("a fix that needs no newer Go says nothing about the go directive", async () => {
+    goProject();
+    GOMOD["golang.org/x/text@v0.3.7"] = "1.17";
+    const { step } = await plan();
+    expect(step("golang.org/x/text").reasons.join(" ")).not.toMatch(/go directive/);
   });
 
   it("a module go.mod replaces is not raised that way", async () => {

@@ -498,6 +498,28 @@ export class FixPathSources {
     }
   }
 
+  /**
+   * The `go` directive of one module version's go.mod, from the proxy (`@v/<v>.mod`): the oldest Go
+   * that builds it. x/text v0.41.0 says `go 1.25.0`, so `go get` on a Go 1.24 toolchain refuses it
+   * with GOTOOLCHAIN=local and raises the directive otherwise. Null when absent or unreadable.
+   */
+  async goDirective(module: string, version: string): Promise<string | null> {
+    const v = version.startsWith("v") ? version : `v${version}`;
+    const key = `fixpath:v${CACHE_VERSION}:go-directive:${module}@${v}`;
+    const hit = this.cache.get<{ go: string | null }>(key);
+    if (hit) return hit.go;
+    if (!this.rateLimiter.consume("fixpath-registry")) return null;
+    try {
+      const res = await fetchWithTimeout(`https://proxy.golang.org/${escapeModulePath(module)}/@v/${escapeModulePath(v)}.mod`, {}, TIMEOUT_MS);
+      if (!res.ok) return null;
+      const go = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(await res.text())?.[1] ?? null;
+      this.cache.set(key, { go }, "go", VERSION_DEPS_TTL);
+      return go;
+    } catch {
+      return null;
+    }
+  }
+
   /** The versions the Go proxy lists for a module path (no `v`), or null: for naming where another major lives. */
   async goModuleVersions(module: string): Promise<string[] | null> {
     return this.goVersions(module);

@@ -24,6 +24,7 @@ import {
   requirementsOn,
   type PythonParents,
 } from "../live/pygo-parents.js";
+import { readTextFile } from "../live/text-file.js";
 import { compareVersions } from "../live/version-compare.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 
@@ -64,7 +65,7 @@ export async function pygoRefreshOrUpstream(
   const root = liveIntel.getProjectRoot() ?? process.cwd();
   const dirs = [...new Set(sourceDirs)];
   if (dirs.length === 0) return false;
-  if (step.ecosystem === "Go") return goRaise(step, dirs, root, installed, target);
+  if (step.ecosystem === "Go") return goRaise(step, dirs, root, installed, target, sources);
   if (step.ecosystem !== "PyPI") return false;
 
   const read: Array<{ dir: string; parents: PythonParents }> = [];
@@ -172,19 +173,43 @@ async function newestAdmits(sources: FixPathSources, parent: string, from: strin
   return specs.some((s) => pythonSpecAdmits(s, target) === true) ? `${parent} ${latest}, its newest release, requires ${pkg} "${specs.join('" or "')}", which admits ${target}` : null;
 }
 
-/** Go: raise the indirect requirement in each go.mod; false when any go.mod replaces, excludes or directly requires it. */
-function goRaise(step: PyGoStep, dirs: string[], root: string, installed: string, target: string): boolean {
+/**
+ * Go: raise the indirect requirement in each go.mod; false when any go.mod replaces, excludes or
+ * directly requires it. When the fix needs a newer Go than a go.mod says, the step says which
+ * (checked 2026-11-12 with go 1.24.4: `go get golang.org/x/text@v0.41.0` refuses under
+ * GOTOOLCHAIN=local, "requires go >= 1.25.0"; v0.3.8 moved x/text alone, x/net untouched).
+ */
+async function goRaise(step: PyGoStep, dirs: string[], root: string, installed: string, target: string, sources: FixPathSources): Promise<boolean> {
   const commands: Array<{ dir: string; command: string }> = [];
+  const directives: string[] = [];
   for (const dir of dirs) {
-    const command = goIndirectRaise(path.join(dir, "go.mod"), step.package, installed, target);
+    const goMod = path.join(dir, "go.mod");
+    const command = goIndirectRaise(goMod, step.package, installed, target);
     if (!command) return false;
     commands.push({ dir: relativeDir(dir, root), command });
+    const own = goDirectiveOf(goMod);
+    if (own) directives.push(own);
   }
+  const needs = await sources.goDirective(step.package, target).catch(() => null);
+  const oldest = directives.sort((a, b) => compareVersions(a, b, "PyPI"))[0] ?? null;
+  const newerGo =
+    needs && oldest && compareVersions(needs, oldest, "PyPI") > 0
+      ? `; ${step.package} v${target.replace(/^v/, "")} requires go >= ${needs} and go.mod says go ${oldest}, so go get also raises the go directive to ${needs} (a Go older than ${needs} with GOTOOLCHAIN=local refuses it: install Go ${needs} or later first)`
+      : "";
   step.action = "lockfile_refresh";
   step.refreshCommands = commands;
   replaceReason(
     step,
-    `Transitive dependency: Go selects the highest version any module requires and no requirement sets an upper bound, so raising it in go.mod reaches ${target} with no parent moving: ${commands.map((c) => `\`${c.command}\` in ${c.dir}`).join("; ")} (go get also raises what that release requires, and the go directive when it needs a newer Go)`,
+    `Transitive dependency: Go selects the highest version any module requires and no requirement sets an upper bound, so raising it in go.mod reaches ${target} with no parent moving: ${commands.map((c) => `\`${c.command}\` in ${c.dir}`).join("; ")} (go get also raises what that release itself requires)${newerGo}`,
   );
   return true;
+}
+
+/** The `go` directive of a go.mod on disk, or null. */
+function goDirectiveOf(goMod: string): string | null {
+  try {
+    return /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(readTextFile(goMod))?.[1] ?? null;
+  } catch {
+    return null;
+  }
 }
