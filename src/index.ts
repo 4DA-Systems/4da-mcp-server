@@ -417,6 +417,8 @@ export function buildServer(): Server {
 
     try {
       const database = databaseFor(name);
+      // A changed .npmrc, .yarnrc.yml, go env file or environment re-reads which names are private (stat calls only).
+      liveIntel?.refreshPrivateRules();
       const result = await dispatchTool(name, database, args as Record<string, unknown> | undefined, { startedAt });
       const note = database?.takeCreationNote() ?? null;
       return note ? withDatabaseNote(result, note) : result;

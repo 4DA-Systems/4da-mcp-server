@@ -34,7 +34,9 @@ import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
-import { PrivatePackageRules, type PrivateDependency } from "./private-packages.js";
+import { npmLockPrivateSources, pep503, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
+import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
+import { registerPrivateNames } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -85,7 +87,7 @@ export class LiveIntelligence {
   private cratesVersions: CratesVersionsReader;
   private pypiReleases: PypiReleasesReader;
   private goReleases: GoReleasesReader;
-  private fixPathSources: FixPathSources;
+  private fixPathSources: PrivateAwareFixPathSources;
   private enabled: boolean;
 
   private lastVulnScan: VulnerabilityScanResult | null = null;
@@ -112,6 +114,8 @@ export class LiveIntelligence {
   private privateDeps: PrivateDependency[] = [];
   /** The same copies as resolved (dev scope and all), for scoping them like a scan. */
   private privateAudit: ResolvedDependency[] = [];
+  /** npm groups: packages their lockfile installs from a non-public registry host (`resolved`). */
+  private npmLockPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
   private initialized = false;
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
@@ -158,7 +162,10 @@ export class LiveIntelligence {
     this.cratesVersions = new CratesVersionsReader(this.cache, this.rateLimiter);
     this.pypiReleases = new PypiReleasesReader(this.cache, this.rateLimiter);
     this.goReleases = new GoReleasesReader(this.cache, this.rateLimiter);
-    this.fixPathSources = new FixPathSources(this.cache, this.rateLimiter);
+    // Fix-path lookups (upgrade_planner, held dependencies) refuse private names (private-fix-sources.ts),
+    // and the HTTP choke point refuses any request naming one this layer knows (private-guard.ts).
+    this.fixPathSources = new PrivateAwareFixPathSources(this.cache, this.rateLimiter, (ecosystem, name) => this.privateReason(ecosystem, name));
+    registerPrivateNames(this);
   }
 
   /** Advisory, registry and parent-requirement lookups for fix paths; null when offline. */
@@ -303,6 +310,11 @@ export class LiveIntelligence {
    * send. They are kept in `privateDeps` so every answer says they were not checked.
    */
   private rebuildDependencySet(): void {
+    this.npmLockPrivate = new Map(
+      this.groupResults
+        .filter((r) => mapEcosystem(r.group.language) === "npm")
+        .map((r) => [r, npmLockPrivateSources(r.group.dir, this.privateRules.npmMirrorHosts)] as const),
+    );
     const key = (dep: { ecosystem: string; name: string; version: string | null }) => `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
     const privateWhy = new Map<string, string>();
     const isPublic = (r: GroupResolution, dep: ResolvedDependency) => {
@@ -325,7 +337,7 @@ export class LiveIntelligence {
 
   /** Why a dependency of this group is private, or null: its lockfile's source, then the name rules. */
   private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): string | null {
-    const fromLock = (r.privateIndex ?? []).find((p) => p.name === name && (p.version === null || version === null || p.version === version));
+    const fromLock = this.lockPrivateOf(r).find((p) => p.name === name && (p.version === null || version === null || p.version === version));
     if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
     return this.privateRules.reasonFor(ecosystem, name);
   }
@@ -338,13 +350,45 @@ export class LiveIntelligence {
   privateReason(ecosystem: string, name: string): string | null {
     const byName = this.privateRules.reasonFor(ecosystem, name);
     if (byName) return byName;
-    const norm = (n: string) => (ecosystem === "PyPI" ? n.toLowerCase().replace(/[-_.]+/g, "-") : n);
+    const norm = (n: string) => (ecosystem === "PyPI" ? pep503(n) : n);
+    // A name this project ALSO installs from the public registry is public (a git fork of serde
+    // beside serde itself): asking about it reveals nothing.
+    if (this.auditDeps.some((d) => d.ecosystem === ecosystem && norm(d.name) === norm(name))) return null;
     for (const r of this.groupResults) {
       if (mapEcosystem(r.group.language) !== ecosystem) continue;
-      const hit = (r.privateIndex ?? []).find((p) => norm(p.name) === norm(name));
+      const hit = this.lockPrivateOf(r).find((p) => norm(p.name) === norm(name));
       if (hit) return `${hit.file} installs it from ${hit.registry}, not the public registry`;
     }
     return null;
+  }
+
+  /** What a group's lockfiles install from a private source: the readers' entries, and npm's `resolved` hosts. */
+  private lockPrivateOf(r: GroupResolution): PrivateIndexEntry[] {
+    const npm = this.npmLockPrivate.get(r);
+    return npm && npm.length > 0 ? [...(r.privateIndex ?? []), ...npm] : (r.privateIndex ?? []);
+  }
+
+  /** Private names a fix-path lookup was refused for in this process, with why. */
+  getPrivateRefusals(): ReadonlyMap<string, string> {
+    return this.fixPathSources.refusals;
+  }
+
+  /**
+   * Re-read the private-package rules when a file they came from (`.npmrc`, `.yarnrc.yml`, the
+   * `go env -w` file) or the environment behind them changed, and rebuild the dependency set with
+   * them. Stat calls only; called at the top of every tool call. True when anything changed.
+   */
+  refreshPrivateRules(): boolean {
+    if (!this.privateRules.stale()) return false;
+    this.privateRules = this.privateRules.reread();
+    if (this.initialized) {
+      this.rebuildDependencySet();
+      this.generation++;
+      this.lastVulnScan = null;
+      this.warmup = null;
+      this.warmupFailedAt = null;
+    }
+    return true;
   }
 
   /** Dependencies left out of every lookup because they are private, each with why. */
@@ -388,14 +432,15 @@ export class LiveIntelligence {
    * for the dependency set it saw at startup.
    */
   refreshIfLockfilesChanged(): boolean {
-    if (!this.initialized || this.groupResults.length === 0) return false;
+    const rulesChanged = this.refreshPrivateRules();
+    if (!this.initialized || this.groupResults.length === 0) return rulesChanged;
     let changed = false;
     this.groupResults = this.groupResults.map((result) => {
       if (!groupIsStale(result)) return result;
       changed = true;
       return resolveGroup(result.group);
     });
-    if (!changed) return false;
+    if (!changed) return rulesChanged;
     this.rebuildDependencySet();
     this.generation++;
     this.lastVulnScan = null;
@@ -699,11 +744,25 @@ export class LiveIntelligence {
    */
   async queryAdvisories(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
     if (!this.enabled) return emptyVulnResult("dependency_check", true, { count: deps.length, reason: LOOKUPS_DISABLED });
+    // A private name is never asked about (a held dependency of a private parent): it has no
+    // answer, so the result is not checked for it, never clean.
+    const priv = deps.filter((d) => this.privateReason(d.ecosystem, d.name));
+    const open = priv.length > 0 ? deps.filter((d) => !priv.includes(d)) : deps;
+    let result: VulnerabilityScanResult;
     try {
-      return await this.osvScanner.scan(deps, "dependency_check");
+      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check") : emptyVulnResult("dependency_check", false);
     } catch (error) {
       return emptyVulnResult("dependency_check", true, { count: deps.length, reason: `the scan failed (${String(error).slice(0, 120)})` });
     }
+    if (priv.length === 0) return result;
+    const names = [...new Set(priv.map((d) => d.name))];
+    return {
+      ...result,
+      offline: true,
+      totalScanned: result.totalScanned + priv.length,
+      unchecked: (result.unchecked ?? 0) + priv.length,
+      uncheckedReason: [result.uncheckedReason, `${names.slice(0, 3).join(", ")}${names.length > 3 ? ", ..." : ""} ${names.length === 1 ? "is" : "are"} private and not sent`].filter(Boolean).join("; "),
+    };
   }
 
   getStatus(): LiveIntelligenceStatus {

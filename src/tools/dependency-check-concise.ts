@@ -30,7 +30,7 @@ export interface DetailedItem {
   signals: Signal[];
   range_check?: RangeCheck;
   maintenance_notices?: string[];
-  /** Set on an item whose package name is private (dependency-check-private.ts): never looked up. */
+  /** "private": the package name is private and was never looked up (live/private-packages.ts). */
   not_checked?: string;
 }
 

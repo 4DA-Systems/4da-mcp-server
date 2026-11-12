@@ -139,15 +139,19 @@ function publishedAfter(at: string | null, than: string | null): boolean {
 }
 
 /**
- * The release `to`'s publish trust is compared with. The installed `from`, unless it was
- * published after `to` (a backport on an older line): then the previous release on `to`'s own
- * line, so a trust "drop" is never read against a release that came later.
+ * The release `to`'s publish trust is compared with. The installed `from`, unless it is a higher
+ * version (a downgrade) or was published after `to` (a backport on an older line): then the
+ * previous release on `to`'s own line, so a trust "drop" is never read against a later release.
  */
 export function trustBaseline(index: PackageReleaseIndex, item: CheckItem): ReturnType<typeof selectBaseline> {
   const base = selectBaseline(index, item);
-  if (base.kind !== "from" || !base.record || !publishedAfter(base.record.publishedAt, index.releases[item.to]?.publishedAt ?? null)) return base;
+  if (base.kind !== "from" || !base.record) return base;
+  // A downgrade: the installed release is the newer one, so it says nothing about how `to` was published.
+  const downgrade = compareIn(item.ecosystem, base.record.version, item.to) > 0;
+  const later = publishedAfter(base.record.publishedAt, index.releases[item.to]?.publishedAt ?? null);
+  if (!downgrade && !later) return base;
   const line = previousOnLine(index, item);
-  return { ...line, note: `installed ${item.from} was published after ${item.to}; ${line.note}` };
+  return { ...line, note: `installed ${item.from} ${downgrade ? "is a higher version than" : "was published after"} ${item.to}; ${line.note}` };
 }
 
 /** Same compatibility line: same major, or same 0.minor below 1.0. */

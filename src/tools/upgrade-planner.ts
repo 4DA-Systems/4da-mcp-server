@@ -24,6 +24,7 @@
  *   else about the lockfile's version needs changing.
  */
 
+import { markPrivateParents } from "./upgrade-planner-private.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
@@ -166,6 +167,8 @@ interface UpgradeRecommendation {
   installFix?: string;
   /** No lockfile: the manifest's declared requirement; `currentVersion` is its floor, not an install. */
   declaredRange?: string;
+  /** Private packages this transitive step arrives through: never looked up, so its fix path is not checked (upgrade-planner-private.ts). */
+  privateParents?: Array<{ parent: string; why: string }>;
 }
 
 export interface UpgradePlanResult {
@@ -711,6 +714,8 @@ async function executeStandalonePlanner(
   await reconcileDirectTargets(limited, verifiedInputs, liveIntel);
   // A transitive fix that needs a major upgrade of what the project declares is breaking.
   settleTransitiveBreaking(limited);
+  // A fix path through a private parent was never looked up: said first, never a proceed (upgrade-planner-private.ts).
+  markPrivateParents(limited, (r) => fixPathInputs.get(r)?.sourceDirs ?? [], liveIntel);
   limited.sort(planOrder);
   // Go module versions carry their `v` in every field, as currentVersion does (audit 7e).
   for (const r of limited) {

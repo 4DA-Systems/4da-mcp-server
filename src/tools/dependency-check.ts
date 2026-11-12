@@ -1052,6 +1052,21 @@ const head = (item: Resolved) => ({
   ...(item.readAs ? { to_read_as: item.readAs } : {}),
 });
 
+/** "N checked: ..." over the items looked up; private items are counted as not checked, never as checked. */
+function summaryLine(results: ItemResult[], parts: string[]): string {
+  const privateCount = results.filter((r) => r.not_checked === "private").length;
+  const checked = results.length - privateCount;
+  const advice = 'Write only "proceed" versions; for the rest write a safe version the item names ("safe"; "range_check" in the detailed form) or report the evidence.';
+  if (privateCount === 0) return `${results.length} checked: ${parts.join(", ")}. ${advice}`;
+  const notChecked = `${privateCount} not checked (private): never looked up, verdict unknown`;
+  if (checked === 0) return `${notChecked}. Nothing was sent; check ${privateCount === 1 ? "it" : "them"} with your private registry's own tooling.`;
+  const counts = new Map<string, number>();
+  for (const r of results) if (r.not_checked !== "private") counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
+  const order = ["avoid", "review", "unknown", "wait", "proceed"];
+  const checkedParts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
+  return `${checked} checked: ${checkedParts.join(", ")}; ${notChecked}. ${advice}`;
+}
+
 function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number }) {
   const counts = new Map<Verdict, number>();
   for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
@@ -1059,7 +1074,7 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
   const parts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
   return {
     checked_at: checkedAt,
-    summary: `${results.length} checked: ${parts.join(", ")}. Write only "proceed" versions; for the rest write a safe version the item names ("safe"; "range_check" in the detailed form) or report the evidence.`,
+    summary: summaryLine(results, parts),
     results,
     _meta: {
       sources: ["registry.npmjs.org", "api.npmjs.org", "crates.io", "index.crates.io", "pypi.org", "proxy.golang.org", "osv.dev"],

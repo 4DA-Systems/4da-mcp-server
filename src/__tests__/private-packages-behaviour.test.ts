@@ -75,23 +75,23 @@ afterEach(() => {
 });
 
 /** A project with a lockfile naming a private scoped package, a public one, and an .npmrc. */
-function npmProject(npmrc: string | null) {
-  write("package.json", JSON.stringify({ name: "app", dependencies: { "@acme/secret-billing": "1.2.3", lodash: "4.17.21" } }));
+function npmProject(npmrc: string | null, scope = "@acme") {
+  write("package.json", JSON.stringify({ name: "app", dependencies: { [`${scope}/secret-billing`]: "1.2.3", lodash: "4.17.21" } }));
   write(
     "package-lock.json",
     JSON.stringify({
       name: "app",
       lockfileVersion: 3,
       packages: {
-        "": { name: "app", dependencies: { "@acme/secret-billing": "1.2.3", lodash: "4.17.21" } },
-        "node_modules/@acme/secret-billing": { version: "1.2.3" },
+        "": { name: "app", dependencies: { [`${scope}/secret-billing`]: "1.2.3", lodash: "4.17.21" } },
+        [`node_modules/${scope}/secret-billing`]: { version: "1.2.3" },
         "node_modules/lodash": { version: "4.17.21" },
       },
     }),
   );
   if (npmrc !== null) write(".npmrc", npmrc);
   const live = new LiveIntelligence(new Database(":memory:"));
-  live.initFromProject(scratch, ["@acme/secret-billing", "lodash"], [], "javascript");
+  live.initFromProject(scratch, [`${scope}/secret-billing`, "lodash"], [], "javascript");
   return live;
 }
 
@@ -139,7 +139,8 @@ describe("a scope the project's .npmrc maps to a private registry", () => {
   });
 
   it("a public scope is still checked", async () => {
-    const live = npmProject("@acme:registry=https://registry.npmjs.org/\n");
+    // Another scope: the choke point applies what every live layer still alive says is private (private-guard.ts).
+    const live = npmProject("@pubco:registry=https://registry.npmjs.org/\n", "@pubco");
     await live.scanVulnerabilities(scratch);
     expect(leaked("secret-billing").length).toBeGreaterThan(0);
   });
@@ -164,6 +165,9 @@ describe("GOPRIVATE and FOURDA_PRIVATE_PACKAGES", () => {
       live,
     );
     expect(result.results.map((r) => r.verdict)).toEqual(["unknown", "unknown"]);
+    // All private: nothing "checked" (review of #64).
+    expect(result.summary).toMatch(/^2 not checked \(private\)/);
+    expect(result.summary).not.toContain("checked:");
     const impact = await executeUpgradeImpact(noDb, { package: "acme-widgets", ecosystem: "npm", to_version: "2.0.0" }, live);
     expect(String((impact as { error?: string }).error)).toContain("NOT CHECKED (private)");
     expect(sent).toEqual([]);

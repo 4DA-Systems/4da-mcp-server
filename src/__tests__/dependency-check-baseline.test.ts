@@ -73,3 +73,12 @@ describe("the publish-trust baseline is an earlier release, never a later one", 
     expect(selectBaseline(undated, { ecosystem: "Go", package: "example.com/m", to: "v1.2.0" }).record?.version).toBe("v1.1.0");
   });
 });
+
+describe("a downgrade is never the trust baseline (review of #64)", () => {
+  it("from 19.2.1 down to 19.2.0: compared with 19.1.1, not the higher installed release", () => {
+    const item = { ecosystem: "npm" as const, package: "react", to: "19.2.0", from: "19.2.1" };
+    const base = trustBaseline(index, item);
+    expect(base.record?.version).toBe("19.1.1");
+    expect(base.note).toContain("higher version");
+  });
+});

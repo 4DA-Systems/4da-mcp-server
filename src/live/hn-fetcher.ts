@@ -8,6 +8,7 @@
  * Privacy: sends generic tech keywords (e.g. "react", "rust") — not personal data.
  */
 
+import { refusePrivateRequest } from "./private-guard.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import type { LiveHeadline } from "./types.js";
@@ -94,6 +95,8 @@ export class HNFetcher {
     const timeout = setTimeout(() => controller.abort(), HN_TIMEOUT_MS);
 
     try {
+      // Through the guard like every lookup: a private package name is never a search term.
+      refusePrivateRequest(url);
       const response = await fetch(url, { signal: controller.signal });
       if (!response.ok) return [];
       const data = (await response.json()) as HNResponse;

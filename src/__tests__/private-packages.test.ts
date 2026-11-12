@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   goPrivateMatch,
+  npmLockPrivateSources,
   isPublicCratesSource,
   isPublicNpmRegistry,
   npmrcPrivateScopes,
@@ -128,5 +129,74 @@ describe("lockfile sources", () => {
     );
     const read = resolvePython(dir);
     expect(read.privateIndex?.map((p) => [p.name, p.version])).toEqual([["acme-auth", "2.1.0"]]);
+  });
+});
+
+describe("review of #64: should-fix items", () => {
+  it("S1: .yarnrc.yml scopes at any indentation, quoted, and in flow style", () => {
+    expect(yarnrcPrivateScopes(["npmScopes:", "    acme:", '        npmRegistryServer: "https://npm.acme.internal"'].join("\n"))).toEqual(["@acme"]);
+    expect(yarnrcPrivateScopes(["npmScopes:", '\t"@acme":', "\t\tnpmRegistryServer: 'https://npm.acme.internal' # comment"].join("\n").replaceAll("\t", "   "))).toEqual(["@acme"]);
+    expect(yarnrcPrivateScopes('npmScopes: { acme: { npmRegistryServer: "https://npm.acme.internal" }, pub: { npmRegistryServer: "https://registry.npmjs.org" } }')).toEqual(["@acme"]);
+    expect(yarnrcPrivateScopes(['npmScopes: {', '  acme: {npmRegistryServer: "https://npm.acme.internal", npmAlwaysAuth: true}', "}"].join("\n"))).toEqual(["@acme"]);
+    expect(yarnrcPrivateScopes("npmRegistryServer: https://npm.acme.internal\n")).toEqual([]);
+  });
+
+  it("S2: a bare scope covers the scope; PyPI names compare PEP 503-normalised on both sides", () => {
+    const rules = new PrivatePackageRules([], { ...noUser, FOURDA_PRIVATE_PACKAGES: "@acme, PyPI:Acme_Auth.Lib, pypi:corp-*" });
+    expect(rules.reasonFor("npm", "@acme/billing")).not.toBeNull();
+    expect(rules.reasonFor("npm", "@acme")).not.toBeNull();
+    expect(rules.reasonFor("npm", "@acmeco/x")).toBeNull();
+    expect(rules.reasonFor("PyPI", "acme-auth-lib")).not.toBeNull();
+    expect(rules.reasonFor("PyPI", "ACME.AUTH_lib")).not.toBeNull();
+    expect(rules.reasonFor("PyPI", "Corp_Tools")).not.toBeNull();
+  });
+
+  it("S3: an empty GOPRIVATE falls back to the `go env -w` file, as go does", () => {
+    const dir = tmp();
+    const goenv = path.join(dir, "env");
+    fs.writeFileSync(goenv, "GOPRIVATE=git.acme.internal\n");
+    const rules = new PrivatePackageRules([], { ...noUser, GOENV: goenv, GOPRIVATE: "" });
+    expect(rules.reasonFor("Go", "git.acme.internal/x")).toContain("GOPRIVATE (go env)");
+  });
+
+  it("S4: the rules know when a file they came from, or the environment, changed", () => {
+    const dir = tmp();
+    const env = { ...noUser };
+    const rules = new PrivatePackageRules([dir], env);
+    expect(rules.stale(env)).toBe(false);
+    expect(rules.reasonFor("npm", "@acme/x")).toBeNull();
+    fs.writeFileSync(path.join(dir, ".npmrc"), "@acme:registry=https://npm.acme.internal/\n");
+    expect(rules.stale(env)).toBe(true);
+    expect(rules.reread(env).reasonFor("npm", "@acme/x")).not.toBeNull();
+    expect(rules.stale({ ...env, FOURDA_PRIVATE_PACKAGES: "x" })).toBe(true);
+  });
+
+  it("S5: an npm lockfile `resolved` host other than the public registry makes the package private", () => {
+    const dir = tmp();
+    fs.writeFileSync(
+      path.join(dir, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": { name: "app" },
+          "node_modules/internal-ui": { version: "2.0.0", resolved: "https://npm.pkg.github.com/download/internal-ui/2.0.0/abc" },
+          "node_modules/mirrored": { version: "1.0.0", resolved: "https://artifactory.acme.internal/api/npm/npm/mirrored/-/mirrored-1.0.0.tgz" },
+          "node_modules/lodash": { version: "4.17.21", resolved: "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz" },
+          "node_modules/fork": { version: "1.0.0", resolved: "https://codeload.github.com/x/fork/tar.gz/abc" },
+        },
+      }),
+    );
+    const found = npmLockPrivateSources(dir, new Set(["artifactory.acme.internal"]));
+    expect(found.map((p) => [p.name, p.registry])).toEqual([["internal-ui", "https://npm.pkg.github.com/download/internal-ui/2.0.0/abc"]]);
+    fs.writeFileSync(
+      path.join(dir, "yarn.lock"),
+      ['"@corp/kit@^1.0.0":', '  version "1.0.0"', '  resolved "https://npm.corp.internal/@corp/kit/-/kit-1.0.0.tgz#abc"', "", 'lodash@^4.17.0:', '  version "4.17.21"', '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz"', ""].join("\n"),
+    );
+    fs.writeFileSync(
+      path.join(dir, "pnpm-lock.yaml"),
+      ["lockfileVersion: '9.0'", "packages:", "  internal-tool@3.1.0:", "    resolution: {integrity: sha512-x, tarball: https://npm.corp.internal/internal-tool/-/internal-tool-3.1.0.tgz}", "  lodash@4.17.21:", "    resolution: {integrity: sha512-y}", ""].join("\n"),
+    );
+    const all = npmLockPrivateSources(dir, new Set()).map((p) => p.name).sort();
+    expect(all).toEqual(["@corp/kit", "internal-tool", "internal-ui", "mirrored"]);
   });
 });
