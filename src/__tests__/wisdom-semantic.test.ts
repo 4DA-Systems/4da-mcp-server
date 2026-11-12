@@ -125,6 +125,20 @@ describe("what_should_i_know hybrid wisdom", () => {
     expect(subjects).not.toContain("Auth approach");
   });
 
+  it("the embedding provider receives the task text, never the file paths (audit 2026-11-11 W1 M2-3)", async () => {
+    const fetchMock = installEmbeddingStub();
+    const files = ["C:/Users/alice/acme-secret-project/src/billing/ledger.ts", "/home/alice/private-repo/db.ts"];
+    await executeWhatShouldIKnow(db, { task: "plan a document database migration", files });
+    const bodies = fetchMock.mock.calls.map(([, init]) => String((init as { body?: string } | undefined)?.body ?? ""));
+    const queries = bodies.filter((b) => b.includes("document database migration"));
+    expect(queries.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).not.toContain("acme-secret-project");
+      expect(body).not.toContain("private-repo");
+      expect(body).not.toContain("ledger.ts");
+    }
+  });
+
   it("stays lexical when no embedding provider is configured", async () => {
     process.env.FOURDA_OFFLINE = "true";
 

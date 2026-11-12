@@ -153,7 +153,11 @@ export async function getRelevantWisdomHybrid(
   config: EmbeddingConfig,
 ): Promise<{ wisdom: WisdomEntry[]; recall_mode: WisdomRecallMode }> {
   const rawDb = db.getRawDb();
+  // The lexical ranking runs here and may use the file paths; the embedding provider gets the
+  // task text only. README says "no file paths" leave the machine, and a configured OpenAI
+  // embedder is off the machine (audit 2026-11-11 W1 M2-3: `[task, ...files]` was embedded).
   const query = [task, ...files].join(" ");
+  const embedQuery = task;
   const decisions = loadWisdomDecisions(rawDb);
   const memories = loadWisdomMemories(rawDb);
 
@@ -169,7 +173,7 @@ export async function getRelevantWisdomHybrid(
     ? await semanticScores(
         db,
         "developer_decisions",
-        query,
+        embedQuery,
         decisions.map((d) => ({ id: d.id, text: decisionEmbedText(d) })),
         config,
       )
@@ -178,7 +182,7 @@ export async function getRelevantWisdomHybrid(
     ? await semanticScores(
         db,
         "agent_memory",
-        query,
+        embedQuery,
         memories.map((m) => ({ id: m.id, text: memoryEmbedText(m) })),
         config,
       )

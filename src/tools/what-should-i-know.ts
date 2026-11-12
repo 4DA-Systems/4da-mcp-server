@@ -244,7 +244,7 @@ export const whatShouldIKnowTool = {
         type: "array",
         items: { type: "string" },
         description:
-          "File paths involved in the task (optional). Manifest and source paths help find the packages involved.",
+          "File paths involved in the task (optional). Manifest and source paths help find the packages involved. Read locally only: never sent anywhere, the embedding provider included (it gets the task text).",
       },
       project_path: {
         type: "string",
