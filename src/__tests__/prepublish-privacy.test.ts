@@ -100,6 +100,31 @@ describe("S3: what_should_i_know and private packages", () => {
     }
   });
 
+  // Black-box re-run 2026-11-14: a private PyPI name in a task was guessed npm and sent to
+  // api.osv.dev and registry.npmjs.org, because the guard judges a name per ecosystem.
+  it.each([
+    ["mixed npm + PyPI", true, "bump omega-internal-risk to 3.2.0"],
+    ["mixed npm + PyPI", true, "upgrade omega-internal-risk to 3.2.0"],
+    ["mixed npm + PyPI", true, "bump omega-internal-risk to 3.2.0 and lodash to 4.18.1"],
+    ["PyPI only", false, "bump omega-internal-risk to 3.2.0"],
+    ["PyPI only", false, "add omega-internal-risk 3.2.0"],
+  ])("%s: a private PyPI name in the task is never looked up under a guessed ecosystem (%s, %s)", async (_, withNpm, task) => {
+    if (withNpm) npmProject();
+    write("requirements.txt", "--index-url https://pypi.corp-secret.example/simple\nomega-internal-risk==3.1.0\n");
+    const live = liveFor(scratch);
+    const db = testDb();
+    try {
+      const result = await executeWhatShouldIKnow(db, { task }, live);
+      expect(mentions("omega")).toEqual([]);
+      expect(mentions("corp-secret")).toEqual([]);
+      expect(result.private_dependencies?.map((p) => p.package)).toContain("omega-internal-risk");
+      expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
+      if (task.includes("lodash")) expect(mentions("lodash").length).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
   it("a private name the project does not install yet is recognised by the rules", async () => {
     const live = npmProject();
     const db = testDb();

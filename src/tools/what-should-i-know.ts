@@ -21,7 +21,7 @@
  */
 
 import { checkRequestedVersions, detectRequestedVersions, sayRequested, type RequestedVersionFinding } from "./briefing-requested-versions.js";
-import { privateAdvisoryText, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
+import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { VulnerabilityScanResult } from "../live/types.js";
@@ -331,10 +331,12 @@ export async function executeWhatShouldIKnow(
   const packages = taskPackages();
   // ...and the ones it adds: the same name-level check dependency_check runs (audit 2026-11-11, M14:
   // "add the lodahs package" came back safe_to_delegate).
-  const newPackages = await checkNewPackages(liveIntel, detectNewPackages(task, allDeps()));
+  // A name the project marks private in any ecosystem is never looked up under a guessed one.
+  const notPrivate = (p: { name: string }) => privateAnywhere(liveIntel, p.name) === null;
+  const newPackages = await checkNewPackages(liveIntel, detectNewPackages(task, allDeps()).filter(notPrivate));
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14).
-  const requestedVersions = await checkRequestedVersions(liveIntel, detectRequestedVersions(task, allDeps()));
+  const requestedVersions = await checkRequestedVersions(liveIntel, detectRequestedVersions(task, allDeps()).filter(notPrivate));
   // Private packages the task names: left out of every lookup, so said first, never as clean (S3).
   const privateTask = privateTaskPackages(task, files, liveIntel);
   const vulns = scan?.vulnerabilities ?? [];

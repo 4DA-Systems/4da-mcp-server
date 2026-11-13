@@ -31,7 +31,11 @@
   named in the task", safe). A private PyPI index named by `--index-url` / `-i`
   in a requirements file, `PIP_INDEX_URL` or pip's config file makes the pins
   it serves private (`omega-internal-risk==3.1.0` reached OSV.dev and
-  pypi.org); `--extra-index-url` keeps names public and says so. No `_meta.privacy`
+  pypi.org); `--extra-index-url` keeps names public and says so. A name a task
+  mentions is never looked up under a guessed ecosystem when the project marks
+  it private in any ecosystem ("bump omega-internal-risk to 3.2.0", private by
+  a pip `--index-url`, was guessed npm and sent to OSV.dev and the npm registry;
+  black-box re-run 2026-11-14). No `_meta.privacy`
   says private names are sent any more (vulnerability_scan still said
   "private names included"), and a test holds every one to the README. One
   shared cleaning for third-party text (changelogs, OSV summaries, deprecation
