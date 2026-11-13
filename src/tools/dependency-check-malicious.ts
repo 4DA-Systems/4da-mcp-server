@@ -65,7 +65,15 @@ export function maliciousName(input: {
       (real.length > 0 && real.every((v) => advisoryAffects(a, v, ecosystem))),
   );
   if (!takenDown && covering.length === 0) return null;
-  const ids = [...new Set((takenDown ? malware : covering).map((a) => a.id))].sort();
+  // Every record that covers the name, not only the ones read as malware: the ecosystem's own record
+  // of the same takedown (GO-2025-3451 beside MAL-2025-2545 for boltdb-go/bolt; RUSTSEC-2026-0483,
+  // "removed from crates.io for malicious code", beside MAL-2026-19058) carries no MAL id, and 6.2.7
+  // listed both (black-box re-run of 96c16d2, 2026-11-13).
+  const openEnded = (a: AdvisoryRanges) => a.spans.some((s) => s.fixed === null && s.lastAffected === null && (s.introduced === "0" || /^0(?:\.0)*(?:-0)?$/.test(s.introduced)));
+  const companions = (input.advisories ?? []).filter(
+    (a) => !a.malware && !a.maintenance && openEnded(a),
+  );
+  const ids = [...new Set([...(takenDown ? malware : covering), ...companions].map((a) => a.id))].sort();
   const placeholder = holding(input.to) ? input.to : (releases.find(holding) ?? null);
   return { ids, takenDown, placeholder: takenDown ? placeholder : null, didYouMean: ecosystem === "npm" ? closestPopularNpm(input.package) : null };
 }

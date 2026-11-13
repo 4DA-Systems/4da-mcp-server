@@ -36,7 +36,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
-import { compiledRequirements, confinedInclude, requirementOptions } from "./lockfile-parsers-pygo.js";
+import { compiledRequirements, confinedInclude, parseGoMod, requirementOptions } from "./lockfile-parsers-pygo.js";
 import { projectOverride } from "./overrides.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
@@ -733,8 +733,13 @@ function withLineFacts(
 ): FixTargetResult {
   if (!clean.target || !installed || !facts || isGoPseudoVersion(installed, ecosystem)) return clean;
   const view = cleanReleases(advisories, ecosystem, facts.versions, installed);
+  // "Safe" means no known advisory affects it at all: the clean predicate passes over advisories no
+  // release fixes (docker/docker +incompatible lines), and those would make a "newest safe release"
+  // false (black-box re-run of 96c16d2, 2026-11-13).
+  const safe = (v: string) => view.clean(v) && view.remains(v).length === 0;
+  if (!safe(clean.target)) return clean;
   const above = facts.versions
-    .filter((v) => isComparable(v, ecosystem) && !isPrereleaseVersion(v, ecosystem) && compareVersions(v, installed, ecosystem) > 0 && view.clean(v))
+    .filter((v) => isComparable(v, ecosystem) && !isPrereleaseVersion(v, ecosystem) && compareVersions(v, installed, ecosystem) > 0 && safe(v))
     .sort((a, b) => compareVersions(a, b, ecosystem));
   const newest = above.length > 0 ? above[above.length - 1] : null;
   const newestSafe = newest && compareVersions(newest, clean.target, ecosystem) > 0 ? newest : null;
@@ -1393,6 +1398,35 @@ export function goDirectCommand(goMod: string, module: string, installed: string
   return requiredAt !== null && requiredAt === v(installed) ? `go get ${module}@${v(target)}` : null;
 }
 
+/**
+ * A module go.mod `replace`s: what is built is the replacement, so `go get <module>@<fix>` changes
+ * the requirement and leaves the replaced version built (pre-publish audit 2026-11-12, S7: require
+ * gin v1.6.0 with `replace => gin v1.6.3`, the plan said `go get gin@v1.9.1`). A replace by the same
+ * module at another version is moved with `go mod edit -replace`, or dropped; a replace by a fork or
+ * a local directory is where the fix has to come from, and the step says it is blocked on that.
+ * Null when go.mod replaces nothing for `name` (as a module required, or as a replacement).
+ */
+export function goReplaceFix(goMod: string, name: string, target: string): DirectFix | null {
+  const mod = parseGoMod(goMod);
+  const left = mod.rawRequires.find((r) => {
+    if (r.module === name) return mod.replacement(r.module, r.version) !== undefined;
+    return mod.replacement(r.module, r.version)?.module === name;
+  });
+  if (!left) return null;
+  const to = mod.replacement(left.module, left.version);
+  const v = target.startsWith("v") ? target : `v${target}`;
+  const safe = isShellSafeName(left.module, "Go") && isShellSafeVersion(v);
+  if (to && to.module === left.module && safe) {
+    return {
+      instruction: `go.mod replaces ${left.module} with ${to.module} ${to.version}, so \`go get\` would leave ${to.version} built: point the replace at the fix with \`go mod edit -replace=${left.module}=${left.module}@${v}\`, then \`go mod tidy\` (or drop it with \`go mod edit -dropreplace=${left.module}\`, then \`go get ${left.module}@${v}\`)`,
+    };
+  }
+  const what = to ? `${to.module} ${to.version}` : "a local directory";
+  return {
+    instruction: `Blocked: go.mod replaces ${left.module} with ${what}, which is what is built, so neither \`go get\` nor a version bump reaches the fix; ${to ? `the replacement needs a release that carries the fix (${name} ${v}), or remove the replace` : "update that directory's code to the fixed release, or remove the replace"}`,
+  };
+}
+
 /** The edit of the requirements line that pins the package with `==` at `installed` (markers, extras kept). */
 export function pypiDirectInstruction(requirements: string, file: string, name: string, installed: string, target: string): string | null {
   const lines = requirements.split("\n");
@@ -1464,7 +1498,10 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
     }
     case "Go": {
       const goMod = read("go.mod");
-      const command = goMod === null ? null : goDirectCommand(goMod, name, installed, target);
+      if (goMod === null) return null;
+      // A replaced module names no command here (shared rule vector fc-049); upgrade_planner words the
+      // replace edit itself (goReplaceFix).
+      const command = goDirectCommand(goMod, name, installed, target);
       return command ? { command } : null;
     }
     case "PyPI": {

@@ -34,6 +34,7 @@ import {
   cleanFixTarget,
   deadLineText,
   directFix,
+  goReplaceFix,
   lineLabel,
   heldNote,
   manualRefreshSteps,
@@ -553,6 +554,14 @@ function declaredFixes(
   return { ...(commands.length > 0 ? { commands } : {}), ...(instructions.length > 0 ? { instructions } : {}) };
 }
 
+function readGoMod(dir: string): string | null {
+  try {
+    return fs.readFileSync(path.join(dir, "go.mod"), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
 /** upgrade_direct: name the command that moves the declared dependency, per declaring project (audit E8). */
 function withUpgradeCommands(input: FixPathInput, liveIntel: Pick<LiveIntelligence, "getProjectRoot">): void {
   const { step } = input;
@@ -563,6 +572,19 @@ function withUpgradeCommands(input: FixPathInput, liveIntel: Pick<LiveIntelligen
   delete step.upgradeInstructions;
   if (fixes.commands) step.upgradeCommands = fixes.commands;
   if (fixes.instructions) step.upgradeInstructions = fixes.instructions;
+  if (step.ecosystem === "Go" && !fixes.commands && !fixes.instructions) {
+    // go.mod replaces the module: `go get` would leave the replacement built (audit 2026-11-12, S7).
+    const root = liveIntel.getProjectRoot() ?? process.cwd();
+    const replaced = [...new Set(input.sourceDirs)].flatMap((dir) => {
+      const goMod = readGoMod(dir);
+      const fix = goMod === null ? null : goReplaceFix(goMod, step.package, step.targetVersion!);
+      return fix && "instruction" in fix ? [{ dir: relativeDir(dir, root), instruction: fix.instruction }] : [];
+    });
+    if (replaced.length > 0) {
+      step.upgradeInstructions = replaced;
+      for (const r of replaced) if (!step.reasons.includes(r.instruction)) step.reasons.push(r.instruction);
+    }
+  }
   if (step.ecosystem === "PyPI" && step.upgradeInstructions) {
     // An `==` edit of a file that pins everything is not independently safe: 4 of pygoat's 15
     // did not resolve against the other pins, nor did all 15 (audit 6.2.5 A-4). Said, per edit.

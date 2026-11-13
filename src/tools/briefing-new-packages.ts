@@ -101,7 +101,8 @@ const MANAGERS: Record<string, Manager> = {
 export function asName(token: string, ecosystem: CheckEcosystem): string | null {
   let name = token.replace(/[),.;:!?'"]+$/, "");
   const at = name.indexOf("@", 1);
-  if (at > 0 && ecosystem !== "Go") name = name.slice(0, at);
+  // `go get mod@v1.2.3` too: the version is not part of the module path (live/go-path.ts).
+  if (at > 0) name = name.slice(0, at);
   name = name.replace(/(?:[=~<>!]=?|\^).*$/, "");
   if (name.length < 2 || VERSION_ONLY.test(name) || NOT_A_NAME.has(name.toLowerCase()) || PACKAGE_WORDS.has(name.toLowerCase())) return null;
   switch (ecosystem) {

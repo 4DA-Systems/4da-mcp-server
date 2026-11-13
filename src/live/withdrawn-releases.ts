@@ -36,7 +36,12 @@ export function excludedReleases(index: PackageReleaseIndex): Map<string, string
   }
   if (index.ecosystem === "npm") {
     const live = Object.fromEntries(releases.filter((r) => !r.withdrawn).map((r) => [r.version, r.deprecated]));
-    for (const v of npmExcludedVersions(live, index.latest)) out.set(v, withdrawalText("npm", v, index.releases[v]?.deprecated));
+    // The same rule fix-paths.ts npmFacts applies (one rule for every tool): the shared withdrawal
+    // rule, plus a release its maintainer deprecated with its own message on a line that carries
+    // another notice. dependency_check named lodash.template 4.18.0 ("Bad release. Please use
+    // lodash.template@4.5.0 instead") as the smallest safe release while the scan withheld it
+    // (black-box re-run of 96c16d2, 2026-11-13).
+    for (const v of [...npmExcludedVersions(live, index.latest), ...npmFlaggedReleases(live, index.latest)]) out.set(v, withdrawalText("npm", v, index.releases[v]?.deprecated));
   }
   return out;
 }

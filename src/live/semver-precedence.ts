@@ -32,7 +32,26 @@ const STRICT = new RegExp(
 const TWO_PART = /^(\d+)\.(\d+)$/;
 
 /** Parse a version for precedence comparison, or null when it is not readable semver. */
+/** Parsed versions, kept bounded (see version-compare.ts parsePep440); results are frozen. */
+const MEMO = new Map<string, Readonly<SemverPrecedence> | null>();
+const MEMO_MAX = 20_000;
+
 export function parseSemverPrecedence(version: string): SemverPrecedence | null {
+  const hit = MEMO.get(version);
+  if (hit !== undefined) return hit as SemverPrecedence | null;
+  const parsed = parseUncached(version);
+  if (MEMO.size >= MEMO_MAX) MEMO.delete(MEMO.keys().next().value!);
+  const frozen = parsed ? deepFreeze(parsed) : null;
+  MEMO.set(version, frozen);
+  return frozen;
+}
+
+function deepFreeze<T extends object>(o: T): T {
+  for (const v of Object.values(o)) if (v && typeof v === "object") Object.freeze(v);
+  return Object.freeze(o);
+}
+
+function parseUncached(version: string): SemverPrecedence | null {
   const v = version.trim().replace(/^v+/, "");
   const strict = STRICT.exec(v);
   if (strict) {

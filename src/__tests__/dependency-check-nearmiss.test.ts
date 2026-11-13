@@ -166,9 +166,22 @@ describe("a new dependency whose name is a near-miss of a popular package", () =
     expect(r.reason).toContain("expres@9.9.9 is not a published version on npm");
   });
 
-  it("an installed package (a `from`) is not a new dependency: no name check, no downloads request", async () => {
+  it("a `from` alone does not make a name installed: the name is still checked (pre-publish audit S2)", async () => {
+    // {expres, 0.0.5, from 0.0.5} and {reactt, latest, from 1.0.0} said proceed: `from` skipped the check.
     NPM.expres.versions["0.0.4"] = { at: "2012-10-01T00:00:00.000Z" };
     const [r] = (await check([{ ecosystem: "npm", package: "expres", from: "0.0.4", to: "0.0.5" }])).results;
+    expect(nameCheck(r)).toBeDefined();
+    expect(r.verdict).not.toBe("proceed");
+    expect(r.reason).toContain("Did you mean express?");
+  });
+
+  it("a package this project's lockfiles already hold is not a new dependency: no name check, no downloads request", async () => {
+    NPM.expres.versions["0.0.4"] = { at: "2012-10-01T00:00:00.000Z" };
+    const live = new LiveIntelligence(new Database(":memory:"));
+    vi.spyOn(live, "isInitialized").mockReturnValue(true);
+    vi.spyOn(live, "getResolvedDeps").mockReturnValue([{ name: "expres", version: "0.0.4", ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }] as never);
+    vi.spyOn(live, "getAuditDeps").mockReturnValue([]);
+    const [r] = ((await executeDependencyCheck(noDb, { items: [{ ecosystem: "npm", package: "expres", from: "0.0.4", to: "0.0.5" }] } as never, live, { now: NOW })) as unknown as { results: Result[] }).results;
     expect(nameCheck(r)).toBeUndefined();
     expect(r.reason).not.toContain("Did you mean");
     expect(downloadRequests).toEqual([]);

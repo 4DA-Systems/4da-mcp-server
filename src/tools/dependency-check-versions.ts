@@ -359,7 +359,14 @@ export function checkRange(input: {
   const installable = Object.values(index.releases).filter((r) => !excluded.has(r.version)).map((r) => r.version);
   const { candidates, stable, prereleasesLeftOut } = rangeCandidates(ecosystem, installable, range, input.allowPrerelease ?? false);
   // The same predicate every tool runs on a release it offers (osv-ranges.ts advisoriesAffecting).
-  const affecting = (v: string) => advisoriesAffecting(input.advisories, v, ecosystem);
+  // Once per release: "advisories affecting every release in range" asked it again per advisory id,
+  // ids x releases x advisories (django 4.2.0: seconds of CPU on the event loop; audit 2026-11-12 S1).
+  const seen = new Map<string, string[]>();
+  const affecting = (v: string) => {
+    let ids = seen.get(v);
+    if (!ids) seen.set(v, (ids = advisoriesAffecting(input.advisories, v, ecosystem)));
+    return ids;
+  };
   const ownSafe = candidates.filter((v) => affecting(v).length === 0);
   const safe = input.held ? ownSafe.filter((v) => !input.held!.unsafe(v)) : ownSafe;
   const out: RangeCheck = {
