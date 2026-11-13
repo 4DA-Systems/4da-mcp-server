@@ -33,7 +33,8 @@
  * connection/request, so 2025-era hosts (classic `initialize` handshake) and
  * 2026-07-28 hosts (stateless `server/discover`) are both supported.
  */
-import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { StdioGate } from "./stdio-gate.js";
 import { Server } from "@modelcontextprotocol/server";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -436,7 +437,8 @@ export function buildServer(): Server {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ error: errorMessage }, null, 2),
+            // One shape for every tool error: `{"error": "..."}`, compact, as the argument check writes it.
+            text: JSON.stringify({ error: errorMessage }),
           },
         ],
         isError: true,
@@ -619,7 +621,14 @@ async function main() {
   // Default: stdio serving. `serveStdio` owns the era decision per connection —
   // a 2025-era `initialize` opening is served exactly as before; a 2026-07-28
   // `server/discover` opening gets the stateless modern protocol.
+  // Parse errors and requests before initialize are answered here, per JSON-RPC and MCP (stdio-gate.ts).
+  const gate = new StdioGate((message) => {
+    process.stdout.write(`${JSON.stringify(message)}
+`);
+  });
+  process.stdin.pipe(gate);
   serveStdio(buildServer, {
+    transport: new StdioServerTransport(gate, process.stdout),
     onerror: (error) => {
       console.error(`[4DA] stdio serving error: ${error.message}`);
     },

@@ -342,6 +342,9 @@ export class LiveIntelligence {
     const n = normName(ecosystem, name);
     const fromLock = this.lockPrivateOf(r).find((p) => normName(ecosystem, p.name) === n && (p.version === null || version === null || p.version === version));
     if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
+    // pip's configured index (PIP_INDEX_URL, pip.conf) serves every package a requirements file installs.
+    const pip = this.privateRules.pipIndex;
+    if (pip && ecosystem === "PyPI" && r.source?.kind === "manifest") return `pip installs it from ${pip.url} (${pip.from}), not pypi.org`;
     return this.privateRules.reasonFor(ecosystem, name);
   }
 
@@ -402,7 +405,18 @@ export class LiveIntelligence {
 
   /** The notice for an `.npmrc` default registry that is not public (PrivatePackageRules.npmRegistryNotice), or null. */
   getRegistryNotice(): string | null {
-    return this.privateRules.npmRegistryNotice();
+    const notices = [
+      this.auditDeps.some((d) => d.ecosystem === "npm") || this.groupResults.length === 0 ? this.privateRules.npmRegistryNotice() : null,
+      this.pipExtraNotice(),
+    ].filter((n): n is string => Boolean(n));
+    return notices.length > 0 ? notices.join(" ") : null;
+  }
+
+  /** pip extra indexes that are not public, from pip's configuration or a requirements file (S4). */
+  private pipExtraNotice(): string | null {
+    const fromFiles = this.groupResults.flatMap((r) => (r.extraIndexes ?? []).map((e) => e.index));
+    const usesPip = this.groupResults.some((r) => mapEcosystem(r.group.language) === "PyPI");
+    return PrivatePackageRules.pipExtraNotice([...fromFiles, ...(usesPip ? this.privateRules.pipExtra : [])]);
   }
 
   /** Dependencies left out of every lookup because they are private, each with why. */
@@ -417,7 +431,7 @@ export class LiveIntelligence {
 
   /** The private part of a scan in this scope, attached to its result so every answer reports it. */
   private withPrivate(scan: VulnerabilityScanResult, includeDev: boolean): VulnerabilityScanResult {
-    const notice = this.auditDeps.some((d) => d.ecosystem === "npm") ? this.privateRules.npmRegistryNotice() : null;
+    const notice = this.getRegistryNotice();
     const result = notice ? { ...scan, registryNotice: notice } : scan;
     if (this.privateAudit.length === 0) return result;
     const scoped = applyInstanceDevScope(this.db, this.privateAudit);

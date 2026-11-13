@@ -2,6 +2,24 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (privacy and protocol).** `what_should_i_know` now
+  recognises a private package the task names (installed, or covered by the
+  private rules): it leads with `NOT CHECKED (private)`, lists
+  `private_dependencies`, and never answers `safe_to_delegate` for it (a task
+  upgrading `@acme/vault-core` came back "No dependency of this project is
+  named in the task", safe). A private PyPI index named by `--index-url` / `-i`
+  in a requirements file, `PIP_INDEX_URL` or pip's config file makes the pins
+  it serves private (`omega-internal-risk==3.1.0` reached OSV.dev and
+  pypi.org); `--extra-index-url` keeps names public and says so. No `_meta.privacy`
+  says private names are sent any more (vulnerability_scan still said
+  "private names included"), and a test holds every one to the README. One
+  shared cleaning for third-party text (changelogs, OSV summaries, deprecation
+  and yank messages, Go retraction rationales, HN titles) now removes Unicode
+  tag characters and invisible operators too: an instruction hidden in tag
+  characters survived the changelog parser. A malformed JSON-RPC line gets a
+  `-32700` Parse error, a request before `initialize` is refused with
+  `-32600`, and every tool error is one compact `{"error": ...}`.
+
 - **dependency_check says avoid for a name that is malware itself.** `{npm,
   lodahs, latest}` said proceed: `latest` is 0.0.1-security, the empty
   placeholder npm publishes after taking a malicious package down, and the

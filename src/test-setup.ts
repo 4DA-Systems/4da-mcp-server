@@ -28,7 +28,8 @@ const emptyNpmrc = join(tmpdir(), "4da-test-empty-npmrc");
 if (!existsSync(emptyNpmrc)) writeFileSync(emptyNpmrc, "");
 process.env.NPM_CONFIG_USERCONFIG = emptyNpmrc;
 process.env.GOENV = "off";
-for (const key of ["GOPRIVATE", "GONOPROXY", "GONOSUMDB", "FOURDA_PRIVATE_PACKAGES", "npm_config_userconfig"]) delete process.env[key];
+for (const key of ["GOPRIVATE", "GONOPROXY", "GONOSUMDB", "FOURDA_PRIVATE_PACKAGES", "npm_config_userconfig", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"]) delete process.env[key];
+process.env.PIP_CONFIG_FILE = "os.devnull";
 
 // The HTTP guard's registry of private names (live/private-guard.ts) is process state: one test's
 // project must never make another test's lookups private (CI run 43253624606). Forgotten after

@@ -19,6 +19,7 @@
  * them on what they already fetched.
  */
 
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import { comparePrecedence, parseSemverPrecedence } from "./semver-precedence.js";
 import type { PackageReleaseIndex } from "./release-metadata.js";
 
@@ -127,7 +128,8 @@ export function npmFlaggedReleases(deprecation: Record<string, unknown>, latest:
 
 /** How a registry names a withdrawal, for the release `version`. */
 export function withdrawalText(ecosystem: string, version: string, detail?: string | null): string {
-  const quoted = detail?.trim() ? ` ("${clip(detail.trim(), 120)}")` : "";
+  const said = detail ? sanitizeThirdParty(detail) : "";
+  const quoted = said ? ` ("${clip(said, 120)}")` : "";
   switch (ecosystem) {
     case "npm":
       return `${version} is deprecated on npm${quoted}`;

@@ -21,6 +21,7 @@
  * runs no package code at download), per-release dependency lists.
  */
 
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -67,7 +68,7 @@ export function parseRetractions(goMod: string): Retraction[] {
   const out: Retraction[] = [];
   const entry = (text: string) => {
     const [body, ...comment] = text.split("//");
-    const rationale = comment.join("//").trim() || null;
+    const rationale = sanitizeThirdParty(comment.join("//")) || null;
     const interval = /^\s*\[\s*(v\S+?)\s*,\s*(v\S+?)\s*\]\s*$/.exec(body);
     if (interval) out.push({ low: interval[1], high: interval[2], rationale });
     else {

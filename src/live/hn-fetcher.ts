@@ -8,6 +8,7 @@
  * Privacy: sends generic tech keywords (e.g. "react", "rust") — not personal data.
  */
 
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import { refusePrivateRequest } from "./private-guard.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -151,7 +152,7 @@ function scoreAndMap(hits: HNHit[], techStack: string[]): LiveHeadline[] {
 
       return {
         id: hit.objectID,
-        title: hit.title,
+        title: sanitizeThirdParty(hit.title ?? "", 300),
         url: hit.url,
         source: "hacker_news" as const,
         points: hit.points,

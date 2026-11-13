@@ -338,8 +338,58 @@ function listGlob(pattern: string, normalise: (s: string) => string = (s) => s):
 }
 
 const ECOSYSTEM_PREFIXES: Record<string, string> = { npm: "npm", "crates.io": "crates.io", cargo: "crates.io", pypi: "PyPI", go: "Go" };
+/**
+ * pip's own configuration files, in the order pip reads them (later wins): the user file, then
+ * PIP_CONFIG_FILE. Site-wide and virtualenv files are not read.
+ */
+function pipConfigFiles(env: NodeJS.ProcessEnv): string[] {
+  // pip's own switch: PIP_CONFIG_FILE=os.devnull loads no configuration file at all.
+  if (env.PIP_CONFIG_FILE === "os.devnull") return [];
+  const home = env.HOME || env.USERPROFILE || os.homedir();
+  const files: string[] = [];
+  if (process.platform === "win32") {
+    if (env.APPDATA) files.push(path.join(env.APPDATA, "pip", "pip.ini"));
+  } else {
+    if (home) files.push(path.join(home, ".pip", "pip.conf"));
+    if (process.platform === "darwin" && home) files.push(path.join(home, "Library", "Application Support", "pip", "pip.conf"));
+    const config = env.XDG_CONFIG_HOME || (home ? path.join(home, ".config") : null);
+    if (config) files.push(path.join(config, "pip", "pip.conf"));
+  }
+  if (env.PIP_CONFIG_FILE && env.PIP_CONFIG_FILE !== "os.devnull") files.push(env.PIP_CONFIG_FILE);
+  return files;
+}
+
+/** `index-url` and `extra-index-url` from a pip config file's [global] and [install] sections. */
+export function pipConfigIndexes(content: string): { index: string | null; extra: string[] } {
+  let section = "";
+  let index: string | null = null;
+  const extra: string[] = [];
+  let continuing: "extra" | null = null;
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.replace(/[#;].*$/, "");
+    const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (header) {
+      section = header[1].trim().toLowerCase();
+      continuing = null;
+      continue;
+    }
+    if (section !== "global" && section !== "install") continue;
+    const kv = /^([\w-]+)\s*[=:]\s*(.*)$/.exec(line.trim());
+    if (kv && /^\S/.test(line)) {
+      const key = kv[1].toLowerCase().replaceAll("_", "-");
+      const values = kv[2].split(/\s+/).filter(Boolean);
+      if (key === "index-url" && values[0]) index = values[0];
+      if (key === "extra-index-url") extra.push(...values);
+      continuing = key === "extra-index-url" ? "extra" : null;
+    } else if (continuing === "extra" && line.trim()) {
+      extra.push(...line.trim().split(/\s+/));
+    }
+  }
+  return { index, extra };
+}
+
 /** The environment that decides the rules: a change to any of them re-reads them. */
-const RULE_ENV = ["FOURDA_PRIVATE_PACKAGES", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOENV", "NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"];
+const RULE_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE", "FOURDA_PRIVATE_PACKAGES", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOENV", "NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"];
 
 /** The rules for one project: what its files, the user's files and the environment say is private. */
 export class PrivatePackageRules {
@@ -348,6 +398,13 @@ export class PrivatePackageRules {
   private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: RegExp; rePypi: RegExp | null; reCrates: RegExp | null }> = [];
   /** Hosts an `.npmrc` names as its default `registry=`: a mirror of the public registry, so not private. */
   readonly npmMirrorHosts = new Set<string>();
+  /**
+   * pip's index from PIP_INDEX_URL or a pip config file, when it is not pypi.org: every package a
+   * requirements file installs comes from it, so they are private, as for a lockfile's index.
+   */
+  readonly pipIndex: { url: string; from: string } | null = null;
+  /** pip's extra indexes (PIP_EXTRA_INDEX_URL, config) that are not public: names are still read as public, and said. */
+  readonly pipExtra: string[] = [];
   /** Every file the rules were read from (present or not), with its signature then. */
   private readonly inputs: Map<string, FileSignature>;
   private readonly envKey: string;
@@ -363,8 +420,20 @@ export class PrivatePackageRules {
     ].filter((f): f is string => Boolean(f));
     const yarnrcs = dirs.map((d) => path.resolve(d, ".yarnrc.yml"));
     const goFile = goEnvPath(env);
+    const pipFiles = pipConfigFiles(env);
     // Signatures first: a write that lands while a file is read still reads as a change.
-    this.inputs = signatureMap([...npmrcs.map((f) => path.resolve(f)), ...yarnrcs, ...(goFile ? [goFile] : [])]);
+    this.inputs = signatureMap([...npmrcs.map((f) => path.resolve(f)), ...yarnrcs, ...(goFile ? [goFile] : []), ...pipFiles]);
+    let pipIndex: { url: string; from: string } | null = null;
+    const extra: string[] = [];
+    for (const file of pipFiles) {
+      const read = pipConfigIndexes(safeRead(file));
+      if (read.index) pipIndex = { url: read.index, from: file };
+      extra.push(...read.extra);
+    }
+    if (env.PIP_INDEX_URL?.trim()) pipIndex = { url: env.PIP_INDEX_URL.trim(), from: "PIP_INDEX_URL" };
+    extra.push(...(env.PIP_EXTRA_INDEX_URL ?? "").split(/\s+/).filter(Boolean));
+    this.pipIndex = pipIndex && !isPublicPypiIndex(pipIndex.url) ? { url: sourceLabel(pipIndex.url), from: pipIndex.from } : null;
+    this.pipExtra = [...new Set(extra.filter((u) => !isPublicPypiIndex(u)).map(sourceLabel))];
     this.envKey = RULE_ENV.map((k) => `${k}=${env[k] ?? ""}`).join("\n");
     for (const file of new Set(npmrcs.map((f) => path.resolve(f)))) {
       const read = npmrcRead(safeRead(file));
@@ -408,6 +477,8 @@ export class PrivatePackageRules {
       this.goPatterns.map((g) => `${g.key}=${g.value}`).sort(),
       this.listed.map((l) => `${l.ecosystem ?? "*"}:${l.pattern}`).sort(),
       [...this.npmMirrorHosts].sort(),
+      this.pipIndex?.url ?? "",
+      [...this.pipExtra].sort(),
     ]);
   }
 
@@ -448,6 +519,13 @@ export class PrivatePackageRules {
    * public registry, and one published only there would be sent by name. Said once, in every
    * coverage note and dependency_check answer that concerns npm (review of #64, S5 decision).
    */
+  /** The notice for pip extra indexes that are not public (configuration or requirements files), or null. */
+  static pipExtraNotice(indexes: string[]): string | null {
+    const unique = [...new Set(indexes)];
+    if (unique.length === 0) return null;
+    return `pip also installs from ${unique.join(", ")} (an extra index). Packages published only there are looked up on pypi.org by name; list them in FOURDA_PRIVATE_PACKAGES, or install them through --index-url, to keep them private.`;
+  }
+
   npmRegistryNotice(): string | null {
     const hosts = [...this.npmMirrorHosts].filter((h) => !PUBLIC_NPM_HOSTS.has(h));
     if (hosts.length === 0) return null;

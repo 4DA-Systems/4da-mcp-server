@@ -20,6 +20,7 @@
  * accepted 10). They no longer decide anything here.
  */
 
+import { privateAdvisoryText, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { VulnerabilityScanResult } from "../live/types.js";
@@ -160,6 +161,8 @@ export interface WhatShouldIKnowResult {
    * not have are all said here, and raise the delegation verdict. Absent when the task adds none.
    */
   new_packages?: NewPackageFinding[];
+  /** Private packages the task touches (live/private-packages.ts): never looked up, so not checked. */
+  private_dependencies?: PrivateTaskPackage[];
   advisories: Advisory[];
   decision_windows: DecisionWindow[];
   relevant_wisdom: WisdomEntry[];
@@ -198,6 +201,9 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
       | "getDiscovery"
       | "queryAdvisories"
       | "getReleaseSources"
+      | "getPrivateAuditDeps"
+      | "getPrivateDependencies"
+      | "privateReason"
     >
   >;
 
@@ -320,6 +326,8 @@ export async function executeWhatShouldIKnow(
   // ...and the ones it adds: the same name-level check dependency_check runs (audit 2026-11-11, M14:
   // "add the lodahs package" came back safe_to_delegate).
   const newPackages = await checkNewPackages(liveIntel, detectNewPackages(task, allDeps()));
+  // Private packages the task names: left out of every lookup, so said first, never as clean (S3).
+  const privateTask = privateTaskPackages(task, files, liveIntel);
   const vulns = scan?.vulnerabilities ?? [];
   const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages, allDeps()) : null;
   const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns, latest));
@@ -328,6 +336,17 @@ export async function executeWhatShouldIKnow(
   // One row per task package (the per-advisory detail is in task_dependencies;
   // listing every advisory twice doubled the briefing).
   const advisories: Advisory[] = [];
+  if (privateTask.length > 0) {
+    advisories.push({
+      title: privateAdvisoryText(privateTask),
+      signal_type: "security_alert",
+      priority: "medium",
+      action: "Check it with your private registry's own tooling before changing its version: this server never sends a private name anywhere.",
+      url: null,
+      scope: "task",
+      version_confirmed: false,
+    });
+  }
   // The highest per-advisory fix can itself be affected by another advisory
   // (openssl 0.10.79): check each target against all of the package's.
   const verified = await verifyFixTargets(
@@ -429,6 +448,7 @@ export async function executeWhatShouldIKnow(
       scanStatus,
       advisories,
       newPackages,
+      privateTask,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -440,6 +460,7 @@ export async function executeWhatShouldIKnow(
       project_path: liveIntel?.getProjectRoot?.() ?? null,
       task_dependencies: taskDependencies,
       ...(newPackages.length > 0 ? { new_packages: newPackages } : {}),
+      ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
       advisories,
       decision_windows: decisionWindows,
       relevant_wisdom: relevantWisdom,
@@ -448,7 +469,7 @@ export async function executeWhatShouldIKnow(
       delegation_assessment: delegation,
       scan_status: scanStatus,
       scan: scanBlock,
-      summary: summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages),
+      summary: `${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages)}`,
       wisdom_recall_mode: wisdomMode,
       _meta: { untrusted_text: UNTRUSTED },
     };
@@ -670,6 +691,7 @@ function assessDelegation(input: {
   scanStatus: ScanStatus;
   advisories: Advisory[];
   newPackages: NewPackageFinding[];
+  privateTask?: PrivateTaskPackage[];
   taskDependencies: TaskDependency[];
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
@@ -697,10 +719,13 @@ function assessDelegation(input: {
   // Anything else dependency_check did not clear: a near-miss name, an advisory or a withdrawal on
   // the newest release, a name the registry does not have, or a check that could not run.
   const unclear = input.newPackages.filter((p) => p.verdict !== "proceed" && p.verdict !== "wait");
-  const nameReasons = unclear.map(
+  const privateReasons = (input.privateTask ?? []).map(
+    (p) => `${p.package} is private (${p.why}) and was not checked: confirm its version and advisories with your private registry`,
+  );
+  const nameReasons = [...privateReasons, ...unclear.map(
     (p) =>
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
-  );
+  )];
   if (confirmed.some((v) => severe(v.severity) && !v.fixed_version)) {
     return { level: "human_only", reason: "A dependency this task touches has a high or critical vulnerability with no fixed release: replacing it or accepting the risk is a human call." };
   }

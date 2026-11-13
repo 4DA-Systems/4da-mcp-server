@@ -19,6 +19,23 @@
 
 import { cleanText } from "./tool-args.js";
 
+/**
+ * The one cleaning every piece of third-party free text gets where it enters this server
+ * (pre-publish audit 2026-11-13, S6: the changelog parser kept "IGNORE PREVIOUS INSTRUCTIONS"
+ * hidden in Unicode tag characters, which its own narrower pattern did not cover): invisible,
+ * control, bidi, tag and variation-selector characters removed (tool-args.ts cleanText), runs of
+ * whitespace collapsed, capped at `cap` characters with an ellipsis. Changelog entries, OSV.dev
+ * advisory summaries, registry deprecation and yank messages, Go retraction rationales and HN
+ * titles all go through it; `third-party-text.test.ts` fails on an ingestion point that does not.
+ */
+export function sanitizeThirdParty(text: string, cap = Number.POSITIVE_INFINITY): string {
+  // One emoji-presentation selector right after a pictograph stays ("⚠️ Breaking": the changelog
+  // classifier reads that marker); every other variation selector goes, as cleanText removes them.
+  const kept = text.replace(/\uF8FF/g, "").replace(/(\p{Extended_Pictographic})\uFE0F/gu, "$1\uF8FF");
+  const clean = cleanText(kept).replace(/\uF8FF/g, "\uFE0F").replace(/\s+/g, " ").trim();
+  return clean.length > cap ? `${clean.slice(0, cap - 1)}…` : clean;
+}
+
 /** How much of a third-party sentence a result quotes. */
 export const QUOTE_MAX = 120;
 
