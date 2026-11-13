@@ -442,29 +442,8 @@ describe("nothing checked is never a good score, an online claim, or a silent pr
     expect(forced._meta.offline).toBe(true);
   });
 
-  it("proxy variables: used where this Node can, and said plainly where it cannot", () => {
-    expect(configureProxy({}, { runtime: null })).toEqual({ state: "none", note: null });
-    // Node 24.14+: turned on at runtime.
-    let called = 0;
-    const on = configureProxy({ HTTPS_PROXY: "http://proxy.corp:8080", NO_PROXY: "localhost" }, { runtime: () => void called++, nodeVersion: "v24.14.0" });
-    expect(called).toBe(1);
-    expect(on).toEqual({ state: "runtime", note: "Proxy: lookups go through the proxy from HTTPS_PROXY (NO_PROXY honoured)." });
-    // Node 22.21+: only when Node was started with it.
-    expect(configureProxy({ https_proxy: "http://p:1", NODE_USE_ENV_PROXY: "1" }, { runtime: null, nodeVersion: "v22.21.0", execArgv: [] }).state).toBe("startup");
-    expect(configureProxy({ HTTP_PROXY: "http://p:1" }, { runtime: null, nodeVersion: "v22.22.1", execArgv: ["--use-env-proxy"] }).state).toBe("startup");
-    const missing = configureProxy({ HTTPS_PROXY: "http://p:1", HTTP_PROXY: "http://p:1" }, { runtime: null, nodeVersion: "v22.21.0", execArgv: [] });
-    expect(missing.state).toBe("unsupported");
-    expect(missing.note).toBe(
-      "Proxy: HTTPS_PROXY / HTTP_PROXY is set, but this process does NOT use it, so lookups go direct and will fail (NOT CHECKED) where the proxy is required. " +
-        `Add NODE_USE_ENV_PROXY=1 to this server's environment (in the MCP server entry's "env") and restart it.`,
-    );
-    // Older Node: the variable would do nothing, so it is not suggested as if it would.
-    const old = configureProxy({ HTTPS_PROXY: "http://p:1", NODE_USE_ENV_PROXY: "1" }, { runtime: null, nodeVersion: "v22.16.0", execArgv: [] });
-    expect(old.state).toBe("unsupported");
-    expect(old.note).toMatch(/Node v22\.16\.0 cannot send fetch through a proxy: run the server on Node 22\.21 or later with NODE_USE_ENV_PROXY=1/);
-    // A runtime that throws is reported, not swallowed.
-    const broken = configureProxy({ HTTPS_PROXY: "not a url" }, { runtime: () => { throw new Error("Invalid URL"); } });
-    expect(broken).toMatchObject({ state: "unsupported" });
-    expect(broken.note).toMatch(/turning proxy support on failed \(Invalid URL\); lookups go DIRECT/);
+  it("proxy variables: every lookup goes through them (proxy-lookups.test.ts), and the startup line says so", () => {
+    expect(configureProxy({})).toEqual({ state: "none", note: null });
+    expect(configureProxy({ HTTPS_PROXY: "http://proxy.corp:8080" }).state).toBe("lookups");
   });
 });

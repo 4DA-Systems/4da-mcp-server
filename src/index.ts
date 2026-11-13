@@ -524,8 +524,8 @@ async function main() {
     FOURDA_OFFLINE      Set to "true" to disable all network calls (OSV.dev, HN)
     FOURDA_CALL_BUDGET_MS  Time one tool call may take (default 20000). Past it the
                         call is answered NOT CHECKED; its lookups run on and are cached.
-    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Used on Node 24.14+; on Node 22.21+ when the
-                        server is started with NODE_USE_ENV_PROXY=1 (see the README).
+    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Every lookup goes through the proxy (NO_PROXY
+                        honoured); an unreachable proxy means NOT CHECKED, never direct.
     MCP_AUTH_SECRET     Shared secret for verifying relay-issued Bearer tokens
                         (HMAC-SHA256). Falls back to JWT_SECRET. Without it, no
                         token is accepted.
@@ -554,7 +554,7 @@ async function main() {
     return;
   }
 
-  // HTTPS_PROXY / HTTP_PROXY: turned on where this Node can, and said either way (proxy.ts).
+  // HTTPS_PROXY / HTTP_PROXY: every lookup goes through it (live/http-utils.ts); said here (proxy.ts).
   const proxy = configureProxy();
   if (proxy.note) console.error(`[4DA] ${proxy.note}`);
 

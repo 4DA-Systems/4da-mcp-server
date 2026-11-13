@@ -295,7 +295,7 @@ npx @4da/mcp-server@6.2.7 --version    # Print version
 | `FOURDA_PRIVATE_PACKAGES` | Package names never sent anywhere, in addition to what `.npmrc`, `GOPRIVATE` and your lockfiles already mark private: globs, `*` matching anything, optionally `npm:` / `crates.io:` / `PyPI:` / `Go:` prefixed. See "Private packages are never sent". | Unset |
 | `FOURDA_CALL_BUDGET_MS` | The time one tool call may take, counted from the request. A call still running then is answered NOT CHECKED (`dependency_check`: every item `unknown`); its lookups run on and are cached, so the same call made again answers from them. | `20000` |
 | `FOURDA_WALK_BUDGET_MS` | The time the startup walk of the project tree may take. Past it the scan is partial and says so. | `10000` |
-| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Used on Node 24.14+; on Node 22.21+ only when the server is started with `NODE_USE_ENV_PROXY=1`. See "Behind a proxy". | Unset |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Every lookup goes through the proxy (NO_PROXY honoured); an unreachable proxy means NOT CHECKED, never a direct connection. See "Behind a proxy". | Unset |
 | `FOURDA_GITHUB_CHANGELOG` | `upgrade_impact`: read GitHub release notes when the registry archive has no changelog for the range (`true` / `1` / `yes` / `on`) | Off |
 | `GITHUB_TOKEN` | Used only with `FOURDA_GITHUB_CHANGELOG`: raises GitHub's rate limit from 60 to 5,000 requests an hour | Unset |
 | `FOURDA_MCP_HOME` | Folder for the files the server writes (`cache.db`, `standalone.db`) | Your user data folder + `4da-mcp` |
@@ -314,13 +314,9 @@ The server reads repositories it did not write, so everything it reads is bounde
 
 ## Behind a proxy
 
-Every lookup uses Node's own `fetch`, and no proxy library is bundled, so whether `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` are used depends on the Node that runs the server:
+Set `HTTPS_PROXY` (and `HTTP_PROXY`, `NO_PROXY`, in upper or lower case) in the server's environment (the `env` block of the MCP server entry) and every OSV.dev, registry and search lookup goes through that proxy, on every supported Node; nothing else to set. Hosts `NO_PROXY` names are reached directly. A proxy that cannot be reached, or refuses a request, makes the lookup fail, and the answer says NOT CHECKED: nothing is ever retried around the proxy. The server uses undici's `EnvHttpProxyAgent` for this (`undici`, MIT, pinned). An embedding provider you configure is the exception: it uses Node's own `fetch`, which honours the proxy on Node 24.14+, or on 22.21+ started with `NODE_USE_ENV_PROXY=1`.
 
-- **Node 24.14 or later:** used, nothing else to set.
-- **Node 22.21 or later:** used when Node itself is started with them, which takes `NODE_USE_ENV_PROXY=1` in the server's environment (the `env` block of the MCP server entry).
-- **Older Node:** not supported; lookups go direct and, where the proxy is required, every answer is NOT CHECKED.
-
-The first lines of the server's stderr, and `npx @4da/mcp-server@6.2.7 --doctor`, say which case applies whenever a proxy variable is set.
+The first lines of the server's stderr, and `npx @4da/mcp-server@6.2.7 --doctor`, say so whenever a proxy variable is set.
 
 ## FAQ
 

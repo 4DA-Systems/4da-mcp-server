@@ -19,6 +19,16 @@
   characters survived the changelog parser. A malformed JSON-RPC line gets a
   `-32700` Parse error, a request before `initialize` is refused with
   `-32600`, and every tool error is one compact `{"error": ...}`.
+- **what_should_i_know judges the version a task names.** "add lodash
+  4.17.20" was judged at latest and came back safe_to_delegate; "pin axios
+  to 0.21.1" did not see axios. `name@v`, `name==v`, "name to v", "name from
+  a to b", "pin name v" are read and judged by dependency_check at exactly
+  that version or constraint (`requested_versions`); one that is not proceed
+  is never safe_to_delegate.
+- **Every lookup goes through HTTPS_PROXY / HTTP_PROXY**, with NO_PROXY
+  honoured, on every supported Node (undici's EnvHttpProxyAgent; `undici`
+  7.30.1, MIT, pinned). A proxy that cannot be reached makes the answer NOT
+  CHECKED, never a direct connection.
 
 - **dependency_check says avoid for a name that is malware itself.** `{npm,
   lodahs, latest}` said proceed: `latest` is 0.0.1-security, the empty
