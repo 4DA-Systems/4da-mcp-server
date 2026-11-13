@@ -20,6 +20,7 @@
  * accepted 10). They no longer decide anything here.
  */
 
+import { checkRequestedVersions, detectRequestedVersions, sayRequested, type RequestedVersionFinding } from "./briefing-requested-versions.js";
 import { privateAdvisoryText, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
@@ -163,6 +164,11 @@ export interface WhatShouldIKnowResult {
   new_packages?: NewPackageFinding[];
   /** Private packages the task touches (live/private-packages.ts): never looked up, so not checked. */
   private_dependencies?: PrivateTaskPackage[];
+  /**
+   * The versions the task names ("lodash 4.17.20", "axios@^1.6", "Django==3.2"), each with
+   * dependency_check's verdict for exactly that version or constraint. Absent when it names none.
+   */
+  requested_versions?: RequestedVersionFinding[];
   advisories: Advisory[];
   decision_windows: DecisionWindow[];
   relevant_wisdom: WisdomEntry[];
@@ -326,6 +332,9 @@ export async function executeWhatShouldIKnow(
   // ...and the ones it adds: the same name-level check dependency_check runs (audit 2026-11-11, M14:
   // "add the lodahs package" came back safe_to_delegate).
   const newPackages = await checkNewPackages(liveIntel, detectNewPackages(task, allDeps()));
+  // The versions the task names, judged at exactly that version or constraint, as dependency_check
+  // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14).
+  const requestedVersions = await checkRequestedVersions(liveIntel, detectRequestedVersions(task, allDeps()));
   // Private packages the task names: left out of every lookup, so said first, never as clean (S3).
   const privateTask = privateTaskPackages(task, files, liveIntel);
   const vulns = scan?.vulnerabilities ?? [];
@@ -449,6 +458,7 @@ export async function executeWhatShouldIKnow(
       advisories,
       newPackages,
       privateTask,
+      requestedVersions,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -461,6 +471,7 @@ export async function executeWhatShouldIKnow(
       task_dependencies: taskDependencies,
       ...(newPackages.length > 0 ? { new_packages: newPackages } : {}),
       ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
+      ...(requestedVersions.length > 0 ? { requested_versions: requestedVersions } : {}),
       advisories,
       decision_windows: decisionWindows,
       relevant_wisdom: relevantWisdom,
@@ -692,6 +703,7 @@ function assessDelegation(input: {
   advisories: Advisory[];
   newPackages: NewPackageFinding[];
   privateTask?: PrivateTaskPackage[];
+  requestedVersions?: RequestedVersionFinding[];
   taskDependencies: TaskDependency[];
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
@@ -709,6 +721,10 @@ function assessDelegation(input: {
   // A package the task adds whose NAME is the problem: malware, or a near-miss nobody installs
   // that is brand new or runs install scripts. Nothing about the project's scan changes that.
   const badNames = input.newPackages.filter((p) => p.malicious || p.name_finding === "avoid");
+  const malwareVersion = (input.requestedVersions ?? []).find((r) => r.malicious);
+  if (malwareVersion) {
+    return { level: "human_only", reason: `The task writes ${malwareVersion.name} ${malwareVersion.to}: ${malwareVersion.reason}` };
+  }
   if (badNames.length > 0) {
     const first = badNames[0];
     return {
@@ -722,7 +738,11 @@ function assessDelegation(input: {
   const privateReasons = (input.privateTask ?? []).map(
     (p) => `${p.package} is private (${p.why}) and was not checked: confirm its version and advisories with your private registry`,
   );
-  const nameReasons = [...privateReasons, ...unclear.map(
+  // A version the task names that dependency_check does not clear: never safe to delegate.
+  const versionReasons = (input.requestedVersions ?? [])
+    .filter((r) => r.verdict !== "proceed")
+    .map((r) => `${sayRequested(r)}: do not write it as named (see requested_versions)`);
+  const nameReasons = [...privateReasons, ...versionReasons, ...unclear.map(
     (p) =>
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
   )];

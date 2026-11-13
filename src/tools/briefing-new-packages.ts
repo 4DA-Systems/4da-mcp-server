@@ -98,7 +98,7 @@ const MANAGERS: Record<string, Manager> = {
 };
 
 /** A token as a package name of the ecosystem (a trailing `@version` / `==version` dropped), or null. */
-function asName(token: string, ecosystem: CheckEcosystem): string | null {
+export function asName(token: string, ecosystem: CheckEcosystem): string | null {
   let name = token.replace(/[),.;:!?'"]+$/, "");
   const at = name.indexOf("@", 1);
   if (at > 0 && ecosystem !== "Go") name = name.slice(0, at);
@@ -117,7 +117,7 @@ function asName(token: string, ecosystem: CheckEcosystem): string | null {
 }
 
 /** The ecosystem prose names ("the crate", "from PyPI"), else the project's most common, else npm. */
-function proseEcosystem(words: string[], deps: readonly ResolvedDependency[]): CheckEcosystem {
+export function proseEcosystem(words: string[], deps: readonly ResolvedDependency[]): CheckEcosystem {
   const has = (...w: string[]) => w.some((x) => words.includes(x));
   if (has("crate", "crates", "cargo", "crates.io", "rust")) return "crates.io";
   if (has("pip", "pip3", "pypi", "python", "poetry", "uv", "requirements.txt", "pyproject.toml")) return "PyPI";
@@ -190,7 +190,7 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
   return found.slice(0, MAX_NEW_PACKAGES);
 }
 
-type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;
+export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;
 
 function unchecked(pkg: NewPackage, why: string): NewPackageFinding {
   return {

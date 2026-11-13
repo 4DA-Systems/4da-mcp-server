@@ -376,7 +376,11 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     // A patch on the same 0.x line crosses nothing.
     const patch = await executeWhatShouldIKnow(db, { task: "Bump reqwest to 0.12.28" }, intel);
     expect(patch.task_dependencies.find((d) => d.package === "reqwest")?.majors_crossed).toBe(0);
-    expect(patch.delegation_assessment.level).toBe("safe_to_delegate");
+    // No major crossed, but the version the task names (0.12.28) could not be judged in this stub
+    // (no registry reads): a named version that is not `proceed` is never safe (requested_versions).
+    expect(patch.task_dependencies.find((d) => d.package === "reqwest")).toBeDefined();
+    expect(patch.requested_versions?.[0]).toMatchObject({ name: "reqwest", to: "0.12.28", verdict: "unknown" });
+    expect(patch.delegation_assessment.level).toBe("review_needed");
   });
 
   it("advisories that appear in both passes are reported once", async () => {
