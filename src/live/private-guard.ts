@@ -11,44 +11,93 @@
  * (LiveIntelligence.getFixPathSources), and this guard catches anything that still slips through.
  * `private-guard.test.ts` fails on any network call in src/ that bypasses it.
  *
- * Every LiveIntelligence registers what it knows is private (its rules and its lockfiles'
- * private names); the union is applied. A layer resolved for a project is held strongly under
- * that project's root, replacing the previous one for the same root, so the registry is bounded
- * by the projects the process has seen and never depends on the garbage collector. A layer with
- * no project yet (user-level rules only) is held weakly until it gets one. Holding only weak
- * references let the collector drop a source still in use: on Node 24 a registered source
- * vanished before the request it should have refused (CI run 43241199693).
+ * Which rules apply. A request made FOR a project (a live layer's scan, advisory query, registry
+ * read or fix-path lookup runs inside that layer's context, `withPrivateContext`) is judged by that
+ * project's rules alone: another project's private name is no reason to refuse it. A request with
+ * no project context is judged by the union of every registered project, which can only refuse
+ * more. (Union-only, a name private in one test's fixture refused another test's public lookup in
+ * the same worker: CI run 43253624606.)
+ *
+ * Registration. A live layer resolved for a project is held strongly under its project root,
+ * replacing the previous one for that root, so the registry never depends on the collector (on
+ * Node 24 a weakly held source vanished before the request it should have refused, CI run
+ * 43241199693). An entry goes when its layer is disposed or its root no longer exists. A layer
+ * with no project yet (user-level rules only) is held weakly.
  */
+
+import * as fs from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /** What one live layer says is private: why a name is, or null. */
 export interface PrivateNameSource {
   privateReason(ecosystem: string, name: string): string | null;
+  /** The project the rules are for; an entry whose project directory is gone is dropped. */
+  getProjectRoot?(): string | null;
+}
+
+/** True when the source's project directory no longer exists. */
+function rootGone(source: PrivateNameSource, root: string | null): boolean {
+  const dir = root ?? source.getProjectRoot?.() ?? null;
+  return dir !== null && !fs.existsSync(dir);
 }
 
 const sources = new Set<WeakRef<PrivateNameSource>>();
-const byKey = new Map<string, PrivateNameSource>();
+const byKey = new Map<string, { source: PrivateNameSource; root: string | null }>();
+const context = new AsyncLocalStorage<PrivateNameSource>();
 
-/** Register a source: strongly under `key` (a project root; it replaces that key's previous source), else weakly. */
-export function registerPrivateNames(source: PrivateNameSource, key?: string): void {
+/**
+ * Register a source: strongly under `key` (it replaces that key's previous source; `root`, when
+ * given, is a directory whose disappearance drops the entry), else weakly.
+ */
+export function registerPrivateNames(source: PrivateNameSource, key?: string, root?: string): void {
   if (key === undefined) {
     sources.add(new WeakRef(source));
     return;
   }
-  byKey.set(key, source);
+  byKey.set(key, { source, root: root ?? null });
+}
+
+/** Forget a source everywhere it is registered (a disposed live layer). */
+export function unregisterPrivateNames(source: PrivateNameSource): void {
+  for (const [key, entry] of byKey) if (entry.source === source) byKey.delete(key);
+  for (const ref of sources) if (ref.deref() === source) sources.delete(ref);
+}
+
+/** Run `fn`, and every request it makes (awaits included), as made for `source`'s project. */
+export function withPrivateContext<T>(source: PrivateNameSource, fn: () => T): T {
+  return context.run(source, fn);
+}
+
+/** How many sources are registered (tests assert nothing leaks between them). */
+export function privateGuardSize(): number {
+  return byKey.size + sources.size;
+}
+
+/** Forget every source (the test suite, between tests). */
+export function resetPrivateGuard(): void {
+  byKey.clear();
+  sources.clear();
 }
 
 function* liveSources(): Generator<PrivateNameSource> {
-  yield* byKey.values();
+  for (const [key, entry] of byKey) {
+    if (rootGone(entry.source, entry.root)) {
+      byKey.delete(key);
+      continue;
+    }
+    yield entry.source;
+  }
   for (const ref of sources) {
     const source = ref.deref();
-    if (source) yield source;
+    if (source && !rootGone(source, null)) yield source;
     else sources.delete(ref);
   }
 }
 
-/** Why `name` (in `ecosystem`, or any ecosystem when null) is private to some live layer, or null. */
+/** Why `name` (in `ecosystem`, or any ecosystem when null) is private, or null: the request's project, else any. */
 function privateWhy(ecosystem: string | null, name: string): string | null {
-  for (const source of liveSources()) {
+  const own = context.getStore();
+  for (const source of own ? [own] : liveSources()) {
     for (const eco of ecosystem ? [ecosystem] : ALL_ECOSYSTEMS) {
       const why = source.privateReason(eco, name);
       if (why) return why;
@@ -183,7 +232,7 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
 
 /** Throws PrivateRequestRefused when the request names a private package; returns otherwise. */
 export function refusePrivateRequest(url: string, init?: { body?: unknown }): void {
-  if (sources.size === 0 && byKey.size === 0) return;
+  if (sources.size === 0 && byKey.size === 0 && !context.getStore()) return;
   for (const [eco, name] of namesInRequest(url, init?.body)) {
     const why = privateWhy(eco, name);
     if (why) {

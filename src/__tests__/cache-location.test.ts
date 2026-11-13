@@ -8,12 +8,31 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import Database from "better-sqlite3";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as os from "node:os";
 
 import { FourDADatabase, serverCacheDbPath, standaloneDbPath } from "../db.js";
-import { LiveCache } from "../live/cache.js";
+import { closeServerCacheDb, LiveCache } from "../live/cache.js";
 
 describe("the cache file", () => {
+  // Each test gets its own server folder: the tests do not depend on each other's files or order.
+  let priorHome: string | undefined;
+  beforeEach(() => {
+    priorHome = process.env.FOURDA_MCP_HOME;
+    closeServerCacheDb();
+    process.env.FOURDA_MCP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "4da-cache-location-"));
+  });
+  afterEach(() => {
+    closeServerCacheDb();
+    const home = process.env.FOURDA_MCP_HOME!;
+    if (priorHome === undefined) delete process.env.FOURDA_MCP_HOME;
+    else process.env.FOURDA_MCP_HOME = priorHome;
+    try {
+      fs.rmSync(home, { recursive: true, force: true });
+    } catch {
+      // Windows: left for the OS temp cleaner.
+    }
+  });
   it("standalone mode caches in cache.db, never in standalone.db", () => {
     const file = standaloneDbPath();
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -42,6 +61,8 @@ describe("the cache file", () => {
   it("a live_cache table an older server left in standalone.db is dropped", () => {
     const file = standaloneDbPath();
     fs.mkdirSync(path.dirname(file), { recursive: true });
+    // A standalone database as this server creates it, then the table an older server added.
+    new FourDADatabase(file).close();
     const raw = new Database(file);
     raw.exec("CREATE TABLE IF NOT EXISTS live_cache (cache_key TEXT PRIMARY KEY, data TEXT, source TEXT, fetched_at TEXT, expires_at TEXT)");
     raw.close();
@@ -52,6 +73,17 @@ describe("the cache file", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("a cache whose shared cache.db connection was closed and reopened keeps working", () => {
+    const cache = new LiveCache(null);
+    cache.set("probe:before", { ok: 1 }, "probe", 60);
+    closeServerCacheDb();
+    // Found with a single worker and no isolation: a later file closed the shared connection under
+    // a cache an earlier one still used ("The database connection is not open").
+    expect(cache.get("probe:before")).toEqual({ ok: 1 });
+    cache.set("probe:after", { ok: 2 }, "probe", 60);
+    expect(cache.get("probe:after")).toEqual({ ok: 2 });
   });
 
   it("an in-memory database passed in (tests) is still used as the cache", () => {

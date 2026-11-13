@@ -539,11 +539,13 @@ export async function executeUpgradeImpact(
   if (ready) liveIntel?.refreshIfLockfilesChanged();
   const installed: InstalledDep[] = ready && liveIntel ? [...liveIntel.getResolvedDeps(), ...liveIntel.getAuditDeps()] : [];
   const root = (ready ? liveIntel?.getProjectRoot() : null) ?? process.cwd();
-  return analyzeUpgradeImpact(params, {
+  // Made for this project (private-guard.ts).
+  const analyze = () => analyzeUpgradeImpact(params, {
     net: createUpgradeNet(cacheFor(db)),
     projectRoot: path.resolve(root),
     installed,
     offline: process.env.FOURDA_OFFLINE === "true" || (liveIntel !== null && !liveIntel.isEnabled()),
     githubChangelog: githubChangelogEnabled(),
   });
+  return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(analyze) : analyze();
 }

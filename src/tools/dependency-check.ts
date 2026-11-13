@@ -225,10 +225,21 @@ export async function runDependencyCheck(db: FourDADatabase | null, params: Depe
 }
 
 export async function executeDependencyCheck(
-  _db: FourDADatabase | null,
+  db: FourDADatabase | null,
   params: DependencyCheckParams,
   liveIntel: LiveIntelligence | null,
   opts: { now?: Date } = {},
+) {
+  // Every lookup (api.npmjs.org downloads included) is made for this project (private-guard.ts).
+  const run = () => checkDependencies(db, params, liveIntel, opts);
+  return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(run) : run();
+}
+
+async function checkDependencies(
+  _db: FourDADatabase | null,
+  params: DependencyCheckParams,
+  liveIntel: LiveIntelligence | null,
+  opts: { now?: Date },
 ) {
   const all = validateItems(params.items);
   const now = opts.now ?? new Date();

@@ -10,8 +10,6 @@
  * index, FOURDA_PRIVATE_PACKAGES). Set FOURDA_OFFLINE=true to disable all network calls.
  */
 
-import * as path from "node:path";
-
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import { LiveCache } from "./cache.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
@@ -38,7 +36,7 @@ import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import { normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
-import { registerPrivateNames } from "./private-guard.js";
+import { registerPrivateNames, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -166,7 +164,9 @@ export class LiveIntelligence {
     this.goReleases = new GoReleasesReader(this.cache, this.rateLimiter);
     // Fix-path lookups (upgrade_planner, held dependencies) refuse private names (private-fix-sources.ts),
     // and the HTTP choke point refuses any request naming one this layer knows (private-guard.ts).
-    this.fixPathSources = new PrivateAwareFixPathSources(this.cache, this.rateLimiter, (ecosystem, name) => this.privateReason(ecosystem, name));
+    this.fixPathSources = new PrivateAwareFixPathSources(this.cache, this.rateLimiter, this);
+    // Weakly: a request made for this layer runs in its context, which holds it (private-guard.ts).
+    // The server's own layer is also held strongly (live-singleton.ts).
     registerPrivateNames(this);
   }
 
@@ -301,9 +301,6 @@ export class LiveIntelligence {
 
   private applyGroups(groups: ResolutionGroup[], projectRoot: string | null): void {
     this.privateRules = new PrivatePackageRules([...new Set([...(projectRoot ? [projectRoot] : []), ...groups.map((g) => g.dir)])]);
-    // Held strongly under the project from now on (private-guard.ts): the choke point never loses it.
-    const root = path.resolve(projectRoot ?? groups[0]?.dir ?? ".");
-    registerPrivateNames(this, `project:${process.platform === "win32" ? root.toLowerCase() : root}`);
     this.groupResults = groups.map(resolveGroup);
     this.rebuildDependencySet();
     this.projectRoot = projectRoot;
@@ -387,7 +384,12 @@ export class LiveIntelligence {
    */
   refreshPrivateRules(): boolean {
     if (!this.privateRules.stale()) return false;
+    const before = this.privateRules.fingerprint();
     this.privateRules = this.privateRules.reread();
+    // A file rewritten with the same rules (a touched .npmrc) changes nothing: the dependency set
+    // and the stored scan stand. Dropping them anyway lost a scan to a test worker rewriting the
+    // shared empty .npmrc (CI run 43253624606).
+    if (this.privateRules.fingerprint() === before) return false;
     if (this.initialized) {
       this.rebuildDependencySet();
       this.generation++;
@@ -501,7 +503,27 @@ export class LiveIntelligence {
    * is a dev one), the population dependency_health and upgrade_planner leave
    * out too. A copy of unknown scope stays: it must not be hidden.
    */
+  /**
+   * Run `fn` as a request made for this project (private-guard.ts): every lookup it makes is
+   * judged by this project's private rules, not another project's.
+   */
+  runInContext<T>(fn: () => T): T {
+    return withPrivateContext(this, fn);
+  }
+
+  /** Forget this layer's private rules in the HTTP guard (it is no longer used). */
+  dispose(): void {
+    unregisterPrivateNames(this);
+  }
+
   async scanVulnerabilities(
+    projectPath: string,
+    options?: { includeDev?: boolean; forceRefresh?: boolean },
+  ): Promise<VulnerabilityScanResult> {
+    return this.runInContext(() => this.scanVulnerabilitiesIn(projectPath, options));
+  }
+
+  private async scanVulnerabilitiesIn(
     projectPath: string,
     options?: { includeDev?: boolean; forceRefresh?: boolean },
   ): Promise<VulnerabilityScanResult> {
@@ -664,6 +686,10 @@ export class LiveIntelligence {
    * Fetch relevant headlines for the user's tech stack.
    */
   async fetchHeadlines(techStack: string[]): Promise<LiveHeadline[]> {
+    return this.runInContext(() => this.fetchHeadlinesIn(techStack));
+  }
+
+  private async fetchHeadlinesIn(techStack: string[]): Promise<LiveHeadline[]> {
     if (!this.enabled) return [];
     // A private package name is never a search term (private-packages.ts).
     const privateNames = new Set(this.privateDeps.map((p) => p.name.toLowerCase()));
@@ -736,6 +762,10 @@ export class LiveIntelligence {
   }
 
   async fetchRegistryHealth(deps: ResolvedDependency[]): Promise<RegistryPackageInfo[]> {
+    return this.runInContext(() => this.fetchRegistryHealthIn(deps));
+  }
+
+  private async fetchRegistryHealthIn(deps: ResolvedDependency[]): Promise<RegistryPackageInfo[]> {
     // Registries are read at call time (not captured at construction) so a
     // test can substitute one.
     return fetchRegistryHealthFor(
@@ -747,8 +777,14 @@ export class LiveIntelligence {
 
   /** Per-release registry readers for dependency_check (name-only requests). */
   getReleaseSources(): Record<CheckEcosystem, ReleaseMetadataSource> {
-    return { npm: this.npmPackuments, "crates.io": this.cratesVersions, PyPI: this.pypiReleases, Go: this.goReleases };
+    // Every read runs as made for this project (private-guard.ts).
+    const scoped = (reader: ReleaseMetadataSource): ReleaseMetadataSource => ({
+      getReleases: (name, wanted) => this.runInContext(() => reader.getReleases(name, wanted)),
+      getCreatedAt: (name) => this.runInContext(() => reader.getCreatedAt(name)),
+    });
+    return { npm: scoped(this.npmPackuments), "crates.io": scoped(this.cratesVersions), PyPI: scoped(this.pypiReleases), Go: scoped(this.goReleases) };
   }
+
 
   /**
    * OSV advisories for explicit (ecosystem, name, version) triples that need
@@ -757,6 +793,10 @@ export class LiveIntelligence {
    * stored project scan. Disabled or failed yields an `offline` result.
    */
   async queryAdvisories(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
+    return this.runInContext(() => this.queryAdvisoriesIn(deps));
+  }
+
+  private async queryAdvisoriesIn(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
     if (!this.enabled) return emptyVulnResult("dependency_check", true, { count: deps.length, reason: LOOKUPS_DISABLED });
     // A private name is never asked about (a held dependency of a private parent): it has no
     // answer, so the result is not checked for it, never clean.

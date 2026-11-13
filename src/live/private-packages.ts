@@ -397,6 +397,20 @@ export class PrivatePackageRules {
     return RULE_ENV.map((k) => `${k}=${env[k] ?? ""}`).join("\n") !== this.envKey || anySignatureChanged(this.inputs);
   }
 
+  /**
+   * What the rules say, as one string: two readings that say the same thing are the same rules,
+   * whatever happened to the files' times. (A rewrite of an unchanged `.npmrc` must not throw
+   * away a scan: refreshPrivateRules compares this.)
+   */
+  fingerprint(): string {
+    return JSON.stringify([
+      [...this.npmScopes.keys()].sort(),
+      this.goPatterns.map((g) => `${g.key}=${g.value}`).sort(),
+      this.listed.map((l) => `${l.ecosystem ?? "*"}:${l.pattern}`).sort(),
+      [...this.npmMirrorHosts].sort(),
+    ]);
+  }
+
   /** The same rules read again (after stale()). */
   reread(env: NodeJS.ProcessEnv = process.env): PrivatePackageRules {
     return new PrivatePackageRules(this.dirs, env);

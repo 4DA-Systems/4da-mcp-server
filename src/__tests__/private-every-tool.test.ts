@@ -15,7 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FourDADatabase } from "../db.js";
 import { LiveIntelligence } from "../live/index.js";
-import { setLiveIntelligence } from "../live-singleton.js";
+import { clearLiveIntelligence, setLiveIntelligence } from "../live-singleton.js";
 import { dispatchTool } from "../tool-dispatch.js";
 import { TOOL_REGISTRY } from "../schema-registry.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
@@ -159,6 +159,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // The server's live layer is process state: never left for the next test file (single-worker runs).
+  clearLiveIntelligence();
   if (saved.GOPRIVATE === undefined) delete process.env.GOPRIVATE;
   else process.env.GOPRIVATE = saved.GOPRIVATE;
   try {

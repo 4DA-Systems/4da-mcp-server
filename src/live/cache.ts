@@ -90,12 +90,15 @@ function dropLegacyCacheTable(db: SqliteDatabase): void {
  */
 export class LiveCache {
   private db: SqliteDatabase | null;
+  /** True when `db` is the shared cache.db connection, which may be closed and reopened under it. */
+  private readonly onServerCache: boolean;
   /** Without any SQLite driver: entries for this session only, keyed like the table. */
   private memory: Map<string, CacheRow> | null = null;
 
   constructor(db: SqliteDatabase | null) {
     if (db && !db.readonly && !inMemory(db)) dropLegacyCacheTable(db);
-    this.db = !db || db.readonly || !inMemory(db) ? getServerCacheDb() : db;
+    this.onServerCache = !db || db.readonly || !inMemory(db);
+    this.db = this.onServerCache ? getServerCacheDb() : db;
     if (!this.db) {
       this.memory = new Map();
       return;
@@ -107,6 +110,22 @@ export class LiveCache {
   /** The Map store's equivalent of datetime('now') comparisons. */
   private live(row: CacheRow): boolean {
     return Date.parse(row.expires_at) > Date.now();
+  }
+
+  /**
+   * The connection to use now. The shared cache.db connection can be closed (closeServerCacheDb)
+   * and reopened while this cache lives; a closed one is replaced by the current one, with its
+   * table, instead of failing every lookup with "The database connection is not open".
+   */
+  private conn(): SqliteDatabase {
+    if (this.onServerCache && this.db && !this.db.open) {
+      const current = getServerCacheDb();
+      if (current) {
+        this.db = current;
+        this.ensureTable();
+      }
+    }
+    return this.db!;
   }
 
   private ensureTable(): void {
@@ -129,7 +148,7 @@ export class LiveCache {
       const hit = this.memory.get(key);
       return hit && this.live(hit) ? (JSON.parse(hit.data) as T) : null;
     }
-    const row = this.db!.prepare(
+    const row = this.conn().prepare(
       `SELECT data FROM live_cache WHERE cache_key = ? AND expires_at > datetime('now') AND ${SANE_FETCHED_AT}`,
     ).get(key) as { data: string } | undefined;
 
@@ -146,7 +165,7 @@ export class LiveCache {
       const hit = this.memory.get(key);
       return hit ? { data: JSON.parse(hit.data) as T, fetchedAt: hit.fetched_at } : null;
     }
-    const row = this.db!.prepare(
+    const row = this.conn().prepare(
       `SELECT data, fetched_at FROM live_cache WHERE cache_key = ? AND ${SANE_FETCHED_AT}`,
     ).get(key) as { data: string; fetched_at: string } | undefined;
 
@@ -165,7 +184,7 @@ export class LiveCache {
       this.memory.set(key, { cache_key: key, data: JSON.stringify(data), source, fetched_at: iso(now), expires_at: iso(now + ttlSeconds * 1000) });
       return;
     }
-    this.db!.prepare(`
+    this.conn().prepare(`
       INSERT OR REPLACE INTO live_cache (cache_key, data, source, fetched_at, expires_at)
       VALUES (?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'))
     `).run(key, JSON.stringify(data), source, ttlSeconds);
@@ -183,11 +202,11 @@ export class LiveCache {
       for (const [key, data] of entries) this.set(key, data, source, ttlSeconds);
       return;
     }
-    const insert = this.db!.prepare(`
+    const insert = this.conn().prepare(`
       INSERT OR REPLACE INTO live_cache (cache_key, data, source, fetched_at, expires_at)
       VALUES (?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'))
     `);
-    this.db!.transaction(() => {
+    this.conn().transaction(() => {
       for (const [key, data] of entries) insert.run(key, JSON.stringify(data), source, ttlSeconds);
     })();
   }
@@ -198,7 +217,7 @@ export class LiveCache {
       for (const [key, row] of this.memory) if (!this.live(row) && this.memory.delete(key)) purged++;
       return purged;
     }
-    const result = this.db!.prepare(
+    const result = this.conn().prepare(
       `DELETE FROM live_cache WHERE expires_at <= datetime('now') OR NOT (${SANE_FETCHED_AT})`,
     ).run();
     return result.changes;
@@ -209,7 +228,7 @@ export class LiveCache {
       for (const [key, row] of this.memory) if (row.source === source) this.memory.delete(key);
       return;
     }
-    this.db!.prepare("DELETE FROM live_cache WHERE source = ?").run(source);
+    this.conn().prepare("DELETE FROM live_cache WHERE source = ?").run(source);
   }
 
   invalidateAll(): void {
@@ -217,6 +236,6 @@ export class LiveCache {
       this.memory.clear();
       return;
     }
-    this.db!.prepare("DELETE FROM live_cache").run();
+    this.conn().prepare("DELETE FROM live_cache").run();
   }
 }

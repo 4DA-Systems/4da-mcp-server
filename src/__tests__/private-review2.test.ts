@@ -202,15 +202,18 @@ describe("X2: Ruby and PHP private sources", () => {
 /**
  * Registered under a key, so held strongly. Registered weakly (as it was), the source was
  * collected before its tests ran when the GC came early: the CI failure on Node 24 (run
- * 43241199693), reproduced locally with `--expose-gc` and the gc() below. A live layer with a
- * project is held the same way (private-guard.ts).
+ * 43241199693), reproduced locally with `--expose-gc` and the gc() below. The server's live
+ * layer is held the same way; any other layer by the context of the requests made for it.
  */
 const guardedSource: PrivateNameSource = { privateReason: (eco, name) => (name.toLowerCase().includes("guarded-r2") ? `private (${eco})` : null) };
-registerPrivateNames(guardedSource, "test:private-review2");
 
 describe("the choke point reads every body form", () => {
-  // Whatever the collector has done by now, the source above is still registered.
-  beforeAll(() => (globalThis as { gc?: () => void }).gc?.());
+  // Registered before each test (the suite forgets every source after each one, test-setup.ts),
+  // and after a collection: a strongly held source survives it.
+  beforeEach(() => {
+    (globalThis as { gc?: () => void }).gc?.();
+    registerPrivateNames(guardedSource, "test:private-review2");
+  });
 
   it.each([
     ["bytes", new TextEncoder().encode(JSON.stringify({ package: { name: "guarded-r2", ecosystem: "npm" } }))],
