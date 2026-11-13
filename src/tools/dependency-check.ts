@@ -54,6 +54,7 @@ import { npmWeeklyDownloads } from "../live/npm-downloads.js";
 import type { AdvisoryRanges } from "../live/osv-ranges.js";
 import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
+import { secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { goPathMajor, goVersionMajor } from "../live/upgrade-go.js";
 import {
   advisoriesSignal,
@@ -200,7 +201,7 @@ interface ItemResult {
    * "private": the package name is private and was never looked up (live/private-packages.ts).
    * "module_path": a Go module path the go command does not accept as written (live/go-path.ts).
    */
-  not_checked?: "private" | "module_path";
+  not_checked?: "private" | "module_path" | "time_budget";
   /** not_checked "module_path": the path the module declares, or the one the spelling most likely means. */
   canonical_module_path?: string;
 }
@@ -237,8 +238,102 @@ export async function executeDependencyCheck(
   opts: { now?: Date } = {},
 ) {
   // Every lookup (api.npmjs.org downloads included) is made for this project (private-guard.ts).
-  const run = () => checkDependencies(db, params, liveIntel, opts);
+  const run = () => checkWithinBudget(db, params, liveIntel, opts);
   return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(run) : run();
+}
+
+/** Kept back from the call's budget for assembling the answer, so the dispatcher's own cut-off never replaces it. */
+const ANSWER_RESERVE_MS = 1_500;
+/** OSV.dev queries made within this many milliseconds of each other go out as one querybatch. */
+const OSV_COALESCE_MS = 30;
+
+/**
+ * Each item is judged on its own, and the answer carries every item that finished within the call's
+ * budget with its real verdict; only the ones still running are `unknown` (`not_checked:
+ * "time_budget"`), and their lookups run on and fill the caches, so asking again for them is fast.
+ * A 25-item first call from a folder with a real project came back all NOT CHECKED: one batch
+ * pipeline, so the slowest item held every other one past the 20 s budget (black-box re-run of
+ * 96c16d2, 2026-11-13). OSV.dev still gets one querybatch for items that reach it together.
+ */
+async function checkWithinBudget(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null, opts: { now?: Date }) {
+  const all = validateItems(params.items);
+  const budgetMs = withinCallBudget(Number.POSITIVE_INFINITY, ANSWER_RESERVE_MS);
+  if (all.length <= 1 || !liveIntel || !liveIntel.isEnabled() || !Number.isFinite(budgetMs)) return checkDependencies(db, params, liveIntel, opts);
+  const checkedAt = (opts.now ?? new Date()).toISOString();
+  const shared = coalescingAdvisories(liveIntel);
+  const raw = params.items as unknown[];
+  const pending = raw.map((item) => checkDependencies(db, { ...params, items: [item] }, shared, opts));
+  for (const p of pending) p.catch(() => undefined);
+  const outcome = (p: (typeof pending)[number]) => p.then((a) => ({ ok: true as const, a }), (error: unknown) => ({ ok: false as const, error }));
+  let settled: Array<Awaited<ReturnType<typeof outcome>> | null> = await Promise.all(pending.map((p) => settleWithin(outcome(p), budgetMs, () => null)));
+  // Nothing finished: waiting on lets the dispatcher's own budget answer (every item NOT CHECKED,
+  // the real time said) stand; this answer is then only what a caller with no budget gets.
+  if (settled.every((x) => x === null)) settled = await Promise.all(pending.map(outcome));
+  const results = settled.map((s, i) => (s && s.ok ? s.a.results[0] : s && !s.ok ? failedResult(all[i], s.error) : timeBudgetResult(all[i], budgetMs + ANSWER_RESERVE_MS)));
+  const answers = settled.flatMap((s) => (s && s.ok ? [s.a] : []));
+  const priv = results.filter((x) => x.not_checked === "private").length;
+  const notice = answers.map((a) => a._meta.registry_notice).find(Boolean);
+  const unfinished = settled.filter((x) => x === null).length;
+  return finish(checkedAt, results, {
+    ...(unfinished > 0 ? { timeBudget: { unfinished, ms: budgetMs + ANSWER_RESERVE_MS } } : {}),
+    offline: answers.some((a) => a._meta.offline),
+    osvCached: answers.length > 0 && answers.every((a) => a._meta.osv_cached),
+    ...(priv > 0 ? { private: priv } : {}),
+    ...(notice ? { registryNotice: notice } : {}),
+  });
+}
+
+/** An item still running when the budget ran out. */
+function timeBudgetResult(r: Requested, budgetMs: number): ItemResult {
+  return {
+    ...head(provisional(r)),
+    verdict: "unknown",
+    reason: `NOT CHECKED (time budget): the registry and advisory lookups for ${r.package} ${provisional(r).to} did not finish within this call's ${secondsText(budgetMs)}; they keep running and their answers are cached. Call dependency_check again for this item. This is not a clean result.`,
+    signals: [],
+    not_checked: "time_budget",
+  };
+}
+
+/** An item whose check failed outright (it never reads as clean). */
+function failedResult(r: Requested, error: unknown): ItemResult {
+  return {
+    ...head(provisional(r)),
+    verdict: "unknown",
+    reason: `NOT CHECKED: the check of ${r.package} ${provisional(r).to} failed (${String(error).slice(0, 120)}). This is not a clean result.`,
+    signals: [],
+  };
+}
+
+/**
+ * The live layer, with OSV.dev queries made close together (one per item, as items finish their
+ * registry reads) sent as one querybatch; every caller gets the whole answer and reads its own
+ * packages from it.
+ */
+function coalescingAdvisories(liveIntel: LiveIntelligence): LiveIntelligence {
+  let queue: Array<{ deps: ResolvedDependency[]; resolve: (r: Awaited<ReturnType<LiveIntelligence["queryAdvisories"]>>) => void; reject: (e: unknown) => void }> = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const flush = () => {
+    const batch = queue;
+    queue = [];
+    timer = null;
+    const deps = batch.flatMap((b) => b.deps);
+    liveIntel.queryAdvisories(deps).then(
+      (result) => batch.forEach((b) => b.resolve(result)),
+      (error) => batch.forEach((b) => b.reject(error)),
+    );
+  };
+  const queryAdvisories = (deps: ResolvedDependency[]) =>
+    new Promise<Awaited<ReturnType<LiveIntelligence["queryAdvisories"]>>>((resolve, reject) => {
+      queue.push({ deps, resolve, reject });
+      timer ??= setTimeout(flush, OSV_COALESCE_MS);
+    });
+  return new Proxy(liveIntel, {
+    get(target, prop, receiver) {
+      if (prop === "queryAdvisories") return queryAdvisories;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 async function checkDependencies(
@@ -1136,14 +1231,16 @@ function summaryLine(results: ItemResult[], parts: string[]): string {
   return `${checked} checked: ${checkedParts.join(", ")}; ${notChecked}. ${advice}`;
 }
 
-function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string }) {
+function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string; timeBudget?: { unfinished: number; ms: number } }) {
   const counts = new Map<Verdict, number>();
   for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
   const order: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
   const parts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
   return {
     checked_at: checkedAt,
-    summary: summaryLine(results, parts),
+    summary: meta.timeBudget
+      ? `NOT CHECKED: ${meta.timeBudget.unfinished} of ${results.length} item${results.length === 1 ? "" : "s"} did not finish within ${secondsText(meta.timeBudget.ms)} (not_checked: "time_budget"): call dependency_check again for ${meta.timeBudget.unfinished === 1 ? "it" : "them"}; their lookups keep running and are cached. The other verdicts are final. ${summaryLine(results, parts)}`
+      : summaryLine(results, parts),
     results,
     _meta: {
       sources: ["registry.npmjs.org", "api.npmjs.org", "crates.io", "index.crates.io", "pypi.org", "proxy.golang.org", "osv.dev"],
@@ -1152,6 +1249,7 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       privacy: PRIVACY_NOTE,
       offline: meta.offline,
       osv_cached: meta.osvCached,
+      ...(meta.timeBudget ? { call_budget_exceeded: true, unfinished_items: meta.timeBudget.unfinished } : {}),
       ...(meta.registryNotice ? { registry_notice: meta.registryNotice } : {}),
       ...(meta.private
         ? { private_packages: `${meta.private} item${meta.private === 1 ? " names a private package" : "s name private packages"}: not looked up anywhere, verdict unknown (not_checked: "private").` }
