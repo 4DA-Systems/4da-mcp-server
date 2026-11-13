@@ -113,7 +113,9 @@ export function asName(token: string, ecosystem: CheckEcosystem): string | null 
     case "PyPI":
       return /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/i.test(name) ? name : null;
     case "Go":
-      return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:\/[\w.~-]+)+$/i.test(name) ? name : null;
+      // A malformed path ("x.com/a//b", a trailing "/") is still the name the task gives: dependency_check
+      // says it is not one the go command accepts (live/go-path.ts), never a silent skip.
+      return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\/[\w.~/-]*$/i.test(name) && name.length <= 300 ? name : null;
   }
 }
 

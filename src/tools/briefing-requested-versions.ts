@@ -49,6 +49,8 @@ const VERBS = new Set([
 ]);
 const PYPI_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)((?:===?|~=|>=|<=|!=|>|<)[^\s]+)$/;
 
+const GO_HOST_PATH = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\//i;
+
 function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: CheckEcosystem): { name: string; ecosystem: CheckEcosystem } | null {
   const bare = token.replace(/[),.;:!?'"`]+$/, "").replace(/^[`'"(]+/, "");
   if (VERBS.has(bare.toLowerCase())) return null;
@@ -56,6 +58,13 @@ function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: C
   const installed = deps.find((d) => d.name.toLowerCase() === bare.toLowerCase() || (d.ecosystem === "PyPI" && norm(d.name) === norm(bare)));
   if (installed && (installed.ecosystem === "npm" || installed.ecosystem === "crates.io" || installed.ecosystem === "PyPI" || installed.ecosystem === "Go")) {
     return { name: installed.name, ecosystem: installed.ecosystem };
+  }
+  // A host-led path ("github.com/...") is a Go module whatever the project mostly holds, and a
+  // malformed one ("github.com/gin-gonic/gin/") is passed on as written: dependency_check says it is
+  // not a path the go command accepts, never a clean answer (pre-publish audit B1).
+  if (GO_HOST_PATH.test(bare)) {
+    const go = asName(bare, "Go");
+    if (go) return { name: go, ecosystem: "Go" };
   }
   const name = asName(bare, fallback);
   return name ? { name, ecosystem: fallback } : null;
