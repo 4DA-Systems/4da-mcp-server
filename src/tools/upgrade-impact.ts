@@ -28,6 +28,7 @@
  * the agent to treat them as data. The code scan is local and bounded.
  */
 
+import { checkGoModulePath, goPathNotCheckedText } from "../live/go-path.js";
 import * as path from "node:path";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
@@ -296,6 +297,12 @@ export async function analyzeUpgradeImpact(
   }
   if (ctx.offline) {
     return { error: "Offline mode (FOURDA_OFFLINE=true): upgrade_impact needs the registry and OSV.dev. Unset FOURDA_OFFLINE to use it." };
+  }
+  if (eco === "Go") {
+    // A spelling the go command would not accept (`..`, `//`, a trailing `/`, a case the module does
+    // not declare) is another module to OSV.dev: its advisories would read as none (audit B1).
+    const g = await checkGoModulePath(pkg);
+    if (!g.ok) return { error: goPathNotCheckedText(pkg, g), not_checked: "module_path", ...(g.canonical ? { canonical_module_path: g.canonical } : {}) };
   }
   const order = versionOrder(eco);
   const go = eco === "Go" ? goModules(pkg, ctx.installed, params.to_version) : null;

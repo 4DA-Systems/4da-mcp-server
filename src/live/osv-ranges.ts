@@ -183,16 +183,64 @@ export function oneIdPerAdvisory(ids: readonly string[], advisories: readonly Ad
  * reports as affected by PYSEC-2024-230 (4DA conformance corpus, 2026-10-12).
  */
 export function advisoryAffects(advisory: AdvisoryRanges, version: string, ecosystem: string): boolean {
-  if (advisory.versions.includes(version)) return true;
   const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
-  if (isComparable(version, ecosystem) && advisory.versions.some((v) => v !== "0" && isComparable(v, ecosystem) && cmp(v, version) === 0)) {
-    return true;
+  const listed = listedIndex(advisory, ecosystem);
+  if (listed.exact.has(version)) return true;
+  if (isComparable(version, ecosystem)) {
+    // Only the listed versions that can equal it are compared: OSV lists every affected PyPI release
+    // (hundreds per Django advisory), and comparing each against each candidate took 25-30 s of CPU
+    // for one dependency_check of django 4.2.0 (pre-publish audit 2026-11-12, S1).
+    const key = releaseKey(version);
+    const near = key === null ? listed.all : [...(listed.byKey.get(key) ?? []), ...listed.unkeyed];
+    if (near.some((v) => cmp(v, version) === 0)) return true;
   }
   return advisory.spans.some(
     (s) =>
       compareToLowerBound(version, s.introduced, ecosystem) >= 0 &&
       (s.fixed !== null ? cmp(version, s.fixed) < 0 : s.lastAffected !== null ? cmp(version, s.lastAffected) <= 0 : true),
   );
+}
+
+/**
+ * The leading release numbers with trailing zeros dropped ("v1.2.0rc1" -> "1.2"): two versions equal
+ * in any ecosystem's order share it. Null for a form that may not (an epoch "1!2.0", no digits).
+ */
+function releaseKey(version: string): string | null {
+  if (version.includes("!")) return null;
+  const m = /^v?(d+(?:.d+)*)/.exec(version.trim());
+  if (!m) return null;
+  const parts = m[1].split(".").map((n) => String(Number(n)));
+  while (parts.length > 1 && parts[parts.length - 1] === "0") parts.pop();
+  return parts.join(".");
+}
+
+interface ListedIndex {
+  exact: Set<string>;
+  /** Comparable listed versions by releaseKey. */
+  byKey: Map<string, string[]>;
+  /** Comparable listed versions with no key: compared against every candidate. */
+  unkeyed: string[];
+  all: string[];
+}
+
+/** One index per advisory and ecosystem, built on first use (an advisory's lists never change once read). */
+const LISTED = new WeakMap<AdvisoryRanges, Map<string, ListedIndex>>();
+
+function listedIndex(advisory: AdvisoryRanges, ecosystem: string): ListedIndex {
+  let perEco = LISTED.get(advisory);
+  if (!perEco) LISTED.set(advisory, (perEco = new Map()));
+  const hit = perEco.get(ecosystem);
+  if (hit) return hit;
+  const index: ListedIndex = { exact: new Set(advisory.versions), byKey: new Map(), unkeyed: [], all: [] };
+  for (const v of advisory.versions) {
+    if (v === "0" || !isComparable(v, ecosystem)) continue;
+    index.all.push(v);
+    const key = releaseKey(v);
+    if (key === null) index.unkeyed.push(v);
+    else index.byKey.set(key, [...(index.byKey.get(key) ?? []), v]);
+  }
+  perEco.set(ecosystem, index);
+  return index;
 }
 
 /**

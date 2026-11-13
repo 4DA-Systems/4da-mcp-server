@@ -2,6 +2,27 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (verdicts).** A Go module path the go command would not
+  accept as written (`github.com/gin-gonic/gin/`, `github.com//gin-gonic/gin`,
+  `github.com/x/y/../../gin-gonic/gin`, `@v1.6.0` inside the path, or a case
+  the module's own go.mod does not declare, such as `github.com/Labstack/Echo/v4`)
+  said `proceed` for vulnerable versions: OSV.dev matches the exact path and
+  matched nothing. dependency_check, upgrade_impact and what_should_i_know now
+  answer NOT CHECKED (`not_checked: "module_path"`) with the canonical path.
+  dependency_check of `{PyPI, django, 4.2.0}` took 25-30 s of CPU that blocked
+  every other call; parsed versions are now kept, an advisory's listed versions
+  indexed, and each release's advisories computed once (about 0.3 s warm;
+  litellm 1.82.7 from 20 s to under 1 s warm). The typo-squat name check runs
+  whenever the project's lockfiles do not hold the package, with `from` or
+  without. upgrade_planner reads go.mod `replace`: it says to move or drop the
+  replace (`go mod edit -replace=...`), or that a fork or local replacement
+  blocks the fix, instead of a `go get` that changes nothing built. An npm
+  alias in `to` (`npm:lodash@4.17.20`) is judged as the package it installs.
+  dependency_check no longer names a maintainer-flagged "bad release"
+  (lodash.template 4.18.0) as the safe release; a malicious name lists every
+  record covering it (GO-2025-3451 beside MAL-2025-2545); and a "newest safe
+  release" is one no advisory affects at all.
+
 - **Pre-publish fixes (privacy and protocol).** `what_should_i_know` now
   recognises a private package the task names (installed, or covered by the
   private rules): it leads with `NOT CHECKED (private)`, lists

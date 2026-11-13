@@ -129,6 +129,14 @@ describe("the version a task names is judged, at that version", () => {
     expect(result.delegation_assessment.reason).toContain("lodash 4.17.20 is avoid");
   });
 
+  it('"add github.com/gin-gonic/gin/ v1.6.0": a Go path the go command would not accept is never safe to delegate (audit B1)', async () => {
+    const result = await brief("add github.com/gin-gonic/gin/ v1.6.0", { react: "18.2.0" });
+    expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
+    const gin = result.requested_versions?.find((r) => r.name.startsWith("github.com/gin-gonic/gin"));
+    expect(gin).toMatchObject({ ecosystem: "Go", to: "v1.6.0", verdict: "unknown" });
+    expect(gin?.reason).toMatch(/not a Go module path the go command accepts as written .* Check `github\.com\/gin-gonic\/gin` instead/);
+  });
+
   it('"pin axios to 0.21.1": axios is seen, 0.21.1 is avoid', async () => {
     const result = await brief("pin axios to 0.21.1", { react: "18.2.0" });
     expect(result.requested_versions?.find((r) => r.name === "axios")).toMatchObject({ to: "0.21.1", verdict: "avoid" });

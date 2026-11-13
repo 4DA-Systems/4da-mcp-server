@@ -101,7 +101,8 @@ const MANAGERS: Record<string, Manager> = {
 export function asName(token: string, ecosystem: CheckEcosystem): string | null {
   let name = token.replace(/[),.;:!?'"]+$/, "");
   const at = name.indexOf("@", 1);
-  if (at > 0 && ecosystem !== "Go") name = name.slice(0, at);
+  // `go get mod@v1.2.3` too: the version is not part of the module path (live/go-path.ts).
+  if (at > 0) name = name.slice(0, at);
   name = name.replace(/(?:[=~<>!]=?|\^).*$/, "");
   if (name.length < 2 || VERSION_ONLY.test(name) || NOT_A_NAME.has(name.toLowerCase()) || PACKAGE_WORDS.has(name.toLowerCase())) return null;
   switch (ecosystem) {
@@ -112,7 +113,9 @@ export function asName(token: string, ecosystem: CheckEcosystem): string | null 
     case "PyPI":
       return /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/i.test(name) ? name : null;
     case "Go":
-      return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:\/[\w.~-]+)+$/i.test(name) ? name : null;
+      // A malformed path ("x.com/a//b", a trailing "/") is still the name the task gives: dependency_check
+      // says it is not one the go command accepts (live/go-path.ts), never a silent skip.
+      return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\/[\w.~/-]*$/i.test(name) && name.length <= 300 ? name : null;
   }
 }
 

@@ -36,7 +36,26 @@ interface Pep440 {
 const PEP440 =
   /^v?(?:(\d+)!)?(\d+(?:\.\d+)*)(?:[-_.]?(a|alpha|b|beta|c|rc|pre|preview)[-_.]?(\d*))?(?:(?:[-_.]?(?:post|rev|r)[-_.]?(\d*))|-(\d+))?(?:[-_.]?dev[-_.]?(\d*))?(?:\+([a-z0-9]+(?:[-_.][a-z0-9]+)*))?$/i;
 
+/**
+ * Parsed versions are kept (bounded, oldest out first): one dependency_check of django 4.2.0 compared
+ * ~400 releases against ~100 advisories' ranges, re-parsing the same strings with this regex millions
+ * of times, 25-30 s of CPU that blocked the event loop (pre-publish audit 2026-11-12, S1). A parse is
+ * a pure function of its string; the result is frozen so no caller can change a shared one.
+ */
+const PEP440_MEMO = new Map<string, Readonly<Pep440> | null>();
+const MEMO_MAX = 20_000;
+
 export function parsePep440(version: string): Pep440 | null {
+  const hit = PEP440_MEMO.get(version);
+  if (hit !== undefined) return hit as Pep440 | null;
+  const parsed = parsePep440Uncached(version);
+  if (PEP440_MEMO.size >= MEMO_MAX) PEP440_MEMO.delete(PEP440_MEMO.keys().next().value!);
+  const frozen = parsed ? Object.freeze({ ...parsed, release: Object.freeze(parsed.release) as number[], local: Object.freeze(parsed.local) as Array<number | string>, pre: parsed.pre ? (Object.freeze(parsed.pre) as [number, number]) : null }) : null;
+  PEP440_MEMO.set(version, frozen);
+  return frozen as Pep440 | null;
+}
+
+function parsePep440Uncached(version: string): Pep440 | null {
   const m = PEP440.exec(version.trim());
   if (!m) return null;
   const preRank: Record<string, number> = { a: 0, alpha: 0, b: 1, beta: 1, c: 2, rc: 2, pre: 2, preview: 2 };

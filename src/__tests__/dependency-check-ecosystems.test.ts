@@ -408,6 +408,28 @@ describe("Go", () => {
     expect(out.results[1]).toMatchObject({ to: "v1.2.0", verdict: "proceed" });
   });
 
+  it("a Go module path the go command would not accept is NOT CHECKED with the canonical path, never proceed (audit B1)", async () => {
+    // A case-mangled spelling the proxy also serves: its go.mod declares the real path.
+    router.go["golang.org/!x/net"] = { list: XNET_LIST, info: fixture("go-xnet-info.json"), mod: "module golang.org/x/net\n\ngo 1.22\n" };
+    const spellings = ["golang.org/x/net/", "golang.org//x/net", "golang.org/y/../x/net", "golang.org/x/net@v0.23.0", "golang.org/X/net"];
+    const out = await check(spellings.map((p) => ({ ecosystem: "Go", package: p, to: "v0.23.0" })));
+    for (const [i, r] of out.results.entries()) {
+      expect(r.verdict, spellings[i]).toBe("unknown");
+      expect(r, spellings[i]).toMatchObject({ not_checked: "module_path", canonical_module_path: "golang.org/x/net" });
+      expect(r.reason).toMatch(/^NOT CHECKED: .* Check `golang\.org\/x\/net` instead\. This is not a clean result\./);
+    }
+    // Nothing was asked of OSV.dev under the mangled spellings.
+    expect(router.requests.filter((u) => u.includes("api.osv.dev")).length).toBe(0);
+    // The canonical path is judged as before.
+    expect(["avoid", "review"]).toContain((await check([{ ecosystem: "Go", package: "golang.org/x/net", to: "v0.23.0" }])).results[0].verdict);
+  });
+
+  it("an uppercase path whose go.mod cannot be read is NOT CHECKED too", async () => {
+    const out = await check([{ ecosystem: "Go", package: "example.com/Retracted", to: "v1.1.0" }]);
+    expect(out.results[0]).toMatchObject({ verdict: "unknown", not_checked: "module_path" });
+    expect(out.results[0].reason).toMatch(/uppercase letters and the module's go\.mod could not be read/);
+  });
+
   it("`+incompatible`: v2.0.0 resolves to the release the proxy lists; a missing /v2 module path is named", async () => {
     router.osv["Go:golang.org/x/net"].batch["v2.0.0"] = [];
     const out = await check([
