@@ -29,6 +29,7 @@ import { parsePyprojectDependencies } from "../project-manifests.js";
 import { readTextFile } from "./text-file.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
+import type { PrivateIndexEntry } from "./private-packages.js";
 
 /** The inputs of one resolution, kept so the same resolution can be re-run. */
 export interface ResolutionGroup {
@@ -59,6 +60,8 @@ export interface GroupResolution {
   unresolved: { manifest: string; ranges: number; pinned: number } | null;
   /** Dependencies installed from git, a URL or a local archive: listed, never matched as registry releases. */
   uncheckable: UncheckableDependency[];
+  /** Packages the lockfile installs from a private registry or index (or git, Cargo): never sent anywhere. */
+  privateIndex: PrivateIndexEntry[];
   /** PyPI: requirements with no pinned version anywhere in this directory, by the file that lists them. */
   unpinned: UnpinnedRequirements[];
   /** Lockfiles present in this directory that could not be read, with the reason. */
@@ -95,6 +98,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
       problems: tooLarge,
       // Nothing was read, so nothing is known to be uncheckable or unpinned: the problem says it was not checked.
       uncheckable: [],
+      privateIndex: [],
       unpinned: [],
       signatures,
       resolvedAt,
@@ -166,6 +170,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     sources,
     unresolved,
     uncheckable: read.uncheckable ?? [],
+    privateIndex: read.privateIndex ?? [],
     unpinned,
     problems: read.problems ?? [],
     signatures,

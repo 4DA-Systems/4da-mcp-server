@@ -3,8 +3,10 @@
  * crates.io release reader for dependency_check.
  *
  * Three name-only reads:
- * - `crates.io/api/v1/crates/<name>/versions` (paged, newest semver first):
- *   publish time, publisher, `trustpub_data`, yanked.
+ * - `crates.io/api/v1/crates/<name>`, for a whole version list (a constraint, "latest"): every
+ *   version in one request, with its publish time, publisher, `trustpub_data` and yanked flag,
+ *   and the crate's creation date; else `crates.io/api/v1/crates/<name>/versions` (paged, newest
+ *   semver first, same fields), which stops at the versions asked about.
  * - the sparse index (`index.crates.io`, the CDN file cargo itself reads):
  *   each version's dependency list, which the versions endpoint lacks.
  * - `crates.io/api/v1/crates/<name>`: when a newly introduced dependency
@@ -13,8 +15,8 @@
  * crates.io asks API clients for a descriptive User-Agent and at most one
  * request per second; every API request here waits for its slot. Paging
  * stops as soon as the versions the caller asked about (and the release just
- * below them) have been seen, so a check costs one or two pages, not the
- * crate's whole history.
+ * below them) have been seen, so an exact check costs one or two pages, and a
+ * whole list one request, not one per hundred versions.
  *
  * Privacy: requests carry the crate NAME only, never the installed version.
  */
@@ -82,6 +84,16 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
     const releases: Record<string, ReleaseRecord> = {};
     let query: string | null = "?per_page=100&sort=semver";
     let pages = 0;
+    // The whole list (a constraint, "latest"): `/crates/<name>` carries every version in ONE
+    // request. Paging it 100 at a time at crates.io's one request a second took clap 5 s
+    // (5 pages) and a 25-item check 16 s of crates.io alone (audit 2026-11-11 W1 M2-5).
+    if (wanted.length === 0) {
+      const whole = await this.wholeList(name);
+      if (whole) {
+        for (const v of whole) releases[v.num] = toRecord(v);
+        query = null;
+      }
+    }
     try {
       while (query && pages < MAX_PAGES) {
         const page: CratesVersionsPage = await this.apiGet<CratesVersionsPage>(
@@ -129,6 +141,26 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
         return { status: "not_found", detail: `"${name}" is not on crates.io` };
       }
       return { status: "unreachable", detail: `crates.io: ${errorText(err)}` };
+    }
+  }
+
+  /**
+   * Every version of a crate from `/crates/<name>`, or null when that read fails or the list it
+   * returns is shorter than the crate's version count (the caller then pages). Its creation date
+   * is kept for getCreatedAt.
+   */
+  private async wholeList(name: string): Promise<CratesVersion[] | null> {
+    try {
+      const body = await this.apiGet<{ crate?: { created_at?: string; num_versions?: number; versions?: unknown[] }; versions?: CratesVersion[] }>(
+        `${CRATES_API}/${encodeURIComponent(name)}`,
+      );
+      const versions = body.versions ?? [];
+      const expected = body.crate?.num_versions ?? body.crate?.versions?.length ?? null;
+      if (versions.length === 0 || expected === null || versions.length < expected) return null;
+      if (body.crate?.created_at) this.cache.set(`crates-created:${name}`, { createdAt: body.crate.created_at }, "crates", CREATED_TTL);
+      return versions;
+    } catch {
+      return null;
     }
   }
 

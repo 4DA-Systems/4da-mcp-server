@@ -30,6 +30,8 @@ export interface Session {
   stderr: string;
   /** How long each request took to be answered, in the order sent. */
   timings: Array<{ method: string; ms: number }>;
+  /** Every URL the server tried to fetch (each was refused), in order. */
+  fetches: string[];
 }
 
 export interface SessionOptions {
@@ -37,6 +39,10 @@ export interface SessionOptions {
   requestTimeoutMs?: number;
   /** Send one more `tools/list` after the calls: a server a call left blocked answers the call and then nothing. */
   listAfterCalls?: boolean;
+  /** Keep the session open this long after the listings, before any call: work the listing scheduled runs then. */
+  idleAfterListMs?: number;
+  /** Before the idle wait, wait (up to `idleAfterListMs` x 20) until stderr contains this: the background init finished. */
+  idleUntilStderr?: string;
 }
 
 export const resultText = (r: ToolResult) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
@@ -49,7 +55,14 @@ export async function stdioSession(
 ): Promise<Session> {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "4da-stdio-"));
   const preload = path.join(scratch, "no-network.cjs");
-  fs.writeFileSync(preload, 'globalThis.fetch = async (u) => { throw new TypeError("fetch blocked in test: " + u); };\n');
+  // Every attempt is refused AND recorded, so a test can assert that nothing was even tried.
+  const fetchLog = path.join(scratch, "fetches.log");
+  fs.writeFileSync(
+    preload,
+    `const fs = require("node:fs");\n` +
+      `globalThis.fetch = async (u) => { const url = String(u && u.url ? u.url : u); ` +
+      `fs.appendFileSync(${JSON.stringify(fetchLog)}, url + "\\n"); throw new TypeError("fetch blocked in test: " + url); };\n`,
+  );
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const k of ["FOURDA_DB_PATH", "FOURDA_SQLITE_DRIVER", "FOURDA_SQL_CORPUS", "NODE_OPTIONS", "FOURDA_OFFLINE", "FOURDA_PROJECT_DIR"]) delete env[k];
   const home = path.join(scratch, "home");
@@ -110,13 +123,19 @@ export async function stdioSession(
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
     const tools = ((await rpc("tools/list", {})).result as { tools: { name: string }[] }).tools.map((t) => t.name);
     const resources = ((await rpc("resources/list", {})).result as { resources: Array<{ uri: string }> }).resources;
+    if (options.idleUntilStderr) {
+      const deadline = Date.now() + (options.idleAfterListMs ?? 1_000) * 20;
+      while (!stderr.includes(options.idleUntilStderr) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (options.idleAfterListMs) await new Promise((resolve) => setTimeout(resolve, options.idleAfterListMs));
     const results: ToolResult[] = [];
     for (const [name, args] of calls) {
       const r = await rpc("tools/call", { name, arguments: args }, `tools/call ${name}`);
       results.push((r.result ?? { isError: true, content: [{ text: JSON.stringify(r.error) }] }) as ToolResult);
     }
     if (options.listAfterCalls) await rpc("tools/list", {}, "tools/list (after the calls)");
-    return { results, resources, tools, stderr, timings };
+    const fetches = fs.existsSync(fetchLog) ? fs.readFileSync(fetchLog, "utf8").split("\n").filter(Boolean) : [];
+    return { results, resources, tools, stderr, timings, fetches };
   } finally {
     exited.catch(() => undefined);
     const gone = child.exitCode !== null ? Promise.resolve() : new Promise((resolve) => child.once("exit", resolve));

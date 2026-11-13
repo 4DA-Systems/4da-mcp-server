@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { emptySource, found, InstanceSet, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
 import { readTextFile } from "./text-file.js";
+import { isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -104,6 +105,7 @@ export function resolvePython(cwd: string): VersionSource {
   const instances = new InstanceSet();
   const sources: string[] = [];
   const uncheckable: UncheckableDependency[] = [];
+  const privateIndex: PrivateIndexEntry[] = [];
   const damaged: LockfileProblem[] = [];
   let lockfile = false;
   const take = (name: string, version: string, dev: boolean | undefined) => {
@@ -118,6 +120,7 @@ export function resolvePython(cwd: string): VersionSource {
       const content = readTextFile(lockPath);
       const read = readTomlPackageLock(content);
       for (const other of read.uncheckable) uncheckable.push({ ...other, file: lockPath });
+      for (const p of read.privateIndex) privateIndex.push({ ...p, file: lockPath });
       if (read.instances.size === 0) continue;
       for (const i of read.instances.toArray()) take(i.name, i.version, i.dev);
       sources.push(lockPath);
@@ -139,9 +142,15 @@ export function resolvePython(cwd: string): VersionSource {
     try {
       const lock = JSON.parse(readTextFile(pipfileLock));
       let any = false;
+      // `"index": "<source name>"` names the Pipfile source a package comes from.
+      const indexes = new Map<string, string>(
+        (Array.isArray(lock._meta?.sources) ? lock._meta.sources : [])
+          .filter((s: { name?: unknown; url?: unknown }) => typeof s?.name === "string" && typeof s?.url === "string")
+          .map((s: { name: string; url: string }) => [s.name, s.url]),
+      );
       for (const [section, dev] of [["default", false], ["develop", true]] as const) {
         for (const [name, info] of Object.entries(lock[section] ?? {})) {
-          const entry = info as { version?: string; git?: string; file?: string; path?: string };
+          const entry = info as { version?: string; git?: string; file?: string; path?: string; index?: string };
           const version = entry.version?.replace(/^===?/, "");
           if (!version) {
             // `{"git": "https://…", "ref": "…"}` or `{"file": "https://…/x.whl"}`: installed, but not an index release.
@@ -149,6 +158,8 @@ export function resolvePython(cwd: string): VersionSource {
             else if (typeof entry.file === "string" && /^https?:/i.test(entry.file)) uncheckable.push({ name: normalizePythonName(name), version: null, kind: "url", file: pipfileLock });
             continue;
           }
+          const index = typeof entry.index === "string" ? indexes.get(entry.index) : undefined;
+          if (index && !isPublicPypiIndex(index)) privateIndex.push({ name: normalizePythonName(name), version, registry: sourceLabel(index), file: pipfileLock });
           take(normalizePythonName(name), version, dev);
           any = true;
         }
@@ -183,6 +194,7 @@ export function resolvePython(cwd: string): VersionSource {
     ...(uncheckable.length > 0 ? { uncheckable: dedupeUncheckable(uncheckable) } : {}),
     ...(unpinned.length > 0 ? { unpinned } : {}),
     ...(problems.length > 0 ? { problems } : {}),
+    ...(privateIndex.length > 0 ? { privateIndex } : {}),
   };
 
   if (sources.length === 0) return { ...emptySource(), ...extra };
@@ -576,10 +588,13 @@ export function readTomlPackageLock(content: string): {
   versions: Map<string, string>;
   instances: InstanceSet;
   uncheckable: Array<{ name: string; version: string | null; kind: "git" | "url" | "file" }>;
+  /** Index releases from an index other than pypi.org (uv `registry`, a poetry `legacy` source): private. */
+  privateIndex: Array<{ name: string; version: string; registry: string }>;
 } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: Array<{ name: string; version: string | null; kind: "git" | "url" | "file" }> = [];
+  const privateIndex: Array<{ name: string; version: string; registry: string }> = [];
   for (const block of content.split(/^\[\[package\]\]\s*$/m).slice(1)) {
     // Stop at the next table header (e.g. [package.dependencies], [metadata]).
     const body = block.split(/^\[/m)[0];
@@ -593,11 +608,21 @@ export function readTomlPackageLock(content: string): {
       if (origin !== "local") uncheckable.push({ name: normalized, version, kind: origin });
       continue;
     }
+    const index = indexUrl(block, body);
+    if (index && !isPublicPypiIndex(index)) privateIndex.push({ name: normalized, version, registry: sourceLabel(index) });
     const category = field("category");
     instances.add(normalized, version, category === null ? undefined : category === "dev");
     if (!versions.has(normalized)) versions.set(normalized, version);
   }
-  return { versions, instances, uncheckable };
+  return { versions, instances, uncheckable, privateIndex };
+}
+
+/** The index an index release came from: uv `source = { registry = "..." }`, a poetry `[package.source]` url. */
+function indexUrl(block: string, body: string): string | null {
+  const uv = /^source\s*=\s*\{\s*registry\s*=\s*"([^"]+)"/m.exec(body)?.[1];
+  if (uv) return uv;
+  const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
+  return /^url\s*=\s*"([^"]+)"/m.exec(poetrySource)?.[1] ?? null;
 }
 
 /**

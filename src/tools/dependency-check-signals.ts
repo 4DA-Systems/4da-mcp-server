@@ -101,21 +101,57 @@ export function selectBaseline(
       note: rec ? `installed ${item.from}` : `installed version ${item.from} is not listed on the registry`,
     };
   }
+  return previousOnLine(index, item);
+}
+
+/**
+ * The previous release on `to`'s line: lower by version order AND published no later than `to`.
+ * A maintenance line keeps shipping after a newer line opens (react 19.1.10 was published a year
+ * after 19.2.0), and a release published later says nothing about how `to` was published: the
+ * baseline is never a later release. Undated releases (Go lists) are compared by version only.
+ */
+function previousOnLine(index: PackageReleaseIndex, item: CheckItem): { record: ReleaseRecord | null; kind: "previous_on_line"; note: string } {
   const eco = item.ecosystem;
   const target = versionParts(eco, item.to);
   if (!target) return { record: null, kind: "previous_on_line", note: "target version is not readable" };
   const targetPre = isPrereleaseIn(eco, item.to);
+  const toAt = index.releases[item.to]?.publishedAt ?? null;
   let best: ReleaseRecord | null = null;
   for (const rec of Object.values(index.releases)) {
     if (rec.withdrawn) continue;
     const p = versionParts(eco, rec.version);
     if (!p || !sameLine(p, target) || compareIn(eco, rec.version, item.to) >= 0) continue;
     if (isPrereleaseIn(eco, rec.version) && !targetPre) continue;
+    if (publishedAfter(rec.publishedAt, toAt)) continue;
     if (!best || compareIn(eco, rec.version, best.version) > 0) best = rec;
   }
   return best
     ? { record: best, kind: "previous_on_line", note: `previous release on the same line, ${best.version}` }
     : { record: null, kind: "previous_on_line", note: "first release on its line; nothing earlier to compare" };
+}
+
+/** True when both times are known and `at` is later than `than`. */
+function publishedAfter(at: string | null, than: string | null): boolean {
+  if (!at || !than) return false;
+  const a = Date.parse(at);
+  const b = Date.parse(than);
+  return Number.isFinite(a) && Number.isFinite(b) && a > b;
+}
+
+/**
+ * The release `to`'s publish trust is compared with. The installed `from`, unless it is a higher
+ * version (a downgrade) or was published after `to` (a backport on an older line): then the
+ * previous release on `to`'s own line, so a trust "drop" is never read against a later release.
+ */
+export function trustBaseline(index: PackageReleaseIndex, item: CheckItem): ReturnType<typeof selectBaseline> {
+  const base = selectBaseline(index, item);
+  if (base.kind !== "from" || !base.record) return base;
+  // A downgrade: the installed release is the newer one, so it says nothing about how `to` was published.
+  const downgrade = compareIn(item.ecosystem, base.record.version, item.to) > 0;
+  const later = publishedAfter(base.record.publishedAt, index.releases[item.to]?.publishedAt ?? null);
+  if (!downgrade && !later) return base;
+  const line = previousOnLine(index, item);
+  return { ...line, note: `installed ${item.from} ${downgrade ? "is a higher version than" : "was published after"} ${item.to}; ${line.note}` };
 }
 
 /** Same compatibility line: same major, or same 0.minor below 1.0. */

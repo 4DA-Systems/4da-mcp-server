@@ -9,7 +9,7 @@
  * Tests that exercise the semantic path set FOURDA_EMBED_PROVIDER explicitly,
  * which takes precedence over the settings file.
  */
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,26 @@ import { join } from "node:path";
 const emptySettings = join(tmpdir(), "4da-test-empty-settings.json");
 writeFileSync(emptySettings, "{}");
 process.env.FOURDA_SETTINGS_PATH = emptySettings;
+
+// Private-package rules (live/private-packages.ts) read the user's ~/.npmrc, the Go env file and
+// GOPRIVATE: a scope or module pattern on the operator's machine must not change what tests send.
+// Tests that exercise them pass their own environment.
+// Written once, never rewritten: every worker's setup rewriting this shared file changed it under
+// the other workers' live layers mid-test (CI run 43253624606).
+const emptyNpmrc = join(tmpdir(), "4da-test-empty-npmrc");
+if (!existsSync(emptyNpmrc)) writeFileSync(emptyNpmrc, "");
+process.env.NPM_CONFIG_USERCONFIG = emptyNpmrc;
+process.env.GOENV = "off";
+for (const key of ["GOPRIVATE", "GONOPROXY", "GONOSUMDB", "FOURDA_PRIVATE_PACKAGES", "npm_config_userconfig"]) delete process.env[key];
+
+// The HTTP guard's registry of private names (live/private-guard.ts) is process state: one test's
+// project must never make another test's lookups private (CI run 43253624606). Forgotten after
+// every test; a test that needs a source registers it in its own beforeEach.
+{
+  const { afterEach } = await import("vitest");
+  const { resetPrivateGuard } = await import("./live/private-guard.js");
+  afterEach(() => resetPrivateGuard());
+}
 
 // Every file the server writes (cache.db, and standalone.db as the memory
 // store beside the desktop app's read-only database) goes under FOURDA_MCP_HOME:

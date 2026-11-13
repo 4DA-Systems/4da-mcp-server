@@ -469,22 +469,32 @@ describe("LiveIntelligence.ensureVulnerabilities", () => {
 
 // ---------------------------------------------------------------------------
 // Server wiring — index.ts cannot be imported (it starts the server), so the
-// contract is pinned on its source: both database modes start the warmup.
+// contract is pinned on its source: server init sends nothing (audit 2026-11-11
+// A1 #7); the first tool that needs the scan starts it (ensureVulnerabilities).
+// no-lookup-at-connect.test.ts proves it on the built server.
 // ---------------------------------------------------------------------------
 
-describe("server init wires the vulnerability warmup in both modes", () => {
+describe("server init makes no lookup", () => {
   const indexSource = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts"),
     "utf8",
   );
 
-  it("starts the warmup in the standalone AND the full-database branch", () => {
-    const starts = indexSource.match(/startVulnerabilityWarmup\(/g) ?? [];
-    expect(starts.length).toBeGreaterThanOrEqual(2);
+  it("starts no warmup and no scan in any branch", () => {
+    expect(indexSource).not.toMatch(/startVulnerabilityWarmup\(/);
+    expect(indexSource).not.toMatch(/\.scanVulnerabilities\(/);
   });
 
-  it("no branch calls scanVulnerabilities directly (the warmup owns the scan)", () => {
-    expect(indexSource).not.toMatch(/\.scanVulnerabilities\(/);
+  it("a briefing with no scan yet starts one and awaits it", async () => {
+    const li = new LiveIntelligence(null);
+    let started = 0;
+    (li as unknown as { scanVulnerabilities: () => Promise<unknown> }).scanVulnerabilities = async () => {
+      started++;
+      return { ...scanOf([entry()]), offline: false };
+    };
+    li.initFromProject("d:/proj", ["lodash"], [], "javascript");
+    expect(await li.ensureVulnerabilities("d:/proj", 2000)).not.toBeNull();
+    expect(started).toBe(1);
   });
 });
 

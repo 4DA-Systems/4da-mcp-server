@@ -524,15 +524,28 @@ export async function executeUpgradeImpact(
   params: UpgradeImpactParams,
   liveIntel: LiveIntelligence | null,
 ): Promise<Record<string, unknown>> {
+  // A private package's name is never sent to a registry (live/private-packages.ts).
+  if (liveIntel && typeof params?.package === "string") {
+    const ecosystems: string[] = params.ecosystem ? [params.ecosystem] : ["npm", "crates.io", "PyPI", "Go"];
+    const why = ecosystems.map((e) => liveIntel.privateReason(e, params.package.trim())).find(Boolean);
+    if (why) {
+      return {
+        error: `NOT CHECKED (private): ${params.package} is a private package (${why}), so its name is not sent to a public registry and its changelog was not read. Read its release notes from your private registry.`,
+        not_checked: "private",
+      };
+    }
+  }
   const ready = liveIntel?.isInitialized() ?? false;
   if (ready) liveIntel?.refreshIfLockfilesChanged();
   const installed: InstalledDep[] = ready && liveIntel ? [...liveIntel.getResolvedDeps(), ...liveIntel.getAuditDeps()] : [];
   const root = (ready ? liveIntel?.getProjectRoot() : null) ?? process.cwd();
-  return analyzeUpgradeImpact(params, {
+  // Made for this project (private-guard.ts).
+  const analyze = () => analyzeUpgradeImpact(params, {
     net: createUpgradeNet(cacheFor(db)),
     projectRoot: path.resolve(root),
     installed,
     offline: process.env.FOURDA_OFFLINE === "true" || (liveIntel !== null && !liveIntel.isEnabled()),
     githubChangelog: githubChangelogEnabled(),
   });
+  return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(analyze) : analyze();
 }

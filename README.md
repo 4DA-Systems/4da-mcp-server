@@ -27,11 +27,13 @@ One command to install. No API keys. No accounts. Your code never leaves your ma
 
 Requires Node.js 22 or later.
 
-The server uses Node's built-in `node:sqlite` (Node 22.13 and later), so it needs no install script and works with npm 12's default of blocking them. On Node 22.0-22.12 it uses the optional `better-sqlite3`, whose native module npm 10 and 11 build on install. `npx @4da/mcp-server --doctor` shows which one is in use.
+The server uses Node's built-in `node:sqlite` (Node 22.13 and later), so it needs no install script and works with npm 12's default of blocking them. On Node 22.0-22.12 it uses the optional `better-sqlite3`, whose native module npm 10 and 11 build on install. `npx @4da/mcp-server@6.2.7 --doctor` shows which one is in use.
 
 ```bash
-claude mcp add 4da -- npx @4da/mcp-server
+claude mcp add 4da -- npx @4da/mcp-server@6.2.7
 ```
+
+Every command and config on this page pins the version (`@6.2.7`), so what runs changes only when you change it. To update, replace the version with the newest one on npm (`npm view @4da/mcp-server version`); the [changelog](CHANGELOG.md) says what changed. Without a version, npx runs whatever it has cached or the newest release, which you did not review.
 
 **As a Claude Code plugin** (the MCP server plus a hook):
 
@@ -45,13 +47,13 @@ The hook: when your agent edits a dependency's version in `package.json`, `Cargo
 <details>
 <summary><b>Cursor / Windsurf / Devin Desktop</b></summary>
 
-Add to `~/.cursor/mcp.json` (Cursor), `~/.codeium/windsurf/mcp_config.json` (Windsurf), or `~/.config/devin/mcp_config.json` (Devin Desktop and Devin CLI; `%APPDATA%devinmcp_config.json` on Windows):
+Add to `~/.cursor/mcp.json` (Cursor), `~/.codeium/windsurf/mcp_config.json` (Windsurf), or `~/.config/devin/mcp_config.json` (Devin Desktop and Devin CLI; `%APPDATA%\devin\mcp_config.json` on Windows):
 ```json
 {
   "mcpServers": {
     "4da": {
       "command": "npx",
-      "args": ["@4da/mcp-server"]
+      "args": ["@4da/mcp-server@6.2.7"]
     }
   }
 }
@@ -61,14 +63,14 @@ Add to `~/.cursor/mcp.json` (Cursor), `~/.codeium/windsurf/mcp_config.json` (Win
 <details>
 <summary><b>VS Code (Copilot)</b></summary>
 
-Run **MCP: Open User Configuration** and add the entry, or edit the file directly: `%APPDATA%CodeUsermcp.json` (Windows), `~/Library/Application Support/Code/User/mcp.json` (macOS), `~/.config/Code/User/mcp.json` (Linux). VS Code uses `servers`, not `mcpServers`:
+Run **MCP: Open User Configuration** and add the entry, or edit the file directly: `%APPDATA%\Code\User\mcp.json` (Windows), `~/Library/Application Support/Code/User/mcp.json` (macOS), `~/.config/Code/User/mcp.json` (Linux). VS Code uses `servers`, not `mcpServers`:
 ```json
 {
   "servers": {
     "4da": {
       "type": "stdio",
       "command": "npx",
-      "args": ["@4da/mcp-server"]
+      "args": ["@4da/mcp-server@6.2.7"]
     }
   }
 }
@@ -84,7 +86,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "4da": {
       "command": "npx",
-      "args": ["@4da/mcp-server"]
+      "args": ["@4da/mcp-server@6.2.7"]
     }
   }
 }
@@ -95,8 +97,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 <summary><b>Auto-setup</b> (detects all installed editors)</summary>
 
 ```bash
-npx @4da/mcp-server --setup --dry-run   # show each file and entry, write nothing
-npx @4da/mcp-server --setup
+npx @4da/mcp-server@6.2.7 --setup --dry-run   # show each file and entry, write nothing
+npx @4da/mcp-server@6.2.7 --setup
 ```
 
 Writes Cursor, VS Code (and Insiders), Windsurf, Devin Desktop and Claude Desktop configs it finds, merging into what is there: other servers, settings and comments are kept, a backup (`.bak`) is written first, and a file it cannot parse is left untouched with the entry to add by hand. For Claude Code it prints the `claude mcp add` command instead of editing `~/.claude.json`.
@@ -127,17 +129,30 @@ Those are all the hosts the server contacts.
 
 Results are cached (24h for registry data, 1h for vulnerabilities, 30min for news) and rate-limited per source.
 
-**What's sent over the network:** package names and versions (the same data visible in your lockfile), and, only for `ecosystem_pulse`, the names of a few of your dependencies as search terms. No source code, no file paths, no personal data. The call-site scan of `upgrade_impact` runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls.
+**What's sent over the network, and when:** nothing when your editor starts the server and lists its tools; the project is read locally, and the first request goes out when a tool that needs it is called (`vulnerability_scan`, `what_should_i_know`, `dependency_check` ...). Then: package names and versions (the same data visible in your lockfile), and, only for `ecosystem_pulse`, the names of a few of your dependencies as search terms. Never a private package's name (below). No source code, no file paths, no personal data. The call-site scan of `upgrade_impact` runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls.
+
+**Private packages are never sent.** A package is private, with nothing to configure, when your machine already says so:
+
+- **npm:** its scope is mapped to a registry other than the public one in the project's `.npmrc`, your user `.npmrc` (or `NPM_CONFIG_USERCONFIG`), or `.yarnrc.yml` `npmScopes` at any indentation or in flow style (`@acme:registry=https://npm.acme.dev/`); or your lockfile installs it from another host: the `resolved` location in `package-lock.json` / `npm-shrinkwrap.json` and `yarn.lock`, the `tarball` in `pnpm-lock.yaml` (GitHub Packages included). A global `registry=` setting, and a lockfile host that matches it, is read as a mirror of the public registry, not as making every package private; registry.npmjs.org, registry.yarnpkg.com and registry.npmmirror.com are public. **That has a consequence you should know:** with `registry=https://artifactory.example/...`, an unscoped package published only on that server is still looked up on the public registry by its name. Every coverage note and `dependency_check` answer says so (`registry_notice`): list such packages in `FOURDA_PRIVATE_PACKAGES`, or publish them under a scope, to keep them private.
+- **Go:** its module path matches `GOPRIVATE`, `GONOPROXY` or `GONOSUMDB`, from the environment or from `go env -w` (the `GOENV` file; as go does, an empty variable falls back to it).
+- **Cargo:** `Cargo.lock` installs it from a registry other than crates.io, or from git (path dependencies are local code and were never sent).
+- **PyPI:** `uv.lock`, `poetry.lock` or `Pipfile.lock` installs it from an index other than pypi.org. A company mirror of PyPI named there counts as private too: list nothing, and its packages are reported as not checked.
+- **RubyGems:** `Gemfile.lock` lists it under a `GEM` section whose `remote:` is not rubygems.org.
+- **Packagist:** `composer.lock` installs it from a host other than Packagist and the public code hosts (a Satis or Private Packagist server), or from a repository `composer.json` declares that is not Packagist (`vcs`, even on GitHub; `composer`; `path`; `artifact`).
+
+Names are compared the way each registry compares them: a crate is the same whatever its case and whether it is written with `_` or `-` (`acme_core`, `Acme-Core`), PyPI names are PEP 503-normalised, npm, RubyGems and Packagist names are case-insensitive.
+
+Add your own with `FOURDA_PRIVATE_PACKAGES`: comma- or space-separated globs, `*` matching anything (`/` included), each optionally prefixed with its ecosystem: `FOURDA_PRIVATE_PACKAGES="npm:@acme/*, crates.io:acme-*, PyPI:acme-*, Go:github.com/acme/*"`. A bare scope (`@acme`) covers the whole scope; PyPI names are compared PEP 503-normalised (`Acme_Auth` is `acme-auth`). The rules are read again whenever one of those files or variables changes. A name your project also installs from the public registry is public (asking about it reveals nothing). A private package is still read from your lockfiles, and is never looked up anywhere, as itself or as the parent of a public one: `vulnerability_scan`, `dependency_health`, `upgrade_planner` and `what_should_i_know` lead with `NOT CHECKED (private)` and list each one with the file or setting that made it private (`coverage.private_dependency_list`), so the answer is never a clean one for it; `dependency_check` answers it `unknown` with `not_checked: "private"`; `upgrade_impact` refuses it; `upgrade_planner` never looks up a private parent's releases, and a step that arrives through one leads with `NOT CHECKED (private)` and names it in `privateParents` (never an inferred refresh); `ecosystem_pulse` never uses its name as a search term. As a second line of defence, every OSV.dev, registry and search request passes one check that refuses it when its URL or body names a private package; a refused request reads as not checked, never clean. Registry URLs are shown without credentials.
 
 **GitHub release notes (opt-in, off by default).** Many packages ship no changelog in their registry archive (vite, zod, cobra, most Go modules). With `FOURDA_GITHUB_CHANGELOG=true` in the server's environment, `upgrade_impact` reads the repository's GitHub releases when the archive has no changelog for the range (for PyPI, first a changelog file the project links on GitHub from its `project_urls`). GitHub then receives the repository name and the versions, nothing else. It uses the unauthenticated REST API (60 requests an hour) or `GITHUB_TOKEN` when set (5,000); a rate limit is reported with its reset time, never retried in a loop, and results are cached. With it off, an answer without a changelog says so and names the setting; nothing is guessed.
 
-**What's written to disk, and where:** only files the server owns, in its folder in your user data directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp` or `~/.local/share/4da-mcp`; `FOURDA_MCP_HOME` moves it): `cache.db` (registry, OSV and changelog responses; safe to delete) and `standalone.db` (without the desktop app: your project scan and the decisions, agent memory and feedback you record). Nothing is written inside your repository.
+**What's written to disk, and where:** only files the server owns, in its folder in your user data directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp` or `~/.local/share/4da-mcp`; `FOURDA_MCP_HOME` moves it): `cache.db` (registry, OSV and changelog responses, in every mode; safe to delete, it costs refetches only) and `standalone.db` (without the desktop app: your project scan and the decisions, agent memory and feedback you record; no cache). Nothing is written inside your repository. (Until 6.3.0 standalone mode kept the cache inside `standalone.db`; that table is dropped the first time 6.3.0 opens it.)
 
 When the 4DA desktop app is installed, the server reads the app's database (`4da.db`) through a **read-only** connection and never creates or alters anything in it: no tables, no columns, no cache. The only writes are rows in the four app-owned tables the tools exist to fill, so the app sees them: decisions (`decision_memory` -> `developer_decisions`), agent memory (`agent_memory`), and feedback (`record_feedback` -> `interactions` and `feedback`, which the app's calibration reads). Those go through a separate write connection that waits briefly for the app's lock. If your app version lacks the table or a column a record needs, the record goes to `standalone.db` instead and the response says so in `_meta`. (Before 6.1 the server also created a `live_cache` table inside the app's database; it now keeps that cache in `cache.db`.)
 
 **Where configuration and the database come from:** `FOURDA_DB_PATH` if set (a relative path resolves against the server's working directory and must name an existing file; an absolute path that names no file is created as a new standalone database when its directory exists, and the first tool answer says so in `_meta.database_note`; otherwise it is refused with an error), else the desktop app's database in its data directory, else the server's own `standalone.db`. Embedding settings come from `FOURDA_SETTINGS_PATH`, else the `settings.json` beside `FOURDA_DB_PATH`, else the desktop app's data directory. Nothing is picked up from the directory the server is started in: until 6.2.5 a `data/settings.json` or `data/4da.db` inside (or beside) the working directory was adopted, so a cloned repository could redirect semantic recall to a host of its choosing or plant "decisions".
 
-> The one exception: if you *explicitly* configure an OpenAI embedding provider (`FOURDA_EMBED_PROVIDER=openai`) for semantic recall, the decision/memory text you store is sent to OpenAI to be embedded. The default — no embedding provider, or a local Ollama one — keeps everything on your machine, and `FOURDA_OFFLINE=true` overrides it regardless.
+> The one exception: if you *explicitly* configure an OpenAI embedding provider (`FOURDA_EMBED_PROVIDER=openai`) for semantic recall, OpenAI receives exactly this, to be embedded: the text of the decisions and memories you stored (subject, decision or content, rationale, rejected alternatives), and the text being searched for: a `what_should_i_know` task, an `agent_memory` recall query, or a `check_decision_alignment` technology and pattern. Never the file paths you pass in `files` (they rank results locally), never source code. The default — no embedding provider, or a local Ollama one — keeps everything on your machine, and `FOURDA_OFFLINE=true` overrides it regardless.
 
 **Ecosystems supported:** npm, crates.io (Rust), PyPI (Python), Go; `vulnerability_scan` also reads RubyGems (`Gemfile.lock`) and Packagist (`composer.lock`). Maven, Gradle and .NET are not read, and are listed as not covered. `upgrade_impact` reads npm, crates.io, PyPI and Go. PyPI: versions and dates from the PyPI JSON API, the changelog from the release's sdist, and import sites matched on the module the distribution installs: read from your virtualenv's metadata (`.venv`, `venv`, `env`: `top_level.txt` or `RECORD`), else a table of well-known differences (`PyYAML` -> `yaml`, `Pillow` -> `PIL`), else the distribution name, which the answer then labels an assumption. Go: versions and dates from proxy.golang.org, the changelog from the module zip, and a major version 2+ reported as the module path change it is (`github.com/jackc/pgx/v4` -> `/v5`), with the files that import the old path. `dependency_check` reads all four too; on PyPI and Go, where the registry exposes no publisher identity or install hooks, those signals say "not applicable".
 
@@ -170,7 +185,7 @@ When the 4DA desktop app is installed, the server reads the app's database (`4da
 | `vulnerability_scan` | Every installed copy in every lockfile matched against OSV.dev. Scope-adjusted severity, an upgrade target checked against every advisory of the package (the highest per-advisory fix can itself be affected by another), where each version is pinned, and a `coverage` block whenever the scan is partial. Concise by default (one row per vulnerable package version, the 40 most severe, about 4k tokens on a 290-advisory project); `package` for one dependency; `response_format: "detailed"` for every advisory. |
 | `dependency_health` | Version freshness, deprecation (of the version you run) and vulnerability counts per dependency. |
 | `upgrade_planner` | The smallest version no advisory affects for each vulnerable package, majors flagged (a 0.x minor counts as a major). Direct steps (`upgrade_direct`) carry `upgradeCommands`, the command per declaring project directory, keeping how the dependency is declared (`npm install x@v --save-exact` for an exact pin, `npm install "x@^v"`, `pnpm up`, `yarn upgrade` / `yarn up`, `cargo add` with `--dev` / `--build` / `--target` / `--rename`, `go get`; none for a `>=` / `||` / tag / git spec or a yarn workspace member), and a direct target is raised when a slightly newer release also clears a vulnerable transitive it pins. Transitive fixes: `lockfile_refresh` with the exact command (`npm update`, `pnpm update`, `yarn up -R`, `cargo update -p ... --precise`) when every parent's declared requirement already admits a clean version; `upgrade_parent` when a parent pins it but a newer release of that parent admits one, with `parentUpgrades` naming the smallest such release that is itself clear of the parent's advisories (read from the registry), the declared dependencies to bump (`levers`, with their commands; none when the lockfile cannot tie the parent to a declaration) and, when the new requirement still admits the installed copy, the refresh to run after the install (`refreshCommands`); `override_or_replace` with the override syntax (npm `overrides`, pnpm `pnpm.overrides`, yarn `resolutions`, Cargo `[patch]`) when the parent will not move (deprecated, already its latest release, or no release admits a clean version); `waiting_on_upstream` when the parent's releases could not be read, and for a copy bundled inside its owner's package, which only a new owner release (or replacing the owner) can move. Dev-only packages are included and labelled `isDev`, as in `vulnerability_scan`. For one project: `project_path` (default: the project the server was started in; `"*"` for every project the desktop app tracks). `package` for a one-package plan. |
-| `dependency_check` | Call before writing any dependency version into a manifest: adding, pinning, upgrading, bumping, downgrading. `to` is the exact version, or the constraint you were given (`"7.x"`, `"^1.20"`, `"~=3.1"`, `"v1"`): then `range_check` lists the smallest and newest release in it that no known advisory affects, and the verdict is for the one it picks. An exact version an advisory affects gets the safe releases on its line. Verdict per item (`proceed` / `wait` / `review` / `avoid` / `unknown`) with evidence: advisories on the target, release age (holds releases under 3 days unless they fix an advisory you have), publish-trust drop, new install scripts, brand-new transitive dependencies, yanked or deprecated, and a breaking version range (a major, or a 0.x minor) is `review` with a pointer to `upgrade_impact`. A name that is malware itself is `avoid`; a new npm dependency one or two edits from a popular package (`expres`) is `review` with "did you mean" unless its downloads and age show it is established. `to_read_as` says how `to` was read: a bare PyPI `"3.1"` is the release 3.1.0, as pip reads `==3.1`, never the series. A prerelease is never named as the safe release unless you ask for one. A registry's own words (a deprecation message) are quoted in `quoted_from_registry`, capped, never inside `reason`. npm, crates.io, PyPI and Go (publisher trust, install scripts and new transitive dependencies are npm/crates.io signals and say "not applicable" elsewhere). |
+| `dependency_check` | Call before writing any dependency version into a manifest: adding, pinning, upgrading, bumping, downgrading. `to` is the exact version, or the constraint you were given (`"7.x"`, `"^1.20"`, `"~=3.1"`, `"v1"`): then `safe` names the smallest and newest release in it that no known advisory affects, and the verdict is for the one it picks. The answer is concise by default (verdict, a reason carrying the evidence of every avoid / review / unknown / wait finding, `safe`, advisory ids and any registry quotes: about 10 KB for 25 items); `response_format: "detailed"` adds every signal with its evidence, `to_read_as` and the full `range_check`. An exact version an advisory affects gets the safe releases on its line. Verdict per item (`proceed` / `wait` / `review` / `avoid` / `unknown`) with evidence: advisories on the target, release age (holds releases under 3 days unless they fix an advisory you have), publish-trust drop, new install scripts, brand-new transitive dependencies, yanked or deprecated, and a breaking version range (a major, or a 0.x minor) is `review` with a pointer to `upgrade_impact`. A name that is malware itself is `avoid`; a new npm dependency one or two edits from a popular package (`expres`) is `review` with "did you mean" unless its downloads and age show it is established. `to_read_as` (in every answer to a constraint or "latest", and in the detailed form) says how `to` was read: a bare PyPI `"3.1"` is the release 3.1.0, as pip reads `==3.1`, never the series. A prerelease is never named as the safe release unless you ask for one. A registry's own words (a deprecation message) are quoted in `quoted_from_registry`, capped, never inside `reason`. A private package is `unknown` and never looked up (see "Private packages are never sent"). npm, crates.io, PyPI and Go (publisher trust, install scripts and new transitive dependencies are npm/crates.io signals and say "not applicable" elsewhere). |
 
 ### Intelligence
 
@@ -230,12 +245,12 @@ The MCP server works without the desktop app. It keeps a small local database in
 
 **stdio** (default) -- works with all MCP hosts:
 ```bash
-npx @4da/mcp-server
+npx @4da/mcp-server@6.2.7
 ```
 
 **Streamable HTTP** -- for remote or multi-client setups:
 ```bash
-npx @4da/mcp-server --http --port 4840
+npx @4da/mcp-server@6.2.7 --http --port 4840
 ```
 
 The HTTP transport binds to `127.0.0.1` by default and applies a `Host`-header
@@ -245,7 +260,7 @@ a shared secret:
 ```bash
 MCP_AUTH_SECRET=<same value as the relay's JWT_SECRET> \
 MCP_ALLOWED_HOSTS=mcp.internal \
-  npx @4da/mcp-server --http --host 0.0.0.0
+  npx @4da/mcp-server@6.2.7 --http --host 0.0.0.0
 ```
 
 Without `MCP_AUTH_SECRET` a non-loopback bind is refused at startup. With it,
@@ -262,11 +277,11 @@ trust boundary), and only behind clients you would give that access.
 ## CLI Reference
 
 ```
-npx @4da/mcp-server              # Start server (stdio)
-npx @4da/mcp-server --http       # Start server (Streamable HTTP)
-npx @4da/mcp-server --setup      # Auto-configure your editors
-npx @4da/mcp-server --doctor     # Verify installation health
-npx @4da/mcp-server --version    # Print version
+npx @4da/mcp-server@6.2.7              # Start server (stdio)
+npx @4da/mcp-server@6.2.7 --http       # Start server (Streamable HTTP)
+npx @4da/mcp-server@6.2.7 --setup      # Auto-configure your editors
+npx @4da/mcp-server@6.2.7 --doctor     # Verify installation health
+npx @4da/mcp-server@6.2.7 --version    # Print version
 ```
 
 ## Environment Variables
@@ -276,6 +291,7 @@ npx @4da/mcp-server --version    # Print version
 | `FOURDA_DB_PATH` | Path to 4DA's SQLite database. An existing file is used. A relative path (resolved against the working directory) that names no file is refused. An absolute path that names no file is created as a standalone database if its directory exists (one stderr line and `_meta.database_note` in the first tool answer say so), and refused if the directory does not exist. | The desktop app's database, else the server's own |
 | `FOURDA_SETTINGS_PATH` | `settings.json` holding the optional `embedding` block for semantic recall | Beside `FOURDA_DB_PATH`, else the desktop app's data directory |
 | `FOURDA_OFFLINE` | Disable all network calls | `false` |
+| `FOURDA_PRIVATE_PACKAGES` | Package names never sent anywhere, in addition to what `.npmrc`, `GOPRIVATE` and your lockfiles already mark private: globs, `*` matching anything, optionally `npm:` / `crates.io:` / `PyPI:` / `Go:` prefixed. See "Private packages are never sent". | Unset |
 | `FOURDA_CALL_BUDGET_MS` | The time one tool call may take, counted from the request. A call still running then is answered NOT CHECKED (`dependency_check`: every item `unknown`); its lookups run on and are cached, so the same call made again answers from them. | `20000` |
 | `FOURDA_WALK_BUDGET_MS` | The time the startup walk of the project tree may take. Past it the scan is partial and says so. | `10000` |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Used on Node 24.14+; on Node 22.21+ only when the server is started with `NODE_USE_ENV_PROXY=1`. See "Behind a proxy". | Unset |
@@ -303,12 +319,15 @@ Every lookup uses Node's own `fetch`, and no proxy library is bundled, so whethe
 - **Node 22.21 or later:** used when Node itself is started with them, which takes `NODE_USE_ENV_PROXY=1` in the server's environment (the `env` block of the MCP server entry).
 - **Older Node:** not supported; lookups go direct and, where the proxy is required, every answer is NOT CHECKED.
 
-The first lines of the server's stderr, and `npx @4da/mcp-server --doctor`, say which case applies whenever a proxy variable is set.
+The first lines of the server's stderr, and `npx @4da/mcp-server@6.2.7 --doctor`, say which case applies whenever a proxy variable is set.
 
 ## FAQ
 
 **Does this send my code anywhere?**
-No. The server sends package names and versions to public APIs ([OSV.dev](https://osv.dev), npm registry, crates.io, PyPI, Go proxy), downloads the target version's archive from the package's own registry for `upgrade_impact` (and reads GitHub release notes only if you set `FOURDA_GITHUB_CHANGELOG=true`), and, only when you call `ecosystem_pulse`, sends a few dependency names as search terms to [HN Algolia](https://hn.algolia.com/api). No source code, no file paths, no personal data: the call-site scan runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls. (The sole exception is opt-in OpenAI embeddings — see the network note above.)
+No. When a tool needs them (never at startup), the server sends public package names and versions to public APIs ([OSV.dev](https://osv.dev), npm registry, crates.io, PyPI, Go proxy), never a private package's name, downloads the target version's archive from the package's own registry for `upgrade_impact` (and reads GitHub release notes only if you set `FOURDA_GITHUB_CHANGELOG=true`), and, only when you call `ecosystem_pulse`, sends a few dependency names as search terms to [HN Algolia](https://hn.algolia.com/api). No source code, no file paths, no personal data: the call-site scan runs locally. Set `FOURDA_OFFLINE=true` to disable all network calls. (The sole exception is opt-in OpenAI embeddings — see the network note above.)
+
+**How does this compare with GitHub's dependency tool for agents?**
+GitHub's hosted MCP server has `check_dependency_vulnerabilities` (dependabot toolset). It needs a GitHub token and reports high and critical advisories and malware. On 216 identical cases (2026-11-11, ground truth from OSV.dev) it was faster (median 1.2 s against 2.5 s for this server's 6.2.7) and covers Maven and .NET, which this server does not read; it missed 102 of 178 known-bad versions, mostly medium and low advisories and RustSec / PyPA / Go-only records, which this server reports, and it does not judge nonexistent, yanked, deprecated or days-old releases. This server needs no account and runs on your machine.
 
 **Do I need the 4DA desktop app?**
 No. 11 tools work standalone: upgrade impact, pre-install dependency checks, vulnerability scanning, dependency health, upgrade planning, ecosystem news, pre-task briefings, project context, decision memory, alignment checking, and agent memory. The desktop app is where the same engine runs day to day: one worklist across every project on the machine, a morning Brief of what changed in your stack, and an Upgrade Plan. With it installed, your agent also gets 5 more tools: signals, knowledge gaps, developer news judged against your stack, Developer DNA and feedback.

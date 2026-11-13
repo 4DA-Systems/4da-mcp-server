@@ -29,10 +29,20 @@ five business days.
   runs cargo from a directory the server owns, names the project only through
   `--manifest-path`, and passes `--offline --locked`, so a scanned repository's
   `.cargo/config.toml` (rustc wrappers, aliases) is never honoured.
-- **Network:** package names and versions go to OSV.dev and the public package
-  registries (npm, crates.io, PyPI, the Go proxy); `ecosystem_pulse` sends a
-  few dependency names to the Hacker News search API. `FOURDA_OFFLINE=true`
-  turns all of it off.
+- **Network:** nothing is sent when the server starts or lists its tools; when
+  a tool needs it, package names and versions go to OSV.dev and the public
+  package registries (npm, crates.io, PyPI, the Go proxy), and `ecosystem_pulse`
+  sends a few dependency names to the Hacker News search API. A private
+  package's name is never sent: a scope your `.npmrc` maps to a private
+  registry, a module matching `GOPRIVATE`, a package your lockfile installs
+  from a private registry or index (npm `resolved`, Cargo `source`, uv /
+  poetry / Pipfile index; for Cargo, git too), and anything in
+  `FOURDA_PRIVATE_PACKAGES`, as a dependency or as the parent of one; such a
+  package is reported as not checked (private), never as clean. Every
+  OSV.dev, registry and search request passes one check that refuses it when
+  it names a private package. An embedding provider you configure receives the
+  stored decision and memory text and the search text, never file paths.
+  `FOURDA_OFFLINE=true` turns all of it off.
 - **`--http`** binds to `127.0.0.1` with a DNS-rebinding `Host` check. A
   non-loopback bind is refused unless `MCP_AUTH_SECRET` is set, and every
   request then needs an HMAC-signed bearer token.

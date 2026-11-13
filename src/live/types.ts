@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import type { PrivateDependency } from "./private-packages.js";
+
 export type OsvEcosystem =
   | "npm"
   | "crates.io"
@@ -215,6 +217,13 @@ export interface VulnerabilityScanResult {
   unchecked?: number;
   /** Why `unchecked` dependencies have no answer, in words; null when every one was answered. */
   uncheckedReason?: string | null;
+  /**
+   * Dependencies left out because their names are private (private-packages.ts): never sent, so
+   * nothing is known about them. `dependencies` lists at most 50, each with why.
+   */
+  privateExcluded?: { count: number; dependencies: PrivateDependency[] };
+  /** An `.npmrc` default registry that is not public: unscoped names are still looked up publicly (private-packages.ts). */
+  registryNotice?: string;
   /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
   staleAnswers?: number;
   /** Why fresh answers were not had for the `staleAnswers` dependencies. */
@@ -255,6 +264,12 @@ export interface VulnerabilityCoverage {
   stale_dependencies?: number;
   /** Advisories matched whose record OSV did not return: severity and fix version unknown; present when any were. */
   details_unchecked?: number;
+  /** Private dependencies never sent (not counted in total_dependencies); present when any were. */
+  private_dependencies?: number;
+  /** The first of them, each with why it is private. */
+  private_dependency_list?: PrivateDependency[];
+  /** VulnerabilityScanResult.registryNotice, when the answer is incomplete for another reason too. */
+  registry_notice?: string;
   /** Why, in words ("OSV.dev unreachable (fetch failed)", "live lookups disabled (FOURDA_OFFLINE=true)"). */
   reason: string;
   /** One line to read first; never a clean result. */

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { refusePrivateRequest } from "./private-guard.js";
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export async function fetchWithTimeout(
@@ -7,6 +9,8 @@ export async function fetchWithTimeout(
   options: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<Response> {
+  // The choke point: a request that names a private package is never made (private-guard.ts).
+  refusePrivateRequest(url, options);
   const controller = new AbortController();
   let timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {

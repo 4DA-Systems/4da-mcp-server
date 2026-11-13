@@ -63,6 +63,7 @@ import {
   publishTrustSignal,
   releaseAgeSignal,
   selectBaseline,
+  trustBaseline,
   upgradeTypeSignal,
   withdrawnSignal,
   WAIT_DAYS,
@@ -94,15 +95,20 @@ import { nameCheckSignal, nearMissOf } from "./dependency-check-nearmiss.js";
 import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { lengthProblem } from "../tool-args.js";
 import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
+import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
+  response_format?: DependencyCheckFormat;
 }
 
 const MAX_ITEMS = 25;
 /** First-publish lookups for newly introduced dependencies, per call (each is a registry read). */
 const MAX_NEW_DEP_LOOKUPS = 40;
-const NPM_CONCURRENCY = 4;
+/** Registry reads in flight per ecosystem (each registry has its own pool: crates.io's one-a-second pacing never holds up npm or PyPI). */
+const REGISTRY_CONCURRENCY = 6;
+/** OSV.dev package advisory lists (/v1/query) in flight at once. */
+const OSV_LIST_CONCURRENCY = 8;
 const ECOSYSTEMS: readonly CheckEcosystem[] = ["npm", "crates.io", "PyPI", "Go"];
 const DAY_MS = 86_400_000;
 
@@ -110,7 +116,8 @@ const PRIVACY_NOTE =
   "Registry requests carried package names only (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list); " +
   "installed and target versions were never sent to a registry, except the Go proxy's per-version .info for the versions judged (the list has no dates). " +
   "OSV.dev received package names and versions, as vulnerability_scan does. " +
-  "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads).";
+  "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads). " +
+  "A private package name (see the README, Privacy) was sent nowhere.";
 
 const VERDICT_RULE =
   "avoid > review > unknown > wait > proceed. unknown = a registry or OSV.dev lookup failed (never read as proceed); " +
@@ -121,7 +128,7 @@ export const dependencyCheckTool = {
   description: [
     "Is this dependency version safe to write? Call BEFORE you write any version into a manifest or lockfile: adding, pinning, upgrading, bumping or downgrading a package, or choosing a version (npm, crates.io, PyPI, Go). Pass the exact version you intend to write, or the constraint you were given (\"7.x\", \"^1.20\", \"~=3.1\", \"v1\") to get the smallest and newest safe release in it. Write only a version that came back `proceed`. Your memory of which release is safe is out of date; this reads the registry and OSV.dev now.",
     "",
-    "Per item: `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason`, `to_read_as` (how `to` was read), `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release. A prerelease is never named as safe unless you asked for one.",
+    "Per item (concise, the default): `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason` carrying the evidence of every avoid/review/unknown/wait finding, `safe` (the safe releases to write), `advisories` (ids affecting `to`) and any registry text in `quoted_from_registry`. With `response_format: \"detailed\"`: also `to_read_as` (how `to` was read), `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release. A prerelease is never named as safe unless you asked for one.",
     "`to` is read as its ecosystem reads it: a full version is that release everywhere; a bare PyPI \"3.1\" is the ONE release 3.1.0 (as pip reads ==3.1), so ask \"3.1.*\" or \"~=3.1.0\" for the series; a bare npm \"7\" / \"7.5\", Cargo \"1\" / \"0.17\" and Go \"v1\" are ranges, as package.json, Cargo.toml and go get read them.",
     "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm: a dependency `to` exact-pins, or narrowly ranges with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones.",
     "  A package name that is malware itself (npm took it down and holds it with a `0.0.N-security` placeholder, or a malicious-package record covers every release) -> avoid, with `malicious_package` and the popular package it likely imitates. When no release in range is safe only because of an advisory on a held dependency, `range_check.held_advice` names it and the override that clears it (the verdict is review for a low or moderate one, avoid for high or critical); a release more than one major or about 18 months older is not offered instead.",
@@ -134,7 +141,7 @@ export const dependencyCheckTool = {
     "",
     "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed.",
     "",
-    "Privacy: registries get the package name only (Go: also the judged versions' .info, as `go get` does); OSV.dev gets names and versions, as vulnerability_scan does. FOURDA_OFFLINE=true disables lookups (every item unknown).",
+    "Privacy: registries get the package name only (Go: also the judged versions' .info, as `go get` does); OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
   ].join("\n"),
   inputSchema: {
     type: "object" as const,
@@ -162,6 +169,12 @@ export const dependencyCheckTool = {
           required: ["ecosystem", "package", "to"],
         },
       },
+      response_format: {
+        type: "string",
+        enum: ["concise", "detailed"],
+        description:
+          "concise (default): per item the verdict, reason (the evidence of every avoid, review, unknown and wait finding), the safe versions to write (`safe`), advisory ids, a malicious package's records and the registry's quoted words. detailed: every signal with its value and evidence, how `to` was read, and the full range_check.",
+      },
     },
     required: ["items"],
   },
@@ -182,6 +195,8 @@ interface ItemResult {
   range_check?: RangeCheck;
   /** Unmaintained-package notices on `to`: reported, never part of the verdict (audit L3). */
   maintenance_notices?: string[];
+  /** "private": the package name is private and was never looked up (live/private-packages.ts). */
+  not_checked?: "private";
 }
 
 /** A validated request item. */
@@ -204,34 +219,82 @@ interface Resolved extends CheckItem {
   unresolved?: string;
 }
 
+/** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
+export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
+  return shapeDependencyCheck(await executeDependencyCheck(db, params, liveIntel), params.response_format);
+}
+
 export async function executeDependencyCheck(
-  _db: FourDADatabase | null,
+  db: FourDADatabase | null,
   params: DependencyCheckParams,
   liveIntel: LiveIntelligence | null,
   opts: { now?: Date } = {},
 ) {
-  const requested = validateItems(params.items);
+  // Every lookup (api.npmjs.org downloads included) is made for this project (private-guard.ts).
+  const run = () => checkDependencies(db, params, liveIntel, opts);
+  return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(run) : run();
+}
+
+async function checkDependencies(
+  _db: FourDADatabase | null,
+  params: DependencyCheckParams,
+  liveIntel: LiveIntelligence | null,
+  opts: { now?: Date },
+) {
+  const all = validateItems(params.items);
   const now = opts.now ?? new Date();
   const checkedAt = now.toISOString();
+
+  // A private package name is never sent anywhere (live/private-packages.ts): such an item is
+  // "not checked (private)", never clean, and nothing below sees it.
+  const privateWhy = all.map((r) => liveIntel?.privateReason?.(r.ecosystem, r.package) ?? null);
+  const requested = all.filter((_, i) => !privateWhy[i]);
+  const privateItems = all.flatMap((r, i) => {
+    const why = privateWhy[i];
+    return why ? [{ at: i, result: privateResult(r, why) }] : [];
+  });
+  /** The results in the order asked, private items in their places. */
+  const inOrder = (checked: ItemResult[]): ItemResult[] => {
+    const out: ItemResult[] = [];
+    let next = 0;
+    for (let i = 0; i < all.length; i++) {
+      const p = privateItems.find((x) => x.at === i);
+      out.push(p ? p.result : checked[next++]);
+    }
+    return out;
+  };
+  const notice = all.some((r) => r.ecosystem === "npm") ? (liveIntel?.getRegistryNotice?.() ?? null) : null;
+  const privateMeta = { ...(privateItems.length > 0 ? { private: privateItems.length } : {}), ...(notice ? { registryNotice: notice } : {}) };
+
+  if (requested.length === 0) {
+    return finish(checkedAt, inOrder([]), { offline: false, osvCached: false, ...privateMeta });
+  }
 
   if (!liveIntel || !liveIntel.isEnabled()) {
     const reason = "Live lookups are disabled (FOURDA_OFFLINE=true); nothing about these versions could be checked.";
     return finish(
       checkedAt,
-      requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason, signals: [] })),
-      { offline: true, osvCached: false },
+      inOrder(requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason, signals: [] }))),
+      { offline: true, osvCached: false, ...privateMeta },
     );
   }
 
   const sources = liveIntel.getReleaseSources();
   const fixSources = liveIntel.getFixPathSources();
-  const indexes = await fetchIndexes(requested.map(provisional), sources, new Set(requested.filter(needsFullList).map(lookupKey)));
-
-  // Constraints are judged against the package's whole advisory list.
-  const advisoryLists = await packageAdvisoryLists(
-    fixSources,
-    requested.filter((r) => r.target.kind === "range"),
-  );
+  // Everything that depends only on the names starts at once: the registry reads, each package's
+  // OSV advisory list (nearly every item needs it later: a constraint's range check, the malware
+  // name check of a new dependency, the safe line of an affected exact version) and, for npm, what
+  // each release holds. Later phases await the same requests instead of starting them one phase at
+  // a time (a 25-item check took 32 s cold, most of it phases waiting on each other).
+  const packageAdvisoryLists = advisoryListReader(fixSources);
+  const held = new HeldJudge(fixSources, (deps) => liveIntel.queryAdvisories(deps));
+  void packageAdvisoryLists(requested);
+  held.prefetch(requested.filter((r) => r.ecosystem === "npm").map((r) => r.package));
+  const [indexes, advisoryLists] = await Promise.all([
+    fetchIndexes(requested.map(provisional), sources, new Set(requested.filter(needsFullList).map(lookupKey))),
+    // Constraints are judged against the package's whole advisory list.
+    packageAdvisoryLists(requested.filter((r) => r.target.kind === "range")),
+  ]);
   let items = requested.map((r) => resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now));
 
   // Go dates come from per-version .info: read them for versions chosen from the list
@@ -248,7 +311,6 @@ export async function executeDependencyCheck(
   // npm: what a release installs at a fixed version comes with it (audit 6.2.5 D-4: express 4.20.0
   // exact-pins an affected qs). Judge `to` and, for a constraint, the smallest and newest safe
   // releases in it, then pick again among the releases that hold nothing affected.
-  const held = new HeldJudge(fixSources, (deps) => liveIntel.queryAdvisories(deps));
   const isNpm = (i: Resolved) => i.ecosystem === "npm" && !i.unresolved;
   await held.judge(
     items.filter(isNpm).map((item) => {
@@ -301,7 +363,7 @@ export async function executeDependencyCheck(
       !i.unresolved &&
       [i.to, i.from].some((v) => v && (byInstance.get(instanceKey(i.ecosystem, i.package, v)) ?? []).some((e) => isMaintenanceNotice(e))),
   );
-  for (const [k, v] of await packageAdvisoryLists(fixSources, noticed.filter((i) => !advisoryLists.has(lookupKey(i))))) advisoryLists.set(k, v);
+  for (const [k, v] of await packageAdvisoryLists(noticed.filter((i) => !advisoryLists.has(lookupKey(i))))) advisoryLists.set(k, v);
   const declaredFor = (item: CheckItem) => new Set((advisoryLists.get(lookupKey(item)) ?? []).filter((a) => a.maintenance).map((a) => a.id));
   // A pre-install check needs a current answer: an expired cached one (OSV failed) can predate
   // the advisory that matters, and read as `proceed` (audit 6.2.5 B-2).
@@ -323,7 +385,7 @@ export async function executeDependencyCheck(
       !i.rangeCheck &&
       ((advisoriesFor(i).available && hasRealAdvisory(advisoriesFor(i))) || (i.ecosystem === "npm" && held.affected(i.package, i.to))),
   );
-  const moreLists = await packageAdvisoryLists(fixSources, affectedExact.filter((i) => !advisoryLists.has(lookupKey(i))));
+  const moreLists = await packageAdvisoryLists(affectedExact.filter((i) => !advisoryLists.has(lookupKey(i))));
   for (const [k, v] of moreLists) advisoryLists.set(k, v);
   const lines = affectedExact.flatMap((item) => {
     const lookup = indexes.get(lookupKey(item))!;
@@ -365,9 +427,9 @@ export async function executeDependencyCheck(
     await adviseNoSafeRelease({ judge: held, pkg: item.package, to: item.to, rc: item.rangeCheck, index: lookup.data, advisories, sources: fixSources, now });
   }
 
-  const holdWaivers = await findHoldWaivers(items, indexes, advisoryLists, fixSources, sources.Go, advisoriesFor, now);
+  const holdWaivers = await findHoldWaivers(items, indexes, advisoryLists, packageAdvisoryLists, sources.Go, advisoriesFor, now);
   // A name that is malware itself (a typo-squat npm took down): avoid, whatever the release says.
-  const malicious = await findMaliciousNames(items, indexes, advisoryLists, fixSources);
+  const malicious = await findMaliciousNames(items, indexes, advisoryLists, packageAdvisoryLists);
   // A new npm dependency one slip away from a popular package: review or avoid unless it is established.
   const nameChecks = await findNearMisses(items, indexes, malicious, now);
 
@@ -381,7 +443,7 @@ export async function executeDependencyCheck(
     }
   }
   const created = new Map<string, CreatedAtFact>();
-  await mapLimit([...wantedCreated.entries()], NPM_CONCURRENCY, async ([key, { ecosystem, name }]) => {
+  await mapLimit([...wantedCreated.entries()], REGISTRY_CONCURRENCY, async ([key, { ecosystem, name }]) => {
     const lookup = await sources[ecosystem].getCreatedAt(name);
     created.set(key, lookup.status === "ok" ? { status: "ok", createdAt: lookup.data } : lookup);
   });
@@ -439,7 +501,7 @@ export async function executeDependencyCheck(
       advisories,
       ...(nameCheck ? [nameCheck] : []),
       releaseAgeSignal(item, to, advisories, now, holdWaivers.get(item)),
-      publishTrustSignal(item, to, base),
+      publishTrustSignal(item, to, trustBaseline(index!, item)),
       installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
       newDependenciesSignal(item, to, base, p.introduced, createdForItem),
       withdrawnSignal(item, to, index!),
@@ -450,7 +512,21 @@ export async function executeDependencyCheck(
     return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, unsafe), signals, ...extra, ...noticesOf(advisories) };
   });
 
-  return finish(checkedAt, results, { offline: scan.offline, osvCached: scan.cached });
+  return finish(checkedAt, inOrder(results), { offline: scan.offline, osvCached: scan.cached, ...privateMeta });
+}
+
+/**
+ * An item whose package is private: unknown, with why, and nothing about it looked up. The
+ * agent is told how to check it instead (the private registry's own tooling).
+ */
+function privateResult(r: Requested, why: string): ItemResult {
+  return {
+    ...head(provisional(r)),
+    verdict: "unknown",
+    reason: `NOT CHECKED (private): ${r.package} is a private package (${why}), so nothing about it was sent to OSV.dev or a public registry, and nothing about ${provisional(r).to} is known. This is not a clean result: check it with your private registry's own tooling.`,
+    signals: [],
+    not_checked: "private",
+  };
 }
 
 /** The reason, plus the safe releases to write instead when the verdict is against `to`. */
@@ -660,7 +736,7 @@ async function findHoldWaivers(
   items: Resolved[],
   indexes: Map<string, RegistryLookup<PackageReleaseIndex>>,
   advisoryLists: Map<string, AdvisoryRanges[] | null>,
-  fixSources: FixPathSources | null,
+  packageAdvisoryLists: AdvisoryListReader,
   go: ReleaseMetadataSource,
   advisoriesFor: (item: CheckItem) => AdvisoryFacts,
   now: Date,
@@ -674,7 +750,7 @@ async function findHoldWaivers(
   });
   if (held.length === 0) return out;
   const missing = held.filter((i) => !advisoryLists.has(lookupKey(i)));
-  for (const [k, v] of await packageAdvisoryLists(fixSources, missing)) advisoryLists.set(k, v);
+  for (const [k, v] of await packageAdvisoryLists(missing)) advisoryLists.set(k, v);
 
   for (const item of held) {
     const lookup = indexes.get(lookupKey(item));
@@ -718,7 +794,7 @@ async function findMaliciousNames(
   items: Resolved[],
   indexes: Map<string, RegistryLookup<PackageReleaseIndex>>,
   advisoryLists: Map<string, AdvisoryRanges[] | null>,
-  fixSources: FixPathSources | null,
+  packageAdvisoryLists: AdvisoryListReader,
 ): Promise<Map<Resolved, MaliciousName>> {
   const out = new Map<Resolved, MaliciousName>();
   // npm holds the name: a placeholder, and nothing else it still serves.
@@ -732,7 +808,7 @@ async function findMaliciousNames(
     return !i.from || lookup?.status === "not_found" || (i.ecosystem === "npm" && (isSecurityHoldingRelease("npm", i.to) || holdingOnly(lookup)));
   });
   const missing = asked.filter((i) => !advisoryLists.has(lookupKey(i)));
-  for (const [k, v] of await packageAdvisoryLists(fixSources, missing)) advisoryLists.set(k, v);
+  for (const [k, v] of await packageAdvisoryLists(missing)) advisoryLists.set(k, v);
   for (const item of asked) {
     const lookup = indexes.get(lookupKey(item));
     const found = maliciousName({
@@ -748,18 +824,34 @@ async function findMaliciousNames(
   return out;
 }
 
-async function packageAdvisoryLists(
-  fixSources: FixPathSources | null,
-  items: Array<{ ecosystem: CheckEcosystem; package: string }>,
-): Promise<Map<string, AdvisoryRanges[] | null>> {
-  const out = new Map<string, AdvisoryRanges[] | null>();
-  if (!fixSources) return out;
-  const unique = new Map(items.map((i) => [lookupKey(i), i]));
-  await mapLimit([...unique.entries()], NPM_CONCURRENCY, async ([key, i]) => {
-    const list = await fixSources.packageAdvisories(i.ecosystem, i.package).catch(() => null);
-    out.set(key, list ? list.map(verdictView) : null);
-  });
-  return out;
+/** Each package's OSV advisory list (verdict view), by lookupKey; null where it could not be read. */
+type AdvisoryListReader = (items: Array<{ ecosystem: CheckEcosystem; package: string }>) => Promise<Map<string, AdvisoryRanges[] | null>>;
+
+/**
+ * One reader per call: each package's list is requested once, at most OSV_LIST_CONCURRENCY at a
+ * time, and every later phase that asks for it awaits the same request (in flight or done).
+ * Nothing (an empty map) without lookup sources.
+ */
+function advisoryListReader(fixSources: FixPathSources | null): AdvisoryListReader {
+  const lists = new Map<string, Promise<AdvisoryRanges[] | null>>();
+  const slots = limiter(OSV_LIST_CONCURRENCY);
+  return async (items) => {
+    const out = new Map<string, AdvisoryRanges[] | null>();
+    if (!fixSources) return out;
+    const unique = new Map(items.map((i) => [lookupKey(i), i]));
+    for (const [key, i] of unique) {
+      if (!lists.has(key)) {
+        lists.set(
+          key,
+          slots(() => fixSources.packageAdvisories(i.ecosystem, i.package))
+            .then((list) => (list ? list.map(verdictView) : null))
+            .catch(() => null),
+        );
+      }
+    }
+    for (const key of unique.keys()) out.set(key, await lists.get(key)!);
+    return out;
+  };
 }
 
 /**
@@ -857,11 +949,20 @@ async function fetchIndexes(
     wanted.set(key, entry);
   }
   const out = new Map<string, RegistryLookup<PackageReleaseIndex>>();
-  await mapLimit([...wanted.entries()], NPM_CONCURRENCY, async ([key, { item, versions }]) => {
-    // A reader that pages (crates.io) stops once it has the wanted versions; a constraint needs them all.
-    const list = item.ecosystem === "crates.io" && fullList.has(key) ? [] : [...versions];
-    out.set(key, await sources[item.ecosystem].getReleases(item.package, list));
-  });
+  // One pool per registry, all running at once.
+  await Promise.all(
+    ECOSYSTEMS.map((ecosystem) =>
+      mapLimit(
+        [...wanted.entries()].filter(([, { item }]) => item.ecosystem === ecosystem),
+        REGISTRY_CONCURRENCY,
+        async ([key, { item, versions }]) => {
+          // A reader that pages (crates.io) stops once it has the wanted versions; a constraint needs them all.
+          const list = item.ecosystem === "crates.io" && fullList.has(key) ? [] : [...versions];
+          out.set(key, await sources[item.ecosystem].getReleases(item.package, list));
+        },
+      ),
+    ),
+  );
   return out;
 }
 
@@ -963,14 +1064,29 @@ const head = (item: Resolved) => ({
   ...(item.readAs ? { to_read_as: item.readAs } : {}),
 });
 
-function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean }) {
+/** "N checked: ..." over the items looked up; private items are counted as not checked, never as checked. */
+function summaryLine(results: ItemResult[], parts: string[]): string {
+  const privateCount = results.filter((r) => r.not_checked === "private").length;
+  const checked = results.length - privateCount;
+  const advice = 'Write only "proceed" versions; for the rest write a safe version the item names ("safe"; "range_check" in the detailed form) or report the evidence.';
+  if (privateCount === 0) return `${results.length} checked: ${parts.join(", ")}. ${advice}`;
+  const notChecked = `${privateCount} not checked (private): never looked up, verdict unknown`;
+  if (checked === 0) return `${notChecked}. Nothing was sent; check ${privateCount === 1 ? "it" : "them"} with your private registry's own tooling.`;
+  const counts = new Map<string, number>();
+  for (const r of results) if (r.not_checked !== "private") counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
+  const order = ["avoid", "review", "unknown", "wait", "proceed"];
+  const checkedParts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
+  return `${checked} checked: ${checkedParts.join(", ")}; ${notChecked}. ${advice}`;
+}
+
+function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string }) {
   const counts = new Map<Verdict, number>();
   for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
   const order: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
   const parts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
   return {
     checked_at: checkedAt,
-    summary: `${results.length} checked: ${parts.join(", ")}. Write only "proceed" versions; for the rest use range_check's safe versions or report the evidence.`,
+    summary: summaryLine(results, parts),
     results,
     _meta: {
       sources: ["registry.npmjs.org", "api.npmjs.org", "crates.io", "index.crates.io", "pypi.org", "proxy.golang.org", "osv.dev"],
@@ -979,12 +1095,35 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       privacy: PRIVACY_NOTE,
       offline: meta.offline,
       osv_cached: meta.osvCached,
+      ...(meta.registryNotice ? { registry_notice: meta.registryNotice } : {}),
+      ...(meta.private
+        ? { private_packages: `${meta.private} item${meta.private === 1 ? " names a private package" : "s name private packages"}: not looked up anywhere, verdict unknown (not_checked: "private").` }
+        : {}),
       provenance: {
         mode: "live_registry_check",
         note: "Point-in-time facts from the public registries and OSV.dev at checked_at. Says nothing about code behaviour; a proceed is the absence of known warning signs, not a review of the release.",
       },
     },
   };
+}
+
+/** Run at most `limit` of the given tasks at once. */
+function limiter(limit: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let running = 0;
+  const queue: Array<() => void> = [];
+  const release = () => {
+    running--;
+    queue.shift()?.();
+  };
+  return <T>(task: () => Promise<T>) =>
+    new Promise<T>((resolve, reject) => {
+      const start = () => {
+        running++;
+        task().then(resolve, reject).finally(release);
+      };
+      if (running < limit) start();
+      else queue.push(start);
+    });
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {

@@ -4,6 +4,8 @@
  * lockfile-parsers-pygo.ts and js-lockfile-readers.ts.
  */
 
+import type { PrivateIndexEntry } from "./private-packages.js";
+
 /** One installed copy of a package. `dev` is undefined when the lockfile does not say. */
 export interface PackageInstance {
   name: string;
@@ -43,6 +45,12 @@ export interface VersionSource {
    * not describe them: never sent to OSV under that name, always listed.
    */
   uncheckable?: UncheckableDependency[];
+  /**
+   * Packages the lockfile installs from a registry or index that is not the public one (Cargo
+   * `source = "registry+https://..."` other than crates.io, or git; a uv / poetry / Pipfile index
+   * other than pypi.org): private, never sent anywhere (private-packages.ts).
+   */
+  privateIndex?: PrivateIndexEntry[];
   /**
    * npm aliases the lockfile installs at the top level: the name the manifest
    * declares (`my-lodash`) to the registry package it is (`lodash`).
@@ -140,7 +148,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex"> = {},
 ): VersionSource {
   return {
     versions,

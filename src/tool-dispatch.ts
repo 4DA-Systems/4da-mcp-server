@@ -32,7 +32,7 @@ import {
   executeEcosystemPulse,
   executeDependencyHealth,
   executeUpgradePlanner,
-  executeDependencyCheck,
+  runDependencyCheck,
   executeUpgradeImpact,
 } from "./tools/index.js";
 
@@ -53,7 +53,7 @@ const DISPATCH_MAP: Record<string, ToolExecutor> = {
   vulnerability_scan: (db, params) => executeVulnerabilityScan(db, params, getLiveIntelligence()),
   dependency_health: (db, params) => executeDependencyHealth(db, params, getLiveIntelligence()),
   upgrade_planner: (db, params) => executeUpgradePlanner(db, params, getLiveIntelligence()),
-  dependency_check: (db, params) => executeDependencyCheck(db, params, getLiveIntelligence()),
+  dependency_check: (db, params) => runDependencyCheck(db, params, getLiveIntelligence()),
   upgrade_impact: (db, params) => executeUpgradeImpact(db, params, getLiveIntelligence()),
 
   // Intelligence

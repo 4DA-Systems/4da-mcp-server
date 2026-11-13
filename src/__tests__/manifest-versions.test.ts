@@ -36,6 +36,14 @@ describe("manifest versions", () => {
     expect(read("gemini-extension.json").version).toBe(version);
   });
 
+  it("every install and run command in the README pins it", () => {
+    const readme = readFileSync(join(root, "README.md"), "utf8");
+    // A command (`npx ...`, `claude mcp add ... -- npx ...`) or a config's `args` entry.
+    const uses = [...readme.matchAll(/(?:npx (?:-y )?|"args": \["(?:-y", ")?)@4da\/mcp-server(@[^\s"`]+)?/g)];
+    expect(uses.length).toBeGreaterThan(10);
+    for (const use of uses) expect(use[1], use[0]).toBe(`@${version}`);
+  });
+
   it("the changelog has an entry for it", () => {
     expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toMatch(new RegExp(`^## ${version.replaceAll(".", "\.")} `, "m"));
   });
