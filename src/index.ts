@@ -33,7 +33,8 @@
  * connection/request, so 2025-era hosts (classic `initialize` handshake) and
  * 2026-07-28 hosts (stateless `server/discover`) are both supported.
  */
-import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { StdioGate } from "./stdio-gate.js";
 import { Server } from "@modelcontextprotocol/server";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -436,7 +437,8 @@ export function buildServer(): Server {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ error: errorMessage }, null, 2),
+            // One shape for every tool error: `{"error": "..."}`, compact, as the argument check writes it.
+            text: JSON.stringify({ error: errorMessage }),
           },
         ],
         isError: true,
@@ -522,8 +524,8 @@ async function main() {
     FOURDA_OFFLINE      Set to "true" to disable all network calls (OSV.dev, HN)
     FOURDA_CALL_BUDGET_MS  Time one tool call may take (default 20000). Past it the
                         call is answered NOT CHECKED; its lookups run on and are cached.
-    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Used on Node 24.14+; on Node 22.21+ when the
-                        server is started with NODE_USE_ENV_PROXY=1 (see the README).
+    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Every lookup goes through the proxy (NO_PROXY
+                        honoured); an unreachable proxy means NOT CHECKED, never direct.
     MCP_AUTH_SECRET     Shared secret for verifying relay-issued Bearer tokens
                         (HMAC-SHA256). Falls back to JWT_SECRET. Without it, no
                         token is accepted.
@@ -552,7 +554,7 @@ async function main() {
     return;
   }
 
-  // HTTPS_PROXY / HTTP_PROXY: turned on where this Node can, and said either way (proxy.ts).
+  // HTTPS_PROXY / HTTP_PROXY: every lookup goes through it (live/http-utils.ts); said here (proxy.ts).
   const proxy = configureProxy();
   if (proxy.note) console.error(`[4DA] ${proxy.note}`);
 
@@ -619,7 +621,14 @@ async function main() {
   // Default: stdio serving. `serveStdio` owns the era decision per connection —
   // a 2025-era `initialize` opening is served exactly as before; a 2026-07-28
   // `server/discover` opening gets the stateless modern protocol.
+  // Parse errors and requests before initialize are answered here, per JSON-RPC and MCP (stdio-gate.ts).
+  const gate = new StdioGate((message) => {
+    process.stdout.write(`${JSON.stringify(message)}
+`);
+  });
+  process.stdin.pipe(gate);
   serveStdio(buildServer, {
+    transport: new StdioServerTransport(gate, process.stdout),
     onerror: (error) => {
       console.error(`[4DA] stdio serving error: ${error.message}`);
     },

@@ -173,12 +173,21 @@ export function resolvePython(cwd: string): VersionSource {
 
   const collected: LockfileProblem[] = [];
   const extras: RequirementExtras = { unpinned: [], uncheckable: [] };
+  const extraIndexes: Array<{ file: string; index: string }> = [];
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
     const pins = readRequirementsFile(file, new Set(), cwd, collected, extras);
     if (pins === null) continue;
     for (const { name, version } of pins) take(name, version, dev);
     sources.push(file);
+    // `--index-url` / `-i` replaces pypi.org for every pin of the file: private when it is not a
+    // public index (pre-publish audit 2026-11-13, S4). `--extra-index-url` adds one beside pypi.org,
+    // so the names are still read as public, and the answer says so (LiveIntelligence.getRegistryNotice).
+    const options = indexOptions(safeRead(file));
+    if (options.index && !isPublicPypiIndex(options.index)) {
+      for (const { name, version } of pins) privateIndex.push({ name, version, registry: sourceLabel(options.index), file });
+    }
+    for (const index of options.extra) if (!isPublicPypiIndex(index)) extraIndexes.push({ file, index: sourceLabel(index) });
   }
   uncheckable.push(...extras.uncheckable);
   // One problem per file, however many requirement files name it.
@@ -195,6 +204,7 @@ export function resolvePython(cwd: string): VersionSource {
     ...(unpinned.length > 0 ? { unpinned } : {}),
     ...(problems.length > 0 ? { problems } : {}),
     ...(privateIndex.length > 0 ? { privateIndex } : {}),
+    ...(extraIndexes.length > 0 ? { extraIndexes } : {}),
   };
 
   if (sources.length === 0) return { ...emptySource(), ...extra };
@@ -360,6 +370,19 @@ function safeRead(file: string): string {
 }
 
 /** `-r file` / `--requirement=file` / `-c file` / `--constraint file` lines (local paths only). */
+/** A requirements file's `--index-url` / `-i` (the last one, as pip takes it) and every `--extra-index-url`. */
+export function indexOptions(content: string): { index: string | null; extra: string[] } {
+  let index: string | null = null;
+  const extra: string[] = [];
+  for (const raw of requirementLines(content)) {
+    const m = /^\s*(?:(-i)|--(index-url|extra-index-url))(?:\s*=\s*|\s+)(\S+)/.exec(raw);
+    if (!m) continue;
+    if (m[2] === "extra-index-url") extra.push(m[3]);
+    else index = m[3];
+  }
+  return { index, extra };
+}
+
 export function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
   const out: Array<{ option: "r" | "c"; target: string }> = [];
   for (const raw of requirementLines(content)) {

@@ -23,7 +23,7 @@ import type {
   ReleaseRecord,
   TrustLevel,
 } from "./release-metadata.js";
-import { readableNpmName } from "../untrusted-text.js";
+import { readableNpmName, sanitizeThirdParty } from "../untrusted-text.js";
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 // Full packuments can be large; 8 s (the abbreviated reader's budget) is not enough.
@@ -135,7 +135,7 @@ export function projectPackument(name: string, doc: NpmPackument): PackageReleas
       trustEvidence,
       installScripts: installScriptsOf(v),
       // `deprecated: true` (no message) counts too, as in the 4DA app.
-      deprecated: typeof v.deprecated === "string" && v.deprecated.length > 0 ? v.deprecated : v.deprecated === true ? "deprecated" : null,
+      deprecated: typeof v.deprecated === "string" && v.deprecated.length > 0 ? sanitizeThirdParty(v.deprecated) || "deprecated" : v.deprecated === true ? "deprecated" : null,
       withdrawn: null,
       // A dependency key is whatever the publisher wrote. One that is not a package name is kept
       // as a placeholder (it still counts as a new dependency, and resolves to nothing) so that

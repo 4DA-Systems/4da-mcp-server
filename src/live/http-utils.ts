@@ -1,6 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
+
 import { refusePrivateRequest } from "./private-guard.js";
+
+/**
+ * HTTPS_PROXY / HTTP_PROXY / NO_PROXY (black-box re-run of 96c16d2: the server ignored them, even
+ * with NODE_USE_ENV_PROXY=1, so a corporate user got nothing or went around the proxy). When one
+ * of the proxy variables is set, every lookup goes through undici's EnvHttpProxyAgent, which reads
+ * them (lower and upper case) and honours NO_PROXY. A proxy that cannot be reached fails the
+ * request like any unreachable host: the answer says NOT CHECKED, and nothing is retried direct.
+ */
+const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"];
+let proxyAgent: { key: string; agent: EnvHttpProxyAgent } | null = null;
+
+/** The dispatcher for the proxy the environment names now, or null when it names none. */
+export function proxyDispatcher(env: NodeJS.ProcessEnv = process.env): EnvHttpProxyAgent | null {
+  const set = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].some((k) => (env[k] ?? "").trim() !== "");
+  if (!set) return null;
+  const key = PROXY_VARIABLES.map((k) => `${k}=${env[k] ?? ""}`).join("\n");
+  if (proxyAgent?.key !== key) {
+    void proxyAgent?.agent.close().catch(() => undefined);
+    proxyAgent = { key, agent: new EnvHttpProxyAgent() };
+  }
+  return proxyAgent.agent;
+}
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -14,7 +38,10 @@ export async function fetchWithTimeout(
   const controller = new AbortController();
   let timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const dispatcher = proxyDispatcher();
+    const response = dispatcher
+      ? ((await undiciFetch(url, { ...(options as Record<string, unknown>), signal: controller.signal, dispatcher } as Parameters<typeof undiciFetch>[1])) as unknown as Response)
+      : await fetch(url, { ...options, signal: controller.signal });
     // The headers are in; the body is not read yet. Clearing the abort here left json(), text()
     // and arrayBuffer() with no deadline: a server that stalled mid-body hung vulnerability_scan
     // and dependency_check, and every later scan that joined the stuck one (audit 6.2.5 B-6).

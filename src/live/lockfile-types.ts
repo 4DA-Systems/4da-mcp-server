@@ -51,6 +51,8 @@ export interface VersionSource {
    * other than pypi.org): private, never sent anywhere (private-packages.ts).
    */
   privateIndex?: PrivateIndexEntry[];
+  /** PyPI: `--extra-index-url` indexes a requirements file adds beside pypi.org (not public ones). */
+  extraIndexes?: Array<{ file: string; index: string }>;
   /**
    * npm aliases the lockfile installs at the top level: the name the manifest
    * declares (`my-lodash`) to the registry package it is (`lodash`).
@@ -148,7 +150,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes"> = {},
 ): VersionSource {
   return {
     versions,

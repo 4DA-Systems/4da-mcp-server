@@ -139,7 +139,7 @@ export function runDoctor(): void {
 
   // Proxy: said only when a proxy is configured; a proxy this process does not use fails every lookup.
   const proxy = configureProxy();
-  if (proxy.note) checks.push({ name: "Proxy", status: proxy.state === "unsupported" ? "fail" : "pass", detail: proxy.note.replace(/^Proxy: /, "") });
+  if (proxy.note) checks.push({ name: "Proxy", status: proxy.state === "invalid" ? "fail" : "pass", detail: proxy.note.replace(/^Proxy: /, "") });
 
   // Print results
   const icons = { pass: "\u2713", warn: "!", fail: "\u2717" };

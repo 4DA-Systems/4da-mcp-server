@@ -18,17 +18,16 @@
  * keywords in the line itself.
  */
 
+import { sanitizeThirdParty } from "../untrusted-text.js";
+
 export type EntryKind = "breaking" | "deprecation" | "security" | "change";
 
 export const MAX_ENTRY_CHARS = 400;
 
-const CONTROL = /[\u0000-\u0009\u000B-\u001F\u007F]/g;
-const INVISIBLE = /[​-‏‪-‮⁦-⁩﻿]/g;
-
-/** Strip control and invisible/bidi characters, collapse whitespace, cap length. */
+/** The shared third-party cleaning (untrusted-text.ts sanitizeThirdParty), capped for an entry. */
 export function sanitizeEntry(text: string, cap: number = MAX_ENTRY_CHARS): string {
-  const clean = text.replace(INVISIBLE, "").replace(CONTROL, " ").replace(/\s+/g, " ").trim();
-  return clean.length > cap ? `${clean.slice(0, cap - 1)}…` : clean;
+  // Control characters read as a space between words, as before; the rest is the shared rule.
+  return sanitizeThirdParty(text.replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, " "), cap);
 }
 
 /**

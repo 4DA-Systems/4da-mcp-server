@@ -8,6 +8,7 @@
  * Privacy: sends only package names + versions (public manifest data).
  */
 
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -632,7 +633,8 @@ function mapVulnerability(
     cvssScore,
     ...(malware ? { malware: true } : {}),
     maintenance: isMaintenanceRecord(vuln, dep.name, dep.ecosystem),
-    summary: vuln.summary || vuln.details?.slice(0, 200) || vuln.id,
+    // Third-party text: the shared cleaning before anything reads it (untrusted-text.ts).
+    summary: sanitizeThirdParty(vuln.summary || vuln.details?.slice(0, 200) || "") || vuln.id,
     fixedVersion,
     published: vuln.published || vuln.modified || "",
     references: (vuln.references || [])

@@ -2,6 +2,34 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (privacy and protocol).** `what_should_i_know` now
+  recognises a private package the task names (installed, or covered by the
+  private rules): it leads with `NOT CHECKED (private)`, lists
+  `private_dependencies`, and never answers `safe_to_delegate` for it (a task
+  upgrading `@acme/vault-core` came back "No dependency of this project is
+  named in the task", safe). A private PyPI index named by `--index-url` / `-i`
+  in a requirements file, `PIP_INDEX_URL` or pip's config file makes the pins
+  it serves private (`omega-internal-risk==3.1.0` reached OSV.dev and
+  pypi.org); `--extra-index-url` keeps names public and says so. No `_meta.privacy`
+  says private names are sent any more (vulnerability_scan still said
+  "private names included"), and a test holds every one to the README. One
+  shared cleaning for third-party text (changelogs, OSV summaries, deprecation
+  and yank messages, Go retraction rationales, HN titles) now removes Unicode
+  tag characters and invisible operators too: an instruction hidden in tag
+  characters survived the changelog parser. A malformed JSON-RPC line gets a
+  `-32700` Parse error, a request before `initialize` is refused with
+  `-32600`, and every tool error is one compact `{"error": ...}`.
+- **what_should_i_know judges the version a task names.** "add lodash
+  4.17.20" was judged at latest and came back safe_to_delegate; "pin axios
+  to 0.21.1" did not see axios. `name@v`, `name==v`, "name to v", "name from
+  a to b", "pin name v" are read and judged by dependency_check at exactly
+  that version or constraint (`requested_versions`); one that is not proceed
+  is never safe_to_delegate.
+- **Every lookup goes through HTTPS_PROXY / HTTP_PROXY**, with NO_PROXY
+  honoured, on every supported Node (undici's EnvHttpProxyAgent; `undici`
+  7.30.1, MIT, pinned). A proxy that cannot be reached makes the answer NOT
+  CHECKED, never a direct connection.
+
 - **dependency_check says avoid for a name that is malware itself.** `{npm,
   lodahs, latest}` said proceed: `latest` is 0.0.1-security, the empty
   placeholder npm publishes after taking a malicious package down, and the

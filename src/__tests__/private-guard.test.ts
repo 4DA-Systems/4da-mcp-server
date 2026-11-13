@@ -63,7 +63,6 @@ describe("nothing in src/ reaches the network around the choke point", () => {
   /** The only places a bare fetch() may appear, and why. */
   const ALLOWED: Record<string, string> = {
     "live/http-utils.ts": "the choke point itself: refusePrivateRequest runs first",
-    "live/hn-fetcher.ts": "calls refusePrivateRequest on the same URL just before",
     "embeddings.ts": "the user's own embedding provider (opt-in), never a registry or OSV.dev",
   };
 
@@ -83,12 +82,13 @@ describe("nothing in src/ reaches the network around the choke point", () => {
       const rel = path.relative(src, file).replaceAll("\\", "/");
       const code = fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
       // A call of the global: `fetch(` not preceded by `.`, a word character (fetchWithTimeout, net.fetch) or `async `-method names.
-      if (/(?<![.\w])fetch\s*\(/.test(code) || /globalThis\.fetch\s*\(/.test(code)) {
+      // A method named fetch (`async fetch(...)`) is a definition, not a call.
+      if (/(?<![.\w]|async )fetch\s*\(/.test(code) || /globalThis\.fetch\s*\(/.test(code)) {
         if (!ALLOWED[rel]) offenders.push(rel);
       }
     }
     expect(offenders).toEqual([]);
-    for (const rel of ["live/http-utils.ts", "live/hn-fetcher.ts"]) {
+    for (const rel of ["live/http-utils.ts"]) {
       expect(fs.readFileSync(path.join(src, rel), "utf8")).toContain("refusePrivateRequest(");
     }
     // The upgrade_impact network seam defaults to the choke point.

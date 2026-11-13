@@ -8,7 +8,8 @@
  * Privacy: sends generic tech keywords (e.g. "react", "rust") — not personal data.
  */
 
-import { refusePrivateRequest } from "./private-guard.js";
+import { sanitizeThirdParty } from "../untrusted-text.js";
+import { fetchWithTimeout } from "./http-utils.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import type { LiveHeadline } from "./types.js";
@@ -91,19 +92,11 @@ export class HNFetcher {
     });
 
     const url = `${HN_ALGOLIA_URL}?${params}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HN_TIMEOUT_MS);
-
-    try {
-      // Through the guard like every lookup: a private package name is never a search term.
-      refusePrivateRequest(url);
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) return [];
-      const data = (await response.json()) as HNResponse;
-      return data.hits || [];
-    } finally {
-      clearTimeout(timeout);
-    }
+    // Through the shared layer like every lookup: the private-name guard and the proxy (http-utils.ts).
+    const response = await fetchWithTimeout(url, {}, HN_TIMEOUT_MS);
+    if (!response.ok) return [];
+    const data = (await response.json()) as HNResponse;
+    return data.hits || [];
   }
 }
 
@@ -151,7 +144,7 @@ function scoreAndMap(hits: HNHit[], techStack: string[]): LiveHeadline[] {
 
       return {
         id: hit.objectID,
-        title: hit.title,
+        title: sanitizeThirdParty(hit.title ?? "", 300),
         url: hit.url,
         source: "hacker_news" as const,
         points: hit.points,

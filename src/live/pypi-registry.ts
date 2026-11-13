@@ -8,6 +8,7 @@
  * Privacy: sends only package names -- public manifest data.
  */
 
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchJson } from "./http-utils.js";
@@ -90,7 +91,7 @@ export class PyPIRegistry {
       // Deprecation: yanked at the package info level
       const deprecated = !!data.info.yanked;
       const deprecationMessage = deprecated
-        ? (data.info.yanked_reason || "Package has been yanked")
+        ? (sanitizeThirdParty(data.info.yanked_reason ?? "") || "Package has been yanked")
         : null;
 
       // Semver distance

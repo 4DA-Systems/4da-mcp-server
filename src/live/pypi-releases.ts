@@ -19,6 +19,7 @@
  * Privacy: the request names the package and nothing else.
  */
 
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -62,7 +63,7 @@ export function projectPypiProject(name: string, doc: PyPIProject): PackageRelea
       trust: 0,
       trustEvidence: PYPI_NOT_APPLICABLE,
       installScripts: null,
-      deprecated: reason ? `yanked: ${reason}` : null,
+      deprecated: reason ? `yanked: ${sanitizeThirdParty(reason)}` : null,
       withdrawn: yanked ? "yanked" : null,
       dependencies: null,
     };
