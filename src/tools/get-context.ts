@@ -8,6 +8,7 @@
 import type { FourDADatabase } from "../db.js";
 import type { GetContextParams, UserContext } from "../types.js";
 import { getLiveIntelligence } from "../live-singleton.js";
+import { scanCurrentProject } from "../project-scanner.js";
 
 /**
  * Tool definition for MCP registration
@@ -56,9 +57,8 @@ export function executeGetContext(
   const includeAce = params.include_ace ?? true;
   const includeLearned = params.include_learned ?? true;
 
-  const context = db.getUserContext(includeAce, includeLearned);
-
   const liveIntel = getLiveIntelligence();
+  const context = scopeToProject(db, db.getUserContext(includeAce, includeLearned), liveIntel?.getProjectRoot?.() ?? null);
   if (liveIntel) {
     const deps = liveIntel.getResolvedDeps();
     if (deps.length > 0) {
@@ -85,6 +85,39 @@ export function executeGetContext(
   }
 
   return context;
+}
+
+/**
+ * The standalone database is shared by every project a server was started in (one data folder), and
+ * every scan adds its languages, frameworks and topics to the same tables. A server started in a
+ * public project listed another project's stack (blind audit round 4). In standalone mode, what a
+ * project scan wrote is kept only when THIS project's scan says it. The desktop app's tables are the
+ * user's own profile, across their projects by design, and are left as they are.
+ */
+function scopeToProject(db: FourDADatabase, context: UserContext, root: string | null): UserContext {
+  if (!db.isStandalone || !root) return context;
+  let scan;
+  try {
+    scan = scanCurrentProject(root);
+  } catch {
+    return context;
+  }
+  const own = new Set([...scan.languages, ...scan.frameworks, ...scan.topics].map((t) => t.toLowerCase()));
+  const keep = (name: string, source?: string | null) => (source !== undefined && source !== null && source !== "project_scan") || own.has(name.toLowerCase());
+  return {
+    ...context,
+    tech_stack: context.tech_stack.filter((t) => own.has(t.toLowerCase())),
+    interests: context.interests.filter((i) => keep(i.topic, i.source ?? "project_scan")),
+    ...(context.ace
+      ? {
+          ace: {
+            ...context.ace,
+            detected_tech: context.ace.detected_tech.filter((t) => keep(t.name, t.source ?? "project_scan")),
+            active_topics: context.ace.active_topics.filter((t) => keep(t.topic, t.source ?? "project_scan")),
+          },
+        }
+      : {}),
+  };
 }
 
 const MAX_LISTED_DEPENDENCIES = 40;

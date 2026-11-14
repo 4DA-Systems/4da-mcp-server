@@ -182,10 +182,14 @@ export function resolvePython(cwd: string): VersionSource {
     sources.push(file);
     // `--index-url` / `-i` replaces pypi.org for every pin of the file: private when it is not a
     // public index (pre-publish audit 2026-11-13, S4). `--extra-index-url` adds one beside pypi.org,
-    // so the names are still read as public, and the answer says so (LiveIntelligence.getRegistryNotice).
+    // and pip takes each package from whichever index has the newest release, so any pin may come
+    // from it: private too (blind audit round 4; until then the names were sent and only a notice
+    // said so). The answer still names the extra index (LiveIntelligence.getRegistryNotice).
     const options = indexOptions(safeRead(file));
-    if (options.index && !isPublicPypiIndex(options.index)) {
-      for (const { name, version } of pins) privateIndex.push({ name, version, registry: sourceLabel(options.index), file });
+    const privateExtra = options.extra.find((index) => !isPublicPypiIndex(index));
+    const privateSource = options.index && !isPublicPypiIndex(options.index) ? options.index : privateExtra;
+    if (privateSource) {
+      for (const { name, version } of pins) privateIndex.push({ name, version, registry: sourceLabel(privateSource), file });
     }
     for (const index of options.extra) if (!isPublicPypiIndex(index)) extraIndexes.push({ file, index: sourceLabel(index) });
   }

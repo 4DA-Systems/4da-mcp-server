@@ -175,13 +175,16 @@ describe("S4: a private index named in a requirements file, or in pip's configur
     expect(mentions("omega-internal-risk")).toEqual([]);
   });
 
-  it("--extra-index-url: pip still consults pypi.org for every name, so names stay public, and the answer says so", async () => {
+  // Blind audit round 4: pip takes each package from whichever index has the newest release, so any
+  // pin may come from the extra index. Its names were sent and only a notice said so; now they are
+  // private (never sent, NOT CHECKED), and the answer still names the extra index.
+  it("--extra-index-url: pip may take any pin from it, so the file's pins are private, and the answer says so", async () => {
     write("requirements.txt", "--extra-index-url https://pypi.corp-secret.example/simple\nrequests==2.32.3\n");
     const live = liveFor(scratch);
     const scan = await live.scanVulnerabilities(scratch, { includeDev: true });
-    expect(mentions("requests").length).toBeGreaterThan(0);
+    expect(mentions("requests")).toEqual([]);
+    expect(scan.privateExcluded?.dependencies.map((d) => d.name)).toEqual(["requests"]);
     expect(scan.registryNotice).toContain("pip also installs from https://pypi.corp-secret.example/simple (an extra index)");
-    expect(scan.registryNotice).toContain("FOURDA_PRIVATE_PACKAGES");
   });
 
   it("PIP_INDEX_URL and pip.conf name the index for every requirements file", async () => {

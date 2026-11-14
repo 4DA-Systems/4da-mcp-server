@@ -192,6 +192,10 @@ const MAX_WALK_DIRS = 20_000;
 const MAX_IGNORED_WALK_DIRS = 5_000;
 /** Lockfile paths listed in `discovery.skipped`; the count covers the rest. */
 const MAX_LISTED_SKIPS = 50;
+/** Registry configuration files whose directory is recorded (`discovery.registryConfigDirs`). */
+const REGISTRY_CONFIG_FILES = new Set([".npmrc", ".yarnrc.yml", "bunfig.toml"]);
+/** At most this many such directories are read for private scopes. */
+const MAX_REGISTRY_CONFIG_DIRS = 500;
 /** Manifests listed in `discovery.unlockedManifests`; the count covers the rest. */
 const MAX_LISTED_UNLOCKED = 25;
 
@@ -239,6 +243,12 @@ export interface TreeDiscovery {
   unlockedManifestsCount?: number;
   /** Lockfiles that were scanned although .gitignore lists them, relative to the root. */
   gitignoredScanned?: string[];
+  /**
+   * Directories below the root holding a package-registry configuration (`.npmrc`, `.yarnrc.yml`,
+   * `bunfig.toml`), absolute. A member's private scope is private for the whole project, lockfile
+   * or not (live/private-packages.ts; blind audit round 4).
+   */
+  registryConfigDirs?: string[];
 }
 
 /** Python requirement files: requirements.txt, requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt. */
@@ -530,6 +540,10 @@ export function scanProjectTree(
   const unlocked: NonNullable<TreeDiscovery["unlockedManifests"]> = [];
   let unlockedCount = 0;
   const gitignoredScanned: string[] = [];
+  const registryConfigDirs: string[] = [];
+  const noteRegistryConfig = (dir: string, names: string[]) => {
+    if (registryConfigDirs.length < MAX_REGISTRY_CONFIG_DIRS && names.some((n) => REGISTRY_CONFIG_FILES.has(n))) registryConfigDirs.push(dir);
+  };
   const noteSkipped = (lockPath: string, reason: SkipReason) => {
     skippedCount++;
     if (skipped.length < MAX_LISTED_SKIPS) skipped.push({ path: lockPath, reason });
@@ -581,6 +595,7 @@ export function scanProjectTree(
     const children = listing(dir);
     if (!children) return;
     for (const name of lockfilesIn(dir, children.map((c) => c.name))) noteSkipped(`${rel}/${name}`, "gitignored_directory");
+    noteRegistryConfig(dir, children.map((c) => c.name));
     for (const child of children) {
       if (!child.isDirectory() || SKIP_DIRS.has(child.name)) continue;
       listIgnored(path.join(dir, child.name), `${rel}/${child.name}`);
@@ -625,6 +640,7 @@ export function scanProjectTree(
       if (grandchildren.some((g) => g.name === ".gitignore")) ignore.load(childRel);
       const names = grandchildren.map((g) => g.name);
       noteUnsupported(sub, childRel, names);
+      noteRegistryConfig(sub, names);
       // Every lockfile, .gitignore-listed or not: it is what is installed.
       const locks = lockfilesIn(sub, names);
       const here = locks.length > 0 ? [...covers, new LockCover(sub, childRel, locks)] : covers;
@@ -668,6 +684,7 @@ export function scanProjectTree(
       ...(fixtures.count > 0 ? { fixtures } : {}),
       ...(unlockedCount > 0 ? { unlockedManifests: unlocked, unlockedManifestsCount: unlockedCount } : {}),
       ...(gitignoredScanned.length > 0 ? { gitignoredScanned } : {}),
+      ...(registryConfigDirs.length > 0 ? { registryConfigDirs } : {}),
     },
   };
 }
