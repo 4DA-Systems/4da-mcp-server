@@ -458,7 +458,9 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expect(step("express")).toMatchObject({ targetVersion: "4.22.3", upgradeCommands: [{ command: "npm install express@4.22.3 --save-exact" }] });
     const ptr = step("path-to-regexp");
     expect(ptr.parentUpgrades).toMatchObject([{ parent: "express", to: "4.22.3", requirement: "~0.1.13", levers: [{ to: "4.22.3", commands: [{ command: "npm install express@4.22.3 --save-exact" }] }] }]);
-    expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.3, not 4\.22\.0: one release of express for every row that names it, its own row included/);
+    // Round 8 (B6): 4.22.0 holds an affected qs ("~6.15.1"), so the row names 4.22.3 itself, never 4.22.0.
+    expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.3 is the smallest express release whose requirement "~0\.1\.13" admits path-to-regexp/);
+    expect(ptr.parentUpgrades[0].smallest).toBeUndefined();
     expect(ptr.reasons.join(" ")).not.toMatch(/upgrade express to 4\.22\.0/);
     expect(new Set([...commandsIn(ptr), ...commandsIn(step("qs")), ...commandsIn(step("express"))])).toEqual(new Set(["npm install express@4.22.3 --save-exact"]));
   });

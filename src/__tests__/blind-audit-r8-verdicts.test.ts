@@ -307,3 +307,64 @@ describe("B7: a well-formed but empty batch answer never overrides the advisorie
   });
 });
 
+
+describe("B6: a parent release whose held dependencies could not be read is never named in a command", () => {
+  /** express 4.17.1 (NodeGoat's shape): only 4.22.3 holds nothing affected. */
+  async function setup() {
+    OSV.push(
+      record("GHSA-qsqs-0000-0001", "npm", "qs", [[{ introduced: "0" }, { fixed: "6.16.0" }]], "HIGH"),
+      record("GHSA-bpbp-0000-0001", "npm", "body-parser", [[{ introduced: "0" }, { fixed: "1.20.3" }]], "HIGH"),
+    );
+    NPM.qs = { versions: Object.fromEntries(["6.7.0", "6.11.0", "6.14.0", "6.16.0"].map((v) => [v, {}])) };
+    NPM["body-parser"] = {
+      versions: { "1.19.0": { deps: { qs: "6.7.0" } }, "1.20.3": { deps: { qs: "6.11.0" } }, "1.20.4": { deps: { qs: "~6.16.0" } } },
+    };
+    NPM.express = {
+      versions: {
+        "4.17.1": { deps: { qs: "6.7.0", "body-parser": "1.19.0" } },
+        "4.20.0": { deps: { qs: "6.11.0", "body-parser": "1.20.3" } },
+        "4.22.0": { deps: { qs: "~6.14.0", "body-parser": "~1.20.3" } },
+        "4.22.3": { deps: { qs: "~6.16.0", "body-parser": "~1.20.4" } },
+      },
+    };
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "x", dependencies: { express: "4.17.1" } }));
+    const packages = {
+      "": { name: "x", dependencies: { express: "4.17.1" } },
+      "node_modules/express": { version: "4.17.1", dependencies: { qs: "6.7.0", "body-parser": "1.19.0" } },
+      "node_modules/body-parser": { version: "1.19.0", dependencies: { qs: "6.7.0" } },
+      "node_modules/qs": { version: "6.7.0" },
+    };
+    fs.writeFileSync(path.join(dir, "package-lock.json"), JSON.stringify({ name: "x", lockfileVersion: 3, packages }));
+    const li = live();
+    const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
+    const { entries, discovery } = scanProjectTree(dir);
+    li.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
+    vi.spyOn(li, "getProjectRoot").mockReturnValue(dir);
+    return li;
+  }
+  const expressReleases = (answer: unknown) => [...new Set(JSON.stringify(answer).match(/express@\d+\.\d+\.\d+/g) ?? [])].sort();
+
+  it("upgrade_planner and vulnerability_scan: only express 4.22.3, healthy or not; unread held dependencies name nothing", async () => {
+    const { executeUpgradePlanner } = await import("../tools/upgrade-planner.js");
+    const { executeVulnerabilityScan } = await import("../tools/vulnerability-scan.js");
+    const healthy = await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50 }, await setup());
+    expect(expressReleases(healthy)).toEqual(["express@4.22.3"]);
+    NPM_DOWN = new Set(["qs", "body-parser"]);
+    const plan = await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50 }, await setup());
+    expect(expressReleases(plan).filter((r) => r !== "express@4.22.3")).toEqual([]);
+    expect(JSON.stringify(plan)).toMatch(/NOT CHECKED/);
+    const scan = await executeVulnerabilityScan(null, { project_path: dir }, await setup());
+    expect(expressReleases(scan).filter((r) => r !== "express@4.22.3")).toEqual([]);
+  });
+});
+
+describe("missing data never turns a known advisory into review", () => {
+  it("an advisory known only from the package's list (grade unread) is kept as avoid for a late answer", async () => {
+    const { runWithCallBudget, callFinding, callFindingKey } = await import("../call-budget.js");
+    const { noteListFacts } = await import("../tools/dependency-check-facts.js");
+    await runWithCallBudget(Date.now(), async () => {
+      noteListFacts({ ecosystem: "npm", package: "express", raw: "4.17.1" }, "4.17.1", [{ id: "GHSA-expr-0000-0001", spans: [{ introduced: "0", fixed: "4.20.0", lastAffected: null }], versions: [] }]);
+      expect(callFinding(callFindingKey("npm", "express", "4.17.1"))?.verdict).toBe("avoid");
+    });
+  });
+});
