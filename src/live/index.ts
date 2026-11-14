@@ -108,6 +108,8 @@ export class LiveIntelligence {
   private scansInFlight = new Map<string, Promise<VulnerabilityScanResult>>();
   private storedScanRequest = 0;
   private lastHeadlines: LiveHeadline[] = [];
+  /** Why the last headline fetch read nothing, when it did not (ecosystem_pulse says so). */
+  private headlineError: string | null = null;
   private resolvedDeps: ResolvedDependency[] = [];
   private auditDeps: ResolvedDependency[] = [];
   /** What the machine says is private (private-packages.ts), for the project in use. */
@@ -773,8 +775,10 @@ export class LiveIntelligence {
 
     try {
       this.lastHeadlines = await this.hnFetcher.fetch(terms);
+      this.headlineError = null;
       return this.lastHeadlines;
-    } catch {
+    } catch (err) {
+      this.headlineError = err instanceof Error ? err.message : String(err);
       return this.lastHeadlines; // Return last known
     }
   }
@@ -811,6 +815,11 @@ export class LiveIntelligence {
   /**
    * Get last headlines (from cache/memory, no network).
    */
+  /** Why the last headline fetch read nothing, or null when it answered. */
+  getHeadlineError(): string | null {
+    return this.headlineError;
+  }
+
   getHeadlines(): LiveHeadline[] {
     return this.lastHeadlines;
   }

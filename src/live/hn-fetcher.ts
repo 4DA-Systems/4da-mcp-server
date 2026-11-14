@@ -51,28 +51,39 @@ export class HNFetcher {
 
     if (!this.rateLimiter.canProceed("hn")) {
       const stale = this.cache.getStale<LiveHeadline[]>(cacheKey);
-      return stale?.data || [];
+      if (stale) return stale.data;
+      throw new Error("the Hacker News request budget for this minute is spent");
     }
 
     const queries = buildQueries(techStack);
+    if (queries.length === 0) return [];
     const allHits: HNHit[] = [];
     const seen = new Set<string>();
+    let answered = 0;
+    let failure = "";
 
     for (const query of queries) {
-      if (!this.rateLimiter.consume("hn")) break;
+      if (!this.rateLimiter.consume("hn")) {
+        failure ||= "the Hacker News request budget for this minute is spent";
+        break;
+      }
 
       try {
         const hits = await this.searchHN(query);
+        answered++;
         for (const hit of hits) {
           if (!seen.has(hit.objectID)) {
             seen.add(hit.objectID);
             allHits.push(hit);
           }
         }
-      } catch {
-        // Individual query failure — continue with others
+      } catch (err) {
+        // One query failed: the others may still answer.
+        failure = err instanceof Error ? err.message : String(err);
       }
     }
+    // Not one query answered: that is "not read", never "no relevant headlines" (blind audit round 3).
+    if (answered === 0) throw new Error(`Hacker News did not answer${failure ? ` (${failure.slice(0, 120)})` : ""}`);
 
     const headlines = scoreAndMap(allHits, techStack);
     this.cache.set(cacheKey, headlines, "hn", HN_CACHE_TTL);
@@ -94,7 +105,7 @@ export class HNFetcher {
     const url = `${HN_ALGOLIA_URL}?${params}`;
     // Through the shared layer like every lookup: the private-name guard and the proxy (http-utils.ts).
     const response = await fetchWithTimeout(url, {}, HN_TIMEOUT_MS);
-    if (!response.ok) return [];
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = (await response.json()) as HNResponse;
     return data.hits || [];
   }

@@ -43,6 +43,22 @@ describe("the stdio gate", () => {
     ]);
   });
 
+  it("answers a message that is not JSON-RPC 2.0, or a request with a null id, with -32600 (blind audit round 3)", async () => {
+    const { passed, replies } = await run([
+      req(3, "initialize"),
+      JSON.stringify({ jsonrpc: "1.0", id: 4, method: "ping" }),
+      JSON.stringify({ id: 5, method: "ping" }),
+      JSON.stringify({ jsonrpc: "2.0", id: null, method: "ping" }),
+      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    ]);
+    expect(replies).toEqual([
+      { jsonrpc: "2.0", id: 4, error: { code: -32600, message: expect.stringContaining('"jsonrpc" must be "2.0"') } },
+      { jsonrpc: "2.0", id: 5, error: { code: -32600, message: expect.stringContaining('"jsonrpc" must be "2.0"') } },
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining("never null") } },
+    ]);
+    expect(passed.map((l) => JSON.parse(l).method)).toEqual(["initialize", "notifications/initialized"]);
+  });
+
   it("refuses a request before initialize, then passes everything after it", async () => {
     const { passed, replies } = await run([req(1, "tools/call", { name: "x" }), req(2, "ping"), req(3, "initialize"), req(4, "tools/call", { name: "x" })]);
     expect(replies).toEqual([{ jsonrpc: "2.0", id: 1, error: { code: -32600, message: expect.stringContaining("Server not initialized") } }]);

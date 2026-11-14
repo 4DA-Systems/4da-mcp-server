@@ -45,6 +45,7 @@ import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
 const TIMEOUT_MS = 15_000;
@@ -341,7 +342,7 @@ export class FixPathSources {
     // something else (lodash.template 4.18.0, "Bad release", in a package retired whole: audit M6).
     const withdrawn = [...new Set([...npmExcludedVersions(deprecation, latest), ...npmFlaggedReleases(deprecation, latest)])];
     const out = new Set(withdrawn);
-    const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? (versions[v].deprecated as string) : null);
+    const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? sanitizeThirdParty(versions[v].deprecated as string) || "deprecated" : null);
     const noticed = Object.keys(versions).filter((v) => !out.has(v) && isNpmDeprecated(versions[v]?.deprecated));
     const heldSpecs: Record<string, Record<string, string>> = {};
     for (const [v, m] of Object.entries(versions)) {

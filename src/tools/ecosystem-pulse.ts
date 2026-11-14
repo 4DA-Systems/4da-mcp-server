@@ -161,7 +161,9 @@ export async function executeEcosystemPulse(
     headlines: filtered,
     total: filtered.length,
     source: "hacker_news",
-    note: filtered.length === 0
+    note: filtered.length === 0 && liveIntel.getHeadlineError?.()
+      ? `NOT CHECKED: ${liveIntel.getHeadlineError?.()}, so no headlines were read. This says nothing about your stack: call again later.`
+      : filtered.length === 0
       ? "No relevant headlines found for your tech stack. Headlines are filtered by detected technologies."
       : `${filtered.length} headline${filtered.length !== 1 ? "s" : ""} relevant to your tech stack.`,
   };
