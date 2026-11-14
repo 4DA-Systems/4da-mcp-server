@@ -122,6 +122,21 @@ export function readableText(text: string): string {
   return decoded.replace(INVISIBLE, "");
 }
 
+/** Dashes and hyphens other than `-` (U+2010-U+2015, minus, small and fullwidth hyphen-minus, hyphen bullet). */
+const DASHES = /[‐-―⁃−﹘﹣－]/g;
+/** Slashes other than `/` that NFKC leaves alone (division and fraction slash). */
+const SLASHES = /[⁄∕]/g;
+
+/**
+ * A name as a registry would read it once look-alike characters are folded: NFKC (fullwidth
+ * `＠acme／ui` is `@acme/ui`, `ｏmega` is `omega`), every Unicode dash or hyphen as `-`, and the
+ * remaining slash look-alikes as `/`. `omega‐risk` (U+2010) and `＠acme/ui` reached OSV.dev and the
+ * registries for the private `omega-risk` and `@acme/ui` (blind audit round 4).
+ */
+export function foldName(name: string): string {
+  return name.normalize("NFKC").replace(DASHES, "-").replace(SLASHES, "/");
+}
+
 export function nameForms(name: string): string[] {
   const out = new Set<string>();
   const add = (s: string) => {
@@ -138,12 +153,18 @@ export function nameForms(name: string): string[] {
       if (t && t !== n.trim() && !queue.includes(t)) queue.push(t);
     };
     next(n.replace(INVISIBLE, ""));
+    next(foldName(n));
     try {
       next(decodeURIComponent(n));
     } catch {
       // not percent-encoded
     }
-    next(n.replace(/^(?:npm|pypi|cargo|crate|go|gem|composer):/i, ""));
+    // An ecosystem prefix, or a code-host shorthand npm reads as `user/repo` (`github:acme/ui`).
+    next(n.replace(/^(?:npm|pypi|cargo|crate|go|gem|composer|github|gitlab|bitbucket):/i, ""));
+    // `acme/ui` (the `@` dropped) is a form of `@acme/ui`: npm reads a bare `user/repo` as a GitHub
+    // shorthand, and an agent that drops the `@` still means the scoped package. Only two segments
+    // and no dot in the first, so a Go path (`github.com/acme/ui`) is never read as one.
+    if (/^[^@/.:\s]+\/[^/\s@]+$/.test(n.trim())) next(`@${n.trim()}`);
     // name@version, @scope/name@version (the scope's own @ is not a version).
     next(n.replace(/(?<=.)@[^@/]*$/, ""));
     // PyPI extras and version specifiers: name[extra], name==1.0, name>=1,<2, name ~= 1.0, name; marker
@@ -167,11 +188,16 @@ export function nameForms(name: string): string[] {
 /** Why `name` (in `ecosystem`, or any ecosystem when null) is private, or null: the request's project, else any. */
 function privateWhy(ecosystem: string | null, name: string): string | null {
   // Sources read every form of the name themselves (LiveIntelligence.privateReason, nameForms).
+  // The folded spelling too, for a source that reads only the name it is given.
+  const folded = foldName(name);
+  const names = folded === name ? [name] : [name, folded];
   const own = context.getStore();
   for (const source of own ? [own] : liveSources()) {
     for (const eco of ecosystem ? [ecosystem] : ALL_ECOSYSTEMS) {
-      const why = source.privateReason(eco, name);
-      if (why) return why;
+      for (const n of names) {
+        const why = source.privateReason(eco, n);
+        if (why) return why;
+      }
     }
   }
   return null;
@@ -236,7 +262,8 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
   const host = u.hostname.toLowerCase().replace(/\.+$/, "");
   if (host === "registry.npmjs.org" || host === "registry.npmjs.com" || host === "registry.yarnpkg.com") {
     // `/@scope%2fname`, `/@scope/name/1.0.0`, `/name/-/name-1.0.0.tgz`
-    const first = segments[0] ?? "";
+    // Folded first: `/＠acme/ui` is the scope `@acme` and its package, not a package named `＠acme`.
+    const first = foldName(segments[0] ?? "");
     if (first.startsWith("@")) out.push(["npm", first.includes("/") ? first : `${first}/${segments[1] ?? ""}`]);
     else if (first) out.push(["npm", first]);
   } else if (host === "api.npmjs.org") {

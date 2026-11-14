@@ -34,7 +34,7 @@ import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
-import { normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
+import { manifestPrivateSources, normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
 import { nameForms, registerPrivateNames, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
@@ -120,6 +120,8 @@ export class LiveIntelligence {
   private privateAudit: ResolvedDependency[] = [];
   /** npm groups: packages their lockfile installs from a non-public registry host (`resolved`). */
   private npmLockPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
+  /** Groups whose manifest takes packages from a private registry or index (manifestPrivateSources). */
+  private manifestPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
   /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
@@ -234,7 +236,7 @@ export class LiveIntelligence {
    * its manifest's platform targets; `root` is the reported project root.
    */
   initFromProjectTree(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
-    this.applyGroups(groups, root);
+    this.applyGroups(groups, root, discovery?.registryConfigDirs ?? []);
     this.discovery = discovery;
   }
 
@@ -307,8 +309,8 @@ export class LiveIntelligence {
     );
   }
 
-  private applyGroups(groups: ResolutionGroup[], projectRoot: string | null): void {
-    this.privateRules = new PrivatePackageRules([...new Set([...(projectRoot ? [projectRoot] : []), ...groups.map((g) => g.dir)])]);
+  private applyGroups(groups: ResolutionGroup[], projectRoot: string | null, memberConfigDirs: string[] = []): void {
+    this.privateRules = new PrivatePackageRules([...new Set([...(projectRoot ? [projectRoot] : []), ...groups.map((g) => g.dir)])], process.env, memberConfigDirs);
     this.groupResults = groups.map(resolveGroup);
     this.rebuildDependencySet();
     this.projectRoot = projectRoot;
@@ -327,6 +329,11 @@ export class LiveIntelligence {
       this.groupResults
         .filter((r) => mapEcosystem(r.group.language) === "npm")
         .map((r) => [r, npmLockPrivateSources(r.group.dir, this.privateRules.npmMirrorHosts)] as const),
+    );
+    // A private registry or index the manifest itself names (Cargo `registry =`, uv `index =`,
+    // Poetry `source =`): private with no lockfile too (blind audit round 4).
+    this.manifestPrivate = new Map(
+      this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
     );
     const key = (dep: { ecosystem: string; name: string; version: string | null }) => `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
     const privateWhy = new Map<string, string>();
@@ -357,6 +364,9 @@ export class LiveIntelligence {
     // pip's configured index (PIP_INDEX_URL, pip.conf) serves every package a requirements file installs.
     const pip = this.privateRules.pipIndex;
     if (pip && ecosystem === "PyPI" && r.source?.kind === "manifest") return `pip installs it from ${pip.url} (${pip.from}), not pypi.org`;
+    // An extra index (PIP_EXTRA_INDEX_URL, a pip config file): pip may take the package from it.
+    const extra = this.privateRules.pipExtraFrom;
+    if (extra && ecosystem === "PyPI" && r.source?.kind === "manifest") return `pip may install it from ${extra.url} (an extra index, ${extra.from}), not pypi.org`;
     return this.privateRules.reasonFor(ecosystem, name);
   }
 
@@ -432,8 +442,9 @@ export class LiveIntelligence {
 
   /** What a group's lockfiles install from a private source: the readers' entries, and npm's `resolved` hosts. */
   private lockPrivateOf(r: GroupResolution): PrivateIndexEntry[] {
-    const npm = this.npmLockPrivate.get(r);
-    return npm && npm.length > 0 ? [...(r.privateIndex ?? []), ...npm] : (r.privateIndex ?? []);
+    const npm = this.npmLockPrivate.get(r) ?? [];
+    const manifest = this.manifestPrivate.get(r) ?? [];
+    return npm.length > 0 || manifest.length > 0 ? [...(r.privateIndex ?? []), ...npm, ...manifest] : (r.privateIndex ?? []);
   }
 
   /** Private names a fix-path lookup was refused for in this process, with why. */
@@ -766,11 +777,10 @@ export class LiveIntelligence {
 
   private async fetchHeadlinesIn(techStack: string[]): Promise<LiveHeadline[]> {
     if (!this.enabled) return [];
-    // A private package name is never a search term (private-packages.ts).
+    // A private package name is never a search term (private-packages.ts): private by any rule, in
+    // any ecosystem, in any spelling (privateReason reads every form under every ecosystem).
     const privateNames = new Set(this.privateDeps.map((p) => p.name.toLowerCase()));
-    const terms = techStack.filter(
-      (t) => !privateNames.has(t.toLowerCase()) && !["npm", "crates.io", "PyPI", "Go"].some((eco) => this.privateRules.reasonFor(eco, t)),
-    );
+    const terms = techStack.filter((t) => !privateNames.has(t.toLowerCase()) && !this.privateReason("npm", t));
     if (terms.length === 0) return [];
 
     try {

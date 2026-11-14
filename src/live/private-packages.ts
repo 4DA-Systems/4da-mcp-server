@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { stripTrailingCommas } from "./bun-lockfile.js";
 import { anySignatureChanged, signatureMap, type FileSignature } from "./file-signature.js";
 
 /** A dependency left out of every lookup because its name is private, and why. */
@@ -70,6 +71,20 @@ export function isPublicNpmRegistry(url: string): boolean {
 export function isPublicPypiIndex(url: string): boolean {
   const host = hostOf(url);
   return host !== null && PUBLIC_PYPI_HOSTS.has(host);
+}
+
+/**
+ * Public wheel indexes projects add as an EXTRA index beside pypi.org (PyTorch, NVIDIA, PyG). They
+ * host only their own public builds, so a name is never private because of them; judging them
+ * private made every pin of a project with `--extra-index-url https://download.pytorch.org/whl/cu121`
+ * NOT CHECKED. Never a replacement for pypi.org: as `--index-url` they still replace it.
+ */
+const PUBLIC_EXTRA_PYPI_HOSTS = new Set(["download.pytorch.org", "pypi.nvidia.com", "pypi.ngc.nvidia.com", "data.pyg.org"]);
+
+/** Whether an extra index (beside pypi.org) is pypi.org or a well-known public wheel index. */
+export function isPublicExtraPypiIndex(url: string): boolean {
+  const host = hostOf(url);
+  return isPublicPypiIndex(url) || (host !== null && PUBLIC_EXTRA_PYPI_HOSTS.has(host));
 }
 
 /** Whether a Cargo.lock `source` is crates.io. */
@@ -256,6 +271,58 @@ export function yarnrcPrivateScopes(content: string): string[] {
   return out;
 }
 
+/** A TOML string value (`"x"` or `'x'`), or null. */
+const tomlString = (raw: string): string | null => {
+  const m = /^\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')/.exec(raw);
+  return m ? (m[1] ?? m[2] ?? "") : null;
+};
+
+/** A key of a TOML inline table (`{ url = "x", token = "y" }`), or null. */
+const inlineKey = (table: string, key: string): string | null => {
+  const m = new RegExp(`(?:^|[{,])\\s*${key}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*"|'[^']*')`).exec(table);
+  return m ? tomlString(m[1]) : null;
+};
+
+/** `"@acme"`, `'acme'`, `acme`: a scope as `@acme`. */
+const bunScope = (raw: string): string => `@${(tomlString(raw) ?? raw.trim()).replace(/^@/, "").toLowerCase()}`;
+
+/**
+ * bunfig.toml: the scopes `[install.scopes]` maps to a registry other than the public one (a URL
+ * string, `{ url = ... }`, or an `[install.scopes.<scope>]` table), and the `[install] registry`
+ * (bun's default registry: a mirror, as an `.npmrc` `registry=` is). Bun installed `@acme/ui` from
+ * a private registry and the server sent it to OSV.dev and npm (blind audit round 4).
+ */
+export function bunfigRegistries(content: string): { scopes: string[]; registry: string | null } {
+  const scopes: string[] = [];
+  let registry: string | null = null;
+  let section = "";
+  let tableScope: string | null = null;
+  for (const raw of content.split(/\r?\n/)) {
+    const line = stripComment(raw).trim();
+    if (!line) continue;
+    const header = /^\[\s*([^\]]+?)\s*\]$/.exec(line);
+    if (header) {
+      section = header[1];
+      const sub = /^install\.scopes\.(.+)$/.exec(section);
+      tableScope = sub ? bunScope(sub[1]) : null;
+      continue;
+    }
+    const kv = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_@.-]+)\s*=\s*(.+)$/.exec(line);
+    if (!kv) continue;
+    const key = tomlString(kv[1]) ?? kv[1];
+    const value = kv[2].trim();
+    const url = value.startsWith("{") ? inlineKey(value, "url") : tomlString(value);
+    if (section === "install.scopes") {
+      if (url && !isPublicNpmRegistry(url)) scopes.push(bunScope(kv[1]));
+    } else if (tableScope && key === "url") {
+      if (url && !isPublicNpmRegistry(url)) scopes.push(tableScope);
+    } else if (section === "install" && key === "registry" && url) {
+      registry = url;
+    }
+  }
+  return { scopes: [...new Set(scopes)], registry };
+}
+
 /** The `go env -w` file: GOENV, else the user config directory's `go/env`; null when off. */
 function goEnvPath(env: NodeJS.ProcessEnv): string | null {
   if (env.GOENV === "off") return null;
@@ -339,24 +406,42 @@ function listGlob(pattern: string, normalise: (s: string) => string = (s) => s):
 
 const ECOSYSTEM_PREFIXES: Record<string, string> = { npm: "npm", "crates.io": "crates.io", cargo: "crates.io", pypi: "PyPI", go: "Go" };
 /**
- * pip's own configuration files, in the order pip reads them (later wins): the user file, then
- * PIP_CONFIG_FILE. Site-wide and virtualenv files are not read.
+ * pip's own configuration files, every one pip reads (pip/_internal/configuration.py), in its
+ * order: site-wide (Windows `%ProgramData%\pip\pip.ini`, found by pip through the Windows API, so
+ * `C:\ProgramData` when the variable is absent; POSIX `$XDG_CONFIG_DIRS/pip/pip.conf` and
+ * `/etc/pip.conf`; macOS `/Library/Application Support/pip/pip.conf`), then the user's (legacy
+ * `~/pip/pip.ini` on Windows and `~/.pip/pip.conf` on POSIX, then `%APPDATA%\pip\pip.ini`,
+ * `~/Library/Application Support/pip/pip.conf`, `$XDG_CONFIG_HOME/pip/pip.conf`), then the
+ * virtualenv's (`$VIRTUAL_ENV/pip.ini` on Windows, `pip.conf` elsewhere), then PIP_CONFIG_FILE.
+ * Only the APPDATA file and PIP_CONFIG_FILE were read, and a private index set in any of the others
+ * (which the real pip loads) let the private names reach OSV.dev and the registries (blind audit
+ * round 4). Paths come from `env` (and `platform`), so tests name their own.
  */
-function pipConfigFiles(env: NodeJS.ProcessEnv): string[] {
+export function pipConfigFiles(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string[] {
   // pip's own switch: PIP_CONFIG_FILE=os.devnull loads no configuration file at all.
   if (env.PIP_CONFIG_FILE === "os.devnull") return [];
-  const home = env.HOME || env.USERPROFILE || os.homedir();
+  const p = platform === "win32" ? path.win32 : path.posix;
   const files: string[] = [];
-  if (process.platform === "win32") {
-    if (env.APPDATA) files.push(path.join(env.APPDATA, "pip", "pip.ini"));
+  if (platform === "win32") {
+    const home = env.USERPROFILE || env.HOME || os.homedir();
+    const programData = env.ProgramData || env.PROGRAMDATA || env.ALLUSERSPROFILE || "C:\\ProgramData";
+    files.push(p.join(programData, "pip", "pip.ini"));
+    if (home) files.push(p.join(home, "pip", "pip.ini"));
+    if (env.APPDATA) files.push(p.join(env.APPDATA, "pip", "pip.ini"));
   } else {
-    if (home) files.push(path.join(home, ".pip", "pip.conf"));
-    if (process.platform === "darwin" && home) files.push(path.join(home, "Library", "Application Support", "pip", "pip.conf"));
-    const config = env.XDG_CONFIG_HOME || (home ? path.join(home, ".config") : null);
-    if (config) files.push(path.join(config, "pip", "pip.conf"));
+    const home = env.HOME || env.USERPROFILE || os.homedir();
+    const configDirs = (env.XDG_CONFIG_DIRS || "/etc/xdg").split(":").filter(Boolean);
+    for (const dir of configDirs) files.push(p.join(dir, "pip", "pip.conf"));
+    if (platform === "darwin") files.push("/Library/Application Support/pip/pip.conf");
+    files.push("/etc/pip.conf");
+    if (home) files.push(p.join(home, ".pip", "pip.conf"));
+    if (platform === "darwin" && home) files.push(p.join(home, "Library", "Application Support", "pip", "pip.conf"));
+    const config = env.XDG_CONFIG_HOME || (home ? p.join(home, ".config") : null);
+    if (config) files.push(p.join(config, "pip", "pip.conf"));
   }
-  if (env.PIP_CONFIG_FILE && env.PIP_CONFIG_FILE !== "os.devnull") files.push(env.PIP_CONFIG_FILE);
-  return files;
+  if (env.VIRTUAL_ENV) files.push(p.join(env.VIRTUAL_ENV, platform === "win32" ? "pip.ini" : "pip.conf"));
+  if (env.PIP_CONFIG_FILE) files.push(env.PIP_CONFIG_FILE);
+  return [...new Set(files)];
 }
 
 /** `index-url` and `extra-index-url` from a pip config file's [global] and [install] sections. */
@@ -389,7 +474,7 @@ export function pipConfigIndexes(content: string): { index: string | null; extra
 }
 
 /** The environment that decides the rules: a change to any of them re-reads them. */
-const RULE_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE", "FOURDA_PRIVATE_PACKAGES", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOENV", "NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"];
+const RULE_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE", "FOURDA_PRIVATE_PACKAGES", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOENV", "NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "VIRTUAL_ENV", "ProgramData", "PROGRAMDATA", "ALLUSERSPROFILE"];
 
 /** The rules for one project: what its files, the user's files and the environment say is private. */
 /** `dir` and each directory above it, nearest first (at most 32 levels). */
@@ -415,41 +500,75 @@ export class PrivatePackageRules {
    * requirements file installs comes from it, so they are private, as for a lockfile's index.
    */
   readonly pipIndex: { url: string; from: string } | null = null;
-  /** pip's extra indexes (PIP_EXTRA_INDEX_URL, config) that are not public: names are still read as public, and said. */
+  /**
+   * pip's extra indexes (PIP_EXTRA_INDEX_URL, config) that are not public. pip takes a package from
+   * whichever index has the newest release, so any name it installs may come from one: every
+   * package a requirements file installs is private, as for `--index-url` (blind audit round 4).
+   */
   readonly pipExtra: string[] = [];
+  /** The first such extra index and where it is set, for the reason line. */
+  readonly pipExtraFrom: { url: string; from: string } | null = null;
   /** Every file the rules were read from (present or not), with its signature then. */
   private readonly inputs: Map<string, FileSignature>;
   private readonly envKey: string;
 
+  /** Hosts a bunfig.toml names as bun's default `[install] registry` that are not public: said, like an `.npmrc` mirror. */
+  readonly bunRegistryHosts = new Set<string>();
+
+  /**
+   * `memberDirs`: directories below the project the tree walk found a registry configuration in
+   * (`.npmrc`, `.yarnrc.yml`, `bunfig.toml`). Their private scopes apply to the whole project: a
+   * server started at a monorepo root sent `@acme/ui`, which `services/api/.npmrc` maps to a
+   * private registry and no lockfile records (blind audit round 4). Their default registries are
+   * not read as mirrors: a member's file can only add private names.
+   */
   constructor(
     private readonly dirs: string[],
     private readonly env: NodeJS.ProcessEnv = process.env,
+    private readonly memberDirs: string[] = [],
   ) {
     const home = env.HOME || env.USERPROFILE || os.homedir();
     // Each directory and every one above it: npm applies a workspace root's `.npmrc` to every member,
     // and a server started in `packages/app` sent `@acme/vault-core` that `../../.npmrc` made private
     // (blind audit round 3, B2). Reading more files can only add private names.
     const withParents = [...new Set(dirs.flatMap((d) => ancestorsOf(path.resolve(d))))];
+    const scopeDirs = [...new Set([...withParents, ...memberDirs.map((d) => path.resolve(d))])];
     const npmrcs = [
       ...withParents.map((d) => path.join(d, ".npmrc")),
       env.NPM_CONFIG_USERCONFIG || env.npm_config_userconfig || (home ? path.join(home, ".npmrc") : null),
     ].filter((f): f is string => Boolean(f));
-    const yarnrcs = withParents.map((d) => path.resolve(d, ".yarnrc.yml"));
+    const memberNpmrcs = scopeDirs.slice(withParents.length).map((d) => path.join(d, ".npmrc"));
+    const yarnrcs = scopeDirs.map((d) => path.resolve(d, ".yarnrc.yml"));
+    // bun reads the project's bunfig.toml and the user's ($XDG_CONFIG_HOME/.bunfig.toml, ~/.bunfig.toml).
+    const xdg = env.XDG_CONFIG_HOME || null;
+    const bunfigs = [
+      ...scopeDirs.map((d) => path.resolve(d, "bunfig.toml")),
+      ...(xdg ? [path.resolve(xdg, ".bunfig.toml")] : []),
+      ...(home ? [path.resolve(home, ".bunfig.toml")] : []),
+    ];
     const goFile = goEnvPath(env);
     const pipFiles = pipConfigFiles(env);
     // Signatures first: a write that lands while a file is read still reads as a change.
-    this.inputs = signatureMap([...npmrcs.map((f) => path.resolve(f)), ...yarnrcs, ...(goFile ? [goFile] : []), ...pipFiles]);
+    this.inputs = signatureMap([...npmrcs.map((f) => path.resolve(f)), ...memberNpmrcs, ...yarnrcs, ...bunfigs, ...(goFile ? [goFile] : []), ...pipFiles]);
+    // Later files win in pip, but which one wins can depend on a file this server cannot see the
+    // same way pip does: any index-url that is not public makes the requirements private.
     let pipIndex: { url: string; from: string } | null = null;
-    const extra: string[] = [];
+    const extra: Array<{ url: string; from: string }> = [];
+    const noteIndex = (url: string, from: string) => {
+      if (!pipIndex || !isPublicPypiIndex(url)) pipIndex = { url, from };
+    };
     for (const file of pipFiles) {
       const read = pipConfigIndexes(safeRead(file));
-      if (read.index) pipIndex = { url: read.index, from: file };
-      extra.push(...read.extra);
+      if (read.index) noteIndex(read.index, file);
+      extra.push(...read.extra.map((url) => ({ url, from: file })));
     }
-    if (env.PIP_INDEX_URL?.trim()) pipIndex = { url: env.PIP_INDEX_URL.trim(), from: "PIP_INDEX_URL" };
-    extra.push(...(env.PIP_EXTRA_INDEX_URL ?? "").split(/\s+/).filter(Boolean));
-    this.pipIndex = pipIndex && !isPublicPypiIndex(pipIndex.url) ? { url: sourceLabel(pipIndex.url), from: pipIndex.from } : null;
-    this.pipExtra = [...new Set(extra.filter((u) => !isPublicPypiIndex(u)).map(sourceLabel))];
+    if (env.PIP_INDEX_URL?.trim()) noteIndex(env.PIP_INDEX_URL.trim(), "PIP_INDEX_URL");
+    extra.push(...(env.PIP_EXTRA_INDEX_URL ?? "").split(/\s+/).filter(Boolean).map((url) => ({ url, from: "PIP_EXTRA_INDEX_URL" })));
+    const chosen = pipIndex as { url: string; from: string } | null;
+    this.pipIndex = chosen && !isPublicPypiIndex(chosen.url) ? { url: sourceLabel(chosen.url), from: chosen.from } : null;
+    const extraPrivate = extra.filter((e) => !isPublicExtraPypiIndex(e.url));
+    this.pipExtra = [...new Set(extraPrivate.map((e) => sourceLabel(e.url)))];
+    this.pipExtraFrom = extraPrivate.length > 0 ? { url: sourceLabel(extraPrivate[0].url), from: extraPrivate[0].from } : null;
     this.envKey = RULE_ENV.map((k) => `${k}=${env[k] ?? ""}`).join("\n");
     // A parent directory's file adds private scopes only: its default `registry=` (a public mirror,
     // which makes a lockfile host public) is taken from the project's own files and the user's.
@@ -459,8 +578,17 @@ export class PrivatePackageRules {
       for (const scope of read.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
       if (read.defaultHost && ownNpmrcs.has(file)) this.npmMirrorHosts.add(read.defaultHost);
     }
+    for (const file of new Set(memberNpmrcs)) {
+      for (const scope of npmrcRead(safeRead(file)).scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
+    }
     for (const file of new Set(yarnrcs)) {
       for (const scope of yarnrcPrivateScopes(safeRead(file))) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
+    }
+    for (const file of new Set(bunfigs)) {
+      const read = bunfigRegistries(safeRead(file));
+      for (const scope of read.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
+      const host = read.registry ? hostOf(read.registry) : null;
+      if (host && !PUBLIC_NPM_HOSTS.has(host)) this.bunRegistryHosts.add(host);
     }
     const fromFile = goEnvFile(goFile);
     for (const key of ["GOPRIVATE", "GONOPROXY", "GONOSUMDB"]) {
@@ -496,6 +624,7 @@ export class PrivatePackageRules {
       this.goPatterns.map((g) => `${g.key}=${g.value}`).sort(),
       this.listed.map((l) => `${l.ecosystem ?? "*"}:${l.pattern}`).sort(),
       [...this.npmMirrorHosts].sort(),
+      [...this.bunRegistryHosts].sort(),
       this.pipIndex?.url ?? "",
       [...this.pipExtra].sort(),
     ]);
@@ -503,7 +632,7 @@ export class PrivatePackageRules {
 
   /** The same rules read again (after stale()). */
   reread(env: NodeJS.ProcessEnv = process.env): PrivatePackageRules {
-    return new PrivatePackageRules(this.dirs, env);
+    return new PrivatePackageRules(this.dirs, env, this.memberDirs);
   }
 
   /** Why this name is private, or null when nothing says it is. */
@@ -542,11 +671,11 @@ export class PrivatePackageRules {
   static pipExtraNotice(indexes: string[]): string | null {
     const unique = [...new Set(indexes)];
     if (unique.length === 0) return null;
-    return `pip also installs from ${unique.join(", ")} (an extra index). Packages published only there are looked up on pypi.org by name; list them in FOURDA_PRIVATE_PACKAGES, or install them through --index-url, to keep them private.`;
+    return `pip also installs from ${unique.join(", ")} (an extra index). pip may take any package from it, so the packages pip installs here were treated as private: never sent, and not checked. A lockfile that records each package's index (uv.lock, poetry.lock, Pipfile.lock) lets the public ones be checked.`;
   }
 
   npmRegistryNotice(): string | null {
-    const hosts = [...this.npmMirrorHosts].filter((h) => !PUBLIC_NPM_HOSTS.has(h));
+    const hosts = [...new Set([...this.npmMirrorHosts, ...this.bunRegistryHosts])].filter((h) => !PUBLIC_NPM_HOSTS.has(h));
     if (hosts.length === 0) return null;
     return `Your npm registry is ${hosts.join(", ")}. Unscoped packages published only there are looked up on the public registry by name; list them in FOURDA_PRIVATE_PACKAGES (or use a scope) to keep them private.`;
   }
@@ -598,9 +727,45 @@ export function npmLockPrivateSources(dir: string, mirrorHosts: ReadonlySet<stri
   const yarnText = safeRead(yarn, LOCK_READ_CAP);
   for (const block of yarnText.split(/\r?\n(?=\S)/)) {
     const head = /^"?((?:@[^@/"\s]+\/)?[^@"\s,]+)@/.exec(block);
+    if (!head) continue;
+    // yarn v1: `resolved "https://..."`; berry: `version: 1.0.0`.
+    const version = /^\s+version:?\s+"?([^"\s]+)"?/m.exec(block)?.[1] ?? null;
     const resolved = /^\s+resolved\s+"([^"]+)"/m.exec(block)?.[1];
-    const version = /^\s+version\s+"([^"]+)"/m.exec(block)?.[1] ?? null;
-    if (head && resolved) take(yarn, head[1], version, resolved);
+    if (resolved) take(yarn, head[1], version, resolved);
+    // yarn berry: `resolution: "name@https://host/x.tgz"`, or a registry entry whose tarball came from
+    // elsewhere (`name@npm:1.0.0::__archiveUrl=https%3A%2F%2Fhost%2F...`).
+    const resolution = /^\s+resolution:\s+"?([^"\r\n]+?)"?\s*$/m.exec(block)?.[1];
+    if (resolution) {
+      const at = resolution.indexOf("@", resolution.startsWith("@") ? 1 : 0);
+      const target = at > 0 ? resolution.slice(at + 1) : "";
+      if (/^https?:\/\//i.test(target)) take(yarn, head[1], version, target);
+      const archive = /__archiveUrl=([^&#\s]+)/.exec(target)?.[1];
+      if (archive) {
+        try {
+          take(yarn, head[1], version, decodeURIComponent(archive));
+        } catch {
+          // a malformed escape names no host
+        }
+      }
+    }
+  }
+  // bun.lock (JSONC): `packages` values are `["name@version", "<registry or tarball URL>", {...}, "sha"]`;
+  // the URL is "" for the default registry (blind audit round 4: `@acme/ui` from a private one was sent).
+  const bunFile = path.join(dir, "bun.lock");
+  const bunText = safeRead(bunFile, LOCK_READ_CAP);
+  if (bunText) {
+    try {
+      const doc = JSON.parse(stripTrailingCommas(bunText)) as { packages?: Record<string, unknown> };
+      for (const value of Object.values(doc.packages ?? {})) {
+        if (!Array.isArray(value) || typeof value[0] !== "string" || typeof value[1] !== "string") continue;
+        const spec = value[0];
+        const at = spec.lastIndexOf("@");
+        if (at <= 0) continue;
+        take(bunFile, spec.slice(0, at), spec.slice(at + 1) || null, value[1]);
+      }
+    } catch {
+      // unreadable: the readers report it
+    }
   }
   const pnpm = path.join(dir, "pnpm-lock.yaml");
   const pnpmText = safeRead(pnpm, LOCK_READ_CAP);
@@ -615,6 +780,141 @@ export function npmLockPrivateSources(dir: string, mirrorHosts: ReadonlySet<stri
     if (tarball && current) take(pnpm, current.name, current.version, tarball);
   }
   return out;
+}
+
+/** `[table]` or `[[array-of-tables]]` header name, or null. */
+const tomlHeader = (line: string): { name: string; array: boolean } | null => {
+  const m = /^\[(\[)?\s*([^\]]+?)\s*\]\]?\s*$/.exec(line);
+  return m ? { name: m[2].replace(/\s*\.\s*/g, ".").replace(/["']/g, ""), array: Boolean(m[1]) } : null;
+};
+
+/** `key = value` of one TOML line (comments stripped), or null. */
+const tomlKeyValue = (line: string): { key: string; value: string } | null => {
+  const m = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_.-]+)\s*=\s*(.+)$/.exec(line);
+  return m ? { key: tomlString(m[1]) ?? m[1], value: m[2].trim() } : null;
+};
+
+/** The lines of a TOML file, comments stripped, blank ones dropped. */
+const tomlLines = (content: string): string[] => content.split(/\r?\n/).map((l) => stripComment(l).trim()).filter(Boolean);
+
+/**
+ * Cargo.toml: dependencies a manifest takes from a registry other than crates.io (`registry =
+ * "acme"`, `registry-index = "..."`), in any dependency table (`[dependencies]`, dev, build,
+ * `[target.<cfg>.dependencies]`, `[workspace.dependencies]`, and the `[dependencies.<name>]` form).
+ * With no Cargo.lock the exact pin `omega-ledger = { version = "=1.2.0", registry = "acme" }` was
+ * sent to OSV.dev and crates.io (blind audit round 4).
+ */
+export function cargoManifestPrivate(content: string): Array<{ name: string; registry: string }> {
+  const out: Array<{ name: string; registry: string }> = [];
+  const isDepTable = (name: string) => /(?:^|\.)(?:dev-|build-)?dependencies$/.test(name);
+  let table = "";
+  let single: { key: string; pkg: string | null; registry: string | null } | null = null;
+  const flush = () => {
+    if (single?.registry && single.registry !== "crates-io" && !isPublicCratesSource(single.registry)) out.push({ name: single.pkg ?? single.key, registry: single.registry });
+    single = null;
+  };
+  for (const line of tomlLines(content)) {
+    const header = tomlHeader(line);
+    if (header) {
+      flush();
+      table = header.name;
+      const sub = /^(.*(?:^|\.)(?:dev-|build-)?dependencies)\.([^.]+)$/.exec(table);
+      if (sub && !header.array) single = { key: sub[2], pkg: null, registry: null };
+      continue;
+    }
+    const kv = tomlKeyValue(line);
+    if (!kv) continue;
+    if (single) {
+      if (kv.key === "registry" || kv.key === "registry-index") single.registry = tomlString(kv.value);
+      if (kv.key === "package") single.pkg = tomlString(kv.value);
+      continue;
+    }
+    if (!isDepTable(table) || !kv.value.startsWith("{")) continue;
+    const registry = inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index");
+    if (registry && registry !== "crates-io" && !isPublicCratesSource(registry)) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry });
+  }
+  flush();
+  return out;
+}
+
+/**
+ * pyproject.toml: packages a manifest takes from an index other than pypi.org.
+ * - uv: `[tool.uv.sources] name = { index = "acme" }` (or a list of such), where `acme` is a
+ *   `[[tool.uv.index]]` whose URL is not pypi.org, or is not declared at all;
+ * - Poetry: `name = { version = ..., source = "acme" }` in a dependency table, where `acme` is a
+ *   `[[tool.poetry.source]]` whose URL is not pypi.org (or is not declared).
+ * With no lockfile, `omega-quant==2.0.0` and `omega-risk = "1.4.0"` were sent to OSV.dev and PyPI
+ * (blind audit round 4). Returns each such name with the index it names.
+ */
+export function pyprojectManifestPrivate(content: string): Array<{ name: string; registry: string }> {
+  const indexes = new Map<string, string>();
+  const wanted: Array<{ name: string; index: string; kind: "uv" | "poetry" }> = [];
+  let table = "";
+  let block: { kind: "uv" | "poetry"; name: string | null; url: string | null } | null = null;
+  const endBlock = () => {
+    if (block?.name) indexes.set(`${block.kind}\0${block.name}`, block.url ?? "");
+    block = null;
+  };
+  const isPoetryDeps = (name: string) => /^tool\.poetry\.(?:dependencies|dev-dependencies|group\.[^.]+\.dependencies)$/.test(name);
+  for (const line of tomlLines(content)) {
+    const header = tomlHeader(line);
+    if (header) {
+      endBlock();
+      table = header.name;
+      if (header.array && table === "tool.uv.index") block = { kind: "uv", name: null, url: null };
+      if (header.array && table === "tool.poetry.source") block = { kind: "poetry", name: null, url: null };
+      continue;
+    }
+    const kv = tomlKeyValue(line);
+    if (!kv) continue;
+    if (block) {
+      if (kv.key === "name") block.name = tomlString(kv.value);
+      if (kv.key === "url") block.url = tomlString(kv.value);
+      continue;
+    }
+    if (table === "tool.uv.sources") {
+      for (const m of kv.value.matchAll(/\bindex\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g)) {
+        const index = tomlString(m[1]);
+        if (index) wanted.push({ name: kv.key, index, kind: "uv" });
+      }
+    } else if (/^tool\.uv\.sources\.[^.]+$/.test(table) && kv.key === "index") {
+      const index = tomlString(kv.value);
+      if (index) wanted.push({ name: table.slice("tool.uv.sources.".length), index, kind: "uv" });
+    } else if (isPoetryDeps(table) && kv.value.startsWith("{")) {
+      const source = inlineKey(kv.value, "source");
+      if (source) wanted.push({ name: kv.key, index: source, kind: "poetry" });
+    }
+  }
+  endBlock();
+  const out: Array<{ name: string; registry: string }> = [];
+  for (const w of wanted) {
+    const url = indexes.get(`${w.kind}\0${w.index}`);
+    // An index or source the file does not declare is still not pypi.org as far as anything here knows.
+    if (url && isPublicPypiIndex(url)) continue;
+    out.push({ name: w.name, registry: url ? sourceLabel(url) : `the "${w.index}" ${w.kind === "uv" ? "index" : "source"}` });
+  }
+  return out;
+}
+
+/** What a group's manifest (no lockfile needed) takes from a private source: Cargo.toml, pyproject.toml. */
+export function manifestPrivateSources(dir: string, ecosystem: string): PrivateIndexEntry[] {
+  const read = (name: string, parse: (content: string) => Array<{ name: string; registry: string }>): PrivateIndexEntry[] => {
+    const file = path.join(dir, name);
+    const text = safeRead(file);
+    if (!text) return [];
+    try {
+      return parse(text).map((p) => ({ name: p.name, version: null, registry: p.registry, file }));
+    } catch {
+      return [];
+    }
+  };
+  if (ecosystem === "crates.io") {
+    return read("Cargo.toml", (text) =>
+      cargoManifestPrivate(text).map((p) => ({ name: p.name, registry: /^[a-z+]*https?:\/\//i.test(p.registry) ? sourceLabel(p.registry) : `the "${p.registry}" registry` })),
+    );
+  }
+  if (ecosystem === "PyPI") return read("pyproject.toml", pyprojectManifestPrivate);
+  return [];
 }
 
 /** Code hosts: an archive from one is a git or URL dependency, which the readers report as not checkable. */
