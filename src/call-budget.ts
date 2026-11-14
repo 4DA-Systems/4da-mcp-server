@@ -89,6 +89,22 @@ export function secondsText(ms: number): string {
   return `${Math.round(ms / 100) / 10} s`;
 }
 
+/** Below this, a wait is the budget running out, not a wait worth naming. */
+const NEAR_ZERO_WAIT_MS = 100;
+
+/**
+ * Why a project's OSV.dev scan is missing from an answer, given how long the call could wait for
+ * it. With FOURDA_CALL_BUDGET_MS at 1, 50 or 400 the wait is what is left of the budget, about 0,
+ * and the answers said "did not finish within 0 ms" (blind audit round 4). At or near 0 the
+ * sentence names the call's budget instead: it was used up before the scan could finish.
+ */
+export function scanUnfinishedText(waitMs: number, what = "the OSV.dev scan"): string {
+  if (waitMs >= NEAR_ZERO_WAIT_MS) return `${what} did not finish within ${secondsText(waitMs)}, the time this call had for it`;
+  const budgetMs = current.getStore()?.budgetMs ?? callBudgetMs();
+  const source = Number(process.env.FOURDA_CALL_BUDGET_MS) > 0 ? ", from FOURDA_CALL_BUDGET_MS" : "";
+  return `this call's time budget (${secondsText(budgetMs)}${source}) was used up before ${what} could finish`;
+}
+
 /**
  * `work`, or `late()` when the running call's budget ends first. `work` is not stopped: it runs on
  * and its result is dropped (its rejection too). Outside a tool call there is no deadline.

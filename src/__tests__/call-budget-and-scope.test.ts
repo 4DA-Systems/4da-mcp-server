@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { callBudgetMs, raceCallBudget, remainingCallBudgetMs, runWithCallBudget, settleWithin, withinCallBudget } from "../call-budget.js";
+import { callBudgetMs, raceCallBudget, remainingCallBudgetMs, runWithCallBudget, scanUnfinishedText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { lateAnswer } from "../late-answer.js";
 import { setLiveIntelligence } from "../live-singleton.js";
 import { _resetCargoPlatformCache, activeCratesForHost } from "../live/cargo-platform.js";
@@ -180,6 +180,38 @@ describe("one time budget per tool call", () => {
     expect(answer.coverage).toMatchObject({ complete: false, unchecked_dependencies: 2 });
     expect(answer.total_vulnerable_packages).toBeNull();
     expect(answer.clean_dependencies).toBeNull();
+  });
+
+  it.each(["1", "50", "400"])(
+    "vulnerability_scan with FOURDA_CALL_BUDGET_MS=%s says the budget was used up, never 'within 0 ms' (blind audit round 4)",
+    async (budget) => {
+      npmProject();
+      stallNetwork();
+      setLiveIntelligence(liveFor());
+      process.env.FOURDA_CALL_BUDGET_MS = budget;
+      const result = await dispatchTool("vulnerability_scan", null, { response_format: "detailed" }, { startedAt: Date.now() });
+      const text = JSON.stringify(parse(result));
+      expect(text).not.toMatch(/within 0 (ms|s)\b/);
+      // A 1 ms budget can end before the tool runs at all: the dispatcher's own answer then names it.
+      for (const tool of ["dependency_health"]) {
+        setLiveIntelligence(liveFor());
+        const other = JSON.stringify(parse(await dispatchTool(tool, null, {}, { startedAt: Date.now() })));
+        expect(other, tool).not.toMatch(/within 0 (ms|s)\b/);
+      }
+      const said = budget === "1" ? "1 ms" : budget === "50" ? "0\\.1 s" : "0\\.4 s";
+      expect(text).toMatch(new RegExp(`time budget \\(${said}, from FOURDA_CALL_BUDGET_MS\\) was used up before the OSV\\.dev scan could finish|vulnerability_scan did not finish within ${said}`));
+    },
+  );
+
+  it("the scan's missing-answer sentence names the budget when the wait was about 0, and the wait otherwise (blind audit round 4)", async () => {
+    process.env.FOURDA_CALL_BUDGET_MS = "400";
+    await runWithCallBudget(Date.now(), async () => {
+      expect(scanUnfinishedText(0)).toBe("this call's time budget (0.4 s, from FOURDA_CALL_BUDGET_MS) was used up before the OSV.dev scan could finish");
+      expect(scanUnfinishedText(40)).not.toMatch(/within/);
+      expect(scanUnfinishedText(400)).toBe("the OSV.dev scan did not finish within 0.4 s, the time this call had for it");
+    });
+    delete process.env.FOURDA_CALL_BUDGET_MS;
+    expect(scanUnfinishedText(0)).toBe("this call's time budget (20 s) was used up before the OSV.dev scan could finish");
   });
 
   it("any other tool that outlives its budget gets an error that starts NOT CHECKED", () => {
