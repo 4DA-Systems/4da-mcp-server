@@ -8,7 +8,7 @@
  * Privacy: sends only package names + versions (public manifest data).
  */
 
-import { isOsvAdvisoryId, osvAdvisoryId, sanitizeThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
+import { ADVISORY_SUMMARY_MAX, isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -29,6 +29,7 @@ import type {
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns/";
+const OSV_QUERY_URL = "https://api.osv.dev/v1/query";
 const OSV_TIMEOUT_MS = 15_000;
 const OSV_CACHE_TTL = 3600; // 1 hour
 const OSV_DETAIL_TTL = 86_400; // 24 hours — advisory details change rarely
@@ -139,6 +140,12 @@ export interface AdvisorySource {
   query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer>;
   /** The full record of each id it can find; a missing id is left out, never fatal. */
   details(ids: string[]): Promise<Map<string, OsvVulnerability>>;
+  /**
+   * The full records affecting one exact dependency (OSV.dev's `/v1/query` with a version), or
+   * null when they cannot be had. Asked only for a dependency whose record fetch failed: the
+   * same records carry the severity, the summary and the fix (pre-publish audit 2026-11-14).
+   */
+  recordsFor?(dep: ResolvedDependency): Promise<OsvVulnerability[] | null>;
 }
 
 /** OSV.dev over HTTP: querybatch for membership, per-id hydration for records. */
@@ -313,6 +320,43 @@ export class OsvHttpSource implements AdvisorySource {
     return out;
   }
 
+  /**
+   * The records affecting one exact dependency, from `/v1/query` with its version: the second route
+   * to a record whose `/v1/vulns/{id}` fetch failed. Every page or null; ids held to OSV's shape.
+   */
+  async recordsFor(dep: ResolvedDependency): Promise<OsvVulnerability[] | null> {
+    if (!dep.version || !this.rateLimiter.consume("osv-package")) return null;
+    const out: OsvVulnerability[] = [];
+    let token: string | undefined;
+    try {
+      for (let page = 0; page < MAX_RESULT_PAGES; page++) {
+        const res = await fetchWithTimeout(
+          OSV_QUERY_URL,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ package: { name: dep.name, ecosystem: dep.ecosystem }, version: dep.version, ...(token ? { page_token: token } : {}) }),
+          },
+          OSV_TIMEOUT_MS,
+        );
+        if (!res.ok) return null;
+        const body = (await res.json()) as { vulns?: unknown; next_page_token?: unknown } | null;
+        if (!body || typeof body !== "object" || (body.vulns !== undefined && !Array.isArray(body.vulns))) return null;
+        for (const raw of (body.vulns ?? []) as Array<Partial<OsvVulnerability> | null>) {
+          if (!raw || typeof raw !== "object") continue;
+          const id = osvAdvisoryId(raw.id);
+          if (!isOsvAdvisoryId(id)) continue;
+          out.push({ ...raw, id, aliases: (Array.isArray(raw.aliases) ? raw.aliases : []).map(osvAdvisoryId).filter(isOsvAdvisoryId) } as OsvVulnerability);
+        }
+        token = typeof body.next_page_token === "string" && body.next_page_token ? body.next_page_token : undefined;
+        if (!token) return out;
+      }
+      return null; // more pages than the cap: not the whole answer
+    } catch {
+      return null;
+    }
+  }
+
   /** One advisory's record; retried once after a throttle, a server error or a network failure. Null when it cannot be had. */
   private async fetchDetail(id: string): Promise<OsvVulnerability | null> {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -341,7 +385,7 @@ export class OsvHttpSource implements AdvisorySource {
  * line breaks in aliases/references and the old malware reading; an upgrade never reads them.
  */
 function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
-  return `osv:v6:${dep.ecosystem}:${dep.name}:${dep.version}`;
+  return `osv:v7:${dep.ecosystem}:${dep.name}:${dep.version}`;
 }
 
 /** Dependencies per cache read before the scan yields to the event loop (so the server keeps answering ping). */
@@ -553,6 +597,40 @@ export class OsvScanner {
     };
   }
 
+  /**
+   * For each dependency with an advisory whose `/v1/vulns/{id}` record did not arrive: the records
+   * OSV.dev's `/v1/query` gives for that exact version. Losing a record turned lodash 4.17.20 and
+   * ws 7.5.10 from avoid into review with severity unknown, though the package's advisory list
+   * held the full record, severity included (pre-publish audit 2026-11-14). Within the alias
+   * budget; what still cannot be read stays an id-only entry (unhydratedEntry), never dropped.
+   */
+  private async recordsForUnread(
+    matches: Array<{ dep: ResolvedDependency; ids: string[] }>,
+    detailById: ReadonlyMap<string, OsvVulnerability>,
+  ): Promise<Map<ResolvedDependency, OsvVulnerability[]>> {
+    const out = new Map<ResolvedDependency, OsvVulnerability[]>();
+    const source = this.source;
+    if (!source.recordsFor) return out;
+    const unread = matches.filter((m) => m.ids.some((id) => isOsvAdvisoryId(id) && !detailById.has(id))).map((m) => m.dep);
+    if (unread.length === 0 || (source.network && process.env.FOURDA_OFFLINE === "true")) return out;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, this.aliasBudgetMs);
+    });
+    try {
+      await Promise.race([
+        pool(unread.slice(0, MAX_ALIAS_LOOKUPS), HYDRATE_CONCURRENCY, async (dep) => {
+          const records = await source.recordsFor!(dep).catch(() => null);
+          if (records) out.set(dep, records);
+        }),
+        deadline,
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+    return new Map(out);
+  }
+
   private async batchQuery(
     deps: ResolvedDependency[],
   ): Promise<{ vulns: VulnerabilityEntry[]; unanswered: ResolvedDependency[]; failure: string | null }> {
@@ -568,6 +646,8 @@ export class OsvScanner {
     const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
     // An id that is not one is never looked up: it stays an advisory known by nothing but that.
     const detailById = await this.source.details(uniqueIds.filter(isOsvAdvisoryId));
+    // Phase 2b — a record whose fetch failed, from the dependency's own advisory list.
+    const recordsByDep = await this.recordsForUnread(matches, detailById);
 
     // Phase 3 — map to entries and cache per-dep (empty results cached too, so
     // clean deps are not re-queried; network answers only).
@@ -577,10 +657,13 @@ export class OsvScanner {
       // Drop advisories OSV has withdrawn/retracted — surfacing them is a false
       // positive. Un-hydrated ids (detail fetch failed) are kept: we can't know,
       // and dropping a real advisory is worse than keeping an un-enriched one.
-      const liveIds = ids.filter((id) => !detailById.get(id)?.withdrawn);
+      const inHand = recordsByDep.get(dep);
+      const recordOf = (id: string) => detailById.get(id) ?? inHand?.find((r) => r.id === id) ?? inHand?.find((r) => r.aliases?.includes(id));
+      const liveIds = ids.filter((id) => !recordOf(id)?.withdrawn);
       const mapped = liveIds.map((id) => {
-        const detail = detailById.get(id);
-        return detail ? mapVulnerability(detail, dep) : unhydratedEntry(id, dep);
+        const detail = recordOf(id);
+        // A record found under an alias describes the same advisory: the id OSV matched is kept.
+        return detail ? { ...mapVulnerability(detail, dep), vulnId: id } : unhydratedEntry(id, dep);
       });
       // An id whose record is missing but which a record that WAS read names as its alias is the
       // same advisory, already described: the stub adds nothing.
@@ -590,7 +673,7 @@ export class OsvScanner {
       // version. Cached, that stub answered for the next hour, so one failed fetch turned a
       // critical into "unknown, no fix" for every scan in it (audit 2026-11-11, T7). Only a
       // dependency whose every advisory was read is cached; the rest are asked again next time.
-      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v6:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v7:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
@@ -663,8 +746,10 @@ function mapVulnerability(
     cvssScore,
     ...(malware ? { malware: true } : {}),
     maintenance: isMaintenanceRecord(vuln, dep.name, dep.ecosystem),
-    // Third-party text: the shared cleaning before anything reads it (untrusted-text.ts).
-    summary: sanitizeThirdParty(vuln.summary || vuln.details?.slice(0, 200) || "") || vuln.id,
+    // Third-party text: the shared cleaning, one line, no `|`, capped, before any tool reads it
+    // (untrusted-text.ts; a 5,135-character summary with a forged `| advisories:` line came back
+    // whole in vulnerability_scan, pre-publish audit 2026-11-14).
+    summary: quoteThirdParty(vuln.summary || vuln.details || "", ADVISORY_SUMMARY_MAX) || vuln.id,
     fixedVersion,
     published: thirdPartyTimestamp(vuln.published) || thirdPartyTimestamp(vuln.modified),
     references: (vuln.references || [])

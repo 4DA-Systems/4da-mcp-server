@@ -176,7 +176,7 @@ describe("vulnerability_scan: a fix target is judged by what it installs (audit 
   it("when no release on the line clears what it holds, the target is not called a clean fix", async () => {
     NPM.express.versions["4.22.3"] = { dependencies: { qs: "6.13.0", "path-to-regexp": "0.1.13", cookie: "0.7.1" } };
     const concise = await scan();
-    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: "4.20.0", fix_checked: "installed_advisories_only" });
+    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: null, fix_note: expect.stringMatching(/^NOT CHECKED: 4.20.0 /), fix_checked: "installed_advisories_only" });
     expect(concise.recommendations[0]).toMatch(/4\.20\.0 exact-pins qs 6\.11\.0 .*no release on its line up to 4\.22\.3 that its own advisories leave clean clears them, so 4\.20\.0 is NOT a clean fix/);
   });
 
@@ -185,7 +185,7 @@ describe("vulnerability_scan: a fix target is judged by what it installs (audit 
     // 4.21.2 narrowly ranges a package the registry does not serve: what it installs cannot be read.
     NPM.express.versions["4.21.2"] = { dependencies: { "gone-dep": "~1.0.0" } };
     const concise = await scan();
-    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: "4.20.0", fix_checked: "installed_advisories_only" });
+    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: null, fix_note: expect.stringMatching(/^NOT CHECKED: 4.20.0 /), fix_checked: "installed_advisories_only" });
     expect(concise.recommendations[0]).toMatch(
       /no release on its line up to 4\.22\.3 that its own advisories leave clean clears them, of the releases that could be checked \(4\.21\.2 NOT CHECKED\), so 4\.20\.0 is NOT a clean fix/,
     );
@@ -195,7 +195,7 @@ describe("vulnerability_scan: a fix target is judged by what it installs (audit 
     HELD_LOOKUP_DOWN = true;
     const concise = await scan();
     // The advisories' own target, never a release picked without the check, and never "all_advisories".
-    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: "4.20.0", fix_checked: "installed_advisories_only" });
+    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: null, fix_note: expect.stringMatching(/^NOT CHECKED: 4.20.0 /), fix_checked: "installed_advisories_only" });
     expect(concise.recommendations[0]).toMatch(/whether the dependencies 4\.20\.0 exact-pins or narrowly ranges are affected was NOT CHECKED/);
   });
 });
@@ -270,7 +270,7 @@ describe("upgrade_planner: a transitive row's target is judged the same way (pr-
       NPM["serve-static"].versions["1.16.2"] = { dependencies: { send: "0.18.0" } };
       const blocked = (await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50 }, await liveFor())) as Record<string, any>;
       const stuck = blocked.recommendations.find((s: { package: string; currentVersion: string }) => s.package === "serve-static" && s.currentVersion === "1.13.2");
-      expect(stuck).toMatchObject({ targetVersion: "1.16.0", fixPathChecked: "installed_advisories_only" });
+      expect(stuck).toMatchObject({ targetVersion: null, reasons: expect.arrayContaining([expect.stringMatching(/^NOT CHECKED: 1.16.0 /)]), fixPathChecked: "installed_advisories_only" });
       expect(blocked.summary).toMatch(/1 fix target NOT a clean fix: the release pins \(or narrowly ranges\) an affected dependency/);
       expect(blocked.summary).not.toMatch(/did not answer in time/);
     } finally {
@@ -284,7 +284,7 @@ describe("upgrade_planner: 6.2.6 second review (I1, I2)", () => {
   it("I1: a direct target that is NOT a clean fix is not counted as upgradable", async () => {
     NPM.express.versions["4.22.3"] = { dependencies: { qs: "6.13.0", "path-to-regexp": "0.1.13", cookie: "0.7.1" } };
     const result = (await executeUpgradePlanner(noDb, { project_path: dir, package: "express" }, await liveFor())) as Record<string, any>;
-    expect(result.recommendations.find((s: { package: string }) => s.package === "express")).toMatchObject({ targetVersion: "4.20.0", fixPathChecked: "installed_advisories_only" });
+    expect(result.recommendations.find((s: { package: string }) => s.package === "express")).toMatchObject({ targetVersion: null, reasons: expect.arrayContaining([expect.stringMatching(/^NOT CHECKED: 4.20.0 /)]), fixPathChecked: "installed_advisories_only" });
     expect(result.summary).toMatch(/1 fix target NOT a clean fix/);
     expect(result.summary).not.toMatch(/upgradable directly/);
   });
@@ -297,7 +297,7 @@ describe("upgrade_planner: 6.2.6 second review (I1, I2)", () => {
     try {
       const result = (await executeUpgradePlanner(noDb, { project_path: dir, package: "express" }, await liveFor())) as Record<string, any>;
       const row = result.recommendations.find((s: { package: string }) => s.package === "express");
-      expect(row).toMatchObject({ targetVersion: "5.0.1", fixPathChecked: "installed_advisories_only" });
+      expect(row).toMatchObject({ targetVersion: null, reasons: expect.arrayContaining([expect.stringMatching(/^NOT CHECKED: 5.0.1 /)]), fixPathChecked: "installed_advisories_only" });
       const reasons = row.reasons.join(" ");
       expect(reasons).toMatch(/5\.0\.1 is an advisory's fixed version newer than every release the registry listed when it was read: confirm it is published/);
       expect(reasons).toMatch(/NOT CHECKED \(the npm registry does not list 5\.0\.1 yet/);

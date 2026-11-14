@@ -602,8 +602,12 @@ describe("L: the smaller findings", () => {
       bySeverity: { critical: 0, high: 1, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [entry], cleanCount: 0, scanDurationMs: 0, cached: false, offline: false,
     };
     const out = formatScanResult(result as never, undefined, { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true }) as Record<string, any>;
-    expect(out.vulnerabilities[0].fixed_version).toBe("v0.33.0");
-    expect(out.fix_targets["golang.org/x/net@v0.20.0"].target).toBe("v0.33.0");
+    // Not confirmed against every advisory: no field gives it as the version (pre-publish audit 2026-11-14);
+    // the prose names it, NOT CHECKED, with its `v`.
+    expect(out.vulnerabilities[0].fixed_version).toBeNull();
+    expect(out.vulnerabilities[0].fixed_version_note).toMatch(/names v0\.33\.0 as its fix/);
+    expect(out.fix_targets["golang.org/x/net@v0.20.0"].target).toBeNull();
+    expect(out.fix_targets["golang.org/x/net@v0.20.0"].note).toMatch(/^NOT CHECKED: v0\.33\.0 was not confirmed/);
     // No verified target was passed: the advisories' own fix, said to be unchecked (audit 6.2.5 F-1).
     // Below 1.0 a minor bump is a major one (caret rules), and the line says so.
     expect(out.recommendations[0]).toMatch(/name v0\.33\.0 \(a major version change: check upgrade_impact\) as the fix, but v0\.33\.0 was NOT CHECKED/);

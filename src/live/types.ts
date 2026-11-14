@@ -156,7 +156,8 @@ export interface VulnerabilityEntry {
    * wording only when none is stated). Absent only on foreign or stub entries, which
    * fall back to the summary wording; the scan cache key moved to osv:v3 so entries
    * cached by 6.2.4 without it are never read (osv:v4 since CVSS v4.0 grades and OSV-read range
-   * bounds changed what an entry holds; osv:v5 since round-4 text cleaning and malware reading; osv:v6 since round-5 advisory-id validation and release-level malware).
+   * bounds changed what an entry holds; osv:v5 since round-4 text cleaning and malware reading; osv:v6 since round-5 advisory-id validation and release-level malware; osv:v7 since summaries are capped at
+   * ADVISORY_SUMMARY_MAX and quoted, and a record already in hand grades an advisory whose /v1/vulns fetch failed).
    */
   maintenance?: boolean;
   /**

@@ -39,6 +39,7 @@ import { reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type 
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
+import { withholdUnconfirmedTargets } from "./unconfirmed-targets.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
@@ -727,6 +728,8 @@ async function executeStandalonePlanner(
     r.targetVersion = inEcosystemForm(r.ecosystem, r.targetVersion);
     if (r.latestVersion !== undefined) r.latestVersion = inEcosystemForm(r.ecosystem, r.latestVersion);
   }
+  // A target OSV.dev did not confirm clean is named only in a NOT CHECKED reason, never in targetVersion.
+  withholdUnconfirmedTargets(limited);
   // Targets that pin (or narrowly range) an affected dependency, or whose held dependencies could not be
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).

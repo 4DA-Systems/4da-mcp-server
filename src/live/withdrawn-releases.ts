@@ -19,7 +19,7 @@
  * them on what they already fetched.
  */
 
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 import { comparePrecedence, parseSemverPrecedence } from "./semver-precedence.js";
 import type { PackageReleaseIndex } from "./release-metadata.js";
 
@@ -133,8 +133,8 @@ export function npmFlaggedReleases(deprecation: Record<string, unknown>, latest:
 
 /** How a registry names a withdrawal, for the release `version`. */
 export function withdrawalText(ecosystem: string, version: string, detail?: string | null): string {
-  const said = detail ? sanitizeThirdParty(detail) : "";
-  const quoted = said ? ` ("${clip(said, 120)}")` : "";
+  const said = detail ? quoteThirdParty(detail) : "";
+  const quoted = said ? ` ("${said}")` : "";
   switch (ecosystem) {
     case "npm":
       return `${version} is deprecated on npm${quoted}`;
@@ -145,13 +145,6 @@ export function withdrawalText(ecosystem: string, version: string, detail?: stri
     default:
       return `${version} is withdrawn on the registry${quoted}`;
   }
-}
-
-/** At most `max` characters, cut at a word, "..." when cut. */
-function clip(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const cut = text.slice(0, max);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), max / 2)).replace(/[\s,;:.]+$/, "")}...`;
 }
 
 /**

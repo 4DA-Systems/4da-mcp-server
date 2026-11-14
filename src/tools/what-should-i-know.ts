@@ -30,7 +30,8 @@ import { readableText } from "../live/private-guard.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { compareVersions, inEcosystemForm, maxVersion } from "../live/version-compare.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
-import { rowFix, targetNote, verifyFixTargets, withheldText } from "../live/fix-paths.js";
+import { rowFix, targetCheckedAll, targetNote, verifyFixTargets, withheldText } from "../live/fix-paths.js";
+import { unconfirmedTargetNote } from "./unconfirmed-targets.js";
 import { installDriftAdvisories } from "./install-drift-notes.js";
 import { getLiveIntelligence } from "../live-singleton.js";
 import { createRelevanceScorer } from "./recall.js";
@@ -406,8 +407,13 @@ export async function executeWhatShouldIKnow(
     const fixes = dep.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f));
     const unfixed = dep.vulnerabilities.length - fixes.length;
     const clean = verified.get(`${dep.ecosystem}\0${dep.package}`);
-    const smallest = inEcosystemForm(dep.ecosystem, clean ? clean.target : fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null);
+    // Named as the release to write only when OSV.dev confirmed it against every advisory of the
+    // package; otherwise in a NOT CHECKED sentence, and no fixed_version carries it (audit 2026-11-14).
+    const confirmed = clean !== undefined && targetCheckedAll(clean);
+    const candidate = inEcosystemForm(dep.ecosystem, clean ? clean.target : fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null);
+    const smallest = confirmed ? candidate : null;
     const note = clean ? targetNote(clean, dep.ecosystem) : null;
+    if (!confirmed) for (const v of dep.vulnerabilities) if (v.fixed_version) Object.assign(v, { fixed_version: null, fixed_version_note: unconfirmedTargetNote(dep.package, v.fixed_version, null) });
     // Every release that fixes it was withdrawn by the registry (FX-H5): never "no fixed release published".
     const withheld = clean && !clean.target ? withheldText(clean, dep.ecosystem) : null;
     const n = dep.vulnerabilities.length;
@@ -420,6 +426,8 @@ export async function executeWhatShouldIKnow(
           ? `Upgrade ${dep.package} to ${smallest} (the smallest version that fixes all ${n}${note ? `; ${note}` : ""})`
           : smallest
             ? `Upgrade ${dep.package} to ${smallest} fixes ${fixes.length}; Review ${dep.package}: ${unfixed} have no fixed release`
+            : !confirmed && candidate
+              ? `Review ${dep.package}: ${unconfirmedTargetNote(dep.package, candidate, note)}`
             : withheld
               ? `Review ${dep.package}: ${withheld}`
               : clean && fixes.length > 0

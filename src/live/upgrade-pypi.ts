@@ -15,7 +15,7 @@
  * read, and only when the GitHub fallback is enabled (github-releases.ts).
  */
 
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 import { parsePep440 } from "./version-compare.js";
 import type { PublishedVersion, RegistryIndex, UpgradeNet } from "./upgrade-sources.js";
 
@@ -93,7 +93,7 @@ export async function loadPypiIndex(net: UpgradeNet, name: string): Promise<Regi
     if (list.length > 0 && list.every((f) => f.yanked)) {
       entry.yanked = true;
       const reason = list.find((f) => f.yanked_reason)?.yanked_reason;
-      if (reason) entry.deprecated = `yanked: ${sanitizeThirdParty(reason)}`;
+      if (reason) entry.deprecated = `yanked: ${quoteThirdParty(reason)}`;
     }
     const sdist = pickSdist(list);
     if (sdist) entry.tarball = sdist;

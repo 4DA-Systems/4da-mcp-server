@@ -660,7 +660,11 @@ async function checkDependencies(
       return {
         ...head(p.item),
         verdict: found.some((s) => s.effect === "avoid") ? "avoid" : negative ? "review" : "unknown",
-        reason: withAlternatives(negative ? `${found.map((s) => `${s.id}: ${s.evidence}`).join(" | ")} | ${p.blocked}` : p.blocked, p.item, negative),
+        reason: withAlternatives(
+          negative ? `${found.map((s) => `${s.id}: ${s.evidence}`).join(" | ")} | ${p.blocked}` : p.blocked,
+          p.item,
+          found.some((s) => s.effect === "avoid") ? "avoid" : negative ? "review" : "unknown",
+        ),
         signals: [advisories, ...(nameCheck ? [nameCheck] : [])],
         ...extra,
         ...noticesOf(advisories),
@@ -687,8 +691,7 @@ async function checkDependencies(
       upgradeTypeSignal(item, releasesBack(item, index!)),
     ];
     const decided = decide(signals);
-    const unsafe = decided.verdict === "avoid" || decided.verdict === "review";
-    return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, unsafe), signals, ...extra, ...noticesOf(advisories) };
+    return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, decided.verdict), signals, ...extra, ...noticesOf(advisories) };
   });
 
   return finish(checkedAt, inOrder(results), { offline: scan.offline, osvCached: scan.cached, ...privateMeta });
@@ -729,10 +732,17 @@ function privateResult(r: Requested, why: string): ItemResult {
   };
 }
 
-/** The reason, plus the safe releases to write instead when the verdict is against `to`. */
-function withAlternatives(reason: string, item: Resolved, unsafe: boolean): string {
-  if (item.listGap) return `${reason} | ${listGapText(item.package, item.listGap)}`;
-  if (item.batchUnread) return `${reason} | ${batchUnreadText(item.package, item.batchUnread)}`;
+/**
+ * The reason, plus the safe releases to write instead when the verdict is against `to`. `verdict`
+ * decides how an incomplete advisory list is worded: under a proceed or wait the version checked
+ * WAS confirmed, so the reason says what was confirmed and never "NOT CHECKED" (pre-publish audit
+ * 2026-11-14: a proceed reason read "NOT CHECKED: OSV.dev's advisory list ... left out ...").
+ */
+function withAlternatives(reason: string, item: Resolved, verdict: Verdict): string {
+  const unsafe = verdict === "avoid" || verdict === "review";
+  const confirmed = verdict === "proceed" || verdict === "wait";
+  if (item.listGap) return `${reason} | ${confirmed ? listGapConfirmedText(item, item.listGap) : listGapText(item.package, item.listGap)}`;
+  if (item.batchUnread) return `${reason} | ${confirmed ? batchUnreadConfirmedText(item.package) : batchUnreadText(item.package, item.batchUnread)}`;
   const rc = item.rangeCheck;
   if (!rc) return reason;
   const where = rc.basis === "requested" ? `in ${rc.range}` : `on ${item.to}'s line (${rc.range})`;
@@ -797,6 +807,17 @@ function rangePicks(item: Resolved): string[] {
 function listGapText(pkg: string, gap: { ids: string[]; versions: string[] }): string {
   const ids = `${gap.ids.slice(0, 3).join(", ")}${gap.ids.length > 3 ? ` and ${gap.ids.length - 3} more` : ""}`;
   return `NOT CHECKED: OSV.dev's advisory list for ${pkg} (/v1/query) left out ${ids}, which its batch query names for ${andList(gap.versions)}, so the list is incomplete and no release of ${pkg} is named safe from it (the verdict on the version checked comes from the batch query and stands). Check again later, or check a specific version with dependency_check.`;
+}
+
+/** The same gap under a proceed or wait: what was confirmed comes first, and nothing reads as NOT CHECKED. */
+function listGapConfirmedText(item: Resolved, gap: { ids: string[]; versions: string[] }): string {
+  const ids = `${gap.ids.slice(0, 3).join(", ")}${gap.ids.length > 3 ? ` and ${gap.ids.length - 3} more` : ""}`;
+  return `OSV.dev's batch check lists no advisory for ${item.package} ${item.to}. Its full advisory list for ${item.package} (/v1/query) was incomplete (it left out ${ids}, which the batch check names for ${andList(gap.versions)}), so other releases were not compared and none is named as an alternative.`;
+}
+
+/** The batch gap under a proceed or wait (not reached today: an unread batch makes the advisories signal unknown). */
+function batchUnreadConfirmedText(pkg: string): string {
+  return `${pkg}'s full advisory list (/v1/query) could not be held against a current batch answer, so other releases were not compared and none is named as an alternative.`;
 }
 
 /** NOT CHECKED: the batch query gave no current answer (Resolved.batchUnread), so no release is named. */
@@ -1308,6 +1329,8 @@ export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices:
       maintenance: declared,
       ...(worded && !declared ? { countedNotice: true } : {}),
       ...(v.severityFrom ? { severityFrom: v.severityFrom } : {}),
+      // Matched, but no record read: the severity is not known and never reads as low (AdvisoryRef.unread).
+      ...(v.severity === "unknown" && members.some((m) => m.detailUnavailable) ? { unread: true as const } : {}),
       // Every malicious-package record of the group, the MAL- one under a GHSA alias included.
       ...(members.some((m) => m.malware) ? { malware: [...new Set(members.filter((m) => m.malware).map((m) => m.vulnId))] } : {}),
     };

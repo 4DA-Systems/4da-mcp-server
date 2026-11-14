@@ -7,6 +7,7 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { GetRelevantContentParams, RelevantItem } from "../types.js";
+import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
 
 /**
  * Tool definition for MCP registration
@@ -85,7 +86,8 @@ export function executeGetRelevantContent(
   const verdicts = latestJudgeVerdicts(db, items.map((item) => item.id));
   return items
     .filter((item) => (verdicts.get(item.id) ?? 1) >= 0.5)
-    .map((item) => ({ ...item, judge_relevance: verdicts.get(item.id) ?? null }));
+    // A headline is third-party text: one line, no `|`, capped (untrusted-text.ts).
+    .map((item) => ({ ...item, title: quoteThirdParty(item.title, HEADLINE_MAX), judge_relevance: verdicts.get(item.id) ?? null }));
 }
 
 /** Latest relevance-judge verdict per item, when the desktop app has judged it. */

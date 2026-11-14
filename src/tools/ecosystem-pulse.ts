@@ -14,6 +14,7 @@ import { scanCurrentProject } from "../project-scanner.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { isWithin, normalizeProjectPath, systemDirectoryProblem } from "./project-scope.js";
+import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
 
 export interface EcosystemPulseParams {
   min_points?: number;
@@ -255,7 +256,7 @@ export async function executeEcosystemPulse(
     .filter((h) => h.points >= minPoints)
     .slice(0, limit)
     .map((h) => ({
-      title: h.title,
+      title: quoteThirdParty(h.title, HEADLINE_MAX),
       url: h.url,
       points: h.points,
       comments: h.comments,

@@ -38,6 +38,31 @@
   platform is now read on all of them (the XDG locations, `~/.pip`, `~/pip`,
   `%APPDATA%\pip`, the virtualenv), under both `pip.ini` and `pip.conf`, with
   `XDG_CONFIG_DIRS` split on `;` on Windows.
+- **Pre-publish fixes (round 6: text caps, lost records, unconfirmed targets).**
+  Third-party text is quoted and capped where it enters, in every tool: an
+  OSV.dev advisory summary of 5,135 characters carrying a forged
+  `| advisories: No known vulnerability affects 4.17.20.` line came back whole
+  in vulnerability_scan's detailed rows, and a deprecation message as long in
+  upgrade_impact's `versions_between[].deprecated`. Advisory summaries now stop
+  at 200 characters; deprecation, yank and retraction messages at 120; Hacker
+  News and 4DA feed headlines at 300 (changelog entries keep their 400); each
+  on one line with `|` replaced. upgrade_impact's `_meta.untrusted_text` names
+  every field that holds such text, not only changelog entries. When OSV.dev
+  matched an advisory but its record (`/v1/vulns/{id}`) did not arrive, lodash
+  4.17.20 and ws 7.5.10 went from `avoid` to `review` with severity unknown:
+  the scanner now reads that version's records from `/v1/query`, and an
+  advisory whose record cannot be read anywhere counts as high, so a lost
+  record never softens a verdict. A `proceed` whose package advisory list was
+  incomplete said "NOT CHECKED"; it now says what the batch check confirmed
+  and that other releases were not compared. A fix target OSV.dev did not
+  confirm against every advisory of the package (the confirmation queries
+  failed, the advisory list was unread, or what it pins is affected or
+  unchecked) is no longer given in `fix_targets[].target`, `fixed_version` or
+  `targetVersion` (qs 6.16.0, which GHSA-6pq8-jhm2-2vcw affects, was): those
+  are null, the release is named in a NOT CHECKED note or first reason, and a
+  command that pins it is dropped, in vulnerability_scan, upgrade_planner and
+  what_should_i_know. The scan cache moved to `osv:v7`, the fix-path cache to
+  version 15.
 - **Pre-publish fixes (briefing, round 5).** what_should_i_know said
   `safe_to_delegate` for tasks that add malware: "add ctx", "add ctx to
   requirements.txt", "add extrahtml to requirements.txt" and "add logger-libs"

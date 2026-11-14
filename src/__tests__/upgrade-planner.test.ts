@@ -132,9 +132,11 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
     expect(transitive).toBeDefined();
     expect(transitive!.scope).toBe("transitive");
     expect(transitive!.action).toBe("waiting_on_upstream");
-    expect(transitive!.targetVersion).toBe("5.0.15");
-    // Computed from current -> target (it read "unknown" before 2026-10-02).
-    expect(transitive!.upgradeType).toBe("patch");
+    // No fix-path check runs here, so 5.0.15 is NOT CHECKED against every advisory: named in the
+    // first reason, never as targetVersion (pre-publish audit 2026-11-14), and no distance is claimed.
+    expect(transitive!.targetVersion).toBeNull();
+    expect(transitive!.reasons[0]).toMatch(/^NOT CHECKED: 5\.0\.15 was not confirmed/);
+    expect(transitive!.upgradeType).toBe("unknown");
     expect(transitive!.breaking).toBe(false);
     expect(transitive!.reasons.some((r) => r.includes("Transitive dependency"))).toBe(true);
     expect(result.waitingOnUpstream).toBe(1);
@@ -156,8 +158,9 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
     expect(transitiveIdx).toBeGreaterThan(directIdx);
     expect(result.recommendations[directIdx].scope).toBe("direct");
     expect(result.recommendations[directIdx].action).toBe("upgrade_direct");
-    // The smallest version that fixes it, not the newest release.
-    expect(result.recommendations[directIdx].targetVersion).toBe("19.2.7");
+    // The smallest version that fixes it, not the newest release: named NOT CHECKED (no fix-path check here).
+    expect(result.recommendations[directIdx].targetVersion).toBeNull();
+    expect(result.recommendations[directIdx].reasons[0]).toMatch(/^NOT CHECKED: 19\.2\.7 /);
   });
 
   it("says no_fix_available, never upgrade_direct with no target, when no fixed release exists", async () => {
@@ -260,7 +263,7 @@ describe("upgrade_planner — CVE-blind disclosure and provenance", () => {
       };
       expect(calls).toEqual([{ includeDev: true }]);
       expect(result.vulnerabilityDataAvailable).toBe(true);
-      expect(result.recommendations).toMatchObject([{ package: "zustand", targetVersion: "5.0.15", scope: "transitive", action: "waiting_on_upstream" }]);
+      expect(result.recommendations).toMatchObject([{ package: "zustand", targetVersion: null, scope: "transitive", action: "waiting_on_upstream" }]);
       expect(result.summary).not.toContain("not a dependency");
     });
 

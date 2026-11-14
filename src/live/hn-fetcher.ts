@@ -8,7 +8,7 @@
  * Privacy: sends generic tech keywords (e.g. "react", "rust") — not personal data.
  */
 
-import { sanitizeThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
+import { HEADLINE_MAX, quoteThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -158,7 +158,7 @@ function scoreAndMap(hits: HNHit[], techStack: string[]): LiveHeadline[] {
       return {
         // The id, URL and timestamp kept CR/LF into ecosystem_pulse (blind audit round 4): only their shapes are kept.
         id: thirdPartyId(hit.objectID)!,
-        title: sanitizeThirdParty(hit.title ?? "", 300),
+        title: quoteThirdParty(hit.title ?? "", HEADLINE_MAX),
         url: thirdPartyUrl(hit.url),
         source: "hacker_news" as const,
         points: hit.points,

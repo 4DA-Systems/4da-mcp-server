@@ -46,7 +46,7 @@ import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn,
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
 import { confirmTargets } from "./batch-confirm.js";
-import { isOsvAdvisoryId, osvAdvisoryId, sanitizeThirdParty } from "../untrusted-text.js";
+import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
 const TIMEOUT_MS = 15_000;
@@ -61,9 +61,9 @@ const MAX_OSV_PAGES = 10;
  * 11: advisory ranges carry `aliases`, so a GHSA record and its PYSEC twin count once; 12: range bounds
  * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable;
  * 13: npm facts withdraw the releases a maintainer flagged on a line that carries another notice, withdrawn-releases.ts npmFlaggedReleases;
- * 14: PyPI facts carry each release's `requiresPython`).
+ * 14: PyPI facts carry each release's `requiresPython`; 15: npm deprecation messages are quoted and capped, untrusted-text.ts quoteThirdParty).
  */
-const CACHE_VERSION = 14;
+const CACHE_VERSION = 15;
 /** How long "the registry does not serve this version" is believed: it may be published later. */
 const ABSENT_TTL = 3600;
 
@@ -345,7 +345,7 @@ export class FixPathSources {
     // something else (lodash.template 4.18.0, "Bad release", in a package retired whole: audit M6).
     const withdrawn = [...new Set([...npmExcludedVersions(deprecation, latest), ...npmFlaggedReleases(deprecation, latest)])];
     const out = new Set(withdrawn);
-    const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? sanitizeThirdParty(versions[v].deprecated as string) || "deprecated" : null);
+    const message = (v: string) => (typeof versions[v]?.deprecated === "string" ? quoteThirdParty(versions[v].deprecated as string) || "deprecated" : null);
     const noticed = Object.keys(versions).filter((v) => !out.has(v) && isNpmDeprecated(versions[v]?.deprecated));
     const heldSpecs: Record<string, Record<string, string>> = {};
     for (const [v, m] of Object.entries(versions)) {
@@ -1039,7 +1039,7 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
   }
   const withheld = withheldText(clean, ecosystem);
   if (clean.advisoriesUnread && clean.unconfirmed && clean.target) {
-    return `${clean.target} is the smallest release the package's advisory list leaves clean, NOT confirmed: ${clean.unconfirmed}, so it is not checked against every advisory`;
+    return `${clean.target} was worked out from the package's advisory list, which was NOT confirmed: ${clean.unconfirmed}, so it is not checked against every advisory`;
   }
   if (clean.advisoriesUnread) {
     const unchecked = "not checked against the package's other advisories (OSV.dev did not answer)";
