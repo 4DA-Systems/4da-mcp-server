@@ -45,6 +45,9 @@ const MAX_BATCH_SIZE = 1000;
 const HYDRATE_CONCURRENCY = 24;
 /** querybatch chunks (1,000 dependencies each) sent at once. */
 const BATCH_CONCURRENCY = 4;
+/** A query of at most this many dependencies waits COALESCE_MS for others to share its request (OsvHttpSource.query). */
+const COALESCE_MAX_DEPS = 50;
+const COALESCE_MS = 20;
 const DETAIL_RETRY_DELAY_MS = 750;
 /** GHSA alias records read per scan to rate records that carry no severity (rateFromAliases). */
 export const MAX_ALIAS_LOOKUPS = 50;
@@ -159,7 +162,47 @@ export class OsvHttpSource implements AdvisorySource {
     private readonly tokenWaitMs: number = MAX_TOKEN_WAIT_MS,
   ) {}
 
+  /** Small queries waiting to go out together (coalesce). */
+  private waiting: Array<{ deps: ResolvedDependency[]; resolve: (answer: AdvisoryAnswer) => void }> = [];
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * A small query (fix-target and verdict confirmations ask about one or two releases each) waits
+   * COALESCE_MS for others and goes out with them in one querybatch request. Sent one by one, a
+   * cold scan's ~120 confirmations used the 60-a-minute query budget up, waited a second each for
+   * tokens, ran out of time, and were asked again by the next scan (blind audit round 6). A
+   * dependency asked about by several callers is asked once. A large query (a scan) goes out as is.
+   */
   async query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer> {
+    if (deps.length === 0 || deps.length > COALESCE_MAX_DEPS) return this.queryNow(deps);
+    return new Promise<AdvisoryAnswer>((resolve) => {
+      this.waiting.push({ deps, resolve });
+      this.flushTimer ??= setTimeout(() => void this.flush(), COALESCE_MS);
+    });
+  }
+
+  private async flush(): Promise<void> {
+    const group = this.waiting;
+    this.waiting = [];
+    this.flushTimer = null;
+    const keyOf = (d: ResolvedDependency) => `${d.ecosystem}\0${d.name}\0${d.version ?? ""}`;
+    const unique = new Map<string, ResolvedDependency>();
+    for (const g of group) for (const d of g.deps) if (!unique.has(keyOf(d))) unique.set(keyOf(d), d);
+    const all = [...unique.values()];
+    let answer: AdvisoryAnswer;
+    try {
+      answer = await this.queryNow(all);
+    } catch (error) {
+      answer = { ids: all.map(() => null), failure: describeFailure(error) };
+    }
+    const idsOf = new Map(all.map((d, i) => [keyOf(d), answer.ids[i] ?? null]));
+    for (const g of group) {
+      const ids = g.deps.map((d) => idsOf.get(keyOf(d)) ?? null);
+      g.resolve({ ids, failure: ids.some((x) => !Array.isArray(x)) ? (answer.failure ?? "OSV.dev gave no answer") : null });
+    }
+  }
+
+  private async queryNow(deps: ResolvedDependency[]): Promise<AdvisoryAnswer> {
     // querybatch returns only `{ id, modified }`; the rich fields (severity,
     // fixed version, summary, references) come from per-advisory hydration.
     const chunks: ResolvedDependency[][] = [];
@@ -401,10 +444,19 @@ async function readInBatches<V>(deps: readonly ResolvedDependency[], read: (keys
   return out;
 }
 
+/** Per cache: a scanner waits only for lookups that fill the cache it reads. */
+const IN_FLIGHT = new WeakMap<LiveCache, Map<string, Promise<unknown>>>();
+
 export class OsvScanner {
   private cache: LiveCache;
   private rateLimiter: RateLimiter;
   private source: AdvisorySource;
+  /** Dependencies being asked about now, by cache key, by any scanner on this cache: settled when that lookup has written it. */
+  private get inFlight(): Map<string, Promise<unknown>> {
+    let map = IN_FLIGHT.get(this.cache);
+    if (!map) IN_FLIGHT.set(this.cache, (map = new Map()));
+    return map;
+  }
   private aliasBudgetMs: number;
 
   constructor(cache: LiveCache, rateLimiter: RateLimiter, source?: AdvisorySource, options: { aliasBudgetMs?: number } = {}) {
@@ -441,24 +493,52 @@ export class OsvScanner {
     // Fetch uncached from OSV. Dependencies it has no answer for fall back to
     // an expired cached answer; with none they are UNCHECKED, counted and
     // reported, and never counted clean.
-    let fetchedVulns: VulnerabilityEntry[] = [];
-    let unanswered: ResolvedDependency[] = [];
+    const fetchedVulns: VulnerabilityEntry[] = [];
+    const unanswered: ResolvedDependency[] = [];
     let failure: string | null = null;
 
-    if (uncached.length > 0) {
+    // A dependency another scan in this process is asking OSV about right now is waited for and read
+    // from the cache that scan fills, not asked again: a cold vulnerability_scan's fix-target and
+    // verdict checks asked about the same release up to six times at once (blind audit round 6).
+    // One that scan got no cacheable answer for is asked here, as before. Waiting never holds this
+    // scan's own registrations, so two scans waiting on each other cannot deadlock.
+    const theirs = network ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
+    const mine = theirs.length > 0 ? uncached.filter((d) => !this.inFlight.has(osvCacheKey(d))) : uncached;
+    const ask = async (batch: ResolvedDependency[]) => {
       try {
-        const outcome = await this.batchQuery(uncached);
-        fetchedVulns = outcome.vulns;
-        unanswered = outcome.unanswered;
-        failure = outcome.failure;
+        return await this.batchQuery(batch);
       } catch (error) {
         // The source layer turns network failures into `outcome.failure`; an
         // exception here is a fault in this server, not an OSV outage, and
         // telling the agent to retry would not help (audit 6.2.5 D-2).
-        unanswered = uncached;
         const detail = error instanceof Error ? error.message.slice(0, 120) : String(error).slice(0, 120);
-        failure = `an internal error in this server stopped the vulnerability lookup (${detail}); retrying will not help, please report it at https://github.com/4DA-Systems/4da-mcp-server/issues`;
+        return {
+          vulns: [] as VulnerabilityEntry[],
+          unanswered: batch,
+          failure: `an internal error in this server stopped the vulnerability lookup (${detail}); retrying will not help, please report it at https://github.com/4DA-Systems/4da-mcp-server/issues`,
+        };
       }
+    };
+    const own = mine.length === 0 ? null : network ? this.registered(mine, () => ask(mine)) : ask(mine);
+    const waited = (async () => {
+      if (theirs.length === 0) return [] as ResolvedDependency[];
+      await Promise.all([...new Set(theirs.map((d) => this.inFlight.get(osvCacheKey(d))))].map((p) => p?.catch(() => undefined)));
+      const filled = this.cache.getMany<VulnerabilityEntry[]>([...new Set(theirs.map(osvCacheKey))]);
+      const still: ResolvedDependency[] = [];
+      for (const dep of theirs) {
+        const hit = filled.get(osvCacheKey(dep));
+        if (hit) cachedVulns.push(...hit.map((v) => restampDepContext(v, dep)));
+        else still.push(dep);
+      }
+      return still;
+    })();
+    const [first, still] = await Promise.all([own, waited]);
+    const again = still.length > 0 ? await ask(still) : null;
+    for (const outcome of [first, again]) {
+      if (!outcome) continue;
+      fetchedVulns.push(...outcome.vulns);
+      unanswered.push(...outcome.unanswered);
+      failure = failure ?? outcome.failure;
     }
 
     let staleAnswers = 0;
@@ -629,6 +709,18 @@ export class OsvScanner {
       if (timer !== undefined) clearTimeout(timer);
     }
     return new Map(out);
+  }
+
+  /** `work` with `deps` registered as in flight until it settles. */
+  private async registered<T>(deps: ResolvedDependency[], work: () => Promise<T>): Promise<T> {
+    const keys = [...new Set(deps.map(osvCacheKey))];
+    const running = work();
+    for (const k of keys) this.inFlight.set(k, running);
+    try {
+      return await running;
+    } finally {
+      for (const k of keys) if (this.inFlight.get(k) === running) this.inFlight.delete(k);
+    }
   }
 
   private async batchQuery(

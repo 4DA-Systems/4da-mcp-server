@@ -2,6 +2,28 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (scan speed, round 6).** On a 1,889-dependency npm
+  project a vulnerability_scan with every answer cached took 3.7 s, and the
+  server did not answer `ping` until it was done (6.2.7: 0.3 s); at 107,000
+  lockfile entries `ping` waited 20.8 s. Every parent lookup re-read, re-parsed
+  and re-walked the whole lockfile. Each lockfile is now read once, indexed
+  child-to-parents once (kept while its size and modification time stay the
+  same), and every lookup is a map read; npm, pnpm, Yarn classic and berry, Bun
+  and Cargo lockfiles alike, and Python lockfiles are read once per call. Long
+  work gives the event loop back every 15 ms, so `ping` answers in tens of
+  milliseconds during a scan. A second scan in the same process re-sent about
+  90 querybatch and 90 `/v1/query` requests: the fix confirmations went out one
+  release per request, used up the 60-a-minute OSV.dev query budget, ran out of
+  time waiting for it, and were asked again by the next scan. Small queries
+  made at the same moment now share one request, concurrent checks of one
+  release or one package's advisory list ask once, and an npm document still
+  being fetched is no longer dropped and fetched again. The fix-target check and
+  the fix-path verdicts run side by side. A transitive finding whose fix path
+  was not worked out within the call now says so (`fix_action: "not_checked"`
+  with `fix_action_note`, `action`/`action_note` in `fix_targets`) instead of
+  carrying no action at all. A version that is not a release number ("latest"
+  for a package the registry does not have) is never sent to OSV.dev and never
+  confirmed. No cache key changes: what is cached, and its shape, is the same.
 - **Pre-publish fixes (briefing, round 6).** In a project with package.json,
   package-lock.json and requirements.txt, what_should_i_know said
   `safe_to_delegate` for "add ctx", "add ctx, then refactor the handler",

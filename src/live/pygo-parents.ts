@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
 import { compiledRequiredBy, compiledRequirements, normalizePythonName, parseGoMod, parseRequirements, requirementFiles } from "./lockfile-parsers-pygo.js";
 import { isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
+import { callMemo } from "../call-budget.js";
 import { readTextFile } from "./text-file.js";
 import { compareVersions } from "./version-compare.js";
 
@@ -52,12 +53,15 @@ export interface PythonParents {
   projectPython: string | null;
 }
 
+/** A lockfile or requirements file, read once per tool call (callMemo): every finding's parents are looked up in it. */
 function read(file: string): string | null {
-  try {
-    return readTextFile(file);
-  } catch {
-    return null;
-  }
+  return callMemo(`pygo-parents-read:${file}`, () => {
+    try {
+      return readTextFile(file);
+    } catch {
+      return null;
+    }
+  });
 }
 
 /** `[[package]]` tables, each with every sub-table that follows it. */

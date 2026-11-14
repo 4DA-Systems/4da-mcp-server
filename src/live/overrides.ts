@@ -23,6 +23,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { callMemo } from "../call-budget.js";
 import { readTextFile } from "./text-file.js";
 import type { LockfileFormat } from "./lockfile-parents.js";
 
@@ -96,6 +97,11 @@ export function workspaceYamlOverride(content: string, name: string): string | n
  */
 export function projectOverride(dir: string, name: string, format: LockfileFormat): ProjectOverride | null {
   if (format === "cargo") return null;
+  // Read once per tool call: a scan asks for every parent of every finding (blind audit round 6).
+  return callMemo(`project-override:${format}:${dir}|${name}`, () => readProjectOverride(dir, name, format));
+}
+
+function readProjectOverride(dir: string, name: string, format: LockfileFormat): ProjectOverride | null {
   try {
     const found = manifestOverride(JSON.parse(readTextFile(path.join(dir, "package.json"))), name, format);
     if (found) return found;
