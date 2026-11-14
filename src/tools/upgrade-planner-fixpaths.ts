@@ -53,16 +53,7 @@ import {
   type RefreshVerdict,
   type RequirementHistory,
 } from "../live/fix-paths.js";
-import {
-  cargoParents,
-  lockfileFormat,
-  packageLockParents,
-  pnpmParents,
-  readLockfileParents,
-  yarnParents,
-  type LockfileFormat,
-  type ParentEdge,
-} from "../live/lockfile-parents.js";
+import { lockfileParentIndex, prepareLockfileParents, readLockfileParents, type LockfileFormat, type ParentEdge } from "../live/lockfile-parents.js";
 import { advisoriesAffecting, advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { projectOverride } from "../live/overrides.js";
 import { pypiCompiledInstruction, pypiPinnedTogether } from "../live/pypi-advice.js";
@@ -76,6 +67,7 @@ import type { AdvisoryQuery } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
+import { yieldIfDue } from "../live/yield-point.js";
 
 /** One dependency the project declares that moves a blocking parent. */
 export interface ParentLever {
@@ -258,6 +250,8 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
   let next = 0;
   const worker = async () => {
     while (next < todo.length) {
+      await yieldIfDue();
+      if (next >= todo.length) break;
       const input = todo[next++];
       const remaining = deadline - Date.now();
       // On a draft: when the budget runs out first, the lookups still in flight write to the
@@ -312,6 +306,7 @@ function setTarget(step: FixPathStep, target: string): void {
 }
 
 async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel: Intel, heldQuery: AdvisoryQuery | null): Promise<Outcome> {
+  await yieldIfDue();
   const { step } = input;
   const ecosystem = step.ecosystem as OsvEcosystem;
   // #981 round 3: an installed copy flagged malicious names no release at all: remove or replace it.
@@ -665,6 +660,8 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     .map((dir) => ({ dir, lockfile: liveIntel.lockfileFor(dir, ecosystem) }))
     .filter((l): l is { dir: string; lockfile: string } => l.lockfile !== null);
   if (lockfiles.length === 0) return;
+  // Index each lockfile's parents once, yielding while it builds; every lookup below reads the index.
+  const indexes = new Map(await Promise.all(lockfiles.map(async (l) => [l.lockfile, await prepareLockfileParents(l.lockfile)] as const)));
   if (memberUpgrade(input, lockfiles, liveIntel, target)) return;
 
   // An advisory no release fixes cannot make a refresh target unclean: every target has it.
@@ -707,7 +704,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
         })
         .join("; ")}. Change that entry to "${target}" (or a range whose newest release is clean), then reinstall; no parent needs to move and no new override is needed`,
     );
-    const parentsOf = verdicts.flatMap((v) => readLockfileParents(v.lockfile, step.package, installed)?.edges ?? []).filter((e) => !e.local && e.range);
+    const parentsOf = verdicts.flatMap((v) => indexes.get(v.lockfile)?.parents(step.package, installed) ?? []).filter((e) => !e.local && e.range);
     forcedAcrossMajor(step, installed, target, parentsOf.map((e) => `${e.parent}${e.parentVersion ? ` ${e.parentVersion}` : ""} requires "${e.range}"`));
     return;
   }
@@ -1168,6 +1165,7 @@ async function goesAway(ctx: MoveContext, b: Blocking, parent: string, from: str
 }
 
 async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> {
+  await yieldIfDue();
   const { sources, ecosystem, pkg, target } = ctx;
   const parent = b.parent;
   const from = b.parentVersion!;
@@ -1665,23 +1663,15 @@ async function throughRelease(
 }
 
 
-/** The lockfile's parents of one entry, from one parse of the file per plan step. */
+/**
+ * The lockfile's parents of one entry, from its parent index: built once per lockfile version and
+ * shared by every step and call (lockfile-parents.ts). Re-parsing per step and re-walking the
+ * whole file per lookup blocked the event loop for seconds (blind audit round 6).
+ */
 function parentsReader(ctx: MoveContext, lockfile: string): ((name: string, version: string) => ParentEdge[]) | null {
   if (ctx.readers.has(lockfile)) return ctx.readers.get(lockfile)!;
-  let reader: ((name: string, version: string) => ParentEdge[]) | null = null;
-  try {
-    const content = fs.readFileSync(lockfile, "utf-8");
-    const format = lockfileFormat(lockfile, content);
-    if (format === "package-lock") {
-      const lock = JSON.parse(content);
-      reader = (n, v) => packageLockParents(lock, n, v);
-    } else if (format === "pnpm") reader = (n, v) => pnpmParents(content, n, v);
-    else if (format === "yarn" || format === "yarn-berry") reader = (n, v) => yarnParents(content, n, v);
-    else if (format === "cargo") reader = (n, v) => cargoParents(content, n, v);
-    else if (format === "bun") reader = (n, v) => readLockfileParents(lockfile, n, v)?.edges ?? [];
-  } catch {
-    reader = null;
-  }
+  const index = lockfileParentIndex(lockfile);
+  const reader = index ? (n: string, v: string) => index.parents(n, v) : null;
   ctx.readers.set(lockfile, reader);
   return reader;
 }

@@ -28,10 +28,19 @@ function dep(ecosystem: OsvEcosystem, name: string, version: string): ResolvedDe
   return { name, version, ecosystem, isDev: false, isDirect: false, devScopeKnown: false, target: null, platformActive: true, sourceDirs: [] };
 }
 
-/** Ask the batch query about these releases, at most until `deadline`. */
+/**
+ * A release number OSV can be asked about: starts with a digit (after Go's `v`). "latest", a range
+ * or an empty string is not one; for a package the registry does not have, "latest" reached OSV.dev
+ * as a version (second blind audit, round 6). Such a release is never asked about and never confirmed.
+ */
+export function isConcreteVersion(version: string): boolean {
+  return /^v?\d[0-9A-Za-z.+!_-]*$/.test(version);
+}
+
+/** Ask the batch query about these releases, at most until `deadline`. A release that is not a concrete version is left out (unconfirmedWhy says why). */
 export async function batchAnswer(query: AdvisoryQuery, releases: Array<{ ecosystem: OsvEcosystem; name: string; version: string }>, deadline: number): Promise<BatchAnswer> {
   const wanted = new Map<string, ResolvedDependency>();
-  for (const r of releases) wanted.set(keyOf(r.ecosystem, r.name, r.version), dep(r.ecosystem, r.name, r.version));
+  for (const r of releases) if (isConcreteVersion(r.version)) wanted.set(keyOf(r.ecosystem, r.name, r.version), dep(r.ecosystem, r.name, r.version));
   if (wanted.size === 0) return { read: true, idsAt: () => [] };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<null>((resolve) => {
@@ -56,6 +65,7 @@ export async function batchAnswer(query: AdvisoryQuery, releases: Array<{ ecosys
 
 /** Why a list-based release is not confirmed, or null when the batch answer was read and the list holds every id it named. */
 async function unconfirmedWhy(sources: FixPathSources, answer: BatchAnswer, ecosystem: OsvEcosystem, name: string, version: string): Promise<string | null> {
+  if (!isConcreteVersion(version)) return `"${version}" is not a release number OSV.dev can be asked about`;
   if (!answer.read) return `OSV.dev's batch query gave no current answer for it (${answer.reason})`;
   const named = answer.idsAt(ecosystem, name, version);
   if (named.length === 0) return null;
@@ -84,18 +94,21 @@ export async function confirmTargets(
     todo.flatMap((i) => [i.clean.target!, ...(i.clean.newestSafe ? [i.clean.newestSafe] : [])].map((version) => ({ ecosystem: i.ecosystem, name: i.name, version }))),
     deadline,
   );
-  for (const i of todo) {
-    const why = await unconfirmedWhy(sources, answer, i.ecosystem, i.name, i.clean.target!);
-    if (why) {
-      const { newestSafe: _n, lineDead: _l, ...rest } = i.clean;
-      out.set(i.key, { ...rest, advisoriesUnread: true, unconfirmed: why });
-      continue;
-    }
-    if (i.clean.newestSafe && (await unconfirmedWhy(sources, answer, i.ecosystem, i.name, i.clean.newestSafe))) {
-      const { newestSafe: _n, ...rest } = i.clean;
-      out.set(i.key, rest);
-    }
-  }
+  // Each target's advisory list is read at once, not one package after another (blind audit round 6).
+  await Promise.all(
+    todo.map(async (i) => {
+      const why = await unconfirmedWhy(sources, answer, i.ecosystem, i.name, i.clean.target!);
+      if (why) {
+        const { newestSafe: _n, lineDead: _l, ...rest } = i.clean;
+        out.set(i.key, { ...rest, advisoriesUnread: true, unconfirmed: why });
+        return;
+      }
+      if (i.clean.newestSafe && (await unconfirmedWhy(sources, answer, i.ecosystem, i.name, i.clean.newestSafe))) {
+        const { newestSafe: _n, ...rest } = i.clean;
+        out.set(i.key, rest);
+      }
+    }),
+  );
   return out;
 }
 
@@ -136,7 +149,7 @@ export async function listConfirmed(
   versions: string[],
   deadline: number,
 ): Promise<boolean> {
-  if (!query) return false;
+  if (!query || !versions.every(isConcreteVersion)) return false;
   const releases = [...new Set(versions)].map((version) => ({ ecosystem, name, version }));
   const answer = await batchAnswer(query, releases, deadline);
   if (!answer.read) return false;

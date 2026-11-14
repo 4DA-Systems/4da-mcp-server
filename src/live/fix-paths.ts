@@ -34,7 +34,8 @@ import { advisoryRanges, advisoryAffects, cleanReleases, installableFix, isGoPse
 import { computeSemverDistance } from "./semver-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { lockfileFormat, readLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
+import { yieldIfDue } from "./yield-point.js";
+import { lockfileFormatOf, prepareLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, parseGoMod, requirementOptions } from "./lockfile-parsers-pygo.js";
 import { projectOverride } from "./overrides.js";
@@ -134,19 +135,72 @@ const NPM_DOCS_KEPT = 16;
 /** Per published release of a parent: its requirements on one package, and whether it declares it only as a peer. */
 export type RequirementHistory = Record<string, { reqs: string[]; peer: boolean }>;
 
+/**
+ * How long, and how many, cache answers are also kept parsed in memory. A plan and a scan read the
+ * same package's facts many times (every parent, lever and target check); each read parsed the
+ * row again, a third of a fully cached scan's time (blind audit round 6). Shorter than any cache
+ * TTL; the rows are registry and OSV facts that a minute does not change.
+ */
+const MEMO_MS = 60_000;
+const MEMO_KEPT = 4_000;
+
+/** Under the test suite a kept answer is frozen, so a caller that mutated a shared answer fails a test. */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v);
+  }
+  return value;
+}
+const FREEZE_MEMO = Boolean(process.env.VITEST);
+
 export class FixPathSources {
-  private npmDocs = new Map<string, { at: number; doc: Promise<NpmAbbreviatedDoc | null> }>();
+  private npmDocs = new Map<string, { at: number; doc: Promise<NpmAbbreviatedDoc | null>; settled: boolean }>();
+  private memo = new Map<string, { at: number; value: unknown }>();
+  /** Advisory-list lookups in flight, so concurrent checks of one package make one request. */
+  private advisoriesInFlight = new Map<string, Promise<AdvisoryRanges[] | null>>();
 
   constructor(
     private cache: LiveCache,
     private rateLimiter: RateLimiter,
   ) {}
 
+  /** A live cache answer, parsed at most once a minute; null on a miss. Shared: callers never mutate it. */
+  private readonly cached = <T>(key: string): T | null => {
+    const kept = this.memo.get(key);
+    if (kept && Date.now() - kept.at < MEMO_MS) return kept.value as T;
+    const hit = this.cache.get<T>(key);
+    if (hit !== null) this.remember(key, hit);
+    else if (kept) this.memo.delete(key);
+    return hit;
+  }
+
+  /** Cache an answer and keep it parsed. */
+  private readonly store = (key: string, value: unknown, source: string, ttlSeconds: number): void => {
+    this.cache.set(key, value, source, ttlSeconds);
+    this.remember(key, value);
+  }
+
+  private readonly remember = (key: string, value: unknown): void => {
+    this.memo.delete(key);
+    this.memo.set(key, { at: Date.now(), value: FREEZE_MEMO ? deepFreeze(value) : value });
+    while (this.memo.size > MEMO_KEPT) this.memo.delete(this.memo.keys().next().value!);
+  }
+
   /** Every non-withdrawn OSV advisory for a package, as ranges; null when OSV could not be read. */
   async packageAdvisories(ecosystem: OsvEcosystem, name: string): Promise<AdvisoryRanges[] | null> {
     const key = `fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`;
-    const hit = this.cache.get<AdvisoryRanges[]>(key);
+    const hit = this.cached<AdvisoryRanges[]>(key);
     if (hit) return hit;
+    const running = this.advisoriesInFlight.get(key);
+    if (running) return running;
+    const lookup = this.fetchPackageAdvisories(key, ecosystem, name).finally(() => this.advisoriesInFlight.delete(key));
+    this.advisoriesInFlight.set(key, lookup);
+    return lookup;
+  }
+
+  // Arrow members, not methods: the private-guard test holds every prototype lookup to a guarded override.
+  private readonly fetchPackageAdvisories = async (key: string, ecosystem: OsvEcosystem, name: string): Promise<AdvisoryRanges[] | null> => {
     if (!this.rateLimiter.consume("osv-package")) return null;
     const out: AdvisoryRanges[] = [];
     let token: string | undefined;
@@ -176,7 +230,7 @@ export class FixPathSources {
     } catch {
       return null;
     }
-    this.cache.set(key, out, "osv", ADVISORY_TTL);
+    this.store(key, out, "osv", ADVISORY_TTL);
     return out;
   }
 
@@ -209,7 +263,7 @@ export class FixPathSources {
     }
     if (ecosystem !== "npm") return null;
     const key = `fixpath:v${CACHE_VERSION}:npm-version-deps:${parent}@${parentVersion}`;
-    let deps = this.cache.get<Record<string, string>>(key);
+    let deps = this.cached<Record<string, string>>(key);
     if (!deps) {
       if (!this.rateLimiter.consume("fixpath-registry")) return null;
       try {
@@ -223,7 +277,7 @@ export class FixPathSources {
         // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
         // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
         deps = { ...doc.optionalDependencies, ...doc.dependencies };
-        this.cache.set(key, deps, "npm", VERSION_DEPS_TTL);
+        this.store(key, deps, "npm", VERSION_DEPS_TTL);
       } catch {
         return null;
       }
@@ -250,7 +304,7 @@ export class FixPathSources {
     }
     if (ecosystem !== "npm") return null;
     const key = `fixpath:v${CACHE_VERSION}:npm-requirement-history:${parent}:${dep}`;
-    const hit = this.cache.get<RequirementHistory>(key);
+    const hit = this.cached<RequirementHistory>(key);
     if (hit) return hit;
     const doc = await this.npmDocument(parent);
     if (!doc) return null;
@@ -261,7 +315,7 @@ export class FixPathSources {
       out[version] =
         typeof req === "string" ? { reqs: [req], peer: false } : typeof peer === "string" ? { reqs: [peer], peer: true } : { reqs: [], peer: false };
     }
-    this.cache.set(key, out, "npm", VERSIONS_TTL);
+    this.store(key, out, "npm", VERSIONS_TTL);
     return out;
   }
 
@@ -289,11 +343,18 @@ export class FixPathSources {
         return null;
       }
     })();
-    this.npmDocs.set(name, { at: now, doc });
+    const entry = { at: now, doc, settled: false };
+    this.npmDocs.set(name, entry);
     void doc.then((d) => {
-      if (d === null) this.npmDocs.delete(name);
+      entry.settled = true;
+      if (d === null && this.npmDocs.get(name) === entry) this.npmDocs.delete(name);
     });
-    while (this.npmDocs.size > NPM_DOCS_KEPT) this.npmDocs.delete(this.npmDocs.keys().next().value!);
+    // Only settled documents are let go: dropping one still in flight made the next caller fetch it
+    // again (a cold scan fetched express four times: blind audit round 6).
+    for (const [n, e] of this.npmDocs) {
+      if (this.npmDocs.size <= NPM_DOCS_KEPT) break;
+      if (e.settled) this.npmDocs.delete(n);
+    }
     return doc;
   }
 
@@ -334,7 +395,7 @@ export class FixPathSources {
    */
   private async npmFacts(name: string): Promise<PackageReleaseFacts | null> {
     const key = `fixpath:v${CACHE_VERSION}:npm-facts:${name}`;
-    const hit = this.cache.get<PackageReleaseFacts>(key);
+    const hit = this.cached<PackageReleaseFacts>(key);
     if (hit) return hit;
     const doc = await this.npmDocument(name);
     if (!doc) return null;
@@ -361,14 +422,14 @@ export class FixPathSources {
       ...(noticed.length > 0 ? { lineNotices: Object.fromEntries(noticed.map((v) => [v, message(v) ?? "deprecated"])) } : {}),
       heldSpecs,
     };
-    this.cache.set(key, facts, "npm", VERSIONS_TTL);
+    this.store(key, facts, "npm", VERSIONS_TTL);
     return facts;
   }
 
   /** A crate's sparse-index record: versions and per-version dependency requirements. */
   async cratesSparse(name: string, fresh = false): Promise<CratesSparse | null> {
     const key = `fixpath:v${CACHE_VERSION}:crates-sparse:${name}`;
-    const hit = fresh ? null : this.cache.get<CratesSparse>(key);
+    const hit = fresh ? null : this.cached<CratesSparse>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
@@ -396,7 +457,7 @@ export class FixPathSources {
           // a malformed line
         }
       }
-      this.cache.set(key, out, "crates", VERSIONS_TTL);
+      this.store(key, out, "crates", VERSIONS_TTL);
       return out;
     } catch {
       return null;
@@ -409,7 +470,7 @@ export class FixPathSources {
    */
   private async pypiFacts(name: string): Promise<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; requiresPython?: Record<string, string> } | null> {
     const key = `fixpath:v${CACHE_VERSION}:pypi-facts:${name}`;
-    const hit = this.cache.get<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; requiresPython?: Record<string, string> }>(key);
+    const hit = this.cached<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; requiresPython?: Record<string, string> }>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
@@ -428,7 +489,7 @@ export class FixPathSources {
           out.versions.push(version);
         }
       }
-      this.cache.set(key, out, "pypi", VERSIONS_TTL);
+      this.store(key, out, "pypi", VERSIONS_TTL);
       return out;
     } catch {
       return null;
@@ -442,7 +503,7 @@ export class FixPathSources {
    */
   async pypiRequiresDist(name: string, version: string): Promise<string[] | null> {
     const key = `fixpath:v${CACHE_VERSION}:pypi-requires:${name}@${version}`;
-    const hit = this.cache.get<string[]>(key);
+    const hit = this.cached<string[]>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
@@ -450,7 +511,7 @@ export class FixPathSources {
       if (!res.ok) return null;
       const doc = (await res.json()) as { info?: { requires_dist?: unknown } };
       const list = Array.isArray(doc.info?.requires_dist) ? (doc.info!.requires_dist as unknown[]).filter((r): r is string => typeof r === "string") : [];
-      this.cache.set(key, list, "pypi", VERSION_DEPS_TTL);
+      this.store(key, list, "pypi", VERSION_DEPS_TTL);
       return list;
     } catch {
       return null;
@@ -465,7 +526,7 @@ export class FixPathSources {
    */
   async versionExists(ecosystem: OsvEcosystem, name: string, version: string): Promise<boolean | null> {
     const key = `fixpath:v${CACHE_VERSION}:exists:${ecosystem}:${name}@${version}`;
-    const hit = this.cache.get<{ exists: boolean }>(key);
+    const hit = this.cached<{ exists: boolean }>(key);
     if (hit) return hit.exists;
     let url: string;
     switch (ecosystem) {
@@ -484,7 +545,7 @@ export class FixPathSources {
         const sparse = await this.cratesSparse(name, true);
         if (!sparse) return null;
         const exists = [...sparse.versions, ...(sparse.yanked ?? [])].includes(version);
-        this.cache.set(key, { exists }, "crates", exists ? VERSION_DEPS_TTL : ABSENT_TTL);
+        this.store(key, { exists }, "crates", exists ? VERSION_DEPS_TTL : ABSENT_TTL);
         return exists;
       }
       default:
@@ -495,7 +556,7 @@ export class FixPathSources {
       const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, TIMEOUT_MS);
       // 404 (and the Go proxy's 410 Gone) is the answer "no such version"; anything else is no answer.
       const exists = res.ok ? true : res.status === 404 || res.status === 410 ? false : null;
-      if (exists !== null) this.cache.set(key, { exists }, ecosystem === "npm" ? "npm" : ecosystem === "PyPI" ? "pypi" : "go", exists ? VERSION_DEPS_TTL : ABSENT_TTL);
+      if (exists !== null) this.store(key, { exists }, ecosystem === "npm" ? "npm" : ecosystem === "PyPI" ? "pypi" : "go", exists ? VERSION_DEPS_TTL : ABSENT_TTL);
       return exists;
     } catch {
       return null;
@@ -510,14 +571,14 @@ export class FixPathSources {
   async goDirective(module: string, version: string): Promise<string | null> {
     const v = version.startsWith("v") ? version : `v${version}`;
     const key = `fixpath:v${CACHE_VERSION}:go-directive:${module}@${v}`;
-    const hit = this.cache.get<{ go: string | null }>(key);
+    const hit = this.cached<{ go: string | null }>(key);
     if (hit) return hit.go;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
       const res = await fetchWithTimeout(`https://proxy.golang.org/${escapeModulePath(module)}/@v/${escapeModulePath(v)}.mod`, {}, TIMEOUT_MS);
       if (!res.ok) return null;
       const go = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(await res.text())?.[1] ?? null;
-      this.cache.set(key, { go }, "go", VERSION_DEPS_TTL);
+      this.store(key, { go }, "go", VERSION_DEPS_TTL);
       return go;
     } catch {
       return null;
@@ -531,7 +592,7 @@ export class FixPathSources {
 
   private async goVersions(name: string): Promise<string[] | null> {
     const key = `fixpath:v${CACHE_VERSION}:go-versions:${name}`;
-    const hit = this.cache.get<string[]>(key);
+    const hit = this.cached<string[]>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
@@ -539,7 +600,7 @@ export class FixPathSources {
       if (!res.ok) return null;
       // OSV's Go ranges carry no `v`.
       const versions = (await res.text()).split("\n").map((v) => v.trim().replace(/^v/, "")).filter(Boolean);
-      this.cache.set(key, versions, "go", VERSIONS_TTL);
+      this.store(key, versions, "go", VERSIONS_TTL);
       return versions;
     } catch {
       return null;
@@ -692,6 +753,7 @@ export async function cleanFixTarget(
   /** The advisory ids OSV's batch query named for the installed copy: the package's list must hold each (listCovers). */
   knownIds: readonly string[] = [],
 ): Promise<FixTargetResult | null> {
+  await yieldIfDue();
   if (perAdvisoryFixes.length === 0 && !installed) return null;
   const [listed, facts] = await Promise.all([
     sources.packageAdvisories(ecosystem, name),
@@ -979,6 +1041,8 @@ export async function verifyFixTargets(
   let next = 0;
   const worker = async () => {
     while (next < todo.length && Date.now() < deadline) {
+      await yieldIfDue();
+      if (next >= todo.length) break;
       const item = todo[next++];
       let timer: ReturnType<typeof setTimeout> | undefined;
       const late = new Promise<null>((resolve) => {
@@ -1591,13 +1655,7 @@ function isPnpmWorkspaceRoot(lockfile: string): boolean {
 
 /** The refresh command for the project whose lockfile is `lockfile`; null when no command is named for it. */
 export function refreshCommandFor(lockfile: string, name: string, installed: string, target: string): string | null {
-  let content: string;
-  try {
-    content = fs.readFileSync(lockfile, "utf-8");
-  } catch {
-    return null;
-  }
-  const format = lockfileFormat(lockfile, content);
+  const format = lockfileFormatOf(lockfile);
   return format ? refreshCommand(format, name, installed, target, format === "pnpm" && isPnpmWorkspaceRoot(lockfile)) : null;
 }
 
@@ -1619,7 +1677,9 @@ export async function refreshVerdict(
   advisories: AdvisoryRanges[] | null,
   published: string[] | null,
 ): Promise<RefreshVerdict | null> {
-  const parents = readLockfileParents(lockfile, name, installed);
+  await yieldIfDue();
+  const index = await prepareLockfileParents(lockfile);
+  const parents = index ? { format: index.format, edges: index.parents(name, installed) } : null;
   if (!parents || parents.edges.length === 0) return null;
   const isCargo = parents.format === "cargo";
   const dialect: RequirementDialect = isCargo ? "cargo" : "npm";

@@ -41,6 +41,8 @@ export function callBudgetMs(): number {
 interface Budget {
   deadline: number;
   budgetMs: number;
+  /** Facts read once per call (callMemo). */
+  memo: Map<string, unknown>;
 }
 
 const current = new AsyncLocalStorage<Budget>();
@@ -48,7 +50,22 @@ const current = new AsyncLocalStorage<Budget>();
 /** Run `work` as one tool call whose budget started at `startedAt` (epoch ms). */
 export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>): Promise<T> {
   const budgetMs = callBudgetMs();
-  return current.run({ deadline: startedAt + budgetMs, budgetMs }, work);
+  return current.run({ deadline: startedAt + budgetMs, budgetMs, memo: new Map() }, work);
+}
+
+/**
+ * `compute()` once per tool call: inside a call the first answer for `key` is kept for the rest of
+ * it; outside one (startup, tests calling a function directly) it is computed every time. For
+ * facts a call reads as one snapshot, such as whether a lockfile changed: a scan stat-ed the same
+ * lockfile thousands of times, a sixth of a fully cached scan (blind audit round 6).
+ */
+export function callMemo<T>(key: string, compute: () => T): T {
+  const memo = current.getStore()?.memo;
+  if (!memo) return compute();
+  if (memo.has(key)) return memo.get(key) as T;
+  const value = compute();
+  memo.set(key, value);
+  return value;
 }
 
 /** Milliseconds left in the running call's budget; Infinity outside a tool call (startup warm-up, tests calling a tool directly). */
