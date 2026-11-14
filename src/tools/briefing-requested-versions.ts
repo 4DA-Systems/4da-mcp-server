@@ -15,7 +15,7 @@
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { asName, proseEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, projectEcosystems, proseEcosystem, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
@@ -25,6 +25,8 @@ export interface RequestedVersion {
   to: string;
   /** The installed version, when the project has exactly one copy of it. */
   from?: string;
+  /** Other ecosystems the project uses, tried when the guessed one has no such release. */
+  alternatives?: CheckEcosystem[];
 }
 
 export interface RequestedVersionFinding extends RequestedVersion {
@@ -53,7 +55,7 @@ const PYPI_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)((?:===?|~=|>=|<=|!=|>|<)[^\s]+)
 
 const GO_HOST_PATH = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\//i;
 
-function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: CheckEcosystem): { name: string; ecosystem: CheckEcosystem } | null {
+function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: CheckEcosystem): { name: string; ecosystem: CheckEcosystem; guessed?: true } | null {
   const bare = token.replace(/[),.;:!?'"`]+$/, "").replace(/^[`'"(]+/, "");
   if (VERBS.has(bare.toLowerCase())) return null;
   const norm = (s: string) => s.toLowerCase().replace(/[-_.]+/g, "-");
@@ -69,7 +71,7 @@ function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: C
     if (go) return { name: go, ecosystem: "Go" };
   }
   const name = asName(bare, fallback);
-  return name ? { name, ecosystem: fallback } : null;
+  return name ? { name, ecosystem: fallback, guessed: true } : null;
 }
 
 /** The (package, version) pairs a task names, in the order named. At most five. */
@@ -77,13 +79,24 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
   const raw = task.match(/[@A-Za-z0-9`'"(^~<>=][\w./@*=<>~^!`'"-]*/g) ?? [];
   const words = raw.map((t) => t.replace(/[`'"(),.;:]+$/, "").replace(/^[`'"(]+/, "").toLowerCase());
   const fallback = proseEcosystem(words, deps);
+  // The ecosystem of a bare name nobody installs is only a guess when the task names none and the
+  // project uses several: the other ones are tried if the guess has no such release (a mixed npm +
+  // Python repository read "add event-stream version 3.3.6" as PyPI; blind audit replay 2026-11-14).
+  const others = statedEcosystem(words) ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
   const out: RequestedVersion[] = [];
-  const add = (who: { name: string; ecosystem: CheckEcosystem } | null, version: string) => {
+  const add = (who: { name: string; ecosystem: CheckEcosystem; guessed?: true } | null, version: string, guess = false) => {
     if (!who || !version) return;
     if (out.some((r) => r.ecosystem === who.ecosystem && r.name === who.name && r.to === version)) return;
     const copies = deps.filter((d) => d.ecosystem === who.ecosystem && d.name === who.name && d.version);
     const versions = [...new Set(copies.map((d) => d.version!))];
-    out.push({ ...who, to: version, ...(versions.length === 1 && versions[0] !== version ? { from: versions[0] } : {}) });
+    const alternatives = guess && who.guessed && who.ecosystem === fallback ? others.filter((e) => asName(who.name, e) !== null) : [];
+    out.push({
+      name: who.name,
+      ecosystem: who.ecosystem,
+      to: version,
+      ...(versions.length === 1 && versions[0] !== version ? { from: versions[0] } : {}),
+      ...(alternatives.length > 0 ? { alternatives } : {}),
+    });
   };
   const clean = (t: string) => t.replace(/[`'"),.;:]+$/, "").replace(/^[`'"(]+/, "");
 
@@ -109,31 +122,31 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
     // "name version 1.2.3", "set name version to 1.2.3" ("add event-stream version 3.3.6" was judged
     // at latest and came back safe_to_delegate; blind audit 2026-11-14, F4).
     if (words[i + 1] === "version" && VERSIONISH.test(after)) {
-      add(nameFor(token, deps, fallback), after);
+      add(nameFor(token, deps, fallback), after, true);
       continue;
     }
     if (words[i + 1] === "version" && words[i + 2] === "to" && VERSIONISH.test(clean(raw[i + 3] ?? ""))) {
-      add(nameFor(token, deps, fallback), clean(raw[i + 3]));
+      add(nameFor(token, deps, fallback), clean(raw[i + 3]), true);
       continue;
     }
     // "version 1.2.3 of name"
     if (words[i] === "version" && VERSIONISH.test(next) && words[i + 2] === "of" && raw[i + 3]) {
-      add(nameFor(clean(raw[i + 3]), deps, fallback), next);
+      add(nameFor(clean(raw[i + 3]), deps, fallback), next, true);
       continue;
     }
     // "name to 1.2.3"
     if (words[i + 1] === "to" && VERSIONISH.test(after)) {
-      add(nameFor(token, deps, fallback), after);
+      add(nameFor(token, deps, fallback), after, true);
       continue;
     }
     // "name from 1.0 to 1.2"
     if (words[i + 1] === "from" && VERSIONISH.test(after) && words[i + 3] === "to" && VERSIONISH.test(clean(raw[i + 4] ?? ""))) {
-      add(nameFor(token, deps, fallback), clean(raw[i + 4]));
+      add(nameFor(token, deps, fallback), clean(raw[i + 4]), true);
       continue;
     }
     // "pin name 1.2.3", "add name 4.17.20": a verb, the name, the version.
     if (i > 0 && VERBS.has(words[i - 1]) && VERSIONISH.test(next)) {
-      add(nameFor(token, deps, fallback), next);
+      add(nameFor(token, deps, fallback), next, true);
     }
   }
   return out.slice(0, MAX_REQUESTED);
@@ -145,7 +158,7 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
  */
 export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
-  const unknown = (r: RequestedVersion, why: string): RequestedVersionFinding => ({
+  const unknown = ({ alternatives: _a, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
     verdict: "unknown",
     resolved: null,
@@ -156,40 +169,62 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
   if (!liveIntel.getReleaseSources || !liveIntel.getFixPathSources || !liveIntel.queryAdvisories) {
     return requested.map((r) => unknown(r, "the registry lookups are not available in this session"));
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = Date.now() + CHECK_BUDGET_MS;
+  /** One dependency_check run within what is left of the budget; null past it. */
+  const run = async (list: RequestedVersion[]) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        executeDependencyCheck(
+          null,
+          { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: r.to, ...(r.from ? { from: r.from } : {}) })) },
+          liveIntel as LiveIntelligence,
+          now ? { now } : {},
+        ),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
+  const finding = (r: RequestedVersion, item: Answer["results"][number] | undefined): RequestedVersionFinding => {
+    const { alternatives: _alternatives, ...own } = r;
+    if (!item) return unknown(own, "no answer");
+    const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
+    const rc = item.range_check;
+    return {
+      ...own,
+      verdict: item.verdict,
+      resolved: item.to,
+      reason: item.reason,
+      ...(rc ? { safe: { smallest: rc.smallest_safe_upgrade ?? rc.smallest_safe_in_range, newest: rc.newest_safe_in_range } } : {}),
+      malicious: Boolean(advisories?.malicious_package),
+      ...(advisories?.critical_affecting_to?.length ? { critical: advisories.critical_affecting_to } : {}),
+    };
+  };
+  const unpublished = (item: Answer["results"][number] | undefined) => Boolean(item && item.verdict === "unknown" && /is not a published version on|a hallucinated package/.test(item.reason));
   try {
-    const answer = await Promise.race([
-      executeDependencyCheck(
-        null,
-        { items: requested.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: r.to, ...(r.from ? { from: r.from } : {}) })) },
-        liveIntel as LiveIntelligence,
-        now ? { now } : {},
-      ),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), CHECK_BUDGET_MS);
-      }),
-    ]);
+    const answer = await run(requested);
     if (!answer) return requested.map((r) => unknown(r, "the lookups did not finish in time"));
-    return requested.map((r, i) => {
-      const item = answer.results[i];
-      if (!item) return unknown(r, "no answer");
-      const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
-      const rc = item.range_check;
-      return {
-        ...r,
-        verdict: item.verdict,
-        resolved: item.to,
-        reason: item.reason,
-        ...(rc ? { safe: { smallest: rc.smallest_safe_upgrade ?? rc.smallest_safe_in_range, newest: rc.newest_safe_in_range } } : {}),
-        malicious: Boolean(advisories?.malicious_package),
-        ...(advisories?.critical_affecting_to?.length ? { critical: advisories.critical_affecting_to } : {}),
-      };
-    });
+    const out = requested.map((r, i) => finding(r, answer.results[i]));
+    // A guessed ecosystem with no such release: the project's other ecosystems, in one more run.
+    const retries = requested.flatMap((r, i) => (unpublished(answer.results[i]) ? (r.alternatives ?? []).map((ecosystem) => ({ i, r: { ...r, ecosystem, alternatives: undefined } })) : []));
+    if (retries.length > 0) {
+      const again = await run(retries.map((x) => x.r)).catch(() => null);
+      if (again) {
+        for (const i of new Set(retries.map((x) => x.i))) {
+          const hit = retries.findIndex((x, k) => x.i === i && again.results[k] && !unpublished(again.results[k]));
+          if (hit >= 0) out[i] = finding(retries[hit].r, again.results[hit]);
+        }
+      }
+    }
+    return out;
   } catch (error) {
     // dependency_check refuses a malformed item (a version it cannot read): unknown, said.
     return requested.map((r) => unknown(r, `the check failed: ${String(error instanceof Error ? error.message : error).slice(0, 120)}`));
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }
 

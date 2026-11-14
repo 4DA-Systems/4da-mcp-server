@@ -71,9 +71,12 @@ beforeEach(() => {
         return doc ? json(doc) : json({ error: "Not found" }, 404);
       }
       if (u.hostname === "api.osv.dev" && u.pathname === "/v1/querybatch") {
-        const { queries } = JSON.parse(body) as { queries: Array<{ package: { name: string }; version: string }> };
+        // Every advisory here is an npm one: OSV answers by ecosystem and name.
+        const { queries } = JSON.parse(body) as { queries: Array<{ package: { name: string; ecosystem?: string }; version: string }> };
         return json({
-          results: queries.map((q) => ({ vulns: ADVISORIES[q.package.name]?.vulnerable.includes(q.version) ? [{ id: ADVISORIES[q.package.name].id, modified: "2026-01-01T00:00:00Z" }] : [] })),
+          results: queries.map((q) => ({
+            vulns: q.package.ecosystem === "npm" && ADVISORIES[q.package.name]?.vulnerable.includes(q.version) ? [{ id: ADVISORIES[q.package.name].id, modified: "2026-01-01T00:00:00Z" }] : [],
+          })),
         });
       }
       if (u.hostname === "api.osv.dev" && u.pathname.startsWith("/v1/vulns/")) {
@@ -81,8 +84,8 @@ beforeEach(() => {
         return name ? json(record(name)) : json({}, 404);
       }
       if (u.hostname === "api.osv.dev" && u.pathname === "/v1/query") {
-        const q = JSON.parse(body) as { package?: { name?: string } };
-        return json({ vulns: q.package?.name && ADVISORIES[q.package.name] ? [record(q.package.name)] : [] });
+        const q = JSON.parse(body) as { package?: { name?: string; ecosystem?: string } };
+        return json({ vulns: q.package?.ecosystem === "npm" && q.package?.name && ADVISORIES[q.package.name] ? [record(q.package.name)] : [] });
       }
       if (u.hostname === "api.npmjs.org") return json({});
       return json({ error: "Not found" }, 404);
@@ -155,6 +158,24 @@ describe("the version a task names is judged, at that version", () => {
       expect(result.delegation_assessment.reason).toContain("GHSA-test-event-stream");
     },
   );
+
+  it("a mixed npm + Python project: a bare name the guessed ecosystem lacks is found in the other (blind audit replay 2026-11-14)", async () => {
+    // PyPI has more dependencies here, so a bare name is guessed PyPI first; pypi.org has no event-stream.
+    fs.writeFileSync(path.join(scratch, "requirements.txt"), "requests==2.32.3\nurllib3==2.2.2\nidna==3.7\n");
+    const live = project({ react: "18.2.0" });
+    const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
+    const { entries, discovery } = scanProjectTree(scratch);
+    live.initFromProjectTree(scratch, treeResolutionGroups(entries), discovery);
+    const db = new FourDADatabase(path.join(scratch, "standalone.db"));
+    try {
+      const result = await executeWhatShouldIKnow(db, { task: "add event-stream version 3.3.6" }, live);
+      expect(result.requested_versions?.[0]).toMatchObject({ name: "event-stream", ecosystem: "npm", to: "3.3.6", verdict: "avoid" });
+      expect(result.requested_versions?.[0]).not.toHaveProperty("alternatives");
+      expect(result.delegation_assessment.level).toBe("human_only");
+    } finally {
+      db.close();
+    }
+  });
 
   it('"upgrade lodash to 4.17.21" from an installed 4.17.20: judged as that move, and it clears', async () => {
     const result = await brief("upgrade lodash to 4.17.21", { lodash: "4.17.20" });

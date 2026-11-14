@@ -39,6 +39,8 @@ import { nearMissOf } from "./dependency-check-nearmiss.js";
 export interface NewPackage {
   name: string;
   ecosystem: CheckEcosystem;
+  /** Other ecosystems the project uses, tried when the guessed one has no such package. */
+  alternatives?: CheckEcosystem[];
 }
 
 /** What the name check found for one package a task adds. */
@@ -121,15 +123,25 @@ export function asName(token: string, ecosystem: CheckEcosystem): string | null 
 
 /** The ecosystem prose names ("the crate", "from PyPI"), else the project's most common, else npm. */
 export function proseEcosystem(words: string[], deps: readonly ResolvedDependency[]): CheckEcosystem {
+  return statedEcosystem(words) ?? projectEcosystems(deps)[0] ?? "npm";
+}
+
+/** The ecosystem the task's own words name ("pip", "cargo", "package.json"...), or null. */
+export function statedEcosystem(words: string[]): CheckEcosystem | null {
   const has = (...w: string[]) => w.some((x) => words.includes(x));
   if (has("crate", "crates", "cargo", "crates.io", "rust")) return "crates.io";
   if (has("pip", "pip3", "pypi", "python", "poetry", "uv", "requirements.txt", "pyproject.toml")) return "PyPI";
   if (has("npm", "pnpm", "yarn", "bun", "node", "nodejs", "package.json")) return "npm";
+  return null;
+}
+
+/** The checkable ecosystems the project installs from, most dependencies first. */
+export function projectEcosystems(deps: readonly ResolvedDependency[]): CheckEcosystem[] {
   const counts = new Map<CheckEcosystem, number>();
   for (const d of deps) {
     if (d.ecosystem === "npm" || d.ecosystem === "crates.io" || d.ecosystem === "PyPI" || d.ecosystem === "Go") counts.set(d.ecosystem, (counts.get(d.ecosystem) ?? 0) + 1);
   }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "npm";
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([e]) => e);
 }
 
 /**
@@ -142,12 +154,15 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
   const raw = task.match(/(?:--?[A-Za-z][\w-]*)|[@A-Za-z0-9][\w./@*=<>~^!-]*/g) ?? [];
   const words = raw.map((t) => t.replace(/[.,;:)]+$/, "").toLowerCase());
   const fallback = proseEcosystem(words, deps);
+  // A name filed under the project's main ecosystem only because the task names none is a guess.
+  const others = statedEcosystem(words) ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
   const packaging = PACKAGING.test(task);
   const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
   const found: NewPackage[] = [];
-  const add = (name: string | null, ecosystem: CheckEcosystem) => {
+  const add = (name: string | null, ecosystem: CheckEcosystem, guess = false) => {
     if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`)) return false;
-    if (!found.some((f) => f.ecosystem === ecosystem && f.name === name)) found.push({ name, ecosystem });
+    const alternatives = guess ? others.filter((e) => asName(name, e) !== null) : [];
+    if (!found.some((f) => f.ecosystem === ecosystem && f.name === name)) found.push({ name, ecosystem, ...(alternatives.length > 0 ? { alternatives } : {}) });
     return true;
   };
 
@@ -184,7 +199,7 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
       const isQuoted = quoted.has(words[k]) || quoted.has(name.toLowerCase());
       const known = packaging && fallback === "npm" && !COMMON_WORDS.has(name) && (POPULAR.has(name) || nearMissOf(name) !== null);
       if (!(saidPackage || PACKAGE_WORDS.has(after) || installing || isQuoted || known)) break;
-      add(name, fallback);
+      add(name, fallback, true);
       // "lodahs and expres", "lodahs, expres": the next name continues the list.
       if (after === "and" || after === "&" || after === "plus") k++;
       else if (PACKAGE_WORDS.has(after)) break;
@@ -195,7 +210,7 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;
 
-function unchecked(pkg: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -217,34 +232,57 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
   if (!liveIntel.getReleaseSources || !liveIntel.getFixPathSources || !liveIntel.queryAdvisories) {
     return packages.map((p) => unchecked(p, "the registry lookups are not available in this session"));
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = Date.now() + NAME_CHECK_BUDGET_MS;
+  /** One dependency_check run within what is left of the budget; null past it. */
+  const run = async (list: NewPackage[]) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        executeDependencyCheck(null, { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: "latest" })) }, liveIntel as LiveIntelligence, now ? { now } : {}),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
+  const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
+    const { alternatives: _alternatives, ...p } = pkg;
+    if (!r) return unchecked(p, "no answer");
+    const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
+    const nameCheck = r.signals.find((s) => s.id === "name_check");
+    const nearMiss = (nameCheck?.value as { near_miss_of?: string } | undefined)?.near_miss_of;
+    return {
+      ...p,
+      verdict: r.verdict,
+      latest: r.to !== "latest" ? r.to : null,
+      reason: r.reason,
+      malicious: Boolean(advisories?.malicious_package),
+      did_you_mean: advisories?.malicious_package?.did_you_mean ?? nearMiss ?? (p.ecosystem === "npm" ? (nearMissOf(p.name)?.of ?? null) : null),
+      name_finding: nameCheck?.effect === "avoid" || nameCheck?.effect === "review" ? nameCheck.effect : null,
+    };
+  };
+  // The guessed ecosystem's registry has no package of that name: in a project of several
+  // ecosystems the guess may be wrong (blind audit replay 2026-11-14), so the others are tried.
+  const missing = (r: Answer["results"][number] | undefined) => Boolean(r && r.verdict === "unknown" && /a hallucinated package/.test(r.reason));
   try {
-    const answer = await Promise.race([
-      executeDependencyCheck(null, { items: packages.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: "latest" })) }, liveIntel as LiveIntelligence, now ? { now } : {}),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), NAME_CHECK_BUDGET_MS);
-      }),
-    ]);
+    const answer = await run(packages);
     if (!answer) return packages.map((p) => unchecked(p, "the lookups did not finish in time"));
-    return packages.map((p, i) => {
-      const r = answer.results[i];
-      if (!r) return unchecked(p, "no answer");
-      const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
-      const nameCheck = r.signals.find((s) => s.id === "name_check");
-      const nearMiss = (nameCheck?.value as { near_miss_of?: string } | undefined)?.near_miss_of;
-      return {
-        ...p,
-        verdict: r.verdict,
-        latest: r.to !== "latest" ? r.to : null,
-        reason: r.reason,
-        malicious: Boolean(advisories?.malicious_package),
-        did_you_mean: advisories?.malicious_package?.did_you_mean ?? nearMiss ?? (p.ecosystem === "npm" ? (nearMissOf(p.name)?.of ?? null) : null),
-        name_finding: nameCheck?.effect === "avoid" || nameCheck?.effect === "review" ? nameCheck.effect : null,
-      };
-    });
+    const out = packages.map((p, i) => finding(p, answer.results[i]));
+    const retries = packages.flatMap((p, i) => (missing(answer.results[i]) ? (p.alternatives ?? []).map((ecosystem) => ({ i, p: { name: p.name, ecosystem } })) : []));
+    if (retries.length > 0) {
+      const again = await run(retries.map((x) => x.p)).catch(() => null);
+      if (again) {
+        for (const i of new Set(retries.map((x) => x.i))) {
+          const hit = retries.findIndex((x, k) => x.i === i && again.results[k] !== undefined && !missing(again.results[k]));
+          if (hit >= 0) out[i] = finding(retries[hit].p, again.results[hit]);
+        }
+      }
+    }
+    return out;
   } catch (error) {
     return packages.map((p) => unchecked(p, `the check failed: ${String(error instanceof Error ? error.message : error).slice(0, 120)}`));
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }
