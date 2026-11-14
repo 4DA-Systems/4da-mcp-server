@@ -71,7 +71,8 @@ export function privateTaskPackages(task: string, files: string[], live: Private
         const reason = live.privateReason(ecosystem, name);
         if (!reason) continue;
         const key = `${ecosystem}\0${name}`;
-        if (![...out.values()].some((p) => p.ecosystem === ecosystem && p.package.toLowerCase() === name.toLowerCase())) {
+        // Once per name: a private PyPI dependency is not listed again as private under npm.
+        if (![...out.values()].some((p) => p.package.toLowerCase() === name.toLowerCase())) {
           out.set(key, { package: name, ecosystem, installed: [], why: reason });
         }
         break;
