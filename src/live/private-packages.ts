@@ -73,6 +73,20 @@ export function isPublicPypiIndex(url: string): boolean {
   return host !== null && PUBLIC_PYPI_HOSTS.has(host);
 }
 
+/**
+ * Public wheel indexes projects add as an EXTRA index beside pypi.org (PyTorch, NVIDIA, PyG). They
+ * host only their own public builds, so a name is never private because of them; judging them
+ * private made every pin of a project with `--extra-index-url https://download.pytorch.org/whl/cu121`
+ * NOT CHECKED. Never a replacement for pypi.org: as `--index-url` they still replace it.
+ */
+const PUBLIC_EXTRA_PYPI_HOSTS = new Set(["download.pytorch.org", "pypi.nvidia.com", "pypi.ngc.nvidia.com", "data.pyg.org"]);
+
+/** Whether an extra index (beside pypi.org) is pypi.org or a well-known public wheel index. */
+export function isPublicExtraPypiIndex(url: string): boolean {
+  const host = hostOf(url);
+  return isPublicPypiIndex(url) || (host !== null && PUBLIC_EXTRA_PYPI_HOSTS.has(host));
+}
+
 /** Whether a Cargo.lock `source` is crates.io. */
 export function isPublicCratesSource(source: string): boolean {
   const bare = (s: string) => s.trim().replace(/\/+$/, "").toLowerCase();
@@ -552,7 +566,7 @@ export class PrivatePackageRules {
     extra.push(...(env.PIP_EXTRA_INDEX_URL ?? "").split(/\s+/).filter(Boolean).map((url) => ({ url, from: "PIP_EXTRA_INDEX_URL" })));
     const chosen = pipIndex as { url: string; from: string } | null;
     this.pipIndex = chosen && !isPublicPypiIndex(chosen.url) ? { url: sourceLabel(chosen.url), from: chosen.from } : null;
-    const extraPrivate = extra.filter((e) => !isPublicPypiIndex(e.url));
+    const extraPrivate = extra.filter((e) => !isPublicExtraPypiIndex(e.url));
     this.pipExtra = [...new Set(extraPrivate.map((e) => sourceLabel(e.url)))];
     this.pipExtraFrom = extraPrivate.length > 0 ? { url: sourceLabel(extraPrivate[0].url), from: extraPrivate[0].from } : null;
     this.envKey = RULE_ENV.map((k) => `${k}=${env[k] ?? ""}`).join("\n");

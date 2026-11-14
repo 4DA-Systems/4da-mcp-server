@@ -476,6 +476,23 @@ describe("A: every pip configuration file pip reads, and extra indexes", () => {
     await live.scanVulnerabilities(scratch, { includeDev: true });
     expect(mentions("requests").length).toBeGreaterThan(0);
   });
+
+  it("a well-known public wheel index as an extra index (PyTorch) keeps the pins public", async () => {
+    write("requirements.txt", "--extra-index-url https://download.pytorch.org/whl/cu121\nrequests==2.31.0\n");
+    process.env.PIP_EXTRA_INDEX_URL = "https://pypi.nvidia.com";
+    const live = liveFor(scratch);
+    const scan = await live.scanVulnerabilities(scratch, { includeDev: true });
+    expect(scan.privateExcluded?.dependencies.map((d) => d.name) ?? []).not.toContain("requests");
+    expect(mentions("requests").length).toBeGreaterThan(0);
+  });
+
+  it("the same host as --index-url still replaces pypi.org, so its pins are private", async () => {
+    write("requirements.txt", "--index-url https://download.pytorch.org/whl/cu121\nomega-internal-risk==3.1.0\n");
+    const live = liveFor(scratch);
+    const scan = await live.scanVulnerabilities(scratch, { includeDev: true });
+    expect(scan.privateExcluded?.dependencies.map((d) => d.name)).toContain("omega-internal-risk");
+    expect(mentions("omega")).toEqual([]);
+  });
 });
 
 describe("B: ecosystem_pulse with no stack to search", () => {

@@ -20,7 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { emptySource, found, InstanceSet, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
 import { readTextFile } from "./text-file.js";
-import { isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
+import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -186,7 +186,7 @@ export function resolvePython(cwd: string): VersionSource {
     // from it: private too (blind audit round 4; until then the names were sent and only a notice
     // said so). The answer still names the extra index (LiveIntelligence.getRegistryNotice).
     const options = indexOptions(safeRead(file));
-    const privateExtra = options.extra.find((index) => !isPublicPypiIndex(index));
+    const privateExtra = options.extra.find((index) => !isPublicExtraPypiIndex(index));
     const privateSource = options.index && !isPublicPypiIndex(options.index) ? options.index : privateExtra;
     if (privateSource) {
       for (const { name, version } of pins) privateIndex.push({ name, version, registry: sourceLabel(privateSource), file });
