@@ -3,6 +3,7 @@
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 
 import { refusePrivateRequest } from "./private-guard.js";
+import { shutdownSignal } from "../shutdown.js";
 
 /**
  * HTTPS_PROXY / HTTP_PROXY / NO_PROXY (black-box re-run of 96c16d2: the server ignored them, even
@@ -35,8 +36,14 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   // The choke point: a request that names a private package is never made (private-guard.ts).
   refusePrivateRequest(url, options);
+  // A server that is shutting down makes no new request, and one in flight is aborted
+  // (shutdown.ts): the host closed stdin, so no answer can reach anyone.
+  if (shutdownSignal.aborted) throw new Error("not requested: the server is shutting down");
   const controller = new AbortController();
+  const stop = () => controller.abort(shutdownSignal.reason);
+  shutdownSignal.addEventListener("abort", stop, { once: true });
   let timeout = setTimeout(() => controller.abort(), timeoutMs);
+  timeout.unref?.();
   try {
     const dispatcher = proxyDispatcher();
     const response = dispatcher
@@ -48,11 +55,15 @@ export async function fetchWithTimeout(
     // The abort stays armed for the body, with its own allowance; unref'd, it never holds the
     // process open, and aborting a body already read does nothing.
     clearTimeout(timeout);
-    timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout = setTimeout(() => {
+      controller.abort();
+      shutdownSignal.removeEventListener("abort", stop);
+    }, timeoutMs);
     timeout.unref?.();
     return response;
   } catch (error) {
     clearTimeout(timeout);
+    shutdownSignal.removeEventListener("abort", stop);
     throw error;
   }
 }

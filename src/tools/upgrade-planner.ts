@@ -569,10 +569,13 @@ async function executeStandalonePlanner(
     // r7: OSV.dev gave no answer for this copy. Its advisories are unknown: the row is listed, its
     // risk is unknown (never the "low" an empty answer reads as), and the release it would move to
     // was not confirmed, so it is named only in a NOT CHECKED reason, never in targetVersion.
-    const noAnswer = !(vulns && vulns.length > 0) && unanswered.has(instanceKey(dep.ecosystem, dep.name, dep.currentVersion));
+    // r8: the same when the whole scan did not finish within the call (vulnResult null): every row's
+    // advisories are unknown, so none may read "low" and drop out of risk_threshold "high".
+    const noAnswer = !(vulns && vulns.length > 0) && (vulnResult === null || unanswered.has(instanceKey(dep.ecosystem, dep.name, dep.currentVersion)));
     if (noAnswer) {
       risk = "unknown";
-      reasons.unshift(`NOT CHECKED: OSV.dev gave no answer for ${dep.name} ${dep.currentVersion ?? ""}`.trimEnd() + ` (${vulnResult?.uncheckedReason ?? "the query failed"}), so its advisories are not known; this is not a clean result`);
+      const why = vulnResult === null ? "the OSV.dev scan did not finish within this call" : (vulnResult.uncheckedReason ?? "the query failed");
+      reasons.unshift(`NOT CHECKED: OSV.dev gave no answer for ${dep.name} ${dep.currentVersion ?? ""}`.trimEnd() + ` (${why}), so its advisories are not known; this is not a clean result`);
     }
     // A newer release offered without being confirmed free of the package's advisories (OSV.dev's
     // batch query failed, or the check ran out of time) is named only in that reason (#80's rule).

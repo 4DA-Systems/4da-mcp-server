@@ -58,6 +58,17 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   if (seen.has("--version") || seen.has("-v")) return { ok: true, command: { kind: "version" } };
   if (seen.has("--help") || seen.has("-h")) return { ok: true, command: { kind: "help" } };
   const httpOnly = [...values.keys()];
+  // `setup --http` ran the setup and `--doctor --http` the doctor, the other flag ignored without a
+  // word (blind audit of e3aba98): two modes at once are refused, as an unknown flag is.
+  const modes = [
+    seen.has("--setup") || seen.has("setup") ? "--setup" : null,
+    seen.has("--doctor") || seen.has("doctor") ? "--doctor" : null,
+    seen.has("--http") ? "--http" : null,
+  ].filter((m): m is string => m !== null);
+  if (modes.length > 1) return { ok: false, error: `${modes.join(" and ")} cannot be combined: choose one` };
+  if (modes.length === 1 && modes[0] !== "--http" && httpOnly.length > 0) {
+    return { ok: false, error: `${httpOnly.join(" and ")} ${httpOnly.length === 1 ? "is" : "are"} used only with --http, not with ${modes[0]}` };
+  }
   if (seen.has("--setup") || seen.has("setup")) return { ok: true, command: { kind: "setup", dryRun: seen.has("--dry-run") } };
   if (seen.has("--dry-run")) return { ok: false, error: "--dry-run is used only with --setup" };
   if (seen.has("--doctor") || seen.has("doctor")) return { ok: true, command: { kind: "doctor" } };

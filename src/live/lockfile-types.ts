@@ -54,6 +54,12 @@ export interface VersionSource {
   /** PyPI: `--extra-index-url` indexes a requirements file adds beside pypi.org (not public ones). */
   extraIndexes?: Array<{ file: string; index: string }>;
   /**
+   * PyPI: every file read records the index each package came from (uv.lock, poetry.lock,
+   * Pipfile.lock), so the configured indexes need not be judged for them. Not set when a pdm.lock
+   * (which records none) or a requirements file was read (R8, B4).
+   */
+  indexRecorded?: true;
+  /**
    * npm aliases the lockfile installs at the top level: the name the manifest
    * declares (`my-lodash`) to the registry package it is (`lodash`).
    */
@@ -150,7 +156,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "indexRecorded"> = {},
 ): VersionSource {
   return {
     versions,

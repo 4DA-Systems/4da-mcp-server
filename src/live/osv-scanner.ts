@@ -298,7 +298,7 @@ export class OsvHttpSource implements AdvisorySource {
   private async postBatch(queries: OsvBatchQuery[]): Promise<OsvBatchResponse["results"]> {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, BATCH_RETRY_DELAY_MS));
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, BATCH_RETRY_DELAY_MS).unref());
       try {
         const response = await fetchWithTimeout(OSV_BATCH_URL, {
           method: "POST",
@@ -425,7 +425,7 @@ export class OsvHttpSource implements AdvisorySource {
       } catch {
         // network failure or timeout: retry once
       }
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, DETAIL_RETRY_DELAY_MS));
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, DETAIL_RETRY_DELAY_MS).unref());
     }
     return null;
   }
@@ -436,7 +436,7 @@ export class OsvHttpSource implements AdvisorySource {
  * line breaks in aliases/references and the old malware reading; an upgrade never reads them.
  */
 function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
-  return `osv:v8:${dep.ecosystem}:${dep.name}:${dep.version}`;
+  return `osv:v9:${dep.ecosystem}:${dep.name}:${dep.version}`;
 }
 
 /** Dependencies per cache read before the scan yields to the event loop (so the server keeps answering ping). */
@@ -472,6 +472,12 @@ export class OsvScanner {
     this.cache = cache;
     this.rateLimiter = rateLimiter;
     this.source = source ?? new OsvHttpSource(cache, rateLimiter);
+  }
+
+  /** Drop the cached answers (fresh and expired) for these releases: the next scan asks OSV.dev again. */
+  forget(deps: ReadonlyArray<Pick<ResolvedDependency, "ecosystem" | "name" | "version">>): void {
+    const keys = [...new Set(deps.filter((d) => d.version !== null).map((d) => osvCacheKey(d)))];
+    if (keys.length > 0) this.cache.deleteMany(keys);
   }
 
   async scan(deps: ResolvedDependency[], projectPath: string): Promise<VulnerabilityScanResult> {
@@ -662,6 +668,7 @@ export class OsvScanner {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), this.aliasBudgetMs);
+        timer.unref?.();
       });
       try {
         // Fetches past the deadline keep running and fill the detail cache for the next call.
@@ -716,6 +723,7 @@ export class OsvScanner {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, this.aliasBudgetMs);
+      timer.unref?.();
     });
     try {
       await Promise.race([
@@ -785,7 +793,7 @@ export class OsvScanner {
       // version. Cached, that stub answered for the next hour, so one failed fetch turned a
       // critical into "unknown, no fix" for every scan in it (audit 2026-11-11, T7). Only a
       // dependency whose every advisory was read is cached; the rest are asked again next time.
-      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v8:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v9:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       pushAll(results, depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);

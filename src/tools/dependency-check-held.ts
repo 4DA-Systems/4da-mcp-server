@@ -33,6 +33,8 @@ export const HELD_RANGE_NOTE =
 
 export class HeldJudge {
   private readonly checks = new Map<string, HeldCheck>();
+  /** The checks that rest on a batch answer (a release that holds nothing needs none). */
+  private readonly fromBatch = new Set<string>();
   /** Per package: every release's held specs, or null when the registry could not be read. */
   private readonly specs = new Map<string, Record<string, Record<string, string>> | null>();
   /**
@@ -91,7 +93,21 @@ export class HeldJudge {
       }
     }
     if (releases.length === 0) return;
-    for (const [key, check] of await heldAdvisories(sources, this.query, releases, this.deadline)) this.checks.set(key, check);
+    for (const [key, check] of await heldAdvisories(sources, this.query, releases, this.deadline)) {
+      this.checks.set(key, check);
+      this.fromBatch.add(key);
+    }
+  }
+
+  /**
+   * The batch answers the clean judgments rest on cannot be trusted (round 8, B7: OSV.dev answered
+   * `{}` for releases its own advisory list says are affected): every release judged to hold nothing
+   * affected is unchecked from here on, with why. A concrete finding (something affected) stands.
+   */
+  distrust(pkg: string, reason: string): void {
+    for (const [key, check] of this.checks) {
+      if (key.startsWith(`${pkg}@`) && this.fromBatch.has(key) && check.status === "checked" && check.affected.length === 0) this.checks.set(key, { status: "unchecked", reason });
+    }
   }
 
   at(pkg: string, version: string): HeldCheck | undefined {

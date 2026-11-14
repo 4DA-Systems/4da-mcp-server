@@ -7,6 +7,7 @@
  * 2. A SQLite driver opens a database (node:sqlite, else better-sqlite3)
  * 3. Database is found and readable
  * 4. LLM providers are configured (optional)
+ * 5. OSV.dev and the registries answer, through the configured proxy
  *
  * Usage:
  *   npx @4da/mcp-server --doctor
@@ -18,6 +19,8 @@ import { explicitDbPathProblem, FourDADatabase } from "./db.js";
 import { NODE_SQLITE_MIN, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
+import { checkLookupReachability } from "./doctor-network.js";
+import { pushAll } from "./array-utils.js";
 
 interface Check {
   name: string;
@@ -25,7 +28,7 @@ interface Check {
   detail: string;
 }
 
-export function runDoctor(): void {
+export async function runDoctor(): Promise<void> {
   console.log("\n  4DA MCP Server — Doctor\n");
 
   const checks: Check[] = [];
@@ -140,6 +143,10 @@ export function runDoctor(): void {
   // Proxy: said only when a proxy is configured; a proxy this process does not use fails every lookup.
   const proxy = configureProxy();
   if (proxy.note) checks.push({ name: "Proxy", status: proxy.state === "invalid" ? "fail" : "pass", detail: proxy.note.replace(/^Proxy: /, "") });
+
+  // 7. Lookups: OSV.dev and each registry asked once, through the proxy when one is set. A proxy
+  // that parses but does not answer used to pass here (blind audit of e3aba98).
+  pushAll(checks, await checkLookupReachability());
 
   // Print results
   const icons = { pass: "\u2713", warn: "!", fail: "\u2717" };

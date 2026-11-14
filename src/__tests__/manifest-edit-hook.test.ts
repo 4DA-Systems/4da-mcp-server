@@ -157,4 +157,39 @@ describe("manifest-edit hook: only dependency sections declare dependencies (pre
     expect(poetry).toContain("requests: ^2.30 -> ^2.31");
     expect(poetry).not.toContain("python:");
   });
+
+  // Pre-publish round 8 (blind audit of e3aba98).
+  it("a [dependencies.x] `version =` edit counts when [package] has a version line too (it was ignored)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "4da-hook-r8-"));
+    try {
+      const cargo = join(dir, "Cargo.toml");
+      writeFileSync(cargo, '[package]\nname = "app"\nversion = "0.2.0"\nedition = "2021"\n\n[dependencies.serde]\nversion = "1.0.210"\nfeatures = ["derive"]\n');
+      const out = run({ tool_name: "Edit", tool_input: { file_path: cargo, old_string: 'version = "1.0.200"', new_string: 'version = "1.0.210"' } });
+      expect(context(out.stdout)).toContain("serde: 1.0.200 -> 1.0.210");
+      // The package's own version is still not a dependency.
+      writeFileSync(cargo, '[package]\nname = "app"\nversion = "0.3.0"\n\n[dependencies.serde]\nversion = "1.0.210"\n');
+      const own = run({ tool_name: "Edit", tool_input: { file_path: cargo, old_string: 'version = "0.2.0"', new_string: 'version = "0.3.0"' } });
+      expect(own.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("one malformed edit in a MultiEdit does not hide the valid one beside it", () => {
+    const out = run({
+      tool_name: "MultiEdit",
+      tool_input: { file_path: "package.json", edits: [{ old_string: 42, new_string: { x: 1 } }, null, { old_string: '"vite": "^6.0.0"', new_string: '"vite": "^7.0.0"' }] },
+    });
+    expect(context(out.stdout)).toContain("vite: ^6.0.0 -> ^7.0.0");
+  });
+
+  it("a very large edit is read in linear time", () => {
+    const n = 40_000;
+    const deps = Array.from({ length: n }, (_, i) => `    "pkg-${i}": "1.0.${i}"`).join(",\n");
+    const after = deps.replace('"pkg-0": "1.0.0"', '"pkg-0": "2.0.0"');
+    const started = Date.now();
+    const out = run({ tool_name: "Edit", tool_input: { file_path: "package.json", old_string: `"dependencies": {\n${deps}\n}`, new_string: `"dependencies": {\n${after}\n}` } });
+    expect(Date.now() - started).toBeLessThan(8_000);
+    expect(context(out.stdout)).toContain("pkg-0: 1.0.0 -> 2.0.0");
+  });
 });

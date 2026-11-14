@@ -64,7 +64,7 @@ import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
 import { withHeldTargets } from "../live/held-targets.js";
 import { confirmTargets, listConfirmed } from "../live/batch-confirm.js";
-import type { AdvisoryQuery } from "../live/held-dependencies.js";
+import { heldAdvisories, heldText, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
@@ -1277,7 +1277,18 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
     return { kind: "move", upgrade, text: `${head}; ${parent}'s release requirements could not be read: ${advice}` };
   }
 
-  const found = smallestAdmitting(ctx, facts, from, history, dialect, own.clean);
+  const smallestOwn = smallestAdmitting(ctx, facts, from, history, dialect, own.clean);
+  // Round 8 (B6): an npm parent release is named only once what it exact-pins or narrowly ranges
+  // was judged clean: the first admitting release (smallest first) that holds nothing affected.
+  // With the registry failing for express's own dependencies the scan and the plan said
+  // `npm install express@4.22.0` (and 4.20.0, which pins an affected qs) where a healthy run names
+  // 4.22.3. One whose held dependencies could not be judged, before any clean one: NOT CHECKED,
+  // no release and no command.
+  const heldPick = smallestOwn ? await heldCleanAdmitting(ctx, parent, facts, admittingReleases(ctx, facts, from, history, dialect, own.clean, true)) : null;
+  if (heldPick && heldPick.kind !== "clean") {
+    return { kind: "unknown", undecided: true, text: `NOT CHECKED: ${heldPick.text}; no ${parent} release is named and no command is given. Run dependency_check on a ${parent} release before installing it` };
+  }
+  const found = heldPick?.kind === "clean" ? heldPick.release : smallestOwn;
   if (!found) {
     // Parity decision 2 (pr-010): a release would admit the fix but brings in an advisory the
     // installed parent does not have. No release is named, and the reason says which.
@@ -1615,6 +1626,39 @@ function admitsClean(ctx: MoveContext, reqs: string[], dialect: RequirementDiale
     if (requirementAdmits(req, ctx.installed) === true) keepsInstalled = true;
   }
   return { resolvesTo, keepsInstalled };
+}
+
+type Admitting = ReturnType<typeof admittingReleases>[number];
+
+/**
+ * npm: the first of `admitting` (smallest first, at most HELD_CANDIDATES) whose held dependencies
+ * (exact pins, narrow ranges: held-dependencies.ts) were judged clean; "unchecked" when one that
+ * could not be judged comes first, "affected" when every one judged holds something affected.
+ * Null (no gate) outside npm or without a batch lookup.
+ */
+async function heldCleanAdmitting(
+  ctx: MoveContext,
+  parent: string,
+  facts: PackageReleaseFacts,
+  admitting: Admitting[],
+): Promise<{ kind: "clean"; release: Admitting } | { kind: "unchecked" | "affected"; text: string } | null> {
+  const query = ctx.intel.queryAdvisories?.bind(ctx.intel);
+  if (ctx.ecosystem !== "npm" || !query || admitting.length === 0) return null;
+  const candidates = admitting.slice(0, HELD_CANDIDATES);
+  const judged = candidates.filter((c) => facts.heldSpecs?.[c.version]);
+  const checks = judged.length > 0
+    ? await heldAdvisories(ctx.sources, query, judged.map((c) => ({ key: c.version, specs: facts.heldSpecs![c.version] })), Date.now() + HELD_BUDGET_MS).catch(() => null)
+    : new Map<string, HeldCheck>();
+  for (const c of candidates) {
+    if (!facts.heldSpecs?.[c.version]) return { kind: "clean", release: c }; // holds nothing at a fixed version
+    const check = checks?.get(c.version);
+    if (!check || check.status === "unchecked") {
+      return { kind: "unchecked", text: `${parent} ${c.version} admits a clean ${ctx.pkg}, but whether what it exact-pins or narrowly ranges is affected could not be checked (${check?.status === "unchecked" ? check.reason : "the check did not finish"})` };
+    }
+    if (check.affected.length === 0) return { kind: "clean", release: c };
+  }
+  const last = candidates[candidates.length - 1].version;
+  return { kind: "affected", text: `every ${parent} release from ${candidates[0].version} to ${last} that admits a clean ${ctx.pkg} exact-pins or narrowly ranges a dependency with a known advisory (${heldText(candidates[0].version, (checks?.get(candidates[0].version) as { affected: HeldDependency[] } | undefined)?.affected ?? [])})` };
 }
 
 /** The smallest installable release of a parent above `from`, clear of its own advisories, whose requirement admits a clean version. */

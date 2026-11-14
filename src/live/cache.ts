@@ -285,6 +285,19 @@ export class LiveCache {
     return result.changes;
   }
 
+  /** Remove these entries, live or expired. */
+  deleteMany(keys: readonly string[]): void {
+    const unique = [...new Set(keys)];
+    if (this.memory) {
+      for (const key of unique) this.memory.delete(key);
+      return;
+    }
+    for (let at = 0; at < unique.length; at += MANY_CHUNK) {
+      const chunk = unique.slice(at, at + MANY_CHUNK);
+      this.conn().prepare(`DELETE FROM live_cache WHERE cache_key IN (${chunk.map(() => "?").join(",")})`).run(...chunk);
+    }
+  }
+
   invalidateSource(source: string): void {
     if (this.memory) {
       for (const [key, row] of this.memory) if (row.source === source) this.memory.delete(key);

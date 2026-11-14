@@ -474,7 +474,9 @@ describe("M4/7b: one release per dependency across every row", () => {
     expect([...commands]).toEqual(["npm install express-session@1.18.2 --save-exact"]);
     expect(own).toMatchObject({ targetVersion: "1.18.2", latestVersion: "1.19.0" });
     // The cookie row is lifted from 1.18.1 to 1.18.2, with the requirement at 1.18.2.
-    expect(step("cookie").parentUpgrades[0]).toMatchObject({ to: "1.18.2", smallest: "1.18.1", requirement: "0.7.2" });
+    // Round 8 (B6): 1.18.1 holds an affected on-headers ("~1.0.2"), so the cookie row names 1.18.2 itself.
+    expect(step("cookie").parentUpgrades[0]).toMatchObject({ to: "1.18.2", requirement: "0.7.2" });
+    expect(step("cookie").parentUpgrades[0].smallest).toBeUndefined();
     expect(step("cookie").reasons.join(" ")).not.toMatch(/upgrade express-session to 1\.18\.1/);
   });
 
@@ -489,7 +491,9 @@ describe("M4/7b: one release per dependency across every row", () => {
     project({ express: "4.21.2" }, {}, { express: { version: "4.21.2", ...deps("0.1.12", "6.5.2") }, "path-to-regexp": { version: "0.1.12" }, qs: { version: "6.5.2" } });
     const { step } = await plan();
     const ptr = step("path-to-regexp");
-    expect(ptr.parentUpgrades[0]).toMatchObject({ parent: "express", to: "4.22.3", smallest: "4.22.0", requirement: "~0.1.13" });
+    // Round 8 (B6): 4.22.0 holds an affected qs ("~6.15.1"), so it is never named, not even as `smallest`.
+    expect(ptr.parentUpgrades[0]).toMatchObject({ parent: "express", to: "4.22.3", requirement: "~0.1.13" });
+    expect(ptr.parentUpgrades[0].smallest).toBeUndefined();
     expect(ptr.parentUpgrades[0].refreshCommands).toBeUndefined();
     expect(JSON.stringify(ptr)).not.toMatch(/npm update path-to-regexp/);
   });

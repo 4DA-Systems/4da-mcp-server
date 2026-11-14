@@ -206,9 +206,24 @@ export function advisoryAffects(advisory: AdvisoryRanges, version: string, ecosy
  * The leading release numbers with trailing zeros dropped ("v1.2.0rc1" -> "1.2"): two versions equal
  * in any ecosystem's order share it. Null for a form that may not (an epoch "1!2.0", no digits).
  */
-function releaseKey(version: string): string | null {
+const RELEASE_KEYS = new Map<string, string | null>();
+
+/** The release numbers of a version without trailing zeros ("1.2.0" -> "1.2"), or null; exported for tests. */
+export function releaseKey(version: string): string | null {
+  const hit = RELEASE_KEYS.get(version);
+  if (hit !== undefined) return hit;
+  const key = releaseKeyOf(version);
+  if (RELEASE_KEYS.size >= 20_000) RELEASE_KEYS.delete(RELEASE_KEYS.keys().next().value!);
+  RELEASE_KEYS.set(version, key);
+  return key;
+}
+
+function releaseKeyOf(version: string): string | null {
   if (version.includes("!")) return null;
-  const m = /^v?(d+(?:.d+)*)/.exec(version.trim());
+  // `\d`, not `d`: written without the backslashes (#68) the key never matched, every version fell
+  // into `unkeyed`, and each release was compared with every listed version again: a cold
+  // dependency_check of django 4.2.0 held the event loop 1.4-2.0 s (black-box round 8).
+  const m = /^v?(\d+(?:\.\d+)*)/.exec(version.trim());
   if (!m) return null;
   const parts = m[1].split(".").map((n) => String(Number(n)));
   while (parts.length > 1 && parts[parts.length - 1] === "0") parts.pop();

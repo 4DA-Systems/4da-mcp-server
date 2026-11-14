@@ -43,6 +43,7 @@ import { extractAuthClaims, getAuthSecret, type TeamClaims } from "./auth.js";
 import { runWithAuthContext } from "./auth-context.js";
 import { envFlag } from "./env-flags.js";
 import { batchRefusedMessage } from "./stdio-gate.js";
+import { abortBackgroundWork } from "./shutdown.js";
 
 const DEFAULT_PORT = 4840;
 const DEFAULT_HOST = "127.0.0.1";
@@ -52,6 +53,12 @@ const SERVER_VERSION: string = JSON.parse(readFileSync(join(__ht_dirname, "..", 
 export interface HttpServerOptions {
   port: number;
   host: string;
+  /**
+   * Who handles SIGINT / SIGTERM. Left out, this transport does: it stops accepting, aborts every
+   * lookup in flight (shutdown.ts) and exits. The server binary passes false and runs its own
+   * shutdown, which also closes the databases.
+   */
+  handleSignals?: boolean;
 }
 
 /** Handle for a running HTTP transport, so callers (and tests) can shut it down. */
@@ -165,6 +172,28 @@ export function requestPathname(target: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * An absolute-form request target (`POST http://127.0.0.1:4840/mcp HTTP/1.1`, RFC 9112 3.2.2),
+ * which a server must accept. Its authority, not the Host header, names the host the request is
+ * for, so the DNS rebinding check applies to it as well: one this server answers to is rewritten to
+ * origin-form (`/mcp`) for the handler; any other, or one that is not an http(s) URL, is refused
+ * 400. Until 6.3.0 the MCP handler read `req.url` as a path and answered every absolute-form
+ * request 500 (blind audit of e3aba98). Returns null for origin-form, which passes untouched.
+ */
+export function absoluteFormTarget(target: string | undefined, allowedHostnames: string[]): { ok: true; path: string } | { ok: false; error: string } | null {
+  if (!target || target.startsWith("/") || target === "*") return null;
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    return { ok: false, error: "Bad Request: the request target is not a valid URL" };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { ok: false, error: "Bad Request: an absolute request target must be an http or https URL" };
+  if (url.username || url.password) return { ok: false, error: "Bad Request: the request target carries credentials" };
+  if (!validateHostHeader(url.host, allowedHostnames).ok) return { ok: false, error: "Bad Request: the request target names a host this server does not answer to" };
+  return { ok: true, path: `${url.pathname}${url.search}` };
 }
 
 /** The body bytes this transport peeks at to find a batch; the SDK's own limit (4 MiB) applies after. */
@@ -318,6 +347,13 @@ export async function startHttpServer(
       return;
     }
 
+    const absolute = absoluteFormTarget(req.url, policy.allowedHostnames);
+    if (absolute && !absolute.ok) {
+      sendJson(res, 400, { error: absolute.error });
+      return;
+    }
+    if (absolute) req.url = absolute.path;
+
     const pathname = requestPathname(req.url);
     if (pathname === null) {
       sendJson(res, 400, { error: "Bad Request: the request target is not a valid URL" });
@@ -407,16 +443,22 @@ export async function startHttpServer(
 
   const close = async (): Promise<void> => {
     await mcpHandler.close();
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    const closed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    // An idle keep-alive connection would hold close() open until it times out.
+    httpServer.closeIdleConnections();
+    await closed;
   };
 
   // Graceful shutdown
-  const shutdown = () => {
-    console.error("Shutting down HTTP server...");
-    void close().finally(() => process.exit(0));
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  if (options.handleSignals !== false) {
+    const shutdown = () => {
+      console.error("Shutting down HTTP server...");
+      abortBackgroundWork("HTTP server stopping");
+      void close().finally(() => process.exit(0));
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+  }
 
   return { server: httpServer, close };
 }

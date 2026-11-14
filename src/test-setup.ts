@@ -37,7 +37,7 @@ process.env.PIP_CONFIG_FILE = "os.devnull";
 process.env.NPM_CONFIG_GLOBALCONFIG = emptyNpmrc;
 process.env.UV_NO_CONFIG = "1";
 for (const key of Object.keys(process.env)) {
-  if (/^(?:GOPROXY|FOURDA_PUBLIC_MIRRORS|UV_CONFIG_FILE|UV_DEFAULT_INDEX|UV_INDEX_URL|UV_INDEX|UV_EXTRA_INDEX_URL|PREFIX|npm_config_(?:registry|prefix|globalconfig|@.*)|yarn_rc_filename|yarn_npm_.*)$/i.test(key) && key !== "NPM_CONFIG_GLOBALCONFIG") delete process.env[key];
+  if (/^(?:GOPROXY|FOURDA_PUBLIC_MIRRORS|PIP_(?:INDEX|EXTRA_INDEX|FIND_LINKS|FIND)|UV_CONFIG_FILE|UV_DEFAULT_INDEX|UV_INDEX_URL|UV_INDEX|UV_EXTRA_INDEX_URL|PREFIX|npm_config_(?:registry|prefix|globalconfig|@.*)|yarn_rc_filename|yarn_npm_.*)$/i.test(key) && key !== "NPM_CONFIG_GLOBALCONFIG") delete process.env[key];
 }
 // A proxy on the operator's machine must not route the suite's stubbed lookups (http-utils.ts).
 for (const key of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY"]) delete process.env[key];

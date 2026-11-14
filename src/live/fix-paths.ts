@@ -1059,6 +1059,7 @@ export async function verifyFixTargets(
       let timer: ReturnType<typeof setTimeout> | undefined;
       const late = new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+        timer.unref?.();
       });
       try {
         const clean = await Promise.race([cleanFixTarget(sources, item.ecosystem, item.name, item.fixes, item.installed, item.ids).catch(() => null), late]);

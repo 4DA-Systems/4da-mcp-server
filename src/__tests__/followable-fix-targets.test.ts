@@ -298,6 +298,8 @@ describe("when every installed parent already admits the fixed child, the step i
   function tailwindProject(tailwindRequiresSucrase = "^3.35.0") {
     ADVISORIES.glob = [adv("GHSA-3g3m-2fjr-6pw4", "glob", fixedIn("11.1.0"))];
     NPM.glob = { latest: "11.1.0", versions: { "10.3.10": {}, "10.5.0": {}, "11.0.0": {}, "11.1.0": {} } };
+    // What sucrase 3.35.1 narrowly ranges (0.x caret): its registry facts, so the release is judged (round 8, B6).
+    NPM.tinyglobby = { latest: "0.2.15", versions: { "0.2.11": {}, "0.2.15": {} } };
     NPM.sucrase = {
       latest: "3.35.1",
       versions: { "3.34.0": { dependencies: { glob: "7.1.6" } }, "3.35.0": { dependencies: { glob: "^10.3.10" } }, "3.35.1": { dependencies: { tinyglobby: "^0.2.11" } } },
