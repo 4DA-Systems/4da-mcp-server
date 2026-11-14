@@ -1,0 +1,260 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Verdict defects from the blind pre-publish audit, round 5 (main a3c873e, 2026-11-14).
+ *
+ * 1. With OSV.dev half down (POST /v1/query answering `{"vulns":[]}`, /v1/querybatch answering 500
+ *    or truncated JSON), dependency_check said `unknown` and still named the smallest release of a
+ *    constraint safe: `{npm, lodash, "4.x"}` said "Safe in 4.x: smallest 4.0.0". The round-4 check
+ *    (the package's list must hold every id the batch query named) has nothing to compare against
+ *    when the batch query failed. A safe pick is now named only when the batch answer for those
+ *    releases was read AND the list holds every id it named.
+ *
+ * Registries and OSV are stubbed with their real response shapes.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import Database from "better-sqlite3";
+import { LiveIntelligence } from "../live/index.js";
+import { clearNpmDownloadsMemo } from "../live/npm-downloads.js";
+import { advisoryAffects, advisoryRanges } from "../live/osv-ranges.js";
+import type { OsvVulnerability } from "../live/types.js";
+import { executeDependencyCheck } from "../tools/dependency-check.js";
+import { conciseItem } from "../tools/dependency-check-concise.js";
+import { targetCheckedAll, targetNote, verifyFixTargets } from "../live/fix-paths.js";
+import { vetOfferedReleases } from "../live/offered-release.js";
+
+const NOW = new Date();
+const DAY = 86_400_000;
+const daysAgo = (n: number) => new Date(NOW.getTime() - n * DAY).toISOString();
+
+let NPM: Record<string, Record<string, string>>;
+let PYPI: Record<string, Record<string, string>>;
+let GO: Record<string, Record<string, string>>;
+let OSV: OsvVulnerability[];
+/** POST /v1/query: "records" answers the package's records, "empty" answers {"vulns":[]}. */
+let QUERY: "records" | "empty";
+/** Ids POST /v1/query leaves out of its answer (an incomplete list). */
+let QUERY_HIDES: string[];
+/** POST /v1/querybatch: answered, HTTP 500, or JSON cut off mid-body. */
+let BATCH: "ok" | "500" | "truncated";
+/** Ids the batch answer adds to every result (defect 2's injected id). */
+let BATCH_EXTRA: string[];
+
+function stub() {
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    const same = (a: string, b: string, eco: string) => (eco === "PyPI" ? a.toLowerCase().replace(/[-_.]+/g, "-") === b.toLowerCase().replace(/[-_.]+/g, "-") : a === b);
+    const recordsFor = (name: string, eco: string) => OSV.filter((v) => v.affected?.some((a) => a.package?.ecosystem === eco && same(a.package.name, name, eco)));
+    if (url.endsWith("/v1/querybatch")) {
+      if (BATCH === "500") return new Response("internal error", { status: 500 });
+      const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string; ecosystem: string }; version: string }> };
+      const body = JSON.stringify({
+        results: queries.map((q) => ({
+          vulns: [
+            ...recordsFor(q.package.name, q.package.ecosystem)
+              .filter((v) => advisoryAffects(advisoryRanges(v, q.package.name, q.package.ecosystem)!, q.version, q.package.ecosystem))
+              .map((v) => ({ id: v.id, modified: "2026-11-01T00:00:00Z" })),
+            ...BATCH_EXTRA.map((id) => ({ id, modified: "2026-11-01T00:00:00Z" })),
+          ],
+        })),
+      });
+      if (BATCH === "truncated") return new Response(body.slice(0, Math.max(1, Math.floor(body.length / 2))), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.includes("/v1/vulns/")) {
+      const id = decodeURIComponent(url.split("/v1/vulns/")[1]);
+      const found = OSV.find((v) => v.id === id);
+      return found ? json(found) : json({ id, summary: "advisory", database_specific: { severity: "HIGH" } });
+    }
+    if (url === "https://api.osv.dev/v1/query") {
+      if (QUERY === "empty") return json({ vulns: [] });
+      const q = JSON.parse(String(init?.body)) as { package: { name: string; ecosystem: string } };
+      return json({ vulns: recordsFor(q.package.name, q.package.ecosystem).filter((v) => !QUERY_HIDES.includes(v.id)) });
+    }
+    const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
+    if (pypi) {
+      const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypi[1]).toLowerCase());
+      if (!name) return json({ message: "Not Found" }, 404);
+      return json({ info: { name }, releases: Object.fromEntries(Object.entries(PYPI[name]).map(([v, at]) => [v, [{ upload_time_iso_8601: at, yanked: false }]])) });
+    }
+    const go = /^https:\/\/proxy\.golang\.org\/(.+?)\/@(v\/list|v\/([^/]+)\.info|latest)$/.exec(url);
+    if (go) {
+      const mod = decodeURIComponent(go[1]).replace(/!([a-z])/g, (_, c: string) => c.toUpperCase());
+      const doc = GO[mod];
+      if (!doc) return new Response("not found", { status: 404 });
+      if (go[2] === "v/list") return new Response(Object.keys(doc).join("\n") + "\n", { status: 200 });
+      const v = go[2] === "latest" ? Object.keys(doc).pop()! : decodeURIComponent(go[3]);
+      return doc[v] ? json({ Version: v, Time: doc[v] }) : new Response("not found", { status: 404 });
+    }
+    if (url.startsWith("https://api.npmjs.org/downloads/")) return json({ error: "not found" }, 404);
+    const npm = /^https:\/\/registry\.npmjs\.org\/(.+)$/.exec(url);
+    if (npm) {
+      const name = decodeURIComponent(npm[1]);
+      const doc = NPM[name];
+      if (!doc) return json({ error: "Not found" }, 404);
+      const versions = Object.keys(doc);
+      const latest = versions[versions.length - 1];
+      return json({
+        name,
+        "dist-tags": { latest },
+        versions: Object.fromEntries(versions.map((v) => [v, { name, version: v, dependencies: {} }])),
+        time: { created: "2015-01-01T00:00:00.000Z", ...doc },
+      });
+    }
+    return json({}, 404);
+  });
+}
+
+let priorOffline: string | undefined;
+beforeEach(() => {
+  priorOffline = process.env.FOURDA_OFFLINE;
+  delete process.env.FOURDA_OFFLINE;
+  clearNpmDownloadsMemo();
+  NPM = {};
+  PYPI = {};
+  GO = {};
+  OSV = [];
+  QUERY = "records";
+  QUERY_HIDES = [];
+  BATCH = "ok";
+  BATCH_EXTRA = [];
+  stub();
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (priorOffline === undefined) delete process.env.FOURDA_OFFLINE;
+  else process.env.FOURDA_OFFLINE = priorOffline;
+});
+
+type Result = Record<string, any>;
+const check = async (items: unknown[]) =>
+  (await executeDependencyCheck(null, { items } as never, new LiveIntelligence(new Database(":memory:")), { now: NOW })) as unknown as { summary: string; results: Result[] };
+const record = (id: string, name: string, ecosystem: string, events: Array<Record<string, string>>, type = "SEMVER", severity = "HIGH"): OsvVulnerability =>
+  ({ id, aliases: [], summary: `${name} advisory`, database_specific: { severity }, affected: [{ package: { name, ecosystem }, ranges: [{ type, events }] }] }) as unknown as OsvVulnerability;
+
+// ---------------------------------------------------------------------------------------------
+// 1. OSV.dev half down: no safe release is named from an unverified list
+// ---------------------------------------------------------------------------------------------
+
+describe("defect 1: with the batch query failed, no release is named safe from /v1/query", () => {
+  beforeEach(() => {
+    NPM.lodash = { "4.0.0": daysAgo(3000), "4.17.11": daysAgo(2400), "4.17.20": daysAgo(2000), "4.17.21": daysAgo(1900) };
+    NPM.ws = { "7.0.0": daysAgo(2000), "7.4.6": daysAgo(1500), "7.5.10": daysAgo(400) };
+    NPM.axios = { "1.0.0": daysAgo(1200), "1.6.0": daysAgo(600), "1.12.0": daysAgo(60) };
+    PYPI.jinja2 = { "3.1.0": daysAgo(1500), "3.1.4": daysAgo(500), "3.1.6": daysAgo(200) };
+    GO["golang.org/x/net"] = { "v0.1.0": daysAgo(1500), "v0.23.0": daysAgo(500), "v0.38.0": daysAgo(200) };
+    OSV.push(
+      record("GHSA-jf85-cpcp-j695", "lodash", "npm", [{ introduced: "0" }, { fixed: "4.17.21" }]),
+      record("GHSA-3h5v-q93c-6h6q", "ws", "npm", [{ introduced: "7.0.0" }, { fixed: "7.5.10" }]),
+      record("GHSA-wf5p-g6vw-rhxx", "axios", "npm", [{ introduced: "1.0.0" }, { fixed: "1.6.0" }]),
+      record("GHSA-h75v-3vvj-5mfj", "jinja2", "PyPI", [{ introduced: "0" }, { fixed: "3.1.4" }], "ECOSYSTEM"),
+      record("GO-2024-2687", "golang.org/x/net", "Go", [{ introduced: "0" }, { fixed: "0.23.0" }]),
+    );
+  });
+
+  const ITEMS = [
+    { ecosystem: "npm", package: "lodash", to: "4.x", smallest: "4.0.0" },
+    { ecosystem: "npm", package: "ws", to: "7.x", smallest: "7.0.0" },
+    { ecosystem: "npm", package: "axios", to: "^1.0", smallest: "1.0.0" },
+    { ecosystem: "PyPI", package: "jinja2", to: "~=3.1", smallest: "3.1.0" },
+    { ecosystem: "Go", package: "golang.org/x/net", to: "v0", smallest: "v0.1.0" },
+  ];
+
+  it.each(ITEMS)("with OSV answering, $package $to names a safe release that clears the advisory (control)", async ({ ecosystem, package: pkg, to, smallest }) => {
+    const [r] = (await check([{ ecosystem, package: pkg, to }])).results;
+    expect(r.range_check?.smallest_safe_in_range).toBeTruthy();
+    expect(r.range_check.smallest_safe_in_range).not.toBe(smallest);
+  });
+
+  for (const mode of ["500", "truncated"] as const) {
+    it.each(ITEMS)(`/v1/query empty and querybatch ${mode}: $package $to is unknown and names no safe release (it named $smallest)`, async ({ ecosystem, package: pkg, to, smallest }) => {
+      QUERY = "empty";
+      BATCH = mode;
+      const answer = await check([{ ecosystem, package: pkg, to }]);
+      const [r] = answer.results;
+      expect(r.verdict).toBe("unknown");
+      expect(r.range_check).toBeUndefined();
+      const concise = conciseItem(r as never);
+      expect(concise.safe).toBeUndefined();
+      expect(r.reason).not.toMatch(/Safe in|Safe on|smallest /);
+      expect(r.reason).not.toContain(`${smallest},`);
+      expect(r.reason).toContain("NOT CHECKED");
+      expect(answer.summary).not.toMatch(/safe version the item names|write the safe/i);
+    });
+  }
+
+  it("a working batch with an empty /v1/query still names nothing (round 4 rule, unchanged)", async () => {
+    QUERY = "empty";
+    const [r] = (await check([{ ecosystem: "npm", package: "lodash", to: "4.x" }])).results;
+    expect(r.range_check).toBeUndefined();
+    expect(r.reason).toContain("NOT CHECKED");
+  });
+});
+
+describe("defect 1, every other tool: a fix target or offered release from /v1/query is confirmed by the batch query", () => {
+  beforeEach(() => {
+    NPM.lodash = { "4.17.20": daysAgo(2000), "4.17.21": daysAgo(1900), "4.17.22": daysAgo(100) };
+    OSV.push(
+      record("GHSA-jf85-cpcp-j695", "lodash", "npm", [{ introduced: "0" }, { fixed: "4.17.21" }]),
+      // Affects only the release the list would name: the installed copy does not have it.
+      record("GHSA-late-0000-0000", "lodash", "npm", [{ introduced: "4.17.21" }, { fixed: "4.17.22" }]),
+    );
+  });
+
+  const targets = async () => {
+    const live = new LiveIntelligence(new Database(":memory:"));
+    const out = await verifyFixTargets(
+      live.getFixPathSources(),
+      [{ key: "k", ecosystem: "npm", name: "lodash", fixes: ["4.17.21"], installed: "4.17.20", ids: ["GHSA-jf85-cpcp-j695"] }],
+      10_000,
+      undefined,
+      { heldQuery: (d) => live.queryAdvisories(d) },
+    );
+    return out.get("k")!;
+  };
+
+  it("with OSV answering, the target is 4.17.22, checked against every advisory (control)", async () => {
+    const clean = await targets();
+    expect(clean.target).toBe("4.17.22");
+    expect(targetCheckedAll(clean)).toBe(true);
+  });
+
+  it("a list that leaves out the advisory on the target: the batch query names it, and the target is not called checked (vulnerability_scan, briefings, upgrade_planner)", async () => {
+    QUERY_HIDES = ["GHSA-late-0000-0000"];
+    const clean = await targets();
+    expect(clean.target).toBe("4.17.21");
+    expect(targetCheckedAll(clean)).toBe(false);
+    expect(clean.unconfirmed).toContain("GHSA-late-0000-0000");
+    expect(targetNote(clean, "npm")).toContain("NOT confirmed");
+  });
+
+  it("with the batch query failing for the target, the target is not called checked", async () => {
+    const live = new LiveIntelligence(new Database(":memory:"));
+    BATCH = "500";
+    const out = await verifyFixTargets(
+      live.getFixPathSources(),
+      [{ key: "k", ecosystem: "npm", name: "lodash", fixes: ["4.17.21"], installed: "4.17.20", ids: ["GHSA-jf85-cpcp-j695"] }],
+      10_000,
+      undefined,
+      { heldQuery: (d) => live.queryAdvisories(d) },
+    );
+    expect(targetCheckedAll(out.get("k")!)).toBe(false);
+    expect(out.get("k")!.unconfirmed).toMatch(/batch query/);
+  });
+
+  it("offered releases (dependency_health, upgrade_planner, briefings): an empty list with a failed batch query is unchecked, never clean", async () => {
+    QUERY = "empty";
+    BATCH = "500";
+    const live = new LiveIntelligence(new Database(":memory:"));
+    const vets = await vetOfferedReleases(live.getFixPathSources(), [{ key: "k", ecosystem: "npm", name: "lodash", installed: "4.17.20", offered: "4.17.21" }], 10_000, undefined, (d) => live.queryAdvisories(d));
+    expect(vets.get("k")).toMatchObject({ checked: false });
+    expect(vets.get("k")!.note).toContain("not confirmed free of known advisories");
+  });
+
+  it("offered releases: with OSV answering, an affected latest is replaced by a confirmed safe one (control)", async () => {
+    const live = new LiveIntelligence(new Database(":memory:"));
+    const vets = await vetOfferedReleases(live.getFixPathSources(), [{ key: "k", ecosystem: "npm", name: "lodash", installed: "4.17.20", offered: "4.17.21" }], 10_000, undefined, (d) => live.queryAdvisories(d));
+    expect(vets.get("k")).toMatchObject({ checked: true, safe: "4.17.22" });
+  });
+});

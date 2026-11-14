@@ -124,6 +124,8 @@ describe("what_should_i_know upgrade targets", () => {
       ensureVulnerabilities: async () => scanned,
       getResolvedDeps: () => [dep],
       getFixPathSources: () => sources(),
+      // OSV.dev's batch query confirms the target (batch-confirm.ts): nothing affects 0.10.80.
+      queryAdvisories: async (deps) => ({ ...scanned, totalScanned: deps.length, totalVulnerable: 0, vulnerabilities: [], cleanCount: deps.length }),
     };
     const result = await executeWhatShouldIKnow(db, { task: "Upgrade openssl in the TLS layer" }, intel);
     const row = result.advisories.find((a) => a.title.startsWith("openssl"));

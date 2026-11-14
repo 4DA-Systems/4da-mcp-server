@@ -45,6 +45,7 @@ import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
+import { confirmTargets } from "./batch-confirm.js";
 import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
@@ -571,6 +572,11 @@ export type FixTargetResult = CleanTarget & {
    */
   advisoriesUnread?: boolean;
   /**
+   * Set with `advisoriesUnread` when the target was worked out from the package's advisory list but
+   * OSV.dev's batch query did not confirm it (batch-confirm.ts): why, in words (blind audit round 5).
+   */
+  unconfirmed?: string;
+  /**
    * True when the package's registry could not be read: withdrawn (yanked, deprecated) releases
    * were not checked, and the target comes from the advisory data alone, as before FX-H5.
    */
@@ -985,6 +991,17 @@ export async function verifyFixTargets(
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, todo.length) }, worker));
+  // Blind audit round 5: a target worked out from the package's advisory list is named as checked
+  // only when OSV.dev's batch query, asked about the target itself, confirms the list. Without the
+  // batch query (a caller's stand-in), nothing is confirmed and every list-based target says so.
+  const listed = todo.filter((i) => out.has(i.key)).map((i) => ({ key: i.key, ecosystem: i.ecosystem, name: i.name, clean: out.get(i.key)! }));
+  const confirmed = await confirmTargets(
+    sources,
+    options.heldQuery ?? (async () => { throw new Error("no batch query"); }),
+    listed,
+    Math.max(deadline, Date.now() + HELD_FLOOR_MS),
+  );
+  for (const [key, clean] of confirmed) out.set(key, clean);
   if (options.heldQuery) {
     // npm: what each target installs at a fixed version, in one advisory lookup for all of them
     // (audit 6.2.5 D-4). It gets at least HELD_FLOOR_MS even when the targets used the budget up:
@@ -1019,6 +1036,9 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
     return [targetNote(rest, ecosystem), held].filter((p): p is string => Boolean(p)).join("; ");
   }
   const withheld = withheldText(clean, ecosystem);
+  if (clean.advisoriesUnread && clean.unconfirmed && clean.target) {
+    return `${clean.target} is the smallest release the package's advisory list leaves clean, NOT confirmed: ${clean.unconfirmed}, so it is not checked against every advisory`;
+  }
   if (clean.advisoriesUnread) {
     const unchecked = "not checked against the package's other advisories (OSV.dev did not answer)";
     if (clean.registryUnread) return `${clean.target} is the highest per-advisory fix, ${unchecked}; ${REGISTRY_UNREAD_NOTE}`;

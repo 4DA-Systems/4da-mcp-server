@@ -404,6 +404,8 @@ async function executeStandalonePlanner(
       .filter((d) => offeredUpgrade(d) !== null)
       .map((d) => ({ key: `${d.ecosystem}\0${d.name}\0${d.currentVersion ?? "unknown"}`, ecosystem: d.ecosystem, name: d.name, installed: d.currentVersion, offered: offeredUpgrade(d)! })),
     withinCallBudget(OFFER_CHECK_BUDGET_MS, PLAN_RESERVE_MS / 2),
+    undefined,
+    (d) => liveIntel.queryAdvisories(d),
   );
   // Complete vulnerability data only: a partial scan (OSV.dev unreachable or
   // rate limited for some dependencies) ranks what it found and says the rest

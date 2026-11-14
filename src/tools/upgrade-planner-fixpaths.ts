@@ -71,6 +71,7 @@ import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
 import { withHeldTargets } from "../live/held-targets.js";
+import { confirmTargets } from "../live/batch-confirm.js";
 import type { AdvisoryQuery } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
@@ -315,6 +316,12 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   const own = step.currentVersion ? await sources.packageAdvisories(ecosystem, step.package).catch(() => null) : null;
   const malicious = own ? cleanReleases(own, ecosystem, []).maliciousAt(step.currentVersion!) : [];
   let clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion, input.ids ?? []);
+  // Blind audit round 5: a target from the package's advisory list is checked only when OSV.dev's
+  // batch query, asked about the target itself, confirms the list (batch-confirm.ts).
+  if (clean?.target) {
+    const query: AdvisoryQuery = heldQuery ?? (async () => { throw new Error("no batch query"); });
+    clean = (await confirmTargets(sources, query, [{ key: "step", ecosystem, name: step.package, clean }], Date.now() + HELD_BUDGET_MS)).get("step") ?? clean;
+  }
   // npm: a target that exact-pins (or narrowly ranges) an affected dependency installs it: express
   // 4.20.0 and qs 6.11.0 (audit 6.2.5 D-4). The same check vulnerability_scan runs on its targets,
   // on every row: a transitive copy's target is the floor its parents' levers must admit, so a
@@ -379,7 +386,9 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     // is withdrawn (lodash 4.18.0, "Bad release"), so it is never the target; the step still
     // counts as checked against the installed version's advisories only.
     step.reasons.push(
-      clean.registryUnread
+      clean.unconfirmed
+        ? `${clean.target} is the smallest release ${step.package}'s advisory list leaves clean, NOT confirmed: ${clean.unconfirmed}`
+        : clean.registryUnread
         ? `${clean.target} is the highest per-advisory fix; neither the package's other advisories nor its registry could be read: ${REGISTRY_UNREAD_NOTE}`
         : withheld
           ? `${withheld}; the package's other advisories could not be read`

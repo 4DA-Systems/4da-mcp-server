@@ -103,6 +103,8 @@ async function vetLatest(liveIntel: LiveIntelligence, rows: RegistryPackageInfo[
     sources,
     rows.filter((r) => offered(r) !== null).map((r) => ({ key: key(r), ecosystem: r.ecosystem, name: r.name, installed: r.currentVersion, offered: offered(r)! })),
     withinCallBudget(OFFER_CHECK_BUDGET_MS, 6_000),
+    undefined,
+    (d) => liveIntel.queryAdvisories(d),
   );
   return rows.map((r) => {
     const latest = offered(r);

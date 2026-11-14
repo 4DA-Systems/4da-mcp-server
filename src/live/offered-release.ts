@@ -16,6 +16,8 @@
 import type { FixPathSources } from "./fix-paths.js";
 import { advisoriesAffecting, cleanReleases, isPrereleaseVersion, remainsText } from "./osv-ranges.js";
 import { unreadableText } from "./fix-paths.js";
+import { confirmOffers } from "./batch-confirm.js";
+import type { AdvisoryQuery } from "./held-dependencies.js";
 import { isSecurityHoldingRelease } from "./osv-scanner.js";
 import { compareVersions } from "./version-compare.js";
 import type { OsvEcosystem } from "./types.js";
@@ -121,6 +123,8 @@ export async function vetOfferedReleases(
   items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; installed: string | null; offered: string }>,
   budgetMs: number,
   concurrency = 12,
+  /** OSV.dev's batch query: every release judged clean from the package's advisory list is confirmed by it (batch-confirm.ts). */
+  query?: AdvisoryQuery | null,
 ): Promise<Map<string, OfferedRelease>> {
   const out = new Map<string, OfferedRelease>();
   if (!sources || items.length === 0) return out;
@@ -142,8 +146,18 @@ export async function vetOfferedReleases(
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  // Blind audit round 5: a release is offered as clean only when the batch query confirms the list.
+  // Without the batch query, nothing judged from the list alone is offered as checked.
+  const vetted = items.flatMap((i) => (out.has(i.key) ? [{ key: i.key, ecosystem: i.ecosystem, name: i.name, vet: out.get(i.key)! }] : []));
+  const confirmed = query
+    ? await confirmOffers(sources, query, vetted, Math.max(deadline, Date.now() + CONFIRM_FLOOR_MS))
+    : await confirmOffers(sources, async () => { throw new Error("no batch query"); }, vetted, Date.now());
+  for (const [key, vet] of confirmed) out.set(key, vet);
   return out;
 }
+
+/** The least time the batch confirmation of the offers gets, even when vetting used the budget up. */
+const CONFIRM_FLOOR_MS = 3_000;
 
 /** Said for an offer that could not be checked in time (the budget ran out, or offline). */
 export function uncheckedOfferNote(name: string, offered: string): string {
