@@ -119,8 +119,35 @@ export function systemDirectoryProblem(dir: string, options: { platform?: NodeJS
   for (const form of sameDirectoryForms(dir, platform, options.platform === undefined)) {
     const why = lexicalSystemDirectoryProblem(form, options);
     if (why) return form === dir ? why : why.replace(`"${form}"`, `"${dir}" (${form})`);
+    // A WSL distribution's files reached from Windows (`\\wsl$\Ubuntu\etc`, `\\wsl.localhost\...`)
+    // are judged as the POSIX paths they are, and its /mnt/<drive> as that Windows drive (blind audit round 4).
+    const posix = platform === "win32" ? wslPosixPath(form) : null;
+    if (posix !== null) {
+      const drive = /^\/mnt\/([a-z])(?:\/(.*))?$/i.exec(posix);
+      const asLinux = lexicalSystemDirectoryProblem(posix, { platform: "linux", env: {} });
+      const asDrive = drive && drive[2] ? lexicalSystemDirectoryProblem(`${drive[1].toUpperCase()}:\\${drive[2].replace(/\//g, "\\")}`, options) : null;
+      const found = asLinux ?? asDrive;
+      if (found) return found.replace(/^"[^"]*"/, `"${dir}" (${posix} in WSL)`);
+    }
   }
   return null;
+}
+
+/**
+ * systemDirectoryProblem's sentence about the directory the server was started in. It read
+ * `The server was started in "C:\Windows" is the Windows directory, ...` (blind audit round 4);
+ * now `The server's directory "C:\Windows" is the Windows directory, ...`.
+ */
+export function serverDirectoryRefusal(refused: string): string {
+  return `The server's directory ${refused}`;
+}
+
+/** The POSIX path inside a WSL distribution that `\\wsl$\<distro>\x` or `\\wsl.localhost\<distro>\x` names; null for any other path. */
+function wslPosixPath(dir: string): string | null {
+  const m = /^[\\/]{2}(?:wsl\$|wsl\.localhost)[\\/]+[^\\/]+(?:[\\/]+(.*))?$/i.exec(dir);
+  if (!m) return null;
+  const rest = (m[1] ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  return `/${rest}`;
 }
 
 /**
@@ -169,8 +196,24 @@ function lexicalSystemDirectoryProblem(dir: string, options: { platform?: NodeJS
   else if (platform === "win32") {
     const drive = env.SystemDrive || "C:";
     const windows = env.SystemRoot || env.windir || `${drive}\\Windows`;
-    const exact = [env.ProgramFiles || `${drive}\\Program Files`, env["ProgramFiles(x86)"] || `${drive}\\Program Files (x86)`, env.ProgramData || `${drive}\\ProgramData`, `${drive}\\Users`];
+    const users = `${drive}\\Users`;
+    const exact = [
+      env.ProgramFiles || `${drive}\\Program Files`,
+      env["ProgramFiles(x86)"] || `${drive}\\Program Files (x86)`,
+      env.ProgramData || `${drive}\\ProgramData`,
+      users,
+      // The shared and template profiles: no one's project (blind audit round 4).
+      env.PUBLIC || `${users}\\Public`,
+      `${users}\\Public`,
+      `${users}\\Default`,
+      `${users}\\Default User`,
+      `${users}\\All Users`,
+    ];
+    // Trees Windows keeps for itself on every drive: the recycle bin, restore points, recovery.
+    const driveRoot = p.parse(p.normalize(dir)).root;
+    const trees = ["$Recycle.Bin", "System Volume Information", "Recovery", "Config.Msi"].map((t) => p.join(driveRoot, t));
     if (within(windows)) what = at === norm(windows) ? "the Windows directory" : `an operating-system directory (inside ${windows})`;
+    else if (trees.some(within)) what = `an operating-system directory (inside ${trees.find(within)})`;
     else if (exact.some((d) => at === norm(d))) what = "an operating-system directory";
   } else if (POSIX_SYSTEM_TREES.some(within)) what = `an operating-system directory (inside ${POSIX_SYSTEM_TREES.find(within)})`;
   else if (POSIX_SYSTEM_DIRS.some((d) => at === norm(d))) what = "an operating-system directory";

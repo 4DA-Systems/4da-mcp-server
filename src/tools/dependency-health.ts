@@ -20,7 +20,7 @@ import { computeSemverDistance } from "../live/semver-utils.js";
 import { isDevOnlyCopy } from "../live/severity-scope.js";
 import { compareVersions } from "../live/version-compare.js";
 import { secondsText, withinCallBudget } from "../call-budget.js";
-import { systemDirectoryProblem } from "./project-scope.js";
+import { serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -162,7 +162,7 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
     dependencies: [],
     vulnerabilitySummary: null,
     summary: refused
-      ? `Nothing was checked, so there is no health score; this is not a healthy result. The server was started in ${refused}`
+      ? `Nothing was checked, so there is no health score; this is not a healthy result. ${serverDirectoryRefusal(refused)}`
       : only
         ? `Nothing was checked, so there is no health score; this is not a healthy result: no ${only.ecosystem} dependency was read in this project (ecosystem_filter: "${only.ecosystem}"). ${
             elsewhere.length > 0 ? `What was read is ${elsewhere.join(", ")}: drop the filter or pass one of those.` : "No dependency of any ecosystem was read."

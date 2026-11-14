@@ -34,7 +34,7 @@ import { formatAppPlan, readAppPlan, scopeAppPlanSteps, type AppPlanResult } fro
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
-import { appTracksProject, liveIntelFor, resolveProjectScope, systemDirectoryProblem } from "./project-scope.js";
+import { appTracksProject, liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
 import { reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
@@ -341,7 +341,7 @@ async function executeStandalonePlanner(
       totalDeps: 0,
       recommendations: [],
       summary: refused
-        ? `Nothing was planned: the server was started in ${refused}`
+        ? `Nothing was planned. ${serverDirectoryRefusal(refused)}`
         : "No project detected. Run from a directory with package.json, Cargo.toml, pyproject.toml, or go.mod.",
       quickWins: 0,
       breakingChanges: 0,

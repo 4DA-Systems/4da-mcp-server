@@ -31,7 +31,7 @@ import { configureProxy } from "../proxy.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { dispatchTool } from "../tool-dispatch.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
-import { resolveProjectScope, systemDirectoryProblem } from "../tools/project-scope.js";
+import { resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "../tools/project-scope.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { formatScanResult } from "../tools/vulnerability-scan-format.js";
@@ -224,6 +224,41 @@ describe("an operating-system directory is never scanned", () => {
     expect(refused("\\\\?\\D:\\4DA")).toBeNull();
   });
 
+  it("Windows: the shared and template profiles, the recycle bin, and a WSL distribution's system directories are refused (blind audit round 4)", () => {
+    const env = { SystemDrive: "C:", SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)", ProgramData: "C:\\ProgramData" };
+    const refused = (d: string) => systemDirectoryProblem(d, { platform: "win32", env });
+    for (const d of [
+      "C:\\Users\\Public",
+      "c:\\users\\public\\",
+      "C:\\Users\\Default",
+      "C:\\Users\\All Users",
+      "C:\\$Recycle.Bin",
+      "C:\\$Recycle.Bin\\S-1-5-21-1",
+      "D:\\$RECYCLE.BIN",
+      "C:\\System Volume Information",
+      "\\\\wsl$\\Ubuntu\\etc",
+      "\\\\wsl$\\Ubuntu\\usr\\lib",
+      "\\\\wsl.localhost\\Ubuntu-22.04\\etc",
+      "\\\\wsl.localhost\\Debian\\proc\\1",
+      "\\\\wsl$\\Ubuntu\\",
+      "\\\\wsl$\\Ubuntu\\mnt\\c",
+      "\\\\wsl$\\Ubuntu\\mnt\\c\\Windows\\System32",
+    ]) {
+      expect(refused(d), d).toMatch(/is (a drive root|the filesystem root|the Windows directory|an operating-system directory[^,]*), not a project, so it is not scanned/);
+    }
+    expect(refused("\\\\wsl$\\Ubuntu\\etc")).toContain('"\\\\wsl$\\Ubuntu\\etc" (/etc in WSL) is an operating-system directory');
+    // Where projects live: a user's own profile, and a WSL home or /srv.
+    for (const d of ["C:\\Users\\Public-Site", "C:\\Users\\dev\\Public", "C:\\Users\\Defaulted\\app", "\\\\wsl$\\Ubuntu\\home\\dev\\app", "\\\\wsl.localhost\\Ubuntu\\srv\\app", "\\\\wsl$\\Ubuntu\\mnt\\c\\code\\app"]) {
+      expect(refused(d), d).toBeNull();
+    }
+  });
+
+  it("the server's own directory is named in a sentence that reads naturally (blind audit round 4)", () => {
+    const why = systemDirectoryProblem("C:\\Windows", { platform: "win32", env: { SystemDrive: "C:", SystemRoot: "C:\\Windows" } })!;
+    expect(serverDirectoryRefusal(why)).toMatch(/^The server's directory "C:\\Windows" is the Windows directory, not a project, so it is not scanned/);
+    expect(serverDirectoryRefusal(why)).not.toContain("started in");
+  });
+
   it.runIf(process.platform === "win32")("Windows, live: an 8.3 short name is the directory it names (C:\\PROGRA~1)", () => {
     expect(systemDirectoryProblem("C:\\PROGRA~1")).toContain("operating-system directory");
   });
@@ -273,8 +308,9 @@ describe("an operating-system directory is never scanned", () => {
     const { results, stderr, timings } = await stdioSession(SYSTEM_DIR, [["vulnerability_scan", {}], ["dependency_health", {}]], {}, { requestTimeoutMs: REQUEST_BOUND_MS });
     expect(stderr).toMatch(/\[4DA\] ".*" is an operating-system directory.*not a project, so it is not scanned/);
     expect(results[0].isError).toBe(true);
-    expect(resultText(results[0])).toMatch(/The server was started in \\?".*\\?" is an operating-system directory/);
-    expect(resultText(results[1])).toMatch(/Nothing was checked, so there is no health score; this is not a healthy result\. The server was started in /);
+    expect(resultText(results[0])).toMatch(/The server's directory \\?".*\\?" is an operating-system directory/);
+    expect(resultText(results[1])).toMatch(/Nothing was checked, so there is no health score; this is not a healthy result\. The server's directory \\?"/);
+    expect(resultText(results[0])).not.toContain("started in");
     expect(resultText(results[1])).toContain('"healthScore":null');
     for (const t of timings) expect(t.ms, t.method).toBeLessThan(REQUEST_BOUND_MS);
   }, 180_000);
