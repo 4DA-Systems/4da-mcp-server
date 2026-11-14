@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { openDatabase, sqliteDriverStatus, type SqliteDatabase } from "../sqlite-driver.js";
+import { openDatabase, sqliteDriverStatus, type SqliteDatabase, type SqliteStatement } from "../sqlite-driver.js";
 
 import { serverCacheDbPath, standaloneDbPath } from "../db.js";
 
@@ -50,6 +50,8 @@ export function closeServerCacheDb(): void {
  * stale, and is purged at start. Five minutes of skew between processes is tolerated.
  */
 const SANE_FETCHED_AT = "fetched_at <= datetime('now', '+5 minutes')";
+/** Keys per IN (...) query in getMany: well under SQLite's 999-variable floor of older builds. */
+const MANY_CHUNK = 500;
 
 interface CacheRow {
   cache_key: string;
@@ -143,12 +145,72 @@ export class LiveCache {
     `);
   }
 
+  /**
+   * One prepared statement per SQL text, for as long as the connection lives. A scan read one row
+   * per dependency and prepared a new statement for each: with a 250,000-entry lockfile that kept
+   * the event loop for seconds, and `ping` waited 7.4 s (blind audit round 4).
+   */
+  private statements = new Map<string, SqliteStatement>();
+  private statementsFor: SqliteDatabase | null = null;
+
+  private statement(sql: string): SqliteStatement {
+    const conn = this.conn();
+    if (this.statementsFor !== conn) {
+      this.statements.clear();
+      this.statementsFor = conn;
+    }
+    let stmt = this.statements.get(sql);
+    if (!stmt) {
+      stmt = conn.prepare(sql);
+      this.statements.set(sql, stmt);
+    }
+    return stmt;
+  }
+
+  /** Many live entries in one query per MANY_CHUNK keys; a key with no live, readable entry is absent from the map. */
+  getMany<T>(keys: readonly string[]): Map<string, T> {
+    return this.readMany(keys, true, (data) => data as T);
+  }
+
+  /** getStale for many keys at once. */
+  getStaleMany<T>(keys: readonly string[]): Map<string, { data: T; fetchedAt: string }> {
+    return this.readMany(keys, false, (data, fetchedAt) => ({ data: data as T, fetchedAt }));
+  }
+
+  private readMany<R>(keys: readonly string[], liveOnly: boolean, make: (data: unknown, fetchedAt: string) => R): Map<string, R> {
+    const out = new Map<string, R>();
+    if (this.memory) {
+      for (const key of keys) {
+        const hit = this.memory.get(key);
+        if (hit && (!liveOnly || this.live(hit))) out.set(key, make(JSON.parse(hit.data), hit.fetched_at));
+      }
+      return out;
+    }
+    const unique = [...new Set(keys)];
+    for (let at = 0; at < unique.length; at += MANY_CHUNK) {
+      const chunk = unique.slice(at, at + MANY_CHUNK);
+      const sql = `SELECT cache_key, data, fetched_at FROM live_cache WHERE cache_key IN (${chunk.map(() => "?").join(",")})${
+        liveOnly ? " AND expires_at > datetime('now')" : ""
+      } AND ${SANE_FETCHED_AT}`;
+      // A full chunk's statement is reused; only the last, shorter one is prepared once more.
+      const rows = (chunk.length === MANY_CHUNK ? this.statement(sql) : this.conn().prepare(sql)).all(...chunk) as Array<{ cache_key: string; data: string; fetched_at: string }>;
+      for (const row of rows) {
+        try {
+          out.set(row.cache_key, make(JSON.parse(row.data), row.fetched_at));
+        } catch {
+          // An unreadable row is a miss, as in get().
+        }
+      }
+    }
+    return out;
+  }
+
   get<T>(key: string): T | null {
     if (this.memory) {
       const hit = this.memory.get(key);
       return hit && this.live(hit) ? (JSON.parse(hit.data) as T) : null;
     }
-    const row = this.conn().prepare(
+    const row = this.statement(
       `SELECT data FROM live_cache WHERE cache_key = ? AND expires_at > datetime('now') AND ${SANE_FETCHED_AT}`,
     ).get(key) as { data: string } | undefined;
 
@@ -165,7 +227,7 @@ export class LiveCache {
       const hit = this.memory.get(key);
       return hit ? { data: JSON.parse(hit.data) as T, fetchedAt: hit.fetched_at } : null;
     }
-    const row = this.conn().prepare(
+    const row = this.statement(
       `SELECT data, fetched_at FROM live_cache WHERE cache_key = ? AND ${SANE_FETCHED_AT}`,
     ).get(key) as { data: string; fetched_at: string } | undefined;
 

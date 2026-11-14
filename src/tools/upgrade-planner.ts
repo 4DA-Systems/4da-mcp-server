@@ -34,7 +34,7 @@ import { formatAppPlan, readAppPlan, scopeAppPlanSteps, type AppPlanResult } fro
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
-import { appTracksProject, liveIntelFor, resolveProjectScope, systemDirectoryProblem } from "./project-scope.js";
+import { appTracksProject, liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
 import { reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
@@ -44,7 +44,7 @@ import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
-import { secondsText, withinCallBudget } from "../call-budget.js";
+import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -341,7 +341,7 @@ async function executeStandalonePlanner(
       totalDeps: 0,
       recommendations: [],
       summary: refused
-        ? `Nothing was planned: the server was started in ${refused}`
+        ? `Nothing was planned. ${serverDirectoryRefusal(refused)}`
         : "No project detected. Run from a directory with package.json, Cargo.toml, pyproject.toml, or go.mod.",
       quickWins: 0,
       breakingChanges: 0,
@@ -413,7 +413,7 @@ async function executeStandalonePlanner(
   const coverage = vulnerabilityCoverage(vulnResult, {
     enabled: liveIntel.isEnabled(),
     expectedTotal: scopeTotal,
-    notLoaded: `the OSV.dev scan did not finish within ${secondsText(scanWaitMs)} or OSV.dev was unreachable`,
+    notLoaded: `${scanUnfinishedText(scanWaitMs)}, or OSV.dev was unreachable`,
   });
   // A project whose only manifests are ones this server does not read (pom.xml) has no data at all (audit 6.2.5 A-6).
   const nothingReadable = (vulnResult?.totalScanned ?? 0) === 0 && (liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0;

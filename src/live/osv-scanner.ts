@@ -8,7 +8,7 @@
  * Privacy: sends only package names + versions (public manifest data).
  */
 
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { sanitizeThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -18,7 +18,7 @@ import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "
 import { collectAffectedSpans } from "./osv-ranges.js";
 import { isMaintenanceNotice, isMaintenanceRecord } from "./maintenance.js";
 import { gradeAliasGroups } from "./advisory-groups.js";
-import { cweIdsOf, isMalware } from "./malware.js";
+import { isMalwareRecord } from "./malware.js";
 import type {
   AliasSeverityReport,
   ResolvedDependency,
@@ -335,6 +335,27 @@ export class OsvHttpSource implements AdvisorySource {
   }
 }
 
+/**
+ * One dependency's cached OSV answer. v5 (blind audit round 4): answers cached before carried
+ * line breaks in aliases/references and the old malware reading; an upgrade never reads them.
+ */
+function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
+  return `osv:v5:${dep.ecosystem}:${dep.name}:${dep.version}`;
+}
+
+/** Dependencies per cache read before the scan yields to the event loop (so the server keeps answering ping). */
+const CACHE_READ_BATCH = 2_000;
+
+/** `read` over the dependencies' cache keys, CACHE_READ_BATCH at a time, yielding to the event loop between batches. */
+async function readInBatches<V>(deps: readonly ResolvedDependency[], read: (keys: string[]) => Map<string, V>): Promise<Map<string, V>> {
+  const out = new Map<string, V>();
+  for (let at = 0; at < deps.length; at += CACHE_READ_BATCH) {
+    if (at > 0) await new Promise((resolve) => setImmediate(resolve));
+    for (const [key, value] of read(deps.slice(at, at + CACHE_READ_BATCH).map(osvCacheKey))) out.set(key, value);
+  }
+  return out;
+}
+
 export class OsvScanner {
   private cache: LiveCache;
   private rateLimiter: RateLimiter;
@@ -360,9 +381,11 @@ export class OsvScanner {
     const uncached: ResolvedDependency[] = [];
     const cachedVulns: VulnerabilityEntry[] = [];
 
+    // Read in batches, yielding to the event loop between them: one statement per dependency kept a
+    // 250,000-entry lockfile's scan from answering `ping` for 7.4 s (blind audit round 4).
+    const cachedFor = network ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
     for (const dep of scannable) {
-      const cacheKey = `osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`;
-      const cached = network ? this.cache.get<VulnerabilityEntry[]>(cacheKey) : null;
+      const cached = cachedFor.get(osvCacheKey(dep)) ?? null;
       if (cached !== null) {
         cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
       } else {
@@ -396,8 +419,11 @@ export class OsvScanner {
     let staleAnswers = 0;
     let staleOldest: string | null = null;
     const unchecked: ResolvedDependency[] = [];
+    const staleFor = network
+      ? await readInBatches(unanswered, (keys) => this.cache.getStaleMany<VulnerabilityEntry[]>(keys))
+      : new Map<string, { data: VulnerabilityEntry[]; fetchedAt: string }>();
     for (const dep of unanswered) {
-      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
+      const stale = staleFor.get(osvCacheKey(dep)) ?? null;
       if (stale) {
         staleAnswers++;
         if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
@@ -562,7 +588,7 @@ export class OsvScanner {
       // version. Cached, that stub answered for the next hour, so one failed fetch turned a
       // critical into "unknown, no fix" for every scan in it (audit 2026-11-11, T7). Only a
       // dependency whose every advisory was read is cached; the rest are asked again next time.
-      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v5:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
@@ -614,7 +640,8 @@ function mapVulnerability(
   dep: ResolvedDependency,
 ): VulnerabilityEntry {
   const graded = deriveSeverity(vuln);
-  const malware = isMalware(vuln.id, vuln.aliases || [], cweIdsOf(vuln), vuln.summary ?? "");
+  // The whole record: summary, details and the OpenSSF origins flag, not the summary alone (blind audit round 4).
+  const malware = isMalwareRecord(vuln);
   // An installed malicious copy is critical in every tool, whatever the record grades (the 4DA lead, 2026-10-18).
   const severity = malware ? "critical" : graded.severity;
   const cvssScore = graded.cvssScore;
@@ -628,7 +655,8 @@ function mapVulnerability(
     isDirect: dep.isDirect,
     devScopeKnown: dep.devScopeKnown,
     vulnId: vuln.id,
-    aliases: vuln.aliases || [],
+    // Ids and URLs from OSV.dev kept CR/LF (blind audit round 4): only an id's or a URL's shape is kept.
+    aliases: [...new Set((vuln.aliases || []).map(thirdPartyId).filter((a): a is string => a !== null))],
     severity,
     cvssScore,
     ...(malware ? { malware: true } : {}),
@@ -636,10 +664,11 @@ function mapVulnerability(
     // Third-party text: the shared cleaning before anything reads it (untrusted-text.ts).
     summary: sanitizeThirdParty(vuln.summary || vuln.details?.slice(0, 200) || "") || vuln.id,
     fixedVersion,
-    published: vuln.published || vuln.modified || "",
+    published: thirdPartyTimestamp(vuln.published) || thirdPartyTimestamp(vuln.modified),
     references: (vuln.references || [])
       .filter((r) => r.type === "ADVISORY" || r.type === "WEB")
-      .map((r) => r.url)
+      .map((r) => thirdPartyUrl(r.url))
+      .filter((u): u is string => u !== null)
       .slice(0, 3),
     target: dep.target,
     platformActive: dep.platformActive,

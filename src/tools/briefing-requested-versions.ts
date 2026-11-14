@@ -16,6 +16,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { asName, projectEcosystems, proseEcosystem, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { installedGoModule, isManifestFile, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
@@ -77,6 +78,35 @@ const DEPENDENCY_VERBS = new Set([
 /** A manifest, lockfile or packaging word: the task is about dependencies. */
 const DEPENDENCY_TASK = /(?:package(?:-lock)?.json|cargo.(?:toml|lock)|requirements(?:-[w-]+)?.txt|pyproject.toml|poetry.lock|uv.lock|pipfile|go.(?:mod|sum)|pnpm-lock.yaml|yarn.lock|dependenc(?:y|ies)|packages?|librar(?:y|ies)|crates?|npm|pnpm|yarn|pip|pypi|cargo)/i;
 const PYPI_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)((?:===?|~=|>=|<=|!=|>|<)[^\s]+)$/;
+/**
+ * Verbs that only ever mean a dependency change. "set", "change" and "use" also set config values
+ * ("Set the request timeout to 30" was judged as `timeout@30`; blind audit round 4), so a bare
+ * number after a name nobody installs is a version only in a task with one of these, or a
+ * manifest or packaging word.
+ */
+const PACKAGE_VERBS = new Set([
+  "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
+]);
+/** A version with no dot (30, v2, ^5): in prose it is as often a setting as a release. */
+const BARE_NUMBER = /^(?:={1,3}|[~^]|[<>]=?)?v?\d+$/i;
+/**
+ * Setting nouns a task gives a number to ("timeout to 30", "port 8080", "retries to 5"): in prose
+ * they are never a package nobody installs. A package really called that is named as `timeout@1.0`,
+ * quoted, or installed.
+ */
+const SETTING_NOUNS = new Set([
+  "timeout", "timeouts", "ttl", "port", "ports", "limit", "limits", "retry", "retries", "attempts", "count", "size", "max", "min", "maximum", "minimum",
+  "interval", "delay", "threshold", "concurrency", "workers", "threads", "width", "height", "depth", "level", "ratio", "rate", "percent", "percentage",
+  "seconds", "secs", "milliseconds", "minutes", "mins", "hours", "days", "kb", "mb", "gb", "memory", "buffer", "batch", "pool", "capacity", "quota",
+  "budget", "offset", "page", "pagesize", "backoff", "duration", "precision", "scale", "weight", "priority", "verbosity", "loglevel", "value", "number",
+  "length", "default", "replicas", "instances", "connections", "deadline", "expiry", "lifetime", "maxage", "age", "temperature", "tokens",
+]);
+/** A bare npm scope with no package after its slash: "@acme". */
+const BARE_SCOPE = /^@[a-z0-9~][\w.~-]*$/i;
+/** Words after a bare scope that name the group of its packages ("the @acme scope", "@acme packages"). */
+const GROUP_NOUNS = new Set(["scope", "scopes", "org", "orgs", "organisation", "organization", "namespace", "packages", "package", "libraries", "libs", "modules", "family", "workspace", "monorepo"]);
+/** Words that put a manifest after a package ("lodash in package.json to 4.17.20"). */
+const FILE_PREPOSITIONS = new Set(["in", "inside", "within", "into", "of", "from"]);
 
 const GO_HOST_PATH = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\//i;
 
@@ -89,14 +119,26 @@ function cleanToken(t: string): string {
     .replace(/'s$/i, "");
 }
 
-function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: CheckEcosystem, explicit = false): { name: string; ecosystem: CheckEcosystem; guessed?: true } | null {
+function nameFor(
+  token: string,
+  deps: readonly ResolvedDependency[],
+  fallback: CheckEcosystem,
+  explicit = false,
+  stated: CheckEcosystem | null = null,
+): { name: string; ecosystem: CheckEcosystem; guessed?: true } | null {
   const bare = cleanToken(token).replace(/[!?]+$/, "");
   const lower = bare.toLowerCase();
-  if (VERBS.has(lower) || CONNECTORS.has(lower) || RUNTIMES.has(lower)) return null;
+  if (VERBS.has(lower) || CONNECTORS.has(lower) || RUNTIMES.has(lower) || isManifestFile(bare)) return null;
   const norm = (s: string) => s.toLowerCase().replace(/[-_.]+/g, "-");
-  const installed = deps.find((d) => d.name.toLowerCase() === lower || (d.ecosystem === "PyPI" && norm(d.name) === norm(bare)));
-  if (installed && (installed.ecosystem === "npm" || installed.ecosystem === "crates.io" || installed.ecosystem === "PyPI" || installed.ecosystem === "Go")) {
-    return { name: installed.name, ecosystem: installed.ecosystem };
+  const checkable = (d: ResolvedDependency) => d.ecosystem === "npm" || d.ecosystem === "crates.io" || d.ecosystem === "PyPI" || d.ecosystem === "Go";
+  const same = deps.filter((d) => checkable(d) && (d.name.toLowerCase() === lower || (d.ecosystem === "PyPI" && norm(d.name) === norm(bare))));
+  // An installed dependency of any ecosystem beats a guess; the one the task names, when it names one.
+  const installed = same.find((d) => d.ecosystem === stated) ?? same[0];
+  if (installed) return { name: installed.name, ecosystem: installed.ecosystem as CheckEcosystem };
+  // A short name for an installed Go module ("gin"), unless the task names another ecosystem.
+  if (!stated || stated === "Go") {
+    const go = installedGoModule(bare, deps);
+    if (go) return { name: go, ecosystem: "Go" };
   }
   // A host-led path ("github.com/...") is a Go module whatever the project mostly holds, and a
   // malformed one ("github.com/gin-gonic/gin/") is passed on as written: dependency_check says it is
@@ -106,7 +148,7 @@ function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: C
     if (go) return { name: go, ecosystem: "Go" };
   }
   // An English word is no package in prose; written as `colors@1.4.44` or `name==1.0` it is one.
-  if (!explicit && COMMON_WORDS.has(lower)) return null;
+  if (!explicit && (COMMON_WORDS.has(lower) || NOT_A_PACKAGE_ADJECTIVES.has(lower))) return null;
   const name = asName(bare, fallback);
   return name ? { name, ecosystem: fallback, guessed: true } : null;
 }
@@ -142,6 +184,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   // Python repository read "add event-stream version 3.3.6" as PyPI; blind audit replay 2026-11-14).
   const others = stated ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
   const aboutDependencies = DEPENDENCY_TASK.test(task) || words.some((w) => DEPENDENCY_VERBS.has(w));
+  // Only packaging words or a dependency-only verb make a bare number a release ("set the timeout to 30" is a setting).
+  const aboutPackages = DEPENDENCY_TASK.test(task) || words.some((w) => PACKAGE_VERBS.has(w));
   const found = new Map<string, RequestedVersion & { order: number }>();
   const unread: string[] = [];
   let order = 0;
@@ -171,13 +215,13 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     if (at > 0 && VERSIONISH.test(token.slice(at + 1))) {
       const name = token.slice(0, at);
       const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : stated === "crates.io" ? "crates.io" : "npm";
-      if (!add(nameFor(name, deps, eco, true), token.slice(at + 1)) && DOTTED.test(token.slice(at + 1))) unread.push(token);
+      if (!add(nameFor(name, deps, eco, true, stated), token.slice(at + 1)) && DOTTED.test(token.slice(at + 1))) unread.push(token);
       continue;
     }
     // name==1.2.3, name~=3.1, name>=2,<3 (PyPI)
     const spec = PYPI_SPEC.exec(token);
     if (spec) {
-      if (!add(nameFor(spec[1], deps, "PyPI", true), spec[2])) unread.push(token);
+      if (!add(nameFor(spec[1], deps, "PyPI", true, stated), spec[2])) unread.push(token);
       continue;
     }
     if (!VERSIONISH.test(token)) continue;
@@ -186,20 +230,31 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     for (let k = i - 1, steps = 0; k >= 0 && steps < 6; k--, steps++) {
       const w = words[k];
       if (CONNECTORS.has(w) || VERSIONISH.test(cleanToken(raw[k]))) continue;
+      // "lodash in package.json to 4.17.20": the file the version goes in, and its preposition, are skipped.
+      if (isManifestFile(raw[k])) continue;
+      if (FILE_PREPOSITIONS.has(w) && k + 1 < i && isManifestFile(raw[k + 1])) continue;
       if (RUNTIMES.has(w)) {
         tied = true; // "node 20", "python 3.12": a runtime, not a package to judge
         break;
       }
+      // "upgrade the @acme scope to 2.0": the word after a bare scope names the group, not a package
+      // (it was read as a package called `scope`; blind audit round 4). The version is unread.
+      if (GROUP_NOUNS.has(w) && k > 0 && BARE_SCOPE.test(cleanToken(raw[k - 1]))) break;
       // A name nobody installs is read from prose only in a task about dependencies, or when it is
       // quoted: "apply the 2.4.1 hotfix" is not a package called `apply`, and an internal codename in
       // a task is never sent to a registry on a guess. The version is then unread instead.
       const quotedName = /^[`'"]/.test(raw[k]);
-      const who = nameFor(raw[k], deps, fallback, quotedName);
-      tied = who !== null && (!who.guessed || aboutDependencies || quotedName) && add(who, token, true);
+      const who = nameFor(raw[k], deps, fallback, quotedName, stated);
+      if (who?.guessed && !quotedName && SETTING_NOUNS.has(w)) {
+        tied = true; // "timeout to 30", "port 8080": a setting, not a package to judge
+        break;
+      }
+      const bareNumberOk = !who?.guessed || quotedName || !BARE_NUMBER.test(token) || aboutPackages;
+      tied = who !== null && (!who.guessed || aboutDependencies || quotedName) && bareNumberOk && add(who, token, true);
       break;
     }
     // "version 1.2.3 of name"
-    if (!tied && aboutDependencies && words[i - 1] === "version" && words[i + 1] === "of" && raw[i + 2]) tied = add(nameFor(raw[i + 2], deps, fallback), token, true);
+    if (!tied && aboutDependencies && words[i - 1] === "version" && words[i + 1] === "of" && raw[i + 2]) tied = add(nameFor(raw[i + 2], deps, fallback, false, stated), token, true);
     if (!tied && DOTTED.test(token)) unread.push(token);
   }
   const requested = [...found.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...r }) => r);

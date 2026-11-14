@@ -19,8 +19,8 @@ import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { isDevOnlyCopy } from "../live/severity-scope.js";
 import { compareVersions } from "../live/version-compare.js";
-import { secondsText, withinCallBudget } from "../call-budget.js";
-import { systemDirectoryProblem } from "./project-scope.js";
+import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
+import { serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -162,7 +162,7 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
     dependencies: [],
     vulnerabilitySummary: null,
     summary: refused
-      ? `Nothing was checked, so there is no health score; this is not a healthy result. The server was started in ${refused}`
+      ? `Nothing was checked, so there is no health score; this is not a healthy result. ${serverDirectoryRefusal(refused)}`
       : only
         ? `Nothing was checked, so there is no health score; this is not a healthy result: no ${only.ecosystem} dependency was read in this project (ecosystem_filter: "${only.ecosystem}"). ${
             elsewhere.length > 0 ? `What was read is ${elsewhere.join(", ")}: drop the filter or pass one of those.` : "No dependency of any ecosystem was read."
@@ -231,7 +231,7 @@ export async function executeDependencyHealth(
   const coverage = vulnerabilityCoverage(vulnResult, {
     enabled: liveIntel.isEnabled(),
     expectedTotal: scopeTotal,
-    notLoaded: `the OSV.dev scan did not finish within ${secondsText(scanWaitMs)} or OSV.dev was unreachable`,
+    notLoaded: `${scanUnfinishedText(scanWaitMs)}, or OSV.dev was unreachable`,
   });
   // A lockfile that could not be read is a gap of the same kind: nothing it
   // pins was sent to OSV. 6.2.5 scored a merge-conflicted package-lock.json

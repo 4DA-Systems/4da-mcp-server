@@ -36,6 +36,41 @@ export function sanitizeThirdParty(text: string, cap = Number.POSITIVE_INFINITY)
   return clean.length > cap ? `${clean.slice(0, cap - 1)}…` : clean;
 }
 
+/**
+ * A third-party identifier (an advisory id or alias, a Hacker News story id): invisible characters
+ * and all whitespace removed, then kept only in an identifier's shape (letters, digits, `.`, `:`,
+ * `_`, `+`, `-`, at most 100 characters); anything else is null. Aliases and HN ids kept CR/LF into
+ * vulnerability_scan and ecosystem_pulse (blind audit round 4).
+ */
+export function thirdPartyId(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const id = cleanText(String(value)).replace(/\s+/g, "");
+  return /^[A-Za-z0-9][\w.:+-]{0,99}$/.test(id) ? id : null;
+}
+
+/**
+ * A third-party URL: invisible characters and all whitespace removed (a URL holds none), then kept
+ * only when it parses as http or https; anything else is null (blind audit round 4).
+ */
+export function thirdPartyUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const url = cleanText(value).replace(/\s+/g, "");
+  if (url.length === 0 || url.length > 2048) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A third-party timestamp: whitespace and invisible characters removed, kept only when it reads as a date; else "". */
+export function thirdPartyTimestamp(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const ts = cleanText(value).replace(/\s+/g, "");
+  return ts.length <= 40 && /^\d{4}-\d{2}-\d{2}/.test(ts) && !Number.isNaN(Date.parse(ts)) ? ts : "";
+}
+
 /** How much of a third-party sentence a result quotes. */
 export const QUOTE_MAX = 120;
 

@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { callBudgetMs, raceCallBudget, remainingCallBudgetMs, runWithCallBudget, settleWithin, withinCallBudget } from "../call-budget.js";
+import { callBudgetMs, raceCallBudget, remainingCallBudgetMs, runWithCallBudget, scanUnfinishedText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { lateAnswer } from "../late-answer.js";
 import { setLiveIntelligence } from "../live-singleton.js";
 import { _resetCargoPlatformCache, activeCratesForHost } from "../live/cargo-platform.js";
@@ -31,7 +31,7 @@ import { configureProxy } from "../proxy.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { dispatchTool } from "../tool-dispatch.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
-import { resolveProjectScope, systemDirectoryProblem } from "../tools/project-scope.js";
+import { resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "../tools/project-scope.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { formatScanResult } from "../tools/vulnerability-scan-format.js";
@@ -182,6 +182,38 @@ describe("one time budget per tool call", () => {
     expect(answer.clean_dependencies).toBeNull();
   });
 
+  it.each(["1", "50", "400"])(
+    "vulnerability_scan with FOURDA_CALL_BUDGET_MS=%s says the budget was used up, never 'within 0 ms' (blind audit round 4)",
+    async (budget) => {
+      npmProject();
+      stallNetwork();
+      setLiveIntelligence(liveFor());
+      process.env.FOURDA_CALL_BUDGET_MS = budget;
+      const result = await dispatchTool("vulnerability_scan", null, { response_format: "detailed" }, { startedAt: Date.now() });
+      const text = JSON.stringify(parse(result));
+      expect(text).not.toMatch(/within 0 (ms|s)\b/);
+      // A 1 ms budget can end before the tool runs at all: the dispatcher's own answer then names it.
+      for (const tool of ["dependency_health"]) {
+        setLiveIntelligence(liveFor());
+        const other = JSON.stringify(parse(await dispatchTool(tool, null, {}, { startedAt: Date.now() })));
+        expect(other, tool).not.toMatch(/within 0 (ms|s)\b/);
+      }
+      const said = budget === "1" ? "1 ms" : budget === "50" ? "0\\.1 s" : "0\\.4 s";
+      expect(text).toMatch(new RegExp(`time budget \\(${said}, from FOURDA_CALL_BUDGET_MS\\) was used up before the OSV\\.dev scan could finish|vulnerability_scan did not finish within ${said}`));
+    },
+  );
+
+  it("the scan's missing-answer sentence names the budget when the wait was about 0, and the wait otherwise (blind audit round 4)", async () => {
+    process.env.FOURDA_CALL_BUDGET_MS = "400";
+    await runWithCallBudget(Date.now(), async () => {
+      expect(scanUnfinishedText(0)).toBe("this call's time budget (0.4 s, from FOURDA_CALL_BUDGET_MS) was used up before the OSV.dev scan could finish");
+      expect(scanUnfinishedText(40)).not.toMatch(/within/);
+      expect(scanUnfinishedText(400)).toBe("the OSV.dev scan did not finish within 0.4 s, the time this call had for it");
+    });
+    delete process.env.FOURDA_CALL_BUDGET_MS;
+    expect(scanUnfinishedText(0)).toBe("this call's time budget (20 s) was used up before the OSV.dev scan could finish");
+  });
+
   it("any other tool that outlives its budget gets an error that starts NOT CHECKED", () => {
     const late = lateAnswer("upgrade_impact", { package: "vite" }, 20_000);
     expect(late.error).toMatch(/^NOT CHECKED: upgrade_impact did not finish within 20 s, so this call verified nothing; the absence of findings here is not a clean result\./);
@@ -222,6 +254,41 @@ describe("an operating-system directory is never scanned", () => {
     // A share that is not an administrative one, and a project on one, are ordinary paths.
     expect(refused("\\\\server\\share\\repo")).toBeNull();
     expect(refused("\\\\?\\D:\\4DA")).toBeNull();
+  });
+
+  it("Windows: the shared and template profiles, the recycle bin, and a WSL distribution's system directories are refused (blind audit round 4)", () => {
+    const env = { SystemDrive: "C:", SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)", ProgramData: "C:\\ProgramData" };
+    const refused = (d: string) => systemDirectoryProblem(d, { platform: "win32", env });
+    for (const d of [
+      "C:\\Users\\Public",
+      "c:\\users\\public\\",
+      "C:\\Users\\Default",
+      "C:\\Users\\All Users",
+      "C:\\$Recycle.Bin",
+      "C:\\$Recycle.Bin\\S-1-5-21-1",
+      "D:\\$RECYCLE.BIN",
+      "C:\\System Volume Information",
+      "\\\\wsl$\\Ubuntu\\etc",
+      "\\\\wsl$\\Ubuntu\\usr\\lib",
+      "\\\\wsl.localhost\\Ubuntu-22.04\\etc",
+      "\\\\wsl.localhost\\Debian\\proc\\1",
+      "\\\\wsl$\\Ubuntu\\",
+      "\\\\wsl$\\Ubuntu\\mnt\\c",
+      "\\\\wsl$\\Ubuntu\\mnt\\c\\Windows\\System32",
+    ]) {
+      expect(refused(d), d).toMatch(/is (a drive root|the filesystem root|the Windows directory|an operating-system directory[^,]*), not a project, so it is not scanned/);
+    }
+    expect(refused("\\\\wsl$\\Ubuntu\\etc")).toContain('"\\\\wsl$\\Ubuntu\\etc" (/etc in WSL) is an operating-system directory');
+    // Where projects live: a user's own profile, and a WSL home or /srv.
+    for (const d of ["C:\\Users\\Public-Site", "C:\\Users\\dev\\Public", "C:\\Users\\Defaulted\\app", "\\\\wsl$\\Ubuntu\\home\\dev\\app", "\\\\wsl.localhost\\Ubuntu\\srv\\app", "\\\\wsl$\\Ubuntu\\mnt\\c\\code\\app"]) {
+      expect(refused(d), d).toBeNull();
+    }
+  });
+
+  it("the server's own directory is named in a sentence that reads naturally (blind audit round 4)", () => {
+    const why = systemDirectoryProblem("C:\\Windows", { platform: "win32", env: { SystemDrive: "C:", SystemRoot: "C:\\Windows" } })!;
+    expect(serverDirectoryRefusal(why)).toMatch(/^The server's directory "C:\\Windows" is the Windows directory, not a project, so it is not scanned/);
+    expect(serverDirectoryRefusal(why)).not.toContain("started in");
   });
 
   it.runIf(process.platform === "win32")("Windows, live: an 8.3 short name is the directory it names (C:\\PROGRA~1)", () => {
@@ -273,8 +340,9 @@ describe("an operating-system directory is never scanned", () => {
     const { results, stderr, timings } = await stdioSession(SYSTEM_DIR, [["vulnerability_scan", {}], ["dependency_health", {}]], {}, { requestTimeoutMs: REQUEST_BOUND_MS });
     expect(stderr).toMatch(/\[4DA\] ".*" is an operating-system directory.*not a project, so it is not scanned/);
     expect(results[0].isError).toBe(true);
-    expect(resultText(results[0])).toMatch(/The server was started in \\?".*\\?" is an operating-system directory/);
-    expect(resultText(results[1])).toMatch(/Nothing was checked, so there is no health score; this is not a healthy result\. The server was started in /);
+    expect(resultText(results[0])).toMatch(/The server's directory \\?".*\\?" is an operating-system directory/);
+    expect(resultText(results[1])).toMatch(/Nothing was checked, so there is no health score; this is not a healthy result\. The server's directory \\?"/);
+    expect(resultText(results[0])).not.toContain("started in");
     expect(resultText(results[1])).toContain('"healthScore":null');
     for (const t of timings) expect(t.ms, t.method).toBeLessThan(REQUEST_BOUND_MS);
   }, 180_000);
