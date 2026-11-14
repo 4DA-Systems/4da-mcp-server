@@ -94,8 +94,61 @@ function* liveSources(): Generator<PrivateNameSource> {
   }
 }
 
+/** Zero-width and other invisible characters a name can carry without looking different. */
+const INVISIBLE = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]|\uDB40[\uDC00-\uDDEF]/g;
+
+/**
+ * Every form of `name` a registry or OSV.dev could read as a package: the name as written, then
+ * the same name without what an agent may wrap it in. A private name written `npm:acme-x`,
+ * `acme-x@1.0.0`, `%40acme%2Fui`, `omega[extra]`, `omega==3.2.0`, with a trailing zero-width
+ * space, as a registry URL, or as a Go path with a capitalised host reached the network: only
+ * the exact spelling was recognised (blind audit 2026-11-14, F2). Only more refusals can follow.
+ */
+export function nameForms(name: string): string[] {
+  const out = new Set<string>();
+  const add = (s: string) => {
+    const t = s.trim();
+    if (t) out.add(t);
+  };
+  const queue = [name];
+  for (let i = 0; i < queue.length && i < 64; i++) {
+    const n = queue[i];
+    if (out.has(n.trim()) && i > 0) continue;
+    add(n);
+    const next = (s: string) => {
+      const t = s.trim();
+      if (t && t !== n.trim() && !queue.includes(t)) queue.push(t);
+    };
+    next(n.replace(INVISIBLE, ""));
+    try {
+      next(decodeURIComponent(n));
+    } catch {
+      // not percent-encoded
+    }
+    next(n.replace(/^(?:npm|pypi|cargo|crate|go|gem|composer):/i, ""));
+    // name@version, @scope/name@version (the scope's own @ is not a version).
+    next(n.replace(/(?<=.)@[^@/]*$/, ""));
+    // PyPI extras and version specifiers: name[extra], name==1.0, name>=1,<2, name ~= 1.0, name; marker
+    next(n.replace(/\s*(?:\[[^\]]*\]|(?:===?|~=|>=|<=|!=|>|<|;).*)$/, ""));
+    // A URL to a registry: the package is the path after the host (and a scoped npm name is two segments).
+    const url = /^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+?)\/?$/i.exec(n);
+    if (url) {
+      const segs = url[1].split("/").filter(Boolean);
+      next(url[1]);
+      if (segs.length >= 2 && segs[segs.length - 2].startsWith("@")) next(segs.slice(-2).join("/"));
+      if (segs.length >= 1) next(segs[segs.length - 1]);
+    }
+    // A Go module's host is case-insensitive; GOPRIVATE patterns are written in lower case.
+    const slash = n.indexOf("/");
+    if (slash > 0 && /\./.test(n.slice(0, slash))) next(n.slice(0, slash).toLowerCase() + n.slice(slash));
+    next(n.toLowerCase());
+  }
+  return [...out];
+}
+
 /** Why `name` (in `ecosystem`, or any ecosystem when null) is private, or null: the request's project, else any. */
 function privateWhy(ecosystem: string | null, name: string): string | null {
+  // Sources read every form of the name themselves (LiveIntelligence.privateReason, nameForms).
   const own = context.getStore();
   for (const source of own ? [own] : liveSources()) {
     for (const eco of ecosystem ? [ecosystem] : ALL_ECOSYSTEMS) {

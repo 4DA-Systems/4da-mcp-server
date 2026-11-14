@@ -36,7 +36,7 @@ import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import { normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
-import { registerPrivateNames, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
+import { nameForms, registerPrivateNames, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -116,6 +116,9 @@ export class LiveIntelligence {
   private privateAudit: ResolvedDependency[] = [];
   /** npm groups: packages their lockfile installs from a non-public registry host (`resolved`). */
   private npmLockPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
+  /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
+  private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
+  private publicNames: Set<string> | null = null;
   private initialized = false;
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
@@ -312,6 +315,8 @@ export class LiveIntelligence {
    * send. They are kept in `privateDeps` so every answer says they were not checked.
    */
   private rebuildDependencySet(): void {
+    this.lockPrivateIndexes = new WeakMap();
+    this.publicNames = null;
     this.npmLockPrivate = new Map(
       this.groupResults
         .filter((r) => mapEcosystem(r.group.language) === "npm")
@@ -339,8 +344,9 @@ export class LiveIntelligence {
 
   /** Why a dependency of this group is private, or null: its lockfile's source, then the name rules. */
   private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): string | null {
-    const n = normName(ecosystem, name);
-    const fromLock = this.lockPrivateOf(r).find((p) => normName(ecosystem, p.name) === n && (p.version === null || version === null || p.version === version));
+    const fromLock = this.lockPrivateIndex(r, ecosystem)
+      .get(normName(ecosystem, name))
+      ?.find((p) => p.version === null || version === null || p.version === version);
     if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
     // pip's configured index (PIP_INDEX_URL, pip.conf) serves every package a requirements file installs.
     const pip = this.privateRules.pipIndex;
@@ -354,19 +360,52 @@ export class LiveIntelligence {
    * from a private registry or index. dependency_check asks this before any lookup.
    */
   privateReason(ecosystem: string, name: string): string | null {
+    // Any form of the name a registry could read as it (`npm:x`, `x@1.0.0`, `x[extra]`, a URL...).
+    for (const form of nameForms(name)) {
+      const why = this.privateReasonExact(ecosystem, form);
+      if (why) return why;
+    }
+    return null;
+  }
+
+  private privateReasonExact(ecosystem: string, name: string): string | null {
     const byName = this.privateRules.reasonFor(ecosystem, name);
     if (byName) return byName;
     // Every spelling the registry treats as the same name (`acme_core`, `Acme-Core`; review of #64, X1).
-    const norm = (n: string) => normName(ecosystem, n);
+    const n = normName(ecosystem, name);
     // A name this project ALSO installs from the public registry is public (a git fork of serde
     // beside serde itself): asking about it reveals nothing.
-    if (this.auditDeps.some((d) => d.ecosystem === ecosystem && norm(d.name) === norm(name))) return null;
+    this.publicNames ??= new Set(this.auditDeps.map((d) => `${d.ecosystem}\0${normName(d.ecosystem, d.name)}`));
+    if (this.publicNames.has(`${ecosystem}\0${n}`)) return null;
     for (const r of this.groupResults) {
       if (mapEcosystem(r.group.language) !== ecosystem) continue;
-      const hit = this.lockPrivateOf(r).find((p) => norm(p.name) === norm(name));
+      const hit = this.lockPrivateIndex(r, ecosystem).get(n)?.[0];
       if (hit) return `${hit.file} installs it from ${hit.registry}, not the public registry`;
     }
     return null;
+  }
+
+  /**
+   * A group's private lockfile entries by normalised name. privateReason runs for every name in
+   * every outgoing request, and once per dependency while the set is built: scanning the whole
+   * dependency list each time made a 40,000-dependency scan take 34 s with the event loop blocked
+   * (blind audit 2026-11-14, F3). Indexes are rebuilt with the dependency set.
+   */
+  private lockPrivateIndex(r: GroupResolution, ecosystem: string): Map<string, PrivateIndexEntry[]> {
+    let byEco = this.lockPrivateIndexes.get(r);
+    if (!byEco) this.lockPrivateIndexes.set(r, (byEco = new Map()));
+    let index = byEco.get(ecosystem);
+    if (!index) {
+      index = new Map();
+      for (const p of this.lockPrivateOf(r)) {
+        const k = normName(ecosystem, p.name);
+        const list = index.get(k);
+        if (list) list.push(p);
+        else index.set(k, [p]);
+      }
+      byEco.set(ecosystem, index);
+    }
+    return index;
   }
 
   /** What a group's lockfiles install from a private source: the readers' entries, and npm's `resolved` hosts. */
