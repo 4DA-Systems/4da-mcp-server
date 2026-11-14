@@ -93,8 +93,11 @@ export interface NewPackageFinding extends NewPackage {
 }
 
 const POPULAR = new Set(POPULAR_NPM);
-/** Enough for any list a task gives ("add a, b, c and d"): every name in it is checked. */
-const MAX_NEW_PACKAGES = 8;
+/**
+ * How many names a briefing checks. Past it the rest are NOT CHECKED, said by name, and the briefing
+ * is never safe_to_delegate (what-should-i-know.ts): a long list is never silently cut.
+ */
+export const MAX_NEW_PACKAGES = 8;
 /** How long a briefing waits for the name checks. Past it they are unchecked, never clean. */
 const NAME_CHECK_BUDGET_MS = 10_000;
 
@@ -223,6 +226,11 @@ export function projectEcosystems(deps: readonly ResolvedDependency[]): CheckEco
  * comment for what counts as naming one). At most eight, in the order named.
  */
 export function detectNewPackages(task: string, deps: readonly ResolvedDependency[]): NewPackage[] {
+  return detectAllNewPackages(task, deps).slice(0, MAX_NEW_PACKAGES);
+}
+
+/** Every package the task adds, uncapped: the briefing checks the first MAX_NEW_PACKAGES and names the rest as not checked. */
+export function detectAllNewPackages(task: string, deps: readonly ResolvedDependency[]): NewPackage[] {
   return readTaskItems(normalizeVersionSyntax(task), deps).packages;
 }
 
@@ -240,6 +248,7 @@ export interface BoundVersion extends TaskSpan {
 }
 
 export interface TaskItems {
+  /** Every package the task adds, in the order named (uncapped). */
   packages: NewPackage[];
   /** Versions tied to the name before them: briefing-requested-versions.ts judges each for that name. */
   bound: BoundVersion[];
@@ -476,7 +485,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       k = next;
     }
   }
-  return { packages: found.slice(0, MAX_NEW_PACKAGES), bound, ignored };
+  return { packages: found, bound, ignored };
 }
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;

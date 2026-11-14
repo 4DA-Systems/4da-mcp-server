@@ -31,7 +31,10 @@
   `requires-python`) are not packages. A name the task gives no ecosystem for
   that none of the project's ecosystems has is also looked up, for malware
   only, in the other ecosystems (npm, crates.io, PyPI); private names are still
-  sent nowhere. Up to eight packages a task adds are checked (was three).
+  sent nowhere. Up to eight packages a task adds are checked (was three, and
+  the rest were dropped without a word); past eight the rest are named as
+  "NOT CHECKED: N more packages named in the task (...)" and the briefing is
+  never `safe_to_delegate`.
   Everyday work still names nothing ("add tests", "add logging to the
   handler", "add tests, logging and retries"). The plugin's manifest-edit hook
   counted `"version"` and engines' `"node"` in package.json, and `version`,

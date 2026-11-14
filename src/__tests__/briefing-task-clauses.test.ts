@@ -385,6 +385,44 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
   });
 });
 
+describe("a task naming more packages than the briefing checks fails closed", () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => `pkg-${i + 1}`);
+  beforeEach(() => {
+    for (const name of many(12)) NPM[name] = { latest: "1.0.0", versions: ["1.0.0"] };
+  });
+
+  it("ten clean packages: the first eight are checked, the other two are NOT CHECKED by name, and it is not safe_to_delegate (it was, silently)", async () => {
+    const r = await brief(`npm install ${many(10).join(" ")}`);
+    expect(r.new_packages?.map((p) => p.name)).toEqual(many(8));
+    expect(r.new_packages?.every((p) => p.verdict === "proceed")).toBe(true);
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).toContain("NOT CHECKED: 2 more packages named in the task (pkg-9, pkg-10)");
+    expect(r.summary).toContain("NOT CHECKED: 2 more packages named in the task (pkg-9, pkg-10)");
+    // Never looked up past the cap: said, not sent.
+    expect(ASKED.some((u) => u === "https://registry.npmjs.org/pkg-9")).toBe(false);
+  });
+
+  it("a prose list past eight fails closed the same way", async () => {
+    const r = await brief(`add ${many(8).join(", ")} and pkg-9`);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(r.delegation_assessment.reason).toContain("NOT CHECKED: 1 more package named in the task (pkg-9)");
+  });
+
+  it("exactly eight clean packages: all checked, safe_to_delegate, nothing said NOT CHECKED", async () => {
+    const r = await brief(`npm install ${many(8).join(" ")}`);
+    expect(r.new_packages).toHaveLength(8);
+    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(r.summary).not.toContain("NOT CHECKED");
+  });
+
+  it("a private name never takes a checked slot, and is never named as unchecked", async () => {
+    const r = await brief(`npm install acme-vault ${many(8).join(" ")}`, NPM_PROJECT, { privateReason: (_e: string, n: string) => (n === "acme-vault" ? "private by .npmrc" : null) });
+    expect(r.new_packages?.map((p) => p.name)).toEqual(many(8));
+    expect(r.summary).not.toContain("NOT CHECKED: 1 more");
+    expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
+  });
+});
+
 describe("what was already right stays right", () => {
   it.each([
     ["add the lodahs package", "human_only"],

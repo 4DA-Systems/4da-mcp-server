@@ -52,7 +52,7 @@ import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { OsvEcosystem, ResolvedDependency } from "../live/types.js";
 import { exclusionNotes } from "../project-tree.js";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
-import { checkNewPackages, detectNewPackages, type NewPackageFinding } from "./briefing-new-packages.js";
+import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, type NewPackageFinding } from "./briefing-new-packages.js";
 import {
   getRelevantWisdom,
   getRelevantWisdomHybrid,
@@ -343,7 +343,10 @@ export async function executeWhatShouldIKnow(
   const privateShort = new Set(privateTask.flatMap((p) => [p.package.toLowerCase(), p.package.split("/").pop()!.toLowerCase()]));
   const notPrivate = (p: { name: string }) =>
     privateAnywhere(liveIntel, p.name) === null && !privateShort.has(p.name.toLowerCase()) && !privateShort.has(p.name.split("/").pop()!.toLowerCase());
-  const newPackages = await checkNewPackages(liveIntel, detectNewPackages(task, allDeps()).filter(notPrivate));
+  const named = detectAllNewPackages(task, allDeps()).filter(notPrivate);
+  const newPackages = await checkNewPackages(liveIntel, named.slice(0, MAX_NEW_PACKAGES));
+  // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
+  const uncheckedPackages = named.slice(MAX_NEW_PACKAGES).map((p) => p.name);
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14).
   const taskVersions = readTaskVersions(task, allDeps());
@@ -482,6 +485,7 @@ export async function executeWhatShouldIKnow(
       privateTask,
       requestedVersions,
       unreadVersions,
+      uncheckedPackages,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -503,7 +507,7 @@ export async function executeWhatShouldIKnow(
       delegation_assessment: delegation,
       scan_status: scanStatus,
       scan: scanBlock,
-      summary: `${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages)}`,
+      summary: `${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages)}`,
       wisdom_recall_mode: wisdomMode,
       _meta: { untrusted_text: UNTRUSTED },
     };
@@ -717,6 +721,11 @@ async function conflictsFor(db: FourDADatabase, packages: TaskPackage[]) {
 }
 
 /** "lodahs (avoid)", "expres (review: did you mean express?)", "left-pad (proceed)". */
+/** The packages a task adds past the briefing's cap, as the briefing says it. */
+function notCheckedPackages(names: string[]): string {
+  return `NOT CHECKED: ${names.length} more package${names.length === 1 ? "" : "s"} named in the task (${names.join(", ")})`;
+}
+
 function sayNewPackage(p: NewPackageFinding): string {
   const guess = p.did_you_mean && p.verdict !== "proceed" && p.verdict !== "wait" ? `: did you mean ${p.did_you_mean}?` : "";
   // The version the task writes is the one judged ("Task adds axios (proceed)" hid axios 0.21.0's avoid).
@@ -734,6 +743,8 @@ function assessDelegation(input: {
   requestedVersions?: RequestedVersionFinding[];
   /** Versions the task names that the briefing could tie to no package. */
   unreadVersions?: string[];
+  /** Packages the task adds past the briefing's cap: named, not checked. */
+  uncheckedPackages?: string[];
   taskDependencies: TaskDependency[];
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
@@ -786,7 +797,9 @@ function assessDelegation(input: {
   const unreadReasons = (input.unreadVersions ?? []).length > 0
     ? [`the task names ${input.unreadVersions!.join(", ")}, which this briefing could not tie to a package: call dependency_check on that package and version before writing it`]
     : [];
-  const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...unclear.map(
+  const unchecked = input.uncheckedPackages ?? [];
+  const cappedReasons = unchecked.length > 0 ? [`${notCheckedPackages(unchecked)}: call dependency_check on each before adding it`] : [];
+  const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...cappedReasons, ...unclear.map(
     (p) =>
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
   )];
