@@ -379,6 +379,8 @@ export async function executeWhatShouldIKnow(
         ecosystem: d.ecosystem as OsvEcosystem,
         name: d.package,
         fixes: d.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f)),
+        // The package's advisory list must hold every advisory the scan named (fix-paths.ts listCovers).
+        ids: d.vulnerabilities.map((v) => v.id),
         // The installed copy: a target never brings in an advisory it does not have.
         ...(d.installed.length === 1 ? { installed: d.installed[0] } : {}),
       })),

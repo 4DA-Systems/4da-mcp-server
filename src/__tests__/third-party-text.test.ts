@@ -67,6 +67,7 @@ describe("every place third-party free text enters goes through it", () => {
   const READS_TO_CLASSIFY: Record<string, string> = {
     "live/maintenance.ts": "matches a summary against wording; never shows it",
     "live/osv-ranges.ts": "matches a summary for the malware class; never shows it",
+    "live/malware.ts": "matches a summary and details against malware wording; never shows them",
     "live/fix-paths.ts": "passes a yank reason to withdrawalText (withdrawn-releases.ts), which cleans it; npm deprecation messages it cleans itself",
     "tools/get-actionable-signals.ts": "reads VulnerabilityEntry.summary, cleaned where the scanner made it (osv-scanner.ts)",
   };

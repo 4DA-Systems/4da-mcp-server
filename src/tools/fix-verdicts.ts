@@ -35,6 +35,7 @@ export function fixInputOf(entries: VulnerabilityEntry[]): Omit<FixPathInput, "s
     fixes: entries.map((e) => e.fixedVersion).filter((f): f is string => Boolean(f)),
     sourceDirs: builtDirs(entries),
     unfixed: unfixed.map((g) => ({ id: g.best.vulnId, ids: [...g.ids] })),
+    ids: entries.map((e) => e.vulnId),
   };
 }
 

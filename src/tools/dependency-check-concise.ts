@@ -61,6 +61,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
         newest: rc.newest_safe_in_range,
         ...(rc.smallest_safe_upgrade !== undefined ? { smallest_upgrade: rc.smallest_safe_upgrade } : {}),
         ...(rc.newest_safe_outside_range ? { newest_outside_range: rc.newest_safe_outside_range } : {}),
+        ...(rc.too_new?.length ? { too_new: rc.too_new } : {}),
       }
     : null;
   const quoted: Record<string, string> = {};

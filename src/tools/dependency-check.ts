@@ -48,7 +48,7 @@ import type { FourDADatabase } from "../db.js";
 import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import type { LiveIntelligence } from "../live/index.js";
-import type { FixPathSources } from "../live/fix-paths.js";
+import { missingFromList, type FixPathSources } from "../live/fix-paths.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
 import { npmWeeklyDownloads } from "../live/npm-downloads.js";
 import type { AdvisoryRanges } from "../live/osv-ranges.js";
@@ -224,6 +224,11 @@ interface Resolved extends CheckItem {
   rangeCheck?: RangeCheck;
   /** Set when no single version could be chosen; the item is then blocked with this text. */
   unresolved?: string;
+  /**
+   * Advisories OSV.dev's batch query named for `to` or `from` that the package's advisory list
+   * (/v1/query) did not hold: the list is incomplete, so no release is named safe from it.
+   */
+  listGap?: { ids: string[]; versions: string[] };
 }
 
 /** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
@@ -465,7 +470,7 @@ async function checkDependencies(
 
   const osvDeps: ResolvedDependency[] = items
     .filter((i) => !i.unresolved)
-    .flatMap((item) => [item.to, item.from].filter((v): v is string => Boolean(v)).map((version) => osvDep(item, version)));
+    .flatMap((item) => [...new Set([item.to, item.from, ...rangePicks(item)].filter((v): v is string => Boolean(v)))].map((version) => osvDep(item, version)));
   const scan = await liveIntel.queryAdvisories(osvDeps);
   // Unrated (Go) records carry their GHSA alias's grade from the scanner, as in every tool (severityFrom).
   const byInstance = new Map<string, VulnerabilityEntry[]>();
@@ -505,6 +510,30 @@ async function checkDependencies(
   );
   const moreLists = await packageAdvisoryLists(affectedExact.filter((i) => !advisoryLists.has(lookupKey(i))));
   for (const [k, v] of moreLists) advisoryLists.set(k, v);
+  // A list that leaves out an advisory the batch query named for `to` or `from` is incomplete: a
+  // proxy that answered {} for /v1/query made lodash 4.17.20 avoid and named 4.0.0, which eight
+  // advisories affect, the smallest safe release on its line (blind audit round 4). Nothing is
+  // computed from it: no safe release, no range check, and the answer says NOT CHECKED.
+  const gaps = new Map<string, { ids: string[]; versions: string[] }>();
+  for (const item of items) {
+    const list = item.unresolved ? null : advisoryLists.get(lookupKey(item));
+    if (!list) continue;
+    for (const version of new Set([item.to, item.from, ...rangePicks(item)])) {
+      if (!version) continue;
+      const missing = missingFromList(list, (byInstance.get(instanceKey(item.ecosystem, item.package, version)) ?? []).map((e) => e.vulnId));
+      if (missing.length === 0) continue;
+      const gap = gaps.get(lookupKey(item)) ?? { ids: [], versions: [] };
+      gaps.set(lookupKey(item), { ids: [...new Set([...gap.ids, ...missing])], versions: [...new Set([...gap.versions, version])] });
+    }
+  }
+  // Per package: every item of a package whose list is incomplete loses what was computed from it.
+  for (const item of items) {
+    const gap = gaps.get(lookupKey(item));
+    if (!gap) continue;
+    advisoryLists.set(lookupKey(item), null);
+    item.listGap = gap;
+    delete item.rangeCheck;
+  }
   const lines = affectedExact.flatMap((item) => {
     const lookup = indexes.get(lookupKey(item))!;
     const advisories = advisoryLists.get(lookupKey(item));
@@ -535,6 +564,7 @@ async function checkDependencies(
       from: item.from,
       allowPrerelease: isPrereleaseIn(item.ecosystem, item.to),
       ...(filter ? { held: filter } : {}),
+      young: (v) => isYoung(index.releases[v]?.publishedAt, now),
     });
   }
   // Nothing in range is safe: never point at a release years older when a low or moderate advisory on a
@@ -629,7 +659,7 @@ async function checkDependencies(
       installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
       newDependenciesSignal(item, to, base, p.introduced, createdForItem),
       withdrawnSignal(item, to, index!),
-      upgradeTypeSignal(item),
+      upgradeTypeSignal(item, releasesBack(item, index!)),
     ];
     const decided = decide(signals);
     const unsafe = decided.verdict === "avoid" || decided.verdict === "review";
@@ -676,6 +706,7 @@ function privateResult(r: Requested, why: string): ItemResult {
 
 /** The reason, plus the safe releases to write instead when the verdict is against `to`. */
 function withAlternatives(reason: string, item: Resolved, unsafe: boolean): string {
+  if (item.listGap) return `${reason} | ${listGapText(item.package, item.listGap)}`;
   const rc = item.rangeCheck;
   if (!rc) return reason;
   const where = rc.basis === "requested" ? `in ${rc.range}` : `on ${item.to}'s line (${rc.range})`;
@@ -708,9 +739,36 @@ function withAlternatives(reason: string, item: Resolved, unsafe: boolean): stri
   const withheld = rc.withheld_note ? ` ${rc.withheld_note}.${quoted}` : "";
   // audit 6.2.5 D-4: releases passed over for what they hold are counted, never dropped silently.
   const heldOut = rc.held_excluded ? ` ${rc.held_excluded} release${rc.held_excluded === 1 ? "" : "s"} clear of ${item.package}'s own advisories left out: ${rc.held_note}.` : "";
-  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}${heldOut}`;
+  // Blind audit round 4: a safe release inside the release-age hold is never named silently.
+  const tooNew = rc.too_new_note ? ` ${rc.too_new_note}.` : "";
+  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}${heldOut}${tooNew}`;
   if (rc.basis === "same_line" && !unsafe) return reason;
   return `${reason} | ${safe}`;
+}
+
+/** For a downgrade: the published, stable releases above `to` up to and including `from` (upgradeTypeSignal). */
+function releasesBack(item: Resolved, index: PackageReleaseIndex): number | null {
+  if (!item.from || compareIn(item.ecosystem, item.to, item.from) >= 0) return null;
+  return Object.values(index.releases).filter(
+    (r) => !r.withdrawn && !isPrereleaseIn(item.ecosystem, r.version) && compareIn(item.ecosystem, r.version, item.to) > 0 && compareIn(item.ecosystem, r.version, item.from!) <= 0,
+  ).length;
+}
+
+/**
+ * The releases a constraint's range check names as safe (smallest, smallest above `from`, newest):
+ * asked of OSV.dev's batch query beside `to`, so a list that left out an advisory affecting one of
+ * them is caught (Resolved.listGap) instead of naming it.
+ */
+function rangePicks(item: Resolved): string[] {
+  const rc = item.rangeCheck;
+  if (!rc || rc.basis !== "requested") return [];
+  return [rc.smallest_safe_in_range, rc.smallest_safe_upgrade, rc.newest_safe_in_range].filter((v): v is string => typeof v === "string" && v !== item.to);
+}
+
+/** NOT CHECKED: the package's advisory list is incomplete (Resolved.listGap), so no release is named. */
+function listGapText(pkg: string, gap: { ids: string[]; versions: string[] }): string {
+  const ids = `${gap.ids.slice(0, 3).join(", ")}${gap.ids.length > 3 ? ` and ${gap.ids.length - 3} more` : ""}`;
+  return `NOT CHECKED: OSV.dev's advisory list for ${pkg} (/v1/query) left out ${ids}, which its batch query names for ${andList(gap.versions)}, so the list is incomplete and no release of ${pkg} is named safe from it (the verdict on the version checked comes from the batch query and stands). Check again later, or check a specific version with dependency_check.`;
 }
 
 /**
@@ -816,7 +874,18 @@ function resolveTarget(
     // Without the advisory list no release can be called safe; judge the newest one on its own advisories.
     return { ...base, to: newestOf(r.ecosystem, admitted)!, requested: r.raw };
   }
-  const rangeCheck = checkRange({ ecosystem: r.ecosystem, index, range, basis: "requested", advisories, from: r.from, allowPrerelease, ...(held ? { held } : {}) });
+  const rangeCheck = checkRange({
+    ecosystem: r.ecosystem,
+    index,
+    range,
+    basis: "requested",
+    advisories,
+    from: r.from,
+    allowPrerelease,
+    ...(held ? { held } : {}),
+    // The picks it names obey the release-age hold, as `to` alone would (blind audit round 4).
+    young: (v) => isYoung(index.releases[v]?.publishedAt, now),
+  });
   if (onlyPrereleases) return { ...base, requested: r.raw, rangeCheck, unresolved: noStable() };
   const safe = rangeCheck.safe_versions;
   const settled = (v: string) => {

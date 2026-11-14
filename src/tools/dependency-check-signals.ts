@@ -489,9 +489,33 @@ export function withdrawnSignal(item: CheckItem, to: ReleaseRecord, index?: Pack
  * vitest 3 -> 5, reqwest 0.12 -> 0.13 and stripe 22 -> 23 all came back
  * "proceed" and the summary told the agent to apply them (2026-10-07 eval).
  */
-export function upgradeTypeSignal(item: CheckItem): Signal {
+/** A downgrade this many published releases back (or more) is review: what `from` added since `to` is gone. */
+export const LARGE_DOWNGRADE_RELEASES = 20;
+
+/**
+ * `releasesBack`: for a downgrade, how many published, stable releases lie above `to` up to and
+ * including `from` (unknown when the registry's list was not read).
+ */
+export function upgradeTypeSignal(item: CheckItem, releasesBack?: number | null): Signal {
   const kind = upgradeType(item.from, item.to, item.ecosystem);
   const text = item.from ? `${item.from} -> ${item.to}: ${kind}` : `new dependency at ${item.to}`;
+  if (kind === "downgrade") {
+    // Blind audit round 4: a briefing moved serde 1.0.219 back to 1.0.0, 219 releases, and said
+    // safe_to_delegate with no word of it. Code written against `from` may use what `to` lacks.
+    const breaking = upgradeType(item.to, item.from!, item.ecosystem) === "major";
+    const back = releasesBack ?? null;
+    const count = back !== null ? `${back} release${back === 1 ? "" : "s"} back` : null;
+    if (breaking || (back !== null && back >= LARGE_DOWNGRADE_RELEASES)) {
+      const why = breaking ? `across a breaking version range${count ? ` (${count})` : ""}` : count!;
+      return {
+        id: "upgrade_type",
+        value: kind,
+        evidence: `${text} ${why}: code written against ${item.from} may use what ${item.to} does not have. Confirm the downgrade is intended and check the project still builds against ${item.to}.`,
+        effect: "review",
+      };
+    }
+    return { id: "upgrade_type", value: kind, evidence: `${text}${count ? ` (${count})` : ""}.`, effect: "info" };
+  }
   if (kind === "major") {
     const zeroX = /^v?0\./.test(item.from ?? "") ? " (below 1.0 a minor bump is a major one)" : "";
     return {

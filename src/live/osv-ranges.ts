@@ -16,7 +16,7 @@ import type { OsvVulnerability } from "./types.js";
 import { compareToLowerBound, compareVersions, isComparable, isComposerOrGemPrerelease, parsePep440, samePackageName } from "./version-compare.js";
 import { parseSemverPrecedence } from "./semver-precedence.js";
 import { isDeclaredNotice, isMaintenanceRecord } from "./maintenance.js";
-import { cweIdsOf, isMalware } from "./malware.js";
+import { isMalwareRecord } from "./malware.js";
 
 /**
  * One affected span: [introduced, fixed), or [introduced, lastAffected]
@@ -46,7 +46,7 @@ export interface AdvisoryRanges {
    * entries cached before 6.3.
    */
   declaredNotice?: boolean;
-  /** A malicious-package record (malware.ts isMalware: a MAL- id or alias, or CWE-506). */
+  /** A malicious-package record (malware.ts isMalwareRecord). */
   malware?: boolean;
   /** The record's `aliases`: the same issue's ids elsewhere (GHSA, PYSEC, CVE). Absent on entries cached by earlier versions. */
   aliases?: string[];
@@ -134,8 +134,8 @@ function listedVersions(affected: OsvVulnerability["affected"] | undefined, pack
 /** One advisory's ranges for one package; null when the advisory is withdrawn. */
 export function advisoryRanges(vuln: OsvVulnerability, packageName: string, ecosystem: string): AdvisoryRanges | null {
   if (vuln.withdrawn) return null;
-  // THE malware predicate (malware.ts): a MAL- id or alias, or CWE-506; never summary wording.
-  const malware = isMalware(vuln.id, vuln.aliases ?? [], cweIdsOf(vuln), vuln.summary ?? "");
+  // THE malware predicate (malware.ts) over the whole record: ids, CWE-506, a malware title, malware-only details wording.
+  const malware = isMalwareRecord(vuln);
   return {
     id: vuln.id,
     spans: collectAffectedSpans(vuln.affected, packageName, ecosystem),

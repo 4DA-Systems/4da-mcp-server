@@ -5,7 +5,7 @@
  * dependency_health) so they all draw the same line.
  */
 
-import { cweIdsOf, isMalware } from "./malware.js";
+import { isMalwareRecord } from "./malware.js";
 import type { OsvVulnerability, VulnerabilityEntry } from "./types.js";
 import { samePackageName } from "./version-compare.js";
 
@@ -78,7 +78,7 @@ export function isMaintenanceNotice(v: Pick<VulnerabilityEntry, "summary"> & { m
  * dependency_check, which answers "may I write this version", is stricter: isDeclaredNotice.
  */
 export function maintenanceBasis(vuln: NoticeRecord, packageName: string, ecosystem: string): "declared" | "wording" | null {
-  if (isMalware(vuln.id ?? "", vuln.aliases ?? [], cweIdsOf(vuln), vuln.summary ?? "")) return null;
+  if (isMalwareRecord(vuln)) return null;
   const entries = affectedEntries(vuln, packageName, ecosystem);
   if (carriesGrade(vuln, entries)) return null;
   if (entries.some((a) => Array.isArray(a.database_specific?.categories) && a.database_specific.categories.length > 0)) return null;
