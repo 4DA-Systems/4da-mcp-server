@@ -213,6 +213,12 @@ export interface RangeCheck {
   /** When `from` is given: the smallest safe release above it (the minimal fixing upgrade). */
   smallest_safe_upgrade?: string | null;
   /**
+   * Safe releases published inside the release-age hold (applyHold): passed over as picks where a
+   * settled safe release could take their place, named otherwise; `too_new_note` says which.
+   */
+  too_new?: string[];
+  too_new_note?: string;
+  /**
    * Releases in range that no advisory affects but the registry withdrew (yanked; npm
    * deprecated with a later clean release on its line), below the smallest safe pick (all of
    * them when none is safe), and why in plain words (FX-H5).
@@ -339,6 +345,49 @@ export function ownSafeInRange(input: { ecosystem: CheckEcosystem; index: Packag
  * (glob 10.x, tar 6.x) withdraws nothing. Maintenance notices do not make a
  * release unsafe.
  */
+/**
+ * The release-age hold on the safe picks. Blind audit round 4 (2026-11-14): `{npm, ws, "7.x"}`
+ * named 7.5.14 as `newest` 1.4 days after it was published, and `{PyPI, boto3, "~=1.44.0"}` named
+ * 1.44.3 at 0.5 days, while dependency_check on either release alone said `wait`. Each pick
+ * (smallest, smallest above `from`, newest, newest outside the range) is now the nearest settled
+ * safe release; a young one passed over is listed in `too_new`. Where no settled safe release can
+ * take a pick's place, the young one stays named and is listed in `too_new` too, and the note says
+ * it is inside the hold (dependency_check waives the hold only when every older release on its
+ * line has a known advisory).
+ */
+function applyHold(out: RangeCheck, safe: string[], young: (v: string) => boolean, ecosystem: CheckEcosystem, from?: string): void {
+  const settled = safe.filter((v) => !young(v));
+  const named = new Set<string>();
+  const pickOf = (inSettled: string | null | undefined, inSafe: string | null | undefined) => {
+    const pick = inSettled ?? inSafe ?? null;
+    if (pick && young(pick)) named.add(pick);
+    return pick;
+  };
+  if (out.smallest_safe_in_range !== null) out.smallest_safe_in_range = pickOf(settled[0], safe[0]);
+  if (out.newest_safe_in_range !== null) out.newest_safe_in_range = pickOf(settled[settled.length - 1], safe[safe.length - 1]);
+  if (from && out.smallest_safe_upgrade) {
+    const above = (v: string) => compareIn(ecosystem, v, from) > 0;
+    out.smallest_safe_upgrade = pickOf(settled.find(above), safe.find(above));
+  }
+  const passed = safe.filter((v) => young(v) && !named.has(v));
+  const tooNew = [...new Set([...passed, ...named])].sort((a, b) => compareIn(ecosystem, a, b));
+  if (tooNew.length === 0) return;
+  out.too_new = tooNew;
+  const list = (vs: string[]) => (vs.length <= 3 ? vs.join(", ") : `${vs.slice(0, 2).join(", ")} and ${vs.length - 2} more`);
+  const parts: string[] = [];
+  if (passed.length > 0) {
+    parts.push(`${list(passed)} ${passed.length === 1 ? "is" : "are"} safe but published under ${HOLD_DAYS} days ago, inside the release hold (dependency_check says wait for ${passed.length === 1 ? "it" : "them"}), so not named`);
+  }
+  const kept = [...named].sort((a, b) => compareIn(ecosystem, a, b));
+  if (kept.length > 0) {
+    parts.push(`${list(kept)} ${kept.length === 1 ? "is" : "are"} named because no settled safe release can take ${kept.length === 1 ? "its" : "their"} place, but ${kept.length === 1 ? "was" : "were"} published under ${HOLD_DAYS} days ago, inside the release hold: dependency_check on ${kept.length === 1 ? "it" : "each"} says wait unless every older release on its line has a known advisory`);
+  }
+  out.too_new_note = parts.join("; ");
+}
+
+/** The release-age hold in days (dependency-check-signals.ts WAIT_DAYS, which imports this module). */
+const HOLD_DAYS = 3;
+
 export function checkRange(input: {
   ecosystem: CheckEcosystem;
   index: PackageReleaseIndex;
@@ -353,6 +402,12 @@ export function checkRange(input: {
   held?: { unsafe: (version: string) => boolean; note: string };
   /** The caller asked for a prerelease (an exact prerelease `to`, or a constraint that names one). */
   allowPrerelease?: boolean;
+  /**
+   * The release-age hold (dependency-check-signals.ts releaseAgeSignal): true for a release younger
+   * than it. A release the hold keeps is not named as the smallest or newest safe pick while a
+   * settled one can be (applyHold).
+   */
+  young?: (version: string) => boolean;
 }): RangeCheck {
   const { ecosystem, index, range, basis } = input;
   const excluded = excludedReleases(index);
@@ -367,6 +422,8 @@ export function checkRange(input: {
     if (!ids) seen.set(v, (ids = advisoriesAffecting(input.advisories, v, ecosystem)));
     return ids;
   };
+  // The release-age hold, except above an affected `from`: a security fix is not held back (releaseAgeSignal).
+  const holdOf = () => (input.young && !(input.from && affecting(input.from).length > 0) ? input.young : undefined);
   const ownSafe = candidates.filter((v) => affecting(v).length === 0);
   const safe = input.held ? ownSafe.filter((v) => !input.held!.unsafe(v)) : ownSafe;
   const out: RangeCheck = {
@@ -388,7 +445,9 @@ export function checkRange(input: {
     const outside = installable
       .filter((v) => !isPrereleaseIn(ecosystem, v) && affecting(v).length === 0 && !input.held?.unsafe(v))
       .sort((a, b) => compareIn(ecosystem, a, b));
-    out.newest_safe_outside_range = outside[outside.length - 1] ?? null;
+    // The newest settled one, as for the picks in range (applyHold); a young one only when none is settled.
+    const hold = holdOf();
+    out.newest_safe_outside_range = (hold ? [...outside].reverse().find((v) => !hold(v)) : undefined) ?? outside[outside.length - 1] ?? null;
   }
   if (input.from) {
     out.smallest_safe_upgrade = safe.find((v) => compareIn(ecosystem, v, input.from!) > 0) ?? null;
@@ -397,6 +456,8 @@ export function checkRange(input: {
     out.held_excluded = ownSafe.length - safe.length;
     out.held_note = input.held.note;
   }
+  const hold = holdOf();
+  if (hold) applyHold(out, safe, hold, ecosystem, input.from);
   // The withdrawn releases that would otherwise have been the smallest safe pick (FX-H5).
   const pick = input.from ? out.smallest_safe_upgrade : out.smallest_safe_in_range;
   const withheld = [...excluded.keys()]

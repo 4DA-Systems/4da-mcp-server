@@ -614,6 +614,7 @@ async function executeStandalonePlanner(
         fixes: vulns.map((v) => v.fixedVersion).filter((f): f is string => Boolean(f)),
         sourceDirs: builtDirs(vulns),
         unfixed: unfixedGroups.map((g) => ({ id: g.best.vulnId, ids: [...g.ids] })),
+        ids: vulns.map((v) => v.vulnId),
       });
     } else if (vulnerable && action === "no_fix_available") {
       fixPathInputs.set(rec, { fixes: [], sourceDirs: [] });

@@ -681,12 +681,16 @@ export async function cleanFixTarget(
   name: string,
   perAdvisoryFixes: string[],
   installed?: string | null,
+  /** The advisory ids OSV's batch query named for the installed copy: the package's list must hold each (listCovers). */
+  knownIds: readonly string[] = [],
 ): Promise<FixTargetResult | null> {
   if (perAdvisoryFixes.length === 0 && !installed) return null;
-  const [advisories, facts] = await Promise.all([
+  const [listed, facts] = await Promise.all([
     sources.packageAdvisories(ecosystem, name),
     sources.releaseFacts(ecosystem, name),
   ]);
+  // A list that leaves out an advisory the batch query named is incomplete: read as unread (audit H5).
+  const advisories = listed && listCovers(listed, knownIds) ? listed : null;
   if (!advisories && !facts && perAdvisoryFixes.length > 0 && WITHDRAWALS_READ.has(ecosystem)) {
     // Neither OSV's list nor the registry answered: the highest per-advisory fix stands, checked
     // against the installed version's advisories only, and the answer says the withdrawal check
@@ -897,6 +901,25 @@ async function registryOnlyTarget(sources: FixPathSources, ecosystem: OsvEcosyst
   return withRegistryFacts(result, ecosystem, fixes, [], facts, await absentReasons(sources, ecosystem, name, absent));
 }
 
+/**
+ * The advisory ids (or aliases) in `ids` that a package's advisory list (/v1/query) does not hold.
+ * OSV's batch query already named them for an installed or requested version, so a list without
+ * them is incomplete, and nothing computed from it may call a release safe: a proxy that answered
+ * `{}` for /v1/query while querybatch answered normally made lodash 4.17.20 avoid, and the same
+ * answer named 4.0.0, which eight advisories affect, the smallest safe release on its line (blind
+ * audit round 4, 2026-11-14). An empty answer is OSV's normal reply for a package with no
+ * advisories, so the gap shows only against what the batch query named.
+ */
+export function missingFromList(list: readonly AdvisoryRanges[], ids: readonly string[]): string[] {
+  const held = new Set(list.flatMap((a) => [a.id, ...(a.aliases ?? [])].map((x) => x.toUpperCase())));
+  return [...new Set(ids)].filter((id) => !held.has(id.toUpperCase()));
+}
+
+/** Whether a package's advisory list holds every id the batch query named (missingFromList). */
+export function listCovers(list: readonly AdvisoryRanges[], ids: readonly string[]): boolean {
+  return missingFromList(list, ids).length === 0;
+}
+
 /** #981 (b): an advisory whose ranges cannot be read leaves the release unknown, never skipped silently. */
 export function unreadableText(ids: string[]): string {
   return `the affected ranges of ${ids.join(", ")} cannot be read, so whether any release clears ${ids.length === 1 ? "it" : "them"} is unknown: no release is named`;
@@ -936,7 +959,7 @@ export function withheldText(clean: FixTargetResult, ecosystem: string): string 
  */
 export async function verifyFixTargets(
   sources: FixPathSources | null,
-  items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string }>,
+  items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string; ids?: string[] }>,
   budgetMs: number,
   concurrency = 12,
   options: { heldQuery?: AdvisoryQuery } = {},
@@ -954,7 +977,7 @@ export async function verifyFixTargets(
         timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
       });
       try {
-        const clean = await Promise.race([cleanFixTarget(sources, item.ecosystem, item.name, item.fixes, item.installed).catch(() => null), late]);
+        const clean = await Promise.race([cleanFixTarget(sources, item.ecosystem, item.name, item.fixes, item.installed, item.ids).catch(() => null), late]);
         if (clean) out.set(item.key, clean);
       } finally {
         if (timer !== undefined) clearTimeout(timer);

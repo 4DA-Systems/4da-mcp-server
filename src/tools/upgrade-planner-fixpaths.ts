@@ -193,6 +193,8 @@ export interface FixPathInput {
   sourceDirs: string[];
   /** Advisories (one per alias group) that name no fixed version: `id` to print, `ids` every id of the group (M2). */
   unfixed?: Array<{ id: string; ids: string[] }>;
+  /** Every advisory id the scan named for this copy: the package's advisory list must hold each (fix-paths.ts listCovers). */
+  ids?: string[];
 }
 
 type Intel = Pick<LiveIntelligence, "getFixPathSources" | "lockfileFor" | "getProjectRoot" | "getResolvedDeps"> &
@@ -312,7 +314,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   // #981 round 3: an installed copy flagged malicious names no release at all: remove or replace it.
   const own = step.currentVersion ? await sources.packageAdvisories(ecosystem, step.package).catch(() => null) : null;
   const malicious = own ? cleanReleases(own, ecosystem, []).maliciousAt(step.currentVersion!) : [];
-  let clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion);
+  let clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion, input.ids ?? []);
   // npm: a target that exact-pins (or narrowly ranges) an affected dependency installs it: express
   // 4.20.0 and qs 6.11.0 (audit 6.2.5 D-4). The same check vulnerability_scan runs on its targets,
   // on every row: a transitive copy's target is the floor its parents' levers must admit, so a
