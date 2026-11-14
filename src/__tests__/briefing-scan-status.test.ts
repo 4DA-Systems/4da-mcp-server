@@ -229,8 +229,10 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     expect(result.scan_status).toBe("ready");
     const named = result.advisories.filter((a) => /jsonwebtoken/i.test(`${a.title} ${a.action}`));
     expect(named.length).toBeGreaterThan(0);
-    // The per-vulnerability live signal carries the upgrade target.
-    expect(result.advisories.some((a) => a.action.includes("Upgrade jsonwebtoken to 10.3.0"))).toBe(true);
+    // The per-vulnerability live signal names the advisories' fix; with no fix-path check here it is
+    // NOT CHECKED, never "Upgrade to" a release OSV.dev did not confirm (pre-publish audit 2026-11-14).
+    expect(result.advisories.some((a) => /NOT CHECKED: 10\.3\.0 was not confirmed/.test(a.action))).toBe(true);
+    expect(result.advisories.some((a) => a.action.includes("Upgrade jsonwebtoken to 10.3.0"))).toBe(false);
     // A medium advisory in the very package being upgraded is not "safe".
     expect(result.delegation_assessment.level).toBe("review_needed");
   });
@@ -394,7 +396,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
     const dbRow = result.advisories.filter((a) => a.title.includes("CRITICAL: jsonwebtoken authorization bypass"));
     expect(dbRow).toHaveLength(1);
-    const liveRow = result.advisories.filter((a) => a.action.includes("Upgrade jsonwebtoken to 10.3.0"));
+    const liveRow = result.advisories.filter((a) => a.action.includes("NOT CHECKED: 10.3.0"));
     expect(liveRow).toHaveLength(1);
   });
 });
@@ -553,7 +555,7 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
       expect.arrayContaining(["GHSA-h395-gr6q-cpjc", "CVE-2026-25800", "RUSTSEC-2026-0088"]),
     );
     expect(liveRows[0].signal_priority).toBe("medium");
-    expect(liveRows[0].action).toBe("Upgrade jsonwebtoken to 10.3.0");
+    expect(liveRows[0].action).toBe("Upgrade jsonwebtoken: the advisory names 10.3.0 as its fix, NOT CHECKED against jsonwebtoken's other advisories (run dependency_check on a release before pinning it)");
   });
 
   it("platform-inactive advisories drop to low with a host note", () => {
@@ -566,7 +568,7 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("low");
-    expect(row!.action).toBe("Not built on this host — Upgrade nix to 0.30.0");
+    expect(row!.action).toBe("Not built on this host — Upgrade nix: the advisory names 0.30.0 as its fix, NOT CHECKED against nix's other advisories (run dependency_check on a release before pinning it)");
     // The title agrees with the priority instead of shouting the advisory's own grade.
     expect(row!.title.startsWith("NOT BUILT HERE (critical):")).toBe(true);
   });

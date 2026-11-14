@@ -21,7 +21,7 @@
  */
 
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
-import { osvAdvisoryId, sanitizeThirdParty } from "../untrusted-text.js";
+import { osvAdvisoryId, quoteThirdParty } from "../untrusted-text.js";
 import { ArchiveError, defaultFetch, fetchArchiveBytes, readRootTextFiles, type FetchFn } from "./package-archive.js";
 import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection, type VersionOrder } from "./changelog.js";
 import { compareVersions, isComparable } from "./version-compare.js";
@@ -175,7 +175,7 @@ async function loadNpmIndex(net: UpgradeNet, name: string): Promise<RegistryInde
   const doc = (await res.json()) as NpmPackument;
   const versions = Object.entries(doc.versions ?? {}).map(([version, meta]) => {
     const entry: PublishedVersion = { version, published: doc.time?.[version] ?? null };
-    if (typeof meta.deprecated === "string" && meta.deprecated) entry.deprecated = sanitizeThirdParty(meta.deprecated) || "deprecated";
+    if (typeof meta.deprecated === "string" && meta.deprecated) entry.deprecated = quoteThirdParty(meta.deprecated) || "deprecated";
     if (meta.dist?.tarball) entry.tarball = meta.dist.tarball;
     return entry;
   });

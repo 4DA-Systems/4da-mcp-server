@@ -159,7 +159,10 @@ describe("defect 1: an incomplete OSV advisory list never names a safe release",
     const [r] = (await check([{ ecosystem: "npm", package: "lodash", to: "^4.0.0" }])).results;
     expect(r.range_check).toBeUndefined();
     expect(r.reason).not.toMatch(/Safe in \^4\.0\.0/);
-    expect(r.reason).toContain("NOT CHECKED: OSV.dev's advisory list for lodash");
+    // The pick itself was confirmed by the batch check: a proceed says so, never "NOT CHECKED" (audit 2026-11-14).
+    expect(r.verdict).toBe("proceed");
+    expect(r.reason).not.toContain("NOT CHECKED");
+    expect(r.reason).toContain("OSV.dev's batch check lists no advisory for lodash 4.17.21. Its full advisory list for lodash (/v1/query) was incomplete");
     expect(r.reason).toContain("4.0.0");
   });
 

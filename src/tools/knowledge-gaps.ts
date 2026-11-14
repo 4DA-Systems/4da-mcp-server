@@ -34,6 +34,7 @@ import {
 } from "./knowledge-gap-grading.js";
 import { compareVersions } from "../live/version-compare.js";
 import { dependencyIsActive, loadActiveScope, loadLinkerIndex, scopeRows, type LinkerIndex } from "./knowledge-gap-scope.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 
 // The grading and range rules live in their own modules; re-exported for existing importers.
 export {
@@ -149,7 +150,7 @@ function newerThanEveryInstall(item: GapCandidate, installs: Install[]): boolean
 function brief(item: GapCandidate): SourceItemBriefRow {
   return {
     id: item.id,
-    title: item.title && item.title.length > 120 ? `${item.title.substring(0, 120)}...` : item.title,
+    title: item.title ? quoteThirdParty(item.title) : item.title,
     url: item.url,
     source_type: item.source_type,
     created_at: item.created_at,

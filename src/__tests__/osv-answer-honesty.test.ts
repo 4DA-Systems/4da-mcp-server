@@ -162,7 +162,9 @@ describe("an advisory whose record could not be fetched", () => {
     const all = formatScanResult(scan, undefined, ctx);
     expect(all.recommendations[0]).toMatch(/^Upgrade pkg 1\.0\.0 .*1 more advisory \(GHSA-unread-0000-0001\) matched, details NOT CHECKED .*the target was not checked against it$/);
     const row = conciseScanResult(all).vulnerable_packages[0];
-    expect(row).toMatchObject({ advisories: 2, details_not_checked: 1, fixed_version: "1.0.1" });
+    // The fix the read advisory names was not confirmed against every advisory: no fixed_version, said why.
+    expect(row).toMatchObject({ advisories: 2, details_not_checked: 1, fixed_version: null });
+    expect(row.fix_note).toMatch(/^NOT CHECKED: 1\.0\.1 /);
     expect(row).not.toHaveProperty("unfixed_advisories");
   });
 });

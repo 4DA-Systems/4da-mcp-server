@@ -97,9 +97,12 @@ describe("vulnerability_scan upgrade targets", () => {
 
   it("when the check cannot run, the answer says the target is unverified", async () => {
     const concise = await scan({}, sources(false));
-    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: "0.10.79", fix_checked: "installed_advisories_only" });
+    // Unverified: named in NOT CHECKED words, never as the version (pre-publish audit 2026-11-14).
+    expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: null, fix_checked: "installed_advisories_only" });
+    expect(concise.vulnerable_packages[0].fix_note).toMatch(/^NOT CHECKED: 0\.10\.79 /);
     const offline = await scan({ response_format: "detailed" }, null);
-    expect(offline.fix_targets["openssl@0.10.38"]).toEqual({ target: "0.10.79", checked: "installed_advisories_only" });
+    expect(offline.fix_targets["openssl@0.10.38"]).toMatchObject({ target: null, checked: "installed_advisories_only" });
+    expect(offline.fix_targets["openssl@0.10.38"].note).toMatch(/^NOT CHECKED: 0\.10\.79 /);
   });
 });
 

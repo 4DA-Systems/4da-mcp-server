@@ -266,7 +266,7 @@ describe("dependency_check: a crafted deprecation message stays quoted data", ()
 
 describe("_meta.untrusted_text on every tool that returns third-party text", () => {
   /** Tools that set their own, more specific note. */
-  const OWN_NOTE = ["upgrade_impact", "what_should_i_know", "get_context", "agent_memory", "decision_memory"];
+  const OWN_NOTE = ["what_should_i_know", "get_context", "agent_memory", "decision_memory"];
   /** Tools whose result holds nothing a third party wrote. */
   const NO_THIRD_PARTY_TEXT = ["record_feedback"];
 

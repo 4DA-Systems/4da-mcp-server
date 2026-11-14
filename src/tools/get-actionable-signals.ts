@@ -15,6 +15,7 @@ import { presentedSeverity, scopeAdjustmentReason } from "../live/severity-scope
 import { getLiveIntelligence } from "../live-singleton.js";
 import { driftAction } from "./install-drift-notes.js";
 import { normalizeStoredPriority, type SignalPriority, type SignalType } from "./signal-classifier.js";
+import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
 
 // The priority vocabulary lives in signal-classifier.ts; re-exported for existing importers.
 export { normalizeStoredPriority, type SignalPriority, type SignalType } from "./signal-classifier.js";
@@ -267,7 +268,7 @@ export function executeGetActionableSignals(
 
     signals.push({
       id: item.id,
-      title: item.title,
+      title: quoteThirdParty(item.title, HEADLINE_MAX),
       url: item.url,
       source_type: item.source_type,
       relevance_score: item.relevance_score,
@@ -304,7 +305,8 @@ export function executeGetActionableSignals(
         let action = vuln.installDriftOf
           ? driftAction(vuln)
           : vuln.fixedVersion
-            ? `Upgrade ${vuln.package} to ${vuln.fixedVersion}`
+            ? // The advisory's own fix, not checked against the package's other advisories here.
+              `Upgrade ${vuln.package}: the advisory names ${vuln.fixedVersion} as its fix, NOT CHECKED against ${vuln.package}'s other advisories (run dependency_check on a release before pinning it)`
             : `Review ${vuln.package} — no fix version published`;
         const adjusted = scopeAdjustmentReason(vuln);
         if (adjusted) {

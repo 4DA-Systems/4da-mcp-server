@@ -199,7 +199,10 @@ describe("defect 1: with the batch query failed, no release is named safe from /
     QUERY = "empty";
     const [r] = (await check([{ ecosystem: "npm", package: "lodash", to: "4.x" }])).results;
     expect(r.range_check).toBeUndefined();
-    expect(r.reason).toContain("NOT CHECKED");
+    // A proceed on the confirmed pick: the gap is said, as what was not compared, never "NOT CHECKED" (audit 2026-11-14).
+    expect(r.verdict).toBe("proceed");
+    expect(r.reason).not.toContain("NOT CHECKED");
+    expect(r.reason).toMatch(/full advisory list for lodash \(\/v1\/query\) was incomplete .* so other releases were not compared/);
   });
 });
 

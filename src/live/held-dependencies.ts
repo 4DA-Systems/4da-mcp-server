@@ -61,6 +61,8 @@ export interface HeldDependency {
   /** The advisories that affect `version` (one id per alias group, maintenance notices left out). */
   ids: string[];
   severity: VulnerabilityEntry["severity"];
+  /** An advisory here was matched but its record could not be read: its severity is not known, and counts as high. */
+  unread?: true;
 }
 
 export type HeldCheck =
@@ -182,16 +184,17 @@ export async function heldAdvisories(
     const k = `${v.package}@${v.currentVersion}`;
     byCopy.set(k, [...(byCopy.get(k) ?? []), v]);
   }
-  const hits = new Map<string, { ids: string[]; severity: VulnerabilityEntry["severity"] }>();
+  const hits = new Map<string, { ids: string[]; severity: VulnerabilityEntry["severity"]; unread: boolean }>();
   for (const [k, entries] of byCopy) {
     const groups = groupAdvisories(entries);
     const worst = groups.map((g) => g.best.severity).reduce((a, b) => ((SEVERITY_RANK[b as keyof typeof SEVERITY_RANK] ?? 0) > (SEVERITY_RANK[a as keyof typeof SEVERITY_RANK] ?? 0) ? b : a), "unknown" as VulnerabilityEntry["severity"]);
-    hits.set(k, { ids: groups.map((g) => g.best.vulnId).sort(), severity: worst });
+    const unread = groups.some((g) => g.best.severity === "unknown" && g.members.some((m) => m.detailUnavailable));
+    hits.set(k, { ids: groups.map((g) => g.best.vulnId).sort(), severity: worst, unread });
   }
   for (const r of resolved) {
     const affected: HeldDependency[] = r.deps.flatMap((d) => {
       const hit = d.version ? hits.get(`${d.name}@${d.version}`) : undefined;
-      return hit ? [{ name: d.name, spec: d.spec, exact: d.exact, version: d.version!, ids: hit.ids, severity: hit.severity }] : [];
+      return hit ? [{ name: d.name, spec: d.spec, exact: d.exact, version: d.version!, ids: hit.ids, severity: hit.severity, ...(hit.unread ? { unread: true as const } : {}) }] : [];
     });
     const unread = r.deps.filter((d) => !d.version).map((d) => `${d.name} "${d.spec}"`);
     if (affected.length > 0) out.set(r.key, { status: "checked", affected });

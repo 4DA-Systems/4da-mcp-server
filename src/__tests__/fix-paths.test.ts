@@ -599,7 +599,9 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const li = intel(cargoDir, "rust", ["tokio", "native-tls"], entriesFor(OPENSSL, "openssl", "crates.io", "0.10.38", cargoDir));
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const openssl = plan.recommendations.find((s: { package: string }) => s.package === "openssl");
-    expect(openssl).toMatchObject({ targetVersion: "0.10.79", action: "waiting_on_upstream", fixPathChecked: "installed_advisories_only" });
+    // Not confirmed: no targetVersion, the release named in a NOT CHECKED reason (pre-publish audit 2026-11-14).
+    expect(openssl).toMatchObject({ targetVersion: null, action: "waiting_on_upstream", fixPathChecked: "installed_advisories_only" });
+    expect(openssl.reasons[0]).toMatch(/^NOT CHECKED: 0\.10\.79 was not confirmed free of openssl's known advisories/);
     expect(plan.summary).toMatch(/checked only against the installed version's advisories/);
   });
 });

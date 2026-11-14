@@ -70,6 +70,12 @@ export interface AdvisoryRef {
   /** The GHSA alias `severity` was read from, when this record carries none of its own (Go). */
   severityFrom?: string;
   /**
+   * OSV.dev matched this advisory to the version, but no record of it could be read (by id or in the
+   * package's list): its severity is not known, and it counts as high. Losing a record never softens
+   * a verdict (pre-publish audit 2026-11-14: lodash 4.17.20 went from avoid to review).
+   */
+  unread?: true;
+  /**
    * The malicious-package records (malware.ts) in this advisory's alias group: a MAL- record often
    * comes in under its GHSA alias, which then names the group (blind audit round 5: chalk 5.6.1).
    */
@@ -190,7 +196,8 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: H
     };
   }
   const severity = heldSeverity(held.affected);
-  const heldEffect: SignalEffect = severity === "critical" || severity === "high" ? "avoid" : "review";
+  // A held advisory whose record could not be read counts as high, as one on `to` does.
+  const heldEffect: SignalEffect = severity === "critical" || severity === "high" || held.affected.some((d) => d.unread) ? "avoid" : "review";
   const effect = own.effect === "avoid" || heldEffect === "avoid" ? "avoid" : "review";
   const affected = held.affected.map((d) => ({ package: d.name, spec: d.spec, installs: d.version, advisories: d.ids, severity: d.severity }));
   const heldNote = `${heldText(item.to, held.affected)}: installing ${item.to} installs ${held.affected.length === 1 ? "it" : "them"}.`;
@@ -245,7 +252,7 @@ function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
     };
   }
   if (affecting.length > 0) {
-    const serious = affecting.some((a) => a.severity === "critical" || a.severity === "high");
+    const serious = affecting.some(isSerious);
     return {
       id: "advisories",
       value,
@@ -261,8 +268,19 @@ function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
   };
 }
 
+/** High or critical, or a severity that could not be read: an unread record never counts as less (AdvisoryRef.unread). */
+function isSerious(a: AdvisoryRef): boolean {
+  return a.severity === "critical" || a.severity === "high" || (a.severity === "unknown" && a.unread === true);
+}
+
 function fmt(a: AdvisoryRef): string {
-  const grade = a.maintenance ? "unmaintained notice" : a.severityFrom ? `${a.severity}, per ${a.severityFrom}` : a.severity;
+  const grade = a.maintenance
+    ? "unmaintained notice"
+    : a.severityFrom
+      ? `${a.severity}, per ${a.severityFrom}`
+      : a.unread && a.severity === "unknown"
+        ? "severity NOT CHECKED: OSV.dev did not return its record, so it counts as high"
+        : a.severity;
   // Counted, and said why: it reads like a notice and is not one by the record's own statement.
   return `${a.id} (${grade}${a.countedNotice ? "; worded as an unmaintained-package notice, but not declared as one or it names a fixed release, so it counts" : ""})`;
 }
@@ -275,7 +293,7 @@ function fmt(a: AdvisoryRef): string {
  */
 function affectedText(to: string, affecting: AdvisoryRef[]): string {
   if (affecting.length === 1) return `${to} is affected by ${fmt(affecting[0])}`;
-  const serious = affecting.filter((a) => a.severity === "critical" || a.severity === "high");
+  const serious = affecting.filter(isSerious);
   const total = `${to} is affected by ${affecting.length} known advisories`;
   if (serious.length === 0) return `${total}: ${list(affecting)}`;
   const share = serious.length === affecting.length ? "all of them" : `${serious.length} of them`;
