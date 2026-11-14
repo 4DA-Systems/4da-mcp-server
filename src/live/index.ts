@@ -1008,6 +1008,14 @@ export class LiveIntelligence {
     return this.runInContext(() => this.queryAdvisoriesIn(deps));
   }
 
+  /**
+   * Drop the cached batch answers for these releases, fresh and expired: one that contradicts what
+   * OSV.dev's own advisory list says about the same release is never answered from again (round 8, B7).
+   */
+  forgetAdvisoryAnswers(deps: ReadonlyArray<Pick<ResolvedDependency, "ecosystem" | "name" | "version">>): void {
+    this.osvScanner.forget(deps);
+  }
+
   private async queryAdvisoriesIn(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
     if (!this.enabled) return emptyVulnResult("dependency_check", true, { count: deps.length, reason: LOOKUPS_DISABLED });
     // A private name is never asked about (a held dependency of a private parent): it has no
