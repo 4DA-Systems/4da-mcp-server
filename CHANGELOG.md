@@ -17,6 +17,27 @@
   package in a project that installs from PyPI ("add colourama", "add
   jeIlyfish", "add python3-dateutil" read as prose and said `safe_to_delegate`;
   now `review_needed` with "did you mean").
+- **Pre-publish fixes (private names, round 6).** dependency_check and
+  upgrade_impact sent a private package's name to npm, PyPI, the Go proxy and
+  OSV.dev when it was written with a little decoration, while
+  what_should_i_know refused the same names: in quotes or backticks
+  (`` `acme` ``, `'acme'`, `"acme"`), in angle brackets (`<acme>`,
+  `&lt;acme&gt;`), followed by a version or a note (`acme 3.1.0`,
+  `acme (3.1.0)`, `acme (npm)`), in a list (`lodash acme`, `acme,lodash`), with
+  stray punctuation (`-acme`, `acme.`), as an archive (`acme.tar.gz`), with
+  `\` or `:` for a scope's `/` (`@acme\ui`, `@acme:ui`), or as a Go module path
+  with a port (`git.acme.internal:443/team/mod`). Every name inside the item is
+  now read, and the item is NOT CHECKED (private) if any of them is private. The
+  short name of a private package or module (`ui` for a private `@acme/ui`,
+  `secret-go` for `github.com/acme/secret-go`) is private too, under any
+  ecosystem, unless the project installs a public package by that name. Every
+  tool that takes a package name reads the same rule, so they cannot disagree.
+- **Pre-publish fixes (pip configuration).** On Windows a private index set in
+  `%USERPROFILE%\.config\pip\pip.conf` was not read, and the project's PyPI
+  names reached OSV.dev and pypi.org. Every location any pip reads on any
+  platform is now read on all of them (the XDG locations, `~/.pip`, `~/pip`,
+  `%APPDATA%\pip`, the virtualenv), under both `pip.ini` and `pip.conf`, with
+  `XDG_CONFIG_DIRS` split on `;` on Windows.
 - **Pre-publish fixes (briefing, round 5).** what_should_i_know said
   `safe_to_delegate` for tasks that add malware: "add ctx", "add ctx to
   requirements.txt", "add extrahtml to requirements.txt" and "add logger-libs"

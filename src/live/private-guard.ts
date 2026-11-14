@@ -158,13 +158,6 @@ function* liveSources(): Generator<PrivateNameSource> {
 const INVISIBLE = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]|\uDB40[\uDC00-\uDDEF]/g;
 
 /**
- * Every form of `name` a registry or OSV.dev could read as a package: the name as written, then
- * the same name without what an agent may wrap it in. A private name written `npm:acme-x`,
- * `acme-x@1.0.0`, `%40acme%2Fui`, `omega[extra]`, `omega==3.2.0`, with a trailing zero-width
- * space, as a registry URL, or as a Go path with a capitalised host reached the network: only
- * the exact spelling was recognised (blind audit 2026-11-14, F2). Only more refusals can follow.
- */
-/**
  * Free text (a briefing task) as a reader sees it: percent-escapes decoded and invisible characters
  * removed, before any package name is read from it. "install %40acme%2Fvault-core version 2.0.0"
  * was split at the `%` and `2fvault-core` sent to OSV.dev and npm, naming the private
@@ -201,6 +194,40 @@ export function foldName(name: string): string {
   return name.normalize("NFKC").replace(DASHES, "-").replace(SLASHES, "/");
 }
 
+/** HTML character references an agent may pass through: `&lt;acme&gt;`, `&#96;acme&#x60;`. */
+const ENTITIES: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'", nbsp: " ", grave: "`", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”" };
+function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, ref: string) => {
+    if (ref[0] === "#") {
+      const code = ref[1] === "x" || ref[1] === "X" ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    }
+    return ENTITIES[ref.toLowerCase()] ?? whole;
+  });
+}
+
+/** Quotes, backticks and brackets: no package name in any ecosystem contains one. */
+const WRAPPERS = /[`'"<>(){}[\]‘’‚‛“”„‟«»‹›「」『』]/g;
+/** What separates the names in a list, or a name from its version: no package name contains one. */
+const SEPARATORS = /[\s,;|]+/;
+/** A distribution archive's suffix: `acme.tar.gz`, `acme-1.0.0.tgz`, `acme-1.0-py3-none-any.whl`. */
+const ARCHIVE = /\.(?:tar\.(?:gz|bz2|xz|zst)|tgz|tbz2?|zip|whl|egg|gem|crate|jar|nupkg)$/i;
+
+/**
+ * Every form of `name` a registry or OSV.dev could read as a package: the name as written, then
+ * the same name without what an agent may wrap it in. A private name written `npm:acme-x`,
+ * `acme-x@1.0.0`, `%40acme%2Fui`, `omega[extra]`, `omega==3.2.0`, with a trailing zero-width
+ * space, as a registry URL, or as a Go path with a capitalised host reached the network: only
+ * the exact spelling was recognised (blind audit 2026-11-14, F2). Only more refusals can follow.
+ *
+ * Also every name inside the item (black-box audit of 60c9edc, round 6): quoted, backticked or
+ * bracketed (`` `acme` ``, `'acme'`, `<acme>`, `&lt;acme&gt;`), followed by a version or a note
+ * (`acme 3.1.0`, `acme (3.1.0)`, `acme\t2.0.0`, `acme (npm)`), in a list (`lodash acme`,
+ * `acme,lodash`), with stray punctuation (`-acme`, `acme.`), as an archive (`acme.tar.gz`), with
+ * `\` or `:` for the scope's `/` (`@acme\ui`, `@acme:ui`), or a Go host with a port
+ * (`github.com:443/acme/x`). Each reached the registries and OSV.dev while the briefing refused it.
+ * A plain name has no other forms, so this costs a public lookup nothing.
+ */
 export function nameForms(name: string): string[] {
   const out = new Set<string>();
   const add = (s: string) => {
@@ -218,6 +245,20 @@ export function nameForms(name: string): string[] {
     };
     next(n.replace(INVISIBLE, ""));
     next(foldName(n));
+    next(decodeEntities(n));
+    // Every name inside the item: wrappers dropped, split at list and version separators.
+    const tokens = n.replace(WRAPPERS, " ").split(SEPARATORS).filter(Boolean);
+    if (tokens.length !== 1 || tokens[0] !== n) for (const t of tokens) next(t);
+    // Stray punctuation either side (a scope's leading `@` kept).
+    next(n.replace(/^[^\p{L}\p{N}@]+|[^\p{L}\p{N}]+$/gu, ""));
+    // A distribution archive, and the version in its file name (`acme-3.1.0.tar.gz`).
+    next(n.replace(ARCHIVE, ""));
+    if (!n.includes("/")) next(n.replace(ARCHIVE, "").replace(/[-_]v?\d+\.\d+[\w.+!-]*$/, ""));
+    // `\` or `:` where a scope's `/` belongs.
+    next(n.replace(/\\+/g, "/"));
+    next(n.replace(/^@([^/:\\\s]+):+/, "@$1/"));
+    // A host with a port, or scp-style (`git@host:org/x`): the module path is the host and the path.
+    next(n.replace(/^(?:[\w.-]+@)?([^/:@\s]+\.[^/:@\s]+):(?:\d+\/?|(?=[^/\d]))/, "$1/"));
     try {
       next(decodeURIComponent(n));
     } catch {
@@ -251,6 +292,45 @@ export function nameForms(name: string): string[] {
     if (!n.includes("/") && /[A-Z_.]|-{2,}/.test(n)) next(pep503(n));
   }
   return [...out];
+}
+
+/**
+ * The short name of a package or module: its last path segment (a Go major-version suffix `/v2`
+ * skipped), without a scope's `@`, PEP 503-folded and lower case. `@zqvault/zqsecretlib`,
+ * `github.com/zqorg/zqgopriv/v2` and `Zq_Py.Internal` read as `zqsecretlib`, `zqgopriv` and
+ * `zq-py-internal`.
+ */
+export function shortKey(name: string): string {
+  const segs = name.trim().split("/").filter(Boolean);
+  while (segs.length > 1 && /^v\d+$/i.test(segs[segs.length - 1])) segs.pop();
+  return pep503((segs[segs.length - 1] ?? "").replace(/^@/, ""));
+}
+
+/**
+ * The short names of a project's private packages, each with the private package it names and why;
+ * a short name that is also the name, or the short name, of a package the project installs from a
+ * public registry is left out (`react` beside a private `@acme/react` is that public package).
+ *
+ * The short name names the private package as surely as the full one: `{npm, zqsecretlib}` for the
+ * private `@zqvault/zqsecretlib`, `{Go, zqgopriv}` for `github.com/zqorg/zqgopriv`, and the same
+ * names under another ecosystem, reached the registries and OSV.dev while the briefing refused them
+ * (black-box audit of 60c9edc, round 6). Whatever ecosystem the asker names, the name is the secret.
+ */
+export function privateShortIndex(
+  privateDeps: ReadonlyArray<{ ecosystem: string; name: string; why: string }>,
+  publicDeps: ReadonlyArray<{ name: string }>,
+): Map<string, { ecosystem: string; name: string; why: string }> {
+  const taken = new Set<string>();
+  for (const d of publicDeps) {
+    taken.add(shortKey(d.name));
+    taken.add(pep503(d.name));
+  }
+  const out = new Map<string, { ecosystem: string; name: string; why: string }>();
+  for (const p of privateDeps) {
+    const key = shortKey(p.name);
+    if (key && !taken.has(key) && !out.has(key)) out.set(key, p);
+  }
+  return out;
 }
 
 /** Why `name` (in `ecosystem`, or any ecosystem when null) is private, or null: the request's project, else any. */

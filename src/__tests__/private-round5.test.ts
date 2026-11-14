@@ -148,7 +148,10 @@ describe("r5-1: full-width characters in a briefing task", () => {
 
   it("the bare-scope rule blocks no public package: other names, and the bare name a project installs publicly", async () => {
     const live = liveFor(zqxProject());
-    for (const name of ["left-pad", "zqxacme-cli", "acme", "vault-core", "omega-internal"]) expect(live.privateReason("npm", name)).toBeNull();
+    for (const name of ["left-pad", "zqxacme-cli", "acme", "omega-internal"]) expect(live.privateReason("npm", name)).toBeNull();
+    // The short name of a private package is private since round 6 (`zqsecretlib` for the private
+    // `@zqvault/zqsecretlib` reached npm and OSV.dev): `vault-core` names `@zqxacme/vault-core`.
+    expect(live.privateReason("npm", "vault-core")).not.toBeNull();
     // A project that installs the unscoped `zqxacme` from the public registry asks about it.
     write("q/.npmrc", "@zqxacme:registry=https://npm.zqxacme.dev/\n");
     write("q/package.json", JSON.stringify({ name: "q", dependencies: { zqxacme: "2.0.0" } }));

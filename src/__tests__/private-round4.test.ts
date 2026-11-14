@@ -433,6 +433,17 @@ describe("A: every pip configuration file pip reads, and extra indexes", () => {
       process.env.VIRTUAL_ENV = path.join(scratch, "venv");
       write(win ? "venv/pip.ini" : "venv/pip.conf", conf());
     }],
+    // Every platform (second black-box audit 2026-11-14: on Windows ~/.config/pip/pip.conf was not read).
+    ["~/.config/pip/pip.conf with XDG_CONFIG_HOME unset", () => {
+      delete process.env.XDG_CONFIG_HOME;
+      write("home/.config/pip/pip.conf", conf());
+    }],
+    ["~/.config/pip/pip.conf beside another XDG_CONFIG_HOME", () => {
+      process.env.XDG_CONFIG_HOME = path.join(scratch, "elsewhere");
+      write("home/.config/pip/pip.conf", conf());
+    }],
+    ["a pip.conf (not pip.ini) in %APPDATA%\\pip", () => write("home/AppData/Roaming/pip/pip.conf", conf())],
+    ["a pip.ini in ~/.config/pip", () => write("home/.config/pip/pip.ini", conf("extra-index-url"))],
     ...(win
       ? ([
           ["the legacy per-user %USERPROFILE%\\pip\\pip.ini", () => write("home/pip/pip.ini", conf())],
@@ -461,11 +472,19 @@ describe("A: every pip configuration file pip reads, and extra indexes", () => {
 
   it("pip's file list, per platform, from the environment", () => {
     const winFiles = pipConfigFiles({ USERPROFILE: "C:\\Users\\u", APPDATA: "C:\\Users\\u\\AppData\\Roaming", VIRTUAL_ENV: "C:\\v", PIP_CONFIG_FILE: "C:\\x.ini" }, "win32");
-    expect(winFiles).toEqual(["C:\\ProgramData\\pip\\pip.ini", "C:\\Users\\u\\pip\\pip.ini", "C:\\Users\\u\\AppData\\Roaming\\pip\\pip.ini", "C:\\v\\pip.ini", "C:\\x.ini"]);
+    // Every file pip itself reads, in pip's order, plus the other spelling and the XDG locations on
+    // every platform (reading more than pip can only make more names private).
+    for (const f of ["C:\\ProgramData\\pip\\pip.ini", "C:\\Users\\u\\pip\\pip.ini", "C:\\Users\\u\\AppData\\Roaming\\pip\\pip.ini", "C:\\v\\pip.ini"]) expect(winFiles).toContain(f);
+    for (const f of ["C:\\Users\\u\\.config\\pip\\pip.conf", "C:\\Users\\u\\.config\\pip\\pip.ini", "C:\\Users\\u\\AppData\\Roaming\\pip\\pip.conf", "C:\\Users\\u\\.pip\\pip.conf", "C:\\v\\pip.conf"]) expect(winFiles).toContain(f);
+    expect(winFiles.at(-1)).toBe("C:\\x.ini");
+    expect(winFiles.indexOf("C:\\ProgramData\\pip\\pip.ini")).toBeLessThan(winFiles.indexOf("C:\\Users\\u\\AppData\\Roaming\\pip\\pip.ini"));
+    // XDG_CONFIG_DIRS is `;`-separated on Windows: a drive letter is not a separator.
+    expect(pipConfigFiles({ USERPROFILE: "C:\\Users\\u", XDG_CONFIG_DIRS: "C:\\xdg;D:\\xdg2" }, "win32")).toEqual(expect.arrayContaining(["C:\\xdg\\pip\\pip.ini", "D:\\xdg2\\pip\\pip.conf"]));
     const mac = pipConfigFiles({ HOME: "/Users/u" }, "darwin");
-    expect(mac).toEqual(["/etc/xdg/pip/pip.conf", "/Library/Application Support/pip/pip.conf", "/etc/pip.conf", "/Users/u/.pip/pip.conf", "/Users/u/Library/Application Support/pip/pip.conf", "/Users/u/.config/pip/pip.conf"]);
-    const linux = pipConfigFiles({ HOME: "/home/u", XDG_CONFIG_DIRS: "/a:/b", VIRTUAL_ENV: "/v" }, "linux");
-    expect(linux).toEqual(["/a/pip/pip.conf", "/b/pip/pip.conf", "/etc/pip.conf", "/home/u/.pip/pip.conf", "/home/u/.config/pip/pip.conf", "/v/pip.conf"]);
+    for (const f of ["/etc/xdg/pip/pip.conf", "/Library/Application Support/pip/pip.conf", "/etc/pip.conf", "/Users/u/.pip/pip.conf", "/Users/u/Library/Application Support/pip/pip.conf", "/Users/u/.config/pip/pip.conf"]) expect(mac).toContain(f);
+    const linux = pipConfigFiles({ HOME: "/home/u", XDG_CONFIG_DIRS: "/a:/b", XDG_CONFIG_HOME: "/cfg", VIRTUAL_ENV: "/v" }, "linux");
+    for (const f of ["/a/pip/pip.conf", "/b/pip/pip.conf", "/etc/pip.conf", "/home/u/.pip/pip.conf", "/cfg/pip/pip.conf", "/home/u/.config/pip/pip.conf", "/home/u/pip/pip.ini", "/v/pip.conf"]) expect(linux).toContain(f);
+    expect(linux.indexOf("/etc/pip.conf")).toBeLessThan(linux.indexOf("/cfg/pip/pip.conf"));
     expect(pipConfigFiles({ PIP_CONFIG_FILE: "os.devnull", HOME: "/home/u" }, "linux")).toEqual([]);
   });
 
