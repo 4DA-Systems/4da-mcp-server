@@ -51,7 +51,8 @@ import type { LiveIntelligence } from "../live/index.js";
 import { missingFromList, type FixPathSources } from "../live/fix-paths.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
 import { npmWeeklyDownloads } from "../live/npm-downloads.js";
-import type { AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { pushAll } from "../array-utils.js";
 import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
 import { callFinding, callFindingKey, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
@@ -238,6 +239,8 @@ interface Resolved extends CheckItem {
    * not be held against it: no release is named safe from the list (blind audit round 5).
    */
   batchUnread?: string;
+  /** `to` is the release the constraint resolves to (resolvedRelease), not a pick among its safe releases. */
+  resolvesRange?: boolean;
 }
 
 /** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
@@ -417,7 +420,12 @@ async function checkDependencies(
   // each release holds. Later phases await the same requests instead of starting them one phase at
   // a time (a 25-item check took 32 s cold, most of it phases waiting on each other).
   const packageAdvisoryLists = advisoryListReader(fixSources);
-  const held = new HeldJudge(fixSources, (deps) => liveIntel.queryAdvisories(deps));
+  // The releases held dependencies were asked about, so a contradicted answer can be dropped from the cache (B7).
+  const heldAsked: ResolvedDependency[] = [];
+  const held = new HeldJudge(fixSources, (deps) => {
+    pushAll(heldAsked, deps);
+    return liveIntel.queryAdvisories(deps);
+  });
   void packageAdvisoryLists(requested);
   // r7: each concrete finding is kept for the call as soon as it is read, so a call that runs out
   // of time still answers avoid for a release already known to be malware (dependency-check-facts.ts).
@@ -451,8 +459,15 @@ async function checkDependencies(
     return i.ecosystem === "Go" && !i.unresolved && lookup?.status === "ok" && lookup.data.releases[i.to] && !lookup.data.releases[i.to].publishedAt;
   });
   if (goRedo.length > 0) {
-    for (const [key, lookup] of await fetchIndexes(goRedo, sources, new Set())) indexes.set(key, lookup);
-    await settleGoPicks(goRedo, indexes, sources.Go, now);
+    // Every item of the same module is read again with them: the new index replaces the shared one.
+    const keys = new Set(goRedo.map(lookupKey));
+    for (const [key, lookup] of await fetchIndexes(items.filter((i) => i.ecosystem === "Go" && !i.unresolved && keys.has(lookupKey(i))), sources, new Set())) indexes.set(key, lookup);
+    // With `to`'s date read, the range's safe picks obey the release-age hold (applyHold) as elsewhere.
+    items = items.map((item, i) =>
+      item.ecosystem === "Go" && item.rangeCheck?.basis === "requested" && keys.has(lookupKey(item))
+        ? resolveTarget(requested[i], indexes.get(lookupKey(item))!, advisoryLists.get(lookupKey(item)), now)
+        : item,
+    );
   }
 
   // npm: what a release installs at a fixed version comes with it (audit 6.2.5 D-4: express 4.20.0
@@ -474,26 +489,29 @@ async function checkDependencies(
     const r = requested[i];
     return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, held.rangeFilter(item.package));
   });
-  // Nothing in range is safe: the answer is about the newest release whose only issue is a low or
-  // moderate advisory on something it holds, when there is one (it is review, with the override that
-  // clears it), else the newest the package's own advisories leave clean (audit 2026-11-11, M13).
-  for (const item of items.filter(isNpm)) {
-    const rc = item.rangeCheck;
-    const lookup = indexes.get(lookupKey(item));
-    const advisories = advisoryLists.get(lookupKey(item));
-    if (!rc || rc.basis !== "requested" || rc.smallest_safe_in_range !== null || lookup?.status !== "ok" || !advisories) continue;
-    const ownSafe = ownSafeInRange({ ecosystem: "npm", index: lookup.data, range: rc.range, advisories, allowPrerelease: rangeNamesPrerelease("npm", rc.range) });
-    const above = item.from ? ownSafe.filter((v) => compareIn("npm", v, item.from!) > 0) : ownSafe;
-    const pick = [...above].reverse().find((v) => held.minorOnly(item.package, v)) ?? above[above.length - 1];
-    if (pick) item.to = pick;
-  }
-  // The pick may have moved to a release judged only through its range: judge it too (normally a no-op).
+  // `to` is what the constraint installs (resolvedRelease, round 8): judge it too (normally a no-op).
   await held.judge(items.filter(isNpm).map((item) => ({ pkg: item.package, versions: [item.to] })));
   const heldAt = (item: CheckItem) => (item.ecosystem === "npm" ? held.at(item.package, item.to) : undefined);
 
-  const osvDeps: ResolvedDependency[] = items.flatMap((item) =>
-    [...new Set((item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)]).filter((v): v is string => isConcreteVersion(v)))].map((version) => osvDep(item, version)),
-  );
+  // Round 8 (B7): the batch answer is held against what each package's own advisory list (/v1/query)
+  // says about the same releases. Where every judged release is clean by the list, one release the
+  // list says is affected goes with them as a probe: a batch that answers `{}` for it is not an
+  // answer to trust for the rest (every querybatch result `{}` made express 4.17.1 proceed).
+  const known = await packageAdvisoryLists(items);
+  const judgedVersions = (item: Resolved) => [...new Set((item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)]).filter((v): v is string => isConcreteVersion(v)))];
+  const probes = new Map<Resolved, string>();
+  for (const item of items) {
+    const lookup = indexes.get(lookupKey(item));
+    const list = known.get(lookupKey(item));
+    if (!list || lookup?.status !== "ok") continue;
+    if (judgedVersions(item).some((v) => listAffecting(list, v, item.ecosystem).length > 0)) continue;
+    const probe = probeRelease(item.ecosystem, lookup.data, list);
+    if (probe && !judgedVersions(item).includes(probe)) probes.set(item, probe);
+  }
+  const osvDeps: ResolvedDependency[] = items.flatMap((item) => {
+    const probe = probes.get(item);
+    return [...judgedVersions(item), ...(probe ? [probe] : [])].map((version) => osvDep(item, version));
+  });
   const scan = await liveIntel.queryAdvisories(osvDeps);
   // Unrated (Go) records carry their GHSA alias's grade from the scanner, as in every tool (severityFrom).
   const byInstance = new Map<string, VulnerabilityEntry[]>();
@@ -514,18 +532,52 @@ async function checkDependencies(
   );
   for (const [k, v] of await packageAdvisoryLists(noticed.filter((i) => !advisoryLists.has(lookupKey(i))))) advisoryLists.set(k, v);
   const declaredFor = (item: CheckItem) => new Set((advisoryLists.get(lookupKey(item)) ?? []).filter((a) => a.maintenance).map((a) => a.id));
+  // Round 8 (B7): a batch answer that leaves out advisories the package's list names for the same
+  // release contradicts it. The known advisories win (worst wins: an unread grade counts as high),
+  // nothing is named safe from the batch, a clean release is NOT CHECKED, and the contradicting
+  // answers are dropped from the cache so a later call asks again.
+  // Per package: in the wholesale case (every result `{}`) each package's own probe catches it.
+  const contradicted = new Map<string, string>();
+  if (!scan.offline && (scan.staleAnswers ?? 0) === 0) {
+    for (const item of items) {
+      const list = known.get(lookupKey(item));
+      if (!list || contradicted.has(lookupKey(item))) continue;
+      const probe = probes.get(item);
+      const found: string[] = [];
+      for (const version of [...judgedVersions(item), ...(probe ? [probe] : [])]) {
+        // npm's security placeholders: the scanner drops findings on them by design (isNpmSecurityHolding).
+        if (isSecurityHoldingRelease(item.ecosystem, version)) continue;
+        const missing = notInBatch(listAffecting(list, version, item.ecosystem), byInstance.get(instanceKey(item.ecosystem, item.package, version)));
+        if (missing.length > 0) found.push(`${version}: ${missing.slice(0, 3).map((a) => a.id).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""}`);
+      }
+      if (found.length > 0) {
+        contradicted.set(lookupKey(item), `OSV.dev's batch answer for ${item.package} leaves out advisories its own advisory list names for the same release (${found.slice(0, 2).join("; ")}${found.length > 2 ? `; and ${found.length - 2} more` : ""})`);
+      }
+    }
+  }
+  const contradictionOf = (item: CheckItem) => contradicted.get(lookupKey(item)) ?? null;
+  if (contradicted.size > 0) {
+    liveIntel.forgetAdvisoryAnswers?.([...osvDeps, ...heldAsked]);
+    for (const item of items) {
+      const why = contradictionOf(item);
+      if (why && item.ecosystem === "npm") held.distrust(item.package, why);
+    }
+  }
   // A pre-install check needs a current answer: an expired cached one (OSV failed) can predate
   // the advisory that matters, and read as `proceed` (audit 6.2.5 B-2).
-  const advisoriesFor = (item: CheckItem): AdvisoryFacts =>
-    scan.offline
-      ? { available: false, detail: "lookup failed or was rate limited" }
-      : (scan.staleAnswers ?? 0) > 0
-        ? { available: false, detail: `no current answer, only an expired cached one (${scan.staleReason ?? "the fresh query failed"})` }
-      : {
-          available: true,
-          to: refs(byInstance.get(instanceKey(item.ecosystem, item.package, item.to)), declaredFor(item)),
-          from: item.from ? refs(byInstance.get(instanceKey(item.ecosystem, item.package, item.from)), declaredFor(item)) : [],
-        };
+  const advisoriesFor = (item: CheckItem): AdvisoryFacts => {
+    if (scan.offline) return { available: false, detail: "lookup failed or was rate limited" };
+    if ((scan.staleAnswers ?? 0) > 0) return { available: false, detail: `no current answer, only an expired cached one (${scan.staleReason ?? "the fresh query failed"})` };
+    const contradiction = contradictionOf(item);
+    const at = (version: string) => {
+      const batch = byInstance.get(instanceKey(item.ecosystem, item.package, version));
+      const missing = contradiction ? notInBatch(listAffecting(known.get(lookupKey(item)) ?? [], version, item.ecosystem), batch) : [];
+      return [...refs(batch, declaredFor(item)), ...missing.map(listOnlyRef)];
+    };
+    const to = at(item.to);
+    if (contradiction && !to.some((a) => !a.maintenance)) return { available: false, detail: `NOT CHECKED: ${contradiction}` };
+    return { available: true, to, from: item.from ? at(item.from) : [] };
+  };
 
   // An exact `to` an advisory affects (its own, or one it holds): the safe releases on its own line.
   const affectedExact = items.filter(
@@ -565,17 +617,19 @@ async function checkDependencies(
   // what a proxy answering {"vulns":[]} looks like, and `{npm, lodash, "4.x"}` said "Safe in 4.x:
   // smallest 4.0.0" (blind audit round 5). No release is named safe then; the list still speaks
   // for what it finds against a release (malware, a negative finding), never for a clean one.
-  const batchRead = !scan.offline && (scan.staleAnswers ?? 0) === 0;
-  if (!batchRead) {
-    const why = scan.offline ? (scan.uncheckedReason ?? "the query failed") : `only an expired cached answer (${scan.staleReason ?? "the fresh query failed"})`;
-    for (const item of items) {
-      if (item.listGap || !item.rangeCheck) continue;
-      item.batchUnread = why;
-      delete item.rangeCheck;
-    }
+  const batchAnswered = !scan.offline && (scan.staleAnswers ?? 0) === 0;
+  const batchRead = (item: CheckItem) => batchAnswered && !contradictionOf(item);
+  for (const item of items) {
+    if (batchRead(item) || item.listGap || !item.rangeCheck) continue;
+    item.batchUnread = scan.offline
+      ? (scan.uncheckedReason ?? "the query failed")
+      : !batchAnswered
+        ? `only an expired cached answer (${scan.staleReason ?? "the fresh query failed"})`
+        : `${contradictionOf(item)!.replace(/^OSV\.dev's /, "")}, so it was not used`;
+    delete item.rangeCheck;
   }
   const lines = affectedExact.flatMap((item) => {
-    if (!batchRead) return [];
+    if (!batchRead(item)) return [];
     const lookup = indexes.get(lookupKey(item))!;
     const advisories = advisoryLists.get(lookupKey(item));
     const line = lineOf(item.ecosystem, item.to);
@@ -659,6 +713,19 @@ async function checkDependencies(
       if (bad) {
         const sig = maliciousSignal(p.item, bad, null);
         return { ...head(p.item), verdict: "avoid" as const, reason: `${sig.id}: ${sig.evidence}`, signals: [sig], ...extra };
+      }
+      // Not on the registry, yet OSV.dev lists advisories against every release of the name: they are
+      // what is known about it, named, never dropped for a bare "not found" (round 8, B3).
+      const gone = indexes.get(lookupKey(p.item))?.status === "not_found" ? everyRelease(advisoryLists.get(lookupKey(p.item))) : [];
+      if (gone.length > 0) {
+        const evidence = `OSV.dev lists ${andList(gone)} against every release of ${p.item.package}, which ${p.item.ecosystem} no longer serves. Do not add it.`;
+        return {
+          ...head(p.item),
+          verdict: "avoid" as const,
+          reason: `advisories: ${evidence} | ${p.blocked}`,
+          signals: [{ id: "advisories", value: { affecting_every_release: gone }, effect: "avoid", evidence }],
+          ...extra,
+        };
       }
       if (p.item.unresolved) {
         const outside = p.item.rangeCheck?.newest_safe_outside_range ? ` Newest safe release outside it: ${p.item.rangeCheck.newest_safe_outside_range}.` : "";
@@ -805,7 +872,12 @@ function withAlternatives(reason: string, item: Resolved, verdict: Verdict): str
   const tooNew = rc.too_new_note ? ` ${rc.too_new_note}.` : "";
   const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}${heldOut}${tooNew}`;
   if (rc.basis === "same_line" && !unsafe) return reason;
-  return `${reason} | ${safe}`;
+  // Round 8 (B2): the verdict is on what the constraint installs; a safe release in it is written as an exact pin.
+  const pin = item.from ? (rc.smallest_safe_upgrade ?? null) : rc.newest_safe_in_range;
+  const pinIt = item.resolvesRange && verdict !== "proceed" && pin && pin !== item.to
+    ? ` Pin exactly ${pin}; the range as written resolves to ${item.to} (${verdict}).`
+    : "";
+  return `${reason} | ${safe}${pinIt}`;
 }
 
 /** For a downgrade: the published, stable releases above `to` up to and including `from` (upgradeTypeSignal). */
@@ -894,6 +966,39 @@ function heldAdviceText(item: Resolved, rc: RangeCheck): string {
   return `${held}${how}`;
 }
 
+/** The advisories of a package's list (maintenance notices left out) that affect `version`. */
+function listAffecting(list: readonly AdvisoryRanges[], version: string, ecosystem: CheckEcosystem): AdvisoryRanges[] {
+  return list.filter((a) => !a.maintenance && advisoryAffects(a, version, ecosystem));
+}
+
+/** Those of `known` that the batch answer for the same release does not name, by id or alias. */
+function notInBatch(known: AdvisoryRanges[], batch: readonly VulnerabilityEntry[] | undefined): AdvisoryRanges[] {
+  const named = new Set((batch ?? []).flatMap((e) => [e.vulnId, ...(e.aliases ?? [])]));
+  return known.filter((a) => !named.has(a.id) && !(a.aliases ?? []).some((x) => named.has(x)));
+}
+
+/** An advisory known only from the package's list: its grade was not read, so it counts as high (AdvisoryRef.unread). */
+function listOnlyRef(a: AdvisoryRanges): AdvisoryRef {
+  return { id: a.id, severity: "unknown", summary: "", maintenance: false, unread: true, ...(a.malware ? { malware: [a.id] } : {}) };
+}
+
+/** The newest installable release the package's list says an advisory affects: the batch query's consistency probe (B7). */
+function probeRelease(ecosystem: CheckEcosystem, index: PackageReleaseIndex, list: readonly AdvisoryRanges[]): string | null {
+  const real = list.filter((a) => !a.maintenance);
+  if (real.length === 0) return null;
+  const versions = Object.values(index.releases)
+    .filter((r) => !r.withdrawn && isConcreteVersion(r.version) && !isSecurityHoldingRelease(ecosystem, r.version))
+    .map((r) => r.version)
+    .sort((a, b) => compareIn(ecosystem, b, a));
+  return versions.find((v) => real.some((a) => advisoryAffects(a, v, ecosystem))) ?? null;
+}
+
+/** The ids of the advisories (maintenance notices left out) that are open from the first release with no fix. */
+function everyRelease(list: readonly AdvisoryRanges[] | null | undefined): string[] {
+  const open = (a: AdvisoryRanges) => a.spans.some((s) => s.fixed === null && s.lastAffected === null && /^0(?:\.0)*(?:-0)?$/.test(s.introduced));
+  return [...new Set((list ?? []).filter((a) => !a.maintenance && open(a)).map((a) => a.id))].sort();
+}
+
 function hasRealAdvisory(facts: AdvisoryFacts): boolean {
   return facts.available && facts.to.some((a) => !a.maintenance);
 }
@@ -973,49 +1078,25 @@ function resolveTarget(
     young: (v) => isYoung(index.releases[v]?.publishedAt, now),
   });
   if (onlyPrereleases) return { ...base, requested: r.raw, rangeCheck, unresolved: noStable() };
-  const safe = rangeCheck.safe_versions;
-  const settled = (v: string) => {
-    const at = index.releases[v]?.publishedAt;
-    return !at || (now.getTime() - Date.parse(at)) / DAY_MS >= WAIT_DAYS;
-  };
-  const pick = r.from
-    ? rangeCheck.smallest_safe_upgrade
-    : ([...safe].reverse().find(settled) ?? rangeCheck.newest_safe_in_range);
-  return { ...base, to: pick ?? newestOf(r.ecosystem, admitted)!, requested: r.raw, rangeCheck };
+  // Pre-publish round 8 (B2): the verdict is about the release the package manager installs for
+  // the constraint as written, never the best safe release in it. `{npm, minimist, "<1.2.6"}` said
+  // proceed (judged as 0.2.4) while npm installs 1.2.5 (GHSA-xvch-5gv4-984h, critical); cargo
+  // resolves smallvec "<1.6.1" to 1.6.0 (RUSTSEC-2021-0003). The safe exact pins stay in
+  // range_check, and the reason says to pin one (withAlternatives).
+  return { ...base, to: resolvedRelease(r.ecosystem, admitted, allowPrerelease), requested: r.raw, rangeCheck, resolvesRange: true };
 }
 
-/** `.info` reads spent looking for a Go release past the hold, per item. */
-const GO_SETTLE_READS = 3;
-
 /**
- * Go lists carry no dates, so a constraint's newest safe release was picked
- * blind to the 3-day hold. When it turns out to be inside it, step down the
- * safe list (newest first) to the newest one that is not, reading `.info`
- * for each step. A pick above `from` (the smallest fix) is left alone.
+ * The release a package manager installs for a constraint, among the published, non-withdrawn
+ * releases it admits: the highest one (npm and pnpm without a lockfile entry, `cargo add` /
+ * `cargo update`, pip, `go get`), stable releases only unless the constraint names a prerelease
+ * and admits no stable release. npm's `latest` tag wins over a higher release only when that tag
+ * is lower; registries here tag the newest stable release, so the highest is what installs.
  */
-async function settleGoPicks(
-  items: Resolved[],
-  indexes: Map<string, RegistryLookup<PackageReleaseIndex>>,
-  go: ReleaseMetadataSource,
-  now: Date,
-): Promise<void> {
-  const young = (at: string | null | undefined) => Boolean(at) && (now.getTime() - Date.parse(at!)) / DAY_MS < WAIT_DAYS;
-  for (const item of items) {
-    const rc = item.rangeCheck;
-    const lookup = indexes.get(lookupKey(item));
-    if (!rc || item.from || rc.basis !== "requested" || lookup?.status !== "ok") continue;
-    if (!young(lookup.data.releases[item.to]?.publishedAt)) continue;
-    const older = rc.safe_versions.filter((v) => compareIn("Go", v, item.to) < 0).reverse().slice(0, GO_SETTLE_READS);
-    for (const v of older) {
-      const next = await go.getReleases(item.package, [v, item.to]);
-      if (next.status !== "ok") break;
-      if (next.data.releases[v]) lookup.data.releases[v] = next.data.releases[v];
-      if (!young(next.data.releases[v]?.publishedAt)) {
-        item.to = v;
-        break;
-      }
-    }
-  }
+function resolvedRelease(ecosystem: CheckEcosystem, admitted: string[], allowPrerelease: boolean): string {
+  const stable = admitted.filter((v) => !isPrereleaseIn(ecosystem, v));
+  const pool = stable.length > 0 || !allowPrerelease ? stable : admitted;
+  return pool.reduce((max, v) => (compareIn(ecosystem, v, max) > 0 ? v : max));
 }
 
 /** Newest release, stable ones first. */
