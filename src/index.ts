@@ -71,6 +71,8 @@ import { SqliteUnavailableError, sqliteDriverStatus } from "./sqlite-driver.js";
 import { getPrompt, listPrompts } from "./prompts.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
+import { shutdown } from "./shutdown.js";
+import { closeServerCacheDb } from "./live/cache.js";
 import { systemDirectoryProblem } from "./tools/project-scope.js";
 import { MAX_DEPTH, MAX_PROJECTS } from "./project-tree.js";
 
@@ -471,6 +473,25 @@ function withDatabaseNote(result: ToolResult, note: string): ToolResult {
 // Server Lifecycle
 // =============================================================================
 
+/**
+ * Stop the server promptly: abort every lookup in flight, close the transport (`first`), the
+ * database and the lookup cache, and exit 0 (shutdown.ts).
+ */
+function stopServer(reason: string, first?: () => Promise<void>): void {
+  shutdown(reason, {
+    close: [
+      ...(first ? [first] : []),
+      () => {
+        if (db) db.close();
+        db = null;
+      },
+      () => closeServerCacheDb(),
+    ],
+    exit: (code) => process.exit(code),
+    log: (line) => console.error(line),
+  });
+}
+
 /** --help, and the text an unknown argument exits with (cli-args.ts). */
 const USAGE = `
   @4da/mcp-server — Dependency intelligence for AI coding agents
@@ -564,7 +585,7 @@ async function main() {
 
   // Doctor command: validate installation health
   if (command.kind === "doctor") {
-    runDoctor();
+    await runDoctor();
     return;
   }
 
@@ -580,7 +601,10 @@ async function main() {
   // HTTP transport mode
   if (command.kind === "http") {
     try {
-      await startHttpServer(buildServer, { port: command.port, host: command.host });
+      const http = await startHttpServer(buildServer, { port: command.port, host: command.host, handleSignals: false });
+      // SIGINT / SIGTERM: stop accepting, abort every lookup, close the databases, exit (shutdown.ts).
+      process.once("SIGINT", () => stopServer("received SIGINT", () => http.close()));
+      process.once("SIGTERM", () => stopServer("received SIGTERM", () => http.close()));
     } catch (error) {
       // Bind-policy refusals carry an actionable message; print it plainly
       // rather than as an unhandled stack trace.
@@ -620,30 +644,28 @@ async function main() {
   // a 2025-era `initialize` opening is served exactly as before; a 2026-07-28
   // `server/discover` opening gets the stateless modern protocol.
   // Parse errors and requests before initialize are answered here, per JSON-RPC and MCP (stdio-gate.ts).
+  // A JSON-RPC batch is served on a 2025-03-26 connection and answered as one array (stdio-gate.ts).
   const gate = new StdioGate((message) => {
-    process.stdout.write(`${JSON.stringify(message)}
-`);
+    process.stdout.write(`${JSON.stringify(message)}\n`);
   });
+  const output = gate.output((text) => {
+    process.stdout.write(text);
+  });
+  output.on("error", () => undefined);
   process.stdin.pipe(gate);
   serveStdio(buildServer, {
-    transport: new StdioServerTransport(gate, process.stdout),
+    transport: new StdioServerTransport(gate, output),
     onerror: (error) => {
       console.error(`[4DA] stdio serving error: ${error.message}`);
     },
   });
 
-  // Handle graceful shutdown
-  process.on("SIGINT", () => {
-    console.error("[4DA] Received SIGINT — shutting down gracefully");
-    if (db) db.close();
-    process.exit(0);
-  });
-
-  process.on("SIGTERM", () => {
-    console.error("[4DA] Received SIGTERM — shutting down gracefully");
-    if (db) db.close();
-    process.exit(0);
-  });
+  // The host closing stdin is MCP's stdio shutdown: abort every lookup, close the databases, exit
+  // (shutdown.ts). Until 6.3.0 the server worked on for up to a minute after it (blind audit of e3aba98).
+  process.stdin.once("end", () => stopServer("stdin closed"));
+  process.stdin.once("close", () => stopServer("stdin closed"));
+  process.once("SIGINT", () => stopServer("received SIGINT"));
+  process.once("SIGTERM", () => stopServer("received SIGTERM"));
 
   // What this start will serve: with the database refused, every call returns that error (audit L6).
   console.error(`4DA MCP Server v${SERVER_VERSION} started — ${startupToolsLine(validation, Boolean(sqlite.driver), DATABASE_FREE_TOOLS.size)}, stdio transport`);

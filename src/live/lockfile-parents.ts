@@ -21,7 +21,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { callMemo } from "../call-budget.js";
 import { stripTrailingCommas } from "./bun-lockfile.js";
-import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, yarnBlockVersion, yarnPackageName } from "./js-lockfile-readers.js";
+import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, textLines, yarnBlockVersion, yarnPackageName } from "./js-lockfile-readers.js";
 import { packageNameFromNodeModulesPath, parseCargoLockPackages } from "./lockfile-parsers.js";
 
 export type LockfileFormat = "package-lock" | "pnpm" | "yarn" | "yarn-berry" | "bun" | "cargo";
@@ -465,7 +465,7 @@ function* pnpmIndex(content: string): IndexBuild {
   let importerSpecifier: string | null = null;
 
   let n = 0;
-  for (const line of content.split(/\r?\n/)) {
+  for (const line of textLines(content)) {
     if (++n % (INDEX_STEP * 4) === 0) yield;
     const text = line.trim();
     if (text === "" || text.startsWith("#")) continue;
