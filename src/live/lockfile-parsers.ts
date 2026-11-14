@@ -271,9 +271,9 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const report = emptyReadReport();
-      readPnpmLock(content, versions, instances, report);
+      const installs = readPnpmLock(content, versions, instances, report);
       if (versions.size === 0) return null;
-      const damage = pnpmLockDamage(content, report.missingDirect);
+      const damage = pnpmLockDamage(content, report.missingDirect, installs);
       return { versions, instances, uncheckable: report.uncheckable, problems: damage ? [damagedProblem(file, damage)] : [] };
     },
   },
