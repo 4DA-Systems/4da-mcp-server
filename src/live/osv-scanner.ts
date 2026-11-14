@@ -335,6 +335,24 @@ export class OsvHttpSource implements AdvisorySource {
   }
 }
 
+/** One dependency's cached OSV answer. */
+function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
+  return `osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`;
+}
+
+/** Dependencies per cache read before the scan yields to the event loop (so the server keeps answering ping). */
+const CACHE_READ_BATCH = 2_000;
+
+/** `read` over the dependencies' cache keys, CACHE_READ_BATCH at a time, yielding to the event loop between batches. */
+async function readInBatches<V>(deps: readonly ResolvedDependency[], read: (keys: string[]) => Map<string, V>): Promise<Map<string, V>> {
+  const out = new Map<string, V>();
+  for (let at = 0; at < deps.length; at += CACHE_READ_BATCH) {
+    if (at > 0) await new Promise((resolve) => setImmediate(resolve));
+    for (const [key, value] of read(deps.slice(at, at + CACHE_READ_BATCH).map(osvCacheKey))) out.set(key, value);
+  }
+  return out;
+}
+
 export class OsvScanner {
   private cache: LiveCache;
   private rateLimiter: RateLimiter;
@@ -360,9 +378,11 @@ export class OsvScanner {
     const uncached: ResolvedDependency[] = [];
     const cachedVulns: VulnerabilityEntry[] = [];
 
+    // Read in batches, yielding to the event loop between them: one statement per dependency kept a
+    // 250,000-entry lockfile's scan from answering `ping` for 7.4 s (blind audit round 4).
+    const cachedFor = network ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
     for (const dep of scannable) {
-      const cacheKey = `osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`;
-      const cached = network ? this.cache.get<VulnerabilityEntry[]>(cacheKey) : null;
+      const cached = cachedFor.get(osvCacheKey(dep)) ?? null;
       if (cached !== null) {
         cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
       } else {
@@ -396,8 +416,11 @@ export class OsvScanner {
     let staleAnswers = 0;
     let staleOldest: string | null = null;
     const unchecked: ResolvedDependency[] = [];
+    const staleFor = network
+      ? await readInBatches(unanswered, (keys) => this.cache.getStaleMany<VulnerabilityEntry[]>(keys))
+      : new Map<string, { data: VulnerabilityEntry[]; fetchedAt: string }>();
     for (const dep of unanswered) {
-      const stale = network ? this.cache.getStale<VulnerabilityEntry[]>(`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`) : null;
+      const stale = staleFor.get(osvCacheKey(dep)) ?? null;
       if (stale) {
         staleAnswers++;
         if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
