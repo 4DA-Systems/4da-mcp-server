@@ -75,8 +75,10 @@ export function privateTaskPackages(task: string, files: string[], live: Private
         if (!reason) continue;
         const ecosystem = live.privateMatch?.(asked, name)?.ecosystem ?? asked;
         const key = `${ecosystem}\0${name}`;
-        // Once per name: a private PyPI dependency is not listed again as private under npm.
-        if (![...out.values()].some((p) => p.package.toLowerCase() === name.toLowerCase())) {
+        // Once per name: a private PyPI dependency is not listed again as private under npm, nor a
+        // private package already listed again by its short name (`telemetry-x` for `@sigma/telemetry-x`).
+        const lower = name.toLowerCase();
+        if (![...out.values()].some((p) => p.package.toLowerCase() === lower || p.package.split("/").pop()!.toLowerCase() === lower)) {
           out.set(key, { package: name, ecosystem, installed: [], why: reason });
         }
         break;

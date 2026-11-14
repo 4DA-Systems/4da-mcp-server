@@ -422,30 +422,35 @@ const ECOSYSTEM_PREFIXES: Record<string, string> = { npm: "npm", "crates.io": "c
  * Only the APPDATA file and PIP_CONFIG_FILE were read, and a private index set in any of the others
  * (which the real pip loads) let the private names reach OSV.dev and the registries (blind audit
  * round 4). Paths come from `env` (and `platform`), so tests name their own.
+ *
+ * More than pip's own list, on purpose: a file is read whenever ANY pip on any platform could read it.
+ * On Windows a private index in `%USERPROFILE%\.config\pip\pip.conf` (the XDG location, which pip
+ * reads through platformdirs when it is there) was not read and the private PyPI name reached
+ * OSV.dev and pypi.org in 13 requests (second black-box audit, 2026-11-14). Both file names (`pip.ini`,
+ * `pip.conf`) are read in every directory, and the XDG directories on every platform: reading a file
+ * pip would not can only make more names private.
  */
 export function pipConfigFiles(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string[] {
   // pip's own switch: PIP_CONFIG_FILE=os.devnull loads no configuration file at all.
   if (env.PIP_CONFIG_FILE === "os.devnull") return [];
-  const p = platform === "win32" ? path.win32 : path.posix;
+  const win = platform === "win32";
+  const p = win ? path.win32 : path.posix;
+  const both = (dir: string) => (win ? [p.join(dir, "pip.ini"), p.join(dir, "pip.conf")] : [p.join(dir, "pip.conf"), p.join(dir, "pip.ini")]);
+  const home = (win ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir();
   const files: string[] = [];
-  if (platform === "win32") {
-    const home = env.USERPROFILE || env.HOME || os.homedir();
-    const programData = env.ProgramData || env.PROGRAMDATA || env.ALLUSERSPROFILE || "C:\\ProgramData";
-    files.push(p.join(programData, "pip", "pip.ini"));
-    if (home) files.push(p.join(home, "pip", "pip.ini"));
-    if (env.APPDATA) files.push(p.join(env.APPDATA, "pip", "pip.ini"));
-  } else {
-    const home = env.HOME || env.USERPROFILE || os.homedir();
-    const configDirs = (env.XDG_CONFIG_DIRS || "/etc/xdg").split(":").filter(Boolean);
-    for (const dir of configDirs) files.push(p.join(dir, "pip", "pip.conf"));
-    if (platform === "darwin") files.push("/Library/Application Support/pip/pip.conf");
-    files.push("/etc/pip.conf");
-    if (home) files.push(p.join(home, ".pip", "pip.conf"));
-    if (platform === "darwin" && home) files.push(p.join(home, "Library", "Application Support", "pip", "pip.conf"));
-    const config = env.XDG_CONFIG_HOME || (home ? p.join(home, ".config") : null);
-    if (config) files.push(p.join(config, "pip", "pip.conf"));
-  }
-  if (env.VIRTUAL_ENV) files.push(p.join(env.VIRTUAL_ENV, platform === "win32" ? "pip.ini" : "pip.conf"));
+  // Site-wide.
+  if (win) files.push(...both(p.join(env.ProgramData || env.PROGRAMDATA || env.ALLUSERSPROFILE || "C:\\ProgramData", "pip")));
+  const configDirs = (env.XDG_CONFIG_DIRS || (win ? "" : "/etc/xdg")).split(win ? ";" : ":").filter(Boolean);
+  for (const dir of configDirs) files.push(...both(p.join(dir, "pip")));
+  if (platform === "darwin") files.push("/Library/Application Support/pip/pip.conf");
+  if (!win) files.push("/etc/pip.conf");
+  // The user's: legacy, then APPDATA, macOS, XDG (both the variable's and the default ~/.config).
+  if (home) files.push(...both(p.join(home, "pip")), ...both(p.join(home, ".pip")));
+  if (env.APPDATA) files.push(...both(p.join(env.APPDATA, "pip")));
+  if (platform === "darwin" && home) files.push(p.join(home, "Library", "Application Support", "pip", "pip.conf"));
+  if (env.XDG_CONFIG_HOME) files.push(...both(p.join(env.XDG_CONFIG_HOME, "pip")));
+  if (home) files.push(...both(p.join(home, ".config", "pip")));
+  if (env.VIRTUAL_ENV) files.push(...both(env.VIRTUAL_ENV));
   if (env.PIP_CONFIG_FILE) files.push(env.PIP_CONFIG_FILE);
   return [...new Set(files)];
 }

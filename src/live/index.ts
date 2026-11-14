@@ -36,7 +36,7 @@ import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import { manifestPrivateSources, normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
-import { nameForms, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
+import { nameForms, privateShortIndex, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -126,6 +126,8 @@ export class LiveIntelligence {
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
   private privateSet: Map<string, string> | null = null;
+  /** privateShortIndex of this project, reset with privateSet. */
+  private privateShorts: ReturnType<typeof privateShortIndex> | null = null;
   private initialized = false;
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
@@ -325,6 +327,7 @@ export class LiveIntelligence {
     this.lockPrivateIndexes = new WeakMap();
     this.publicNames = null;
     this.privateSet = null;
+    this.privateShorts = null;
     this.npmLockPrivate = new Map(
       this.groupResults
         .filter((r) => mapEcosystem(r.group.language) === "npm")
@@ -381,6 +384,7 @@ export class LiveIntelligence {
     for (const d of out) rememberPrivateName(d.ecosystem, d.name, refused.get(key(d)) ?? "private");
     this.publicNames = null;
     this.privateSet = null;
+    this.privateShorts = null;
   }
 
   /** Why a dependency of this group is private, or null: its lockfile's source, then the name rules. */
@@ -425,6 +429,8 @@ export class LiveIntelligence {
     }
     const scope = this.privateScopeFragment(forms);
     if (scope) return { ecosystem: "npm", why: scope };
+    const short = this.privateShortName(forms);
+    if (short) return short;
     // Found private by any scan in this process, for any project (blind audit round 5, 4).
     return rememberedPrivate(name, (eco, n) => this.installsPublicly(eco, n));
   }
@@ -444,6 +450,22 @@ export class LiveIntelligence {
       if (!bare) continue;
       const file = this.privateRules.privateScopeFile(`@${bare}`);
       if (file && !this.installsPublicly("npm", bare)) return `the bare name of the private scope @${bare} (mapped to a private registry in ${file})`;
+    }
+    return null;
+  }
+
+  /**
+   * The short name of one of this project's private packages, in any form of the name
+   * (privateShortIndex): `zqsecretlib` for the private `@zqvault/zqsecretlib`, under any ecosystem.
+   * A form the project installs from a public registry is that public package.
+   */
+  private privateShortName(forms: string[]): { ecosystem: string; why: string } | null {
+    if (this.privateDeps.length === 0) return null;
+    this.privateShorts ??= privateShortIndex(this.privateDeps, this.auditDeps);
+    for (const form of forms) {
+      if (/\s/.test(form) || ALL_PRIVATE_ECOSYSTEMS.some((eco) => this.installsPublicly(eco, form))) continue;
+      const hit = this.privateShorts.get(shortKey(form));
+      if (hit) return { ecosystem: hit.ecosystem, why: `the short name of the private package ${hit.name} (${hit.why})` };
     }
     return null;
   }
