@@ -74,10 +74,11 @@ describe("detectNewPackages: the names a task is about to add", () => {
     expect(names(task)).toEqual([]);
   });
 
-  it("a package the project already has is not a new one, and at most three are read", () => {
+  it("a package the project already has is not a new one, and at most eight are read", () => {
     expect(names("add the lodash package")).toEqual([]);
     expect(names("npm install lodash lodahs")).toEqual(["npm:lodahs"]);
-    expect(names("npm install aaa bbb ccc ddd eee")).toHaveLength(3);
+    expect(names("npm install aaa bbb ccc ddd eee")).toHaveLength(5);
+    expect(names("npm install a1 a2 a3 a4 a5 a6 a7 a8 a9 a10")).toHaveLength(8);
   });
 
   it("prose without a manager word takes the project's ecosystem", () => {
@@ -226,7 +227,7 @@ describe("what_should_i_know: a task that adds a package", () => {
 
   it("a project with more Python than npm: a bare name PyPI lacks is checked on npm too, and its malware is found (blind audit replay 2026-11-14)", async () => {
     const mixed = [dep("lodash", "4.17.21"), dep("requests", "2.32.3", "PyPI"), dep("urllib3", "2.2.2", "PyPI"), dep("idna", "3.7", "PyPI")];
-    expect(detectNewPackages("add the lodahs package", mixed)).toEqual([{ name: "lodahs", ecosystem: "PyPI", alternatives: ["npm"] }]);
+    expect(detectNewPackages("add the lodahs package", mixed)).toEqual([{ name: "lodahs", ecosystem: "PyPI", alternatives: ["npm"], guessed: true }]);
     const r = await executeWhatShouldIKnow(db, { task: "add the lodahs package" }, intel(READY_SCAN, { getResolvedDeps: () => mixed }));
     expect(r.new_packages).toMatchObject([{ name: "lodahs", ecosystem: "npm", verdict: "avoid", malicious: true }]);
     expect(r.new_packages?.[0]).not.toHaveProperty("alternatives");

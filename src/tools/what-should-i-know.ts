@@ -52,7 +52,7 @@ import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { OsvEcosystem, ResolvedDependency } from "../live/types.js";
 import { exclusionNotes } from "../project-tree.js";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
-import { checkNewPackages, detectNewPackages, type NewPackageFinding } from "./briefing-new-packages.js";
+import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, type NewPackageFinding } from "./briefing-new-packages.js";
 import {
   getRelevantWisdom,
   getRelevantWisdomHybrid,
@@ -245,7 +245,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and newer releases the 4DA feed saw. For a package the task ADDS (\"add the X package\", \"npm install X\"), new_packages gives dependency_check's verdict for the name (checked in every ecosystem the project uses when the task does not say which; the worst answer stands): a name that is malware is human_only, a near-miss of a popular package or a name the registry does not have is review_needed. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, a finding on a package the task adds, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
+    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and newer releases the 4DA feed saw. For a package the task ADDS (\"add the X package\", \"npm install X\"), new_packages gives dependency_check's verdict for each name, every item of a list (\"add a, b and c\"), at the version the task writes for it or else latest (checked in every ecosystem the project uses when the task does not say which; the worst answer stands): a name that is malware is human_only, a near-miss of a popular package or a name the registry does not have is review_needed. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, a finding on a package the task adds, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -343,7 +343,10 @@ export async function executeWhatShouldIKnow(
   const privateShort = new Set(privateTask.flatMap((p) => [p.package.toLowerCase(), p.package.split("/").pop()!.toLowerCase()]));
   const notPrivate = (p: { name: string }) =>
     privateAnywhere(liveIntel, p.name) === null && !privateShort.has(p.name.toLowerCase()) && !privateShort.has(p.name.split("/").pop()!.toLowerCase());
-  const newPackages = await checkNewPackages(liveIntel, detectNewPackages(task, allDeps()).filter(notPrivate));
+  const named = detectAllNewPackages(task, allDeps()).filter(notPrivate);
+  const newPackages = await checkNewPackages(liveIntel, named.slice(0, MAX_NEW_PACKAGES));
+  // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
+  const uncheckedPackages = named.slice(MAX_NEW_PACKAGES).map((p) => p.name);
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14).
   const taskVersions = readTaskVersions(task, allDeps());
@@ -482,6 +485,7 @@ export async function executeWhatShouldIKnow(
       privateTask,
       requestedVersions,
       unreadVersions,
+      uncheckedPackages,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -503,7 +507,7 @@ export async function executeWhatShouldIKnow(
       delegation_assessment: delegation,
       scan_status: scanStatus,
       scan: scanBlock,
-      summary: `${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages)}`,
+      summary: `${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages)}`,
       wisdom_recall_mode: wisdomMode,
       _meta: { untrusted_text: UNTRUSTED },
     };
@@ -717,9 +721,17 @@ async function conflictsFor(db: FourDADatabase, packages: TaskPackage[]) {
 }
 
 /** "lodahs (avoid)", "expres (review: did you mean express?)", "left-pad (proceed)". */
+/** The packages a task adds past the briefing's cap, as the briefing says it. */
+function notCheckedPackages(names: string[]): string {
+  return `NOT CHECKED: ${names.length} more package${names.length === 1 ? "" : "s"} named in the task (${names.join(", ")})`;
+}
+
 function sayNewPackage(p: NewPackageFinding): string {
   const guess = p.did_you_mean && p.verdict !== "proceed" && p.verdict !== "wait" ? `: did you mean ${p.did_you_mean}?` : "";
-  return `${p.name} (${p.malicious ? "a malware name, avoid" : p.verdict}${guess})`;
+  // The version the task writes is the one judged ("Task adds axios (proceed)" hid axios 0.21.0's avoid).
+  // A malicious record on a named release (node-ipc 10.1.1) is about that release, not the name.
+  const malware = p.version ? "a malicious release, avoid" : "a malware name, avoid";
+  return `${p.name}${p.version ? ` ${p.version}` : ""} (${p.malicious ? malware : p.verdict}${guess})`;
 }
 
 function assessDelegation(input: {
@@ -731,6 +743,8 @@ function assessDelegation(input: {
   requestedVersions?: RequestedVersionFinding[];
   /** Versions the task names that the briefing could tie to no package. */
   unreadVersions?: string[];
+  /** Packages the task adds past the briefing's cap: named, not checked. */
+  uncheckedPackages?: string[];
   taskDependencies: TaskDependency[];
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
@@ -783,7 +797,9 @@ function assessDelegation(input: {
   const unreadReasons = (input.unreadVersions ?? []).length > 0
     ? [`the task names ${input.unreadVersions!.join(", ")}, which this briefing could not tie to a package: call dependency_check on that package and version before writing it`]
     : [];
-  const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...unclear.map(
+  const unchecked = input.uncheckedPackages ?? [];
+  const cappedReasons = unchecked.length > 0 ? [`${notCheckedPackages(unchecked)}: call dependency_check on each before adding it`] : [];
+  const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...cappedReasons, ...unclear.map(
     (p) =>
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
   )];

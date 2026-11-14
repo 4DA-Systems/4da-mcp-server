@@ -7,7 +7,10 @@
  * and judged by dependency_check itself (the same engine), at that exact version or constraint:
  *
  *   name@1.2.3 / name@^1.2 (npm, Go `module@v1.2.3`), name==1.2.3 / name~=3.1 / name>=2,<3 (PyPI),
- *   "name to 1.2.3", "name from 1.0 to 1.2", "pin name 1.2.3", "add name 4.17.20".
+ *   "name to 1.2.3", "name from 1.0 to 1.2", "pin name 1.2.3", "add name 4.17.20",
+ *   "pull in name 1.2.3", "replace A with name 1.2.3", "add a 1.0, b 2.0 & c" (each version bound to
+ *   the name before it by the clause reader, briefing-new-packages.ts readTaskItems), and manifest
+ *   entries (`"name": "^1.2"`, `"alias": "npm:name@1.2.3"`, `name = "1.2"`, `name==1.2`).
  *
  * A named version that is not `proceed` keeps the briefing from safe_to_delegate.
  */
@@ -15,7 +18,7 @@
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { asName, projectEcosystems, proseEcosystem, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import { installedGoModule, isManifestFile, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
@@ -69,6 +72,7 @@ const CONNECTORS = new Set([
 const RUNTIMES = new Set([
   "node", "nodejs", "node.js", "python", "python3", "py", "go", "golang", "rust", "rustc", "cargo", "npm", "pnpm", "yarn", "bun", "deno", "java", "jdk",
   "typescript", "ts", "ubuntu", "debian", "alpine", "macos", "windows", "ios", "android", "es", "ecmascript", "pip", "msrv", "edition", "toolchain",
+  "rust-version", "requires-python", "engines",
 ]);
 /** Verbs that change a dependency: a task with one is about dependencies. */
 const DEPENDENCY_VERBS = new Set([
@@ -118,9 +122,9 @@ const EMAIL_DOMAIN = /^[a-z][\w-]*(?:\.[\w-]+)*\.[a-z]{2,}$/i;
 
 /** A token as a name: quotes, brackets, trailing punctuation and a possessive `'s` removed. */
 function cleanToken(t: string): string {
+  // `"node":` loses its colon and both quotes: a manifest key read as `node"` was taken for a package.
   return t
-    .replace(/[`'"),.;]+$/, "")
-    .replace(/:$/, "")
+    .replace(/[`'"),.;:]+$/, "")
     .replace(/^[`'"(]+/, "")
     .replace(/'s$/i, "");
 }
@@ -182,7 +186,12 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
  */
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
   task = normalizeVersionSyntax(task);
-  const raw = task.match(/(?:->|=>|→)|[@A-Za-z0-9`'"(^~<>=][\w./@*=<>~^!`'"+:-]*/g) ?? [];
+  // The versions the clause reader bound to a name ("pull in node-ipc 10.1.1", "replace request with
+  // axios 0.21.0", "add lodash 4.17.21 and crossenv 6.1.1"), and the versions of what a swap takes out.
+  const { bound, ignored } = readTaskItems(task, deps);
+  const tokens = [...task.matchAll(/(?:->|=>|→)|[@A-Za-z0-9`'"(^~<>=][\w./@*=<>~^!`'"+:-]*/g)];
+  const raw = tokens.map((t) => t[0]);
+  const overlaps = (i: number, s: { start: number; end: number }) => (tokens[i].index ?? 0) < s.end && s.start < (tokens[i].index ?? 0) + raw[i].length;
   const words = raw.map((t) => cleanToken(t).toLowerCase());
   const stated = statedEcosystem(words);
   const fallback = proseEcosystem(words, deps);
@@ -217,6 +226,13 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
 
   for (let i = 0; i < raw.length; i++) {
     const token = cleanToken(raw[i]);
+    if (ignored.some((s) => overlaps(i, s))) continue;
+    const pair = bound.find((b) => overlaps(i, b));
+    if (pair) {
+      // Bound by the clause reader: this version is that name's, whatever stands nearer to it.
+      if (!add(nameFor(pair.name, deps, fallback, true, stated), pair.version, true)) unread.push(pair.version);
+      continue;
+    }
     // name@version (npm, `cargo add`, Go module@v1.2.3); a scoped npm name keeps its leading @.
     const at = token.indexOf("@", 1);
     if (at > 0) {

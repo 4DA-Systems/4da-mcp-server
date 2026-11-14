@@ -128,10 +128,40 @@ export const MANIFEST_FIELDS: ReadonlySet<string> = new Set([
  * came back safe_to_delegate with the version unread (round 5 audits).
  */
 export function normalizeVersionSyntax(task: string): string {
-  return task
-    .replace(/((?:^|[\s`'"(])@?[\w.~-]+(?:\/[\w.~-]+)?)@npm:(?=@?[\w.~-])/gi, (_m, pre: string) => pre.replace(/@?[\w.~-]+(?:\/[\w.~-]+)?$/, ""))
-    .replace(/@(["'])([^"'\s]+)\1/g, "@$2");
+  const toml = TOML_MANIFEST.test(task);
+  return (
+    task
+      // A manifest entry written into the task (pre-publish audit of 5d709ff): `"dbg": "npm:debug@4.4.2"`
+      // installs debug 4.4.2 under the name dbg, and was read as the packages dbg and npm, both clean.
+      .replace(JSON_ALIAS_ENTRY, (_m, _q1, _key, _q2, name: string, spec: string | undefined) => (spec ? `${name}@${spec.replace(/\s+/g, "")}` : name))
+      // `"lodash": "^4.17.20"`, `"lodash": "4.17.20"`: the version is the package's.
+      .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${name}@${spec.replace(/\s+/g, "")}`))
+      // Cargo.toml / Poetry: `serde = { version = "1.0.200", features = [...] }`.
+      .replace(TOML_TABLE_ENTRY, (m, pre: string, name: string, _q, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${pre}${name}@${spec.replace(/\s+/g, "")}`))
+      // `serde = "1.0.200"`: a dotted version, or any version in a task that names a TOML manifest
+      // (`timeout = "30"` in prose is a setting, not a crate).
+      .replace(TOML_VERSION_ENTRY, (m, pre: string, name: string, _q, spec: string) =>
+        NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) || (!toml && !/\d\.\d/.test(spec)) ? m : `${pre}${name}@${spec.replace(/\s+/g, "")}`,
+      )
+      .replace(/((?:^|[\s`'"(])@?[\w.~-]+(?:\/[\w.~-]+)?)@npm:(?=@?[\w.~-])/gi, (_m, pre: string) => pre.replace(/@?[\w.~-]+(?:\/[\w.~-]+)?$/, ""))
+      .replace(/@(["'])([^"'\s]+)\1/g, "@$2")
+  );
 }
+
+/** A package name as a manifest key: `lodash`, `@scope/name`. */
+const KEY = String.raw`@?[\w.~-]+(?:\/[\w.~-]+)?`;
+/** A version or range a manifest entry gives: `4.17.20`, `^1.2`, `~2.0.1`, `>=2`, `=1.0.0`, `7.x`. */
+const SPEC = String.raw`(?:[~^]|[<>]=?|={1,2})?\s*v?\d[\w.*+-]*`;
+const JSON_ALIAS_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])npm:(${KEY})(?:@([^"'\s]+))?\3`, "g");
+const JSON_VERSION_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])(${SPEC})\3`, "g");
+const TOML_TABLE_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]*)\s*=\s*\{[^}]*?\bversion\s*=\s*(["'])(${SPEC})\3[^}]*\}`, "gm");
+const TOML_VERSION_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]*)\s*=\s*(["'])(${SPEC})\3`, "gm");
+const TOML_MANIFEST = /\b(?:cargo\.toml|pyproject\.toml|crates?|cargo|poetry)\b/i;
+/** Manifest fields that hold a version but are not a dependency (`"version": "1.2.3"`, engines' `"node": ">=18"`, `edition = "2021"`). */
+const NOT_DEPENDENCY_FIELDS: ReadonlySet<string> = new Set([
+  "version", "node", "npm", "pnpm", "yarn", "bun", "deno", "vscode", "engines", "packagemanager", "edition", "rust-version", "requires-python", "python",
+  "resolver", "lockfileversion", "lockfile-version", "schema", "manifest_version",
+]);
 
 /** A manifest or lockfile name, bare or with a directory ("web/package.json"), quotes and trailing punctuation aside. */
 export function isManifestFile(token: string): boolean {
