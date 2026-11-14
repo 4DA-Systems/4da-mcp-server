@@ -27,6 +27,10 @@ import { executeDependencyHealth } from "../tools/dependency-health.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import type { RegistryPackageInfo, ResolvedDependency } from "../live/types.js";
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { FourDADatabase } from "../db.js";
+import { executeWhatShouldIKnow, type BriefingLiveIntel } from "../tools/what-should-i-know.js";
+import type { VulnerabilityScanResult } from "../live/types.js";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -337,5 +341,72 @@ describe("defect 3: dependency_health and upgrade_planner cap the deprecation me
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 5. A MAL- record on a release is malware in every tool
+// ---------------------------------------------------------------------------------------------
+
+describe("defect 5: a malicious-package record on a hijacked release sets the malicious flag and says malware", () => {
+  const FIX = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "osv", "malware-releases-2026-11-14.json"), "utf8")) as { records: OsvVulnerability[] };
+
+  beforeEach(() => {
+    OSV.push(...FIX.records);
+    NPM.chalk = { "5.6.0": daysAgo(400), "5.6.1": daysAgo(60), "5.6.2": daysAgo(59) };
+    NPM.debug = { "4.4.1": daysAgo(400), "4.4.2": daysAgo(60), "4.4.3": daysAgo(59) };
+  });
+
+  it.each([
+    ["chalk", "5.6.1", "MAL-2025-46969"],
+    // The MAL record comes in beside its GHSA alias, which names the group.
+    ["debug", "4.4.2", "MAL-2025-46974"],
+  ])("dependency_check %s %s: avoid, malicious_package names %s, and the reason says malware (it said only 'affected by ... (critical)')", async (pkg, to, mal) => {
+    const [r] = (await check([{ ecosystem: "npm", package: pkg, to }])).results;
+    expect(r.verdict).toBe("avoid");
+    expect(conciseItem(r as never).malicious_package).toMatchObject({ ids: expect.arrayContaining([mal]), taken_down: false });
+    expect(r.reason).toContain(`MALWARE: ${pkg} ${to} is a malicious release`);
+  });
+
+  it("the safe release next to it is not flagged (control)", async () => {
+    const [r] = (await check([{ ecosystem: "npm", package: "chalk", to: "5.6.2" }])).results;
+    expect(r.verdict).not.toBe("avoid");
+    expect(conciseItem(r as never).malicious_package).toBeUndefined();
+  });
+
+  it.each(["0.0.0-stage", "^1.0.0", "latest"])("yummy-bolts %s: every release it published is malware and npm holds the name with stubs: avoid, malicious (0.0.0-stage said proceed)", async (to) => {
+    // MAL-2026-19107 (read 2026-11-14): versions 1.0.0 to 1.4.0; the registry serves only npm's 0.0.0-stage stub and 0.0.1-security.
+    OSV.push({ id: "MAL-2026-19107", aliases: ["GHSA-v9xg-mgjf-74xm"], summary: "Malicious code in yummy-bolts (npm)", affected: [{ package: { name: "yummy-bolts", ecosystem: "npm" }, versions: ["1.4.0", "1.3.1", "1.3.0", "1.2.0", "1.1.0", "1.0.0"] }] } as unknown as OsvVulnerability);
+    NPM["yummy-bolts"] = { "0.0.0-stage": daysAgo(4), "0.0.1-security": daysAgo(3) };
+    const [r] = (await check([{ ecosystem: "npm", package: "yummy-bolts", to }])).results;
+    expect(r.verdict).toBe("avoid");
+    expect(conciseItem(r as never).malicious_package).toMatchObject({ ids: ["MAL-2026-19107"], taken_down: true });
+    expect(r.reason).toContain("(0.0.1-security)");
+  });
+
+  it("what_should_i_know: a task that writes debug 4.4.2 is human_only, with the release read as malware", async () => {
+    const live = new LiveIntelligence(new Database(":memory:"));
+    const installed: ResolvedDependency = { name: "debug", version: "4.4.1", ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: ["d:/proj"] };
+    const scan: VulnerabilityScanResult = {
+      scannedAt: NOW.toISOString(), projectPath: "d:/proj", ecosystemsScanned: ["npm"], totalScanned: 1, totalVulnerable: 0, platformInactiveVulnerable: 0,
+      bySeverity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [], cleanCount: 1, scanDurationMs: 1, cached: false, offline: false,
+    };
+    const intel: BriefingLiveIntel = {
+      isEnabled: () => true,
+      getProjectRoot: () => "d:/proj",
+      ensureVulnerabilities: async () => scan,
+      getVulnerabilities: () => scan,
+      getResolvedDeps: () => [installed],
+      getAuditDeps: () => [],
+      getReleaseSources: () => live.getReleaseSources(),
+      getFixPathSources: () => live.getFixPathSources(),
+      queryAdvisories: (d) => live.queryAdvisories(d),
+    };
+    const db = Object.create(FourDADatabase.prototype) as FourDADatabase;
+    (db as unknown as { db: unknown }).db = new Database(":memory:");
+    const b = await executeWhatShouldIKnow(db, { task: "upgrade debug to 4.4.2" }, intel);
+    expect(b.delegation_assessment.level).toBe("human_only");
+    expect(b.requested_versions?.map((r) => [r.name, r.to, r.malicious])).toEqual([["debug", "4.4.2", true]]);
+    expect(b.delegation_assessment.reason).toContain("MALWARE: debug 4.4.2 is a malicious release");
   });
 });

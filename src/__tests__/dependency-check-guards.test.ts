@@ -219,7 +219,12 @@ describe("Y2: real packages are never avoided for being popular, or for one hija
     expect(verdicts).toMatchObject({ "lodash@4.17.21": "proceed", "express@5.1.0": "proceed", "react@19.2.0": "proceed", "chalk@5.6.2": "proceed", "debug@4.4.3": "proceed" });
     expect(verdicts["chalk@5.6.1"]).toBe("avoid");
     expect(verdicts["debug@4.4.2"]).toBe("avoid");
-    for (const r of out.results) expect(advisoriesOf(r)?.value?.malicious_package, `${r.package}@${r.to}`).toBeUndefined();
+    // The name is never flagged; the hijacked release itself is malware, and flagged as such (blind audit round 5).
+    for (const r of out.results) {
+      const flag = advisoriesOf(r)?.value?.malicious_package;
+      if (r.to === "5.6.1" || r.to === "4.4.2") expect(flag, `${r.package}@${r.to}`).toMatchObject({ taken_down: false, did_you_mean: null });
+      else expect(flag, `${r.package}@${r.to}`).toBeUndefined();
+    }
   });
 });
 

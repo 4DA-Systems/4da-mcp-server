@@ -1308,6 +1308,8 @@ export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices:
       maintenance: declared,
       ...(worded && !declared ? { countedNotice: true } : {}),
       ...(v.severityFrom ? { severityFrom: v.severityFrom } : {}),
+      // Every malicious-package record of the group, the MAL- one under a GHSA alias included.
+      ...(members.some((m) => m.malware) ? { malware: [...new Set(members.filter((m) => m.malware).map((m) => m.vulnId))] } : {}),
     };
   });
 }
