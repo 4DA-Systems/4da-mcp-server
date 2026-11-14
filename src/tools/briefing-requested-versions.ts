@@ -16,7 +16,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { asName, projectEcosystems, proseEcosystem, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
-import { installedGoModule, isManifestFile, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
+import { installedGoModule, isManifestFile, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
@@ -75,8 +75,12 @@ const DEPENDENCY_VERBS = new Set([
   "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
   "set", "setting", "change", "changing", "roll", "revert", "require", "lock", "use", "using",
 ]);
-/** A manifest, lockfile or packaging word: the task is about dependencies. */
-const DEPENDENCY_TASK = /(?:package(?:-lock)?.json|cargo.(?:toml|lock)|requirements(?:-[w-]+)?.txt|pyproject.toml|poetry.lock|uv.lock|pipfile|go.(?:mod|sum)|pnpm-lock.yaml|yarn.lock|dependenc(?:y|ies)|packages?|librar(?:y|ies)|crates?|npm|pnpm|yarn|pip|pypi|cargo)/i;
+/**
+ * A manifest, lockfile or packaging word: the task is about dependencies. It once held literal
+ * backspace characters for its word boundaries and so matched no task: "lodash in package.json to
+ * 4.17.20" left 4.17.20 unread when lodash was not installed (round 5 audits).
+ */
+const DEPENDENCY_TASK = /\b(?:package(?:-lock)?\.json|cargo\.(?:toml|lock)|requirements(?:-[\w-]+)?\.txt|pyproject\.toml|poetry\.lock|uv\.lock|pipfile|go\.(?:mod|sum)|pnpm-lock\.yaml|yarn\.lock|dependenc(?:y|ies)|packages?|librar(?:y|ies)|crates?|npm|pnpm|yarn|pip|pypi|cargo)\b/i;
 const PYPI_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)((?:===?|~=|>=|<=|!=|>|<)[^\s]+)$/;
 /**
  * Verbs that only ever mean a dependency change. "set", "change" and "use" also set config values
@@ -109,6 +113,8 @@ const GROUP_NOUNS = new Set(["scope", "scopes", "org", "orgs", "organisation", "
 const FILE_PREPOSITIONS = new Set(["in", "inside", "within", "into", "of", "from"]);
 
 const GO_HOST_PATH = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\//i;
+/** The part after `@` in an email address ("ping ops@example.com"): not a version. */
+const EMAIL_DOMAIN = /^[a-z][\w-]*(?:\.[\w-]+)*\.[a-z]{2,}$/i;
 
 /** A token as a name: quotes, brackets, trailing punctuation and a possessive `'s` removed. */
 function cleanToken(t: string): string {
@@ -175,6 +181,7 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
  * safe_to_delegate.
  */
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
+  task = normalizeVersionSyntax(task);
   const raw = task.match(/(?:->|=>|→)|[@A-Za-z0-9`'"(^~<>=][\w./@*=<>~^!`'"+:-]*/g) ?? [];
   const words = raw.map((t) => cleanToken(t).toLowerCase());
   const stated = statedEcosystem(words);
@@ -212,10 +219,18 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     const token = cleanToken(raw[i]);
     // name@version (npm, `cargo add`, Go module@v1.2.3); a scoped npm name keeps its leading @.
     const at = token.indexOf("@", 1);
-    if (at > 0 && VERSIONISH.test(token.slice(at + 1))) {
+    if (at > 0) {
       const name = token.slice(0, at);
+      const after = token.slice(at + 1);
       const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : stated === "crates.io" ? "crates.io" : "npm";
-      if (!add(nameFor(name, deps, eco, true, stated), token.slice(at + 1)) && DOTTED.test(token.slice(at + 1))) unread.push(token);
+      if (VERSIONISH.test(after) || after.toLowerCase() === "latest") {
+        if (!add(nameFor(name, deps, eco, true, stated), after.toLowerCase() === "latest" ? "latest" : after) && DOTTED.test(after)) unread.push(token);
+        continue;
+      }
+      // Whatever else follows `name@` (a dist-tag, a branch, a tarball, a version in a form not read
+      // here) is a version this briefing could not judge: unread, never dropped (`lodash@"4.17.20"`
+      // came back safe_to_delegate; round 5 audits). An email address is not a package.
+      if (after && !EMAIL_DOMAIN.test(after) && (aboutDependencies || eco === "Go" || /^[\d^~<>=v"'`]/i.test(after)) && asName(name, eco) !== null) unread.push(token);
       continue;
     }
     // name==1.2.3, name~=3.1, name>=2,<3 (PyPI)

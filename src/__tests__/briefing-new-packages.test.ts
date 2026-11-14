@@ -101,10 +101,13 @@ let NPM: Record<string, Pkg>;
 let OSV: OsvVulnerability[];
 let DOWNLOADS: Record<string, number>;
 let REGISTRY_DOWN: boolean;
+/** Every URL the briefing fetched, to prove a word was never looked up. */
+let ASKED: string[];
 
 function stub() {
   vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
+    ASKED.push(url);
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
     // OSV answers by ecosystem and name, as the real one does.
     const recordsFor = (name: string, ecosystem?: string) => OSV.filter((v) => v.affected?.some((a) => a.package?.name === name && (!ecosystem || a.package?.ecosystem === ecosystem)));
@@ -191,6 +194,7 @@ beforeEach(() => {
   clearNpmDownloadsMemo();
   db = createDb();
   REGISTRY_DOWN = false;
+  ASKED = [];
   DOWNLOADS = { express: 195_493_804, expres: 5216, lodash: 202_301_867 };
   NPM = {
     // npm took it down: only the security placeholder is listed.
@@ -286,5 +290,97 @@ describe("what_should_i_know: a task that adds a package", () => {
     const r = await executeWhatShouldIKnow(db, { task: "add error handling to the parser" }, intel());
     expect(r.new_packages).toBeUndefined();
     expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 5 audits: malware added to a Python project, swapped in, or added with no package word
+// ---------------------------------------------------------------------------------------------
+
+const PY = [dep("requests", "2.32.3", "PyPI")];
+const mal = (name: string, ecosystem: string, id: string) =>
+  ({ id, aliases: [], summary: `Malicious code in ${name} (${ecosystem})`, affected: [{ package: { name, ecosystem }, ranges: [{ type: "SEMVER", events: [{ introduced: "0" }] }] }] }) as unknown as OsvVulnerability;
+
+describe("round 5: a task that adds malware is never safe_to_delegate", () => {
+  beforeEach(() => {
+    OSV.push(
+      mal("ctx", "PyPI", "MAL-2022-ctx"),
+      mal("extrahtml", "PyPI", "MAL-2024-extrahtml"),
+      mal("logger-libs", "PyPI", "MAL-2024-logger-libs"),
+      mal("flatmap-stream", "npm", "MAL-2018-flatmap-stream"),
+    );
+    NPM["flatmap-stream"] = { latest: "0.0.1-security", versions: { "0.0.1-security": "2018-11-26T00:00:00.000Z" } };
+  });
+
+  it.each(["add ctx", "add ctx to requirements.txt", "add extrahtml to requirements.txt", "add logger-libs", "add extrahtml and ctx"])(
+    "a PyPI project: %s is human_only (it was safe_to_delegate with no new package)",
+    async (task) => {
+      const r = await executeWhatShouldIKnow(db, { task }, intel(READY_SCAN, { getResolvedDeps: () => PY }));
+      expect(r.delegation_assessment.level).toBe("human_only");
+      expect(r.new_packages?.length).toBeGreaterThan(0);
+      expect(r.new_packages!.every((p) => p.ecosystem === "PyPI" && p.verdict === "avoid" && p.malicious)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["replace lodash with lodahs", "lodahs", "human_only"],
+    ["swap express for expres", "expres", "review_needed"],
+    ["add flatmap-stream", "flatmap-stream", "human_only"],
+  ])("an npm project: %s brings %s in and is %s (it was safe_to_delegate with new_packages [])", async (task, name, level) => {
+    const r = await executeWhatShouldIKnow(db, { task }, intel());
+    expect(r.new_packages).toMatchObject([{ name, ecosystem: "npm" }]);
+    expect(r.new_packages![0].verdict).not.toBe("proceed");
+    expect(r.delegation_assessment.level).toBe(level);
+  });
+
+  it.each([
+    ["replace lodash with lodahs", ["npm:lodahs"]],
+    ["swap express for expres", ["npm:expres"]],
+    ["swap out express for expres", ["npm:expres"]],
+    ["switch from lodash to lodahs", ["npm:lodahs"]],
+    ["migrate to dayjs", ["npm:dayjs"]],
+    ["add flatmap-stream", ["npm:flatmap-stream"]],
+    ["add ctx to the dependencies", ["npm:ctx"]],
+    ["add ctx as a dev dependency", ["npm:ctx"]],
+  ])("reads what comes in: %s", (task, expected) => {
+    expect(detectNewPackages(task, DEPS).map((p) => `${p.ecosystem}:${p.name}`)).toEqual(expected);
+  });
+
+  it.each([
+    "install steps",
+    "add routes to the app",
+    "add memoization to the parser",
+    "add caching to the client",
+    "add a footer to the page",
+    "import json and parse the file",
+    "add scripts to package.json",
+    "replace the for loop with map",
+    "move the helper to utils",
+  ])("everyday English names nothing to look up: %s", (task) => {
+    expect(detectNewPackages(task, PY)).toEqual([]);
+    expect(detectNewPackages(task, DEPS)).toEqual([]);
+  });
+
+  it('"install zqx omega risk": zqx is a name, omega and risk are words and are never looked up', async () => {
+    expect(detectNewPackages("install zqx omega risk", PY).map((p) => p.name)).toEqual(["zqx"]);
+    await executeWhatShouldIKnow(db, { task: "install steps" }, intel(READY_SCAN, { getResolvedDeps: () => PY }));
+    await executeWhatShouldIKnow(db, { task: "install zqx omega risk" }, intel());
+    expect(ASKED.some((u) => /\/(?:steps|risk|omega)(?:$|[/?])/.test(u) || /"name":"(?:steps|risk|omega)"/.test(u))).toBe(false);
+  });
+
+  it("a bare name no registry has and no malware record covers was prose: dropped, the task judged as before", async () => {
+    // "add frobnicator" with nothing else saying it is a package: the registry has no such name.
+    expect(detectNewPackages("add frobnicator", DEPS)).toMatchObject([{ name: "frobnicator", ecosystem: "npm", weak: true }]);
+    const r = await executeWhatShouldIKnow(db, { task: "add frobnicator" }, intel());
+    expect(r.new_packages).toBeUndefined();
+    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    // Said to be a package, the same name is still reported as one the registry does not have.
+    const said = await executeWhatShouldIKnow(db, { task: "add frobnicator to package.json" }, intel());
+    expect(said.new_packages).toMatchObject([{ name: "frobnicator", verdict: "unknown" }]);
+    expect(said.delegation_assessment.level).toBe("review_needed");
+    // And a check that could not run is never dropped as prose.
+    REGISTRY_DOWN = true;
+    const down = await executeWhatShouldIKnow(db, { task: "add frobnicator" }, intel());
+    expect(down.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 });

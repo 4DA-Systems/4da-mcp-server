@@ -18,11 +18,15 @@
  *   `uv add a`, `poetry add a`, `go get host/path`;
  * - an adding verb, then only articles and package words, then the name: "add the lodahs package",
  *   "install lodahs", "add a dependency on lodahs", "use the left-pad library";
- * - the same verb and a bare name only when the name is in code quotes ("add `expres`"), or the
- *   task speaks of packaging somewhere ("add expres to package.json") and the name is on the
- *   popular list or a near-miss of it. "Install" always names a package. A bare everyday word
- *   after "add" ("add routes to the app") is not read as a package: `routes` is one letter from
- *   `router`, and a briefing that cried typo-squat at it would be wrong far more often than right.
+ * - "add X to requirements.txt / package.json / the dependencies", "add X as a dependency": the
+ *   destination says X is a package, whatever X looks like;
+ * - "replace/swap A with/for B", "switch/migrate (from A) to B": B comes in;
+ * - a bare "add X" / "install X" for any plausible name ("add ctx", "add flatmap-stream"; round 5
+ *   audits found both safe_to_delegate), unless X is everyday English ("install steps", "add routes
+ *   to the app", "add memoization": briefing-names.ts). A bare name nothing else marks as a package
+ *   is `weak`: if no registry has it and no malicious-package record covers it, or it comes back
+ *   clean, it was prose and is dropped; a malware name, a near-miss or any other finding stands.
+ *   A popular npm name or a near-miss of one is always a package, English or not.
  *   dependency_check still judges the name when the agent asks before writing it.
  * A name the project already depends on is the task-scope module's, not this one's.
  */
@@ -31,7 +35,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { installedGoModule, isManifestFile, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
+import { ENGLISH_TASK_WORDS, installedGoModule, isManifestFile, MANIFEST_FIELDS, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES, PYTHON_STDLIB } from "./briefing-names.js";
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
@@ -42,6 +46,13 @@ export interface NewPackage {
   ecosystem: CheckEcosystem;
   /** Other ecosystems the project uses, tried when the guessed one has no such package. */
   alternatives?: CheckEcosystem[];
+  /**
+   * Read from a bare "add X" with nothing else saying X is a package: when no registry has the name
+   * and no malicious-package record covers it, it was prose ("add memoization"), and it is dropped
+   * instead of reported as a hallucinated package. Any other answer (malware, a near-miss, a release
+   * with advisories, a lookup that could not run) stands.
+   */
+  weak?: true;
 }
 
 /** What the name check found for one package a task adds. */
@@ -85,9 +96,28 @@ const NOT_A_NAME = new Set([
 const CLAUSE_VERBS = new Set([
   "set", "upgrade", "update", "bump", "pin", "change", "remove", "delete", "drop", "fix", "run", "make", "move", "write", "roll", "downgrade", "test", "build",
   "configure", "refactor", "replace", "rename", "check", "verify", "add", "install", "use", "deploy", "release", "publish", "commit", "push", "lock", "revert",
+  "parse", "print", "read", "save", "load", "send", "render", "handle", "return", "call", "wire", "connect", "show", "display", "import", "export",
+  "rewrite", "clean", "validate", "log", "document", "swap", "switch", "migrate", "start", "stop", "restart", "open", "close", "create", "generate",
 ]);
-/** A manifest or a packaging word anywhere in the task: it is about dependencies. */
-const PACKAGING = /\b(?:package\.json|cargo\.toml|requirements(?:-[\w-]+)?\.txt|pyproject\.toml|go\.mod|dependenc(?:y|ies)|devdependenc(?:y|ies)|packages?|librar(?:y|ies)|crates?|npm|pnpm|yarn|pip|pypi)\b/i;
+/**
+ * Verbs that swap one thing for another: "replace lodash with lodahs", "swap express for expres",
+ * "switch from moment to dayjs", "migrate to pnpm". The thing after the connector is introduced
+ * (both of the first two came back safe_to_delegate with no new package; round 5 audits).
+ */
+const SWAP_VERBS = new Set(["replace", "replacing", "replaces", "swap", "swapping", "swaps", "switch", "switching", "migrate", "migrating", "move", "moving", "port", "porting"]);
+/** The word before what comes in, by verb: "replace A with B", "swap A for B", "switch from A to B". */
+const swapConnectors = (verb: string): ReadonlySet<string> => (verb.startsWith("replac") ? new Set(["with", "by"]) : verb.startsWith("swap") ? new Set(["for", "with"]) : new Set(["to"]));
+/** Words between a name and the manifest it goes in: "add ctx to requirements.txt", "into the package.json". */
+const DESTINATION_PREPOSITIONS = new Set(["to", "into", "in", "inside"]);
+const DESTINATION_FILLERS = new Set(["the", "our", "my", "your", "this", "project's", "app's", "dev", "runtime", "a", "an", "its"]);
+/** Section names a destination may give instead of a file: "add ctx to the dependencies", "to requirements". */
+const DESTINATION_SECTIONS = new Set(["dependencies", "deps", "devdependencies", "dev-dependencies", "requirements", "manifest", "lockfile", "lock", "pyproject", "gemfile"]);
+/** English, as briefing-names.ts lists it, less every name on the popular list: those are always checked. */
+const ENGLISH = new Set([...ENGLISH_TASK_WORDS].filter((w) => !POPULAR.has(w)));
+/** Endings of English nouns and gerunds ("memoization", "caching", "management"): a bare "add X" with one is prose. */
+const ENGLISH_ENDING = /^[a-z]{3,}(?:ing|tion|sion|ment|ness|ity|ance|ence|ism|ship|ure|ies)$/;
+/** Punctuation and shapes no English word has: a name like this after "add" is a package ("logger-libs", "flatmap-stream"). */
+const NAME_SHAPED = /[-_.@/\d]/;
 const VERSION_ONLY = /^v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][\w.]+)?$/i;
 
 type Manager = { ecosystem: CheckEcosystem; commands: ReadonlySet<string> };
@@ -156,6 +186,7 @@ export function projectEcosystems(deps: readonly ResolvedDependency[]): CheckEco
  * comment for what counts as naming one). At most three, in the order named.
  */
 export function detectNewPackages(task: string, deps: readonly ResolvedDependency[]): NewPackage[] {
+  task = normalizeVersionSyntax(task);
   const quoted = new Set((task.match(/`([^`\s]+)`/g) ?? []).map((q) => q.slice(1, -1).toLowerCase()));
   // Word-ish tokens that keep package punctuation; a leading "-" marks a command flag.
   const raw = task.match(/(?:--?[A-Za-z][\w-]*)|[@A-Za-z0-9][\w./@*=<>~^!-]*/g) ?? [];
@@ -163,17 +194,48 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
   const fallback = proseEcosystem(words, deps);
   // A name filed under the project's main ecosystem only because the task names none is a guess.
   const others = statedEcosystem(words) ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
-  const packaging = PACKAGING.test(task);
   const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
+  const installedName = (name: string) => deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps) !== null;
   const found: NewPackage[] = [];
-  const add = (name: string | null, ecosystem: CheckEcosystem, guess = false) => {
+  const add = (name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false) => {
     if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`) || isManifestFile(name)) return false;
     // A guessed name the project already has, in any ecosystem or as a Go module's short name
     // ("install gin" with github.com/gin-gonic/gin in go.mod), is not new (blind audit round 4).
-    if (guess && (deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps))) return false;
+    if (guess && installedName(name)) return false;
     const alternatives = guess ? others.filter((e) => asName(name, e) !== null) : [];
-    if (!found.some((f) => f.ecosystem === ecosystem && f.name === name)) found.push({ name, ecosystem, ...(alternatives.length > 0 ? { alternatives } : {}) });
+    const at = found.findIndex((f) => f.ecosystem === ecosystem && f.name === name);
+    if (at < 0) found.push({ name, ecosystem, ...(alternatives.length > 0 ? { alternatives } : {}), ...(weak ? { weak: true as const } : {}) });
+    else if (!weak) delete found[at].weak;
     return true;
+  };
+  /**
+   * The words after a name (or a list of names) put it in a manifest or the dependency list:
+   * "to requirements.txt", "into the package.json", "to the dependencies", "as a dev dependency".
+   */
+  const goesInManifest = (from: number): boolean => {
+    let j = from;
+    // Past the rest of an "a and b" / "a, b" list.
+    while (j < words.length && (words[j] === "and" || words[j] === "&" || words[j] === "plus" || (asName(raw[j], fallback) !== null && !DESTINATION_PREPOSITIONS.has(words[j]) && words[j] !== "as"))) {
+      if (j - from > 6) return false;
+      j++;
+    }
+    if (words[j] === "as") {
+      let m = j + 1;
+      while (m < words.length && (DESTINATION_FILLERS.has(words[m]) || words[m] === "new")) m++;
+      return PACKAGE_WORDS.has(words[m] ?? "");
+    }
+    if (!DESTINATION_PREPOSITIONS.has(words[j] ?? "")) return false;
+    let m = j + 1;
+    while (m < words.length && DESTINATION_FILLERS.has(words[m])) m++;
+    const target = words[m] ?? "";
+    return isManifestFile(raw[m] ?? "") || DESTINATION_SECTIONS.has(target) || PACKAGE_WORDS.has(target);
+  };
+  /** Prose that reads as English, not as a package, for a name nothing else marks as one. */
+  const english = (name: string, bareAdd: boolean) => {
+    const n = name.toLowerCase();
+    if (ENGLISH.has(n)) return true;
+    if (!bareAdd) return false;
+    return COMMON_WORDS.has(n) || PYTHON_STDLIB.has(n) || (!NAME_SHAPED.test(n) && ENGLISH_ENDING.test(n));
   };
 
   for (let i = 0; i < words.length; i++) {
@@ -194,16 +256,37 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
       continue;
     }
     const installing = INSTALL_VERBS.has(word);
-    if (!installing && !ADD_VERBS.has(word)) continue;
+    // "replace lodash with lodahs", "swap express for expres", "switch to dayjs": what comes in.
+    let swapped = false;
+    let swappedFromDependency = false;
+    if (SWAP_VERBS.has(word)) {
+      let c = i + 1;
+      if (words[c] === "out" || words[c] === "over") c++;
+      if (words[c] === "from") c++;
+      // "move" and "port" move code as often as packages: only "move from A to B" swaps one.
+      if ((word.startsWith("mov") || word.startsWith("port")) && words[c - 1] !== "from") continue;
+      // The thing replaced: up to four words ("the lodash package", "our old date library").
+      const connectors = swapConnectors(word);
+      let end = c;
+      while (end < words.length && end - c < 5 && !connectors.has(words[end])) end++;
+      if (!connectors.has(words[end] ?? "")) continue;
+      // "switch to B" / "migrate to B" name only what comes in; "replace X with Y" must name X.
+      if (end === c && words[end] !== "to") continue;
+      swappedFromDependency = words.slice(c, end).some((w) => installedName(w) || PACKAGE_WORDS.has(w) || quoted.has(w));
+      swapped = true;
+      i = end;
+    } else if (!installing && !ADD_VERBS.has(word)) continue;
     // The verb, then only articles and package words, then the name.
     let k = i + 1;
     let saidPackage = false;
+    let skipped = 0;
     // "install the private @acme scope": an adjective there is no package (blind audit round 4).
     while (k < words.length && (FILLERS.has(words[k]) || PACKAGE_WORDS.has(words[k]) || (NOT_A_PACKAGE_ADJECTIVES.has(words[k]) && !quoted.has(words[k])))) {
       if (PACKAGE_WORDS.has(words[k])) saidPackage = true;
       k++;
+      skipped++;
     }
-    for (; k < words.length; k++) {
+    for (let listed = true; k < words.length; k++) {
       const name = asName(raw[k], fallback);
       if (!name) break;
       const after = words[k + 1];
@@ -211,13 +294,29 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
       // A popular npm name, or a near miss of one, is a package whatever the wording: "add lodahs" came
       // back safe_to_delegate without a packaging word (blind audit round 3, B3). The list is bundled,
       // so an unknown word is never sent anywhere for it.
-      const known = fallback === "npm" && !COMMON_WORDS.has(name) && (POPULAR.has(name) || nearMissOf(name) !== null);
-      if (!(saidPackage || PACKAGE_WORDS.has(after) || installing || isQuoted || known)) break;
-      add(name, fallback, true);
+      const known = fallback === "npm" && !COMMON_WORDS.has(name) && !ENGLISH.has(name) && !PYTHON_STDLIB.has(name) && (POPULAR.has(name) || nearMissOf(name) !== null);
+      // "add ctx to requirements.txt", "add extrahtml to the dependencies": the destination says it is a package
+      // (both came back safe_to_delegate in a Python project; round 5 audits). A manifest's own fields are not.
+      const manifest = goesInManifest(k + 1) && !MANIFEST_FIELDS.has(name.toLowerCase());
+      const strong = saidPackage || PACKAGE_WORDS.has(after) || isQuoted || known || manifest || (swapped && swappedFromDependency);
+      if (!strong) {
+        // A bare "add X" (or "install X", "replace A with X") reads X as a package for any plausible
+        // name ("add ctx", "add flatmap-stream" came back safe_to_delegate; round 5 audits), unless it
+        // is English ("install steps", "add routes"). After an article only a name-shaped word counts
+        // ("add a footer" is prose, "add the logger-libs" is not).
+        if (english(name, !installing)) break;
+        if (!installing && skipped > 0 && !NAME_SHAPED.test(name)) break;
+        // A bare list continues only over "and": "add zqx omega risk" is one name and prose.
+        if (!installing && !listed) break;
+      }
+      add(name, fallback, true, !strong && !installing);
       // "lodahs and expres", "lodahs, expres": the next name continues the list, unless a new clause
       // starts ("install omega-flag-beta and set lodash ..." added a package named `set`).
-      if ((after === "and" || after === "&" || after === "plus") && !CLAUSE_VERBS.has(words[k + 2] ?? "")) k++;
-      else if (after === "and" || after === "&" || after === "plus") break;
+      listed = false;
+      if ((after === "and" || after === "&" || after === "plus") && !CLAUSE_VERBS.has(words[k + 2] ?? "")) {
+        k++;
+        listed = true;
+      } else if (after === "and" || after === "&" || after === "plus") break;
       else if (PACKAGE_WORDS.has(after)) break;
     }
   }
@@ -226,7 +325,7 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;
 
-function unchecked({ alternatives: _alternatives, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -265,7 +364,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, ...p } = pkg;
     if (!r) return unchecked(p, "no answer");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
@@ -288,6 +387,8 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     if (!answer) return packages.map((p) => unchecked(p, "the lookups did not finish in time"));
     const out = packages.map((p, i) => finding(p, answer.results[i]));
     const retries = packages.flatMap((p, i) => (missing(answer.results[i]) ? (p.alternatives ?? []).map((ecosystem) => ({ i, p: { name: p.name, ecosystem } })) : []));
+    /** A weak name no registry has and no malware record covers was prose; a clean one adds nothing to say. */
+    const prose = (f: NewPackageFinding, i: number) => packages[i].weak === true && !f.malicious && f.name_finding === null && (f.verdict === "proceed" || (f.verdict === "unknown" && /a hallucinated package/.test(f.reason)));
     if (retries.length > 0) {
       const again = await run(retries.map((x) => x.p)).catch(() => null);
       if (again) {
@@ -297,7 +398,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
         }
       }
     }
-    return out;
+    return out.filter((f, i) => !prose(f, i));
   } catch (error) {
     return packages.map((p) => unchecked(p, `the check failed: ${String(error instanceof Error ? error.message : error).slice(0, 120)}`));
   }
