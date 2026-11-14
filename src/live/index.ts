@@ -35,6 +35,7 @@ import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import { manifestPrivateSources, normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
+import { declaredMirror } from "./private-configs.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
 import { nameForms, privateShortIndex, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
@@ -123,6 +124,11 @@ export class LiveIntelligence {
   private npmLockPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
   /** Groups whose manifest takes packages from a private registry or index (manifestPrivateSources). */
   private manifestPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
+  /**
+   * Every name a group declares, resolves or lists, by `${ecosystem}\0${normalised name}`, when its
+   * ecosystem's registry, index or proxy is not public (PrivatePackageRules.ecosystemWide), with why.
+   */
+  private wideNames = new Map<string, string>();
   /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
@@ -332,13 +338,33 @@ export class LiveIntelligence {
     this.npmLockPrivate = new Map(
       this.groupResults
         .filter((r) => mapEcosystem(r.group.language) === "npm")
-        .map((r) => [r, npmLockPrivateSources(r.group.dir, this.privateRules.npmMirrorHosts)] as const),
+        .map((r) => [r, npmLockPrivateSources(r.group.dir, this.privateRules.publicMirrors)] as const),
     );
     // A private registry or index the manifest itself names (Cargo `registry =`, uv `index =`,
     // Poetry `source =`): private with no lockfile too (blind audit round 4).
     this.manifestPrivate = new Map(
       this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
     );
+    // A registry, index or proxy that is not public and is consulted for any name: every name the
+    // group knows, ranged and unpinned ones included, so no tool sends one (R7, 2).
+    this.wideNames = new Map();
+    for (const r of this.groupResults) {
+      const ecosystem = mapEcosystem(r.group.language);
+      const why = this.privateRules.ecosystemWide(ecosystem, r.source?.kind === "lockfile");
+      if (!why) continue;
+      const names = [
+        ...r.group.deps,
+        ...r.group.devDeps,
+        ...r.resolved.map((d) => d.name),
+        ...r.audit.map((d) => d.name),
+        ...(r.unpinned ?? []).flatMap((u) => u.names),
+        ...(r.uncheckable ?? []).map((u) => u.name),
+      ];
+      for (const name of names) {
+        const k = `${ecosystem}\0${normName(ecosystem, name)}`;
+        if (!this.wideNames.has(k)) this.wideNames.set(k, why);
+      }
+    }
     const key = (dep: { ecosystem: string; name: string; version: string | null }) => `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
     const privateWhy = new Map<string, string>();
     const isPublic = (r: GroupResolution, dep: ResolvedDependency) => {
@@ -394,12 +420,11 @@ export class LiveIntelligence {
       .get(normName(ecosystem, name))
       ?.find((p) => p.version === null || version === null || p.version === version);
     if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
-    // pip's configured index (PIP_INDEX_URL, pip.conf) serves every package a requirements file installs.
-    const pip = this.privateRules.pipIndex;
-    if (pip && ecosystem === "PyPI" && r.source?.kind === "manifest") return `pip installs it from ${pip.url} (${pip.from}), not pypi.org`;
-    // An extra index (PIP_EXTRA_INDEX_URL, a pip config file): pip may take the package from it.
-    const extra = this.privateRules.pipExtraFrom;
-    if (extra && ecosystem === "PyPI" && r.source?.kind === "manifest") return `pip may install it from ${extra.url} (an extra index, ${extra.from}), not pypi.org`;
+    // A registry, index or proxy that is not public and serves any name: pip's configured index or
+    // an extra one (for what a requirements file installs), uv's, Poetry's, npm's default registry,
+    // GOPROXY, a Cargo source replacement (PrivatePackageRules.ecosystemWide).
+    const wide = mapEcosystem(r.group.language) === ecosystem ? this.privateRules.ecosystemWide(ecosystem, r.source?.kind === "lockfile") : null;
+    if (wide) return wide;
     return this.privateRules.reasonFor(ecosystem, name);
   }
 
@@ -496,6 +521,8 @@ export class LiveIntelligence {
     // beside serde itself): asking about it reveals nothing.
     this.publicNames ??= new Set(this.auditDeps.map((d) => `${d.ecosystem}\0${normName(d.ecosystem, d.name)}`));
     if (this.publicNames.has(`${ecosystem}\0${n}`)) return null;
+    const wide = this.wideNames.get(`${ecosystem}\0${n}`);
+    if (wide) return wide;
     for (const r of this.groupResults) {
       if (mapEcosystem(r.group.language) !== ecosystem) continue;
       const hit = this.lockPrivateIndex(r, ecosystem).get(n)?.[0];
@@ -531,7 +558,11 @@ export class LiveIntelligence {
   private lockPrivateOf(r: GroupResolution): PrivateIndexEntry[] {
     const npm = this.npmLockPrivate.get(r) ?? [];
     const manifest = this.manifestPrivate.get(r) ?? [];
-    return npm.length > 0 || manifest.length > 0 ? [...(r.privateIndex ?? []), ...npm, ...manifest] : (r.privateIndex ?? []);
+    const all = npm.length > 0 || manifest.length > 0 ? [...(r.privateIndex ?? []), ...npm, ...manifest] : (r.privateIndex ?? []);
+    // A host FOURDA_PUBLIC_MIRRORS declares a mirror of the public registry serves public packages,
+    // whether a lockfile, a requirements file or the configuration names it (R7: one policy).
+    const mirrors = this.privateRules.publicMirrors;
+    return mirrors.size === 0 ? all : all.filter((p) => !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
   }
 
   /** Private names a fix-path lookup was refused for in this process, with why. */
@@ -565,7 +596,7 @@ export class LiveIntelligence {
   /** The notice for an `.npmrc` default registry that is not public (PrivatePackageRules.npmRegistryNotice), or null. */
   getRegistryNotice(): string | null {
     const notices = [
-      this.auditDeps.some((d) => d.ecosystem === "npm") || this.groupResults.length === 0 ? this.privateRules.npmRegistryNotice() : null,
+      this.groupResults.some((r) => mapEcosystem(r.group.language) === "npm") || this.groupResults.length === 0 ? this.privateRules.npmRegistryNotice() : null,
       this.pipExtraNotice(),
     ].filter((n): n is string => Boolean(n));
     return notices.length > 0 ? notices.join(" ") : null;

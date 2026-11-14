@@ -265,15 +265,39 @@ describe("a PyPI private parent in upgrade_planner", () => {
 });
 
 describe("an .npmrc default registry that is not public", () => {
-  it("dependency_check and vulnerability_scan say unscoped names are still looked up publicly", async () => {
+  // Until 6.3.0 the host was read as a mirror and unscoped names were sent (review of #64, S5). R7
+  // made the policy one for every ecosystem, as for a pip `--index-url`: any package may be
+  // published only there, so the project's npm packages are private unless FOURDA_PUBLIC_MIRRORS
+  // declares the host a mirror.
+  const project = () => {
     write(".npmrc", "registry=https://artifactory.acme.dev/api/npm/npm/\n");
-    write("package.json", JSON.stringify({ name: "app", dependencies: { lodash: "4.17.21" } }));
-    write("package-lock.json", JSON.stringify({ name: "app", lockfileVersion: 3, packages: { "": { name: "app", dependencies: { lodash: "4.17.21" } }, "node_modules/lodash": { version: "4.17.21" } } }));
+    write("package.json", JSON.stringify({ name: "app", dependencies: { "zqart-internal": "1.0.0" } }));
+    write("package-lock.json", JSON.stringify({ name: "app", lockfileVersion: 3, packages: { "": { name: "app", dependencies: { "zqart-internal": "1.0.0" } }, "node_modules/zqart-internal": { version: "1.0.0" } } }));
+  };
+
+  it("makes the project's npm packages private, says why, and sends none of them", async () => {
+    project();
     const live = liveFor(scratch);
-    const notice = "Your npm registry is artifactory.acme.dev. Unscoped packages published only there are looked up on the public registry by name; list them in FOURDA_PRIVATE_PACKAGES (or use a scope) to keep them private.";
-    const check = await executeDependencyCheck(noDb, { items: [{ ecosystem: "npm", package: "lodash", to: "4.17.21" }] }, live);
-    expect(check._meta).toMatchObject({ registry_notice: notice });
+    const check = await executeDependencyCheck(noDb, { items: [{ ecosystem: "npm", package: "zqart-internal", to: "1.0.0" }] }, live);
+    expect(String(check._meta?.registry_notice)).toContain("Your npm registry is artifactory.acme.dev");
+    expect(String(check._meta?.registry_notice)).toContain("FOURDA_PUBLIC_MIRRORS=artifactory.acme.dev");
     const scan = (await executeVulnerabilityScan(noDb, {}, live)) as { registry_notice?: string };
-    expect(scan.registry_notice).toBe(notice);
+    expect(scan.registry_notice).toContain("treated as private");
+    expect(live.getPrivateDependencies().map((p) => p.name)).toEqual(["zqart-internal"]);
+    expect(mentions("zqart")).toEqual([]);
+  });
+
+  it("FOURDA_PUBLIC_MIRRORS declares the host a mirror: the packages are checked again", async () => {
+    project();
+    process.env.FOURDA_PUBLIC_MIRRORS = "artifactory.acme.dev";
+    try {
+      const live = liveFor(scratch);
+      expect(live.getPrivateDependencies()).toEqual([]);
+      expect(live.getRegistryNotice()).toBeNull();
+      await executeVulnerabilityScan(noDb, {}, live);
+      expect(mentions("zqart").length).toBeGreaterThan(0);
+    } finally {
+      delete process.env.FOURDA_PUBLIC_MIRRORS;
+    }
   });
 });

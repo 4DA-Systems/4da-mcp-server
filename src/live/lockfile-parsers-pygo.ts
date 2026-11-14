@@ -22,6 +22,7 @@ import { emptySource, found, InstanceSet, type LockfileProblem, type Uncheckable
 import { readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
+import { privateDirectReference } from "./private-configs.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -173,7 +174,7 @@ export function resolvePython(cwd: string): VersionSource {
   }
 
   const collected: LockfileProblem[] = [];
-  const extras: RequirementExtras = { unpinned: [], uncheckable: [] };
+  const extras: RequirementExtras = { unpinned: [], uncheckable: [], directPrivate: [] };
   const extraIndexes: Array<{ file: string; index: string }> = [];
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
@@ -186,7 +187,9 @@ export function resolvePython(cwd: string): VersionSource {
     // and pip takes each package from whichever index has the newest release, so any pin may come
     // from it: private too (blind audit round 4; until then the names were sent and only a notice
     // said so). The answer still names the extra index (LiveIntelligence.getRegistryNotice).
-    const options = indexOptions(safeRead(file));
+    // The options of every file it includes (`-r base.txt`, `-c constraints.txt`, nested) apply to the
+    // whole install: `--index-url` in an included base.txt sent every pin to OSV.dev (R7, 1).
+    const options = requirementIndexOptions(file, cwd);
     const privateExtra = options.extra.find((index) => !isPublicExtraPypiIndex(index));
     const privateSource = options.index && !isPublicPypiIndex(options.index) ? options.index : privateExtra;
     if (privateSource) {
@@ -195,6 +198,9 @@ export function resolvePython(cwd: string): VersionSource {
     for (const index of options.extra) if (!isPublicPypiIndex(index)) extraIndexes.push({ file, index: sourceLabel(index) });
   }
   pushAll(uncheckable, extras.uncheckable);
+  // A direct reference to a location that is not public (`name @ https://pkgs.acme.dev/...`, a private
+  // git host, `file:`): installed from there, never from pypi.org, so the name is private (R7, 3).
+  pushAll(privateIndex, extras.directPrivate);
   // One problem per file, however many requirement files name it.
   const problems = [...new Map([...damaged, ...collected].map((p) => [p.file.toLowerCase(), p])).values()];
   // A name some other file here pins exactly has a version to check: only what nothing pins is unpinned.
@@ -258,6 +264,9 @@ export function readRequirementsFile(
     const listed = unpinnedRequirements(content);
     for (const name of listed.names) extras.unpinned.push({ file: path.resolve(file), name });
     for (const other of listed.direct) extras.uncheckable.push({ ...other, version: null, file: path.resolve(file) });
+    for (const ref of listed.references) {
+      if (privateDirectReference(ref.location)) extras.directPrivate.push({ name: ref.name, version: null, registry: /^file:/i.test(ref.location) ? "a local file" : sourceLabel(ref.location.replace(/^git\+/i, "")), file: path.resolve(file) });
+    }
   }
   const overlong = overlongRequirementLines(content);
   if (overlong > 0) {
@@ -384,6 +393,34 @@ export function indexOptions(content: string): { index: string | null; extra: st
     if (!m) continue;
     if (m[2] === "extra-index-url") extra.push(m[3]);
     else index = m[3];
+  }
+  return { index, extra };
+}
+
+/** At most this many files deep a requirements file's includes are followed for its index options. */
+const MAX_INCLUDE_DEPTH = 16;
+
+/**
+ * The index options of a requirements file and of every file it includes, `-r` and `-c`, nested,
+ * each relative to the file that names it and confined to `root` as the pins are (a loop or a
+ * depth past MAX_INCLUDE_DEPTH stops there). pip applies an option from any of them to the whole
+ * install. The last `--index-url` read is pip's, but a non-public one anywhere is what matters.
+ */
+export function requirementIndexOptions(file: string, root: string, visited: Set<string> = new Set(), depth = 0): { index: string | null; extra: string[] } {
+  const key = path.resolve(file).toLowerCase();
+  if (visited.has(key) || depth > MAX_INCLUDE_DEPTH) return { index: null, extra: [] };
+  visited.add(key);
+  const content = safeRead(file);
+  const own = indexOptions(content);
+  let index = own.index;
+  const extra = [...own.extra];
+  for (const { target } of requirementOptions(content)) {
+    const included = confinedInclude(path.dirname(file), target, root);
+    if (included === null) continue;
+    const nested = requirementIndexOptions(included, root, visited, depth + 1);
+    // A replacing index that is not public wins over a public one, wherever it is.
+    if (nested.index && (!index || isPublicPypiIndex(index))) index = nested.index;
+    pushAll(extra, nested.extra);
   }
   return { index, extra };
 }
@@ -528,6 +565,8 @@ export interface RequirementExtras {
   unpinned: Array<{ file: string; name: string }>;
   /** A requirement installed from git or a URL: not a release of the index package. */
   uncheckable: UncheckableDependency[];
+  /** A direct reference whose location is not public: the name is private. */
+  directPrivate: PrivateIndexEntry[];
 }
 
 /**
@@ -541,9 +580,15 @@ export interface RequirementExtras {
  * 2026-11-11, T4). The line names a dependency with no installed version to
  * check; that is "not checked", never "no advisories".
  */
-export function unpinnedRequirements(content: string): { names: string[]; direct: Array<{ name: string; kind: "git" | "url" }> } {
+export function unpinnedRequirements(content: string): {
+  names: string[];
+  direct: Array<{ name: string; kind: "git" | "url" }>;
+  /** Every direct reference with where it points (`file:` ones too), for the private-name rules. */
+  references: Array<{ name: string; location: string }>;
+} {
   const names: string[] = [];
   const direct: Array<{ name: string; kind: "git" | "url" }> = [];
+  const references: Array<{ name: string; location: string }> = [];
   const kindOf = (location: string): "git" | "url" => (/^git\+|\.git(?:[@#]|$)/i.test(location) ? "git" : "url");
   for (const raw of requirementLines(content)) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
@@ -555,6 +600,7 @@ export function unpinnedRequirements(content: string): { names: string[]; direct
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(editable[1]) && !/^file:/i.test(editable[1])) {
         direct.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1])), kind: kindOf(editable[1]) });
       }
+      if (/^[a-z][a-z0-9+.-]*:/i.test(editable[1])) references.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1])), location: editable[1] });
       continue;
     }
     if (line.startsWith("-")) continue;
@@ -562,6 +608,7 @@ export function unpinnedRequirements(content: string): { names: string[]; direct
     // A bare URL requirement: the archive's name is all there is.
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(spec)) {
       if (!/^file:/i.test(spec)) direct.push({ name: normalizePythonName(archiveName(spec)), kind: kindOf(spec) });
+      references.push({ name: normalizePythonName(archiveName(spec)), location: spec });
       continue;
     }
     const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(spec);
@@ -570,13 +617,14 @@ export function unpinnedRequirements(content: string): { names: string[]; direct
     const reference = /^@\s*(\S+)/.exec(m[2]);
     if (reference) {
       if (!/^file:/i.test(reference[1])) direct.push({ name: normalizePythonName(m[1]), kind: kindOf(reference[1]) });
+      references.push({ name: normalizePythonName(m[1]), location: reference[1] });
       continue;
     }
     // `vendor/pkg.whl`: a local path, not a name.
     if (/===?/.test(m[2]) || /^[\\/]/.test(m[2])) continue;
     names.push(normalizePythonName(m[1]));
   }
-  return { names: [...new Set(names)], direct };
+  return { names: [...new Set(names)], direct, references };
 }
 
 /** The package name an archive or repository URL ends in: `…/requests-2.25.0-py3-none-any.whl` -> requests, `…/repo.git@v1` -> repo. */
