@@ -31,6 +31,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
+import { installedGoModule, isManifestFile } from "./briefing-names.js";
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
@@ -166,7 +167,10 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
   const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
   const found: NewPackage[] = [];
   const add = (name: string | null, ecosystem: CheckEcosystem, guess = false) => {
-    if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`)) return false;
+    if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`) || isManifestFile(name)) return false;
+    // A guessed name the project already has, in any ecosystem or as a Go module's short name
+    // ("install gin" with github.com/gin-gonic/gin in go.mod), is not new (blind audit round 4).
+    if (guess && (deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps))) return false;
     const alternatives = guess ? others.filter((e) => asName(name, e) !== null) : [];
     if (!found.some((f) => f.ecosystem === ecosystem && f.name === name)) found.push({ name, ecosystem, ...(alternatives.length > 0 ? { alternatives } : {}) });
     return true;
