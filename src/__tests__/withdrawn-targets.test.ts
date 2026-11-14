@@ -224,17 +224,17 @@ describe("vulnerability_scan and upgrade_planner never name a withdrawn release"
     expect(detailed.vulnerabilities[0]).toMatchObject({
       fixed_version: "4.18.1",
       withheld: ["4.18.0"],
-      withheld_note: '4.18.0 is deprecated on npm ("Bad release. Please use lodash@4.17.21 instead."); 4.18.1 is the smallest release past it that fixes this advisory',
+      withheld_note: "4.18.0 is deprecated on npm (the registry's message is quoted in quoted_from_registry); 4.18.1 is the smallest release past it that fixes this advisory",
     });
     expect(detailed.fix_targets["lodash@4.17.20"]).toMatchObject({
       target: "4.18.1",
       withheld: ["4.18.0"],
-      withheld_note: '4.18.0 is deprecated on npm ("Bad release. Please use lodash@4.17.21 instead."); 4.18.1 is the smallest clean release',
+      withheld_note: "4.18.0 is deprecated on npm (the registry's message is quoted in quoted_from_registry); 4.18.1 is the smallest clean release",
     });
     expect(JSON.stringify(detailed)).not.toMatch(/"fixed_version":"4\.18\.0"|→ 4\.18\.0/);
     const step = (await plan(dir)).find((r) => r.package === "lodash")!;
     expect(step).toMatchObject({ targetVersion: "4.18.1", withheld: ["4.18.0"] });
-    expect(step.reasons).toContain('4.18.0 is deprecated on npm ("Bad release. Please use lodash@4.17.21 instead."); 4.18.1 is the smallest clean release');
+    expect(step.reasons).toContain("4.18.0 is deprecated on npm (the registry's message is quoted in quoted_from_registry); 4.18.1 is the smallest clean release");
   });
 
   it("crates.io: yanked h2 0.3.17 is passed for 0.3.18, in the finding and the target", async () => {

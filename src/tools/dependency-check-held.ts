@@ -10,8 +10,9 @@
  * dependencies too (held-dependencies.ts): an affected one makes `to` review or avoid by the same
  * severity rule as its own advisories, and keeps the release out of the safe ones.
  *
- * Fail closed: when the registry or OSV cannot answer, `to` is `unknown` (never proceed) and the
- * safe releases stay as its own advisories decide them, with the reason in the signal.
+ * Fail closed: when the registry or OSV cannot answer, `to` is `unknown` (never proceed), and no
+ * release whose held dependencies could not be judged is named safe (the answer says NOT CHECKED,
+ * never a wider safe set than a healthy run gives: r7 blocker).
  */
 
 import { heldAdvisories, heldSeverity, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
@@ -114,25 +115,43 @@ export class HeldJudge {
   }
 
   /**
-   * checkRange's held filter for one package, or undefined when nothing about it could be judged
-   * (registry or OSV down): the safe releases then stay as its own advisories decide, and `to`
-   * says unknown instead.
+   * checkRange's held filter for one package. Never undefined (r7 blocker): it was undefined when
+   * the registry could not say what the releases hold, or when every held check came back
+   * unchecked (OSV failed for the dependencies only), and the safe releases then fell back to the
+   * package's own advisories: `{express, "4.x"}` said `unknown` and safe 4.20.0, which a healthy
+   * run calls avoid. A release that holds something, or may (the registry could not be read), and
+   * was not judged clean is not safe; `notChecked` says which of them were left out unjudged, so
+   * the answer says NOT CHECKED instead of "affected".
    */
-  rangeFilter(pkg: string): { unsafe: (version: string) => boolean; note: string } | undefined {
+  rangeFilter(pkg: string): HeldRangeFilter {
     const all = this.specs.get(pkg);
-    if (!all) return undefined;
-    const judged = [...this.checks.entries()].filter(([k]) => k.startsWith(`${pkg}@`) && all[k.slice(pkg.length + 1)]);
-    if (judged.length > 0 && judged.every(([, c]) => c.status === "unchecked")) return undefined;
+    if (!all) {
+      const reason = "what its releases install could not be read from the npm registry";
+      return { unsafe: () => true, notChecked: () => true, reason, note: HELD_RANGE_NOTE };
+    }
+    const unchecked = (v: string) => {
+      const c = this.at(pkg, v);
+      // A release that holds something and was not judged is not called safe.
+      return c ? c.status === "unchecked" : Boolean(all[v]);
+    };
+    const reasons = [...this.checks.entries()].filter(([k, c]) => k.startsWith(`${pkg}@`) && c.status === "unchecked").map(([, c]) => (c as { reason: string }).reason);
     return {
-      unsafe: (v) => {
-        const c = this.at(pkg, v);
-        // A release that holds something and was not judged is not called safe.
-        if (!c) return Boolean(all[v]);
-        return c.status === "unchecked" || c.affected.length > 0;
-      },
+      unsafe: (v) => unchecked(v) || this.affected(pkg, v),
+      notChecked: unchecked,
+      reason: reasons[0] ?? "the dependencies they exact-pin or narrowly range were not judged",
       note: HELD_RANGE_NOTE,
     };
   }
+}
+
+/** checkRange's held filter (dependency-check-versions.ts RangeCheck.held_not_checked). */
+export interface HeldRangeFilter {
+  unsafe: (version: string) => boolean;
+  /** Left out because what it holds could not be judged (not because it is affected). */
+  notChecked: (version: string) => boolean;
+  /** Why they could not be judged. */
+  reason: string;
+  note: string;
 }
 
 /** An alternative outside the range is offered only within this distance of `to`'s line... */
@@ -183,6 +202,9 @@ export async function adviseNoSafeRelease(input: {
 }): Promise<void> {
   const { rc, judge, pkg } = input;
   if (rc.smallest_safe_in_range !== null) return;
+  // Nothing in range was judged safe only because what the releases hold could not be checked: the
+  // answer is NOT CHECKED, and no alternative is looked for in its place (r7).
+  if (rc.held_not_checked && (rc.affecting_all_total ?? 0) === 0) return;
   const published = (v: string) => input.index.releases[v]?.publishedAt ?? null;
   // "None known" may only mean none was judged: judge the newest ones before saying there is none.
   if (!rc.newest_safe_outside_range && input.advisories) await offerJudgedOutside(input, published);

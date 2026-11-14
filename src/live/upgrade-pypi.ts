@@ -15,7 +15,7 @@
  * read, and only when the GitHub fallback is enabled (github-releases.ts).
  */
 
-import { quoteThirdParty } from "../untrusted-text.js";
+import { quoteThirdParty, thirdPartyUrl } from "../untrusted-text.js";
 import { parsePep440 } from "./version-compare.js";
 import type { PublishedVersion, RegistryIndex, UpgradeNet } from "./upgrade-sources.js";
 
@@ -74,7 +74,11 @@ export function pypiRepository(info: PyPIProject["info"]): string | null {
 export function pypiChangelogLinks(info: PyPIProject["info"]): string[] {
   return Object.entries(info?.project_urls ?? {})
     .filter(([k, v]) => typeof v === "string" && CHANGELOG_KEY.test(k) && /^https:\/\//i.test(v))
-    .map(([, v]) => v);
+    // Held to a URL's shape and length like every third-party URL (r7).
+    .flatMap(([, v]) => {
+      const url = thirdPartyUrl(v);
+      return url ? [url] : [];
+    });
 }
 
 export async function loadPypiIndex(net: UpgradeNet, name: string): Promise<RegistryIndex | null> {

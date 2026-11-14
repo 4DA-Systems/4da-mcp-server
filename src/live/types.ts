@@ -157,7 +157,8 @@ export interface VulnerabilityEntry {
    * fall back to the summary wording; the scan cache key moved to osv:v3 so entries
    * cached by 6.2.4 without it are never read (osv:v4 since CVSS v4.0 grades and OSV-read range
    * bounds changed what an entry holds; osv:v5 since round-4 text cleaning and malware reading; osv:v6 since round-5 advisory-id validation and release-level malware; osv:v7 since summaries are capped at
-   * ADVISORY_SUMMARY_MAX and quoted, and a record already in hand grades an advisory whose /v1/vulns fetch failed).
+   * ADVISORY_SUMMARY_MAX and quoted, and a record already in hand grades an advisory whose /v1/vulns fetch failed;
+   * osv:v8 since an alias with whitespace or a control character inside is dropped, not glued into one id, r7).
    */
   maintenance?: boolean;
   /**
@@ -216,6 +217,11 @@ export interface VulnerabilityScanResult {
    * stubs.
    */
   unchecked?: number;
+  /**
+   * Which dependencies those are: `ecosystem\0name\0version` each (r7: a planner row whose own
+   * answer is missing must not read as low risk with a clean newest release). Absent when none.
+   */
+  uncheckedDependencies?: string[];
   /** Why `unchecked` dependencies have no answer, in words; null when every one was answered. */
   uncheckedReason?: string | null;
   /**

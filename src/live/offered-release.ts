@@ -21,6 +21,7 @@ import type { AdvisoryQuery } from "./held-dependencies.js";
 import { isSecurityHoldingRelease } from "./osv-scanner.js";
 import { compareVersions } from "./version-compare.js";
 import type { OsvEcosystem } from "./types.js";
+import { registryQuote } from "../untrusted-text.js";
 
 export interface OfferedRelease {
   /** The release the tool was about to offer. */
@@ -78,6 +79,8 @@ export async function vetOfferedRelease(
   const unavoidable = view.unfixed.filter((id) => installed !== null && advisoriesAffecting(advisories, installed, ecosystem).includes(id));
   const affectedBy = advisoriesAffecting(advisories, offered, ecosystem).filter((id) => !unavoidable.includes(id));
   const withdrawnWhy = facts?.withdrawn.includes(offered) ? (facts.withdrawnWhy[offered] ?? `${offered} is withdrawn on the registry`) : null;
+  // The registry's own words go to the result's quoted_from_registry, never into the note (r7).
+  if (withdrawnWhy) registryQuote(`${name}@${offered}`, facts?.withdrawnQuote?.[offered]);
   if (affectedBy.length === 0 && !withdrawnWhy) {
     const remains = view.remains(offered).filter((id) => unavoidable.includes(id));
     return remains.length > 0 ? { ...base, note: `${name} ${offered} ${remainsText(remains)}` } : base;

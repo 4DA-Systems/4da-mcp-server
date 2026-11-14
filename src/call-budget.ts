@@ -43,6 +43,57 @@ interface Budget {
   budgetMs: number;
   /** Facts read once per call (callMemo). */
   memo: Map<string, unknown>;
+  /** Concrete negative findings already in hand, per checked item (noteCallFinding). */
+  findings: Map<string, CallFinding>;
+  /** The registry's own words this call's sentences point to (untrusted-text.ts registryQuote). */
+  quotes: Map<string, string>;
+}
+
+/**
+ * A finding a call already holds about one item before it finishes: the registry unpublished or
+ * yanked the release, an advisory record (malware or not) affects it. When the call's budget ends
+ * first, the answer keeps it (late-answer.ts, dependency_check's per-item time-budget result):
+ * chalk 5.6.1 came back `unknown` though npm's "unpublished" and OSV.dev's MAL- record were both
+ * read, because one hanging /v1/vulns request held the call past its budget (r7).
+ */
+export interface CallFinding {
+  verdict: "avoid" | "review";
+  /** In this server's words; at most a few findings, each with its source. */
+  evidence: string[];
+}
+
+/** The key a finding is kept under: the item as the caller wrote it. */
+export function callFindingKey(ecosystem: unknown, pkg: unknown, to: unknown): string {
+  const t = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return `${t(ecosystem)}\0${t(pkg)}\0${t(to)}`;
+}
+
+/** Keep a finding for this call; the worse verdict stands, and evidence accumulates (deduplicated). */
+export function noteCallFinding(key: string, verdict: CallFinding["verdict"], evidence: string): void {
+  const findings = current.getStore()?.findings;
+  if (!findings) return;
+  const had = findings.get(key);
+  const worst = had?.verdict === "avoid" || verdict === "avoid" ? "avoid" : "review";
+  const all = [...(had?.evidence ?? [])];
+  if (!all.includes(evidence)) all.push(evidence);
+  findings.set(key, { verdict: worst, evidence: all.slice(0, 4) });
+}
+
+/** Keep third-party words for this call's top-level `quoted_from_registry` (first words kept per key). */
+export function noteCallQuote(key: string, words: string): void {
+  const quotes = current.getStore()?.quotes;
+  if (quotes && !quotes.has(key)) quotes.set(key, words);
+}
+
+/** The words kept by noteCallQuote, or null when none (or outside a call). */
+export function callQuotes(): Record<string, string> | null {
+  const quotes = current.getStore()?.quotes;
+  return quotes && quotes.size > 0 ? Object.fromEntries(quotes) : null;
+}
+
+/** The finding this call holds for an item, if any. */
+export function callFinding(key: string): CallFinding | undefined {
+  return current.getStore()?.findings.get(key);
 }
 
 const current = new AsyncLocalStorage<Budget>();
@@ -50,7 +101,7 @@ const current = new AsyncLocalStorage<Budget>();
 /** Run `work` as one tool call whose budget started at `startedAt` (epoch ms). */
 export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>): Promise<T> {
   const budgetMs = callBudgetMs();
-  return current.run({ deadline: startedAt + budgetMs, budgetMs, memo: new Map() }, work);
+  return current.run({ deadline: startedAt + budgetMs, budgetMs, memo: new Map(), findings: new Map(), quotes: new Map() }, work);
 }
 
 /**

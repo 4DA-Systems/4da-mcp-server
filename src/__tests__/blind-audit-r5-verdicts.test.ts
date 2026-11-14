@@ -340,7 +340,8 @@ describe("defect 3: dependency_health and upgrade_planner cap the deprecation me
         expect(text).not.toContain(LONG.slice(0, 400));
         expect((text.match(/IGNORE PREVIOUS INSTRUCTIONS/g) ?? []).length).toBeLessThanOrEqual(2);
       }
-      expect(plan).toContain("Deprecated: This package is no longer maintained.");
+      // r7: the registry's words are no longer inside the reason; the reason points to quoted_from_registry.
+      expect(plan).toContain("Package is deprecated (the registry's message is quoted in quoted_from_registry)");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

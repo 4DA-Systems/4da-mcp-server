@@ -54,7 +54,11 @@ import { npmWeeklyDownloads } from "../live/npm-downloads.js";
 import type { AdvisoryRanges } from "../live/osv-ranges.js";
 import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
-import { secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
+import { callFinding, callFindingKey, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
+import { findingReason } from "../late-answer.js";
+import { noteListFacts, noteRegistryFacts, noteScanFacts } from "./dependency-check-facts.js";
+import { unquotePackageName } from "./package-name.js";
+import { isConcreteVersion } from "../live/release-version.js";
 import { goPathMajor, goVersionMajor } from "../live/upgrade-go.js";
 import {
   advisoriesSignal,
@@ -90,7 +94,7 @@ import {
   type RangeCheck,
   type Target,
 } from "./dependency-check-versions.js";
-import { adviseNoSafeRelease, HeldJudge, heldRangeCandidates } from "./dependency-check-held.js";
+import { adviseNoSafeRelease, HeldJudge, heldRangeCandidates, type HeldRangeFilter } from "./dependency-check-held.js";
 import { andList } from "../live/held-dependencies.js";
 import { closestPopularNpm, maliciousName, maliciousSignal, type MaliciousName } from "./dependency-check-malicious.js";
 import { nameCheckSignal, nearMissOf } from "./dependency-check-nearmiss.js";
@@ -293,8 +297,12 @@ async function checkWithinBudget(db: FourDADatabase | null, params: DependencyCh
   });
 }
 
-/** An item still running when the budget ran out. */
+/** An item still running when the budget ran out: a finding already in hand stands (r7), else unknown. */
 function timeBudgetResult(r: Requested, budgetMs: number): ItemResult {
+  const found = callFinding(callFindingKey(r.ecosystem, r.package, r.raw));
+  if (found) {
+    return { ...head(provisional(r)), verdict: found.verdict, reason: findingReason(found, secondsText(budgetMs)), signals: [], not_checked: "time_budget" };
+  }
   return {
     ...head(provisional(r)),
     verdict: "unknown",
@@ -410,6 +418,13 @@ async function checkDependencies(
   const packageAdvisoryLists = advisoryListReader(fixSources);
   const held = new HeldJudge(fixSources, (deps) => liveIntel.queryAdvisories(deps));
   void packageAdvisoryLists(requested);
+  // r7: each concrete finding is kept for the call as soon as it is read, so a call that runs out
+  // of time still answers avoid for a release already known to be malware (dependency-check-facts.ts).
+  for (const r of requested) {
+    if (r.target.kind !== "exact") continue;
+    const to = r.target.version;
+    void packageAdvisoryLists([r]).then((lists) => noteListFacts(r, to, lists.get(lookupKey(r))), () => undefined);
+  }
   held.prefetch(requested.filter((r) => r.ecosystem === "npm").map((r) => r.package));
   const [indexes, advisoryLists] = await Promise.all([
     fetchIndexes(requested.map(provisional), sources, new Set(requested.filter(needsFullList).map(lookupKey))),
@@ -421,7 +436,10 @@ async function checkDependencies(
   // (pre-publish audit 2026-11-12, S1: ping and lodash waited 22 s behind django).
   let items: Resolved[] = [];
   for (const r of requested) {
-    items.push(resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now));
+    const resolved = resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now);
+    items.push(resolved);
+    const index = indexes.get(lookupKey(r));
+    if (!resolved.unresolved && index?.status === "ok") noteRegistryFacts(r, resolved.to, index.data.releases[resolved.to]);
     await yieldToEventLoop();
   }
 
@@ -452,9 +470,8 @@ async function checkDependencies(
   );
   items = items.map((item, i) => {
     if (!isNpm(item) || item.rangeCheck?.basis !== "requested") return item;
-    const filter = held.rangeFilter(item.package);
     const r = requested[i];
-    return filter ? resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter) : item;
+    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, held.rangeFilter(item.package));
   });
   // Nothing in range is safe: the answer is about the newest release whose only issue is a low or
   // moderate advisory on something it holds, when there is one (it is review, with the override that
@@ -474,7 +491,7 @@ async function checkDependencies(
   const heldAt = (item: CheckItem) => (item.ecosystem === "npm" ? held.at(item.package, item.to) : undefined);
 
   const osvDeps: ResolvedDependency[] = items.flatMap((item) =>
-    [...new Set((item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)]).filter((v): v is string => Boolean(v)))].map((version) => osvDep(item, version)),
+    [...new Set((item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)]).filter((v): v is string => isConcreteVersion(v)))].map((version) => osvDep(item, version)),
   );
   const scan = await liveIntel.queryAdvisories(osvDeps);
   // Unrated (Go) records carry their GHSA alias's grade from the scanner, as in every tool (severityFrom).
@@ -483,6 +500,9 @@ async function checkDependencies(
     const key = instanceKey(v.ecosystem, v.package, v.currentVersion);
     byInstance.set(key, [...(byInstance.get(key) ?? []), v]);
   }
+  items.forEach((item, i) => {
+    if (!item.unresolved) noteScanFacts(requested[i], item.to, byInstance.get(instanceKey(item.ecosystem, item.package, item.to)));
+  });
   // An advisory the scan reads as an unmaintained-package notice is passed over only when its
   // record DECLARES that class (maintenance.ts isDeclaredNotice, read from the package's advisory
   // list). Without the list nothing is declared, and the advisory counts (audit 2026-11-11, M11).
@@ -765,6 +785,11 @@ function withAlternatives(reason: string, item: Resolved, verdict: Verdict): str
     // read (fail-closed) as covering every release: apache-airflow ">=1.10" said proceed 3.4.0 and
     // "No release ... is free of known advisories" in one breath (`last_affected: "2.9.0-NA"`;
     // blind audit 2026-11-14). Say which is which instead of contradicting the verdict.
+    // r7 blocker: releases left out only because what they hold could not be judged are NOT
+    // CHECKED, not affected; a healthy run may name them safe. Say that, never "free of advisories".
+    if (rc.held_not_checked && (rc.affecting_all_total ?? 0) === 0) {
+      return `${reason} | ${heldNotCheckedText(item.package, where, rc)}${withheld}`;
+    }
     if (!unsafe && ids.length > 0) {
       return `${reason} | OSV.dev lists no advisory against ${item.to}, but the published ranges of ${ids.slice(0, 3).join(", ")}${total > 3 ? ` and ${total - 3} more` : ""} cannot rule out any release ${where}, so no other release there is vouched for.${withheld}${outside}`;
     }
@@ -818,6 +843,12 @@ function listGapConfirmedText(item: Resolved, gap: { ids: string[]; versions: st
 /** The batch gap under a proceed or wait (not reached today: an unread batch makes the advisories signal unknown). */
 function batchUnreadConfirmedText(pkg: string): string {
   return `${pkg}'s full advisory list (/v1/query) could not be held against a current batch answer, so other releases were not compared and none is named as an alternative.`;
+}
+
+/** NOT CHECKED: no release in range is named safe because what they hold could not be judged (r7 blocker). */
+function heldNotCheckedText(pkg: string, where: string, rc: RangeCheck): string {
+  const n = rc.held_not_checked ?? 0;
+  return `NOT CHECKED: no release of ${pkg} ${where} is named safe: ${n} release${n === 1 ? "" : "s"} clear of ${pkg}'s own advisories ${n === 1 ? "exact-pins or narrowly ranges" : "exact-pin or narrowly range"} dependencies whose advisories could not be checked (${rc.held_not_checked_reason}). This is not a clean result and names no version to write: check again later.`;
 }
 
 /** NOT CHECKED: the batch query gave no current answer (Resolved.batchUnread), so no release is named. */
@@ -886,7 +917,7 @@ function resolveTarget(
   lookup: RegistryLookup<PackageReleaseIndex>,
   advisories: AdvisoryRanges[] | null | undefined,
   now: Date,
-  held?: { unsafe: (version: string) => boolean; note: string },
+  held?: HeldRangeFilter,
 ): Resolved {
   const base = provisional(r);
   if (lookup.status !== "ok") return base;
@@ -1278,7 +1309,8 @@ function validateItems(raw: unknown): Requested[] {
       }
       from = f.version;
     }
-    return { ecosystem, package: alias ? alias[1] : o.package.trim(), raw: rawTo, target, ...(from ? { from } : {}) };
+    // The same reading of a name every tool uses (package-name.ts): quotes around it are not part of it (r7).
+    return { ecosystem, package: alias ? alias[1] : unquotePackageName(o.package), raw: rawTo, target, ...(from ? { from } : {}) };
   });
 }
 

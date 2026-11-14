@@ -42,6 +42,38 @@
   changes: only dependency sections count now (the edited lines' own section,
   or the manifest on disk when they do not show it), and `[dependencies.serde]`
   `version = "..."` is serde's.
+- **Pre-publish fixes (verdicts, round 7).** With OSV.dev failing only for
+  express's own dependencies, `dependency_check {express, "4.x"}` said
+  `unknown` and still named 4.20.0 the smallest safe release, which a healthy
+  run calls avoid (it pins a vulnerable qs, cookie and body-parser), and the
+  summary told the agent to write a safe version the item names; "add express
+  4.x" in what_should_i_know did the same, as did a failed second page of a
+  querybatch or a hanging advisory record. A release whose held dependencies
+  could not be checked is now never named safe: the answer says NOT CHECKED
+  (`range_check.held_not_checked`), offers no release outside the range in its
+  place, and is never wider than the healthy answer. upgrade_planner no longer
+  puts an unconfirmed release in `targetVersion` when the batch query fails,
+  and a row OSV.dev gave no answer for has risk `"unknown"` (ranked and
+  filtered with critical) instead of `"low"`. A call that runs out of time
+  keeps what it already read: chalk 5.6.1 is avoid on npm's "unpublished" and
+  its MAL- record instead of `unknown`, and one hanging `/v1/vulns/{id}`
+  request (now 4 s per attempt) no longer eats the whole call. Registry
+  deprecation and yank messages are no longer inside this server's sentences
+  (`recommendations`, fix notes, planner reasons, the briefing's actions): they
+  are in a top-level `quoted_from_registry`, which `_meta.untrusted_text`
+  names. Repository and changelog URLs from a registry are held to http(s), at
+  most 300 characters, with no whitespace or control character (a
+  5,000-character one came back whole). An advisory id or alias with a line
+  break inside is dropped, not glued into one id. upgrade_impact reads
+  `to_version: "latest"` as the newest stable release, says when a refused
+  target is vulnerable, unpublished or malware, and reads `"lodash"` (quoted)
+  as dependency_check does. A version that is not a release number ("latest"
+  for a package the registry does not have, a range) is never sent to OSV.dev
+  from any tool. upgrade_planner names one upgrade command once, however many
+  parents lead to it (`sameCommandsAs`). Cache keys change: the OSV answer
+  cache moves to `osv:v8`, fix-path facts to `fixpath:v16`, and
+  upgrade_impact's registry index to `upgrade-impact:index:v2`.
+
 - **Pre-publish fixes (scan speed, round 6).** On a 1,889-dependency npm
   project a vulnerability_scan with every answer cached took 3.7 s, and the
   server did not answer `ping` until it was done (6.2.7: 0.3 s); at 107,000

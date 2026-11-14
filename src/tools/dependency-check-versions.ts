@@ -238,6 +238,14 @@ export interface RangeCheck {
   held_excluded?: number;
   held_note?: string;
   /**
+   * How many of `held_excluded` were left out because what they hold could NOT be judged (the
+   * registry or OSV.dev did not answer), and why. Those are NOT CHECKED, not affected: a healthy
+   * run may name some of them safe (r7 blocker: they were named safe on the package's own
+   * advisories alone).
+   */
+  held_not_checked?: number;
+  held_not_checked_reason?: string;
+  /**
    * npm: no release in range is safe only because of low or moderate advisories on dependencies
    * they hold (dependency-check-held.ts adviseHeldOnly): which ones, the release that clears each,
    * and the far older release outside the range that is therefore not offered.
@@ -399,7 +407,7 @@ export function checkRange(input: {
    * npm: a release whose held dependencies (exact pins, narrow ranges) are affected or could not
    * be judged is not safe either (audit 6.2.5 D-4), and `heldNote` says why when any is left out.
    */
-  held?: { unsafe: (version: string) => boolean; note: string };
+  held?: { unsafe: (version: string) => boolean; note: string; notChecked?: (version: string) => boolean; reason?: string };
   /** The caller asked for a prerelease (an exact prerelease `to`, or a constraint that names one). */
   allowPrerelease?: boolean;
   /**
@@ -455,6 +463,14 @@ export function checkRange(input: {
   if (input.held && safe.length < ownSafe.length) {
     out.held_excluded = ownSafe.length - safe.length;
     out.held_note = input.held.note;
+    const notChecked = input.held.notChecked ? ownSafe.filter((v) => input.held!.notChecked!(v)).length : 0;
+    if (notChecked > 0) {
+      out.held_not_checked = notChecked;
+      out.held_not_checked_reason = input.held.reason ?? "the dependencies they hold could not be judged";
+      // Nothing in range is safe only because it could not be checked: a release outside the range
+      // is no answer to the question asked (a healthy run names one in range), so none is offered (r7).
+      if (safe.length === 0 && (out.affecting_all_total ?? 0) === 0) out.newest_safe_outside_range = null;
+    }
   }
   const hold = holdOf();
   if (hold) applyHold(out, safe, hold, ecosystem, input.from);

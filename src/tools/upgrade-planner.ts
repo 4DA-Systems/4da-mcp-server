@@ -39,12 +39,13 @@ import { reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type 
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
-import { withholdUnconfirmedTargets } from "./unconfirmed-targets.js";
+import { unconfirmedTargetNote, withholdUnconfirmedTargets } from "./unconfirmed-targets.js";
+import { dedupeParentCommands } from "./upgrade-planner-dedupe.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
-import { quoteThirdParty } from "../untrusted-text.js";
+import { registryQuote } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 
@@ -72,7 +73,11 @@ interface UpgradeRecommendation {
   latestVersion?: string | null;
   /** Distance from currentVersion to targetVersion. */
   upgradeType: "patch" | "minor" | "major" | "unknown";
-  risk: "low" | "medium" | "high" | "critical";
+  /**
+   * "unknown": OSV.dev gave no answer for this copy, so its advisories are not known (r7: it read
+   * "low"). Ranked and filtered with "critical": incomplete coverage never lowers a row.
+   */
+  risk: "low" | "medium" | "high" | "critical" | "unknown";
   reasons: string[];
   breaking: boolean;
   isDev: boolean;
@@ -256,7 +261,7 @@ export const upgradePlannerTool = {
   },
 };
 
-const RISK_LEVELS: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+const RISK_LEVELS: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3, unknown: 3 };
 
 /** critical > high > medium > low, then runtime before dev-only, then fixable now (direct) before transitive, then non-breaking first (quick wins). */
 function planOrder(a: UpgradeRecommendation, b: UpgradeRecommendation): number {
@@ -275,6 +280,10 @@ function planOrder(a: UpgradeRecommendation, b: UpgradeRecommendation): number {
  * as the scan presents it; it used to stay medium. Ranking on the raw grade let dev-only criticals
  * push a runtime high out of max_recommendations (readiness review 2026-10-17, finding 6).
  */
+function hasVulns(vulns: VulnerabilityEntry[] | undefined): boolean {
+  return Boolean(vulns && vulns.length > 0);
+}
+
 function riskOf(entries: VulnerabilityEntry[]): UpgradeRecommendation["risk"] {
   const tiers = entries.map((v) => rankedSeverity(v));
   for (const t of ["critical", "high", "medium"] as const) if (tiers.includes(t)) return t;
@@ -430,6 +439,8 @@ async function executeStandalonePlanner(
   // the instance version is exact.
   const instanceKey = (ecosystem: string, name: string, version: string | null) =>
     `${ecosystem}\0${name}\0${version ?? "unknown"}`;
+  // Copies OSV.dev gave no answer for: their advisories are unknown, never "none" (r7).
+  const unanswered = new Set(vulnResult?.uncheckedDependencies ?? []);
   const vulnsByPackage = new Map<string, VulnerabilityEntry[]>();
   // "X is unmaintained" (RUSTSEC informational) is not a CVE and has nothing
   // to upgrade to; it was counted as "1 known CVE" on paste, ttf-parser and
@@ -504,7 +515,8 @@ async function executeStandalonePlanner(
     if (dep.deprecated) {
       if (risk === "low") risk = "high";
       // The registry's words, quoted and capped inside this server's sentence (blind audit round 5).
-      reasons.push(dep.deprecationMessage ? `Deprecated: ${quoteThirdParty(dep.deprecationMessage)}` : "Package is deprecated");
+      // The registry's words go to quoted_from_registry, never into this server's reason (r7).
+      reasons.push(`Package is deprecated${dep.deprecationMessage ? registryQuote(dep.name, dep.deprecationMessage) : ""}`);
     }
 
     // Check version distance: to the release this row may offer, not to a known-affected latest.
@@ -554,6 +566,17 @@ async function executeStandalonePlanner(
 
     // Every newer release is known-affected or withdrawn: the row says so (crossenv: remove it).
     if (noSafeUpgrade && offerNote) reasons.push(offerNote);
+    // r7: OSV.dev gave no answer for this copy. Its advisories are unknown: the row is listed, its
+    // risk is unknown (never the "low" an empty answer reads as), and the release it would move to
+    // was not confirmed, so it is named only in a NOT CHECKED reason, never in targetVersion.
+    const noAnswer = !(vulns && vulns.length > 0) && unanswered.has(instanceKey(dep.ecosystem, dep.name, dep.currentVersion));
+    if (noAnswer) {
+      risk = "unknown";
+      reasons.unshift(`NOT CHECKED: OSV.dev gave no answer for ${dep.name} ${dep.currentVersion ?? ""}`.trimEnd() + ` (${vulnResult?.uncheckedReason ?? "the query failed"}), so its advisories are not known; this is not a clean result`);
+    }
+    // A newer release offered without being confirmed free of the package's advisories (OSV.dev's
+    // batch query failed, or the check ran out of time) is named only in that reason (#80's rule).
+    const unconfirmedOffer = Boolean(offered && !hasVulns(vulns) && (!vet || !vet.checked) && targetVersion);
     // Skip if no upgrade needed (no vuln, not deprecated, not behind, no drift => no reasons)
     if (reasons.length === 0) continue;
     // The newer release it would have offered was replaced or could not be checked: said, never silent.
@@ -573,6 +596,11 @@ async function executeStandalonePlanner(
       targetVersion = null;
     }
 
+    if (unconfirmedOffer) {
+      reasons.unshift(unconfirmedTargetNote(dep.name, targetVersion, null));
+      if (offerNote && !reasons.includes(offerNote)) reasons.push(offerNote);
+      targetVersion = null;
+    }
     const upgradeType = upgradeTypeBetween(dep.currentVersion, targetVersion);
     // Drift is the only problem: the lockfile's version is the target, and
     // reinstalling it is the whole step.
@@ -588,7 +616,7 @@ async function executeStandalonePlanner(
             ? vet?.holding
               ? "remove_dependency"
               : "hold_current"
-            : targetVersion
+            : targetVersion || unconfirmedOffer
               ? "upgrade_direct"
               : "no_fix_available";
 
@@ -720,6 +748,8 @@ async function executeStandalonePlanner(
   await reconcileDirectTargets(limited, verifiedInputs, liveIntel);
   // A transitive fix that needs a major upgrade of what the project declares is breaking.
   settleTransitiveBreaking(limited);
+  // One command per move: two parents reached through one direct dependency name its upgrade once (r7).
+  dedupeParentCommands(limited);
   // A fix path through a private parent was never looked up: said first, never a proceed (upgrade-planner-private.ts).
   markPrivateParents(limited, (r) => fixPathInputs.get(r)?.sourceDirs ?? [], liveIntel);
   limited.sort(planOrder);
@@ -735,7 +765,10 @@ async function executeStandalonePlanner(
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
   const heldRows = limited.filter(heldUnclean);
-  const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r));
+  const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
+  // Rows whose advisories OSV.dev did not answer for, or whose newer release was not confirmed (r7).
+  const unknownRisk = limited.filter((r) => r.risk === "unknown").length;
+  const unconfirmedNewer = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && r.targetVersion === null && r.fixPathChecked === undefined && !heldUnclean(r)).length;
   const quickWins = upgrades.filter((r) => !r.breaking).length;
   const breakingChanges = upgrades.filter((r) => r.breaking).length;
   const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length;
@@ -778,6 +811,8 @@ async function executeStandalonePlanner(
     );
   }
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
+  if (unknownRisk > 0) parts.push(`${unknownRisk} NOT CHECKED: OSV.dev gave no answer for ${unknownRisk === 1 ? "it" : "them"}, so ${unknownRisk === 1 ? "its" : "their"} advisories are not known (risk "unknown", not low)`);
+  if (unconfirmedNewer > 0) parts.push(`${unconfirmedNewer} newer release${unconfirmedNewer !== 1 ? "s" : ""} NOT CHECKED against advisories, so no targetVersion is given (run dependency_check before writing one)`);
   if (noFix > 0) parts.push(`${noFix} vulnerable with no fixed release yet`);
   if (inactive > 0) parts.push(`${inactive} vulnerable only in code not built on this host`);
   const criticalCount = limited.filter((r) => r.risk === "critical").length;

@@ -47,6 +47,10 @@ export function parseGithubRepo(url: string | null | undefined): { owner: string
   if (!m) return null;
   const repo = m[2].replace(/\.git$/, "");
   if (!repo || m[1] === "." || repo === "." || repo === "..") return null;
+  // GitHub's own limits: an owner is at most 39 letters, digits and hyphens, a repository name at
+  // most 100 characters. A 5,000-character "owner" from a registry came back whole in
+  // github_fallback.how_to_enable (r7).
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(m[1]) || repo.length > 100) return null;
   return { owner: m[1], repo };
 }
 

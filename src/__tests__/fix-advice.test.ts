@@ -124,7 +124,7 @@ describe("fix targets", () => {
     const result = await scan();
     expect(result.vulnerable_packages[0]).toMatchObject({ package: "lodash", fixed_version: "4.18.1", fix_checked: "all_advisories" });
     // FX-H5: the withdrawn release is named in the registry's words.
-    expect(result.recommendations[0]).toMatch(/Upgrade lodash 4\.17\.15 → 4\.18\.1 .*4\.18\.0 is deprecated on npm \("Bad release\. Please use lodash@4\.17\.21 instead\."\); 4\.18\.1 is the smallest clean release/);
+    expect(result.recommendations[0]).toMatch(/Upgrade lodash 4\.17\.15 → 4\.18\.1 .*4\.18\.0 is deprecated on npm \(the registry's message is quoted in quoted_from_registry\); 4\.18\.1 is the smallest clean release/);
     expect(result.vulnerable_packages[0]).toMatchObject({ withheld: ["4.18.0"] });
   });
 
