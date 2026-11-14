@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { compiledIndirect, compiledRequirements, confinedInclude, normalizePythonName, parseGoMod, requirementOptions } from "./live/lockfile-parsers-pygo.js";
 import { readTextFile } from "./live/text-file.js";
+import { pushAll } from "./array-utils.js";
 
 /** The body of a TOML table (`[name]`) up to the next table header, or null. */
 export function tomlTable(content: string, name: string): string | null {
@@ -148,7 +149,7 @@ export function requirementNamesWithIncludes(file: string, root: string = path.d
   for (const { option, target } of requirementOptions(content)) {
     if (option !== "r") continue;
     const included = confinedInclude(path.dirname(file), target, root);
-    if (included) names.push(...requirementNamesWithIncludes(included, root, visited));
+    if (included) pushAll(names, requirementNamesWithIncludes(included, root, visited));
   }
   return [...new Set(names)];
 }

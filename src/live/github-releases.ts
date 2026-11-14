@@ -21,6 +21,8 @@
 import { CHANGELOG_PARSER_VERSION, isChangelogName, parseChangelog, type ChangelogSection, type VersionOrder } from "./changelog.js";
 import { ArchiveError, MAX_FILE_BYTES } from "./package-archive.js";
 import type { ChangelogResult, UpgradeNet } from "./upgrade-sources.js";
+import { pushAll } from "../array-utils.js";
+import { envFlag } from "../env-flags.js";
 
 export const GITHUB_CHANGELOG_ENV = "FOURDA_GITHUB_CHANGELOG";
 const CACHE_SOURCE = "upgrade-impact";
@@ -34,7 +36,7 @@ const USER_AGENT = "4da-mcp-server (https://4da.ai; upgrade_impact)";
 
 /** True when the user opted in: FOURDA_GITHUB_CHANGELOG is 1 / true / yes / on. */
 export function githubChangelogEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return /^(?:1|true|yes|on)$/i.test(String(env[GITHUB_CHANGELOG_ENV] ?? "").trim());
+  return envFlag(GITHUB_CHANGELOG_ENV, env);
 }
 
 /** `owner/repo` of a GitHub URL (https, git+https, git@, shorthand), or null. */
@@ -165,7 +167,7 @@ async function fetchReleases(
     if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`);
     const batch = (await res.json()) as GithubRelease[];
     if (!Array.isArray(batch)) throw new Error("GitHub API returned an unexpected releases payload");
-    out.push(...batch);
+    pushAll(out, batch);
     const reachedFrom = batch.some((r) => {
       const v = typeof r.tag_name === "string" ? versionFromTag(r.tag_name, pkg, tagPrefix) : null;
       return v !== null && stop(v);

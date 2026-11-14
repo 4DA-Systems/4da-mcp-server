@@ -62,6 +62,7 @@ import { projectCargoFeatures } from "./upgrade-impact-features.js";
 import { flagOldSyntax } from "./upgrade-impact-literals.js";
 import { nearestVersions, shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
 import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
+import { isOfflineMode } from "../env-flags.js";
 
 export interface UpgradeImpactParams {
   package: string;
@@ -562,7 +563,7 @@ export async function executeUpgradeImpact(
     net: createUpgradeNet(cacheFor(db)),
     projectRoot: path.resolve(root),
     installed,
-    offline: process.env.FOURDA_OFFLINE === "true" || (liveIntel !== null && !liveIntel.isEnabled()),
+    offline: isOfflineMode() || (liveIntel !== null && !liveIntel.isEnabled()),
     githubChangelog: githubChangelogEnabled(),
   });
   return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(analyze) : analyze();

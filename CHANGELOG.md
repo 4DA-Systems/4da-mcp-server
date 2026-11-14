@@ -74,6 +74,42 @@
   cache moves to `osv:v8`, fix-path facts to `fixpath:v16`, and
   upgrade_impact's registry index to `upgrade-impact:index:v2`.
 
+- **Pre-publish fixes (robustness and protocol, round 7).** A lockfile of
+  130,000 or more entries whose lookups went unanswered (OSV.dev down, or the
+  query budget spent) came back NOT CHECKED "the scan failed (Maximum call
+  stack size exceeded)": a list was spread into a function call. No array is
+  spread into a call any more, and `pnpm run check` refuses a new one; 200,000
+  npm, Yarn, pnpm and Bun entries with the network blocked are 200,000
+  unchecked, for the network's reason. One unauthenticated `--http` request
+  (`GET http://[`) ended the server; a request target that is not a URL is now
+  answered 400, anything a request handler throws is answered 500 without
+  stopping the server, and an error no request handled is logged on stderr in
+  either mode instead of ending the process (a closed stdout still ends it).
+  On stdio `{"jsonrpc":"2.0"}` and `{"jsonrpc":"2.0","id":77}` got no reply;
+  each now gets -32600, under its id when it has one. `FOURDA_OFFLINE=1` left
+  the server online (463 requests): every yes/no variable (`FOURDA_OFFLINE`,
+  `MCP_AUTH_REQUIRED`, `FOURDA_GITHUB_CHANGELOG`) is on for 1, true, yes or on
+  and off for 0, false, no or off, in any case; any other value is read as its
+  safe side (offline, authentication required, GitHub not asked) and said once
+  on stderr. The first call on a large lockfile blocked longer than 6.2.7: a
+  100,000-entry npm lockfile spent 6.2 s building a requested-by list that was
+  copied on every entry, and a 150,000-entry bun.lock 3.7 s dropping trailing
+  commas one character at a time. Both are linear now: npm 100,000 entries,
+  first call 12.9 s / 729 MB peak to 3.1 s / 503 MB; Bun 150,000 entries 10.8 s
+  / 1,725 MB to 4.3 s / 608 MB (`bench/lockfile-scale`). The fix-path rows a
+  call's time budget left unstarted are worked out after the call returns, so
+  a second scan of an unchanged project asks nothing (js-nest-npm3: 49
+  requests, then 0). `constructor`, `__proto__` and `toString` were accepted as
+  tool parameters ("the limit is function toString() { [native code] }"); only
+  a tool's own parameters are. Invalid params on `initialize`, `resources/read`
+  and `prompts/get` were answered -32603 Internal error; they are -32602.
+  HTTP served JSON-RPC batches that stdio refuses: a batch is refused the same
+  way (-32600) unless the request speaks 2025-03-26 or earlier, the revisions
+  that require a server to accept one. `--port 80abc` bound port 80 and
+  `--bogus` started the server: a port is a whole number from 1 to 65535 and an
+  unknown argument exits with the usage and code 2. A scan served from the
+  cache said `_meta.offline: null`; it is `false` (a boolean always), with
+  `osv_contacted: false` saying OSV.dev was not asked.
 - **Pre-publish fixes (scan speed, round 6).** On a 1,889-dependency npm
   project a vulnerability_scan with every answer cached took 3.7 s, and the
   server did not answer `ping` until it was done (6.2.7: 0.3 s); at 107,000

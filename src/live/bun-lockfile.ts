@@ -35,27 +35,59 @@ interface BunMeta {
   optionalDependencies?: Record<string, string>;
 }
 
-/** JSONC to JSON: drops trailing commas outside strings (bun.lock has no comments). */
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const COMMA = 0x2c;
+const CLOSE_BRACE = 0x7d;
+const CLOSE_BRACKET = 0x5d;
+const SPACE_LIKE = /\s/;
+
+function isSpace(code: number): boolean {
+  if (code === 0x20 || (code >= 0x09 && code <= 0x0d)) return true;
+  return code > 0x7f && SPACE_LIKE.test(String.fromCharCode(code));
+}
+
+/**
+ * JSONC to JSON: drops trailing commas outside strings (bun.lock has no comments).
+ *
+ * One pass that copies the text between dropped commas as slices. The earlier version appended one
+ * character at a time and ran a regex per character after a comma: 38 MB (150,000 entries) took
+ * most of a 10.9 s first call (pre-publish round 7).
+ */
 export function stripTrailingCommas(text: string): string {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      out += ch;
-      if (ch === "\\") out += text[++i] ?? "";
-      else if (ch === '"') inString = false;
+  const parts: string[] = [];
+  const n = text.length;
+  let start = 0;
+  let i = 0;
+  while (i < n) {
+    const code = text.charCodeAt(i);
+    if (code === QUOTE) {
+      // Skip the string: an escape takes the next character with it, whatever it is.
+      i++;
+      while (i < n) {
+        const c = text.charCodeAt(i);
+        if (c === BACKSLASH) i += 2;
+        else if (c === QUOTE) {
+          i++;
+          break;
+        } else i++;
+      }
       continue;
     }
-    if (ch === '"') inString = true;
-    if (ch === ",") {
+    if (code === COMMA) {
       let j = i + 1;
-      while (j < text.length && /\s/.test(text[j])) j++;
-      if (text[j] === "}" || text[j] === "]") continue;
+      while (j < n && isSpace(text.charCodeAt(j))) j++;
+      const next = j < n ? text.charCodeAt(j) : -1;
+      if (next === CLOSE_BRACE || next === CLOSE_BRACKET) {
+        parts.push(text.slice(start, i));
+        start = i + 1;
+      }
     }
-    out += ch;
+    i++;
   }
-  return out;
+  if (start === 0) return text;
+  parts.push(text.slice(start));
+  return parts.join("");
 }
 
 /** "next/@babel/core" -> ["next", "@babel/core"]: a scope and its name are one segment. */
@@ -104,14 +136,14 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
     const segments = keySegments(fromKey);
     for (let n = segments.length; n > 0; n--) {
       const candidate = [...segments.slice(0, n), dep].join("/");
-      if (candidate in packages) return candidate;
+      if (Object.hasOwn(packages, candidate)) return candidate;
     }
-    return dep in packages ? dep : null;
+    return Object.hasOwn(packages, dep) ? dep : null;
   };
 
   const reach = (roots: Iterable<string>): Set<string> => {
     const seen = new Set<string>();
-    const stack = [...roots].filter((name) => name in packages);
+    const stack = [...roots].filter((name) => Object.hasOwn(packages, name));
     while (stack.length > 0) {
       const key = stack.pop() as string;
       if (seen.has(key)) continue;

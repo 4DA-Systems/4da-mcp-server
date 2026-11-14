@@ -69,9 +69,7 @@ export class StdioGate extends Transform {
         id: null,
         error: {
           code: -32600,
-          message: Array.isArray(message)
-            ? "Invalid Request: JSON-RPC batches are not supported by MCP; send each request on its own line."
-            : "Invalid Request: a message must be a JSON object.",
+          message: Array.isArray(message) ? batchRefusedMessage("stdio") : "Invalid Request: a message must be a JSON object.",
         },
       });
       return;
@@ -89,10 +87,16 @@ export class StdioGate extends Transform {
     const isMethod = typeof message.method === "string";
     const hasId = "id" in message && message.id !== undefined;
     const badId = (isMethod || hasMethod) && hasId && !isRequestId(message.id);
+    // A message with no "method" that is not a response either (`{"jsonrpc":"2.0"}`,
+    // `{"jsonrpc":"2.0","id":77}`) was dropped by the SDK's schema with a Zod dump on stderr and
+    // no reply (pre-publish round 7): -32600, under its id when it has a usable one, else null.
+    const isResponse = "result" in message || "error" in message;
     const invalid =
       message.jsonrpc !== "2.0"
         ? `Invalid Request: "jsonrpc" must be "2.0" (got ${JSON.stringify(message.jsonrpc ?? null).slice(0, 40)}).`
-        : hasMethod && !isMethod
+        : !hasMethod && !isResponse
+          ? 'Invalid Request: a message needs a "method" (a request or a notification), or a "result" or an "error" (a response).'
+          : hasMethod && !isMethod
           ? `Invalid Request: "method" must be a string (got ${message.method === null ? "null" : Array.isArray(message.method) ? "an array" : `a ${typeof message.method === "object" ? "JSON object" : typeof message.method}`}).`
           : badId && message.id === null
             ? "Invalid Request: a request id must be a string or a number, never null (MCP); omit id only for a notification."
@@ -135,6 +139,11 @@ export class StdioGate extends Transform {
     }
     this.push(`${line}\n`);
   }
+}
+
+/** The refusal of a JSON-RPC batch, the same on stdio and HTTP (http-transport.ts). */
+export function batchRefusedMessage(transport: "stdio" | "http"): string {
+  return `Invalid Request: JSON-RPC batches are not supported by MCP since protocol revision 2025-06-18; send each request ${transport === "stdio" ? "on its own line" : "in its own HTTP request"}.`;
 }
 
 function parseError(detail: string): Record<string, unknown> {

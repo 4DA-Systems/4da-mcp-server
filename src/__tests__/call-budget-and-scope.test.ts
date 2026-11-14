@@ -501,7 +501,7 @@ describe("nothing checked is never a good score, an online claim, or a silent pr
     expect(npm.totalDeps).toBe(2);
   });
 
-  it("a scan served from the cache does not claim to be online: `offline` is null and it says OSV.dev was not contacted", async () => {
+  it("a scan served from the cache is complete (`offline: false`, a boolean) and says OSV.dev was not contacted (pre-publish round 7)", async () => {
     npmProject();
     const network = cleanNetwork();
     const li = liveFor();
@@ -514,12 +514,13 @@ describe("nothing checked is never a good score, an online claim, or a silent pr
     const second = (await executeVulnerabilityScan(null, { response_format: "detailed" }, li)) as Record<string, any>;
     expect(network.requests.filter((u) => u.includes("osv.dev")).length).toBe(before);
     expect(second._meta.osv_cached).toBe(true);
-    expect(second._meta.offline).toBeNull();
+    expect(second._meta.offline).toBe(false);
     expect(second._meta.osv_contacted).toBe(false);
     expect(second._meta.offline_note).toMatch(/^Served from the advisory cache .* OSV\.dev was not contacted in this call, so whether it is reachable now is not known\./);
     // The concise form carries the same.
     const concise = (await executeVulnerabilityScan(null, {}, li)) as Record<string, any>;
-    expect(concise._meta.offline).toBeNull();
+    expect(concise._meta.offline).toBe(false);
+    expect(concise._meta.osv_contacted).toBe(false);
     // Asked again with the network still dead, it says so.
     const forced = (await executeVulnerabilityScan(null, { force_refresh: true, response_format: "detailed" }, li)) as Record<string, any>;
     expect(forced.summary).toMatch(/^NOT CHECKED/);

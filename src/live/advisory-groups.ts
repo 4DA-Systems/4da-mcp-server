@@ -11,6 +11,7 @@
 import { isMaintenanceNotice } from "./maintenance.js";
 import { isMalware } from "./malware.js";
 import type { VulnerabilityEntry } from "./types.js";
+import { pushAll } from "../array-utils.js";
 
 const RANK: Record<string, number> = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
 
@@ -34,7 +35,7 @@ export function groupAdvisories(entries: readonly VulnerabilityEntry[] | undefin
     const merged: AdvisoryGroup = { ids: new Set(ids), best: v, members: [v] };
     for (const g of hit) {
       for (const id of g.ids) merged.ids.add(id);
-      merged.members.push(...g.members);
+      pushAll(merged.members, g.members);
       if ((RANK[g.best.severity] ?? 0) > (RANK[merged.best.severity] ?? 0)) merged.best = g.best;
     }
     groups = [...groups.filter((g) => !hit.includes(g)), merged];

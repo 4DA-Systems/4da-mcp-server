@@ -59,6 +59,7 @@ import {
   type WisdomEntry,
   type WisdomRecallMode,
 } from "./briefing-wisdom.js";
+import { maxOf, pushAll } from "../array-utils.js";
 
 // ============================================================================
 // Types
@@ -458,7 +459,7 @@ export async function executeWhatShouldIKnow(
       version_confirmed: false,
     });
   }
-  if (scan) advisories.push(...projectAdvisories(scan, new Set(packages.map((p) => p.name))));
+  if (scan) pushAll(advisories, projectAdvisories(scan, new Set(packages.map((p) => p.name))));
 
   // ── 3. Decisions: windows, conflicts, wisdom ──────────────────────────
   const decisionWindows = getOpenDecisionWindows(db)
@@ -640,7 +641,7 @@ function describePackage(
   // Without a stated "from", the furthest installed copy sets the distance.
   const froms = pkg.requested_from ? [pkg.requested_from] : pkg.installed.length > 0 ? pkg.installed : [null];
   const distances = froms.map((f) => majorsCrossedLoose(f, pkg.requested_to)).filter((d): d is number => d !== null);
-  let majors: number | null = distances.length > 0 ? Math.max(...distances) : null;
+  let majors: number | null = distances.length > 0 ? maxOf(distances) : null;
   let latest: TaskDependency["latest"];
   if (latestByPackage) {
     const fact = latestByPackage.get(`${pkg.ecosystem}\0${pkg.name}`) ?? { version: null };

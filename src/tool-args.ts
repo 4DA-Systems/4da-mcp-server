@@ -71,25 +71,32 @@ const STRING_LIMITS: Record<string, number> = {
 
 /** The message for a string argument over its limit, or null. `where` names it ("dependency_check: items[0].to"). */
 export function lengthProblem(where: string, name: string, value: string): string | null {
-  const max = STRING_LIMITS[name] ?? MAX_TEXT_ARG_LENGTH;
+  const max = (Object.hasOwn(STRING_LIMITS, name) ? STRING_LIMITS[name] : undefined) ?? MAX_TEXT_ARG_LENGTH;
   if (value.length <= max) return null;
   return `${where} is ${value.length.toLocaleString("en-US")} characters long; the limit is ${max.toLocaleString("en-US")}. It starts ${JSON.stringify(value.slice(0, 40))}.`;
 }
 
-/** An actionable message for the first problem with `args`, or null when they are valid. */
+/**
+ * An actionable message for the first problem with `args`, or null when they are valid.
+ *
+ * Own properties only, on both sides: `properties[name]` found Object.prototype's members, so
+ * `constructor`, `__proto__` and `toString` passed as known parameters and the length check
+ * answered "the limit is function toString() { [native code] }" (pre-publish round 7).
+ */
 export function validateToolArgs(toolName: string, schema: InputSchema, args: Record<string, unknown>): string | null {
   const properties = (schema.properties ?? {}) as Record<string, PropertySchema>;
   const known = Object.keys(properties);
+  const own = (name: string): unknown => (Object.hasOwn(args, name) ? args[name] : undefined);
 
   for (const name of schema.required ?? []) {
-    if (args[name] === undefined || args[name] === null || args[name] === "") {
+    if (own(name) === undefined || own(name) === null || own(name) === "") {
       return `${toolName}: missing required parameter "${name}". Required: ${(schema.required ?? []).join(", ")}.`;
     }
   }
 
   for (const [name, value] of Object.entries(args)) {
-    const prop = properties[name];
-    if (!prop) {
+    const prop = Object.hasOwn(properties, name) ? properties[name] : undefined;
+    if (!prop || typeof prop !== "object") {
       return `${toolName}: unknown parameter "${name}". Valid parameters: ${known.join(", ") || "(none)"}.`;
     }
     if (value === undefined || value === null) continue;
@@ -143,7 +150,10 @@ export function cleanStrings<T>(value: T): T {
   if (Array.isArray(value)) return value.map((v) => cleanStrings(v)) as T;
   if (value && typeof value === "object" && (value as object).constructor === Object) {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = cleanStrings(v);
+    // defineProperty: an own "__proto__" key (JSON.parse makes one) stays a key, never the prototype.
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      Object.defineProperty(out, k, { value: cleanStrings(v), enumerable: true, writable: true, configurable: true });
+    }
     return out as T;
   }
   return value;

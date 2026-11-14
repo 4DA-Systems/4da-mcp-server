@@ -508,11 +508,20 @@ export function readPackageLock(lock: {
 
   if (lock.packages) {
     // What asked for each name, to tell a URL dependency from a registry with tarball paths of its own.
+    // Appended in place: copying the list on every request made a name requested by 50,000 packages
+    // cost 50,000²/2 copies (100,000 entries: 6.2 s of a 7.1 s read; pre-publish round 7).
     const requested = new Map<string, string[]>();
     for (const entry of Object.values(lock.packages)) {
       for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const) {
-        for (const [name, spec] of Object.entries(entry?.[field] ?? {})) {
-          if (typeof spec === "string") requested.set(name, [...(requested.get(name) ?? []), spec]);
+        const specs = entry?.[field];
+        if (!specs || typeof specs !== "object") continue;
+        for (const name in specs) {
+          if (!Object.hasOwn(specs, name)) continue;
+          const spec = specs[name];
+          if (typeof spec !== "string") continue;
+          const list = requested.get(name);
+          if (list) list.push(spec);
+          else requested.set(name, [spec]);
         }
       }
     }
