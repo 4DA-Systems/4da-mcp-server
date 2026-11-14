@@ -78,15 +78,34 @@ export class StdioGate extends Transform {
     }
     // A message that is not JSON-RPC 2.0, or a request whose id is null (MCP: "MUST NOT be null"):
     // the SDK dropped both without a word (blind audit round 3).
+    // A request whose id is an object, an array or a boolean was dropped the same way (blind audit
+    // round 4): JSON-RPC allows only a string or a number, and the answer carries id null since the
+    // id cannot be echoed.
+    const isMethod = typeof message.method === "string";
+    const badId = isMethod && "id" in message && message.id !== undefined && typeof message.id !== "string" && typeof message.id !== "number";
     const invalid =
       message.jsonrpc !== "2.0"
         ? `Invalid Request: "jsonrpc" must be "2.0" (got ${JSON.stringify(message.jsonrpc ?? null).slice(0, 40)}).`
-        : typeof message.method === "string" && "id" in message && message.id === null
+        : badId && message.id === null
           ? "Invalid Request: a request id must be a string or a number, never null (MCP); omit id only for a notification."
-          : null;
+          : badId
+            ? `Invalid Request: a request id must be a string or a number (got ${Array.isArray(message.id) ? "an array" : `a ${typeof message.id === "object" ? "JSON object" : typeof message.id}`}).`
+            : null;
     if (invalid) {
       const id = typeof message.id === "string" || typeof message.id === "number" ? message.id : null;
       this.reply({ jsonrpc: "2.0", id, error: { code: -32600, message: invalid } });
+      return;
+    }
+    // A request with "params": null (or a string, a number, an array) got no answer either (blind
+    // audit round 4): MCP params are an object, or left out.
+    const isRequest = isMethod && (typeof message.id === "string" || typeof message.id === "number");
+    if (isRequest && "params" in message && message.params !== undefined && !isObject(message.params)) {
+      const got = message.params === null ? "null" : Array.isArray(message.params) ? "an array" : `a ${typeof message.params}`;
+      this.reply({
+        jsonrpc: "2.0",
+        id: message.id as string | number,
+        error: { code: -32602, message: `Invalid params: MCP params must be a JSON object, or left out (got ${got}).` },
+      });
       return;
     }
     if (!this.opened && typeof message.method === "string") {

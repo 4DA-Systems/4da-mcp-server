@@ -59,6 +59,37 @@ describe("the stdio gate", () => {
     expect(passed.map((l) => JSON.parse(l).method)).toEqual(["initialize", "notifications/initialized"]);
   });
 
+  it("answers a request whose id is an object, an array or a boolean with -32600 and id null (blind audit round 4)", async () => {
+    const { passed, replies } = await run([
+      req(3, "initialize"),
+      JSON.stringify({ jsonrpc: "2.0", id: { a: 1 }, method: "ping" }),
+      JSON.stringify({ jsonrpc: "2.0", id: [1], method: "tools/list" }),
+      JSON.stringify({ jsonrpc: "2.0", id: true, method: "ping" }),
+      JSON.stringify({ jsonrpc: "2.0", id: "s-1", method: "ping" }),
+    ]);
+    expect(replies).toEqual([
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining("got a JSON object") } },
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining("got an array") } },
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining("got a boolean") } },
+    ]);
+    expect(passed.map((l) => JSON.parse(l).id)).toEqual([3, "s-1"]);
+  });
+
+  it('answers a request with "params": null, a string, a number or an array with -32602 under its own id (blind audit round 4)', async () => {
+    const line = (id: number, params: unknown) => JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params });
+    const { passed, replies } = await run([
+      req(1, "initialize"),
+      line(2, null),
+      line(3, "x"),
+      line(4, 5),
+      line(5, [1]),
+      JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/list" }),
+      line(7, {}),
+    ]);
+    expect(replies).toEqual([2, 3, 4, 5].map((id) => ({ jsonrpc: "2.0", id, error: { code: -32602, message: expect.stringContaining("params must be a JSON object") } })));
+    expect(passed.map((l) => JSON.parse(l).id)).toEqual([1, 6, 7]);
+  });
+
   it("refuses a request before initialize, then passes everything after it", async () => {
     const { passed, replies } = await run([req(1, "tools/call", { name: "x" }), req(2, "ping"), req(3, "initialize"), req(4, "tools/call", { name: "x" })]);
     expect(replies).toEqual([{ jsonrpc: "2.0", id: 1, error: { code: -32600, message: expect.stringContaining("Server not initialized") } }]);
@@ -102,5 +133,24 @@ describe.skipIf(!fs.existsSync(serverEntry))("the built server over stdio", () =
     const lines = out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: unknown; error?: { code: number } });
     expect(lines.find((l) => l.id === null)?.error?.code).toBe(-32700);
     expect(lines.find((l) => l.id === 7)?.error?.code).toBe(-32600);
+  }, 60_000);
+
+  it('answers "params": null and an object id on stdout (blind audit round 4)', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "4da-gate-"));
+    const env = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
+    delete env.FOURDA_DB_PATH;
+    const child = spawn(process.execPath, [serverEntry], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    const init = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } };
+    child.stdin.write(`${req(1, "initialize", init)}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: null })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: { x: 1 }, method: "ping" })}\n`);
+    const deadline = Date.now() + 30_000;
+    while (out.split("\n").filter(Boolean).length < 3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    child.kill();
+    const lines = out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: unknown; error?: { code: number } });
+    expect(lines.find((l) => l.id === 2)?.error?.code).toBe(-32602);
+    expect(lines.find((l) => l.id === null)?.error?.code).toBe(-32600);
   }, 60_000);
 });
