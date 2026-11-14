@@ -29,6 +29,11 @@ import { dispatchTool } from "../tool-dispatch.js";
 import { TOOL_REGISTRY } from "../schema-registry.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 
+// No real cargo: whether a crate builds on this host is beside the point here, and `cargo tree`
+// against a fixture CARGO_HOME is slow and machine-dependent. Unknown (null) is what the server
+// uses when cargo is absent.
+vi.mock("../live/cargo-platform.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../live/cargo-platform.js")>()), activeCratesForHost: () => null }));
+
 let scratch: string;
 let home: string;
 let sent: string[];
