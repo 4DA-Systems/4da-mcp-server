@@ -2,6 +2,21 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (briefing, round 6).** In a project with package.json,
+  package-lock.json and requirements.txt, what_should_i_know said
+  `safe_to_delegate` for "add ctx", "add ctx, then refactor the handler",
+  "install the ctx module" and "add `ctx`": it looked up npm's `ctx` (clean)
+  and never PyPI's, which is malware (PYSEC-2022-199). A package the task names
+  without saying where it comes from is now checked in every ecosystem the
+  project uses, at once and within the same budget, and the worst answer
+  stands (`also_checked` lists the others); "pip install ctx", "add ctx to
+  requirements.txt", "npm i ctx" and "cargo add" still check only the one
+  named. "we need X", "we'll need X", "bring in X" and "pull in X" read like
+  "add X" ("we need electorn for the desktop build" is electron's malware
+  typo-squat). A bare name one or two edits from a popular PyPI project is a
+  package in a project that installs from PyPI ("add colourama", "add
+  jeIlyfish", "add python3-dateutil" read as prose and said `safe_to_delegate`;
+  now `review_needed` with "did you mean").
 - **Pre-publish fixes (briefing, round 5).** what_should_i_know said
   `safe_to_delegate` for tasks that add malware: "add ctx", "add ctx to
   requirements.txt", "add extrahtml to requirements.txt" and "add logger-libs"

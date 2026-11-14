@@ -107,7 +107,7 @@ let ASKED: string[];
 function stub() {
   vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
-    ASKED.push(url);
+    ASKED.push(init?.body ? `${url} ${String(init.body)}` : url);
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
     // OSV answers by ecosystem and name, as the real one does.
     const recordsFor = (name: string, ecosystem?: string) => OSV.filter((v) => v.affected?.some((a) => a.package?.name === name && (!ecosystem || a.package?.ecosystem === ecosystem)));
@@ -382,5 +382,142 @@ describe("round 5: a task that adds malware is never safe_to_delegate", () => {
     REGISTRY_DOWN = true;
     const down = await executeWhatShouldIKnow(db, { task: "add frobnicator" }, intel());
     expect(down.delegation_assessment.level).not.toBe("safe_to_delegate");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Black-box audit of 60c9edc (2026-11-14): a bare name in a project of several ecosystems
+// ---------------------------------------------------------------------------------------------
+
+/** package.json + package-lock.json + requirements.txt: more npm than PyPI, so npm was the only guess. */
+const MIXED = [dep("express", "5.1.0"), dep("lodash", "4.17.21"), dep("requests", "2.32.3", "PyPI")];
+/** Was `name` looked up in this ecosystem (its registry, or OSV.dev under that ecosystem)? */
+const askedFor = (name: string, ecosystem: "npm" | "PyPI") =>
+  ASKED.some((u) =>
+    ecosystem === "npm"
+      ? u === `https://registry.npmjs.org/${name}` || new RegExp(`"name":"${name}","ecosystem":"npm"|"ecosystem":"npm","name":"${name}"`).test(u)
+      : u.startsWith(`https://pypi.org/pypi/${name}/`) || new RegExp(`"name":"${name}","ecosystem":"PyPI"|"ecosystem":"PyPI","name":"${name}"`).test(u),
+  );
+
+describe("a name the task gives no ecosystem for is checked in every ecosystem the project uses", () => {
+  beforeEach(() => {
+    // npm's ctx is an ordinary package; PyPI's was taken over and replaced with malware.
+    NPM.ctx = { latest: "0.2.6", versions: { "0.2.6": "2016-03-01T00:00:00.000Z" } };
+    OSV.push(mal("ctx", "PyPI", "GHSA-4g82-3jcr-q52w"));
+  });
+
+  it.each([
+    "add ctx",
+    "add Ctx",
+    "add  ctx",
+    "add ctx, then refactor the handler",
+    "install the ctx module",
+    "add `ctx`",
+    "we need ctx for the config",
+    "we'll need ctx",
+    "bring in ctx",
+    "pull in ctx",
+    "use ctx for the config",
+  ])("an npm + Python project: %s is human_only (it was safe_to_delegate: only npm's clean ctx was asked)", async (task) => {
+    const r = await executeWhatShouldIKnow(db, { task }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    expect(r.delegation_assessment.level).toBe("human_only");
+    expect(r.new_packages).toMatchObject([{ name: "ctx", ecosystem: "PyPI", verdict: "avoid", malicious: true, also_checked: [{ ecosystem: "npm", verdict: "proceed" }] }]);
+    expect(askedFor("ctx", "PyPI")).toBe(true);
+    expect(askedFor("ctx", "npm")).toBe(true);
+  });
+
+  it.each([
+    ["npm i ctx", "npm"],
+    ["npm install ctx", "npm"],
+    ["add ctx to package.json", "npm"],
+    ["pip install ctx", "PyPI"],
+    ["add ctx to requirements.txt", "PyPI"],
+  ] as const)("a task that names the ecosystem is checked there only: %s", async (task, ecosystem) => {
+    const r = await executeWhatShouldIKnow(db, { task }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    expect(r.new_packages).toHaveLength(1);
+    expect(r.new_packages![0].ecosystem).toBe(ecosystem);
+    expect(r.new_packages![0]).not.toHaveProperty("also_checked");
+    expect(askedFor("ctx", ecosystem === "npm" ? "PyPI" : "npm")).toBe(false);
+    expect(r.delegation_assessment.level).toBe(ecosystem === "npm" ? "safe_to_delegate" : "human_only");
+  });
+
+  it("a clean name in the same project is judged as before: safe_to_delegate, the other registry's miss listed", async () => {
+    const r = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    expect(r.new_packages).toMatchObject([{ name: "left-pad", ecosystem: "npm", verdict: "proceed", also_checked: [{ ecosystem: "PyPI", verdict: "not_found" }] }]);
+    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    // A bare word no registry has and no malware record covers is still prose, in every ecosystem.
+    const prose = await executeWhatShouldIKnow(db, { task: "add frobnicator" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    expect(prose.new_packages).toBeUndefined();
+    expect(prose.delegation_assessment.level).toBe("safe_to_delegate");
+  });
+
+  it("a check that could not run in one ecosystem is never outvoted by a miss in another", async () => {
+    REGISTRY_DOWN = true;
+    const r = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    expect(r.new_packages).toMatchObject([{ name: "left-pad", verdict: "unknown" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
+  });
+
+  it("a name private in any ecosystem is looked up in none of them", async () => {
+    const r = await executeWhatShouldIKnow(
+      db,
+      { task: "add ctx-vault" },
+      intel(READY_SCAN, { getResolvedDeps: () => MIXED, privateReason: (eco: string, name: string) => (eco === "PyPI" && name.toLowerCase() === "ctx-vault" ? "private by pip --index-url" : null) }),
+    );
+    expect(r.new_packages).toBeUndefined();
+    expect(ASKED.some((u) => u.includes("ctx-vault"))).toBe(false);
+  });
+});
+
+describe("dependency phrasings and PyPI typo-squats (black-box audit of 60c9edc, 2026-11-14)", () => {
+  it.each([
+    ["we need electorn for the desktop build", "electorn"],
+    ["we'll need electorn", "electorn"],
+    ["need electorn", "electorn"],
+    ["bring in electorn", "electorn"],
+    ["pull in electorn", "electorn"],
+  ])("%s reads %s as a package", (task, name) => {
+    expect(detectNewPackages(task, DEPS).map((p) => p.name)).toEqual([name]);
+  });
+
+  it('"we need electorn for the desktop build" is review_needed: did you mean electron? (it was safe_to_delegate)', async () => {
+    const r = await executeWhatShouldIKnow(db, { task: "we need electorn for the desktop build" }, intel());
+    expect(r.new_packages).toMatchObject([{ name: "electorn", did_you_mean: "electron" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
+  });
+
+  it.each([
+    ["add colourama", "colourama", "colorama"],
+    ["add jeIlyfish", "jeilyfish", "jellyfish"],
+    ["add python3-dateutil", "python3-dateutil", "python-dateutil"],
+  ])("%s is review_needed in a project that installs from PyPI: did you mean the popular project? (it read as prose)", async (task, name, meant) => {
+    for (const deps of [MIXED, PY]) {
+      const r = await executeWhatShouldIKnow(db, { task }, intel(READY_SCAN, { getResolvedDeps: () => deps }));
+      // npm reads names in lower case, PyPI as written: the same name either way.
+      expect(r.new_packages).toMatchObject([{ name: expect.stringMatching(new RegExp(`^${name}$`, "i")), ecosystem: "PyPI", verdict: "unknown", did_you_mean: meant }]);
+      expect(r.delegation_assessment.level).toBe("review_needed");
+    }
+  });
+
+  it.each([
+    "add tests",
+    "add logging to the handler",
+    "add tests for the parser",
+    "we need to refactor the auth flow",
+    "we need better error messages",
+    "we need more tests",
+    "need help with the build",
+    "we'll need a migration for the users table",
+    "pull in the latest main",
+    "pull in upstream fixes",
+    "bring in the changes from main",
+    "add docstrings",
+    "add type hints",
+    "we need faster builds",
+    "add tools for debugging",
+  ])("ordinary work names nothing to look up: %s", (task) => {
+    expect(detectNewPackages(task, MIXED)).toEqual([]);
+    expect(detectNewPackages(task, PY)).toEqual([]);
+    expect(detectNewPackages(task, DEPS)).toEqual([]);
   });
 });
