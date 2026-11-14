@@ -31,12 +31,14 @@ function packument(name: string, versions: string[], latest: string) {
 const ADVISORIES: Record<string, { id: string; fixed: string; vulnerable: string[] }> = {
   lodash: { id: "GHSA-test-lodash", fixed: "4.17.21", vulnerable: ["4.17.20"] },
   axios: { id: "GHSA-test-axios", fixed: "0.21.2", vulnerable: ["0.21.1"] },
+  // The flatmap-stream compromise (GHSA-mh6f-8j2x-4483): critical.
+  "event-stream": { id: "GHSA-test-event-stream", fixed: "4.0.0", vulnerable: ["3.3.6"] },
 };
 const record = (name: string) => ({
   id: ADVISORIES[name].id,
   modified: "2026-01-01T00:00:00Z",
   summary: `${name} prototype pollution`,
-  database_specific: { severity: "HIGH" },
+  database_specific: { severity: name === "event-stream" ? "CRITICAL" : "HIGH" },
   affected: [{ package: { ecosystem: "npm", name }, ranges: [{ type: "SEMVER", events: [{ introduced: "0" }, { fixed: ADVISORIES[name].fixed }] }] }],
 });
 
@@ -57,6 +59,7 @@ beforeEach(() => {
   const docs: Record<string, unknown> = {
     lodash: packument("lodash", ["4.17.20", "4.17.21", "4.18.1"], "4.18.1"),
     axios: packument("axios", ["0.21.1", "0.21.2", "1.6.0"], "1.6.0"),
+    "event-stream": packument("event-stream", ["3.3.4", "3.3.6", "4.0.0", "4.0.1"], "4.0.1"),
   };
   vi.stubGlobal(
     "fetch",
@@ -143,6 +146,16 @@ describe("the version a task names is judged, at that version", () => {
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
+  it.each(["add event-stream version 3.3.6", "install event-stream 3.3.6"])(
+    '"%s": a release a critical advisory affects is a human call, never delegated (blind audit 2026-11-14, F4)',
+    async (task) => {
+      const result = await brief(task, { react: "18.2.0" });
+      expect(result.requested_versions?.find((r) => r.name === "event-stream")).toMatchObject({ to: "3.3.6", verdict: "avoid", critical: ["GHSA-test-event-stream"] });
+      expect(result.delegation_assessment.level).toBe("human_only");
+      expect(result.delegation_assessment.reason).toContain("GHSA-test-event-stream");
+    },
+  );
+
   it('"upgrade lodash to 4.17.21" from an installed 4.17.20: judged as that move, and it clears', async () => {
     const result = await brief("upgrade lodash to 4.17.21", { lodash: "4.17.20" });
     expect(result.requested_versions?.find((r) => r.name === "lodash")).toMatchObject({ to: "4.17.21", from: "4.17.20", verdict: "proceed" });
@@ -161,6 +174,11 @@ describe("the forms a task names a version in", () => {
     ["bump axios from 0.21.1 to 1.6.0", [dep("axios", "0.21.1")], { name: "axios", ecosystem: "npm", to: "1.6.0", from: "0.21.1" }],
     ["pin serde 1.0.200 in Cargo.toml", [dep("serde", "1.0.150", "crates.io")], { name: "serde", ecosystem: "crates.io", to: "1.0.200", from: "1.0.150" }],
     ["go get golang.org/x/net@v0.23.0", [], { name: "golang.org/x/net", ecosystem: "Go", to: "v0.23.0" }],
+    // blind audit 2026-11-14, F4: "version X" wording was not read, and latest was judged instead.
+    ["add event-stream version 3.3.6", [], { name: "event-stream", ecosystem: "npm", to: "3.3.6" }],
+    ["Add the package `event-stream` version 3.3.6 to package.json", [], { name: "event-stream", ecosystem: "npm", to: "3.3.6" }],
+    ["set lodash version to 4.17.20", [dep("lodash", "4.17.21")], { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.17.21" }],
+    ["use version 4.17.20 of lodash", [], { name: "lodash", ecosystem: "npm", to: "4.17.20" }],
   ])("%s", (task, deps, expected) => {
     expect(detectRequestedVersions(task, deps as ResolvedDependency[])[0]).toEqual(expected);
   });

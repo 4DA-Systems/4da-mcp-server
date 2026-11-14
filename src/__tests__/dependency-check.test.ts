@@ -426,3 +426,17 @@ describe("decide: a stronger verdict never hides an unchecked signal", () => {
     expect(out.reason).toMatch(/NOT CHECKED: advisories: lookup failed/);
   });
 });
+
+describe("decide: an avoid never hides a review finding (blind audit 2026-11-14)", () => {
+  it("time 0.3.8: yanked (avoid) and RUSTSEC-2026-0009 (review) are both in the reason", () => {
+    const out = decide([
+      { id: "advisories", effect: "review", evidence: "RUSTSEC-2026-0009 (medium) affects 0.3.8" },
+      { id: "yanked_or_deprecated", effect: "avoid", evidence: "0.3.8 was yanked from the registry" },
+      { id: "release_age", effect: "proceed", evidence: "old enough" },
+    ] as never);
+    expect(out.verdict).toBe("avoid");
+    expect(out.reason).toContain("yanked_or_deprecated: 0.3.8 was yanked");
+    expect(out.reason).toContain("advisories: RUSTSEC-2026-0009");
+    expect(out.reason).not.toContain("old enough");
+  });
+});

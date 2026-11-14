@@ -35,7 +35,20 @@
   mentions is never looked up under a guessed ecosystem when the project marks
   it private in any ecosystem ("bump omega-internal-risk to 3.2.0", private by
   a pip `--index-url`, was guessed npm and sent to OSV.dev and the npm registry;
-  black-box re-run 2026-11-14). No `_meta.privacy`
+  black-box re-run 2026-11-14). A private name is also recognised in every form
+  an agent may write it: `npm:acme-x`, `acme-x@1.0.0`, percent-encoded, with an
+  invisible character, as a registry URL, `omega[extra]`, `omega==3.2.0`, and a
+  GOPRIVATE module with a capitalised host (each reached the network; blind
+  audit 2026-11-14). Deciding which names are private is now linear: a
+  40,000-dependency tree took 34 s with the server unresponsive, now under
+  0.1 s. The briefing reads "add event-stream version 3.3.6", "set lodash
+  version to 4.17.20" and "version X of name", and a task that writes a release
+  a critical advisory affects is `human_only` (event-stream 3.3.6 came back
+  `safe_to_delegate`). `reason` carries every review finding beside an avoid
+  (time 0.3.8 named the yank but not RUSTSEC-2026-0009), and no longer says no
+  release in a range is clean while answering `proceed` on one. A JSON-RPC batch
+  array, or a line that is not a JSON object, gets `-32600` instead of silence.
+  The README says the Go proxy is asked for `.mod` as well as `.info`. No `_meta.privacy`
   says private names are sent any more (vulnerability_scan still said
   "private names included"), and a test holds every one to the README. One
   shared cleaning for third-party text (changelogs, OSV summaries, deprecation

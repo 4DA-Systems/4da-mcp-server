@@ -60,6 +60,22 @@ export class StdioGate extends Transform {
       this.reply(parseError(error instanceof Error ? error.message : String(error)));
       return;
     }
+    // A JSON-RPC batch (an array), or JSON that is no message at all: MCP has not carried batches
+    // since 2025-06-18, and the SDK dropped such a line without a word, so a client waited for a
+    // reply that never came (blind audit 2026-11-14).
+    if (!isObject(message)) {
+      this.reply({
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32600,
+          message: Array.isArray(message)
+            ? "Invalid Request: JSON-RPC batches are not supported by MCP; send each request on its own line."
+            : "Invalid Request: a message must be a JSON object.",
+        },
+      });
+      return;
+    }
     if (!this.opened && isObject(message) && typeof message.method === "string") {
       const method = message.method;
       const claimed = isObject(message.params) && isObject(message.params._meta) && typeof message.params._meta[PROTOCOL_CLAIM] === "string";

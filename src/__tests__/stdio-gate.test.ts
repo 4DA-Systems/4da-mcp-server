@@ -33,6 +33,16 @@ describe("the stdio gate", () => {
     expect(replies).toEqual([{ jsonrpc: "2.0", id: null, error: { code: -32700, message: expect.stringContaining("Parse error") } }]);
   });
 
+  it("answers a JSON-RPC batch, or JSON that is no message, with -32600 and passes nothing on (blind audit 2026-11-14)", async () => {
+    const { passed, replies } = await run([JSON.stringify([{ jsonrpc: "2.0", id: 1, method: "ping" }]), "5", "null"]);
+    expect(passed).toEqual([]);
+    expect(replies).toEqual([
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining("batches are not supported") } },
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining("must be a JSON object") } },
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining("must be a JSON object") } },
+    ]);
+  });
+
   it("refuses a request before initialize, then passes everything after it", async () => {
     const { passed, replies } = await run([req(1, "tools/call", { name: "x" }), req(2, "ping"), req(3, "initialize"), req(4, "tools/call", { name: "x" })]);
     expect(replies).toEqual([{ jsonrpc: "2.0", id: 1, error: { code: -32600, message: expect.stringContaining("Server not initialized") } }]);

@@ -36,6 +36,8 @@ export interface RequestedVersionFinding extends RequestedVersion {
   /** The safe releases dependency_check names, when it names any. */
   safe?: { smallest: string | null; newest: string | null };
   malicious: boolean;
+  /** Critical advisories that affect exactly this release (event-stream 3.3.6: GHSA-mh6f-8j2x-4483). */
+  critical?: string[];
 }
 
 const MAX_REQUESTED = 5;
@@ -104,6 +106,21 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
     }
     const next = clean(raw[i + 1] ?? "");
     const after = clean(raw[i + 2] ?? "");
+    // "name version 1.2.3", "set name version to 1.2.3" ("add event-stream version 3.3.6" was judged
+    // at latest and came back safe_to_delegate; blind audit 2026-11-14, F4).
+    if (words[i + 1] === "version" && VERSIONISH.test(after)) {
+      add(nameFor(token, deps, fallback), after);
+      continue;
+    }
+    if (words[i + 1] === "version" && words[i + 2] === "to" && VERSIONISH.test(clean(raw[i + 3] ?? ""))) {
+      add(nameFor(token, deps, fallback), clean(raw[i + 3]));
+      continue;
+    }
+    // "version 1.2.3 of name"
+    if (words[i] === "version" && VERSIONISH.test(next) && words[i + 2] === "of" && raw[i + 3]) {
+      add(nameFor(clean(raw[i + 3]), deps, fallback), next);
+      continue;
+    }
     // "name to 1.2.3"
     if (words[i + 1] === "to" && VERSIONISH.test(after)) {
       add(nameFor(token, deps, fallback), after);
@@ -156,7 +173,7 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
     return requested.map((r, i) => {
       const item = answer.results[i];
       if (!item) return unknown(r, "no answer");
-      const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown } | null | undefined;
+      const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
       const rc = item.range_check;
       return {
         ...r,
@@ -165,6 +182,7 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
         reason: item.reason,
         ...(rc ? { safe: { smallest: rc.smallest_safe_upgrade ?? rc.smallest_safe_in_range, newest: rc.newest_safe_in_range } } : {}),
         malicious: Boolean(advisories?.malicious_package),
+        ...(advisories?.critical_affecting_to?.length ? { critical: advisories.critical_affecting_to } : {}),
       };
     });
   } catch (error) {

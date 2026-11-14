@@ -727,6 +727,16 @@ function assessDelegation(input: {
   if (malwareVersion) {
     return { level: "human_only", reason: `The task writes ${malwareVersion.name} ${malwareVersion.to}: ${malwareVersion.reason}` };
   }
+  // The task tells the agent to write a release a critical advisory affects (event-stream 3.3.6,
+  // the flatmap-stream compromise, came back review_needed; blind audit 2026-11-14, F4): doing
+  // what it says is the harm, so a human decides, never the agent.
+  const criticalVersion = (input.requestedVersions ?? []).find((r) => r.verdict === "avoid" && (r.critical?.length ?? 0) > 0);
+  if (criticalVersion) {
+    return {
+      level: "human_only",
+      reason: `The task writes ${criticalVersion.name} ${criticalVersion.to}, which critical advisor${criticalVersion.critical!.length > 1 ? "ies" : "y"} ${criticalVersion.critical!.join(", ")} affect${criticalVersion.critical!.length > 1 ? "" : "s"}: ${criticalVersion.reason}`,
+    };
+  }
   if (badNames.length > 0) {
     const first = badNames[0];
     return {
