@@ -335,9 +335,12 @@ export class OsvHttpSource implements AdvisorySource {
   }
 }
 
-/** One dependency's cached OSV answer. */
+/**
+ * One dependency's cached OSV answer. v5 (blind audit round 4): answers cached before carried
+ * line breaks in aliases/references and the old malware reading; an upgrade never reads them.
+ */
 function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
-  return `osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`;
+  return `osv:v5:${dep.ecosystem}:${dep.name}:${dep.version}`;
 }
 
 /** Dependencies per cache read before the scan yields to the event loop (so the server keeps answering ping). */
@@ -585,7 +588,7 @@ export class OsvScanner {
       // version. Cached, that stub answered for the next hour, so one failed fetch turned a
       // critical into "unknown, no fix" for every scan in it (audit 2026-11-11, T7). Only a
       // dependency whose every advisory was read is cached; the rest are asked again next time.
-      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v4:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v5:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
