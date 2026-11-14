@@ -23,7 +23,20 @@
     code" count as malware, so `evm-units` is avoid again (6.2.7 had it; 6.3.0
     candidates lost it). A batch answer that contradicts the advisories already
     known for a package no longer wins, is not cached, and names no safe
-    release. The OSV cache moved to `osv:v9`.
+    release. The OSV cache moved to `osv:v9`. With the npm registry failing
+    for express's own dependencies, vulnerability_scan and upgrade_planner
+    said `npm install express@4.20.0` and `express@4.22.0`, releases that
+    install a vulnerable qs or body-parser: a parent upgrade now names only
+    the first release whose pinned and narrowly ranged dependencies were
+    confirmed clean (4.22.3 here), or NOT CHECKED with no release and no
+    command, and `parentUpgrades[].smallest` never names a release that
+    installs an affected dependency. An advisory whose grade could not be read
+    keeps a package at avoid. When the whole OSV scan did not finish within
+    the call, upgrade_planner rated rows "low" and `risk_threshold: "high"`
+    dropped them; their risk is now unknown, listed under every threshold.
+    The PyPI range check's release bucketing never matched (its pattern had
+    lost its backslashes), so every release was compared with every listed
+    version; a cold django check spends about half as long there.
   - *Privacy.* Private Python names stayed private in more layouts: PDM sources
     with `pdm.lock`, Pipfile `[[source]]`, pip config values on a continuation
     line, `-i<url>`, `--index`, `--extra-index`, `--find-links`/`-f` and

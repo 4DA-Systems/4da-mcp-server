@@ -806,7 +806,7 @@ export class LiveIntelligence {
     // The same scan already running (the startup warm-up, or a second call
     // while the first is out) is awaited, not repeated. A forced refresh
     // always runs its own.
-    const shareKey = `${this.generation} ${options?.includeDev ? "dev" : "runtime"} ${projectPath}`;
+    const shareKey = `${this.generation}\u0000${options?.includeDev ? "dev" : "runtime"}\u0000${projectPath}`;
     const running = options?.forceRefresh ? undefined : this.scansInFlight.get(shareKey);
     if (running) return running;
     const scan = this.runScan(deps, projectPath, options?.includeDev ?? false);
