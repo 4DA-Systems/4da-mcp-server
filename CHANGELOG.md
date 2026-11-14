@@ -110,6 +110,51 @@
   unknown argument exits with the usage and code 2. A scan served from the
   cache said `_meta.offline: null`; it is `false` (a boolean always), with
   `osv_contacted: false` saying OSV.dev was not asked.
+- **Pre-publish fixes (privacy, round 7).** An audit of 5d709ff found
+  configuration layouts in which a private package or module name still
+  reached OSV.dev, a public registry or HN; each was confirmed with a dead
+  proxy, and each now has a test that runs every tool and asserts no request
+  names the private package while a public one is still checked. A pip
+  requirements file whose `-r base.txt` or `-c constraints.txt` (nested, each
+  relative to the file naming it, loops and depth bounded) set
+  `--index-url` / `--extra-index-url`: the included file's options now apply
+  to the whole install, as in pip. uv and Poetry projects with no lockfile:
+  a `[[tool.uv.index]]` that is the default or not `explicit`, `[tool.uv]`
+  `index-url` / `extra-index-url`, `uv.toml` (the project's or above it, the
+  user's, the system's, `UV_CONFIG_FILE`), `UV_DEFAULT_INDEX`, `UV_INDEX_URL`,
+  `UV_INDEX` and `UV_EXTRA_INDEX_URL`, and a Poetry source that is not
+  `priority = "explicit"` (primary, default, supplemental, legacy
+  `default = true` / `secondary = true`) or a PDM source now make every
+  package the project declares private, ranged and unpinned ones included; the
+  public wheel indexes (PyTorch, NVIDIA, PyG) are still allowed as extra
+  indexes. A PEP 508 direct reference (`name @ https://...`, `git+https://`,
+  `file:`) or a uv / Poetry `git`, `url` or `path` source on a host that is not
+  public makes that name private (pypi.org's files, the public wheel indexes
+  and GitHub, GitLab and Bitbucket are public). Cargo: every workspace
+  member's Cargo.toml is read (`members` globs, `exclude` respected), a `git =`
+  dependency and a `[patch]` entry count like `registry =`, and
+  `.cargo/config.toml` is read in the project, every directory above it and
+  `CARGO_HOME` (`[patch]`, and `[source.crates-io] replace-with` a registry).
+  npm: the global npmrc (`npm_config_globalconfig`, `<prefix>/etc/npmrc`,
+  `%APPDATA%\npm\etc\npmrc`), a quoted `"@scope:registry"` key,
+  `npm_config_@scope:registry` and every other `npm_config_*` in any case, the
+  user's `~/.yarnrc.yml`, `YARN_RC_FILENAME`, `YARN_NPM_SCOPES` and
+  `YARN_NPM_REGISTRY_SERVER` are read. The request guard reads a GOPRIVATE
+  module in every git spelling: `https://github.com/org/mod.git`,
+  `git+ssh://git@github.com/org/mod`, `git@github.com:org/mod.git`,
+  `...#v1.2.3`, `.../tree/main`, a bare `mod.git`.
+- **One mirror policy for npm, PyPI, Go and Cargo (behaviour change).** A
+  default registry, index or proxy that is not public, consulted for any name,
+  now makes that ecosystem's packages in the project private (never sent,
+  reported as not checked, the setting named), as a pip `--index-url` already
+  did. Until now an npm `registry=` host (and bun's `[install] registry`) was
+  read as a mirror and unscoped names were looked up publicly with only a
+  notice, and a `GOPROXY` pointing at a private proxy with no GOPRIVATE sent
+  every module path to proxy.golang.org and OSV.dev. A server that only
+  mirrors the public registry is declared with `FOURDA_PUBLIC_MIRRORS` (hosts),
+  and its packages, lockfile hosts included, are checked again in every
+  ecosystem. `registry_notice` for npm now says the packages were treated as
+  private and names the setting.
 - **Pre-publish fixes (scan speed, round 6).** On a 1,889-dependency npm
   project a vulnerability_scan with every answer cached took 3.7 s, and the
   server did not answer `ping` until it was done (6.2.7: 0.3 s); at 107,000

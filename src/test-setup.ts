@@ -30,6 +30,15 @@ process.env.NPM_CONFIG_USERCONFIG = emptyNpmrc;
 process.env.GOENV = "off";
 for (const key of ["GOPRIVATE", "GONOPROXY", "GONOSUMDB", "FOURDA_PRIVATE_PACKAGES", "npm_config_userconfig", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"]) delete process.env[key];
 process.env.PIP_CONFIG_FILE = "os.devnull";
+// The same for the rest of what the rules read (R7): npm's global npmrc, uv's user and system
+// uv.toml (UV_NO_CONFIG, uv's own switch), GOPROXY, the uv, npm and yarn variables and
+// FOURDA_PUBLIC_MIRRORS. Tests that exercise them pass their own environment. CARGO_HOME is left
+// alone: the cargo-platform suites run `cargo tree --offline` against the crates CI fetched into it.
+process.env.NPM_CONFIG_GLOBALCONFIG = emptyNpmrc;
+process.env.UV_NO_CONFIG = "1";
+for (const key of Object.keys(process.env)) {
+  if (/^(?:GOPROXY|FOURDA_PUBLIC_MIRRORS|UV_CONFIG_FILE|UV_DEFAULT_INDEX|UV_INDEX_URL|UV_INDEX|UV_EXTRA_INDEX_URL|PREFIX|npm_config_(?:registry|prefix|globalconfig|@.*)|yarn_rc_filename|yarn_npm_.*)$/i.test(key) && key !== "NPM_CONFIG_GLOBALCONFIG") delete process.env[key];
+}
 // A proxy on the operator's machine must not route the suite's stubbed lookups (http-utils.ts).
 for (const key of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY"]) delete process.env[key];
 

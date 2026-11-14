@@ -235,7 +235,7 @@ export function nameForms(name: string): string[] {
     if (t) out.add(t);
   };
   const queue = [name];
-  for (let i = 0; i < queue.length && i < 64; i++) {
+  for (let i = 0; i < queue.length && i < 160; i++) {
     const n = queue[i];
     if (out.has(n.trim()) && i > 0) continue;
     add(n);
@@ -282,6 +282,16 @@ export function nameForms(name: string): string[] {
       if (segs.length >= 2 && segs[segs.length - 2].startsWith("@")) next(segs.slice(-2).join("/"));
       if (segs.length >= 1) next(segs[segs.length - 1]);
     }
+    // A repository spelled as git writes it (pre-publish audit of 5d709ff, R7 6): with GOPRIVATE set,
+    // `https://github.com/org/mod.git`, `git+ssh://git@github.com/org/mod`, `...#v1.2.3`,
+    // `.../tree/main` and `mod.git` reached the registries and OSV.dev. The module path is the host
+    // and the repository path, without scheme, credentials, port, `.git`, fragment or a browse path.
+    next(n.replace(/^git\+/i, ""));
+    next(n.replace(/[#?].*$/, ""));
+    next(n.replace(/\.git\/*$/i, ""));
+    next(n.replace(/\/+(?:-\/+)?(?:tree|blob|commits?|releases\/tag|src)\/.*$/i, ""));
+    const repo = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:@]+)(?::\d*)?\/+(.+)$/i.exec(n);
+    if (repo) next(`${repo[1].toLowerCase()}/${repo[2]}`);
     // A Go module's host is case-insensitive; GOPRIVATE patterns are written in lower case.
     const slash = n.indexOf("/");
     if (slash > 0 && /\./.test(n.slice(0, slash))) next(n.slice(0, slash).toLowerCase() + n.slice(slash));
