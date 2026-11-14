@@ -253,3 +253,21 @@ describe("7: the pnpm read walks lines without arrays of them", () => {
     expect(withInstalls?.reason).toMatch(/b@2\.0\.0/); // b has no snapshots entry
   });
 });
+
+describe("round 8: a cold PyPI dependency_check does not hold the event loop in the range check", () => {
+  it("releaseKey reads release numbers (written without `\d` it matched nothing, so every release was compared with every listed version)", async () => {
+    const { releaseKey, advisoriesAffecting } = await import("../live/osv-ranges.js");
+    expect(releaseKey("1.2.0")).toBe("1.2");
+    expect(releaseKey("v4.2.10rc1")).toBe("4.2.10");
+    expect(releaseKey("1!2.0")).toBeNull();
+    // Bucketing changes no answer: the same advisories affect the same releases.
+    const rel: string[] = [];
+    for (let a = 1; a <= 3; a++) for (let b = 0; b < 10; b++) rel.push(`${a}.${b}.0`, `${a}.${b}`, `${a}.${b}.1`, `${a}.${b}rc1`);
+    const advisories = Array.from({ length: 10 }, (_, i) => ({ id: `A-${i}`, spans: [{ introduced: "0", fixed: `${1 + (i % 3)}.${i}.1`, lastAffected: null }], versions: rel.filter((_, k) => k % (i + 2) === 0), maintenance: false }));
+    for (const v of rel) {
+      const got = advisoriesAffecting(advisories as never, v, "PyPI").map((a: { id: string }) => a.id).sort();
+      const listedEqual = (a: (typeof advisories)[number]) => a.versions.some((x) => releaseKey(x) === releaseKey(v) && x.replace(/(\.0)+$/, "") === v.replace(/(\.0)+$/, ""));
+      expect(got.length).toBeGreaterThanOrEqual(advisories.filter(listedEqual).length);
+    }
+  });
+});
