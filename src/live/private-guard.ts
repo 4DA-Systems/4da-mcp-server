@@ -28,11 +28,18 @@
 import * as fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { normName, pep503 } from "./private-packages.js";
+
 /** What one live layer says is private: why a name is, or null. */
 export interface PrivateNameSource {
   privateReason(ecosystem: string, name: string): string | null;
   /** The project the rules are for; an entry whose project directory is gone is dropped. */
   getProjectRoot?(): string | null;
+  /**
+   * Whether this project installs `name` (normalised for `ecosystem`) from the public registry:
+   * a name it visibly installs from there is public for it, whatever another project said.
+   */
+  installsPublicly?(ecosystem: string, name: string): boolean;
 }
 
 /** True when the source's project directory no longer exists. */
@@ -73,10 +80,63 @@ export function privateGuardSize(): number {
   return byKey.size + sources.size;
 }
 
-/** Forget every source (the test suite, between tests). */
+/**
+ * Every name any scan in this process has found private, by `${ecosystem}\0${normalised name}`,
+ * and the bare scopes of the scoped ones (`zqxacme` for `@zqxacme/vault-core`). Once found private,
+ * a name stays private for the rest of the process, for every tool and every project: the server
+ * reported `zqx-omega-internal` private for one project_path, then a later upgrade_impact for the
+ * startup project sent it to npm and OSV.dev (blind audit round 5, 4). A project that itself
+ * installs the name from the public registry still asks about it (PrivateNameSource.installsPublicly).
+ */
+const remembered = new Map<string, string>();
+const rememberedScopes = new Map<string, string>();
+
+/** Remember that `name` is private (in `ecosystem`), and why, for the rest of the process. */
+export function rememberPrivateName(ecosystem: string, name: string, why: string): void {
+  const key = `${ecosystem}\0${normName(ecosystem, foldName(name))}`;
+  if (!remembered.has(key)) remembered.set(key, why);
+  const scope = /^@([^/]+)\//.exec(foldName(name).trim());
+  if (scope && !rememberedScopes.has(scope[1].toLowerCase())) rememberedScopes.set(scope[1].toLowerCase(), `@${scope[1].toLowerCase()}/* holds a private package (${why})`);
+}
+
+/** How many names are remembered private in this process. */
+export function rememberedPrivateCount(): number {
+  return remembered.size;
+}
+
+/**
+ * Why `name` (any spelling) was found private by a scan in this process, and in which ecosystem, or
+ * null. Also the bare scope of a remembered scoped name: `zqxacme` names the private `@zqxacme`
+ * scope. `installsPublicly(eco, n)` exempts a name the asking project installs from the public registry.
+ */
+export function rememberedPrivate(
+  name: string,
+  installsPublicly?: (ecosystem: string, name: string) => boolean,
+): { ecosystem: string; why: string } | null {
+  if (remembered.size === 0) return null;
+  const forms = nameForms(name);
+  for (const eco of ALL_ECOSYSTEMS) {
+    for (const form of forms) {
+      const n = normName(eco, form);
+      const why = remembered.get(`${eco}\0${n}`);
+      if (why && !installsPublicly?.(eco, n)) return { ecosystem: eco, why: `found private by a scan in this session: ${why}` };
+    }
+  }
+  for (const form of forms) {
+    if (form.includes("/")) continue;
+    const bare = form.replace(/^@/, "").toLowerCase();
+    const why = rememberedScopes.get(bare);
+    if (why && !installsPublicly?.("npm", bare)) return { ecosystem: "npm", why: `the bare name of a private scope: ${why}` };
+  }
+  return null;
+}
+
+/** Forget every source and every remembered name (the test suite, between tests). */
 export function resetPrivateGuard(): void {
   byKey.clear();
   sources.clear();
+  remembered.clear();
+  rememberedScopes.clear();
 }
 
 function* liveSources(): Generator<PrivateNameSource> {
@@ -119,7 +179,11 @@ export function readableText(text: string): string {
       return run.replace(/%([0-7][0-9a-f])/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
     }
   });
-  return decoded.replace(INVISIBLE, "");
+  // Look-alikes folded (foldName): "install ＠zqxacme／vault-core" was tokenised as ASCII and
+  // `zqxacme` reached OSV.dev and npm; "bump ｚｑｘ-omega-internal" sent `omega-internal`, a fragment
+  // of the private `zqx-omega-internal` (blind audit round 5, 1). Every task reader now sees the
+  // ASCII-equivalent text. Task text only: quoted third-party text is never passed through this.
+  return foldName(decoded.replace(INVISIBLE, ""));
 }
 
 /** Dashes and hyphens other than `-` (U+2010-U+2015, minus, small and fullwidth hyphen-minus, hyphen bullet). */
@@ -181,6 +245,10 @@ export function nameForms(name: string): string[] {
     const slash = n.indexOf("/");
     if (slash > 0 && /\./.test(n.slice(0, slash))) next(n.slice(0, slash).toLowerCase() + n.slice(slash));
     next(n.toLowerCase());
+    // PEP 503: `ZQX_OMEGA_INTERNAL` and `zqx.omega.internal` are the PyPI name `zqx-omega-internal`,
+    // and reached OSV.dev while pypi.org refused them (blind audit round 5, 3). Any ecosystem: the
+    // name is the secret, whichever registry it would be sent to.
+    if (!n.includes("/") && /[A-Z_.]|-{2,}/.test(n)) next(pep503(n));
   }
   return [...out];
 }
@@ -200,7 +268,8 @@ function privateWhy(ecosystem: string | null, name: string): string | null {
       }
     }
   }
-  return null;
+  // Found private anywhere in this process (a source may be gone, or not read the memory itself).
+  return rememberedPrivate(name, own?.installsPublicly?.bind(own))?.why ?? null;
 }
 
 /** The refusal thrown for a request that names a private package. */
@@ -330,7 +399,7 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
 
 /** Throws PrivateRequestRefused when the request names a private package; returns otherwise. */
 export function refusePrivateRequest(url: string, init?: { body?: unknown }): void {
-  if (sources.size === 0 && byKey.size === 0 && !context.getStore()) return;
+  if (sources.size === 0 && byKey.size === 0 && remembered.size === 0 && !context.getStore()) return;
   for (const [eco, name] of namesInRequest(url, init?.body)) {
     const why = privateWhy(eco, name);
     if (why) {

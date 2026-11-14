@@ -358,13 +358,19 @@ function elementMatch(pattern: string, value: string): boolean {
   }
 }
 
-/** Go's module.MatchPrefixPatterns: a glob list matched against the leading elements of a module path. */
+/**
+ * Go's module.MatchPrefixPatterns: a glob list matched against the leading elements of a module
+ * path, case-insensitively. Module paths differ only in case name the same repository on the code
+ * hosts GOPRIVATE is written for, and the request guard (nameForms) already read them lowercased:
+ * `github.com/Zqxcorp/Other` under GOPRIVATE=github.com/zqxcorp was scanned as public, the guard
+ * refused the whole OSV batch, and every public dependency came back NOT CHECKED (blind audit round 5, 2).
+ */
 export function goPrivateMatch(patterns: string, modulePath: string): string | null {
-  const parts = modulePath.split("/");
+  const parts = modulePath.toLowerCase().split("/");
   for (const raw of patterns.split(",")) {
     const pattern = raw.trim().replace(/\/+$/, "");
     if (!pattern) continue;
-    const elements = pattern.split("/");
+    const elements = pattern.toLowerCase().split("/");
     if (elements.length > parts.length) continue;
     if (elements.every((e, i) => elementMatch(e, parts[i]))) return pattern;
   }
@@ -678,6 +684,11 @@ export class PrivatePackageRules {
     const hosts = [...new Set([...this.npmMirrorHosts, ...this.bunRegistryHosts])].filter((h) => !PUBLIC_NPM_HOSTS.has(h));
     if (hosts.length === 0) return null;
     return `Your npm registry is ${hosts.join(", ")}. Unscoped packages published only there are looked up on the public registry by name; list them in FOURDA_PRIVATE_PACKAGES (or use a scope) to keep them private.`;
+  }
+
+  /** Which file maps `scope` (`@acme`) to a private registry, or null. */
+  privateScopeFile(scope: string): string | null {
+    return this.npmScopes.get(scope.toLowerCase()) ?? null;
   }
 
   /** Whether any rule exists (a project with none skips the per-name checks). */
