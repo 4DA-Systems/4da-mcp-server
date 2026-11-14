@@ -392,6 +392,18 @@ export function pipConfigIndexes(content: string): { index: string | null; extra
 const RULE_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE", "FOURDA_PRIVATE_PACKAGES", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOENV", "NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"];
 
 /** The rules for one project: what its files, the user's files and the environment say is private. */
+/** `dir` and each directory above it, nearest first (at most 32 levels). */
+function ancestorsOf(dir: string): string[] {
+  const out: string[] = [];
+  for (let d = dir, i = 0; i < 32; i++) {
+    out.push(d);
+    const up = path.dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  return out;
+}
+
 export class PrivatePackageRules {
   private readonly npmScopes = new Map<string, string>();
   private readonly goPatterns: Array<{ key: string; value: string; from: string }> = [];
@@ -414,11 +426,15 @@ export class PrivatePackageRules {
     private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
     const home = env.HOME || env.USERPROFILE || os.homedir();
+    // Each directory and every one above it: npm applies a workspace root's `.npmrc` to every member,
+    // and a server started in `packages/app` sent `@acme/vault-core` that `../../.npmrc` made private
+    // (blind audit round 3, B2). Reading more files can only add private names.
+    const withParents = [...new Set(dirs.flatMap((d) => ancestorsOf(path.resolve(d))))];
     const npmrcs = [
-      ...dirs.map((d) => path.join(d, ".npmrc")),
+      ...withParents.map((d) => path.join(d, ".npmrc")),
       env.NPM_CONFIG_USERCONFIG || env.npm_config_userconfig || (home ? path.join(home, ".npmrc") : null),
     ].filter((f): f is string => Boolean(f));
-    const yarnrcs = dirs.map((d) => path.resolve(d, ".yarnrc.yml"));
+    const yarnrcs = withParents.map((d) => path.resolve(d, ".yarnrc.yml"));
     const goFile = goEnvPath(env);
     const pipFiles = pipConfigFiles(env);
     // Signatures first: a write that lands while a file is read still reads as a change.
@@ -435,10 +451,13 @@ export class PrivatePackageRules {
     this.pipIndex = pipIndex && !isPublicPypiIndex(pipIndex.url) ? { url: sourceLabel(pipIndex.url), from: pipIndex.from } : null;
     this.pipExtra = [...new Set(extra.filter((u) => !isPublicPypiIndex(u)).map(sourceLabel))];
     this.envKey = RULE_ENV.map((k) => `${k}=${env[k] ?? ""}`).join("\n");
+    // A parent directory's file adds private scopes only: its default `registry=` (a public mirror,
+    // which makes a lockfile host public) is taken from the project's own files and the user's.
+    const ownNpmrcs = new Set([...dirs.map((d) => path.resolve(d, ".npmrc")), ...npmrcs.slice(withParents.length).map((f) => path.resolve(f))]);
     for (const file of new Set(npmrcs.map((f) => path.resolve(f)))) {
       const read = npmrcRead(safeRead(file));
       for (const scope of read.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
-      if (read.defaultHost) this.npmMirrorHosts.add(read.defaultHost);
+      if (read.defaultHost && ownNpmrcs.has(file)) this.npmMirrorHosts.add(read.defaultHost);
     }
     for (const file of new Set(yarnrcs)) {
       for (const scope of yarnrcPrivateScopes(safeRead(file))) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);

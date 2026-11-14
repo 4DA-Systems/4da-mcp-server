@@ -20,7 +20,7 @@
  * accepted 10). They no longer decide anything here.
  */
 
-import { checkRequestedVersions, detectRequestedVersions, sayRequested, type RequestedVersionFinding } from "./briefing-requested-versions.js";
+import { checkRequestedVersions, readTaskVersions, sayRequested, type RequestedVersionFinding } from "./briefing-requested-versions.js";
 import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
@@ -334,14 +334,21 @@ export async function executeWhatShouldIKnow(
   const packages = taskPackages();
   // ...and the ones it adds: the same name-level check dependency_check runs (audit 2026-11-11, M14:
   // "add the lodahs package" came back safe_to_delegate).
-  // A name the project marks private in any ecosystem is never looked up under a guessed one.
-  const notPrivate = (p: { name: string }) => privateAnywhere(liveIntel, p.name) === null;
+  // Private packages the task names: left out of every lookup, so said first, never as clean (S3).
+  const privateTask = privateTaskPackages(task, files, liveIntel);
+  // A name the project marks private in any ecosystem is never looked up under a guessed one, nor is
+  // the short name of a private package the task names: "update secret-go to v1.4.0" (the GOPRIVATE
+  // module github.com/acmecorp/secret-go) was reported private and still sent (blind audit round 3).
+  const privateShort = new Set(privateTask.flatMap((p) => [p.package.toLowerCase(), p.package.split("/").pop()!.toLowerCase()]));
+  const notPrivate = (p: { name: string }) =>
+    privateAnywhere(liveIntel, p.name) === null && !privateShort.has(p.name.toLowerCase()) && !privateShort.has(p.name.split("/").pop()!.toLowerCase());
   const newPackages = await checkNewPackages(liveIntel, detectNewPackages(task, allDeps()).filter(notPrivate));
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14).
-  const requestedVersions = await checkRequestedVersions(liveIntel, detectRequestedVersions(task, allDeps()).filter(notPrivate));
-  // Private packages the task names: left out of every lookup, so said first, never as clean (S3).
-  const privateTask = privateTaskPackages(task, files, liveIntel);
+  const taskVersions = readTaskVersions(task, allDeps());
+  const requestedVersions = await checkRequestedVersions(liveIntel, taskVersions.requested.filter(notPrivate));
+  // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
+  const unreadVersions = taskVersions.unread;
   const vulns = scan?.vulnerabilities ?? [];
   const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages, allDeps()) : null;
   const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns, latest));
@@ -464,6 +471,7 @@ export async function executeWhatShouldIKnow(
       newPackages,
       privateTask,
       requestedVersions,
+      unreadVersions,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -709,6 +717,8 @@ function assessDelegation(input: {
   newPackages: NewPackageFinding[];
   privateTask?: PrivateTaskPackage[];
   requestedVersions?: RequestedVersionFinding[];
+  /** Versions the task names that the briefing could tie to no package. */
+  unreadVersions?: string[];
   taskDependencies: TaskDependency[];
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
@@ -757,7 +767,11 @@ function assessDelegation(input: {
   const versionReasons = (input.requestedVersions ?? [])
     .filter((r) => r.verdict !== "proceed")
     .map((r) => `${sayRequested(r)}: do not write it as named (see requested_versions)`);
-  const nameReasons = [...privateReasons, ...versionReasons, ...unclear.map(
+  // A version the task writes that the briefing could not tie to a package: never vouched for (blind audit round 3, B3).
+  const unreadReasons = (input.unreadVersions ?? []).length > 0
+    ? [`the task names ${input.unreadVersions!.join(", ")}, which this briefing could not tie to a package: call dependency_check on that package and version before writing it`]
+    : [];
+  const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...unclear.map(
     (p) =>
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
   )];

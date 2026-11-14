@@ -22,6 +22,7 @@ export interface PrivateTaskPackage {
 
 export interface PrivateLookup {
   getPrivateAuditDeps?(): ResolvedDependency[];
+  getAuditDeps?(): ResolvedDependency[];
   getPrivateDependencies?(): Array<{ ecosystem: string; name: string; version: string | null; why: string }>;
   privateReason?(ecosystem: string, name: string): string | null;
 }
@@ -43,6 +44,24 @@ export function privateTaskPackages(task: string, files: string[], live: Private
       ecosystem: pkg.ecosystem,
       installed: [...new Set(copies.map((d) => d.version).filter((v): v is string => Boolean(v)))],
       why: why.get(`${pkg.ecosystem}\0${pkg.name}`) ?? "private",
+    });
+  }
+  // A private dependency named by its short name: "upgrade telemetry-x to 3.1" for @sigma/telemetry-x,
+  // "update secret-go" for github.com/acmecorp/secret-go (blind audit round 3).
+  const words = new Set((task.match(NAME_TOKEN) ?? []).map((t) => t.replace(/[.,;:]+$/, "").toLowerCase()));
+  // A short name the project also installs publicly (`react` beside a private `@acme/react`) is that public package.
+  const publicNames = new Set((live.getAuditDeps?.() ?? []).map((d) => d.name.toLowerCase()));
+  for (const p of live.getPrivateDependencies?.() ?? []) {
+    const short = p.name.split("/").pop()!.toLowerCase();
+    const byShort = words.has(short) && !publicNames.has(short);
+    if (!words.has(p.name.toLowerCase()) && !byShort) continue;
+    if ([...out.values()].some((o) => o.ecosystem === p.ecosystem && o.package === p.name)) continue;
+    const copies = installed.filter((d) => d.ecosystem === p.ecosystem && d.name === p.name);
+    out.set(`${p.ecosystem}\0${p.name}`, {
+      package: p.name,
+      ecosystem: p.ecosystem,
+      installed: [...new Set(copies.map((d) => d.version).filter((v): v is string => Boolean(v)))],
+      why: p.why,
     });
   }
   if (live.privateReason) {

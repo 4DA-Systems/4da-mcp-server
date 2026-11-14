@@ -80,6 +80,11 @@ const NOT_A_NAME = new Set([
   "again", "first", "locally", "globally", "manually", "properly", "correctly", "successfully", "fails", "failed", "works", "step", "command", "script", "before", "after",
   "when", "if", "because", "but", "not", "no", "yet", "still", "everything", "anything", "nothing", "something", "run", "running", "via", "using", "inside", "without",
 ]);
+/** Verbs that start a new clause after "and": the list of names has ended. */
+const CLAUSE_VERBS = new Set([
+  "set", "upgrade", "update", "bump", "pin", "change", "remove", "delete", "drop", "fix", "run", "make", "move", "write", "roll", "downgrade", "test", "build",
+  "configure", "refactor", "replace", "rename", "check", "verify", "add", "install", "use", "deploy", "release", "publish", "commit", "push", "lock", "revert",
+]);
 /** A manifest or a packaging word anywhere in the task: it is about dependencies. */
 const PACKAGING = /\b(?:package\.json|cargo\.toml|requirements(?:-[\w-]+)?\.txt|pyproject\.toml|go\.mod|dependenc(?:y|ies)|devdependenc(?:y|ies)|packages?|librar(?:y|ies)|crates?|npm|pnpm|yarn|pip|pypi)\b/i;
 const VERSION_ONLY = /^v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][\w.]+)?$/i;
@@ -129,9 +134,10 @@ export function proseEcosystem(words: string[], deps: readonly ResolvedDependenc
 /** The ecosystem the task's own words name ("pip", "cargo", "package.json"...), or null. */
 export function statedEcosystem(words: string[]): CheckEcosystem | null {
   const has = (...w: string[]) => w.some((x) => words.includes(x));
-  if (has("crate", "crates", "cargo", "crates.io", "rust")) return "crates.io";
-  if (has("pip", "pip3", "pypi", "python", "poetry", "uv", "requirements.txt", "pyproject.toml")) return "PyPI";
-  if (has("npm", "pnpm", "yarn", "bun", "node", "nodejs", "package.json")) return "npm";
+  if (has("crate", "crates", "cargo", "crates.io", "rust", "cargo.toml", "cargo.lock")) return "crates.io";
+  if (has("pip", "pip3", "pypi", "python", "poetry", "uv", "requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock", "pipfile", "setup.py")) return "PyPI";
+  if (has("go.mod", "go.sum")) return "Go";
+  if (has("npm", "pnpm", "yarn", "bun", "node", "nodejs", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock")) return "npm";
   return null;
 }
 
@@ -197,11 +203,16 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
       if (!name) break;
       const after = words[k + 1];
       const isQuoted = quoted.has(words[k]) || quoted.has(name.toLowerCase());
-      const known = packaging && fallback === "npm" && !COMMON_WORDS.has(name) && (POPULAR.has(name) || nearMissOf(name) !== null);
+      // A popular npm name, or a near miss of one, is a package whatever the wording: "add lodahs" came
+      // back safe_to_delegate without a packaging word (blind audit round 3, B3). The list is bundled,
+      // so an unknown word is never sent anywhere for it.
+      const known = fallback === "npm" && !COMMON_WORDS.has(name) && (POPULAR.has(name) || nearMissOf(name) !== null);
       if (!(saidPackage || PACKAGE_WORDS.has(after) || installing || isQuoted || known)) break;
       add(name, fallback, true);
-      // "lodahs and expres", "lodahs, expres": the next name continues the list.
-      if (after === "and" || after === "&" || after === "plus") k++;
+      // "lodahs and expres", "lodahs, expres": the next name continues the list, unless a new clause
+      // starts ("install omega-flag-beta and set lodash ..." added a package named `set`).
+      if ((after === "and" || after === "&" || after === "plus") && !CLAUSE_VERBS.has(words[k + 2] ?? "")) k++;
+      else if (after === "and" || after === "&" || after === "plus") break;
       else if (PACKAGE_WORDS.has(after)) break;
     }
   }

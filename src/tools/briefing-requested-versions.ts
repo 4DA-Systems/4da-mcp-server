@@ -16,6 +16,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { asName, projectEcosystems, proseEcosystem, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
@@ -44,22 +45,56 @@ export interface RequestedVersionFinding extends RequestedVersion {
 
 const MAX_REQUESTED = 5;
 const CHECK_BUDGET_MS = 10_000;
-/** A version or constraint as tasks write them: 4.17.20, v1.2.3, ^1.2, ~2.0.1, >=2, 7.x, 1.2.*. */
-const VERSIONISH = /^(?:[~^=]|[<>]=?)?v?\d+(?:\.(?:\d+|x|\*))*(?:-[\w.]+)?(?:\+[\w.]+)?$/i;
+/**
+ * A version or constraint as tasks write them: 4.17.20, v1.2.3, ^1.2, ~2.0.1, >=2, 7.x, 1.2.*,
+ * ==3.3.6, prereleases with dashes (1.4.44-liberty-2) and Go pseudo-versions
+ * (v0.0.0-20210226172049-e18ecbb05110).
+ */
+const VERSIONISH = /^(?:={1,3}|[~^]|[<>]=?)?v?\d+(?:\.(?:\d+|x|\*))*(?:-[\w.-]+)?(?:\+[\w.-]+)?$/i;
+/** A dotted version (or a pseudo-version): a token the briefing must tie to a package or say it could not. */
+const DOTTED = /^(?:={1,3}|[~^]|[<>]=?)?v?\d+\.(?:\d+|x|\*)/i;
 /** Words that come before a package name and are never one. */
 const VERBS = new Set([
   "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
-  "move", "moving", "set", "setting", "use", "using", "change", "lock", "require", "version", "release", "it", "them", "everything", "all", "dependency", "package",
+  "move", "moving", "set", "setting", "use", "using", "change", "changing", "lock", "require", "version", "release", "it", "them", "everything", "all",
+  "dependency", "package", "roll", "revert", "restore", "write", "put", "get", "and", "or", "with", "then", "also",
 ]);
+/** Words between a package and its version: "lodash to 4.17.20", "event-stream at version 3.3.6", "lodash: 4.18.1 -> 4.17.20". */
+const CONNECTORS = new Set([
+  "to", "at", "version", "versions", "v", "=", "==", "===", ":", "->", "=>", ">", "→", "is", "be", "back", "down", "up", "from", "of", "on", "into",
+  "the", "a", "an", "its", "package", "packages", "dependency", "dependencies", "dep", "crate", "module", "library", "lib", "release", "pinned", "exactly",
+]);
+/** Runtimes and toolchains a task gives a version to ("node 20", "python 3.12", "go 1.22"): not packages to judge. */
+const RUNTIMES = new Set([
+  "node", "nodejs", "node.js", "python", "python3", "py", "go", "golang", "rust", "rustc", "cargo", "npm", "pnpm", "yarn", "bun", "deno", "java", "jdk",
+  "typescript", "ts", "ubuntu", "debian", "alpine", "macos", "windows", "ios", "android", "es", "ecmascript", "pip", "msrv", "edition", "toolchain",
+]);
+/** Verbs that change a dependency: a task with one is about dependencies. */
+const DEPENDENCY_VERBS = new Set([
+  "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
+  "set", "setting", "change", "changing", "roll", "revert", "require", "lock", "use", "using",
+]);
+/** A manifest, lockfile or packaging word: the task is about dependencies. */
+const DEPENDENCY_TASK = /(?:package(?:-lock)?.json|cargo.(?:toml|lock)|requirements(?:-[w-]+)?.txt|pyproject.toml|poetry.lock|uv.lock|pipfile|go.(?:mod|sum)|pnpm-lock.yaml|yarn.lock|dependenc(?:y|ies)|packages?|librar(?:y|ies)|crates?|npm|pnpm|yarn|pip|pypi|cargo)/i;
 const PYPI_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)((?:===?|~=|>=|<=|!=|>|<)[^\s]+)$/;
 
 const GO_HOST_PATH = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\//i;
 
-function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: CheckEcosystem): { name: string; ecosystem: CheckEcosystem; guessed?: true } | null {
-  const bare = token.replace(/[),.;:!?'"`]+$/, "").replace(/^[`'"(]+/, "");
-  if (VERBS.has(bare.toLowerCase())) return null;
+/** A token as a name: quotes, brackets, trailing punctuation and a possessive `'s` removed. */
+function cleanToken(t: string): string {
+  return t
+    .replace(/[`'"),.;]+$/, "")
+    .replace(/:$/, "")
+    .replace(/^[`'"(]+/, "")
+    .replace(/'s$/i, "");
+}
+
+function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: CheckEcosystem, explicit = false): { name: string; ecosystem: CheckEcosystem; guessed?: true } | null {
+  const bare = cleanToken(token).replace(/[!?]+$/, "");
+  const lower = bare.toLowerCase();
+  if (VERBS.has(lower) || CONNECTORS.has(lower) || RUNTIMES.has(lower)) return null;
   const norm = (s: string) => s.toLowerCase().replace(/[-_.]+/g, "-");
-  const installed = deps.find((d) => d.name.toLowerCase() === bare.toLowerCase() || (d.ecosystem === "PyPI" && norm(d.name) === norm(bare)));
+  const installed = deps.find((d) => d.name.toLowerCase() === lower || (d.ecosystem === "PyPI" && norm(d.name) === norm(bare)));
   if (installed && (installed.ecosystem === "npm" || installed.ecosystem === "crates.io" || installed.ecosystem === "PyPI" || installed.ecosystem === "Go")) {
     return { name: installed.name, ecosystem: installed.ecosystem };
   }
@@ -70,86 +105,105 @@ function nameFor(token: string, deps: readonly ResolvedDependency[], fallback: C
     const go = asName(bare, "Go");
     if (go) return { name: go, ecosystem: "Go" };
   }
+  // An English word is no package in prose; written as `colors@1.4.44` or `name==1.0` it is one.
+  if (!explicit && COMMON_WORDS.has(lower)) return null;
   const name = asName(bare, fallback);
   return name ? { name, ecosystem: fallback, guessed: true } : null;
 }
 
+/** What the briefing read from a task: the (package, version) pairs, and dotted versions it could tie to nothing. */
+export interface TaskVersions {
+  requested: RequestedVersion[];
+  /** Versions the task writes that no package (or runtime) could be read for: never safe to delegate on. */
+  unread: string[];
+}
+
 /** The (package, version) pairs a task names, in the order named. At most five. */
 export function detectRequestedVersions(task: string, deps: readonly ResolvedDependency[]): RequestedVersion[] {
-  const raw = task.match(/[@A-Za-z0-9`'"(^~<>=][\w./@*=<>~^!`'"-]*/g) ?? [];
-  const words = raw.map((t) => t.replace(/[`'"(),.;:]+$/, "").replace(/^[`'"(]+/, "").toLowerCase());
+  return readTaskVersions(task, deps).requested;
+}
+
+/**
+ * Every version-like token in the task is tied to the nearest word before it that can be a package,
+ * over connector words ("to", "at", "version", "==", "->", "back", "the ... package"), or after it in
+ * "version X of name". The last version tied to a package is its target ("from 1.0 to 1.2",
+ * "4.18.1 -> 4.17.20"). Wording the parser was not written for used to drop the version and judge
+ * latest instead ("add event-stream at version 3.3.6" came back safe_to_delegate; blind audit round
+ * 3, B3); now a dotted version tied to nothing is reported as unread, which keeps the briefing from
+ * safe_to_delegate.
+ */
+export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
+  const raw = task.match(/(?:->|=>|→)|[@A-Za-z0-9`'"(^~<>=][\w./@*=<>~^!`'"+:-]*/g) ?? [];
+  const words = raw.map((t) => cleanToken(t).toLowerCase());
+  const stated = statedEcosystem(words);
   const fallback = proseEcosystem(words, deps);
   // The ecosystem of a bare name nobody installs is only a guess when the task names none and the
   // project uses several: the other ones are tried if the guess has no such release (a mixed npm +
   // Python repository read "add event-stream version 3.3.6" as PyPI; blind audit replay 2026-11-14).
-  const others = statedEcosystem(words) ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
-  const out: RequestedVersion[] = [];
-  const add = (who: { name: string; ecosystem: CheckEcosystem; guessed?: true } | null, version: string, guess = false) => {
-    if (!who || !version) return;
-    if (out.some((r) => r.ecosystem === who.ecosystem && r.name === who.name && r.to === version)) return;
+  const others = stated ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
+  const aboutDependencies = DEPENDENCY_TASK.test(task) || words.some((w) => DEPENDENCY_VERBS.has(w));
+  const found = new Map<string, RequestedVersion & { order: number }>();
+  const unread: string[] = [];
+  let order = 0;
+  const add = (who: { name: string; ecosystem: CheckEcosystem; guessed?: true } | null, version: string, guess = false): boolean => {
+    if (!who || !version) return false;
+    const to = version.replace(/^==?(?!=)/, "");
+    const key = `${who.ecosystem}\0${who.name}`;
     const copies = deps.filter((d) => d.ecosystem === who.ecosystem && d.name === who.name && d.version);
     const versions = [...new Set(copies.map((d) => d.version!))];
     const alternatives = guess && who.guessed && who.ecosystem === fallback ? others.filter((e) => asName(who.name, e) !== null) : [];
-    out.push({
+    // A later version for the same package is its target ("from 1.0 to 1.2", "1.0 -> 1.2").
+    found.set(key, {
       name: who.name,
       ecosystem: who.ecosystem,
-      to: version,
-      ...(versions.length === 1 && versions[0] !== version ? { from: versions[0] } : {}),
+      to,
+      ...(versions.length === 1 && versions[0] !== to ? { from: versions[0] } : {}),
       ...(alternatives.length > 0 ? { alternatives } : {}),
+      order: found.get(key)?.order ?? order++,
     });
+    return true;
   };
-  const clean = (t: string) => t.replace(/[`'"),.;:]+$/, "").replace(/^[`'"(]+/, "");
 
   for (let i = 0; i < raw.length; i++) {
-    const token = clean(raw[i]);
-    // name@version (npm; Go module@v1.2.3); a scoped npm name keeps its leading @.
+    const token = cleanToken(raw[i]);
+    // name@version (npm, `cargo add`, Go module@v1.2.3); a scoped npm name keeps its leading @.
     const at = token.indexOf("@", 1);
     if (at > 0 && VERSIONISH.test(token.slice(at + 1))) {
       const name = token.slice(0, at);
-      // `@` pins a version in npm and in `go get`; nowhere else.
-      const eco: CheckEcosystem = /^[a-z0-9.-]+\.[a-z]{2,}\//i.test(name) ? "Go" : "npm";
-      add(nameFor(name, deps, eco), token.slice(at + 1));
+      const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : stated === "crates.io" ? "crates.io" : "npm";
+      if (!add(nameFor(name, deps, eco, true), token.slice(at + 1)) && DOTTED.test(token.slice(at + 1))) unread.push(token);
       continue;
     }
     // name==1.2.3, name~=3.1, name>=2,<3 (PyPI)
     const spec = PYPI_SPEC.exec(token);
     if (spec) {
-      add(nameFor(spec[1], deps, "PyPI"), spec[2].replace(/^==(?!=)/, ""));
+      if (!add(nameFor(spec[1], deps, "PyPI", true), spec[2])) unread.push(token);
       continue;
     }
-    const next = clean(raw[i + 1] ?? "");
-    const after = clean(raw[i + 2] ?? "");
-    // "name version 1.2.3", "set name version to 1.2.3" ("add event-stream version 3.3.6" was judged
-    // at latest and came back safe_to_delegate; blind audit 2026-11-14, F4).
-    if (words[i + 1] === "version" && VERSIONISH.test(after)) {
-      add(nameFor(token, deps, fallback), after, true);
-      continue;
-    }
-    if (words[i + 1] === "version" && words[i + 2] === "to" && VERSIONISH.test(clean(raw[i + 3] ?? ""))) {
-      add(nameFor(token, deps, fallback), clean(raw[i + 3]), true);
-      continue;
+    if (!VERSIONISH.test(token)) continue;
+    // A version: the package before it, over connector words and other versions.
+    let tied = false;
+    for (let k = i - 1, steps = 0; k >= 0 && steps < 6; k--, steps++) {
+      const w = words[k];
+      if (CONNECTORS.has(w) || VERSIONISH.test(cleanToken(raw[k]))) continue;
+      if (RUNTIMES.has(w)) {
+        tied = true; // "node 20", "python 3.12": a runtime, not a package to judge
+        break;
+      }
+      // A name nobody installs is read from prose only in a task about dependencies, or when it is
+      // quoted: "apply the 2.4.1 hotfix" is not a package called `apply`, and an internal codename in
+      // a task is never sent to a registry on a guess. The version is then unread instead.
+      const quotedName = /^[`'"]/.test(raw[k]);
+      const who = nameFor(raw[k], deps, fallback, quotedName);
+      tied = who !== null && (!who.guessed || aboutDependencies || quotedName) && add(who, token, true);
+      break;
     }
     // "version 1.2.3 of name"
-    if (words[i] === "version" && VERSIONISH.test(next) && words[i + 2] === "of" && raw[i + 3]) {
-      add(nameFor(clean(raw[i + 3]), deps, fallback), next, true);
-      continue;
-    }
-    // "name to 1.2.3"
-    if (words[i + 1] === "to" && VERSIONISH.test(after)) {
-      add(nameFor(token, deps, fallback), after, true);
-      continue;
-    }
-    // "name from 1.0 to 1.2"
-    if (words[i + 1] === "from" && VERSIONISH.test(after) && words[i + 3] === "to" && VERSIONISH.test(clean(raw[i + 4] ?? ""))) {
-      add(nameFor(token, deps, fallback), clean(raw[i + 4]), true);
-      continue;
-    }
-    // "pin name 1.2.3", "add name 4.17.20": a verb, the name, the version.
-    if (i > 0 && VERBS.has(words[i - 1]) && VERSIONISH.test(next)) {
-      add(nameFor(token, deps, fallback), next, true);
-    }
+    if (!tied && aboutDependencies && words[i - 1] === "version" && words[i + 1] === "of" && raw[i + 2]) tied = add(nameFor(raw[i + 2], deps, fallback), token, true);
+    if (!tied && DOTTED.test(token)) unread.push(token);
   }
-  return out.slice(0, MAX_REQUESTED);
+  const requested = [...found.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...r }) => r);
+  return { requested: requested.slice(0, MAX_REQUESTED), unread: [...new Set(unread)] };
 }
 
 /**

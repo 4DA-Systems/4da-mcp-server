@@ -318,3 +318,101 @@ describe("blind audit 2026-11-14: a private name in any spelling, under any gues
     expect(mentions("lodash").length).toBeGreaterThan(0);
   });
 });
+
+describe("blind audit round 3 (2026-11-14): every tool treats what the scan calls private as private", () => {
+  const withEnv = async (vars: Record<string, string>, fn: () => Promise<void>) => {
+    const prior = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, vars);
+    try {
+      await fn();
+    } finally {
+      for (const [k, v] of Object.entries(prior)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  };
+
+  it("B1: a pin private by PIP_INDEX_URL is refused by dependency_check and the briefing, as the scan says", async () => {
+    write("requirements.txt", "rho-billing-core==1.4.0\n");
+    await withEnv({ PIP_INDEX_URL: "https://pypi.rho.example/simple" }, async () => {
+      const live = liveFor(scratch);
+      await live.scanVulnerabilities(scratch, { includeDev: true });
+      const check = await executeDependencyCheck(null, { items: [{ ecosystem: "PyPI", package: "rho-billing-core", to: "1.4.0" }] }, live);
+      expect(check.results[0].verdict).toBe("unknown");
+      const db = new FourDADatabase(path.join(scratch, "standalone.db"));
+      try {
+        const result = await executeWhatShouldIKnow(db, { task: "bump rho-billing-core to 1.5.0" }, live);
+        expect(result.private_dependencies?.map((p) => p.package)).toContain("rho-billing-core");
+      } finally {
+        db.close();
+      }
+      expect(mentions("rho-billing")).toEqual([]);
+    });
+  });
+
+  it("B2: a workspace member's private scope from the workspace root's .npmrc is refused", async () => {
+    write(".npmrc", "@acme:registry=https://npm.acme.dev/\n");
+    write("package.json", JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"] }));
+    write("packages/app/package.json", JSON.stringify({ name: "app", dependencies: { "@acme/vault-core": "1.0.0", lodash: "4.17.21" } }));
+    const member = path.join(scratch, "packages", "app");
+    const live = liveFor(member);
+    await live.scanVulnerabilities(member, { includeDev: true });
+    const check = await executeDependencyCheck(null, { items: [{ ecosystem: "npm", package: "@acme/vault-core", to: "1.1.0" }] }, live);
+    expect(check.results[0].verdict).toBe("unknown");
+    expect(mentions("vault-core")).toEqual([]);
+    expect(mentions("lodash").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["npm", "omega-internal-risk"],
+    ["crates.io", "omega_internal_risk"],
+    ["npm", "acme-crypto-core"],
+    ["PyPI", "acme-crypto-core"],
+  ])("SF2: structured args under another ecosystem: {%s, %s} is refused, never sent", async (ecosystem, pkg) => {
+    write("requirements.txt", "--index-url https://pypi.corp-secret.example/simple\nomega-internal-risk==3.1.0\n");
+    write("Cargo.toml", '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\nacme-crypto-core = { version = "1.0.0", registry = "acme" }\n');
+    write(
+      "Cargo.lock",
+      'version = 3\n\n[[package]]\nname = "acme-crypto-core"\nversion = "1.0.0"\nsource = "sparse+https://cargo.acme.dev/index/"\n\n[[package]]\nname = "app"\nversion = "0.1.0"\ndependencies = ["acme-crypto-core"]\n',
+    );
+    const live = liveFor(scratch);
+    await live.scanVulnerabilities(scratch, { includeDev: true });
+    sent = [];
+    const check = await executeDependencyCheck(null, { items: [{ ecosystem, package: pkg, to: "1.0.1" }] }, live);
+    expect(check.results[0].verdict).toBe("unknown");
+    expect(mentions("omega")).toEqual([]);
+    expect(mentions("acme-crypto")).toEqual([]);
+  });
+
+  it("SF1: a private dependency named by its short name in a task is private and never sent", async () => {
+    write(".npmrc", "@sigma:registry=https://npm.sigma.dev/\n");
+    write("package.json", JSON.stringify({ name: "app", dependencies: { "@sigma/telemetry-x": "3.0.0", react: "18.2.0" } }));
+    write(
+      "package-lock.json",
+      JSON.stringify({
+        name: "app",
+        lockfileVersion: 3,
+        packages: {
+          "": { name: "app", dependencies: { "@sigma/telemetry-x": "3.0.0", react: "18.2.0" } },
+          "node_modules/@sigma/telemetry-x": { version: "3.0.0" },
+          "node_modules/react": { version: "18.2.0" },
+        },
+      }),
+    );
+    const live = liveFor(scratch);
+    const db = new FourDADatabase(path.join(scratch, "standalone.db"));
+    try {
+      const result = await executeWhatShouldIKnow(db, { task: "upgrade telemetry-x to 3.1.0" }, live);
+      expect(result.private_dependencies?.map((p) => p.package)).toEqual(["@sigma/telemetry-x"]);
+      expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
+      expect(mentions("telemetry")).toEqual([]);
+      // A public dependency is still itself, whatever private scope sits beside it.
+      sent = [];
+      const react = await executeWhatShouldIKnow(db, { task: "upgrade react to 18.3.1" }, live);
+      expect(react.private_dependencies ?? []).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});
