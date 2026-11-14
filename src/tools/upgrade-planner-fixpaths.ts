@@ -254,12 +254,14 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
   const heldQuery = liveIntel.queryAdvisories ? liveIntel.queryAdvisories.bind(liveIntel) : null;
   let unverified = 0;
   let next = 0;
+  const leftOver: FixPathInput[] = [];
   const worker = async () => {
     while (next < todo.length) {
       await yieldIfDue();
       if (next >= todo.length) break;
       const input = todo[next++];
       const remaining = deadline - Date.now();
+      if (remaining <= 0) leftOver.push(input);
       // On a draft: when the budget runs out first, the lookups still in flight write to the
       // draft, never to the step (readiness review 2026-10-17, finding 9).
       const draft = structuredClone(input.step);
@@ -271,7 +273,55 @@ export async function verifyFixPaths(inputs: FixPathInput[], liveIntel: Intel, b
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, todo.length) }, worker));
+  warmInBackground(leftOver, sources, liveIntel, heldQuery);
   return unverified;
+}
+
+/** Rows being worked out after their call returned, by step identity: one background pass each. */
+const WARMING = new Set<string>();
+/** A background pass stops starting rows after this long. */
+const WARM_BUDGET_MS = 60_000;
+const WARM_CONCURRENCY = 4;
+let warmEnabled = true;
+
+/** Tests turn the background pass off where they count requests per call (on by default). */
+export function setFixPathWarming(enabled: boolean): void {
+  warmEnabled = enabled;
+}
+
+/**
+ * Rows the call's budget left unstarted are worked out after it returns, on a draft that is thrown
+ * away: their lookups land in the cache, and the same scan made again answers from it. Without
+ * this a second scan of an unchanged project still asked 18 requests (8.7 s) and a third 4 more
+ * (js-nest-npm3, pre-publish round 7): every row past the deadline was started only by the next
+ * call, which again ran out of time. The same lookups the call would have made, through the same
+ * cache, rate limit and private-name guard; nothing else is sent.
+ */
+function warmInBackground(rows: FixPathInput[], sources: FixPathSources, liveIntel: Intel, heldQuery: AdvisoryQuery | null): void {
+  if (!warmEnabled || rows.length === 0) return;
+  const keyOf = (i: FixPathInput) => `${i.step.ecosystem}\0${i.step.package}\0${i.step.currentVersion}`;
+  const mine = rows.filter((i) => !WARMING.has(keyOf(i)));
+  if (mine.length === 0) return;
+  for (const i of mine) WARMING.add(keyOf(i));
+  const stopAt = Date.now() + WARM_BUDGET_MS;
+  let next = 0;
+  const worker = async () => {
+    while (next < mine.length && Date.now() < stopAt) {
+      await yieldIfDue();
+      const input = mine[next++];
+      if (!input) break;
+      try {
+        await withTimeout(verifyOne({ ...input, step: structuredClone(input.step) }, sources, liveIntel, heldQuery), Math.max(0, stopAt - Date.now()), "failed" as Outcome);
+      } catch {
+        // a background pass never surfaces anything
+      } finally {
+        WARMING.delete(keyOf(input));
+      }
+    }
+  };
+  void Promise.all(Array.from({ length: Math.min(WARM_CONCURRENCY, mine.length) }, worker)).finally(() => {
+    for (const i of mine) WARMING.delete(keyOf(i));
+  });
 }
 
 /** Make `step` equal to `draft`, keeping the object (the planner keys its inputs by it). */

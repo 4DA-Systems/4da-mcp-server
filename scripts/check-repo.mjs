@@ -20,6 +20,11 @@
  *      CI audit step, issue #9). Overrides and the build allowlist live in
  *      pnpm-workspace.yaml, which pnpm 10 and 11 both read; package.json must
  *      not carry a `pnpm` field, and the workspace file must hold overrides.
+ *   5. No array spread into a call. `x.push(...items)`, `x.splice(i, n, ...items)`, `Math.max(...values)` and
+ *      `String.fromCharCode(...codes)` put every element on the stack and throw
+ *      "Maximum call stack size exceeded" past ~100,000 elements (a 150,000-entry
+ *      pnpm lockfile did, pre-publish round 7). Server code uses pushAll / maxOf
+ *      (src/array-utils.ts). Tests are exempt.
  *
  * Exit 1 on any finding.
  */
@@ -117,6 +122,17 @@ if (pkg.pnpm !== undefined) {
 const workspace = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
 if (!/^overrides:[ \t]*\r?\n[ \t]+\S/m.test(workspace)) {
   findings.push("pnpm-workspace.yaml: no `overrides:` block. The security overrides must live there (pnpm 10 and 11 read it).");
+}
+
+// 5. No array spread into a call ---------------------------------------------
+const SPREAD_CALL = /\.(push|unshift)\(\s*\.\.\.|\.splice\([^()]*,\s*\.\.\.|Math\.(max|min)\(\s*\.\.\.|String\.from(CharCode|CodePoint)\(\s*\.\.\./;
+for (const file of walk(join(root, "src"), (p) => /\.ts$/.test(p) && !p.replaceAll("\\", "/").includes("/__tests__/"))) {
+  readFileSync(file, "utf8")
+    .split("\n")
+    .forEach((line, i) => {
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) return; // a comment naming the pattern
+      if (SPREAD_CALL.test(line)) findings.push(`${rel(file)}:${i + 1}: array spread into a call overflows the stack on a large array; use pushAll / maxOf (src/array-utils.ts)`);
+    });
 }
 
 if (findings.length) {

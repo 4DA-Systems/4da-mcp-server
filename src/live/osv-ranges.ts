@@ -17,6 +17,7 @@ import { compareToLowerBound, compareVersions, isComparable, isComposerOrGemPrer
 import { parseSemverPrecedence } from "./semver-precedence.js";
 import { isDeclaredNotice, isMaintenanceRecord } from "./maintenance.js";
 import { isMalwareRecord } from "./malware.js";
+import { pushAll } from "../array-utils.js";
 
 /**
  * One affected span: [introduced, fixed), or [introduced, lastAffected]
@@ -126,7 +127,7 @@ function listedVersions(affected: OsvVulnerability["affected"] | undefined, pack
   const out: string[] = [];
   for (const a of affected ?? []) {
     if (!a.package || a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
-    out.push(...(a.versions ?? []));
+    pushAll(out, a.versions ?? []);
   }
   return out;
 }
@@ -168,7 +169,7 @@ export function oneIdPerAdvisory(ids: readonly string[], advisories: readonly Ad
       const next = stack.pop()!;
       if (seen.has(next)) continue;
       seen.add(next);
-      stack.push(...(links.get(next) ?? []), ...(reverse.get(next) ?? []));
+      pushAll(pushAll(stack, links.get(next) ?? []), reverse.get(next) ?? []);
     }
   }
   return out;

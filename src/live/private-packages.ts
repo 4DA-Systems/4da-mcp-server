@@ -29,6 +29,7 @@ import * as path from "node:path";
 
 import { stripTrailingCommas } from "./bun-lockfile.js";
 import { anySignatureChanged, signatureMap, type FileSignature } from "./file-signature.js";
+import { pushAll } from "../array-utils.js";
 
 /** A dependency left out of every lookup because its name is private, and why. */
 export interface PrivateDependency {
@@ -439,18 +440,18 @@ export function pipConfigFiles(env: NodeJS.ProcessEnv, platform: NodeJS.Platform
   const home = (win ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir();
   const files: string[] = [];
   // Site-wide.
-  if (win) files.push(...both(p.join(env.ProgramData || env.PROGRAMDATA || env.ALLUSERSPROFILE || "C:\\ProgramData", "pip")));
+  if (win) pushAll(files, both(p.join(env.ProgramData || env.PROGRAMDATA || env.ALLUSERSPROFILE || "C:\\ProgramData", "pip")));
   const configDirs = (env.XDG_CONFIG_DIRS || (win ? "" : "/etc/xdg")).split(win ? ";" : ":").filter(Boolean);
-  for (const dir of configDirs) files.push(...both(p.join(dir, "pip")));
+  for (const dir of configDirs) pushAll(files, both(p.join(dir, "pip")));
   if (platform === "darwin") files.push("/Library/Application Support/pip/pip.conf");
   if (!win) files.push("/etc/pip.conf");
   // The user's: legacy, then APPDATA, macOS, XDG (both the variable's and the default ~/.config).
-  if (home) files.push(...both(p.join(home, "pip")), ...both(p.join(home, ".pip")));
-  if (env.APPDATA) files.push(...both(p.join(env.APPDATA, "pip")));
+  if (home) pushAll(files, [...both(p.join(home, "pip")), ...both(p.join(home, ".pip"))]);
+  if (env.APPDATA) pushAll(files, both(p.join(env.APPDATA, "pip")));
   if (platform === "darwin" && home) files.push(p.join(home, "Library", "Application Support", "pip", "pip.conf"));
-  if (env.XDG_CONFIG_HOME) files.push(...both(p.join(env.XDG_CONFIG_HOME, "pip")));
-  if (home) files.push(...both(p.join(home, ".config", "pip")));
-  if (env.VIRTUAL_ENV) files.push(...both(env.VIRTUAL_ENV));
+  if (env.XDG_CONFIG_HOME) pushAll(files, both(p.join(env.XDG_CONFIG_HOME, "pip")));
+  if (home) pushAll(files, both(p.join(home, ".config", "pip")));
+  if (env.VIRTUAL_ENV) pushAll(files, both(env.VIRTUAL_ENV));
   if (env.PIP_CONFIG_FILE) files.push(env.PIP_CONFIG_FILE);
   return [...new Set(files)];
 }
@@ -475,10 +476,10 @@ export function pipConfigIndexes(content: string): { index: string | null; extra
       const key = kv[1].toLowerCase().replaceAll("_", "-");
       const values = kv[2].split(/\s+/).filter(Boolean);
       if (key === "index-url" && values[0]) index = values[0];
-      if (key === "extra-index-url") extra.push(...values);
+      if (key === "extra-index-url") pushAll(extra, values);
       continuing = key === "extra-index-url" ? "extra" : null;
     } else if (continuing === "extra" && line.trim()) {
-      extra.push(...line.trim().split(/\s+/));
+      pushAll(extra, line.trim().split(/\s+/));
     }
   }
   return { index, extra };
@@ -571,10 +572,10 @@ export class PrivatePackageRules {
     for (const file of pipFiles) {
       const read = pipConfigIndexes(safeRead(file));
       if (read.index) noteIndex(read.index, file);
-      extra.push(...read.extra.map((url) => ({ url, from: file })));
+      pushAll(extra, read.extra.map((url) => ({ url, from: file })));
     }
     if (env.PIP_INDEX_URL?.trim()) noteIndex(env.PIP_INDEX_URL.trim(), "PIP_INDEX_URL");
-    extra.push(...(env.PIP_EXTRA_INDEX_URL ?? "").split(/\s+/).filter(Boolean).map((url) => ({ url, from: "PIP_EXTRA_INDEX_URL" })));
+    pushAll(extra, (env.PIP_EXTRA_INDEX_URL ?? "").split(/\s+/).filter(Boolean).map((url) => ({ url, from: "PIP_EXTRA_INDEX_URL" })));
     const chosen = pipIndex as { url: string; from: string } | null;
     this.pipIndex = chosen && !isPublicPypiIndex(chosen.url) ? { url: sourceLabel(chosen.url), from: chosen.from } : null;
     const extraPrivate = extra.filter((e) => !isPublicExtraPypiIndex(e.url));

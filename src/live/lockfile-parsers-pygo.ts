@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { emptySource, found, InstanceSet, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
+import { pushAll } from "../array-utils.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -193,7 +194,7 @@ export function resolvePython(cwd: string): VersionSource {
     }
     for (const index of options.extra) if (!isPublicPypiIndex(index)) extraIndexes.push({ file, index: sourceLabel(index) });
   }
-  uncheckable.push(...extras.uncheckable);
+  pushAll(uncheckable, extras.uncheckable);
   // One problem per file, however many requirement files name it.
   const problems = [...new Map([...damaged, ...collected].map((p) => [p.file.toLowerCase(), p])).values()];
   // A name some other file here pins exactly has a version to check: only what nothing pins is unpinned.
@@ -273,7 +274,7 @@ export function readRequirementsFile(
       problems.push(refusedInclude(file, option, target));
       continue;
     }
-    if (option === "r") out.push(...(readRequirementsFile(included, visited, root, problems, extras) ?? []));
+    if (option === "r") pushAll(out, readRequirementsFile(included, visited, root, problems, extras) ?? []);
     else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {

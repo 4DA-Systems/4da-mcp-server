@@ -22,6 +22,7 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { desktopAppDbPaths, type AppWritableTable, type FourDADatabase } from "./db.js";
+import { isOfflineMode as offlineFlag } from "./env-flags.js";
 
 // =============================================================================
 // Config
@@ -40,9 +41,9 @@ const DEFAULT_OLLAMA_EMBED_MODEL = "nomic-embed-text";
 const DEFAULT_OPENAI_EMBED_MODEL = "text-embedding-3-small";
 const DEFAULT_OLLAMA_URL = "http://localhost:11434";
 
-/** True when network calls are disabled by the FOURDA_OFFLINE escape hatch. */
+/** True when network calls are disabled by the FOURDA_OFFLINE escape hatch (1 / true / yes / on). */
 export function isOfflineMode(): boolean {
-  return String(process.env.FOURDA_OFFLINE || "").toLowerCase() === "true";
+  return offlineFlag();
 }
 
 /**

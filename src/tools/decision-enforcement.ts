@@ -22,6 +22,7 @@ import {
   hybridDecisionRecall,
   POSSIBLE_CONFLICT_THRESHOLD,
 } from "./decision-recall.js";
+import { maxOf } from "../array-utils.js";
 
 // ============================================================================
 // Types
@@ -270,7 +271,7 @@ function assembleAlignment(
 
   const maxConfidence =
     relevantDecisions.length > 0
-      ? Math.max(...relevantDecisions.map((d) => d.confidence))
+      ? maxOf(relevantDecisions.map((d) => d.confidence))
       : 0.5;
 
   return {

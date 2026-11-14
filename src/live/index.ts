@@ -47,6 +47,7 @@ import type {
   LiveHeadline,
   LiveIntelligenceStatus,
 } from "./types.js";
+import { isOfflineMode } from "../env-flags.js";
 
 export type {
   VulnerabilityScanResult,
@@ -160,7 +161,7 @@ export class LiveIntelligence {
    */
   constructor(db: SqliteDatabase | null, options: { advisorySource?: AdvisorySource } = {}) {
     this.db = db;
-    this.enabled = process.env.FOURDA_OFFLINE !== "true" || options.advisorySource?.network === false;
+    this.enabled = !isOfflineMode() || options.advisorySource?.network === false;
     this.cache = new LiveCache(db);
     this.privateRules = new PrivatePackageRules([]);
     this.rateLimiter = new RateLimiter(DEFAULT_RATE_LIMITS);

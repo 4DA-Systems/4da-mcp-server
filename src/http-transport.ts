@@ -41,6 +41,8 @@ import {
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { extractAuthClaims, getAuthSecret, type TeamClaims } from "./auth.js";
 import { runWithAuthContext } from "./auth-context.js";
+import { envFlag } from "./env-flags.js";
+import { batchRefusedMessage } from "./stdio-gate.js";
 
 const DEFAULT_PORT = 4840;
 const DEFAULT_HOST = "127.0.0.1";
@@ -112,7 +114,8 @@ export function resolveSecurityPolicy(host: string): HttpSecurityPolicy {
 
   return {
     loopback,
-    authRequired: loopback ? process.env.MCP_AUTH_REQUIRED === "true" : true,
+    // 1 / true / yes / on, any case (env-flags.ts); an unreadable value is read as required.
+    authRequired: loopback ? envFlag("MCP_AUTH_REQUIRED") : true,
     allowedHostnames: [...localhostAllowedHostnames(), ...bindExtras, ...extras],
     allowedOrigins: [...localhostAllowedOrigins(), ...bindExtras, ...extras],
   };
@@ -152,6 +155,91 @@ export function evaluateRequestGuard(
   }
 
   return null;
+}
+
+/** The path of a request target, or null when it is not a URL at all (`http://[`). */
+export function requestPathname(target: string | undefined): string | null {
+  try {
+    // A fixed base: the bind address is not a valid URL host for every bind (`::1` unbracketed).
+    return new URL(target || "/", "http://localhost").pathname;
+  } catch {
+    return null;
+  }
+}
+
+/** The body bytes this transport peeks at to find a batch; the SDK's own limit (4 MiB) applies after. */
+const PEEK_LIMIT = 4 * 1024 * 1024;
+
+/**
+ * The first protocol revision without JSON-RPC batches. 2025-03-26 required a server to accept
+ * them; 2025-06-18 removed them, and the 2026-07-28 revision has none.
+ */
+const FIRST_REVISION_WITHOUT_BATCHES = "2025-06-18";
+
+/**
+ * The protocol revision a POST speaks: its `MCP-Protocol-Version` header, else the version an
+ * `initialize` in it asks for, else 2025-03-26, which the transport spec says a server assumes
+ * when a request names none.
+ */
+function requestRevision(header: string | string[] | undefined, messages: unknown[]): string {
+  const named = Array.isArray(header) ? header[0] : header;
+  if (named && named.trim()) return named.trim();
+  for (const m of messages) {
+    if (m && typeof m === "object" && (m as { method?: unknown }).method === "initialize") {
+      const version = (m as { params?: { protocolVersion?: unknown } }).params?.protocolVersion;
+      if (typeof version === "string") return version;
+    }
+  }
+  return "2025-03-26";
+}
+
+/**
+ * Peeks at a POST body for a JSON-RPC batch, and answers one the way stdio does (stdio-gate.ts):
+ * -32600, id null. A batch is passed on only when the request speaks 2025-03-26 or earlier, the
+ * revisions that require a server to accept one (pre-publish round 7: HTTP served every batch
+ * while stdio refused them). The body read here is handed on unchanged as a replayed stream, so
+ * the SDK parses it, sizes it and answers its errors exactly as before.
+ */
+async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<string, unknown> | null; body: IncomingMessage }> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  const iterator = req[Symbol.asyncIterator]();
+  let complete = true;
+  for (;;) {
+    const next = await iterator.next();
+    if (next.done) break;
+    const chunk = typeof next.value === "string" ? Buffer.from(next.value) : (next.value as Buffer);
+    chunks.push(chunk);
+    size += chunk.byteLength;
+    if (size > PEEK_LIMIT) {
+      complete = false;
+      break;
+    }
+  }
+  const rest = complete ? null : iterator;
+  const replay = Object.assign(Object.create(req) as IncomingMessage, {
+    [Symbol.asyncIterator]: async function* () {
+      for (const chunk of chunks) yield chunk;
+      if (rest) {
+        for (;;) {
+          const next = await rest.next();
+          if (next.done) return;
+          yield next.value;
+        }
+      }
+    },
+  });
+  if (!complete) return { refusal: null, body: replay };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    return { refusal: null, body: replay };
+  }
+  if (!Array.isArray(parsed)) return { refusal: null, body: replay };
+  const revision = requestRevision(req.headers["mcp-protocol-version"], parsed);
+  if (revision < FIRST_REVISION_WITHOUT_BATCHES) return { refusal: null, body: replay };
+  return { refusal: { jsonrpc: "2.0", id: null, error: { code: -32600, message: batchRefusedMessage("http") } }, body: replay };
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -222,7 +310,7 @@ export async function startHttpServer(
     },
   });
 
-  const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // DNS rebinding protection — every request, before routing or auth.
     const rejection = evaluateRequestGuard(req.headers, policy);
     if (rejection) {
@@ -230,7 +318,11 @@ export async function startHttpServer(
       return;
     }
 
-    const pathname = new URL(req.url || "/", `http://${host}:${port}`).pathname;
+    const pathname = requestPathname(req.url);
+    if (pathname === null) {
+      sendJson(res, 400, { error: "Bad Request: the request target is not a valid URL" });
+      return;
+    }
 
     // Auth gate. Unauthenticated health checks on "/" stay open so liveness
     // probes work; the endpoint reveals only name, version and status.
@@ -267,9 +359,36 @@ export async function startHttpServer(
     // Hand off to the MCP handler — body parsing, era classification, and
     // per-request instance construction happen inside the entry. The auth
     // context rides along so tool dispatch can enforce the verified role.
+    // A JSON-RPC batch is refused here as stdio refuses it, unless the request speaks a protocol
+    // revision that requires batches (batchRefusal).
+    if (req.method === "POST") {
+      const refused = await batchRefusal(req);
+      if (refused.refusal) {
+        sendJson(res, 400, refused.refusal);
+        return;
+      }
+      await runWithAuthContext({ claims, enforced: policy.authRequired }, () => handleMcpRequest(refused.body, res));
+      return;
+    }
+
     await runWithAuthContext({ claims, enforced: policy.authRequired }, () =>
       handleMcpRequest(req, res),
     );
+  };
+
+  // No single request can stop the server: anything a handler throws is answered (500) or, once
+  // the response has started, ends that connection. A request target of `http://[` used to throw
+  // out of `new URL()` here and end the process, before authentication (pre-publish round 7).
+  const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+    handle(req, res).catch((error: unknown) => {
+      console.error(`[4DA] HTTP request failed: ${error instanceof Error ? error.message : String(error)}`);
+      try {
+        if (!res.headersSent) sendJson(res, 500, { error: "Internal Server Error" });
+        else res.destroy();
+      } catch {
+        res.destroy();
+      }
+    });
   });
 
   await new Promise<void>((resolve, reject) => {

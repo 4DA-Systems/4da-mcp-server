@@ -27,6 +27,8 @@ import type {
   VulnerabilityEntry,
   VulnerabilityScanResult,
 } from "./types.js";
+import { pushAll } from "../array-utils.js";
+import { isOfflineMode } from "../env-flags.js";
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns/";
@@ -490,7 +492,7 @@ export class OsvScanner {
     for (const dep of scannable) {
       const cached = cachedFor.get(osvCacheKey(dep)) ?? null;
       if (cached !== null) {
-        cachedVulns.push(...cached.map((v) => restampDepContext(v, dep)));
+        pushAll(cachedVulns, cached.map((v) => restampDepContext(v, dep)));
       } else {
         uncached.push(dep);
       }
@@ -513,9 +515,11 @@ export class OsvScanner {
     const notRelease = uncached.filter((d) => !isConcreteVersion(d.version));
     let notReleaseWhy: string | null = null;
     if (notRelease.length > 0) {
-      unanswered.push(...notRelease);
+      pushAll(unanswered, notRelease);
       notReleaseWhy = `"${notRelease[0].version ?? ""}" is not a release number OSV.dev can be asked about, so it was not sent`;
-      uncached.splice(0, uncached.length, ...uncached.filter((d) => isConcreteVersion(d.version)));
+      const releases = uncached.filter((d) => isConcreteVersion(d.version));
+      uncached.length = 0;
+      pushAll(uncached, releases);
     }
     const theirs = network ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
     const mine = theirs.length > 0 ? uncached.filter((d) => !this.inFlight.has(osvCacheKey(d))) : uncached;
@@ -542,7 +546,7 @@ export class OsvScanner {
       const still: ResolvedDependency[] = [];
       for (const dep of theirs) {
         const hit = filled.get(osvCacheKey(dep));
-        if (hit) cachedVulns.push(...hit.map((v) => restampDepContext(v, dep)));
+        if (hit) pushAll(cachedVulns, hit.map((v) => restampDepContext(v, dep)));
         else still.push(dep);
       }
       return still;
@@ -551,8 +555,8 @@ export class OsvScanner {
     const again = still.length > 0 ? await ask(still) : null;
     for (const outcome of [first, again]) {
       if (!outcome) continue;
-      fetchedVulns.push(...outcome.vulns);
-      unanswered.push(...outcome.unanswered);
+      pushAll(fetchedVulns, outcome.vulns);
+      pushAll(unanswered, outcome.unanswered);
       failure = failure ?? outcome.failure;
     }
 
@@ -567,7 +571,7 @@ export class OsvScanner {
       if (stale) {
         staleAnswers++;
         if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
-        cachedVulns.push(...stale.data.map((v) => restampDepContext(v, dep)));
+        pushAll(cachedVulns, stale.data.map((v) => restampDepContext(v, dep)));
       } else {
         unchecked.push(dep);
       }
@@ -652,7 +656,7 @@ export class OsvScanner {
     const asked = toRead.slice(0, MAX_ALIAS_LOOKUPS);
     let records = new Map<string, OsvVulnerability>();
     const reasons: string[] = toRead.length > asked.length ? [`more than ${MAX_ALIAS_LOOKUPS} aliases to read; the rest were not asked for`] : [];
-    if (asked.length > 0 && this.source.network && process.env.FOURDA_OFFLINE === "true") {
+    if (asked.length > 0 && this.source.network && isOfflineMode()) {
       reasons.push("live lookups are disabled (FOURDA_OFFLINE=true)");
     } else if (asked.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -708,7 +712,7 @@ export class OsvScanner {
     const source = this.source;
     if (!source.recordsFor) return out;
     const unread = matches.filter((m) => m.ids.some((id) => isOsvAdvisoryId(id) && !detailById.has(id))).map((m) => m.dep);
-    if (unread.length === 0 || (source.network && process.env.FOURDA_OFFLINE === "true")) return out;
+    if (unread.length === 0 || (source.network && isOfflineMode())) return out;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, this.aliasBudgetMs);
@@ -782,7 +786,7 @@ export class OsvScanner {
       // critical into "unknown, no fix" for every scan in it (audit 2026-11-11, T7). Only a
       // dependency whose every advisory was read is cached; the rest are asked again next time.
       if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v8:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
-      results.push(...depVulns);
+      pushAll(results, depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
 

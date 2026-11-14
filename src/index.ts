@@ -35,7 +35,11 @@
  */
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { StdioGate } from "./stdio-gate.js";
-import { Server } from "@modelcontextprotocol/server";
+import type { Server } from "@modelcontextprotocol/server";
+import { FourDAServer, ownHandler } from "./mcp-server.js";
+import { parseCliArgs } from "./cli-args.js";
+import { installProcessGuards } from "./process-guards.js";
+import { warnUnreadableEnvFlags } from "./env-flags.js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -349,7 +353,8 @@ function scheduleBackgroundInit(): void {
  * shares the same lazily-initialized database and live-intelligence layer.
  */
 export function buildServer(): Server {
-  const server = new Server(
+  // FourDAServer: params the SDK rejects are answered -32602, not -32603 (mcp-server.ts).
+  const server = new FourDAServer(
     {
       name: "4da-server",
       version: SERVER_VERSION,
@@ -370,31 +375,31 @@ export function buildServer(): Server {
   // used to open the database AND resolve every lockfile synchronously first
   // (measured 6.6 s on a 2,063-dependency tree), stalling the host's handshake.
   // The full init is started right after the first listing is sent.
-  server.setRequestHandler("tools/list", async () => {
+  server.setRequestHandler("tools/list", ownHandler(async () => {
     scheduleBackgroundInit();
     return {
       tools: getSlimToolList(isStandaloneMode() ? true : undefined),
     };
-  });
+  }));
 
   // Resources: every tool's full schema (lazy loading), and the category
   // manifest. An unknown URI is a resource-not-found protocol error.
   // Filtered as tools/list is: standalone mode advertised the 5 desktop-only schemas (audit L6).
-  server.setRequestHandler("resources/list", async () => ({ resources: listResources(isStandaloneMode() ? true : undefined) }));
+  server.setRequestHandler("resources/list", ownHandler(async () => ({ resources: listResources(isStandaloneMode() ? true : undefined) })));
 
-  server.setRequestHandler("resources/read", async (request) => readResource(request.params.uri, isStandaloneMode() ? true : undefined));
+  server.setRequestHandler("resources/read", ownHandler(async (request) => readResource(request.params.uri, isStandaloneMode() ? true : undefined)));
 
   // Prompts: user-invoked workflows (surfaced as slash commands by some hosts).
-  server.setRequestHandler("prompts/list", async () => ({ prompts: listPrompts() }));
+  server.setRequestHandler("prompts/list", ownHandler(async () => ({ prompts: listPrompts() })));
 
-  server.setRequestHandler("prompts/get", async (request) => {
+  server.setRequestHandler("prompts/get", ownHandler(async (request) => {
     const prompt = getPrompt(request.params.name, request.params.arguments);
     if (!prompt) throw unknownPromptError(request.params.name);
     return prompt;
-  });
+  }));
 
   // Execute a tool
-  server.setRequestHandler("tools/call", async (request) => {
+  server.setRequestHandler("tools/call", ownHandler(async (request) => {
     // The call's time budget counts from here: the first call of a session also pays for the project scan.
     const startedAt = Date.now();
     const { name, arguments: args } = request.params;
@@ -444,7 +449,7 @@ export function buildServer(): Server {
         isError: true,
       };
     }
-  });
+  }));
 
   return server;
 }
@@ -466,6 +471,51 @@ function withDatabaseNote(result: ToolResult, note: string): ToolResult {
 // Server Lifecycle
 // =============================================================================
 
+/** --help, and the text an unknown argument exits with (cli-args.ts). */
+const USAGE = `
+  @4da/mcp-server — Dependency intelligence for AI coding agents
+
+  Usage:
+    npx @4da/mcp-server              Start MCP server (stdio transport)
+    npx @4da/mcp-server --http       Start Streamable HTTP transport
+    npx @4da/mcp-server --setup      Auto-configure your editor
+    npx @4da/mcp-server --doctor     Check installation health
+    npx @4da/mcp-server --version    Print version
+
+  Options:
+    --http              Use Streamable HTTP instead of stdio
+    --port <number>     HTTP port, 1 to 65535 (default: 4840)
+    --host <address>    HTTP bind address (default: 127.0.0.1). A non-loopback
+                        address exposes every tool to the network and is
+                        refused unless MCP_AUTH_SECRET is set; authentication
+                        is then mandatory for every request.
+    --setup             Detect editors and write MCP config
+    --dry-run           With --setup: print each file and entry, write nothing
+    --doctor            Validate database, bindings, and LLM providers
+
+  An argument not listed here exits with this text and code 2.
+
+  Environment (a yes/no variable is on for 1, true, yes or on, any case):
+    FOURDA_DB_PATH      Path to 4DA's SQLite database (auto-detected if omitted)
+    FOURDA_OFFLINE      Set to 1 / true to disable all network calls (OSV.dev, HN)
+    FOURDA_CALL_BUDGET_MS  Time one tool call may take (default 20000). Past it the
+                        call is answered NOT CHECKED; its lookups run on and are cached.
+    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Every lookup goes through the proxy (NO_PROXY
+                        honoured); an unreachable proxy means NOT CHECKED, never direct.
+    MCP_AUTH_SECRET     Shared secret for verifying relay-issued Bearer tokens
+                        (HMAC-SHA256). Falls back to JWT_SECRET. Without it, no
+                        token is accepted.
+    MCP_AUTH_REQUIRED   Set to 1 / true to require auth on a loopback --http bind
+                        (always required on a non-loopback bind)
+    MCP_ALLOWED_HOSTS   Extra comma-separated hostnames accepted in the Host /
+                        Origin headers (needed when binding to 0.0.0.0)
+
+  Works standalone (scans your project on startup) or with the full
+  4DA desktop app for content scoring, source monitoring, and more.
+  Desktop app: https://github.com/4DA-Systems/4DA/releases/latest
+  Docs:        https://4da.ai
+`;
+
 /**
  * Start the MCP server
  *
@@ -475,7 +525,13 @@ function withDatabaseNote(result: ToolResult, note: string): ToolResult {
  *   --setup    Configure editors for 4DA MCP
  */
 async function main() {
-  const args = process.argv.slice(2);
+  const parsed = parseCliArgs(process.argv.slice(2));
+  if (!parsed.ok) {
+    console.error(`[4DA] ${parsed.error}`);
+    console.error(USAGE);
+    process.exit(2);
+  }
+  const command = parsed.command;
 
   // Say it before anything else: a stale dist answers with code the repo has
   // already replaced (the 2026-08-30 server was two days behind its src and
@@ -490,99 +546,41 @@ async function main() {
     // The self-check must never block startup.
   }
 
-  // Version
-  if (args.includes("--version") || args.includes("-v")) {
+  if (command.kind === "version") {
     console.log(`@4da/mcp-server ${SERVER_VERSION}`);
     return;
   }
 
-  // Help
-  if (args.includes("--help") || args.includes("-h")) {
-    console.log(`
-  @4da/mcp-server — Dependency intelligence for AI coding agents
-
-  Usage:
-    npx @4da/mcp-server              Start MCP server (stdio transport)
-    npx @4da/mcp-server --http       Start Streamable HTTP transport
-    npx @4da/mcp-server --setup      Auto-configure your editor
-    npx @4da/mcp-server --doctor     Check installation health
-    npx @4da/mcp-server --version    Print version
-
-  Options:
-    --http              Use Streamable HTTP instead of stdio
-    --port <number>     HTTP port (default: 4840)
-    --host <address>    HTTP bind address (default: 127.0.0.1). A non-loopback
-                        address exposes every tool to the network and is
-                        refused unless MCP_AUTH_SECRET is set; authentication
-                        is then mandatory for every request.
-    --setup             Detect editors and write MCP config
-    --dry-run           With --setup: print each file and entry, write nothing
-    --doctor            Validate database, bindings, and LLM providers
-
-  Environment:
-    FOURDA_DB_PATH      Path to 4DA's SQLite database (auto-detected if omitted)
-    FOURDA_OFFLINE      Set to "true" to disable all network calls (OSV.dev, HN)
-    FOURDA_CALL_BUDGET_MS  Time one tool call may take (default 20000). Past it the
-                        call is answered NOT CHECKED; its lookups run on and are cached.
-    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Every lookup goes through the proxy (NO_PROXY
-                        honoured); an unreachable proxy means NOT CHECKED, never direct.
-    MCP_AUTH_SECRET     Shared secret for verifying relay-issued Bearer tokens
-                        (HMAC-SHA256). Falls back to JWT_SECRET. Without it, no
-                        token is accepted.
-    MCP_AUTH_REQUIRED   Set to "true" to require auth on a loopback --http bind
-                        (always required on a non-loopback bind)
-    MCP_ALLOWED_HOSTS   Extra comma-separated hostnames accepted in the Host /
-                        Origin headers (needed when binding to 0.0.0.0)
-
-  Works standalone (scans your project on startup) or with the full
-  4DA desktop app for content scoring, source monitoring, and more.
-  Desktop app: https://github.com/4DA-Systems/4DA/releases/latest
-  Docs:        https://4da.ai
-`);
+  if (command.kind === "help") {
+    console.log(USAGE);
     return;
   }
 
   // Setup command: configure editors
-  if (args.includes("--setup") || args.includes("setup")) {
-    runSetup(args.includes("--dry-run"));
+  if (command.kind === "setup") {
+    runSetup(command.dryRun);
     return;
   }
 
   // Doctor command: validate installation health
-  if (args.includes("--doctor") || args.includes("doctor")) {
+  if (command.kind === "doctor") {
     runDoctor();
     return;
   }
+
+  // A FOURDA_OFFLINE or MCP_AUTH_REQUIRED value that is not a yes or a no is said once (env-flags.ts).
+  warnUnreadableEnvFlags();
+  // An error no request handled is logged and the server keeps serving (process-guards.ts).
+  installProcessGuards();
 
   // HTTPS_PROXY / HTTP_PROXY: every lookup goes through it (live/http-utils.ts); said here (proxy.ts).
   const proxy = configureProxy();
   if (proxy.note) console.error(`[4DA] ${proxy.note}`);
 
   // HTTP transport mode
-  if (args.includes("--http")) {
-    const flagValue = (flag: string): string | undefined => {
-      const i = args.indexOf(flag);
-      if (i === -1) return undefined;
-      const value = args[i + 1];
-      // A flag with no value (or followed by another flag) is a typo, not a
-      // request to bind everywhere — refuse rather than guess.
-      if (value === undefined || value.startsWith("-")) {
-        console.error(`[4DA] ${flag} requires a value`);
-        process.exit(1);
-      }
-      return value;
-    };
-
-    const rawPort = flagValue("--port");
-    const port = rawPort === undefined ? 4840 : Number.parseInt(rawPort, 10);
-    if (!Number.isInteger(port) || port < 0 || port > 65535) {
-      console.error(`[4DA] Invalid --port value: ${rawPort}`);
-      process.exit(1);
-    }
-    const host = flagValue("--host") ?? "127.0.0.1";
-
+  if (command.kind === "http") {
     try {
-      await startHttpServer(buildServer, { port, host });
+      await startHttpServer(buildServer, { port: command.port, host: command.host });
     } catch (error) {
       // Bind-policy refusals carry an actionable message; print it plainly
       // rather than as an unhandled stack trace.

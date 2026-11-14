@@ -21,6 +21,7 @@ import {
   requirementNamesWithIncludes,
 } from "./project-manifests.js";
 import { readTextFile } from "./live/text-file.js";
+import { pushAll } from "./array-utils.js";
 
 // =============================================================================
 // Types
@@ -167,7 +168,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       // Production dependencies (filter Node.js built-ins)
       if (pkg.dependencies && typeof pkg.dependencies === "object") {
         const depNames = Object.keys(pkg.dependencies).filter(d => !NODE_BUILTINS.has(d));
-        result.dependencies.push(...depNames);
+        pushAll(result.dependencies, depNames);
 
         for (const dep of depNames) {
           if (dep in NPM_FRAMEWORK_MAP) {
@@ -179,7 +180,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       // Dev dependencies (filter Node.js built-ins)
       if (pkg.devDependencies && typeof pkg.devDependencies === "object") {
         const devDepNames = Object.keys(pkg.devDependencies).filter(d => !NODE_BUILTINS.has(d));
-        result.devDependencies.push(...devDepNames);
+        pushAll(result.devDependencies, devDepNames);
 
         for (const dep of devDepNames) {
           if (dep in NPM_DEVTOOL_MAP) {
@@ -247,8 +248,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       }
 
       // Add to flat arrays for backward compat
-      result.dependencies.push(...rustDeps);
-      result.devDependencies.push(...rustDevDeps);
+      pushAll(result.dependencies, rustDeps);
+      pushAll(result.devDependencies, rustDevDeps);
 
       // Populate per-ecosystem tracking for rust
       if (rustDeps.length > 0 || rustDevDeps.length > 0) {
@@ -297,7 +298,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
     result.dependencies.push(name);
     detectPythonFramework(name, fwSet);
   }
-  result.devDependencies.push(...pyDevDeps);
+  pushAll(result.devDependencies, pyDevDeps);
   if (pyDeps.size > 0 || pyDevDeps.size > 0) {
     result.depsByEcosystem["python"] = { deps: [...pyDeps], devDeps: [...pyDevDeps] };
   }
