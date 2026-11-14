@@ -44,10 +44,13 @@ for (const key of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO
 
 // Every file the server writes (cache.db, and standalone.db as the memory
 // store beside the desktop app's read-only database) goes under FOURDA_MCP_HOME:
-// a per-worker temp directory, never the operator's real data directory.
-if (!process.env.FOURDA_MCP_HOME) {
+// a per-worker temp directory, never the operator's real data directory. Always: a FOURDA_MCP_HOME
+// set in the shell shared one cache across workers and runs, and a lookup a test expects to fail
+// was answered from an earlier run's cache (final-audit-625 7a, blind audit round 3).
+{
   const { mkdtempSync, rmSync } = await import("node:fs");
   const { afterAll } = await import("vitest");
+  const outer = process.env.FOURDA_MCP_HOME;
   const home = mkdtempSync(join(tmpdir(), "4da-mcp-home-"));
   process.env.FOURDA_MCP_HOME = home;
   afterAll(async () => {
@@ -58,7 +61,8 @@ if (!process.env.FOURDA_MCP_HOME) {
     } catch {
       // A handle a test left open (Windows): the OS temp cleaner gets it.
     }
-    delete process.env.FOURDA_MCP_HOME;
+    if (outer === undefined) delete process.env.FOURDA_MCP_HOME;
+    else process.env.FOURDA_MCP_HOME = outer;
   });
 }
 

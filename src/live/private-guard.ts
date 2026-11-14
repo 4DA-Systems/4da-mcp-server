@@ -104,6 +104,24 @@ const INVISIBLE = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿�
  * space, as a registry URL, or as a Go path with a capitalised host reached the network: only
  * the exact spelling was recognised (blind audit 2026-11-14, F2). Only more refusals can follow.
  */
+/**
+ * Free text (a briefing task) as a reader sees it: percent-escapes decoded and invisible characters
+ * removed, before any package name is read from it. "install %40acme%2Fvault-core version 2.0.0"
+ * was split at the `%` and `2fvault-core` sent to OSV.dev and npm, naming the private
+ * `@acme/vault-core` (black-box round 3, 2026-11-14). A malformed escape is left as written.
+ */
+export function readableText(text: string): string {
+  const decoded = text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      // Not UTF-8 as a whole: each escape that is a single ASCII byte on its own.
+      return run.replace(/%([0-7][0-9a-f])/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    }
+  });
+  return decoded.replace(INVISIBLE, "");
+}
+
 export function nameForms(name: string): string[] {
   const out = new Set<string>();
   const add = (s: string) => {

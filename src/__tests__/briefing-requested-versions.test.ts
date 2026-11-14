@@ -12,7 +12,7 @@ import Database from "better-sqlite3";
 import { FourDADatabase } from "../db.js";
 import { LiveIntelligence } from "../live/index.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { detectRequestedVersions } from "../tools/briefing-requested-versions.js";
+import { detectRequestedVersions, readTaskVersions } from "../tools/briefing-requested-versions.js";
 import type { ResolvedDependency } from "../live/types.js";
 
 const NOW = new Date("2026-11-14T00:00:00Z");
@@ -177,6 +177,20 @@ describe("the version a task names is judged, at that version", () => {
     }
   });
 
+  it("a version the briefing cannot tie to a package keeps it from safe_to_delegate, and says which", async () => {
+    const result = await brief("fix the login bug and bump the version to 2.4.1", { lodash: "4.17.21" });
+    expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(result.delegation_assessment.reason).toContain("the task names 2.4.1, which this briefing could not tie to a package");
+  });
+
+  it.each(["Add the event-stream package at 3.3.6", "add event-stream at version 3.3.6", 'Write "event-stream": "3.3.6" into package.json'])(
+    '"%s": human_only (blind audit round 3, B3)',
+    async (task) => {
+      const result = await brief(task, { lodash: "4.17.21" });
+      expect(result.delegation_assessment.level).toBe("human_only");
+    },
+  );
+
   it('"upgrade lodash to 4.17.21" from an installed 4.17.20: judged as that move, and it clears', async () => {
     const result = await brief("upgrade lodash to 4.17.21", { lodash: "4.17.20" });
     expect(result.requested_versions?.find((r) => r.name === "lodash")).toMatchObject({ to: "4.17.21", from: "4.17.20", verdict: "proceed" });
@@ -200,8 +214,43 @@ describe("the forms a task names a version in", () => {
     ["Add the package `event-stream` version 3.3.6 to package.json", [], { name: "event-stream", ecosystem: "npm", to: "3.3.6" }],
     ["set lodash version to 4.17.20", [dep("lodash", "4.17.21")], { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.17.21" }],
     ["use version 4.17.20 of lodash", [], { name: "lodash", ecosystem: "npm", to: "4.17.20" }],
+    // blind audit round 3, B3: each of these judged latest, or nothing, and came back safe_to_delegate.
+    ["Add the event-stream package at 3.3.6", [], { name: "event-stream", ecosystem: "npm", to: "3.3.6" }],
+    ["add event-stream at version 3.3.6", [], { name: "event-stream", ecosystem: "npm", to: "3.3.6" }],
+    ["add event-stream ==3.3.6", [], { name: "event-stream", ecosystem: "npm", to: "3.3.6" }],
+    ['"event-stream": "3.3.6"', [], { name: "event-stream", ecosystem: "npm", to: "3.3.6" }],
+    ["set the lodash dependency to 4.17.20", [dep("lodash", "4.18.1")], { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.18.1" }],
+    ["change lodash's version to 4.17.20", [dep("lodash", "4.18.1")], { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.18.1" }],
+    ["lodash: 4.18.1 -> 4.17.20", [dep("lodash", "4.18.1")], { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.18.1" }],
+    ['Write "lodash": "4.17.20" into package.json', [dep("lodash", "4.18.1")], { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.18.1" }],
+    ["install colors@1.4.44-liberty-2", [], { name: "colors", ecosystem: "npm", to: "1.4.44-liberty-2" }],
+    ["go get golang.org/x/net@v0.0.0-20210226172049-e18ecbb05110", [], { name: "golang.org/x/net", ecosystem: "Go", to: "v0.0.0-20210226172049-e18ecbb05110" }],
+    ["Upgrade the express package to 4.17.1", [], { name: "express", ecosystem: "npm", to: "4.17.1" }],
+    ["roll lodash back to 4.17.20", [dep("lodash", "4.18.1")], { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.18.1" }],
+    ["cargo add smallvec@0.6.9", [], { name: "smallvec", ecosystem: "crates.io", to: "0.6.9" }],
   ])("%s", (task, deps, expected) => {
     expect(detectRequestedVersions(task, deps as ResolvedDependency[])[0]).toEqual(expected);
+  });
+
+  it("two packages in one Cargo task are both crates, and a prose word is never a package", () => {
+    expect(detectRequestedVersions("add serde_json 1 and smallvec 0.6.9 to Cargo.toml", [])).toEqual([
+      { name: "serde_json", ecosystem: "crates.io", to: "1" },
+      { name: "smallvec", ecosystem: "crates.io", to: "0.6.9" },
+    ]);
+    expect(detectRequestedVersions("install omega-flag-beta and set lodash to 4.17.20", [dep("lodash", "4.18.1")])).toEqual([
+      { name: "lodash", ecosystem: "npm", to: "4.17.20", from: "4.18.1" },
+    ]);
+  });
+
+  it.each([
+    ["upgrade to node 20 and python 3.12", [], []],
+    ["fix the login bug and bump the version to 2.4.1", [], ["2.4.1"]],
+    ["apply the 2.4.1 hotfix", [], ["2.4.1"]],
+    ["migrate the API from v1 to v2", [], []],
+  ])("%s: runtimes are not packages; a version tied to nothing is unread (%j, %j)", (task, requested, unread) => {
+    const read = readTaskVersions(task, []);
+    expect(read.requested).toEqual(requested);
+    expect(read.unread).toEqual(unread);
   });
 
   it("names no version: nothing is requested", () => {

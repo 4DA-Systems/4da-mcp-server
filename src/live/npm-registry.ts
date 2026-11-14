@@ -9,6 +9,7 @@
  */
 
 import type { LiveCache } from "./cache.js";
+import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchJson, fetchWithTimeout } from "./http-utils.js";
 import type { RegistryPackageInfo, SemverDistance } from "./types.js";
@@ -135,7 +136,8 @@ interface NpmPackageFacts {
 function packageFacts(meta: NpmAbbreviatedMeta): NpmPackageFacts {
   const deprecations: Record<string, string> = {};
   for (const [version, entry] of Object.entries(meta.versions || {})) {
-    if (entry?.deprecated) deprecations[version] = entry.deprecated;
+    // One line, invisible characters removed: dependency_health and upgrade_planner print it (blind audit round 3, CR/LF nit).
+    if (entry?.deprecated) deprecations[version] = sanitizeThirdParty(entry.deprecated) || "deprecated";
   }
   return {
     latestTag: meta["dist-tags"]?.latest ?? null,

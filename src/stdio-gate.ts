@@ -76,7 +76,20 @@ export class StdioGate extends Transform {
       });
       return;
     }
-    if (!this.opened && isObject(message) && typeof message.method === "string") {
+    // A message that is not JSON-RPC 2.0, or a request whose id is null (MCP: "MUST NOT be null"):
+    // the SDK dropped both without a word (blind audit round 3).
+    const invalid =
+      message.jsonrpc !== "2.0"
+        ? `Invalid Request: "jsonrpc" must be "2.0" (got ${JSON.stringify(message.jsonrpc ?? null).slice(0, 40)}).`
+        : typeof message.method === "string" && "id" in message && message.id === null
+          ? "Invalid Request: a request id must be a string or a number, never null (MCP); omit id only for a notification."
+          : null;
+    if (invalid) {
+      const id = typeof message.id === "string" || typeof message.id === "number" ? message.id : null;
+      this.reply({ jsonrpc: "2.0", id, error: { code: -32600, message: invalid } });
+      return;
+    }
+    if (!this.opened && typeof message.method === "string") {
       const method = message.method;
       const claimed = isObject(message.params) && isObject(message.params._meta) && typeof message.params._meta[PROTOCOL_CLAIM] === "string";
       const isRequest = "id" in message && message.id !== null && message.id !== undefined;

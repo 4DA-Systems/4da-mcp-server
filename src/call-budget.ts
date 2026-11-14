@@ -83,8 +83,9 @@ export async function settleWithin<T>(work: Promise<T>, ms: number, late: () => 
   }
 }
 
-/** "20 s", "0.3 s": a budget as an answer states it. */
+/** "20 s", "0.3 s", "40 ms": a budget as an answer states it (under 0.05 s it is in ms, never "0 s": blind audit round 3). */
 export function secondsText(ms: number): string {
+  if (ms < 50) return `${Math.max(0, Math.round(ms))} ms`;
   return `${Math.round(ms / 100) / 10} s`;
 }
 

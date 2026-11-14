@@ -22,6 +22,7 @@ export interface PrivateTaskPackage {
 
 export interface PrivateLookup {
   getPrivateAuditDeps?(): ResolvedDependency[];
+  getAuditDeps?(): ResolvedDependency[];
   getPrivateDependencies?(): Array<{ ecosystem: string; name: string; version: string | null; why: string }>;
   privateReason?(ecosystem: string, name: string): string | null;
 }
@@ -45,6 +46,24 @@ export function privateTaskPackages(task: string, files: string[], live: Private
       why: why.get(`${pkg.ecosystem}\0${pkg.name}`) ?? "private",
     });
   }
+  // A private dependency named by its short name: "upgrade telemetry-x to 3.1" for @sigma/telemetry-x,
+  // "update secret-go" for github.com/acmecorp/secret-go (blind audit round 3).
+  const words = new Set((task.match(NAME_TOKEN) ?? []).map((t) => t.replace(/[.,;:]+$/, "").toLowerCase()));
+  // A short name the project also installs publicly (`react` beside a private `@acme/react`) is that public package.
+  const publicNames = new Set((live.getAuditDeps?.() ?? []).map((d) => d.name.toLowerCase()));
+  for (const p of live.getPrivateDependencies?.() ?? []) {
+    const short = p.name.split("/").pop()!.toLowerCase();
+    const byShort = words.has(short) && !publicNames.has(short);
+    if (!words.has(p.name.toLowerCase()) && !byShort) continue;
+    if ([...out.values()].some((o) => o.ecosystem === p.ecosystem && o.package === p.name)) continue;
+    const copies = installed.filter((d) => d.ecosystem === p.ecosystem && d.name === p.name);
+    out.set(`${p.ecosystem}\0${p.name}`, {
+      package: p.name,
+      ecosystem: p.ecosystem,
+      installed: [...new Set(copies.map((d) => d.version).filter((v): v is string => Boolean(v)))],
+      why: p.why,
+    });
+  }
   if (live.privateReason) {
     for (const token of task.match(NAME_TOKEN) ?? []) {
       const name = token.replace(/[.,;:]+$/, "");
@@ -52,7 +71,8 @@ export function privateTaskPackages(task: string, files: string[], live: Private
         const reason = live.privateReason(ecosystem, name);
         if (!reason) continue;
         const key = `${ecosystem}\0${name}`;
-        if (![...out.values()].some((p) => p.ecosystem === ecosystem && p.package.toLowerCase() === name.toLowerCase())) {
+        // Once per name: a private PyPI dependency is not listed again as private under npm.
+        if (![...out.values()].some((p) => p.package.toLowerCase() === name.toLowerCase())) {
           out.set(key, { package: name, ecosystem, installed: [], why: reason });
         }
         break;

@@ -61,6 +61,8 @@ export type {
 
 /** Minimum gap between vulnerability warmup attempts after an offline result. */
 const WARMUP_RETRY_MS = 60_000;
+/** Every ecosystem a private rule can name: privateReason judges a name under all of them. */
+const ALL_PRIVATE_ECOSYSTEMS = ["npm", "crates.io", "PyPI", "Go", "RubyGems", "Packagist"];
 
 /**
  * How long a finished scan may stand in for a new one. The server lives as
@@ -106,6 +108,8 @@ export class LiveIntelligence {
   private scansInFlight = new Map<string, Promise<VulnerabilityScanResult>>();
   private storedScanRequest = 0;
   private lastHeadlines: LiveHeadline[] = [];
+  /** Why the last headline fetch read nothing, when it did not (ecosystem_pulse says so). */
+  private headlineError: string | null = null;
   private resolvedDeps: ResolvedDependency[] = [];
   private auditDeps: ResolvedDependency[] = [];
   /** What the machine says is private (private-packages.ts), for the project in use. */
@@ -119,6 +123,7 @@ export class LiveIntelligence {
   /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
+  private privateSet: Map<string, string> | null = null;
   private initialized = false;
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
@@ -317,6 +322,7 @@ export class LiveIntelligence {
   private rebuildDependencySet(): void {
     this.lockPrivateIndexes = new WeakMap();
     this.publicNames = null;
+    this.privateSet = null;
     this.npmLockPrivate = new Map(
       this.groupResults
         .filter((r) => mapEcosystem(r.group.language) === "npm")
@@ -360,12 +366,28 @@ export class LiveIntelligence {
    * from a private registry or index. dependency_check asks this before any lookup.
    */
   privateReason(ecosystem: string, name: string): string | null {
-    // Any form of the name a registry could read as it (`npm:x`, `x@1.0.0`, `x[extra]`, a URL...).
-    for (const form of nameForms(name)) {
-      const why = this.privateReasonExact(ecosystem, form);
-      if (why) return why;
+    // Any form of the name a registry could read as it (`npm:x`, `x@1.0.0`, `x[extra]`, a URL...),
+    // under any ecosystem: the name is the secret, whichever registry it would be sent to.
+    // `{npm, omega-internal-risk}` (private on PyPI) and `{PyPI, acme-crypto-core}` (a private
+    // crate) reached OSV.dev and the registries (blind audit round 3, should-fix 2).
+    const forms = nameForms(name);
+    for (const eco of [ecosystem, ...ALL_PRIVATE_ECOSYSTEMS.filter((e) => e !== ecosystem)]) {
+      for (const form of forms) {
+        const why = this.privateReasonExact(eco, form) ?? this.privateSetReason(eco, form);
+        if (why) return why;
+      }
     }
     return null;
+  }
+
+  /**
+   * Why the scan's own private set holds this name, or null. That set applies every rule, PIP_INDEX_URL
+   * and pip's config file included; privateReasonExact did not read those, so dependency_check,
+   * upgrade_impact and the briefing sent a pin the scan had just called private (blind audit round 3, B1).
+   */
+  private privateSetReason(ecosystem: string, name: string): string | null {
+    this.privateSet ??= new Map(this.privateDeps.map((p) => [`${p.ecosystem}\0${normName(p.ecosystem, p.name)}`, p.why]));
+    return this.privateSet.get(`${ecosystem}\0${normName(ecosystem, name)}`) ?? null;
   }
 
   private privateReasonExact(ecosystem: string, name: string): string | null {
@@ -753,8 +775,10 @@ export class LiveIntelligence {
 
     try {
       this.lastHeadlines = await this.hnFetcher.fetch(terms);
+      this.headlineError = null;
       return this.lastHeadlines;
-    } catch {
+    } catch (err) {
+      this.headlineError = err instanceof Error ? err.message : String(err);
       return this.lastHeadlines; // Return last known
     }
   }
@@ -791,6 +815,11 @@ export class LiveIntelligence {
   /**
    * Get last headlines (from cache/memory, no network).
    */
+  /** Why the last headline fetch read nothing, or null when it answered. */
+  getHeadlineError(): string | null {
+    return this.headlineError;
+  }
+
   getHeadlines(): LiveHeadline[] {
     return this.lastHeadlines;
   }

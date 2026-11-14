@@ -51,6 +51,10 @@ describe("every place third-party free text enters goes through it", () => {
     "live/npm-packument.ts": /v\.deprecated/,
     "live/pypi-releases.ts": /yanked_reason/,
     "live/go-releases.ts": /rationale/,
+    // Deprecation messages kept their line breaks into dependency_health, upgrade_impact and upgrade_planner (blind audit round 3).
+    "live/npm-registry.ts": /entry\.deprecated/,
+    "live/upgrade-sources.ts": /meta\.deprecated/,
+    "live/fix-paths.ts": /versions\[v\]\??\.deprecated/,
   };
 
   it.each(Object.entries(INGESTION))("%s reads third-party text and cleans it", (file, field) => {
@@ -63,7 +67,7 @@ describe("every place third-party free text enters goes through it", () => {
   const READS_TO_CLASSIFY: Record<string, string> = {
     "live/maintenance.ts": "matches a summary against wording; never shows it",
     "live/osv-ranges.ts": "matches a summary for the malware class; never shows it",
-    "live/fix-paths.ts": "passes a yank reason to withdrawalText (withdrawn-releases.ts), which cleans it",
+    "live/fix-paths.ts": "passes a yank reason to withdrawalText (withdrawn-releases.ts), which cleans it; npm deprecation messages it cleans itself",
     "tools/get-actionable-signals.ts": "reads VulnerabilityEntry.summary, cleaned where the scanner made it (osv-scanner.ts)",
   };
 
