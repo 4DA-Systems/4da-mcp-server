@@ -47,7 +47,7 @@ import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn,
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
 import { confirmTargets } from "./batch-confirm.js";
-import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty } from "../untrusted-text.js";
+import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
 const TIMEOUT_MS = 15_000;
@@ -62,9 +62,10 @@ const MAX_OSV_PAGES = 10;
  * 11: advisory ranges carry `aliases`, so a GHSA record and its PYSEC twin count once; 12: range bounds
  * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable;
  * 13: npm facts withdraw the releases a maintainer flagged on a line that carries another notice, withdrawn-releases.ts npmFlaggedReleases;
- * 14: PyPI facts carry each release's `requiresPython`; 15: npm deprecation messages are quoted and capped, untrusted-text.ts quoteThirdParty).
+ * 14: PyPI facts carry each release's `requiresPython`; 15: npm deprecation messages are quoted and capped, untrusted-text.ts quoteThirdParty;
+ * 16: `withdrawnWhy` holds this server's words only and the registry's message moves to `withdrawnQuote`, r7).
  */
-const CACHE_VERSION = 15;
+const CACHE_VERSION = 16;
 /** How long "the registry does not serve this version" is believed: it may be published later. */
 const ABSENT_TTL = 3600;
 
@@ -78,8 +79,10 @@ export interface PackageReleaseFacts {
    * non-deprecated stable release exists on the same caret line and `latest` is not deprecated.
    */
   withdrawn: string[];
-  /** Per withdrawn release, the registry's words ("4.18.0 is deprecated on npm ("Bad release...")"). */
+  /** Per withdrawn release, in this server's words ("4.18.0 is deprecated on npm"); never the registry's message (r7). */
   withdrawnWhy: Record<string, string>;
+  /** Per withdrawn release, the registry's own message (deprecation, yank reason), quoted and capped: for `quoted_from_registry` only. */
+  withdrawnQuote?: Record<string, string>;
   /** The registry's latest release (npm `latest` tag; crates.io the highest non-yanked), or null. */
   latest: string | null;
   /** The package-level deprecation of the newest release (npm), or null. */
@@ -417,6 +420,7 @@ export class FixPathSources {
       versions: Object.keys(versions).filter((v) => !out.has(v)),
       withdrawn,
       withdrawnWhy: Object.fromEntries(withdrawn.map((v) => [v, withdrawalText("npm", v, message(v))])),
+      withdrawnQuote: Object.fromEntries(withdrawn.flatMap((v) => (message(v) ? [[v, message(v)!]] : []))),
       latest,
       deprecatedLatest: latest && isNpmDeprecated(versions[latest]?.deprecated) ? (message(latest) ?? "deprecated") : null,
       ...(noticed.length > 0 ? { lineNotices: Object.fromEntries(noticed.map((v) => [v, message(v) ?? "deprecated"])) } : {}),
@@ -468,23 +472,28 @@ export class FixPathSources {
    * PyPI's JSON API: every release with files; one whose every file is yanked is withdrawn
    * (PEP 592, the app's `parse_pypi`). A release with no files cannot be installed and is not listed.
    */
-  private async pypiFacts(name: string): Promise<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; requiresPython?: Record<string, string> } | null> {
+  private async pypiFacts(
+    name: string,
+  ): Promise<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; withdrawnQuote: Record<string, string>; requiresPython?: Record<string, string> } | null> {
     const key = `fixpath:v${CACHE_VERSION}:pypi-facts:${name}`;
-    const hit = this.cached<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; requiresPython?: Record<string, string> }>(key);
+    const hit = this.cached<{ versions: string[]; withdrawn: string[]; withdrawnWhy: Record<string, string>; withdrawnQuote: Record<string, string>; requiresPython?: Record<string, string> }>(key);
     if (hit) return hit;
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
       const res = await fetchWithTimeout(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, {}, TIMEOUT_MS);
       if (!res.ok) return null;
       const doc = (await res.json()) as { releases?: Record<string, Array<{ yanked?: boolean; yanked_reason?: string | null; requires_python?: string | null }>> };
-      const out = { versions: [] as string[], withdrawn: [] as string[], withdrawnWhy: {} as Record<string, string>, requiresPython: {} as Record<string, string> };
+      const out = { versions: [] as string[], withdrawn: [] as string[], withdrawnWhy: {} as Record<string, string>, withdrawnQuote: {} as Record<string, string>, requiresPython: {} as Record<string, string> };
       for (const [version, files] of Object.entries(doc.releases ?? {})) {
         if (!Array.isArray(files) || files.length === 0) continue;
         const python = files.find((f) => typeof f.requires_python === "string" && f.requires_python.trim() !== "")?.requires_python;
         if (python) out.requiresPython[version] = python.trim();
         if (files.every((f) => f.yanked === true)) {
           out.withdrawn.push(version);
-          out.withdrawnWhy[version] = withdrawalText("PyPI", version, files.find((f) => f.yanked_reason)?.yanked_reason ?? null);
+          const reason = files.find((f) => f.yanked_reason)?.yanked_reason ?? null;
+          out.withdrawnWhy[version] = withdrawalText("PyPI", version, reason);
+          const quoted = quoteThirdParty(reason);
+          if (quoted) out.withdrawnQuote[version] = quoted;
         } else {
           out.versions.push(version);
         }
@@ -782,13 +791,13 @@ export async function cleanFixTarget(
     if (malware.length > 0) Object.assign(clean, { malware });
     if (clean.target === null && clean.maliciousLanding) Object.assign(clean, { landingNote: malwareText(name, clean.maliciousLanding) });
     const result: FixTargetResult = { ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}), ...(absent.length > 0 ? { absent } : {}) };
-    return withLineFacts(withRegistryFacts(result, ecosystem, perAdvisoryFixes, advisories, facts, await absentReasons(sources, ecosystem, name, absent)), ecosystem, advisories, facts, installed);
+    return withLineFacts(withRegistryFacts(name, result, ecosystem, perAdvisoryFixes, advisories, facts, await absentReasons(sources, ecosystem, name, absent)), ecosystem, advisories, facts, installed);
   }
   // Only a registry list can show a release past a last_affected bound.
   if (!published || published.length === 0) return null;
   const clean = smallestCleanVersion({ ecosystem, fixes: [installed!], advisories, published, excluded, installed });
   if (!clean || clean.target === null || clean.target === installed || clean.stillAffectedBy.length > 0) return null;
-  return withRegistryFacts({ ...clean, noAdvisoryFix: true }, ecosystem, [], advisories, facts);
+  return withRegistryFacts(name, { ...clean, noAdvisoryFix: true }, ecosystem, [], advisories, facts);
 }
 
 /**
@@ -911,6 +920,7 @@ async function absentReasons(sources: FixPathSources, ecosystem: OsvEcosystem, n
  * release above it that the advisories fixed at it do not affect).
  */
 function withRegistryFacts(
+  name: string,
   clean: FixTargetResult,
   ecosystem: OsvEcosystem,
   fixes: string[],
@@ -944,12 +954,14 @@ function withRegistryFacts(
   const why = (v: string) =>
     absentWhy[v] ?? facts.withdrawnWhy[v] ?? (isListedVersion(published, v, ecosystem) ? withdrawalText(ecosystem, v) : `${v} is not a release the registry lists`);
   const withheldWhy = Object.fromEntries([...named].map((v) => [v, why(v)]));
+  // The registry's own words for the releases named go to the result's quoted_from_registry (r7).
+  for (const v of named) registryQuote(`${name}@${v}`, facts.withdrawnQuote?.[v]);
   const notice = clean.target ? facts.lineNotices?.[clean.target] : undefined;
   return {
     ...clean,
     ...(named.size > 0 ? { withheldWhy } : {}),
     ...(Object.keys(lineFixes).length > 0 ? { lineFixes } : {}),
-    ...(notice ? { targetNotice: lineNoticeText(clean.target!, notice) } : {}),
+    ...(notice ? { targetNotice: lineNoticeText(clean.target!, notice, name) } : {}),
   };
 }
 
@@ -968,7 +980,7 @@ async function registryOnlyTarget(sources: FixPathSources, ecosystem: OsvEcosyst
   if (!clean || (clean.target !== null && clean.target === clean.floor)) return null;
   if (clean.target === null && clean.withheld.length === 0) return null;
   const result: FixTargetResult = { ...clean, floorWithdrawn: facts.withdrawn.includes(clean.floor), advisoriesUnread: true, ...(absent.length > 0 ? { absent } : {}) };
-  return withRegistryFacts(result, ecosystem, fixes, [], facts, await absentReasons(sources, ecosystem, name, absent));
+  return withRegistryFacts(name, result, ecosystem, fixes, [], facts, await absentReasons(sources, ecosystem, name, absent));
 }
 
 /**
@@ -1006,9 +1018,9 @@ export function malwareText(name: string, ids: string[]): string {
 }
 
 /** The words for a target that carries a line-wide deprecation notice (FixTargetResult.targetNotice). */
-export function lineNoticeText(version: string, message: string): string {
-  const quoted = message.length > 120 ? `${message.slice(0, 117)}...` : message;
-  return `${version} is deprecated on npm ("${quoted}"), a notice on its whole line rather than a withdrawn release (no later release on the line is free of it), so it stays the smallest fix without a major upgrade; dependency_check says review for it: tell the user it is deprecated`;
+export function lineNoticeText(version: string, message: string, name: string): string {
+  // The registry's words go to quoted_from_registry, never into this sentence (r7).
+  return `${version} is deprecated on npm${registryQuote(`${name}@${version}`, message)}, a notice on its whole line rather than a withdrawn release (no later release on the line is free of it), so it stays the smallest fix without a major upgrade; dependency_check says review for it: tell the user it is deprecated`;
 }
 
 /** The ecosystems whose registry withdrawals (yanked, deprecated) are read. */

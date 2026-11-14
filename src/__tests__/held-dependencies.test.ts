@@ -336,3 +336,65 @@ describe("upgrade_planner: a direct row's target is judged the same way", () => 
     expect(express.reasons.join(" ")).toMatch(/4\.20\.0 exact-pins qs 6\.11\.0/);
   });
 });
+
+/**
+ * Black-box audit of 5d709ff (r7 BLOCKER): `{express, "4.x"}` healthy said safe smallest/newest
+ * 4.22.3; with OSV failing only for express's own dependencies it said `unknown` and
+ * safe {smallest 4.20.0, newest 4.22.3}, and the summary told the agent to write a safe version
+ * the item names. A failed check never makes the safe set wider than the healthy one.
+ */
+describe("r7 blocker: a held check that could not run never widens the safe set", () => {
+  const safeOf = (r: Record<string, any>) => ({
+    smallest: r.range_check?.smallest_safe_in_range ?? null,
+    newest: r.range_check?.newest_safe_in_range ?? null,
+    list: r.range_check?.safe_versions ?? [],
+  });
+  const wider = (healthy: string[], faulted: string[]) => faulted.filter((v) => !healthy.includes(v));
+
+  it("{to: 4.x} with OSV down for express's dependencies: no release named safe, NOT CHECKED, never wider than healthy", async () => {
+    const healthy = (await check([{ ecosystem: "npm", package: "express", to: "4.x" }])).results[0];
+    expect(safeOf(healthy)).toMatchObject({ smallest: "4.22.3", newest: "4.22.3" });
+    HELD_LOOKUP_DOWN = true;
+    const out = await check([{ ecosystem: "npm", package: "express", to: "4.x" }]);
+    const r = out.results[0];
+    expect(r.verdict).toBe("unknown");
+    const s = safeOf(r);
+    expect(wider(safeOf(healthy).list, s.list)).toEqual([]);
+    expect(s.smallest).toBeNull();
+    expect(s.newest).toBeNull();
+    // Nor a release outside the range in its place: the healthy answer names none.
+    expect(r.range_check?.newest_safe_outside_range ?? null).toBeNull();
+    expect(r.reason).toMatch(/NOT CHECKED/);
+    expect(r.reason).not.toMatch(/Safe in 4\.x: smallest/);
+    expect(out.summary).not.toMatch(/write a safe version the item names/i);
+  });
+
+  it("{from 4.16.4, to: 4.x}: the smallest safe upgrade is not named either", async () => {
+    HELD_LOOKUP_DOWN = true;
+    const r = (await check([{ ecosystem: "npm", package: "express", from: "4.16.4", to: "4.x" }])).results[0];
+    expect(r.verdict).toBe("unknown");
+    expect(r.range_check?.smallest_safe_upgrade ?? null).toBeNull();
+    expect(r.range_check?.smallest_safe_in_range ?? null).toBeNull();
+  });
+
+  it("an exact affected `to` (4.20.0): the same-line safe releases are not named from an unchecked held lookup", async () => {
+    HELD_LOOKUP_DOWN = true;
+    ADVISORIES.express.push(adv("GHSA-test-only-0420", "express", "4.21.0", "MODERATE"));
+    try {
+      const r = (await check([{ ecosystem: "npm", package: "express", to: "4.20.0" }])).results[0];
+      expect(["review", "avoid"]).toContain(r.verdict);
+      expect(r.range_check?.smallest_safe_in_range ?? null).toBeNull();
+      expect(r.reason).not.toMatch(/Safe on 4\.20\.0's line/);
+    } finally {
+      ADVISORIES.express.pop();
+    }
+  });
+
+  it("the npm registry unreadable for what releases hold: no release named safe", async () => {
+    // The packument serves dependency_check's index; releaseFacts reads the same URL. Make every
+    // release hold something and the held lookup fail: the same answer as the OSV fault.
+    HELD_LOOKUP_DOWN = true;
+    const r = (await check([{ ecosystem: "npm", package: "express", to: "^4.21.0" }])).results[0];
+    expect(r.range_check?.smallest_safe_in_range ?? null).toBeNull();
+  });
+});

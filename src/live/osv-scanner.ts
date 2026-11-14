@@ -12,6 +12,7 @@ import { ADVISORY_SUMMARY_MAX, isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, 
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
+import { isConcreteVersion } from "./release-version.js";
 import { cvssBaseScore } from "./cvss.js";
 import { cvss4Score } from "./cvss4.js";
 import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "./version-compare.js";
@@ -31,6 +32,11 @@ const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns/";
 const OSV_QUERY_URL = "https://api.osv.dev/v1/query";
 const OSV_TIMEOUT_MS = 15_000;
+/**
+ * One `/v1/vulns/{id}` request (a single small record): a hung one held a whole dependency_check
+ * past its 20 s call budget at OSV_TIMEOUT_MS x 2 attempts (r7). Two attempts now fit in ~9 s.
+ */
+const OSV_DETAIL_TIMEOUT_MS = 4_000;
 const OSV_CACHE_TTL = 3600; // 1 hour
 const OSV_DETAIL_TTL = 86_400; // 24 hours — advisory details change rarely
 const MAX_BATCH_SIZE = 1000;
@@ -368,7 +374,7 @@ export class OsvHttpSource implements AdvisorySource {
    * to a record whose `/v1/vulns/{id}` fetch failed. Every page or null; ids held to OSV's shape.
    */
   async recordsFor(dep: ResolvedDependency): Promise<OsvVulnerability[] | null> {
-    if (!dep.version || !this.rateLimiter.consume("osv-package")) return null;
+    if (!isConcreteVersion(dep.version) || !this.rateLimiter.consume("osv-package")) return null;
     const out: OsvVulnerability[] = [];
     let token: string | undefined;
     try {
@@ -404,7 +410,7 @@ export class OsvHttpSource implements AdvisorySource {
   private async fetchDetail(id: string): Promise<OsvVulnerability | null> {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const response = await fetchWithTimeout(`${OSV_VULN_URL}${encodeURIComponent(id)}`, {}, OSV_TIMEOUT_MS);
+        const response = await fetchWithTimeout(`${OSV_VULN_URL}${encodeURIComponent(id)}`, {}, OSV_DETAIL_TIMEOUT_MS);
         if (response.ok) {
           // Only the record asked for is an answer: a 200 `{}` (or any other record) crashed the
           // scan downstream and was cached for 24 h (audit 6.2.5 B-8). Anything else is retried.
@@ -428,7 +434,7 @@ export class OsvHttpSource implements AdvisorySource {
  * line breaks in aliases/references and the old malware reading; an upgrade never reads them.
  */
 function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
-  return `osv:v7:${dep.ecosystem}:${dep.name}:${dep.version}`;
+  return `osv:v8:${dep.ecosystem}:${dep.name}:${dep.version}`;
 }
 
 /** Dependencies per cache read before the scan yields to the event loop (so the server keeps answering ping). */
@@ -502,6 +508,15 @@ export class OsvScanner {
     // verdict checks asked about the same release up to six times at once (blind audit round 6).
     // One that scan got no cacheable answer for is asked here, as before. Waiting never holds this
     // scan's own registrations, so two scans waiting on each other cannot deadlock.
+    // A version that is not a release number ("latest" for a package the registry does not have, a
+    // tag, a range, "") is never sent to OSV.dev: its dependency is NOT CHECKED (release-version.ts; r7).
+    const notRelease = uncached.filter((d) => !isConcreteVersion(d.version));
+    let notReleaseWhy: string | null = null;
+    if (notRelease.length > 0) {
+      unanswered.push(...notRelease);
+      notReleaseWhy = `"${notRelease[0].version ?? ""}" is not a release number OSV.dev can be asked about, so it was not sent`;
+      uncached.splice(0, uncached.length, ...uncached.filter((d) => isConcreteVersion(d.version)));
+    }
     const theirs = network ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
     const mine = theirs.length > 0 ? uncached.filter((d) => !this.inFlight.has(osvCacheKey(d))) : uncached;
     const ask = async (batch: ResolvedDependency[]) => {
@@ -593,7 +608,8 @@ export class OsvScanner {
       cached: uncached.length === 0,
       offline,
       unchecked: unchecked.length,
-      uncheckedReason: offline ? (failure ?? "OSV.dev could not be queried") : null,
+      ...(unchecked.length > 0 ? { uncheckedDependencies: unchecked.map((d) => `${d.ecosystem}\0${d.name}\0${d.version}`) } : {}),
+      uncheckedReason: offline ? (failure ?? notReleaseWhy ?? "OSV.dev could not be queried") : null,
       staleAnswers,
       // An expired answer is not a current one: every consumer says so (audit 6.2.5 B-2).
       ...(staleAnswers > 0 ? { staleReason: failure ?? "OSV.dev could not be queried", staleOldestFetchedAt: staleOldest } : {}),
@@ -765,7 +781,7 @@ export class OsvScanner {
       // version. Cached, that stub answered for the next hour, so one failed fetch turned a
       // critical into "unknown, no fix" for every scan in it (audit 2026-11-11, T7). Only a
       // dependency whose every advisory was read is cached; the rest are asked again next time.
-      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v7:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
+      if (depVulns.every((v) => !v.detailUnavailable)) rows.push([`osv:v8:${dep.ecosystem}:${dep.name}:${dep.version}`, depVulns]);
       results.push(...depVulns);
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);

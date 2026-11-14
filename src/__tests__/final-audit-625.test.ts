@@ -378,7 +378,7 @@ describe("8a/8b: parent candidates and newest", () => {
     const leaf = step("leaf");
     expect(leaf.action).toBe("override_or_replace");
     expect(leaf.parentUpgrades ?? []).toEqual([]);
-    expect(leaf.reasons.join(" ")).toContain('par is deprecated ("retired")');
+    expect(leaf.reasons.join(" ")).toContain("par is deprecated (the registry's message is quoted in quoted_from_registry)");
   });
 });
 
@@ -621,7 +621,7 @@ describe("L: the smaller findings", () => {
     const { step } = await plan();
     const row = step("glob");
     expect(row.targetVersion).toBe("10.5.0");
-    expect(row.reasons.join(" ")).toMatch(/10\.5\.0 is deprecated on npm \("Old versions of glob are not supported"\), a notice on its whole line rather than a withdrawn release/);
+    expect(row.reasons.join(" ")).toMatch(/10\.5\.0 is deprecated on npm \(the registry's message is quoted in quoted_from_registry\), a notice on its whole line rather than a withdrawn release/);
   });
 
   it("7g: a pin in a requirements file included with -r is declared", async () => {

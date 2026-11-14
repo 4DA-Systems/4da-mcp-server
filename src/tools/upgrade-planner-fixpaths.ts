@@ -56,6 +56,7 @@ import {
 import { lockfileParentIndex, prepareLockfileParents, readLockfileParents, type LockfileFormat, type ParentEdge } from "../live/lockfile-parents.js";
 import { advisoriesAffecting, advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { projectOverride } from "../live/overrides.js";
+import { registryQuote } from "../untrusted-text.js";
 import { pypiCompiledInstruction, pypiPinnedTogether } from "../live/pypi-advice.js";
 import { requirementAdmits, type RequirementDialect } from "../live/refresh-rule.js";
 import { compareVersions } from "../live/version-compare.js";
@@ -93,6 +94,11 @@ export interface ParentLever {
    * fix in brings in an advisory it lacks, none does, or it is already at its latest release.
    */
   outcome?: "malicious" | StuckOutcome;
+  /**
+   * Set instead of `commands` when another parent's lever on this step already carries the same
+   * commands (upgrade-planner-dedupe.ts): the parent whose lever does. Run them once.
+   */
+  sameCommandsAs?: string;
 }
 
 /**
@@ -1175,7 +1181,8 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   // an npm deprecated release only when a later clean one is on its line, nothing when `latest` is
   // deprecated), and "newest" is the highest stable non-withdrawn release, not the `latest` tag.
   // A deprecated package is not stuck by that alone: its releases are judged like any other's.
-  const deprecated = facts.deprecatedLatest ? `${parent} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
+  // The registry's words go to quoted_from_registry, never into the sentence (r7).
+  const deprecated = facts.deprecatedLatest ? `${parent} is deprecated${registryQuote(parent, facts.deprecatedLatest)}, and ` : "";
   const route = findRoute(ctx, b.lockfile, parent, from);
   const own = await ownClean(ctx, parent, facts, from);
   if (own.unreadable.length > 0) return { kind: "unknown", undecided: true, text: `${parent}'s own advisories cannot be judged: ${unreadableText(own.unreadable)}` };
@@ -1187,7 +1194,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   // The withdrawal rule (8a) withdraws none of a retired package's releases; that decides the
   // copy's own targets, not this move.
   if (facts.deprecatedLatest) {
-    return goesAway(ctx, b, parent, from, route, `${parent} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}")`, "deprecated");
+    return goesAway(ctx, b, parent, from, route, `${parent} is deprecated${registryQuote(parent, facts.deprecatedLatest)}`, "deprecated");
   }
   const latestOf = facts.latest ?? newestOf(facts.versions, ecosystem);
   if (latestOf && compareVersions(from, latestOf, ecosystem) >= 0) {
@@ -1246,7 +1253,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
           ? `, and no advisory of ${parent} affects it`
           : "") +
     // A package retired as a whole keeps its releases installable (8a); the move says it is deprecated.
-    (facts.deprecatedLatest ? ` (${parent} is deprecated: "${facts.deprecatedLatest.slice(0, 120)}")` : "");
+    (facts.deprecatedLatest ? ` (${parent} is deprecated${registryQuote(parent, facts.deprecatedLatest)})` : "");
   const upgrade: ParentUpgrade = {
     parent,
     from,
@@ -1658,7 +1665,7 @@ async function throughRelease(
     const ids = [...new Set(blocked.flatMap((v) => own.introducedAt(v)))].sort();
     return { kind: "stuck", outcome: "introduces", text: `no ${lever.name} release is named: ${introducesText(ids).replace(/, so no release is named$/, "")}` };
   }
-  const deprecated = facts.deprecatedLatest ? `${lever.name} is deprecated ("${facts.deprecatedLatest.slice(0, 120)}"), and ` : "";
+  const deprecated = facts.deprecatedLatest ? `${lever.name} is deprecated${registryQuote(lever.name, facts.deprecatedLatest)}, and ` : "";
   return { kind: "stuck", outcome: "none_admits", text: `${deprecated}no ${lever.name} release up to ${newest ?? "its latest"} brings in a ${parent} that admits a clean ${ctx.pkg}` };
 }
 

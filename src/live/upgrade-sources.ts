@@ -21,7 +21,8 @@
  */
 
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
-import { osvAdvisoryId, quoteThirdParty } from "../untrusted-text.js";
+import { osvAdvisoryId, quoteThirdParty, thirdPartyUrl, URL_MAX } from "../untrusted-text.js";
+import { isMalwareRecord } from "./malware.js";
 import { ArchiveError, defaultFetch, fetchArchiveBytes, readRootTextFiles, type FetchFn } from "./package-archive.js";
 import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection, type VersionOrder } from "./changelog.js";
 import { compareVersions, isComparable } from "./version-compare.js";
@@ -85,6 +86,8 @@ export interface RegistryIndex {
   repository: string | null;
   /** Links the project itself labels as its changelog (PyPI `project_urls`). */
   changelogLinks?: string[];
+  /** npm: releases listed in `time` that the registry no longer serves (unpublished). */
+  unpublished?: string[];
 }
 
 export interface ChangelogResult {
@@ -160,11 +163,15 @@ interface CratesCrateResponse {
 }
 
 function repositoryUrl(repo: unknown): string | null {
-  if (typeof repo === "string") return repo;
-  if (repo && typeof repo === "object" && typeof (repo as { url?: unknown }).url === "string") {
-    return (repo as { url: string }).url;
-  }
-  return null;
+  const raw = typeof repo === "string" ? repo : repo && typeof repo === "object" && typeof (repo as { url?: unknown }).url === "string" ? (repo as { url: string }).url : null;
+  if (raw === null) return null;
+  // The publisher's words: a repository is a short URL or `owner/repo`, never 5,000 characters or
+  // a line break with text after it (r7: both came back whole in release_notes_url and
+  // github_fallback.how_to_enable). Anything else names no repository.
+  const trimmed = raw.trim();
+  // eslint-disable-next-line no-control-regex
+  if (trimmed === "" || trimmed.length > URL_MAX || /[\s\u0000-\u001f\u007f-\u009f]/.test(trimmed)) return null;
+  return trimmed;
 }
 
 async function loadNpmIndex(net: UpgradeNet, name: string): Promise<RegistryIndex | null> {
@@ -179,7 +186,11 @@ async function loadNpmIndex(net: UpgradeNet, name: string): Promise<RegistryInde
     if (meta.dist?.tarball) entry.tarball = meta.dist.tarball;
     return entry;
   });
-  return { name: doc.name ?? name, ecosystem: "npm", versions, repository: repositoryUrl(doc.repository) };
+  // Releases npm lists in `time` but no longer serves: unpublished (chalk 5.6.1, the September 2025
+  // hijack). A refusal to analyse one says so instead of "not published" (r7).
+  const served = new Set(Object.keys(doc.versions ?? {}));
+  const unpublished = Object.keys(doc.time ?? {}).filter((v) => v !== "created" && v !== "modified" && !served.has(v) && parseSemverPrecedence(v) !== null);
+  return { name: doc.name ?? name, ecosystem: "npm", versions, repository: repositoryUrl(doc.repository), ...(unpublished.length > 0 ? { unpublished } : {}) };
 }
 
 async function loadCratesIndex(net: UpgradeNet, name: string): Promise<RegistryIndex | null> {
@@ -207,7 +218,8 @@ export async function getRegistryIndex(
 ): Promise<RegistryIndex | null> {
   const keyName =
     ecosystem === "crates.io" ? name.replace(/-/g, "_") : ecosystem === "PyPI" ? normalizePypiName(name) : name;
-  const key = `upgrade-impact:index:${ecosystem}:${keyName}`;
+  // v2 (r7): npm indexes carry `unpublished`, and `repository` is held to a URL's shape and length.
+  const key = `upgrade-impact:index:v2:${ecosystem}:${keyName}`;
   const index = await cached(net, key, INDEX_TTL, () => {
     switch (ecosystem) {
       case "npm":
@@ -331,6 +343,35 @@ export async function getOsvAdvisories(
 }
 
 /**
+ * The advisories OSV.dev lists for one exact release, and which of them are malicious-package
+ * records (malware.ts isMalwareRecord over the whole record); null when OSV.dev could not be read.
+ * Asked only when upgrade_impact refuses a target (not published, or not newer), so the refusal
+ * says what is known about it (r7: chalk 5.6.1 came back only "not published on npm").
+ */
+export async function getOsvRecordFacts(
+  net: UpgradeNet,
+  ecosystem: UpgradeEcosystem,
+  name: string,
+  version: string,
+): Promise<{ ids: string[]; malware: string[] } | null> {
+  try {
+    const res = await net.fetch(
+      "https://api.osv.dev/v1/query",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package: { name, ecosystem }, version }) },
+      OSV_TIMEOUT_MS,
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as { vulns?: Array<Parameters<typeof isMalwareRecord>[0] | null> };
+    const records = (body.vulns ?? []).filter((v): v is NonNullable<typeof v> => v !== null && typeof v === "object");
+    const ids = [...new Set(records.map((v) => osvAdvisoryId(v.id)))];
+    const malware = [...new Set(records.filter((v) => isMalwareRecord(v)).map((v) => osvAdvisoryId(v.id)))];
+    return { ids, malware };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Release-notes page derived from the registry's own `repository` field: a
  * GitHub repo becomes `https://github.com/<owner>/<repo>/releases`; any other
  * https repository URL is returned as-is; anything else is null.
@@ -340,7 +381,8 @@ export function releaseNotesUrl(repository: string | null): string | null {
   const raw = repository.trim();
   const shorthand = /^(?:github:)?([\w.-]+)\/([\w.-]+)$/.exec(raw);
   const gh = shorthand ?? /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/#?].*)?$/i.exec(raw);
-  if (gh) return `https://github.com/${gh[1]}/${gh[2].replace(/\.git$/, "")}/releases`;
+  if (gh) return thirdPartyUrl(`https://github.com/${gh[1]}/${gh[2].replace(/\.git$/, "")}/releases`);
   const https = raw.replace(/^git\+/, "");
-  return /^https:\/\//i.test(https) ? https.replace(/\.git$/, "") : null;
+  // Held to a URL's shape and length like every third-party URL (r7).
+  return /^https:\/\//i.test(https) ? thirdPartyUrl(https.replace(/\.git$/, "")) : null;
 }

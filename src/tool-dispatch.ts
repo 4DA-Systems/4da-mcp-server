@@ -12,9 +12,9 @@ import type { FourDADatabase } from "./db.js";
 import { assertToolPermission } from "./auth-context.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { cleanStrings } from "./tool-args.js";
-import { raceCallBudget, runWithCallBudget } from "./call-budget.js";
+import { callQuotes, raceCallBudget, runWithCallBudget } from "./call-budget.js";
 import { lateAnswer } from "./late-answer.js";
-import { withUntrustedTextNote } from "./untrusted-text.js";
+import { withRegistryQuotes, withUntrustedTextNote } from "./untrusted-text.js";
 import { TOOL_REGISTRY } from "./schema-registry.js";
 
 import {
@@ -148,7 +148,13 @@ export async function dispatchTool(
   };
   // One time budget per call (call-budget.ts): a call still running when it ends is answered
   // NOT CHECKED in the tool's place, never left to hang and never answered as clean.
-  const result = await runWithCallBudget(options.startedAt ?? Date.now(), () => raceCallBudget(run(), (budgetMs) => lateAnswer(name, toolArgs, budgetMs)));
+  // The registry's own words a result's sentences point to are read before the call's context ends (r7).
+  let quotes: Record<string, string> | null = null;
+  const result = await runWithCallBudget(options.startedAt ?? Date.now(), async () => {
+    const answer = await raceCallBudget(run(), (budgetMs) => lateAnswer(name, toolArgs, budgetMs));
+    quotes = callQuotes();
+    return answer;
+  });
   // Feed freshness describes the desktop app's feed; a standalone install has
   // none, and telling it to "run fourda-engine" is noise.
   const withFreshness = db !== null && FRESHNESS_TOOLS.has(name) && !db.isStandalone;
@@ -160,7 +166,7 @@ export async function dispatchTool(
   // Every tool that returns third-party text says which fields hold it (`_meta.untrusted_text`),
   // here when the tool does not say it itself.
   const payload = cleanStrings(
-    withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated),
+    withRegistryQuotes(withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated), quotes),
   );
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.

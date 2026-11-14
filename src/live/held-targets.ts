@@ -109,7 +109,7 @@ export async function withHeldTargets(
       stillAffectedBy: view.remains(chosen),
       heldFrom: target,
       heldPast: past,
-      ...(notice ? { targetNotice: lineNoticeText(chosen, notice) } : {}),
+      ...(notice ? { targetNotice: lineNoticeText(chosen, notice, item.name) } : {}),
     });
   }
   return out;

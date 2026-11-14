@@ -323,7 +323,7 @@ describe("H5: a deprecated release is never the target, even when the advisory l
     // Not checked against every advisory: named only in NOT CHECKED prose, never as fixed_version or
     // targetVersion, and never "the smallest clean release" (pre-publish audit 2026-11-14).
     expect(scanned.vulnerable_packages[0]).toMatchObject({ package: "lodash", fixed_version: null, fix_checked: "installed_advisories_only" });
-    expect(scanned.recommendations[0]).toMatch(/^Upgrade lodash 4\.17\.20 .*NOT CHECKED: 4\.18\.1 was not confirmed .*4\.18\.0 is deprecated on npm \("Bad release\. Please use lodash@4\.17\.21 instead\."\); 4\.18\.1 is the smallest installable release past it; not checked against the package's other advisories/);
+    expect(scanned.recommendations[0]).toMatch(/^Upgrade lodash 4\.17\.20 .*NOT CHECKED: 4\.18\.1 was not confirmed .*4\.18\.0 is deprecated on npm \(the registry's message is quoted in quoted_from_registry\); 4\.18\.1 is the smallest installable release past it; not checked against the package's other advisories/);
     expect(JSON.stringify(scanned)).not.toMatch(/→ 4\.18\.0|smallest clean/);
     const { step } = await plan();
     expect(step("lodash")).toMatchObject({ targetVersion: null, fixPathChecked: "installed_advisories_only" });

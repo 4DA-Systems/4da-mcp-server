@@ -19,7 +19,7 @@
  * them on what they already fetched.
  */
 
-import { quoteThirdParty } from "../untrusted-text.js";
+import { QUOTED_ELSEWHERE } from "../untrusted-text.js";
 import { comparePrecedence, parseSemverPrecedence } from "./semver-precedence.js";
 import type { PackageReleaseIndex } from "./release-metadata.js";
 
@@ -41,7 +41,8 @@ export function excludedReleases(index: PackageReleaseIndex): Map<string, string
     // another notice. dependency_check named lodash.template 4.18.0 ("Bad release. Please use
     // lodash.template@4.5.0 instead") as the smallest safe release while the scan withheld it
     // (black-box re-run of 96c16d2, 2026-11-13).
-    for (const v of [...npmExcludedVersions(live, index.latest), ...npmFlaggedReleases(live, index.latest)]) out.set(v, withdrawalText("npm", v, index.releases[v]?.deprecated));
+    // dependency_check quotes the registry's words itself (range_check.quoted_from_registry).
+    for (const v of [...npmExcludedVersions(live, index.latest), ...npmFlaggedReleases(live, index.latest)]) out.set(v, withdrawalText("npm", v));
   }
   return out;
 }
@@ -131,10 +132,13 @@ export function npmFlaggedReleases(deprecation: Record<string, unknown>, latest:
   return flagged;
 }
 
-/** How a registry names a withdrawal, for the release `version`. */
+/**
+ * How a registry names a withdrawal, for the release `version`, in this server's words only. The
+ * registry's own message (`detail`) is never put in the sentence (r7): the caller keeps it for the
+ * result's `quoted_from_registry` (untrusted-text.ts registryQuote), and the sentence points there.
+ */
 export function withdrawalText(ecosystem: string, version: string, detail?: string | null): string {
-  const said = detail ? quoteThirdParty(detail) : "";
-  const quoted = said ? ` ("${said}")` : "";
+  const quoted = typeof detail === "string" && detail.trim() !== "" ? ` ${QUOTED_ELSEWHERE}` : "";
   switch (ecosystem) {
     case "npm":
       return `${version} is deprecated on npm${quoted}`;
@@ -149,7 +153,7 @@ export function withdrawalText(ecosystem: string, version: string, detail?: stri
 
 /**
  * The withdrawn releases in plain words, releases with the same reason said once:
- * "7.5.3, 7.5.4 and 7.5.5 are deprecated on npm ("Old versions of tar ...")".
+ * "7.5.3, 7.5.4 and 7.5.5 are deprecated on npm (the registry's message is quoted in quoted_from_registry)".
  */
 export function sayWithdrawn(versions: string[], why: Record<string, string>, ecosystem: string): string {
   const groups: Array<{ rest: string; versions: string[] }> = [];
@@ -173,7 +177,7 @@ export function sayWithdrawn(versions: string[], why: Record<string, string>, ec
  * The plain-words note for a target moved past withdrawn releases, or for no
  * target because every release that would fix it was withdrawn (the app's
  * Upgrade Plan wording: "No installable fix").
- *   "4.18.0 is deprecated on npm ("Bad release..."); 4.18.1 is the smallest clean release"
+ *   "4.18.0 is deprecated on npm (the registry's message is quoted in ...); 4.18.1 is the smallest clean release"
  *   "No installable fix: 0.3.17 is yanked on crates.io, and no later release is known to clear it"
  * `why` holds the registry's own text per withdrawn release (withdrawalText).
  * `clean: false`: the target clears only the advisories a release fixes.

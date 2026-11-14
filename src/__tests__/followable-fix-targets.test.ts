@@ -265,9 +265,9 @@ describe("a release deprecated by itself is never the target (lodash.template, M
     expect(row).toMatchObject({ targetVersion: "4.18.1", action: "upgrade_direct", fixPathChecked: "all_advisories", withheld: ["4.18.0"] });
     const reasons = row.reasons.join(" | ");
     // The flagged release, in the registry's words, and why it was passed.
-    expect(reasons).toMatch(/4\.18\.0 is deprecated on npm \("Bad release\. Please use lodash\.template@4\.5\.0 instead\."\); 4\.18\.1 is the smallest clean release/);
+    expect(reasons).toMatch(/4\.18\.0 is deprecated on npm \(the registry's message is quoted in quoted_from_registry\); 4\.18\.1 is the smallest clean release/);
     // The target is deprecated too (the package is retired): said, never silent.
-    expect(reasons).toMatch(/4\.18\.1 is deprecated on npm \("This package is deprecated\. Use https:\/\/socket\.dev\/npm\/package\/eta instead\."\), a notice on its whole line/);
+    expect(reasons).toMatch(/4\.18\.1 is deprecated on npm \(the registry's message is quoted in quoted_from_registry\), a notice on its whole line/);
     expect(row.upgradeCommands?.[0].command).toBe("npm update lodash.template");
   });
 
@@ -285,7 +285,7 @@ describe("a release deprecated by itself is never the target (lodash.template, M
     const { step } = await plan();
     const row = step("lodash.template");
     expect(row).toMatchObject({ targetVersion: null, action: "no_fix_available" });
-    expect(row.reasons.join(" ")).toMatch(/No installable fix: 4\.18\.0 is deprecated on npm \("Bad release/);
+    expect(row.reasons.join(" ")).toMatch(/No installable fix: 4\.18\.0 is deprecated on npm \(the registry's message is quoted/);
   });
 });
 

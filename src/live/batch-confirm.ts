@@ -28,14 +28,9 @@ function dep(ecosystem: OsvEcosystem, name: string, version: string): ResolvedDe
   return { name, version, ecosystem, isDev: false, isDirect: false, devScopeKnown: false, target: null, platformActive: true, sourceDirs: [] };
 }
 
-/**
- * A release number OSV can be asked about: starts with a digit (after Go's `v`). "latest", a range
- * or an empty string is not one; for a package the registry does not have, "latest" reached OSV.dev
- * as a version (second blind audit, round 6). Such a release is never asked about and never confirmed.
- */
-export function isConcreteVersion(version: string): boolean {
-  return /^v?\d[0-9A-Za-z.+!_-]*$/.test(version);
-}
+/** A release number OSV can be asked about (release-version.ts); anything else is never asked about and never confirmed. */
+export { isConcreteVersion } from "./release-version.js";
+import { isConcreteVersion } from "./release-version.js";
 
 /** Ask the batch query about these releases, at most until `deadline`. A release that is not a concrete version is left out (unconfirmedWhy says why). */
 export async function batchAnswer(query: AdvisoryQuery, releases: Array<{ ecosystem: OsvEcosystem; name: string; version: string }>, deadline: number): Promise<BatchAnswer> {

@@ -51,6 +51,9 @@ import {
   type UpgradeEcosystem,
   type UpgradeNet,
 } from "../live/upgrade-sources.js";
+import { getOsvRecordFacts } from "../live/upgrade-sources.js";
+import { notPublishedText, targetFactsText } from "./upgrade-impact-refusals.js";
+import { unquotePackageName } from "./package-name.js";
 import { enrichGoVersions, goBasePath, goMajorPath, goPathMajor, goTagPrefix, goVersionMajor, type GoInfo } from "../live/upgrade-go.js";
 import { scanCallSites, type CallSiteReport } from "./upgrade-impact-callsites.js";
 import { resolveChangelog } from "./upgrade-impact-changelog.js";
@@ -58,7 +61,7 @@ import { pythonImportNames, type PythonImportNames } from "./upgrade-impact-impo
 import { projectCargoFeatures } from "./upgrade-impact-features.js";
 import { flagOldSyntax } from "./upgrade-impact-literals.js";
 import { nearestVersions, shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
-import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
+import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 
 export interface UpgradeImpactParams {
   package: string;
@@ -289,7 +292,8 @@ export async function analyzeUpgradeImpact(
   params: UpgradeImpactParams,
   ctx: UpgradeImpactContext,
 ): Promise<Record<string, unknown>> {
-  const pkg = typeof params.package === "string" ? params.package.trim() : "";
+  // The same reading of a name dependency_check uses (package-name.ts): `"lodash"` is lodash (r7).
+  const pkg = typeof params.package === "string" ? unquotePackageName(params.package) : "";
   if (!pkg) return { error: "`package` is required." };
   const eco = chooseEcosystem({ ...params, package: pkg }, ctx.installed);
   if (typeof eco !== "string") return eco;
@@ -332,11 +336,13 @@ export async function analyzeUpgradeImpact(
     return { error: `from_version "${from}" is not a readable ${eco === "PyPI" ? "PEP 440" : "semantic"} version.` };
   }
 
-  const wanted = params.to_version ? normalizeVersion(params.to_version, eco) : null;
+  // "latest" is the newest stable release, as for no to_version at all (r7: it said "not published ... Nearest published versions: .").
+  const askedLatest = typeof params.to_version === "string" && /^latest$/i.test(params.to_version.trim());
+  const wanted = params.to_version && !askedLatest ? normalizeVersion(params.to_version, eco) : null;
   const target = pickTarget(index, eco, wanted);
   if (!target) {
     if (wanted) {
-      return { error: `${targetName}@${wanted} is not published on ${eco}. Nearest published versions: ${nearestVersions(published, wanted).join(", ")}.` };
+      return { error: await notPublishedText(ctx, eco, index, targetName, wanted, published) };
     }
     return { error: `"${targetName}" has no stable, non-yanked release on ${eco}. Pass to_version.` };
   }
@@ -344,7 +350,7 @@ export async function analyzeUpgradeImpact(
   const pathChange = go !== null && fromName !== targetName;
   if (!pathChange && (order(from, to) ?? 0) >= 0) {
     // Already on the newest stable release is an answer, not a failed call.
-    if (!params.to_version) {
+    if (!wanted) {
       return {
         package: index.name,
         ecosystem: eco,
@@ -356,7 +362,10 @@ export async function analyzeUpgradeImpact(
         summary: `${index.name} ${from} is already at or past the newest stable release (${to}); nothing to upgrade.`,
       };
     }
-    return { error: `from_version ${from} is not older than to_version ${to}: nothing to upgrade. Pass a newer to_version.` };
+    // A downgrade is refused, and what is known against the target is said with it (r7: it was
+    // refused with no word that the release asked for is vulnerable).
+    const facts = to !== from ? await getOsvRecordFacts(ctx.net, eco, index.name, to) : null;
+    return { error: `from_version ${from} is not older than to_version ${to}: nothing to upgrade. Pass a newer to_version.${facts ? ` ${targetFactsText(index.name, to, facts)}` : ""}` };
   }
 
   const allowPre = isPrerelease(to, eco);
@@ -373,7 +382,8 @@ export async function analyzeUpgradeImpact(
     origin = (await enrichGoVersions(ctx.net, targetName, newLine, target).catch(() => ({ origin: null }))).origin;
     if (oldLine.length > 0) await enrichGoVersions(ctx.net, fromName, oldLine, null, 10).catch(() => undefined);
   }
-  const repository = go && origin?.URL && /github\.com/i.test(origin.URL) ? origin.URL : index.repository;
+  const goOrigin = go ? thirdPartyUrl(origin?.URL) : null;
+  const repository = goOrigin && /github\.com/i.test(goOrigin) ? goOrigin : index.repository;
 
   const py = eco === "PyPI" ? pythonImportNames(ctx.projectRoot, index.name) : null;
   // The local code scan runs alongside the network reads, not after them.
@@ -468,7 +478,7 @@ export async function analyzeUpgradeImpact(
     advisories_fixed: advisoriesFixed,
     advisories_remaining: advTo,
     ...(advFrom === null || advTo === null ? { advisories_note: "OSV.dev could not be reached; advisory fields are null, not empty." } : {}),
-    release_notes_url: releaseNotesUrl(repository) ?? index.changelogLinks?.[0] ?? null,
+    release_notes_url: thirdPartyUrl(releaseNotesUrl(repository)) ?? thirdPartyUrl(index.changelogLinks?.[0]) ?? null,
     _meta: {
       sources: [...ctx.net.contacted].sort(),
       untrusted_text: UNTRUSTED,
