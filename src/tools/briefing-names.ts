@@ -14,6 +14,14 @@ import type { ResolvedDependency } from "../live/types.js";
 const MANIFEST_FILE =
   /^(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|pnpm-(?:lock|workspace)\.yaml|yarn\.lock|bun\.lockb?|cargo\.(?:toml|lock)|requirements(?:[-_.][\w.-]+)?\.(?:txt|in)|constraints\.txt|pyproject\.toml|poetry\.lock|uv\.lock|pipfile(?:\.lock)?|setup\.(?:py|cfg)|go\.(?:mod|sum|work)|gemfile(?:\.lock)?|composer\.(?:json|lock))$/i;
 
+/**
+ * Adjectives a task puts before a package or a scope ("install the private @acme scope" reported a
+ * new package called `private`): never a package name in prose; written `private@1.0` or quoted it is one.
+ */
+export const NOT_A_PACKAGE_ADJECTIVES: ReadonlySet<string> = new Set([
+  "private", "internal", "proprietary", "in-house", "inhouse", "company", "corporate", "our", "public", "scoped", "vendored",
+]);
+
 /** A manifest or lockfile name, bare or with a directory ("web/package.json"), quotes and trailing punctuation aside. */
 export function isManifestFile(token: string): boolean {
   const bare = token.replace(/^[`'"(]+/, "").replace(/[`'"),.;:!?]+$/, "");

@@ -31,7 +31,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { installedGoModule, isManifestFile } from "./briefing-names.js";
+import { installedGoModule, isManifestFile, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
@@ -198,7 +198,8 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
     // The verb, then only articles and package words, then the name.
     let k = i + 1;
     let saidPackage = false;
-    while (k < words.length && (FILLERS.has(words[k]) || PACKAGE_WORDS.has(words[k]))) {
+    // "install the private @acme scope": an adjective there is no package (blind audit round 4).
+    while (k < words.length && (FILLERS.has(words[k]) || PACKAGE_WORDS.has(words[k]) || (NOT_A_PACKAGE_ADJECTIVES.has(words[k]) && !quoted.has(words[k])))) {
       if (PACKAGE_WORDS.has(words[k])) saidPackage = true;
       k++;
     }

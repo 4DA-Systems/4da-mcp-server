@@ -16,7 +16,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { asName, projectEcosystems, proseEcosystem, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
-import { installedGoModule, isManifestFile } from "./briefing-names.js";
+import { installedGoModule, isManifestFile, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
@@ -101,6 +101,10 @@ const SETTING_NOUNS = new Set([
   "budget", "offset", "page", "pagesize", "backoff", "duration", "precision", "scale", "weight", "priority", "verbosity", "loglevel", "value", "number",
   "length", "default", "replicas", "instances", "connections", "deadline", "expiry", "lifetime", "maxage", "age", "temperature", "tokens",
 ]);
+/** A bare npm scope with no package after its slash: "@acme". */
+const BARE_SCOPE = /^@[a-z0-9~][\w.~-]*$/i;
+/** Words after a bare scope that name the group of its packages ("the @acme scope", "@acme packages"). */
+const GROUP_NOUNS = new Set(["scope", "scopes", "org", "orgs", "organisation", "organization", "namespace", "packages", "package", "libraries", "libs", "modules", "family", "workspace", "monorepo"]);
 /** Words that put a manifest after a package ("lodash in package.json to 4.17.20"). */
 const FILE_PREPOSITIONS = new Set(["in", "inside", "within", "into", "of", "from"]);
 
@@ -144,7 +148,7 @@ function nameFor(
     if (go) return { name: go, ecosystem: "Go" };
   }
   // An English word is no package in prose; written as `colors@1.4.44` or `name==1.0` it is one.
-  if (!explicit && COMMON_WORDS.has(lower)) return null;
+  if (!explicit && (COMMON_WORDS.has(lower) || NOT_A_PACKAGE_ADJECTIVES.has(lower))) return null;
   const name = asName(bare, fallback);
   return name ? { name, ecosystem: fallback, guessed: true } : null;
 }
@@ -233,6 +237,9 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
         tied = true; // "node 20", "python 3.12": a runtime, not a package to judge
         break;
       }
+      // "upgrade the @acme scope to 2.0": the word after a bare scope names the group, not a package
+      // (it was read as a package called `scope`; blind audit round 4). The version is unread.
+      if (GROUP_NOUNS.has(w) && k > 0 && BARE_SCOPE.test(cleanToken(raw[k - 1]))) break;
       // A name nobody installs is read from prose only in a task about dependencies, or when it is
       // quoted: "apply the 2.4.1 hotfix" is not a package called `apply`, and an internal codename in
       // a task is never sent to a registry on a guess. The version is then unread instead.

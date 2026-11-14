@@ -111,6 +111,24 @@ describe("a number in a sentence about settings is not a package version", () =>
   });
 });
 
+describe("a scope and its adjectives are never a package (round-4 privacy review)", () => {
+  it.each(["upgrade the @acme scope to 2.0", "bump @acme packages to 2.0.1", "move the @acme org to 3.0"])("%s: no package named after the group word; the version is unread", (task) => {
+    const read = readTaskVersions(task, MIXED);
+    expect(read.requested).toEqual([]);
+    expect(read.unread.length).toBe(1);
+  });
+
+  it.each(["install the private @acme scope", "add the internal @acme packages", "install our private packages"])("%s: no new package called `private` or `internal`", (task) => {
+    expect(detectNewPackages(task, MIXED)).toEqual([]);
+  });
+
+  it("an adjective before a real name still finds the name, and a quoted or explicit one is a name", () => {
+    expect(detectNewPackages("install the private left-pad package", MIXED).map((p) => p.name)).toEqual(["left-pad"]);
+    expect(readTaskVersions("upgrade the internal lodash to 4.17.20", MIXED).requested[0]).toMatchObject({ name: "lodash", to: "4.17.20" });
+    expect(readTaskVersions("npm install private@0.1.0", MIXED).requested[0]).toMatchObject({ name: "private", to: "0.1.0" });
+  });
+});
+
 describe("what_should_i_know on a setting: nothing about it is sent anywhere (round-4 black-box gate)", () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "4da-task-names-"));
   afterEach(() => vi.unstubAllGlobals());
