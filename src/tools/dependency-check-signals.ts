@@ -212,8 +212,11 @@ function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
   // reported in its own field and never moves the verdict (audit L3, the
   // same split as vulnerability_scan's `maintenance_notices`).
   const notices = facts.to.filter((a) => a.maintenance);
+  const critical = facts.to.filter((a) => !a.maintenance && a.severity === "critical").map((a) => a.id);
   const value = {
     affecting_to: facts.to.filter((a) => !a.maintenance).map((a) => a.id),
+    // The critical ones by name: the briefing hands a task that writes such a release to a human.
+    ...(critical.length > 0 ? { critical_affecting_to: critical } : {}),
     fixed_by_this_change: fixed.map((a) => a.id),
     ...(notices.length > 0 ? { maintenance_notices: notices.map((a) => a.id) } : {}),
   };
@@ -531,7 +534,10 @@ export function decide(signals: Signal[]): { verdict: Verdict; reason: string } 
     // A stronger verdict must not hide what could not be checked: crossenv `latest` (the malware
     // 1.0.1) read `review` for "major" alone while its advisory lookup had failed (audit 6.2.5 D-10).
     const unchecked = verdict === "unknown" ? [] : signals.filter((s) => s.effect === "unknown");
-    const reason = hits.map((s) => `${s.id}: ${s.evidence}`).join(" | ");
+    // Every avoid and review finding is in the reason (README): time 0.3.8 read only "yanked" while
+    // RUSTSEC-2026-0009 (a review) affected it too (blind audit 2026-11-14).
+    const findings = verdict === "avoid" ? [...hits, ...signals.filter((s) => s.effect === "review")] : hits;
+    const reason = findings.map((s) => `${s.id}: ${s.evidence}`).join(" | ");
     return {
       verdict,
       reason: unchecked.length > 0 ? `${reason} | NOT CHECKED: ${unchecked.map((s) => `${s.id}: ${s.evidence}`).join(" | ")}` : reason,

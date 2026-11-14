@@ -106,16 +106,20 @@ function stub() {
   vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-    const recordsFor = (name: string) => OSV.filter((v) => v.affected?.some((a) => a.package?.name === name));
+    // OSV answers by ecosystem and name, as the real one does.
+    const recordsFor = (name: string, ecosystem?: string) => OSV.filter((v) => v.affected?.some((a) => a.package?.name === name && (!ecosystem || a.package?.ecosystem === ecosystem)));
     if (url.endsWith("/v1/querybatch")) {
-      const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string }; version: string }> };
-      return json({ results: queries.map((q) => ({ vulns: recordsFor(q.package.name).map((v) => ({ id: v.id, modified: "2026-11-01T00:00:00Z" })) })) });
+      const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string; ecosystem: string }; version: string }> };
+      return json({ results: queries.map((q) => ({ vulns: recordsFor(q.package.name, q.package.ecosystem).map((v) => ({ id: v.id, modified: "2026-11-01T00:00:00Z" })) })) });
     }
     if (url.includes("/v1/vulns/")) {
       const found = OSV.find((v) => v.id === decodeURIComponent(url.split("/v1/vulns/")[1]));
       return found ? json(found) : json({}, 404);
     }
-    if (url === "https://api.osv.dev/v1/query") return json({ vulns: recordsFor((JSON.parse(String(init?.body)) as { package: { name: string } }).package.name) });
+    if (url === "https://api.osv.dev/v1/query") {
+      const q = JSON.parse(String(init?.body)) as { package: { name: string; ecosystem: string } };
+      return json({ vulns: recordsFor(q.package.name, q.package.ecosystem) });
+    }
     const downloads = /^https:\/\/api\.npmjs\.org\/downloads\/point\/last-week\/(.+)$/.exec(url);
     if (downloads) {
       const asked = decodeURIComponent(downloads[1]).split(",");
@@ -214,6 +218,20 @@ describe("what_should_i_know: a task that adds a package", () => {
     expect(r.new_packages).toMatchObject([{ name: "lodahs", ecosystem: "npm", verdict: "avoid", malicious: true, did_you_mean: "lodash", latest: "0.0.1-security" }]);
     expect(r.summary).toContain("Task adds lodahs (a malware name, avoid: did you mean lodash?)");
     expect(r.summary).toContain("Delegation: human_only.");
+  });
+
+  it("a project with more Python than npm: a bare name PyPI lacks is checked on npm too, and its malware is found (blind audit replay 2026-11-14)", async () => {
+    const mixed = [dep("lodash", "4.17.21"), dep("requests", "2.32.3", "PyPI"), dep("urllib3", "2.2.2", "PyPI"), dep("idna", "3.7", "PyPI")];
+    expect(detectNewPackages("add the lodahs package", mixed)).toEqual([{ name: "lodahs", ecosystem: "PyPI", alternatives: ["npm"] }]);
+    const r = await executeWhatShouldIKnow(db, { task: "add the lodahs package" }, intel(READY_SCAN, { getResolvedDeps: () => mixed }));
+    expect(r.new_packages).toMatchObject([{ name: "lodahs", ecosystem: "npm", verdict: "avoid", malicious: true }]);
+    expect(r.new_packages?.[0]).not.toHaveProperty("alternatives");
+    expect(r.delegation_assessment.level).toBe("human_only");
+  });
+
+  it("a stated ecosystem is never second-guessed: \"pip install lodahs\" stays PyPI", () => {
+    const mixed = [dep("lodash", "4.17.21"), dep("requests", "2.32.3", "PyPI")];
+    expect(detectNewPackages("pip install lodahs", mixed)).toEqual([{ name: "lodahs", ecosystem: "PyPI" }]);
   });
 
   it("the same when the project scan is not ready: a malware name is never \"unknown\"", async () => {

@@ -62,6 +62,23 @@ export function privateTaskPackages(task: string, files: string[], live: Private
   return [...out.values()];
 }
 
+/**
+ * Why `name` is private in ANY ecosystem this project's rules cover, or null. The briefing guesses
+ * the ecosystem of a name a task mentions but the project does not visibly install, and private
+ * copies are never visible to it: "bump omega-internal-risk to 3.2.0" (private by a pip
+ * `--index-url`) was guessed npm and sent to OSV.dev and registry.npmjs.org, which the guard let
+ * through because the name is private in PyPI, not npm (black-box re-run 2026-11-14). A guessed
+ * ecosystem is only a guess, so a name private anywhere in the project is never looked up.
+ */
+export function privateAnywhere(live: PrivateLookup | null, name: string): string | null {
+  if (!live?.privateReason) return null;
+  for (const ecosystem of ECOSYSTEMS) {
+    const why = live.privateReason(ecosystem, name);
+    if (why) return why;
+  }
+  return null;
+}
+
 /** The advisory row the briefing leads with. */
 export function privateAdvisoryText(found: PrivateTaskPackage[]): string {
   const names = found.map((p) => `${p.package}${p.installed.length ? ` ${p.installed.join("/")}` : ""}`).join(", ");

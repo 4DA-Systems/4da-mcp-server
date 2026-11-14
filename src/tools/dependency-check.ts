@@ -116,7 +116,7 @@ const DAY_MS = 86_400_000;
 
 const PRIVACY_NOTE =
   "Registry requests carried package names only (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list); " +
-  "installed and target versions were never sent to a registry, except the Go proxy's per-version .info for the versions judged (the list has no dates). " +
+  "installed and target versions were never sent to a registry, except the Go proxy's per-version .info and .mod for the versions judged (the list has no dates). " +
   "OSV.dev received package names and versions, as vulnerability_scan does. " +
   "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads). " +
   "A private package name (see the README, Privacy) was sent nowhere.";
@@ -143,7 +143,7 @@ export const dependencyCheckTool = {
     "",
     "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed.",
     "",
-    "Privacy: registries get the package name only (Go: also the judged versions' .info, as `go get` does); OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
+    "Privacy: registries get the package name only (Go: also the judged versions' .info and .mod, as `go get` does); OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
   ].join("\n"),
   inputSchema: {
     type: "object" as const,
@@ -694,6 +694,13 @@ function withAlternatives(reason: string, item: Resolved, unsafe: boolean): stri
     const all = ids.length ? `: ${ids.slice(0, 3).join(", ")}${total > 3 ? ` and ${total - 3} more` : ""} ${total === 1 ? "affects" : "affect"} every one` : "";
     const outside = rc.newest_safe_outside_range ? ` Newest safe release outside it: ${rc.newest_safe_outside_range}.` : "";
     const withheld = rc.withheld_note ? ` ${rc.withheld_note}.${quoted}` : "";
+    // OSV.dev's own answer for `to` lists no advisory, but the published ranges of these advisories
+    // read (fail-closed) as covering every release: apache-airflow ">=1.10" said proceed 3.4.0 and
+    // "No release ... is free of known advisories" in one breath (`last_affected: "2.9.0-NA"`;
+    // blind audit 2026-11-14). Say which is which instead of contradicting the verdict.
+    if (!unsafe && ids.length > 0) {
+      return `${reason} | OSV.dev lists no advisory against ${item.to}, but the published ranges of ${ids.slice(0, 3).join(", ")}${total > 3 ? ` and ${total - 3} more` : ""} cannot rule out any release ${where}, so no other release there is vouched for.${withheld}${outside}`;
+    }
     return `${reason} | No release ${where} is free of known advisories${all}.${withheld}${heldAdviceText(item, rc)}${outside}`;
   }
   const upgrade = rc.smallest_safe_upgrade && rc.smallest_safe_upgrade !== rc.smallest_safe_in_range ? `, smallest above ${item.from} ${rc.smallest_safe_upgrade}` : "";
