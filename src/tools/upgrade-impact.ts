@@ -546,7 +546,8 @@ export async function executeUpgradeImpact(
   // A private package's name is never sent to a registry (live/private-packages.ts).
   if (liveIntel && typeof params?.package === "string") {
     const ecosystems: string[] = params.ecosystem ? [params.ecosystem] : ["npm", "crates.io", "PyPI", "Go"];
-    const why = ecosystems.map((e) => liveIntel.privateReason(e, params.package.trim())).find(Boolean);
+    // A named ecosystem is a lookup there: its private registry or proxy makes any name private (R8). A guessed one is not.
+    const why = ecosystems.map((e) => ((params.ecosystem && liveIntel.lookupPrivateReason) || liveIntel.privateReason).call(liveIntel, e, params.package.trim())).find(Boolean);
     if (why) {
       return {
         error: `NOT CHECKED (private): ${params.package} is a private package (${why}), so its name is not sent to a public registry and its changelog was not read. Read its release notes from your private registry.`,

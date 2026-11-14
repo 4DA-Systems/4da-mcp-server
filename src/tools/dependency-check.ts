@@ -366,7 +366,8 @@ async function checkDependencies(
 
   // A private package name is never sent anywhere (live/private-packages.ts): such an item is
   // "not checked (private)", never clean, and nothing below sees it.
-  const privateWhy = all.map((r) => liveIntel?.privateReason?.(r.ecosystem, r.package) ?? null);
+  // The item names its ecosystem, so a registry or proxy for it that is not public makes any name private (R8).
+  const privateWhy = all.map((r) => (liveIntel?.lookupPrivateReason ?? liveIntel?.privateReason)?.call(liveIntel, r.ecosystem, r.package) ?? null);
   // A Go module path the go command would not accept as written (`..`, `//`, a trailing `/`, `@`,
   // or a case the module does not declare) matches no advisory at OSV.dev: it is NOT CHECKED, with
   // the canonical path named, never `proceed` (pre-publish audit 2026-11-12, B1).

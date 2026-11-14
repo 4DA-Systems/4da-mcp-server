@@ -166,6 +166,132 @@ export function yarnEnvConfig(env: NodeJS.ProcessEnv, parseFlowMap: (text: strin
 }
 
 // ---------------------------------------------------------------------------------------------
+// pip's options
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The long options pip reads in a requirements file (pip/_internal/req/req_file.py: SUPPORTED_OPTIONS
+ * and SUPPORTED_OPTIONS_REQ). optparse accepts any unambiguous prefix of one: `--index` is
+ * `--index-url`, `--extra-index` is `--extra-index-url`, `--find` is `--find-links`. Only the full
+ * spellings were read, and `--index https://pypi.acme.dev/simple` sent every pin to OSV.dev (R8, B4).
+ */
+const PIP_LONG_OPTIONS = [
+  "index-url", "extra-index-url", "no-index", "constraint", "requirement", "editable", "find-links",
+  "no-binary", "only-binary", "prefer-binary", "require-hashes", "pre", "trusted-host", "use-feature",
+  "global-option", "config-settings", "hash",
+];
+/** Long options whose value is the next token when not given with `=`. */
+const PIP_VALUE_OPTIONS = new Set(["index-url", "extra-index-url", "constraint", "requirement", "editable", "find-links", "no-binary", "only-binary", "trusted-host", "use-feature", "global-option", "config-settings", "hash"]);
+/** Short options and the long option each is. */
+const PIP_SHORT_OPTIONS: Record<string, string> = { i: "index-url", f: "find-links", r: "requirement", c: "constraint", e: "editable" };
+
+/** The pip long option `name` names (exactly, or as optparse's unambiguous prefix), or null. */
+export function resolvePipOption(name: string): string | null {
+  const key = name.toLowerCase().replaceAll("_", "-");
+  if (!key) return null;
+  if (PIP_LONG_OPTIONS.includes(key)) return key;
+  const hits = PIP_LONG_OPTIONS.filter((o) => o.startsWith(key));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
+ * The options on one logical requirements line, as pip's optparse reads them: `--name value`,
+ * `--name=value`, an unambiguous prefix of a long option, `-x value` and the attached `-xvalue`
+ * (`-ihttps://...`, `-f./wheels`, `-rbase.txt`). Quotes around a value are dropped.
+ */
+export function pipLineOptions(line: string): Array<{ option: string; value: string | null }> {
+  const tokens = line.replace(/(^|\s)#.*$/, "").trim().split(/\s+/).filter(Boolean);
+  const out: Array<{ option: string; value: string | null }> = [];
+  const clean = (v: string | undefined) => (v === undefined ? null : v.replace(/^["']|["']$/g, "") || null);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.startsWith("--")) {
+      const eq = t.indexOf("=");
+      const option = resolvePipOption(eq >= 0 ? t.slice(2, eq) : t.slice(2));
+      if (!option) continue;
+      if (!PIP_VALUE_OPTIONS.has(option)) out.push({ option, value: null });
+      else out.push({ option, value: clean(eq >= 0 ? t.slice(eq + 1) : tokens[++i]) });
+    } else if (/^-[A-Za-z]/.test(t)) {
+      const option = PIP_SHORT_OPTIONS[t[1]];
+      if (!option) continue;
+      const attached = t.slice(2).replace(/^=/, "");
+      out.push({ option, value: clean(attached || tokens[++i]) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether a `--find-links` location is public: pypi.org's files or a well-known public wheel index.
+ * A local directory or any other host serves packages pip may take instead of pypi.org's, so it is
+ * judged like a private extra index (R8, B4).
+ */
+export const isPublicFindLinks = (location: string): boolean => /^https?:\/\//i.test(location.trim()) && isPublicExtraPypiIndex(location.trim());
+
+/**
+ * pip's index settings from the environment: `PIP_<OPTION>` for index-url, extra-index-url and
+ * find-links, any case, the option named as pip spells it or by an unambiguous prefix
+ * (PIP_INDEX_URL, PIP_INDEX, PIP_EXTRA_INDEX, PIP_FIND_LINKS). Values are whitespace-separated lists.
+ */
+export function pipEnvIndexes(env: NodeJS.ProcessEnv): { index: PrivateSetting[]; extra: PrivateSetting[] } {
+  const index: PrivateSetting[] = [];
+  const extra: PrivateSetting[] = [];
+  for (const [key, value] of envMatching(env, /^pip_/i)) {
+    const option = resolvePipOption(key.slice(4));
+    const values = value.split(/\s+/).filter(Boolean);
+    if (option === "index-url" && values[0]) index.push({ url: values[0], from: key });
+    else if (option === "extra-index-url") pushAll(extra, values.map((url) => ({ url, from: key })));
+    else if (option === "find-links") pushAll(extra, values.filter((v) => !isPublicFindLinks(v)).map((v) => ({ url: findLinksLabel(v), from: key })));
+  }
+  return { index, extra };
+}
+
+/** A find-links location as an index URL: a URL as it is, a local directory as `file:` (never public). */
+export const findLinksLabel = (location: string): string => (/^[a-z][a-z0-9+.-]*:\/\//i.test(location.trim()) ? location.trim() : `file:///${location.trim().replace(/\\/g, "/").replace(/^\/+/, "")}`);
+
+// ---------------------------------------------------------------------------------------------
+// Pipfile (pipenv)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A Pipfile's `[[source]]` indexes that are not public, and the packages it declares. pipenv resolves
+ * every package against its sources (the first is the default), so a source that is not public makes
+ * each package the Pipfile declares private, except one pinned to a public source by `index = "..."`.
+ * A Pipfile with a private source and no Pipfile.lock sent its packages to OSV.dev and pypi.org (R8, B4).
+ */
+export function pipfilePrivate(content: string): { indexes: string[]; names: string[] } {
+  const sources: Array<{ name: string | null; url: string | null }> = [];
+  const declared: Array<{ name: string; index: string | null }> = [];
+  let table = "";
+  let block: { name: string | null; url: string | null } | null = null;
+  for (const line of tomlLines(content)) {
+    const header = tomlHeader(line);
+    if (header) {
+      if (block) sources.push(block);
+      block = header.array && header.name === "source" ? { name: null, url: null } : null;
+      table = header.name;
+      continue;
+    }
+    const kv = tomlKeyValue(line);
+    if (!kv) continue;
+    if (block) {
+      if (kv.key === "name") block.name = tomlString(kv.value);
+      if (kv.key === "url") block.url = tomlString(kv.value);
+      continue;
+    }
+    // [packages], [dev-packages] and pipenv's other package categories.
+    if (table !== "requires" && table !== "pipenv" && table !== "scripts" && table !== "source") {
+      declared.push({ name: kv.key, index: kv.value.startsWith("{") ? inlineKey(kv.value, "index") : null });
+    }
+  }
+  if (block) sources.push(block);
+  const indexes = sources.filter((s, i) => s.url && !(i === 0 ? isPublicPypiIndex(s.url) : isPublicExtraPypiIndex(s.url))).map((s) => s.url as string);
+  if (indexes.length === 0) return { indexes, names: [] };
+  const publicSource = new Set(sources.filter((s) => s.name && s.url && isPublicPypiIndex(s.url)).map((s) => s.name as string));
+  return { indexes, names: declared.filter((d) => !(d.index && publicSource.has(d.index))).map((d) => d.name) };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Python: uv, Poetry, PDM
 // ---------------------------------------------------------------------------------------------
 
@@ -202,7 +328,8 @@ const uvIndexList = (value: string): string[] =>
  * index. An index or source marked `explicit` serves only the packages pinned to it
  * (pyprojectManifestPrivate reads those). `prefix` is `tool.uv.` in pyproject.toml, `` in uv.toml.
  */
-export function pythonIndexConfig(content: string, kind: "pyproject" | "uv.toml"): string[] {
+export function pythonIndexConfig(content: string, kind: "pyproject" | "uv.toml" | "Pipfile"): string[] {
+  if (kind === "Pipfile") return pipfilePrivate(content).indexes;
   const uv = kind === "pyproject" ? "tool.uv" : "";
   const at = (name: string) => (uv ? (name ? `${uv}.${name}` : uv) : name);
   let table = "";

@@ -350,7 +350,7 @@ export class LiveIntelligence {
     this.wideNames = new Map();
     for (const r of this.groupResults) {
       const ecosystem = mapEcosystem(r.group.language);
-      const why = this.privateRules.ecosystemWide(ecosystem, r.source?.kind === "lockfile");
+      const why = this.privateRules.ecosystemWide(ecosystem, r.group.dir, Boolean(r.indexRecorded));
       if (!why) continue;
       const names = [
         ...r.group.deps,
@@ -418,12 +418,13 @@ export class LiveIntelligence {
   private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): string | null {
     const fromLock = this.lockPrivateIndex(r, ecosystem)
       .get(normName(ecosystem, name))
-      ?.find((p) => p.version === null || version === null || p.version === version);
+      // A local entry a manifest names (no version) says nothing about a registry copy a lockfile installs.
+      ?.find((p) => (p.version === null || version === null || p.version === version) && !(p.local && p.version === null && r.source?.kind === "lockfile"));
     if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
     // A registry, index or proxy that is not public and serves any name: pip's configured index or
     // an extra one (for what a requirements file installs), uv's, Poetry's, npm's default registry,
     // GOPROXY, a Cargo source replacement (PrivatePackageRules.ecosystemWide).
-    const wide = mapEcosystem(r.group.language) === ecosystem ? this.privateRules.ecosystemWide(ecosystem, r.source?.kind === "lockfile") : null;
+    const wide = mapEcosystem(r.group.language) === ecosystem ? this.privateRules.ecosystemWide(ecosystem, r.group.dir, Boolean(r.indexRecorded)) : null;
     if (wide) return wide;
     return this.privateRules.reasonFor(ecosystem, name);
   }
@@ -512,7 +513,59 @@ export class LiveIntelligence {
     return this.privateSet.get(`${ecosystem}\0${normName(ecosystem, name)}`) ?? null;
   }
 
+  /**
+   * privateReasonExactOne, and for Go every module path the name is a package of. A package path
+   * under a private module is that module's code: under a private GOPROXY with
+   * `github.com/acme/core` installed, `github.com/acme/core/sub/pkg` went to proxy.golang.org and
+   * OSV.dev (R8, B5). The longest module path wins, as in go: a nearer module this project installs
+   * from the public proxy makes the path public.
+   */
   private privateReasonExact(ecosystem: string, name: string): string | null {
+    const own = this.privateReasonExactOne(ecosystem, name);
+    if (own || ecosystem !== "Go" || this.installsPublicly("Go", name)) return own;
+    const segments = name.split("/");
+    for (let k = segments.length - 1; k >= 1; k--) {
+      const prefix = segments.slice(0, k).join("/");
+      if (this.installsPublicly("Go", prefix)) return null;
+      const why = this.privateReasonExactOne("Go", prefix) ?? this.privateSetReason("Go", prefix);
+      if (why) return `a package of the private module ${prefix} (${why})`;
+    }
+    return null;
+  }
+
+  /**
+   * privateReason, and for a lookup that names its ecosystem (dependency_check, upgrade_impact given
+   * an ecosystem, a registry or OSV.dev request) the project's registry, index or proxy for that
+   * ecosystem when it is not public: any name may be published only there, installed here or not
+   * (ecosystemPrivate). Not for a guessed ecosystem: the briefing's and HN's terms are judged by
+   * privateReason alone, or every word of a task would be private.
+   */
+  lookupPrivateReason(ecosystem: string, name: string): string | null {
+    return this.privateReason(ecosystem, name) ?? this.ecosystemPrivate(ecosystem, name);
+  }
+
+  /**
+   * Why a name looked up in `ecosystem` is private because the project's default registry, index or
+   * proxy for it is not public, or null. Under a private registry a name not yet installed went to
+   * the public one (npm, PyPI, Go and Cargo alike): asking about it reveals it, and is the first step
+   * of a dependency-confusion install (R8). A name this project installs from the public registry
+   * is public. The configuration is the project root's (its directory and above, the user's, the
+   * environment's), never a sibling project's.
+   */
+  ecosystemPrivate(ecosystem: string, name: string): string | null {
+    if (!ALL_PRIVATE_ECOSYSTEMS.includes(ecosystem)) return null;
+    if (nameForms(name).some((form) => this.installsPublicly(ecosystem, form))) return null;
+    return this.privateRules.ecosystemWide(ecosystem, this.projectRoot, false);
+  }
+
+  /** The directories whose npm registry the notice is about: every npm group's, else the project root's. */
+  private npmNoticeDirs(): Array<string | null> {
+    const npm = this.groupResults.filter((r) => mapEcosystem(r.group.language) === "npm").map((r) => r.group.dir);
+    if (npm.length > 0) return npm;
+    return this.groupResults.length === 0 ? [this.projectRoot] : [];
+  }
+
+  private privateReasonExactOne(ecosystem: string, name: string): string | null {
     const byName = this.privateRules.reasonFor(ecosystem, name);
     if (byName) return byName;
     // Every spelling the registry treats as the same name (`acme_core`, `Acme-Core`; review of #64, X1).
@@ -596,7 +649,7 @@ export class LiveIntelligence {
   /** The notice for an `.npmrc` default registry that is not public (PrivatePackageRules.npmRegistryNotice), or null. */
   getRegistryNotice(): string | null {
     const notices = [
-      this.groupResults.some((r) => mapEcosystem(r.group.language) === "npm") || this.groupResults.length === 0 ? this.privateRules.npmRegistryNotice() : null,
+      this.privateRules.npmRegistryNotice(this.npmNoticeDirs()),
       this.pipExtraNotice(),
     ].filter((n): n is string => Boolean(n));
     return notices.length > 0 ? notices.join(" ") : null;
