@@ -2,6 +2,19 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (briefing, round 5).** what_should_i_know said
+  `safe_to_delegate` for tasks that add malware: "add ctx", "add ctx to
+  requirements.txt", "add extrahtml to requirements.txt" and "add logger-libs"
+  in a Python project, "replace lodash with lodahs", "swap express for expres"
+  and "add flatmap-stream". A bare "add X" now checks any plausible name, a
+  name put in a manifest or the dependency list is always a package, and
+  "replace/swap/switch/migrate A with/for/to B" checks B. Everyday English is
+  not looked up ("install steps", "add routes to the app"), and a bare name no
+  registry has and no malware record covers is read as prose. Quoted versions
+  (`lodash@"4.17.20"`) and npm aliases (`lodash@npm:event-stream@3.3.6`) are
+  judged at the version written; anything else after `name@` that cannot be
+  read is unread, which keeps the briefing from `safe_to_delegate`. "lodash in
+  package.json to 4.17.20" ties the version to lodash in a project without it.
 - **Pre-publish fixes (verdicts).** A Go module path the go command would not
   accept as written (`github.com/gin-gonic/gin/`, `github.com//gin-gonic/gin`,
   `github.com/x/y/../../gin-gonic/gin`, `@v1.6.0` inside the path, or a case
