@@ -81,16 +81,26 @@ export class StdioGate extends Transform {
     // A request whose id is an object, an array or a boolean was dropped the same way (blind audit
     // round 4): JSON-RPC allows only a string or a number, and the answer carries id null since the
     // id cannot be echoed.
+    // A numeric id that is not an integer (1.5) or not a safe one (12345678901234567890), and a
+    // "method" that is not a string, were dropped by the SDK's schema with a Zod error on stderr
+    // and no reply (blind audit round 5): MCP request ids are strings or integers, and its integer
+    // schema takes only safe integers. Each now gets -32600, echoing the id when it is a number.
+    const hasMethod = "method" in message && message.method !== undefined;
     const isMethod = typeof message.method === "string";
-    const badId = isMethod && "id" in message && message.id !== undefined && typeof message.id !== "string" && typeof message.id !== "number";
+    const hasId = "id" in message && message.id !== undefined;
+    const badId = (isMethod || hasMethod) && hasId && !isRequestId(message.id);
     const invalid =
       message.jsonrpc !== "2.0"
         ? `Invalid Request: "jsonrpc" must be "2.0" (got ${JSON.stringify(message.jsonrpc ?? null).slice(0, 40)}).`
-        : badId && message.id === null
-          ? "Invalid Request: a request id must be a string or a number, never null (MCP); omit id only for a notification."
-          : badId
-            ? `Invalid Request: a request id must be a string or a number (got ${Array.isArray(message.id) ? "an array" : `a ${typeof message.id === "object" ? "JSON object" : typeof message.id}`}).`
-            : null;
+        : hasMethod && !isMethod
+          ? `Invalid Request: "method" must be a string (got ${message.method === null ? "null" : Array.isArray(message.method) ? "an array" : `a ${typeof message.method === "object" ? "JSON object" : typeof message.method}`}).`
+          : badId && message.id === null
+            ? "Invalid Request: a request id must be a string or a number, never null (MCP); omit id only for a notification."
+            : badId && typeof message.id === "number"
+              ? `Invalid Request: a request id must be a string or an integer (MCP), and a number id a safe integer (got ${String(message.id).slice(0, 40)}).`
+              : badId
+                ? `Invalid Request: a request id must be a string or a number (got ${Array.isArray(message.id) ? "an array" : `a ${typeof message.id === "object" ? "JSON object" : typeof message.id}`}).`
+                : null;
     if (invalid) {
       const id = typeof message.id === "string" || typeof message.id === "number" ? message.id : null;
       this.reply({ jsonrpc: "2.0", id, error: { code: -32600, message: invalid } });
@@ -129,6 +139,11 @@ export class StdioGate extends Transform {
 
 function parseError(detail: string): Record<string, unknown> {
   return { jsonrpc: "2.0", id: null, error: { code: -32700, message: `Parse error: ${detail.slice(0, 200)}` } };
+}
+
+/** An MCP request id: a string, or an integer JSON-RPC can carry exactly (a safe integer). */
+function isRequestId(value: unknown): value is string | number {
+  return typeof value === "string" || (typeof value === "number" && Number.isSafeInteger(value));
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
