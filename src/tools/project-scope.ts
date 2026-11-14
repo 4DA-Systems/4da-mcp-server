@@ -109,6 +109,50 @@ const POSIX_SYSTEM_TREES = ["/proc", "/sys", "/dev", "/boot", "/run", "/System"]
  * own directories by exact path and the kernel/system trees whole.
  */
 export function systemDirectoryProblem(dir: string, options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): string | null {
+  // Judged in every spelling that names the same directory: the check was lexical, and
+  // `\\127.0.0.1\C$\Windows\System32` (2,119 dependencies scanned), `\\?\C:\Windows`,
+  // `\\localhost\C$\Windows` and `C:\PROGRA~1` all passed it (blind audit round 3, should-fix 3).
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32" && /^[\\/]{2}\.[\\/]/.test(dir)) {
+    return `"${dir}" is a Windows device path, not a project, so it is not scanned. Pass project_path with the absolute path of your project's root (or set FOURDA_PROJECT_DIR for the server).`;
+  }
+  for (const form of sameDirectoryForms(dir, platform, options.platform === undefined)) {
+    const why = lexicalSystemDirectoryProblem(form, options);
+    if (why) return form === dir ? why : why.replace(`"${form}"`, `"${dir}" (${form})`);
+  }
+  return null;
+}
+
+/**
+ * The spellings of one directory: as given; on Windows without a `\\?\` prefix, and an
+ * administrative share (`\\host\C$\x`) as the drive path it shares; and, on the live filesystem,
+ * its real path (8.3 short names expanded, links followed).
+ */
+function sameDirectoryForms(dir: string, platform: NodeJS.Platform, live: boolean): string[] {
+  const forms = new Set<string>();
+  const add = (d: string | null | undefined) => {
+    if (!d) return;
+    forms.add(d);
+    if (platform !== "win32") return;
+    const unprefixed = d.replace(/^[\\/]{2}\?[\\/]UNC[\\/]/i, "\\\\").replace(/^[\\/]{2}\?[\\/]/, "");
+    forms.add(unprefixed);
+    const share = /^[\\/]{2}[^\\/]+[\\/]([a-z])\$(?:[\\/](.*))?$/i.exec(unprefixed);
+    if (share) forms.add(`${share[1].toUpperCase()}:\\${(share[2] ?? "").replace(/\//g, "\\")}`);
+  };
+  add(dir);
+  if (live) {
+    for (const d of [...forms]) {
+      try {
+        add(fs.realpathSync.native(d));
+      } catch {
+        // Not there, or not readable: the spellings above still stand.
+      }
+    }
+  }
+  return [...forms];
+}
+
+function lexicalSystemDirectoryProblem(dir: string, options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): string | null {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const p = platform === "win32" ? path.win32 : path.posix;

@@ -212,6 +212,22 @@ describe("an operating-system directory is never scanned", () => {
     );
   });
 
+  it("Windows: every spelling of a system directory is refused, not just the plain one (blind audit round 3)", () => {
+    const env = { SystemDrive: "C:", SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)", ProgramData: "C:\\ProgramData" };
+    const refused = (d: string) => systemDirectoryProblem(d, { platform: "win32", env });
+    for (const d of ["\\\\127.0.0.1\\C$\\Windows\\System32", "\\\\localhost\\C$\\Windows", "\\\\?\\C:\\Windows", "\\\\?\\UNC\\localhost\\C$\\Windows", "\\\\host\\c$\\", "\\\\.\\C:\\Windows"]) {
+      expect(refused(d), d).not.toBeNull();
+    }
+    expect(refused("\\\\localhost\\C$\\Windows")).toContain('"\\\\localhost\\C$\\Windows" (C:\\Windows) is the Windows directory');
+    // A share that is not an administrative one, and a project on one, are ordinary paths.
+    expect(refused("\\\\server\\share\\repo")).toBeNull();
+    expect(refused("\\\\?\\D:\\4DA")).toBeNull();
+  });
+
+  it.runIf(process.platform === "win32")("Windows, live: an 8.3 short name is the directory it names (C:\\PROGRA~1)", () => {
+    expect(systemDirectoryProblem("C:\\PROGRA~1")).toContain("operating-system directory");
+  });
+
   it("POSIX: the root, the system's own directories by exact path, and the kernel and system trees whole", () => {
     const refused = (d: string, platform: NodeJS.Platform = "linux") => systemDirectoryProblem(d, { platform, env: {} });
     for (const d of ["/", "/usr", "/usr/", "/usr/lib", "/usr/local", "/bin", "/etc", "/var", "/opt", "/home", "/proc", "/proc/1/cwd", "/sys/kernel", "/dev/shm", "/mnt/c"]) {
