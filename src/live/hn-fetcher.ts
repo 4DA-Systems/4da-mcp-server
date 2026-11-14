@@ -8,7 +8,7 @@
  * Privacy: sends generic tech keywords (e.g. "react", "rust") — not personal data.
  */
 
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { sanitizeThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -136,6 +136,8 @@ function scoreAndMap(hits: HNHit[], techStack: string[]): LiveHeadline[] {
   const techLower = techStack.map((t) => t.toLowerCase());
 
   return hits
+    // A story with no id in an id's shape has no discussion link to give.
+    .filter((hit) => thirdPartyId(hit.objectID) !== null)
     .map((hit) => {
       const titleLower = hit.title.toLowerCase();
       const matchedTech = techLower.filter((t) => wordBoundaryMatch(titleLower, t));
@@ -154,13 +156,14 @@ function scoreAndMap(hits: HNHit[], techStack: string[]): LiveHeadline[] {
       const score = Math.min(0.1 + techBoost + pointsBoost + commentsBoost, 1.0);
 
       return {
-        id: hit.objectID,
+        // The id, URL and timestamp kept CR/LF into ecosystem_pulse (blind audit round 4): only their shapes are kept.
+        id: thirdPartyId(hit.objectID)!,
         title: sanitizeThirdParty(hit.title ?? "", 300),
-        url: hit.url,
+        url: thirdPartyUrl(hit.url),
         source: "hacker_news" as const,
         points: hit.points,
         comments: hit.num_comments,
-        published: hit.created_at,
+        published: thirdPartyTimestamp(hit.created_at),
         relevanceScore: Math.round(score * 100) / 100,
         relevanceReason: named.length > 0
           ? `Names ${named.join(", ")} (used in your projects)`

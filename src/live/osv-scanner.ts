@@ -8,7 +8,7 @@
  * Privacy: sends only package names + versions (public manifest data).
  */
 
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { sanitizeThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -628,7 +628,8 @@ function mapVulnerability(
     isDirect: dep.isDirect,
     devScopeKnown: dep.devScopeKnown,
     vulnId: vuln.id,
-    aliases: vuln.aliases || [],
+    // Ids and URLs from OSV.dev kept CR/LF (blind audit round 4): only an id's or a URL's shape is kept.
+    aliases: [...new Set((vuln.aliases || []).map(thirdPartyId).filter((a): a is string => a !== null))],
     severity,
     cvssScore,
     ...(malware ? { malware: true } : {}),
@@ -636,10 +637,11 @@ function mapVulnerability(
     // Third-party text: the shared cleaning before anything reads it (untrusted-text.ts).
     summary: sanitizeThirdParty(vuln.summary || vuln.details?.slice(0, 200) || "") || vuln.id,
     fixedVersion,
-    published: vuln.published || vuln.modified || "",
+    published: thirdPartyTimestamp(vuln.published) || thirdPartyTimestamp(vuln.modified),
     references: (vuln.references || [])
       .filter((r) => r.type === "ADVISORY" || r.type === "WEB")
-      .map((r) => r.url)
+      .map((r) => thirdPartyUrl(r.url))
+      .filter((u): u is string => u !== null)
       .slice(0, 3),
     target: dep.target,
     platformActive: dep.platformActive,
