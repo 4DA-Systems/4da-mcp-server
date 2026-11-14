@@ -28,6 +28,12 @@
  *   clean, it was prose and is dropped; a malware name, a near-miss or any other finding stands.
  *   A popular npm name or a near-miss of one is always a package, English or not.
  *   dependency_check still judges the name when the agent asks before writing it.
+ * - "we need X", "bring in X", "pull in X" read like "add X";
+ * - a bare name that is a near-miss of a popular PyPI project, in a project that installs from PyPI,
+ *   is a package as a near-miss of a popular npm one is ("add colourama").
+ * A name the task gives no ecosystem for (no manager, manifest or ecosystem word) is checked in every
+ * ecosystem the project uses, and the worst answer stands: "add ctx" in an npm + Python project is
+ * PyPI's malware `ctx`, not npm's clean one.
  * A name the project already depends on is the task-scope module's, not this one's.
  */
 
@@ -35,7 +41,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { ENGLISH_TASK_WORDS, installedGoModule, isManifestFile, MANIFEST_FIELDS, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES, PYTHON_STDLIB } from "./briefing-names.js";
+import { closestPopularPypi, ENGLISH_TASK_WORDS, installedGoModule, isManifestFile, MANIFEST_FIELDS, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES, PYTHON_STDLIB } from "./briefing-names.js";
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
@@ -44,7 +50,7 @@ import { nearMissOf } from "./dependency-check-nearmiss.js";
 export interface NewPackage {
   name: string;
   ecosystem: CheckEcosystem;
-  /** Other ecosystems the project uses, tried when the guessed one has no such package. */
+  /** Other ecosystems the project uses: a name the task gives no ecosystem for is checked in each, and the worst answer stands. */
   alternatives?: CheckEcosystem[];
   /**
    * Read from a bare "add X" with nothing else saying X is a package: when no registry has the name
@@ -69,6 +75,11 @@ export interface NewPackageFinding extends NewPackage {
   did_you_mean: string | null;
   /** What the name check itself said, apart from the release's own signals: avoid, review, or null. */
   name_finding: "avoid" | "review" | null;
+  /**
+   * The task named no ecosystem, so the name was checked in every one the project uses; this
+   * finding is the worst answer, and these are the others (`not_found`: that registry has no such name).
+   */
+  also_checked?: Array<{ ecosystem: CheckEcosystem; verdict: NewPackageFinding["verdict"] | "not_found"; malicious?: true }>;
 }
 
 const POPULAR = new Set(POPULAR_NPM);
@@ -76,7 +87,13 @@ const MAX_NEW_PACKAGES = 3;
 /** How long a briefing waits for the name checks. Past it they are unchecked, never clean. */
 const NAME_CHECK_BUDGET_MS = 10_000;
 
-const ADD_VERBS = new Set(["add", "adding", "adds", "use", "using", "adopt", "adopting", "introduce", "introducing", "import", "importing", "require", "requiring", "try", "trying"]);
+/**
+ * Verbs that bring a package in. "need" too: "we need electorn for the desktop build" and "we need
+ * ctx for the config" came back safe_to_delegate (black-box audit of 60c9edc, 2026-11-14).
+ */
+const ADD_VERBS = new Set(["add", "adding", "adds", "use", "using", "adopt", "adopting", "introduce", "introducing", "import", "importing", "require", "requiring", "try", "trying", "need", "needs"]);
+/** Verbs that bring a package in with "in" after them: "bring in ctx", "pull in left-pad". */
+const IN_VERBS = new Set(["bring", "bringing", "brings", "pull", "pulling", "pulls"]);
 const INSTALL_VERBS = new Set(["install", "installing", "installs", "reinstall"]);
 /** Words that may stand between the verb and the name. */
 const FILLERS = new Set(["the", "a", "an", "new", "this", "another", "npm", "pnpm", "yarn", "bun", "node", "nodejs", "pip", "pypi", "python", "cargo", "rust", "go", "golang", "official", "popular", "called", "named", "on", "of"]);
@@ -192,8 +209,10 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
   const raw = task.match(/(?:--?[A-Za-z][\w-]*)|[@A-Za-z0-9][\w./@*=<>~^!-]*/g) ?? [];
   const words = raw.map((t) => t.replace(/[.,;:)]+$/, "").toLowerCase());
   const fallback = proseEcosystem(words, deps);
-  // A name filed under the project's main ecosystem only because the task names none is a guess.
+  // A name filed under the project's main ecosystem only because the task names none is a guess:
+  // it is checked in every ecosystem the project uses (checkNewPackages takes the worst answer).
   const others = statedEcosystem(words) ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
+  const guessed = new Set<CheckEcosystem>([fallback, ...others]);
   const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
   const installedName = (name: string) => deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps) !== null;
   const found: NewPackage[] = [];
@@ -256,6 +275,9 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
       continue;
     }
     const installing = INSTALL_VERBS.has(word);
+    // "bring in ctx", "pull in left-pad": the verb is the pair.
+    const bringingIn = IN_VERBS.has(word) && (words[i + 1] === "in" || words[i + 1] === "into");
+    if (bringingIn) i++;
     // "replace lodash with lodahs", "swap express for expres", "switch to dayjs": what comes in.
     let swapped = false;
     let swappedFromDependency = false;
@@ -275,7 +297,7 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
       swappedFromDependency = words.slice(c, end).some((w) => installedName(w) || PACKAGE_WORDS.has(w) || quoted.has(w));
       swapped = true;
       i = end;
-    } else if (!installing && !ADD_VERBS.has(word)) continue;
+    } else if (!installing && !bringingIn && !ADD_VERBS.has(word)) continue;
     // The verb, then only articles and package words, then the name.
     let k = i + 1;
     let saidPackage = false;
@@ -294,7 +316,13 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
       // A popular npm name, or a near miss of one, is a package whatever the wording: "add lodahs" came
       // back safe_to_delegate without a packaging word (blind audit round 3, B3). The list is bundled,
       // so an unknown word is never sent anywhere for it.
-      const known = fallback === "npm" && !COMMON_WORDS.has(name) && !ENGLISH.has(name) && !PYTHON_STDLIB.has(name) && (POPULAR.has(name) || nearMissOf(name) !== null);
+      // A near-miss of a popular PyPI project too, in a project that installs from PyPI: "add colourama",
+      // "add jeIlyfish" and "add python3-dateutil" read as prose (black-box audit of 60c9edc, 2026-11-14).
+      const known =
+        !COMMON_WORDS.has(name) &&
+        !ENGLISH.has(name) &&
+        !PYTHON_STDLIB.has(name) &&
+        ((guessed.has("npm") && (POPULAR.has(name) || nearMissOf(name) !== null)) || (guessed.has("PyPI") && closestPopularPypi(name) !== null));
       // "add ctx to requirements.txt", "add extrahtml to the dependencies": the destination says it is a package
       // (both came back safe_to_delegate in a Python project; round 5 audits). A manifest's own fields are not.
       const manifest = goesInManifest(k + 1) && !MANIFEST_FIELDS.has(name.toLowerCase());
@@ -325,6 +353,13 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;
 
+/** The popular package a name resembles in its ecosystem's bundled list, when there is one. */
+function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
+  if (ecosystem === "npm") return nearMissOf(name)?.of ?? null;
+  if (ecosystem === "PyPI") return closestPopularPypi(name);
+  return null;
+}
+
 function unchecked({ alternatives: _alternatives, weak: _weak, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
@@ -332,14 +367,38 @@ function unchecked({ alternatives: _alternatives, weak: _weak, ...pkg }: NewPack
     latest: null,
     reason: `${pkg.name} could not be checked (${why}). Call dependency_check on it before adding it.`,
     malicious: false,
-    did_you_mean: pkg.ecosystem === "npm" ? (nearMissOf(pkg.name)?.of ?? null) : null,
+    did_you_mean: nearMissName(pkg.name, pkg.ecosystem),
     name_finding: null,
   };
+}
+
+/** No registry of that ecosystem has the name and no malicious-package record covers it. */
+const notFound = (f: NewPackageFinding) => !f.malicious && f.verdict === "unknown" && /a hallucinated package/.test(f.reason);
+
+/**
+ * How bad one ecosystem's answer for a name is: malware, then a name finding of avoid, then any
+ * avoid, then review, then a check that could not run, then wait, then proceed. A name that
+ * ecosystem does not have at all ranks below everything: it says nothing about the others.
+ */
+function badness(f: NewPackageFinding): number {
+  if (notFound(f)) return -1;
+  if (f.malicious) return 6;
+  if (f.name_finding === "avoid") return 5;
+  if (f.verdict === "avoid") return 4;
+  if (f.verdict === "review" || f.name_finding === "review") return 3;
+  if (f.verdict === "unknown") return 2;
+  return f.verdict === "wait" ? 1 : 0;
 }
 
 /**
  * dependency_check's answer for each package at `latest`, within the briefing's budget. Offline,
  * without the live layer, or past the budget, a package is `unknown`: never read as safe.
+ *
+ * A name the task gives no ecosystem for is checked in every ecosystem the project uses, all at
+ * once, and the worst answer is the finding: "add ctx" in a project with package.json and
+ * requirements.txt looked up only npm's `ctx` (clean) and came back safe_to_delegate, while PyPI's
+ * `ctx` is malware (PYSEC-2022-199; black-box audit of 60c9edc, 2026-11-14). The other
+ * ecosystems' answers are listed in `also_checked`.
  */
 export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date): Promise<NewPackageFinding[]> {
   if (packages.length === 0) return [];
@@ -375,29 +434,27 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       latest: r.to !== "latest" ? r.to : null,
       reason: r.reason,
       malicious: Boolean(advisories?.malicious_package),
-      did_you_mean: advisories?.malicious_package?.did_you_mean ?? nearMiss ?? (p.ecosystem === "npm" ? (nearMissOf(p.name)?.of ?? null) : null),
+      did_you_mean: advisories?.malicious_package?.did_you_mean ?? nearMiss ?? nearMissName(p.name, p.ecosystem),
       name_finding: nameCheck?.effect === "avoid" || nameCheck?.effect === "review" ? nameCheck.effect : null,
     };
   };
-  // The guessed ecosystem's registry has no package of that name: in a project of several
-  // ecosystems the guess may be wrong (blind audit replay 2026-11-14), so the others are tried.
-  const missing = (r: Answer["results"][number] | undefined) => Boolean(r && r.verdict === "unknown" && /a hallucinated package/.test(r.reason));
+  // Every ecosystem a guessed name may be in, in one run: the lookups go out together, so a
+  // second ecosystem costs no more wall time than the first, within the same budget.
+  const items = packages.flatMap((p, i) => [p, ...(p.alternatives ?? []).map((ecosystem) => ({ name: p.name, ecosystem }))].map((q) => ({ i, q })));
   try {
-    const answer = await run(packages);
+    const answer = await run(items.map((x) => x.q));
     if (!answer) return packages.map((p) => unchecked(p, "the lookups did not finish in time"));
-    const out = packages.map((p, i) => finding(p, answer.results[i]));
-    const retries = packages.flatMap((p, i) => (missing(answer.results[i]) ? (p.alternatives ?? []).map((ecosystem) => ({ i, p: { name: p.name, ecosystem } })) : []));
+    const out = packages.map((p, i) => {
+      const answers = items.flatMap((x, k) => (x.i === i ? [finding(x.q, answer.results[k])] : []));
+      if (answers.length === 1) return answers[0];
+      // The worst answer; when no ecosystem has the name, the one that knows what it resembles.
+      const worst = answers.reduce((a, b) => (badness(b) > badness(a) ? b : a));
+      const pick = notFound(worst) ? (answers.find((f) => f.did_you_mean) ?? worst) : worst;
+      const also = answers.filter((f) => f !== pick).map((f) => ({ ecosystem: f.ecosystem, verdict: notFound(f) ? ("not_found" as const) : f.verdict, ...(f.malicious ? { malicious: true as const } : {}) }));
+      return { ...pick, also_checked: also };
+    });
     /** A weak name no registry has and no malware record covers was prose; a clean one adds nothing to say. */
-    const prose = (f: NewPackageFinding, i: number) => packages[i].weak === true && !f.malicious && f.name_finding === null && (f.verdict === "proceed" || (f.verdict === "unknown" && /a hallucinated package/.test(f.reason)));
-    if (retries.length > 0) {
-      const again = await run(retries.map((x) => x.p)).catch(() => null);
-      if (again) {
-        for (const i of new Set(retries.map((x) => x.i))) {
-          const hit = retries.findIndex((x, k) => x.i === i && again.results[k] !== undefined && !missing(again.results[k]));
-          if (hit >= 0) out[i] = finding(retries[hit].p, again.results[hit]);
-        }
-      }
-    }
+    const prose = (f: NewPackageFinding, i: number) => packages[i].weak === true && !f.malicious && f.name_finding === null && (f.verdict === "proceed" || notFound(f));
     return out.filter((f, i) => !prose(f, i));
   } catch (error) {
     return packages.map((p) => unchecked(p, `the check failed: ${String(error instanceof Error ? error.message : error).slice(0, 120)}`));

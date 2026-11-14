@@ -5,7 +5,41 @@
  * (briefing-new-packages.ts).
  */
 
+import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import type { ResolvedDependency } from "../live/types.js";
+import { editDistance } from "./dependency-check-malicious.js";
+
+const POPULAR_PYPI_SET = new Set(POPULAR_PYPI);
+
+/** A PyPI name as PyPI compares names: lower case, runs of `-`, `_` and `.` as one `-`. */
+export function normalizePypiName(name: string): string {
+  return name.trim().toLowerCase().replace(/[-_.]+/g, "-");
+}
+
+/**
+ * The popular PyPI project a name is a near-miss of: the most popular one edit away (names of 5
+ * characters or more), else two edits away (names of 8 or more). Null for a popular name itself
+ * and for anything else. Deterministic and offline (live/popular-pypi.ts). `colourama` is
+ * colorama, `jeIlyfish` jellyfish, `python3-dateutil` python-dateutil.
+ */
+export function closestPopularPypi(name: string): string | null {
+  const n = normalizePypiName(name);
+  if (n.length < 5 || POPULAR_PYPI_SET.has(n)) return null;
+  const nearest = (max: number) => {
+    let best: string | null = null;
+    let bestDistance = max + 1;
+    for (const p of POPULAR_PYPI) {
+      if (Math.abs(p.length - n.length) >= bestDistance) continue;
+      const d = editDistance(n, p, bestDistance - 1);
+      if (d > 0 && d < bestDistance) {
+        best = p;
+        bestDistance = d;
+      }
+    }
+    return best;
+  };
+  return nearest(1) ?? (n.length >= 8 ? nearest(2) : null);
+}
 
 /**
  * Manifest and lockfile names: where a version is written, never the package it is for ("lodash in
@@ -61,6 +95,9 @@ export const ENGLISH_TASK_WORDS: ReadonlySet<string> = new Set([
   "app", "apps", "application", "project", "projects", "repo", "repository", "codebase", "monorepo", "workspace", "workspaces", "environment", "environments",
   "loop", "loops", "map", "maps", "array", "arrays", "object", "objects", "promise", "promises", "class", "classes", "function", "functions", "call", "calls",
   "machine", "computer", "system", "systems", "os", "windows", "linux", "macos", "mac", "browser", "browsers", "mobile", "desktop", "web", "frontend", "backend",
+  // what a task says it needs, after "need" ("we need better error messages", "need help with the build")
+  "better", "faster", "cleaner", "clearer", "simpler", "safer", "smaller", "bigger", "stronger", "help", "upstream", "downstream", "tool", "tools",
+  "graceful", "structured", "proper", "consistent", "reliable", "robust", "clean", "clear", "simple", "fast", "slow", "time", "approval", "review", "feedback",
 ]);
 
 /** Python standard-library modules "import X" names in a task: not a package anyone installs. */
