@@ -36,7 +36,7 @@ import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import { manifestPrivateSources, normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
-import { nameForms, registerPrivateNames, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
+import { nameForms, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -352,7 +352,35 @@ export class LiveIntelligence {
       version: dep.version,
       why: privateWhy.get(key(dep)) ?? "private",
     }));
+    // Private for the rest of the process, for every project (private-guard.ts, blind audit round 5, 4).
+    for (const p of this.privateDeps) rememberPrivateName(p.ecosystem, p.name, p.why);
     this.resolvedAt = new Date().toISOString();
+  }
+
+  /**
+   * Take out of the dependency set every copy the request guard would refuse (a name another
+   * project's scan found private, a spelling the per-group rules did not read), each with why, so a
+   * scan never hands the guard a batch it refuses. A refused batch failed whole: every public
+   * dependency came back NOT CHECKED and the summary said "OSV.dev unreachable" (blind audit round 5, 2).
+   */
+  private takeOutRefused(): void {
+    if (this.privateRules.empty && this.privateDeps.length === 0 && rememberedPrivateCount() === 0) return;
+    const refused = new Map<string, string>();
+    const key = (d: { ecosystem: string; name: string }) => `${d.ecosystem}\0${d.name}`;
+    for (const d of this.auditDeps) {
+      if (refused.has(key(d))) continue;
+      const why = this.privateReason(d.ecosystem, d.name);
+      if (why) refused.set(key(d), why);
+    }
+    if (refused.size === 0) return;
+    const out = this.auditDeps.filter((d) => refused.has(key(d)));
+    this.auditDeps = this.auditDeps.filter((d) => !refused.has(key(d)));
+    this.resolvedDeps = this.resolvedDeps.filter((d) => !refused.has(key(d)));
+    this.privateAudit = dedupeDependencies([...this.privateAudit, ...out]);
+    this.privateDeps = [...this.privateDeps, ...out.map((d) => ({ ecosystem: d.ecosystem, name: d.name, version: d.version, why: refused.get(key(d)) ?? "private" }))];
+    for (const d of out) rememberPrivateName(d.ecosystem, d.name, refused.get(key(d)) ?? "private");
+    this.publicNames = null;
+    this.privateSet = null;
   }
 
   /** Why a dependency of this group is private, or null: its lockfile's source, then the name rules. */
@@ -376,6 +404,14 @@ export class LiveIntelligence {
    * from a private registry or index. dependency_check asks this before any lookup.
    */
   privateReason(ecosystem: string, name: string): string | null {
+    return this.privateMatch(ecosystem, name)?.why ?? null;
+  }
+
+  /**
+   * privateReason, with the ecosystem whose rule or lockfile makes the name private (the briefing
+   * reported a PyPI-private name as `npm`: blind audit round 5, 5).
+   */
+  privateMatch(ecosystem: string, name: string): { ecosystem: string; why: string } | null {
     // Any form of the name a registry could read as it (`npm:x`, `x@1.0.0`, `x[extra]`, a URL...),
     // under any ecosystem: the name is the secret, whichever registry it would be sent to.
     // `{npm, omega-internal-risk}` (private on PyPI) and `{PyPI, acme-crypto-core}` (a private
@@ -384,10 +420,38 @@ export class LiveIntelligence {
     for (const eco of [ecosystem, ...ALL_PRIVATE_ECOSYSTEMS.filter((e) => e !== ecosystem)]) {
       for (const form of forms) {
         const why = this.privateReasonExact(eco, form) ?? this.privateSetReason(eco, form);
-        if (why) return why;
+        if (why) return { ecosystem: eco, why };
       }
     }
+    const scope = this.privateScopeFragment(forms);
+    if (scope) return { ecosystem: "npm", why: scope };
+    // Found private by any scan in this process, for any project (blind audit round 5, 4).
+    return rememberedPrivate(name, (eco, n) => this.installsPublicly(eco, n));
+  }
+
+  /**
+   * A bare private scope used as a package name: `zqxacme` when `.npmrc` maps `@zqxacme` to a
+   * private registry. It names the private organisation as surely as `@zqxacme/vault-core` does,
+   * and went to OSV.dev and registry.npmjs.org (blind audit round 5, 1). Only the exact scope name:
+   * suffixes and other fragments (`omega-internal` of `zqx-omega-internal`) are ordinary public
+   * names (`internal`, `core`, `utils`), and refusing them would block public packages. A project
+   * that installs the bare name from the public registry still asks about it.
+   */
+  private privateScopeFragment(forms: string[]): string | null {
+    for (const form of forms) {
+      if (form.includes("/")) continue;
+      const bare = form.replace(/^@/, "").toLowerCase();
+      if (!bare) continue;
+      const file = this.privateRules.privateScopeFile(`@${bare}`);
+      if (file && !this.installsPublicly("npm", bare)) return `the bare name of the private scope @${bare} (mapped to a private registry in ${file})`;
+    }
     return null;
+  }
+
+  /** Whether this project installs `name` (normalised for `ecosystem`) from the public registry. */
+  installsPublicly(ecosystem: string, name: string): boolean {
+    this.publicNames ??= new Set(this.auditDeps.map((d) => `${d.ecosystem}\0${normName(d.ecosystem, d.name)}`));
+    return this.publicNames.has(`${ecosystem}\0${normName(ecosystem, name)}`);
   }
 
   /**
@@ -617,6 +681,8 @@ export class LiveIntelligence {
       return this.withPrivate(emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: LOOKUPS_DISABLED }), options?.includeDev ?? false);
     }
 
+    // Names the guard would refuse are taken out first, each with why (takeOutRefused).
+    this.takeOutRefused();
     // Read at scan time, not init time: the app rewrites its inventory on
     // every rescan, and the freshest determination is the one to grade by.
     const scoped = applyInstanceDevScope(this.db, this.auditDeps);

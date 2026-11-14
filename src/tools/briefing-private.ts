@@ -25,6 +25,8 @@ export interface PrivateLookup {
   getAuditDeps?(): ResolvedDependency[];
   getPrivateDependencies?(): Array<{ ecosystem: string; name: string; version: string | null; why: string }>;
   privateReason?(ecosystem: string, name: string): string | null;
+  /** privateReason with the ecosystem whose rule makes the name private. */
+  privateMatch?(ecosystem: string, name: string): { ecosystem: string; why: string } | null;
 }
 
 /** Tokens that can be a package name the project does not install yet: a scoped npm name, a module path, a plain name. */
@@ -67,9 +69,11 @@ export function privateTaskPackages(task: string, files: string[], live: Private
   if (live.privateReason) {
     for (const token of task.match(NAME_TOKEN) ?? []) {
       const name = token.replace(/[.,;:]+$/, "");
-      for (const ecosystem of ECOSYSTEMS) {
-        const reason = live.privateReason(ecosystem, name);
+      for (const asked of ECOSYSTEMS) {
+        // The ecosystem that makes it private, not the first one asked (blind audit round 5, 5).
+        const reason = live.privateReason(asked, name);
         if (!reason) continue;
+        const ecosystem = live.privateMatch?.(asked, name)?.ecosystem ?? asked;
         const key = `${ecosystem}\0${name}`;
         // Once per name: a private PyPI dependency is not listed again as private under npm.
         if (![...out.values()].some((p) => p.package.toLowerCase() === name.toLowerCase())) {
