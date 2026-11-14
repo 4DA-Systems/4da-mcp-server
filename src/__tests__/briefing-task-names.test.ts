@@ -5,7 +5,14 @@
  * github.com/gin-gonic/gin), "lodash in package.json to 4.17.20" as a package named `package.json`,
  * and "Set the request timeout to 30" as `timeout@30`. All failed safe (review_needed); now they are right.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import Database from "better-sqlite3";
+import { FourDADatabase } from "../db.js";
+import { LiveIntelligence } from "../live/index.js";
+import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { detectNewPackages } from "../tools/briefing-new-packages.js";
 import { installedGoModule, isManifestFile } from "../tools/briefing-names.js";
@@ -101,5 +108,51 @@ describe("a number in a sentence about settings is not a package version", () =>
     expect(readTaskVersions("upgrade react to 19", MIXED).requested).toEqual([{ name: "react", ecosystem: "npm", to: "19", from: "18.2.0" }]);
     expect(readTaskVersions("add serde_json 1 to Cargo.toml", []).requested).toEqual([{ name: "serde_json", ecosystem: "crates.io", to: "1" }]);
     expect(readTaskVersions("install left-pad 1", MIXED).requested[0]).toMatchObject({ name: "left-pad", to: "1" });
+  });
+});
+
+describe("what_should_i_know on a setting: nothing about it is sent anywhere (round-4 black-box gate)", () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "4da-task-names-"));
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** The briefing over an npm project with express installed; every request it makes, recorded. */
+  async function brief(task: string) {
+    const sent: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        sent.push(`${url} ${typeof init?.body === "string" ? init.body : ""}`);
+        return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: { "content-type": "application/json" } });
+      }),
+    );
+    const deps = { express: "4.19.2" };
+    fs.writeFileSync(path.join(scratch, "package.json"), JSON.stringify({ name: "app", dependencies: deps }));
+    fs.writeFileSync(
+      path.join(scratch, "package-lock.json"),
+      JSON.stringify({ name: "app", lockfileVersion: 3, packages: { "": { name: "app", dependencies: deps }, "node_modules/express": { version: "4.19.2" } } }),
+    );
+    const live = new LiveIntelligence(new Database(":memory:"));
+    live.initFromProject(scratch, Object.keys(deps), [], "javascript");
+    const db = new FourDADatabase(path.join(scratch, "standalone.db"));
+    const prior = process.env.FOURDA_OFFLINE;
+    delete process.env.FOURDA_OFFLINE;
+    try {
+      return { result: await executeWhatShouldIKnow(db, { task }, live), sent };
+    } finally {
+      if (prior !== undefined) process.env.FOURDA_OFFLINE = prior;
+      db.close();
+    }
+  }
+
+  it.each(["set back the timeout to 30 seconds", "Set the request timeout to 30"])('"%s" ties no version and sends no `timeout`', async (task) => {
+    const { result, sent } = await brief(task);
+    expect(result.requested_versions ?? []).toEqual([]);
+    expect(sent.filter((s) => /timeout/i.test(s))).toEqual([]);
+  });
+
+  it('"set back the timeout and bump express to 5.1.0" ties only express', async () => {
+    const { result, sent } = await brief("set back the timeout and bump express to 5.1.0");
+    expect((result.requested_versions ?? []).map((r) => [r.name, r.to])).toEqual([["express", "5.1.0"]]);
+    expect(sent.filter((s) => /timeout/i.test(s))).toEqual([]);
   });
 });
