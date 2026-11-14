@@ -21,7 +21,7 @@
  */
 
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { osvAdvisoryId, sanitizeThirdParty } from "../untrusted-text.js";
 import { ArchiveError, defaultFetch, fetchArchiveBytes, readRootTextFiles, type FetchFn } from "./package-archive.js";
 import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection, type VersionOrder } from "./changelog.js";
 import { compareVersions, isComparable } from "./version-compare.js";
@@ -321,7 +321,8 @@ export async function getOsvAdvisories(
     );
     if (!res.ok) return null;
     const body = (await res.json()) as { vulns?: Array<{ id?: string }> };
-    const ids = (body.vulns ?? []).map((v) => v.id).filter((id): id is string => typeof id === "string");
+    // Held to OSV's id shape (blind audit round 5); one that is not an id still counts.
+    const ids = [...new Set((body.vulns ?? []).map((v) => osvAdvisoryId(v?.id)))];
     net.cache?.set(key, ids, CACHE_SOURCE, OSV_TTL);
     return ids;
   } catch {

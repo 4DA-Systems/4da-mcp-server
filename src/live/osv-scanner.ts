@@ -8,7 +8,7 @@
  * Privacy: sends only package names + versions (public manifest data).
  */
 
-import { sanitizeThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
+import { isOsvAdvisoryId, osvAdvisoryId, sanitizeThirdParty, thirdPartyId, thirdPartyTimestamp, thirdPartyUrl } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -198,7 +198,8 @@ export class OsvHttpSource implements AdvisorySource {
       ...(d.version ? { version: d.version } : {}),
     }));
     const first = await this.postBatch(queries);
-    const ids: Array<string[] | null> = first.map((r) => (r.vulns ?? []).map((v) => v.id));
+    // Every id is held to OSV's id shape where it enters (blind audit round 5): untrusted-text.ts osvAdvisoryId.
+    const ids: Array<string[] | null> = first.map((r) => [...new Set((r.vulns ?? []).map((v) => osvAdvisoryId(v?.id)))]);
     let open = first.flatMap((r, index) => (r.next_page_token ? [{ index, token: r.next_page_token }] : []));
     let incomplete: string | null = null;
     for (let page = 2; open.length > 0; page++) {
@@ -226,7 +227,7 @@ export class OsvHttpSource implements AdvisorySource {
       more.forEach((r, k) => {
         const { index } = open[k];
         const seen = new Set(ids[index] ?? []);
-        for (const v of r.vulns ?? []) seen.add(v.id);
+        for (const v of r.vulns ?? []) seen.add(osvAdvisoryId(v?.id));
         ids[index] = [...seen];
         if (r.next_page_token) next.push({ index, token: r.next_page_token });
       });
@@ -565,7 +566,8 @@ export class OsvScanner {
 
     // Phase 2 — the record behind each unique advisory, once.
     const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
-    const detailById = await this.source.details(uniqueIds);
+    // An id that is not one is never looked up: it stays an advisory known by nothing but that.
+    const detailById = await this.source.details(uniqueIds.filter(isOsvAdvisoryId));
 
     // Phase 3 — map to entries and cache per-dep (empty results cached too, so
     // clean deps are not re-queried; network answers only).

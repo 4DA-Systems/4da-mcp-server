@@ -46,7 +46,7 @@ import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn,
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
 import { confirmTargets } from "./batch-confirm.js";
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { isOsvAdvisoryId, osvAdvisoryId, sanitizeThirdParty } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
 
 const TIMEOUT_MS = 15_000;
@@ -163,7 +163,9 @@ export class FixPathSources {
         );
         if (!res.ok) return null;
         const body = (await res.json()) as { vulns?: OsvVulnerability[]; next_page_token?: string };
-        for (const v of body.vulns ?? []) {
+        for (const raw of body.vulns ?? []) {
+          // Ids held to OSV's id shape where they enter (blind audit round 5; untrusted-text.ts osvAdvisoryId).
+          const v = { ...raw, id: osvAdvisoryId(raw?.id), aliases: (raw?.aliases ?? []).map(osvAdvisoryId).filter(isOsvAdvisoryId) };
           const ranges = advisoryRanges(v, name, ecosystem);
           if (ranges) out.push(ranges);
         }
