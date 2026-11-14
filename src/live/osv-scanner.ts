@@ -18,7 +18,7 @@ import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "
 import { collectAffectedSpans } from "./osv-ranges.js";
 import { isMaintenanceNotice, isMaintenanceRecord } from "./maintenance.js";
 import { gradeAliasGroups } from "./advisory-groups.js";
-import { cweIdsOf, isMalware } from "./malware.js";
+import { isMalwareRecord } from "./malware.js";
 import type {
   AliasSeverityReport,
   ResolvedDependency,
@@ -614,7 +614,8 @@ function mapVulnerability(
   dep: ResolvedDependency,
 ): VulnerabilityEntry {
   const graded = deriveSeverity(vuln);
-  const malware = isMalware(vuln.id, vuln.aliases || [], cweIdsOf(vuln), vuln.summary ?? "");
+  // The whole record: summary, details and the OpenSSF origins flag, not the summary alone (blind audit round 4).
+  const malware = isMalwareRecord(vuln);
   // An installed malicious copy is critical in every tool, whatever the record grades (the 4DA lead, 2026-10-18).
   const severity = malware ? "critical" : graded.severity;
   const cvssScore = graded.cvssScore;
