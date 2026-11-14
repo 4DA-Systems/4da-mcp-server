@@ -125,6 +125,28 @@ describe("S3: what_should_i_know and private packages", () => {
     }
   });
 
+  // Black-box round 3 (2026-11-14): a percent-encoded private name in a task was split at the `%`
+  // and its pieces sent: `2fvault-core` reached OSV.dev and npm.
+  it.each([
+    ["install %40acme%2Fui version 1.0.0", "@acme/ui"],
+    ["install %40acme%2Fvault-core version 2.0.0", "@acme/vault-core"],
+    ["upgrade @acme%2Fvault-core to 2.0.0", "@acme/vault-core"],
+    ["upgrade @acme%2fui to 2.0.0", "@acme/ui"],
+    ["add %40acme/ui 1.0.0", "@acme/ui"],
+    ["upgrade @acme/vault​-core to 2.0.0", "@acme/vault-core"],
+  ])("%s: read as %s, private, nothing about it sent", async (task, name) => {
+    const live = npmProject();
+    const db = testDb();
+    try {
+      const result = await executeWhatShouldIKnow(db, { task }, live);
+      expect(sent.filter((s) => /acme|2fui|2fvault|vault-core|40acme/i.test(s))).toEqual([]);
+      expect(result.private_dependencies?.map((p) => p.package)).toContain(name);
+      expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
+    } finally {
+      db.close();
+    }
+  });
+
   it("a private name the project does not install yet is recognised by the rules", async () => {
     const live = npmProject();
     const db = testDb();

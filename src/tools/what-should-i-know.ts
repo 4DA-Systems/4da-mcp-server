@@ -26,6 +26,7 @@ import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { VulnerabilityScanResult } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
+import { readableText } from "../live/private-guard.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { compareVersions, inEcosystemForm, maxVersion } from "../live/version-compare.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
@@ -306,7 +307,9 @@ export async function executeWhatShouldIKnow(
   params: WhatShouldIKnowParams,
   liveIntel: BriefingLiveIntel | null = getLiveIntelligence(),
 ): Promise<WhatShouldIKnowResult> {
-  const task = params.task;
+  // Names are read from the task as a person reads it: `%40acme%2Fui` is @acme/ui, never `40acme`
+  // and `2fui` (which went out as package names; black-box round 3).
+  const task = readableText(params.task);
   const files = params.files || [];
   const relevance = createRelevanceScorer([task, ...files].join(" "));
 
