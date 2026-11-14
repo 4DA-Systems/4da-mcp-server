@@ -2,6 +2,46 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (round 8).**
+  - *Briefing.* A list no longer stops at a common or standard-library word:
+    "add uuid and electorn", "add ms, crossenv" and "add json and ctx" said
+    `safe_to_delegate` with the malware unchecked. A version constraint in the
+    task ("add minimist <1.2.6", `">=1.2.5 <1.2.6"`, "django>=2,<3") is read
+    whole and checked as one constraint. Each version binds to its own package
+    ("A, B to X and Y", "/" between items, "depend on X 1.2.3"), the summary
+    shows the worst verdict of everything checked, and names past the check
+    cap are listed as NOT CHECKED. OSV advisory text moved out of
+    `advisories[].action` into `advisories[].quoted_from_osv`, named in
+    `_meta.untrusted_text`. "install the git hooks" names no package. The
+    round-7 entry said a `[dependencies.serde] version` edit counted when
+    `[package]` also has a version line; it did not, and does now. One bad edit
+    in a MultiEdit no longer hides the others.
+  - *Verdicts.* A constraint is judged at the release the package manager would
+    install, the highest one it admits ("minimist <1.2.6" installs 1.2.5, which
+    is critical, and said proceed); the safe exact pins are still given.
+    RustSec's `malicious` category and "removed from crates.io for malicious
+    code" count as malware, so `evm-units` is avoid again (6.2.7 had it; 6.3.0
+    candidates lost it). A batch answer that contradicts the advisories already
+    known for a package no longer wins, is not cached, and names no safe
+    release. The OSV cache moved to `osv:v9`.
+  - *Privacy.* Private Python names stayed private in more layouts: PDM sources
+    with `pdm.lock`, Pipfile `[[source]]`, pip config values on a continuation
+    line, `-i<url>`, `--index`, `--extra-index`, `--find-links`/`-f` and
+    `PIP_FIND_LINKS`, and uv.lock git sources on a private host. Under a private
+    GOPROXY a sub-package path of a private module is private. Twice
+    percent-encoded names, Cargo path members, Go `replace => ../local` modules
+    and `!`-escaped Go spellings are refused. Under a private registry, index or
+    proxy, a name that is not installed is private when the lookup names its
+    ecosystem. A project's own workspace crates and Go module count as local.
+  - *Protocol and process.* An over-10 MB stdio line is discarded whole; its
+    tail ran as a request. Closing stdin, SIGINT or SIGTERM cancels requests in
+    flight and exits (it kept working for up to a minute). stdio serves batches
+    for 2025-03-26 sessions like HTTP. `--doctor` tests OSV.dev and the
+    registries through the configured proxy. An offline scan starts with
+    "NOT CHECKED (offline)". Conflicting modes (`--setup`, `--doctor`, `--http`)
+    exit 2; an absolute-form HTTP target is served or refused with 400, never
+    500. Reading a 150k-entry pnpm lockfile peaks at about half the memory.
+
 - **Pre-publish fixes (briefing, round 7).** what_should_i_know left a package
   or a version unchecked in common wordings. "bring in rustdecimal" in an npm
   project said `safe_to_delegate`: npm has no such name, so it was dropped as
@@ -40,8 +80,7 @@
   counted `"version"` and engines' `"node"` in package.json, and `version`,
   `edition` and `rust-version` in Cargo.toml or pyproject.toml, as dependency
   changes: only dependency sections count now (the edited lines' own section,
-  or the manifest on disk when they do not show it), and `[dependencies.serde]`
-  `version = "..."` is serde's.
+  or the manifest on disk when they do not show it).
 - **Pre-publish fixes (verdicts, round 7).** With OSV.dev failing only for
   express's own dependencies, `dependency_check {express, "4.x"}` said
   `unknown` and still named 4.20.0 the smallest safe release, which a healthy
