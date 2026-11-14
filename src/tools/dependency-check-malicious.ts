@@ -51,7 +51,11 @@ export function maliciousName(input: {
   advisories: readonly AdvisoryRanges[] | null | undefined;
 }): MaliciousName | null {
   const { ecosystem } = input;
-  const holding = (v: string) => isSecurityHoldingRelease(ecosystem, v);
+  // npm's own placeholders: the `0.0.N-security` holding release, and the `0.0.0-stage` stub npm
+  // publishes for a held name (yummy-bolts: MAL-2026-19107 lists every release it published, 1.0.0
+  // to 1.4.0, and the registry serves only 0.0.0-stage and 0.0.1-security; `to: "0.0.0-stage"`
+  // said proceed and `^1.0.0` unknown, blind audit round 5).
+  const holding = (v: string) => isSecurityHoldingRelease(ecosystem, v) || (ecosystem === "npm" && v === "0.0.0-stage");
   const releases = input.index ? Object.keys(input.index.releases) : [];
   // Unpublished (withdrawn) releases are listed too: crossenv's packument names 6.1.1 it no longer serves.
   const real = releases.filter((v) => !holding(v) && !input.index!.releases[v].withdrawn);
@@ -74,7 +78,8 @@ export function maliciousName(input: {
     (a) => !a.malware && !a.maintenance && openEnded(a),
   );
   const ids = [...new Set([...(takenDown ? malware : covering), ...companions].map((a) => a.id))].sort();
-  const placeholder = holding(input.to) ? input.to : (releases.find(holding) ?? null);
+  const security = releases.find((v) => isSecurityHoldingRelease(ecosystem, v));
+  const placeholder = isSecurityHoldingRelease(ecosystem, input.to) ? input.to : (security ?? releases.find(holding) ?? null);
   return { ids, takenDown, placeholder: takenDown ? placeholder : null, didYouMean: ecosystem === "npm" ? closestPopularNpm(input.package) : null };
 }
 

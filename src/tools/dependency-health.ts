@@ -16,6 +16,7 @@ import { driftFor } from "./install-drift-notes.js";
 import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { isDevOnlyCopy } from "../live/severity-scope.js";
 import { compareVersions } from "../live/version-compare.js";
@@ -92,7 +93,10 @@ const OFFER_CHECK_BUDGET_MS = 10_000;
  * one is not offered: `latestSafeVersion` names the newest release that is neither, and
  * `versionsBehind` is measured to it (so it is not "outdated" when nothing newer is safe).
  */
-async function vetLatest(liveIntel: LiveIntelligence, rows: RegistryPackageInfo[]): Promise<RegistryPackageInfo[]> {
+async function vetLatest(liveIntel: LiveIntelligence, fetched: RegistryPackageInfo[]): Promise<RegistryPackageInfo[]> {
+  // The registry's deprecation message is quoted and capped, as dependency_check does: it carried
+  // all 5,194 characters of a crafted one (blind audit round 5).
+  const rows = fetched.map((r) => (r.deprecationMessage ? { ...r, deprecationMessage: quoteThirdParty(r.deprecationMessage) || null } : r));
   const offered = (r: RegistryPackageInfo) => {
     const latest = r.latestStableVersion || r.latestVersion;
     return latest && r.currentVersion && compareVersions(latest, r.currentVersion, r.ecosystem) > 0 ? latest : null;
@@ -103,6 +107,8 @@ async function vetLatest(liveIntel: LiveIntelligence, rows: RegistryPackageInfo[
     sources,
     rows.filter((r) => offered(r) !== null).map((r) => ({ key: key(r), ecosystem: r.ecosystem, name: r.name, installed: r.currentVersion, offered: offered(r)! })),
     withinCallBudget(OFFER_CHECK_BUDGET_MS, 6_000),
+    undefined,
+    (d) => liveIntel.queryAdvisories(d),
   );
   return rows.map((r) => {
     const latest = offered(r);

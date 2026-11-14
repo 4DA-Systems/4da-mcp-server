@@ -51,7 +51,7 @@ describe("the cache reads a big scan's answers in batches", () => {
   it("a 20,000-dependency scan yields to the event loop while it reads the cache", async () => {
     const cache = new LiveCache(new Database(":memory:") as never);
     const deps = Array.from({ length: 20_000 }, (_, i) => dep(i));
-    cache.setMany(deps.map((d) => [`osv:v5:npm:${d.name}:1.0.0`, []] as [string, unknown]), "osv", 3600);
+    cache.setMany(deps.map((d) => [`osv:v6:npm:${d.name}:1.0.0`, []] as [string, unknown]), "osv", 3600);
     const source: AdvisorySource = { network: true, query: async () => ({ ids: [], failure: null }), details: async () => new Map() };
     const scanner = new OsvScanner(cache, new RateLimiter(DEFAULT_RATE_LIMITS), source);
     let turns = 0;

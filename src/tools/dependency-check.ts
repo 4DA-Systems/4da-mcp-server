@@ -229,6 +229,11 @@ interface Resolved extends CheckItem {
    * (/v1/query) did not hold: the list is incomplete, so no release is named safe from it.
    */
   listGap?: { ids: string[]; versions: string[] };
+  /**
+   * OSV.dev's batch query gave no current answer, so the package's advisory list (/v1/query) could
+   * not be held against it: no release is named safe from the list (blind audit round 5).
+   */
+  batchUnread?: string;
 }
 
 /** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
@@ -468,9 +473,9 @@ async function checkDependencies(
   await held.judge(items.filter(isNpm).map((item) => ({ pkg: item.package, versions: [item.to] })));
   const heldAt = (item: CheckItem) => (item.ecosystem === "npm" ? held.at(item.package, item.to) : undefined);
 
-  const osvDeps: ResolvedDependency[] = items
-    .filter((i) => !i.unresolved)
-    .flatMap((item) => [...new Set([item.to, item.from, ...rangePicks(item)].filter((v): v is string => Boolean(v)))].map((version) => osvDep(item, version)));
+  const osvDeps: ResolvedDependency[] = items.flatMap((item) =>
+    [...new Set((item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)]).filter((v): v is string => Boolean(v)))].map((version) => osvDep(item, version)),
+  );
   const scan = await liveIntel.queryAdvisories(osvDeps);
   // Unrated (Go) records carry their GHSA alias's grade from the scanner, as in every tool (severityFrom).
   const byInstance = new Map<string, VulnerabilityEntry[]>();
@@ -516,9 +521,9 @@ async function checkDependencies(
   // computed from it: no safe release, no range check, and the answer says NOT CHECKED.
   const gaps = new Map<string, { ids: string[]; versions: string[] }>();
   for (const item of items) {
-    const list = item.unresolved ? null : advisoryLists.get(lookupKey(item));
+    const list = advisoryLists.get(lookupKey(item));
     if (!list) continue;
-    for (const version of new Set([item.to, item.from, ...rangePicks(item)])) {
+    for (const version of new Set(item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)])) {
       if (!version) continue;
       const missing = missingFromList(list, (byInstance.get(instanceKey(item.ecosystem, item.package, version)) ?? []).map((e) => e.vulnId));
       if (missing.length === 0) continue;
@@ -534,7 +539,22 @@ async function checkDependencies(
     item.listGap = gap;
     delete item.rangeCheck;
   }
+  // The list can be held against the batch query only when the batch query answered. With it
+  // failed (HTTP 500, truncated JSON) or answered only from an expired cache, an empty list is
+  // what a proxy answering {"vulns":[]} looks like, and `{npm, lodash, "4.x"}` said "Safe in 4.x:
+  // smallest 4.0.0" (blind audit round 5). No release is named safe then; the list still speaks
+  // for what it finds against a release (malware, a negative finding), never for a clean one.
+  const batchRead = !scan.offline && (scan.staleAnswers ?? 0) === 0;
+  if (!batchRead) {
+    const why = scan.offline ? (scan.uncheckedReason ?? "the query failed") : `only an expired cached answer (${scan.staleReason ?? "the fresh query failed"})`;
+    for (const item of items) {
+      if (item.listGap || !item.rangeCheck) continue;
+      item.batchUnread = why;
+      delete item.rangeCheck;
+    }
+  }
   const lines = affectedExact.flatMap((item) => {
+    if (!batchRead) return [];
     const lookup = indexes.get(lookupKey(item))!;
     const advisories = advisoryLists.get(lookupKey(item));
     const line = lineOf(item.ecosystem, item.to);
@@ -621,10 +641,15 @@ async function checkDependencies(
       }
       if (p.item.unresolved) {
         const outside = p.item.rangeCheck?.newest_safe_outside_range ? ` Newest safe release outside it: ${p.item.rangeCheck.newest_safe_outside_range}.` : "";
+        const unnamed = p.item.listGap
+          ? ` | ${listGapText(p.item.package, p.item.listGap)}`
+          : p.item.batchUnread
+            ? ` | ${batchUnreadText(p.item.package, p.item.batchUnread)}`
+            : "";
         return {
           ...head(p.item),
           verdict: nameFinding ? (nameFinding.effect as Verdict) : ("unknown" as const),
-          reason: `${nameFinding ? `name_check: ${nameFinding.evidence} | ` : ""}${p.blocked}${outside}`,
+          reason: `${nameFinding ? `name_check: ${nameFinding.evidence} | ` : ""}${p.blocked}${outside}${unnamed}`,
           signals: nameCheck ? [nameCheck] : [],
           ...extra,
         };
@@ -707,6 +732,7 @@ function privateResult(r: Requested, why: string): ItemResult {
 /** The reason, plus the safe releases to write instead when the verdict is against `to`. */
 function withAlternatives(reason: string, item: Resolved, unsafe: boolean): string {
   if (item.listGap) return `${reason} | ${listGapText(item.package, item.listGap)}`;
+  if (item.batchUnread) return `${reason} | ${batchUnreadText(item.package, item.batchUnread)}`;
   const rc = item.rangeCheck;
   if (!rc) return reason;
   const where = rc.basis === "requested" ? `in ${rc.range}` : `on ${item.to}'s line (${rc.range})`;
@@ -762,13 +788,20 @@ function releasesBack(item: Resolved, index: PackageReleaseIndex): number | null
 function rangePicks(item: Resolved): string[] {
   const rc = item.rangeCheck;
   if (!rc || rc.basis !== "requested") return [];
-  return [rc.smallest_safe_in_range, rc.smallest_safe_upgrade, rc.newest_safe_in_range].filter((v): v is string => typeof v === "string" && v !== item.to);
+  return [rc.smallest_safe_in_range, rc.smallest_safe_upgrade, rc.newest_safe_in_range, rc.newest_safe_outside_range].filter(
+    (v): v is string => typeof v === "string" && (Boolean(item.unresolved) || v !== item.to),
+  );
 }
 
 /** NOT CHECKED: the package's advisory list is incomplete (Resolved.listGap), so no release is named. */
 function listGapText(pkg: string, gap: { ids: string[]; versions: string[] }): string {
   const ids = `${gap.ids.slice(0, 3).join(", ")}${gap.ids.length > 3 ? ` and ${gap.ids.length - 3} more` : ""}`;
   return `NOT CHECKED: OSV.dev's advisory list for ${pkg} (/v1/query) left out ${ids}, which its batch query names for ${andList(gap.versions)}, so the list is incomplete and no release of ${pkg} is named safe from it (the verdict on the version checked comes from the batch query and stands). Check again later, or check a specific version with dependency_check.`;
+}
+
+/** NOT CHECKED: the batch query gave no current answer (Resolved.batchUnread), so no release is named. */
+function batchUnreadText(pkg: string, why: string): string {
+  return `NOT CHECKED: OSV.dev's batch query gave no current answer (${why}), so ${pkg}'s advisory list (/v1/query) could not be confirmed complete and no release of ${pkg} is named safe. This is not a clean result: check again later.`;
 }
 
 /**
@@ -1275,6 +1308,8 @@ export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices:
       maintenance: declared,
       ...(worded && !declared ? { countedNotice: true } : {}),
       ...(v.severityFrom ? { severityFrom: v.severityFrom } : {}),
+      // Every malicious-package record of the group, the MAL- one under a GHSA alias included.
+      ...(members.some((m) => m.malware) ? { malware: [...new Set(members.filter((m) => m.malware).map((m) => m.vulnId))] } : {}),
     };
   });
 }
@@ -1296,7 +1331,13 @@ const head = (item: Resolved) => ({
 function summaryLine(results: ItemResult[], parts: string[]): string {
   const privateCount = results.filter((r) => r.not_checked === "private").length;
   const checked = results.length - privateCount;
-  const advice = 'Write only "proceed" versions; for the rest write a safe version the item names ("safe"; "range_check" in the detailed form) or report the evidence.';
+  // An item that names no safe release (OSV.dev not answering, say) is never told to write one (blind audit round 5).
+  const names = results.some((r) => r.verdict !== "proceed" && r.range_check && (r.range_check.smallest_safe_in_range || r.range_check.newest_safe_outside_range));
+  const advice = names
+    ? 'Write only "proceed" versions; for the rest write a safe version the item names ("safe"; "range_check" in the detailed form) or report the evidence. An item without "safe" names none.'
+    : results.every((r) => r.verdict === "proceed")
+      ? 'Write only "proceed" versions.'
+      : 'Write only "proceed" versions; no other item names a safe version to write instead: report the evidence.';
   if (privateCount === 0) return `${results.length} checked: ${parts.join(", ")}. ${advice}`;
   const notChecked = `${privateCount} not checked (private): never looked up, verdict unknown`;
   if (checked === 0) return `${notChecked}. Nothing was sent; check ${privateCount === 1 ? "it" : "them"} with your private registry's own tooling.`;

@@ -75,6 +75,27 @@ describe("the stdio gate", () => {
     expect(passed.map((l) => JSON.parse(l).id)).toEqual([3, "s-1"]);
   });
 
+it('answers a non-integer or unsafe-integer id, and a "method" that is not a string, with -32600 (blind audit round 5)', async () => {
+    const { passed, replies } = await run([
+      req(1, "initialize"),
+      '{"jsonrpc":"2.0","id":1.5,"method":"ping"}',
+      '{"jsonrpc":"2.0","id":2.25,"method":"tools/list"}',
+      '{"jsonrpc":"2.0","id":12345678901234567890,"method":"ping"}',
+      '{"jsonrpc":"2.0","id":9,"method":5}',
+      '{"jsonrpc":"2.0","id":{"x":1},"method":5}',
+      '{"jsonrpc":"2.0","id":9007199254740991,"method":"ping"}',
+    ]);
+    expect(replies).toEqual([
+      { jsonrpc: "2.0", id: 1.5, error: { code: -32600, message: expect.stringContaining("string or an integer") } },
+      { jsonrpc: "2.0", id: 2.25, error: { code: -32600, message: expect.stringContaining("string or an integer") } },
+      { jsonrpc: "2.0", id: 12345678901234567890, error: { code: -32600, message: expect.stringContaining("safe integer") } },
+      { jsonrpc: "2.0", id: 9, error: { code: -32600, message: expect.stringContaining('"method" must be a string (got a number)') } },
+      { jsonrpc: "2.0", id: null, error: { code: -32600, message: expect.stringContaining('"method" must be a string') } },
+    ]);
+    // The largest safe integer is a valid id and passes.
+    expect(passed.map((l) => JSON.parse(l).id)).toEqual([1, 9007199254740991]);
+  });
+
   it('answers a request with "params": null, a string, a number or an array with -32602 under its own id (blind audit round 4)', async () => {
     const line = (id: number, params: unknown) => JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params });
     const { passed, replies } = await run([
@@ -152,5 +173,31 @@ describe.skipIf(!fs.existsSync(serverEntry))("the built server over stdio", () =
     const lines = out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: unknown; error?: { code: number } });
     expect(lines.find((l) => l.id === 2)?.error?.code).toBe(-32602);
     expect(lines.find((l) => l.id === null)?.error?.code).toBe(-32600);
+  }, 60_000);
+  it("answers every request line exactly once: fractional, unsafe-integer ids and a non-string method (blind audit round 5)", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "4da-gate-"));
+    const env = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
+    delete env.FOURDA_DB_PATH;
+    const child = spawn(process.execPath, [serverEntry], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    const init = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } };
+    child.stdin.write(`${req(1, "initialize", init)}\n`);
+    child.stdin.write('{"jsonrpc":"2.0","id":1.5,"method":"ping"}\n');
+    child.stdin.write('{"jsonrpc":"2.0","id":2.25,"method":"ping"}\n');
+    child.stdin.write('{"jsonrpc":"2.0","id":12345678901234567890,"method":"ping"}\n');
+    child.stdin.write('{"jsonrpc":"2.0","id":5,"method":5}\n');
+    child.stdin.write(`${req(6, "ping")}\n`);
+    const deadline = Date.now() + 30_000;
+    while (out.split("\n").filter(Boolean).length < 6 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 300));
+    child.kill();
+    const lines = out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: unknown; error?: { code: number } });
+    expect(lines).toHaveLength(6);
+    for (const id of [1.5, 2.25, 12345678901234567890, 5]) expect(lines.filter((l) => l.id === id).map((l) => l.error?.code)).toEqual([-32600]);
+    expect(lines.filter((l) => l.id === 6)).toHaveLength(1);
+    expect(err).not.toMatch(/unrecognized_keys|ZodError|invalid_union/);
   }, 60_000);
 });

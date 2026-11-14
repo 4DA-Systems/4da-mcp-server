@@ -367,6 +367,22 @@ function stubNetwork(parentManifests: Record<string, Record<string, string> | nu
       const q = JSON.parse(String(init?.body)) as { package: { name: string } };
       return json({ vulns: advisories[q.package.name] ?? [] });
     }
+    // The batch query that confirms each target (batch-confirm.ts), from the same records.
+    if (url === "https://api.osv.dev/v1/querybatch") {
+      const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string; ecosystem: string }; version: string }> };
+      return json({
+        results: queries.map((q) => ({
+          vulns: (advisories[q.package.name] ?? [])
+            .filter((v) => { const r = advisoryRanges(v, q.package.name, q.package.ecosystem); return r !== null && advisoryAffects(r, q.version, q.package.ecosystem); })
+            .map((v) => ({ id: v.id, modified: "2026-01-01T00:00:00Z" })),
+        })),
+      });
+    }
+    if (url.startsWith("https://api.osv.dev/v1/vulns/")) {
+      const id = decodeURIComponent(url.split("/v1/vulns/")[1]);
+      const found = Object.values(advisories).flat().find((v) => v.id === id);
+      return found ? json(found) : new Response("", { status: 404 });
+    }
     const npm = /^https:\/\/registry\.npmjs\.org\/([^/]+)(?:\/(.+))?$/.exec(url);
     if (npm) {
       const name = decodeURIComponent(npm[1]);

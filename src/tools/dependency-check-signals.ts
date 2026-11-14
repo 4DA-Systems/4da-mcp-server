@@ -69,6 +69,11 @@ export interface AdvisoryRef {
   countedNotice?: boolean;
   /** The GHSA alias `severity` was read from, when this record carries none of its own (Go). */
   severityFrom?: string;
+  /**
+   * The malicious-package records (malware.ts) in this advisory's alias group: a MAL- record often
+   * comes in under its GHSA alias, which then names the group (blind audit round 5: chalk 5.6.1).
+   */
+  malware?: string[];
 }
 
 export type AdvisoryFacts =
@@ -227,6 +232,18 @@ function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
   const fixedNote = fixed.length > 0 ? ` This change fixes ${list(fixed)} affecting ${item.from}.` : "";
 
   const affecting = facts.to.filter((a) => !a.maintenance);
+  // A malicious-package record on `to` (a hijacked release: chalk 5.6.1, debug 4.4.2) is malware,
+  // said in those words and flagged as the name-level check flags it, so every tool and the
+  // briefing read it as malware, never as one more critical advisory (blind audit round 5).
+  const malware = [...new Set(affecting.flatMap((a) => a.malware ?? []))].sort();
+  if (malware.length > 0) {
+    return {
+      id: "advisories",
+      value: { ...value, malicious_package: { ids: malware, taken_down: false, did_you_mean: null } },
+      effect: "avoid",
+      evidence: `MALWARE: ${item.package} ${item.to} is a malicious release (${malware.join(", ")} record${malware.length === 1 ? "s" : ""} it as malware). Do not install it.${item.from ? ` Check the installed ${item.package}@${item.from} as well.` : ""} ${affectedText(item.to, affecting)}.${fixedNote}${noticeNote}`,
+    };
+  }
   if (affecting.length > 0) {
     const serious = affecting.some((a) => a.severity === "critical" || a.severity === "high");
     return {

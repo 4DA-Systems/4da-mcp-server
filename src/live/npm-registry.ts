@@ -9,7 +9,7 @@
  */
 
 import type { LiveCache } from "./cache.js";
-import { sanitizeThirdParty } from "../untrusted-text.js";
+import { quoteThirdParty, sanitizeThirdParty } from "../untrusted-text.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchJson, fetchWithTimeout } from "./http-utils.js";
 import type { RegistryPackageInfo, SemverDistance } from "./types.js";
@@ -170,7 +170,8 @@ function infoFor(name: string, currentVersion: string | null, isDev: boolean, fa
     latestStableVersion: facts.latestStable,
     versionsBehind,
     deprecated: Boolean(installedDeprecation || latestDeprecation),
-    deprecationMessage: installedDeprecation ?? latestDeprecation ?? null,
+    // Quoted and capped, as dependency_check does (blind audit round 5): it is shown inside sentences.
+    deprecationMessage: quoteThirdParty(installedDeprecation ?? latestDeprecation ?? null) || null,
     lastPublished: facts.modified,
     license: null, // abbreviated metadata does not include license
     weeklyDownloads: null, // fetched separately via getBulkDownloads

@@ -71,6 +71,7 @@ import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
 import { withHeldTargets } from "../live/held-targets.js";
+import { confirmTargets, listConfirmed } from "../live/batch-confirm.js";
 import type { AdvisoryQuery } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
@@ -200,6 +201,8 @@ export interface FixPathInput {
 type Intel = Pick<LiveIntelligence, "getFixPathSources" | "lockfileFor" | "getProjectRoot" | "getResolvedDeps"> &
   Partial<Pick<LiveIntelligence, "queryAdvisories">>;
 
+/** Time a parent's or lever's advisory list may spend being confirmed by the batch query (batch-confirm.ts). */
+const LIST_CONFIRM_MS = 5_000;
 /** Time one npm step may spend judging what its target holds at a fixed version (audit 6.2.5 D-4). */
 const HELD_BUDGET_MS = 5_000;
 
@@ -315,6 +318,12 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   const own = step.currentVersion ? await sources.packageAdvisories(ecosystem, step.package).catch(() => null) : null;
   const malicious = own ? cleanReleases(own, ecosystem, []).maliciousAt(step.currentVersion!) : [];
   let clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion, input.ids ?? []);
+  // Blind audit round 5: a target from the package's advisory list is checked only when OSV.dev's
+  // batch query, asked about the target itself, confirms the list (batch-confirm.ts).
+  if (clean?.target) {
+    const query: AdvisoryQuery = heldQuery ?? (async () => { throw new Error("no batch query"); });
+    clean = (await confirmTargets(sources, query, [{ key: "step", ecosystem, name: step.package, clean }], Date.now() + HELD_BUDGET_MS)).get("step") ?? clean;
+  }
   // npm: a target that exact-pins (or narrowly ranges) an affected dependency installs it: express
   // 4.20.0 and qs 6.11.0 (audit 6.2.5 D-4). The same check vulnerability_scan runs on its targets,
   // on every row: a transitive copy's target is the floor its parents' levers must admit, so a
@@ -379,7 +388,9 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     // is withdrawn (lodash 4.18.0, "Bad release"), so it is never the target; the step still
     // counts as checked against the installed version's advisories only.
     step.reasons.push(
-      clean.registryUnread
+      clean.unconfirmed
+        ? `${clean.target} is the smallest release ${step.package}'s advisory list leaves clean, NOT confirmed: ${clean.unconfirmed}`
+        : clean.registryUnread
         ? `${clean.target} is the highest per-advisory fix; neither the package's other advisories nor its registry could be read: ${REGISTRY_UNREAD_NOTE}`
         : withheld
           ? `${withheld}; the package's other advisories could not be read`
@@ -1001,7 +1012,11 @@ async function ownClean(
     pending = ctx.sources.packageAdvisories(ctx.ecosystem, name).catch(() => null);
     ctx.advisories.set(name, pending);
   }
-  const advisories = await pending;
+  const listed = await pending;
+  // Blind audit round 5: the list calls releases clean only when OSV.dev's batch query, asked about
+  // the installed release and the newest one, answered and named nothing the list left out.
+  const asked = [...(installed ? [installed] : []), ...(newestOf(facts.versions, ctx.ecosystem) ? [newestOf(facts.versions, ctx.ecosystem)!] : [])];
+  const advisories = listed && (await listConfirmed(ctx.intel.queryAdvisories?.bind(ctx.intel), listed, ctx.ecosystem, name, asked, Date.now() + LIST_CONFIRM_MS)) ? listed : null;
   if (!advisories) return { clean: () => true, read: false, any: false, newest: newestOf(facts.versions, ctx.ecosystem), unreadable: [], remains: () => [], maliciousAt: () => [], introducedAt: () => [], cleanButIntroduced: () => false };
   // The one clean-release predicate (#981): malware never skipped, unreadable ranges unknown, a
   // genuinely unfixed advisory skipped and said (osv-ranges.ts cleanReleases).
@@ -1768,9 +1783,11 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
   const looked = await withTimeout(
     Promise.all(
       [...leversOf.values()].map(async (d) => {
-        const [advisories, facts] = sources
+        const [listed, facts] = sources
           ? await Promise.all([sources.packageAdvisories(d.eco as OsvEcosystem, d.name).catch(() => null), sources.releaseFacts(d.eco as OsvEcosystem, d.name).catch(() => null)])
           : [null, null];
+        // Blind audit round 5: only a list the batch query confirms calls a release clean (batch-confirm.ts).
+        const advisories = listed && (await listConfirmed(liveIntel.queryAdvisories?.bind(liveIntel), listed, d.eco as OsvEcosystem, d.name, [d.version], Date.now() + LIST_CONFIRM_MS)) ? listed : null;
         // The one clean-release predicate (#981), over the dependency's own release list.
         return [key(d.eco, d.name, d.version), advisories ? cleanReleases(advisories, d.eco, facts?.versions ?? [], d.version) : null] as const;
       }),

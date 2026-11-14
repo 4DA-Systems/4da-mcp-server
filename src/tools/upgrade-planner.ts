@@ -43,6 +43,7 @@ import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 
@@ -404,6 +405,8 @@ async function executeStandalonePlanner(
       .filter((d) => offeredUpgrade(d) !== null)
       .map((d) => ({ key: `${d.ecosystem}\0${d.name}\0${d.currentVersion ?? "unknown"}`, ecosystem: d.ecosystem, name: d.name, installed: d.currentVersion, offered: offeredUpgrade(d)! })),
     withinCallBudget(OFFER_CHECK_BUDGET_MS, PLAN_RESERVE_MS / 2),
+    undefined,
+    (d) => liveIntel.queryAdvisories(d),
   );
   // Complete vulnerability data only: a partial scan (OSV.dev unreachable or
   // rate limited for some dependencies) ranks what it found and says the rest
@@ -499,7 +502,8 @@ async function executeStandalonePlanner(
     // Check deprecation
     if (dep.deprecated) {
       if (risk === "low") risk = "high";
-      reasons.push(dep.deprecationMessage ? `Deprecated: ${dep.deprecationMessage}` : "Package is deprecated");
+      // The registry's words, quoted and capped inside this server's sentence (blind audit round 5).
+      reasons.push(dep.deprecationMessage ? `Deprecated: ${quoteThirdParty(dep.deprecationMessage)}` : "Package is deprecated");
     }
 
     // Check version distance: to the release this row may offer, not to a known-affected latest.

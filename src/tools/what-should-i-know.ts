@@ -595,6 +595,8 @@ async function latestVersions(
       sources,
       newer.map((i) => ({ key: `${i.ecosystem}\0${i.name}`, ecosystem: i.ecosystem, name: i.name, installed: i.currentVersion, offered: i.latestStableVersion! })),
       TARGET_CHECK_BUDGET_MS,
+      undefined,
+      liveIntel.queryAdvisories ? (d) => liveIntel.queryAdvisories!(d) : null,
     );
     const out = new Map<string, LatestFact>();
     for (const info of infos) {
