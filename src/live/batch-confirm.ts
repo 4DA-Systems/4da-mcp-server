@@ -15,6 +15,7 @@
 import { missingFromList, type FixPathSources, type FixTargetResult } from "./fix-paths.js";
 import type { AdvisoryQuery } from "./held-dependencies.js";
 import type { OfferedRelease } from "./offered-release.js";
+import type { AdvisoryRanges } from "./osv-ranges.js";
 import type { OsvEcosystem, ResolvedDependency } from "./types.js";
 
 /** What the batch query said about a set of releases: read, with the ids per release, or not read and why. */
@@ -120,4 +121,24 @@ export async function confirmOffers(
     out.set(i.key, { ...i.vet, checked: false, note: i.vet.note && i.vet.safe !== i.vet.offered ? `${i.vet.note}; but ${unconfirmed}` : unconfirmed });
   }
   return out;
+}
+
+/**
+ * Whether a package's advisory list may be used to call releases of it clean: the batch query
+ * answered for `versions` (the releases about to be judged) and the list holds every id it named.
+ * Used where many releases are judged from one list (upgrade_planner's parent and lever checks).
+ */
+export async function listConfirmed(
+  query: AdvisoryQuery | null | undefined,
+  list: readonly AdvisoryRanges[],
+  ecosystem: OsvEcosystem,
+  name: string,
+  versions: string[],
+  deadline: number,
+): Promise<boolean> {
+  if (!query) return false;
+  const releases = [...new Set(versions)].map((version) => ({ ecosystem, name, version }));
+  const answer = await batchAnswer(query, releases, deadline);
+  if (!answer.read) return false;
+  return releases.every((r) => missingFromList(list, answer.idsAt(ecosystem, name, r.version)).length === 0);
 }

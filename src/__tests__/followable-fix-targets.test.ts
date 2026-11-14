@@ -50,6 +50,8 @@ let NPM: Record<string, { versions: Record<string, VersionDoc>; latest: string }
 let GO: Record<string, string[]> = {};
 /** Every URL asked for, so a test can say what was (not) looked up. */
 let REQUESTS: string[] = [];
+/** Advisory ids POST /v1/query leaves out of its answer (an incomplete list; blind audit round 5). */
+let QUERY_HIDES: string[] = [];
 
 const cmp = (a: string, b: string) => a.replace(/^v/, "").localeCompare(b.replace(/^v/, ""), undefined, { numeric: true });
 const affects = (v: OsvVulnerability, version: string) => {
@@ -73,7 +75,7 @@ function stubNetwork() {
     }
     if (url === "https://api.osv.dev/v1/query") {
       const q = JSON.parse(String(init?.body)) as { package: { name: string } };
-      return json({ vulns: ADVISORIES[q.package.name] ?? [] });
+      return json({ vulns: (ADVISORIES[q.package.name] ?? []).filter((v) => !QUERY_HIDES.includes(v.id)) });
     }
     const npm = /^https:\/\/registry\.npmjs\.org\/([^/]+)(?:\/(.+))?$/.exec(url);
     if (npm) {
@@ -107,6 +109,7 @@ beforeEach(() => {
   delete process.env.FOURDA_OFFLINE;
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-followable-"));
   ADVISORIES = {};
+  QUERY_HIDES = [];
   NPM = {};
   GO = {};
   REQUESTS = [];
@@ -338,6 +341,18 @@ describe("when every installed parent already admits the fixed child, the step i
     expect(glob.parentUpgrades[0]).toMatchObject({ parent: "sucrase", from: "3.35.0", to: "3.35.1" });
     expect(glob.parentUpgrades[0].levers[0]).toMatchObject({ name: "tailwindcss", version: "3.4.18", to: "3.4.19" });
     expect(glob.parentUpgrades[0].refreshOnly).toBeUndefined();
+  });
+
+  it("a parent release judged clean from a list the batch query contradicts is not named clean (blind audit round 5)", async () => {
+    tailwindProject("3.35.0");
+    // sucrase 3.35.1 has an advisory of its own that sucrase's list (/v1/query) leaves out.
+    ADVISORIES.sucrase = [adv("GHSA-sucr-0000-0000", "sucrase", [{ introduced: "3.35.1" }])];
+    QUERY_HIDES = ["GHSA-sucr-0000-0000"];
+    const { step } = await plan();
+    const glob = step("glob");
+    const reason = glob.reasons.find((r: string) => r.startsWith("Transitive dependency"));
+    // Named only as unchecked: before, the empty list called sucrase 3.35.1 clean, silently.
+    expect(reason).toContain("not checked against sucrase's own advisories");
   });
 
   it("two installed parents: a refresh only when BOTH admit the fixed child", async () => {
