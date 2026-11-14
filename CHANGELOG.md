@@ -2,6 +2,43 @@
 
 ## 6.3.0 — unreleased
 
+- **Pre-publish fixes (briefing, round 7).** what_should_i_know left a package
+  or a version unchecked in common wordings. "bring in rustdecimal" in an npm
+  project said `safe_to_delegate`: npm has no such name, so it was dropped as
+  prose, and crates.io's rustdecimal is malware (GHSA-7pwq-f4pq-78gm). "pull in
+  node-ipc 10.1.1", "we need node-ipc 10.1.1", "bring in ua-parser-js 0.7.29"
+  and "pull in event-stream 3.3.6" never tied the version to the name, so the
+  malicious releases were not flagged. "add express, ctx", "add lodash 4.17.21
+  and crossenv" and "add chalk 5.6.2 and electorn" never checked the second
+  package: a comma, or a version after the first name, ended the list. "replace
+  request with axios 0.21.0" (and swap / migrate) said "Task adds axios
+  (proceed)": the version was dropped and latest judged. `add "dbg":
+  "npm:debug@4.4.2" to package.json` said "Task adds dbg (proceed), npm
+  (proceed)" and missed the malicious debug 4.4.2. The task is now read clause
+  by clause (a sentence break, ";", "then" or a new verb ends one): after the
+  verb (add, install, need, use, include, require, bring in, pull in, replace
+  A with, swap A for, migrate / switch from A to) comes a list of items, each
+  `name [version]`, separated by commas, "and", "&", "+" or "plus", and each
+  version is bound to the item just before it ("upgrade lodash to 4.17.21 and
+  add express 4.x" gives 4.x to express). A package the task names a version
+  for is checked at that version, in new_packages as in requested_versions, and
+  the summary names it ("Task adds axios 0.21.0 (avoid)"); the version of what
+  a swap takes out is not judged. Manifest entries written into a task read as
+  the dependency they declare: `"name": "npm:real@1.2.3"` is real 1.2.3 (never
+  a package called `npm`), `"name": "^1.2.3"`, Cargo's `name = "1.2"` and
+  `name = { version = "1.2" }`, and pip's `name==1.2`; a manifest's own fields
+  (`"version"`, engines' `"node"`, `edition`, `rust-version`,
+  `requires-python`) are not packages. A name the task gives no ecosystem for
+  that none of the project's ecosystems has is also looked up, for malware
+  only, in the other ecosystems (npm, crates.io, PyPI); private names are still
+  sent nowhere. Up to eight packages a task adds are checked (was three).
+  Everyday work still names nothing ("add tests", "add logging to the
+  handler", "add tests, logging and retries"). The plugin's manifest-edit hook
+  counted `"version"` and engines' `"node"` in package.json, and `version`,
+  `edition` and `rust-version` in Cargo.toml or pyproject.toml, as dependency
+  changes: only dependency sections count now (the edited lines' own section,
+  or the manifest on disk when they do not show it), and `[dependencies.serde]`
+  `version = "..."` is serde's.
 - **Pre-publish fixes (scan speed, round 6).** On a 1,889-dependency npm
   project a vulnerability_scan with every answer cached took 3.7 s, and the
   server did not answer `ping` until it was done (6.2.7: 0.3 s); at 107,000
@@ -35,7 +72,8 @@
   requirements.txt", "npm i ctx" and "cargo add" still check only the one
   named. "we need X", "we'll need X", "bring in X" and "pull in X" read like
   "add X" ("we need electorn for the desktop build" is electron's malware
-  typo-squat). A bare name one or two edits from a popular PyPI project is a
+  typo-squat), by name only: a version written after X, or a second package
+  after a comma, was not read until round 7. A bare name one or two edits from a popular PyPI project is a
   package in a project that installs from PyPI ("add colourama", "add
   jeIlyfish", "add python3-dateutil" read as prose and said `safe_to_delegate`;
   now `review_needed` with "did you mean").
@@ -91,7 +129,8 @@
   in a Python project, "replace lodash with lodahs", "swap express for expres"
   and "add flatmap-stream". A bare "add X" now checks any plausible name, a
   name put in a manifest or the dependency list is always a package, and
-  "replace/swap/switch/migrate A with/for/to B" checks B. Everyday English is
+  "replace/swap/switch/migrate A with/for/to B" checks B (at latest: a
+  version written after B was dropped until round 7). Everyday English is
   not looked up ("install steps", "add routes to the app"), and a bare name no
   registry has and no malware record covers is read as prose. Quoted versions
   (`lodash@"4.17.20"`) and npm aliases (`lodash@npm:event-stream@3.3.6`) are

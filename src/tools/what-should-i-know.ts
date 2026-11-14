@@ -245,7 +245,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and newer releases the 4DA feed saw. For a package the task ADDS (\"add the X package\", \"npm install X\"), new_packages gives dependency_check's verdict for the name (checked in every ecosystem the project uses when the task does not say which; the worst answer stands): a name that is malware is human_only, a near-miss of a popular package or a name the registry does not have is review_needed. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, a finding on a package the task adds, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
+    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and newer releases the 4DA feed saw. For a package the task ADDS (\"add the X package\", \"npm install X\"), new_packages gives dependency_check's verdict for each name, every item of a list (\"add a, b and c\"), at the version the task writes for it or else latest (checked in every ecosystem the project uses when the task does not say which; the worst answer stands): a name that is malware is human_only, a near-miss of a popular package or a name the registry does not have is review_needed. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, a finding on a package the task adds, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -719,7 +719,10 @@ async function conflictsFor(db: FourDADatabase, packages: TaskPackage[]) {
 /** "lodahs (avoid)", "expres (review: did you mean express?)", "left-pad (proceed)". */
 function sayNewPackage(p: NewPackageFinding): string {
   const guess = p.did_you_mean && p.verdict !== "proceed" && p.verdict !== "wait" ? `: did you mean ${p.did_you_mean}?` : "";
-  return `${p.name} (${p.malicious ? "a malware name, avoid" : p.verdict}${guess})`;
+  // The version the task writes is the one judged ("Task adds axios (proceed)" hid axios 0.21.0's avoid).
+  // A malicious record on a named release (node-ipc 10.1.1) is about that release, not the name.
+  const malware = p.version ? "a malicious release, avoid" : "a malware name, avoid";
+  return `${p.name}${p.version ? ` ${p.version}` : ""} (${p.malicious ? malware : p.verdict}${guess})`;
 }
 
 function assessDelegation(input: {

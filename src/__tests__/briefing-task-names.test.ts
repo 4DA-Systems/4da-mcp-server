@@ -58,7 +58,7 @@ describe("a short name is the installed Go module it stands for", () => {
 
   it('"install gin" with gin in go.mod is not a new npm package', () => {
     expect(detectNewPackages("install gin", MIXED)).toEqual([]);
-    expect(detectNewPackages("install gin and left-pad", MIXED)).toEqual([{ name: "left-pad", ecosystem: "npm", alternatives: ["PyPI"] }]);
+    expect(detectNewPackages("install gin and left-pad", MIXED)).toEqual([{ name: "left-pad", ecosystem: "npm", alternatives: ["PyPI"], guessed: true }]);
   });
 });
 

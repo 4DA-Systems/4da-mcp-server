@@ -13,25 +13,141 @@
  *
  * Fast and quiet by design: no network, no dependencies, plain Node. Any
  * input it does not understand exits 0 with no output, so it can never block
- * or slow an edit. It reads only the edit payload Claude Code passes on stdin.
+ * or slow an edit. It reads the edit payload Claude Code passes on stdin and,
+ * when the edited lines do not show which section they are in, the edited
+ * manifest itself (only dependency sections declare dependencies).
  */
 
+import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod"]);
 
-/** name -> version specifier pairs a manifest snippet declares. */
-function declaredVersions(file, text) {
+/**
+ * Only dependency sections declare dependencies. `"version": "1.2.0"` and engines'
+ * `"node": ">=20"` were reported as dependencies called `version` and `node`, and
+ * Cargo's `edition = "2021"` / `rust-version` and pyproject's `version` the same
+ * (pre-publish audit of 5d709ff).
+ */
+const NPM_DEPENDENCY_SECTIONS = new Set(["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides", "resolutions"]);
+/** A TOML table of dependencies: [dependencies], [dev-dependencies], [target.'cfg(..)'.build-dependencies], [workspace.dependencies], [tool.poetry.group.dev.dependencies]. */
+const TOML_DEPENDENCY_TABLE = /(?:^|\.)(?:dependencies|dev-dependencies|build-dependencies)$/;
+/** `[dependencies.serde]`: the table of one dependency, whose `version` key is that dependency's. */
+const TOML_ONE_DEPENDENCY = /(?:^|\.)(?:dependencies|dev-dependencies|build-dependencies)\.["']?([\w.-]+)["']?$/;
+/** TOML keys that are never a dependency, wherever they stand (Poetry lists the interpreter as `python`). */
+const TOML_NOT_DEPENDENCIES = new Set(["version", "edition", "rust-version", "requires-python", "resolver", "python", "name"]);
+/** package.json keys outside the dependency sections that hold a version. */
+const NPM_NOT_DEPENDENCIES = new Set(["version", "node", "npm", "pnpm", "yarn", "bun", "deno", "vscode", "packageManager"]);
+
+/** The object a JSON snippet's key at `index` sits in, when the snippet shows it: its key, "" for the top level, or null when unseen. */
+function enclosingJsonKey(text, index) {
+  let depth = 0;
+  let inString = false;
+  for (let i = index - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === '"' && text[i - 1] !== "\\") inString = !inString;
+    if (inString) continue;
+    if (ch === "}" || ch === "]") depth++;
+    else if (ch === "{" || ch === "[") {
+      if (depth === 0) {
+        const key = /"([^"]+)"\s*:\s*$/.exec(text.slice(0, i));
+        return key ? key[1] : ch === "{" && text.slice(0, i).trim() === "" ? "" : null;
+      }
+      depth--;
+    }
+  }
+  return null;
+}
+
+/** The TOML table header a snippet's line at `index` sits under, when the snippet shows it. */
+function enclosingTomlTable(text, index) {
+  const headers = [...text.slice(0, index).matchAll(/^\s*\[{1,2}\s*([^\]]+?)\s*\]{1,2}\s*$/gm)];
+  return headers.length > 0 ? headers[headers.length - 1][1].replace(/\s+/g, "") : null;
+}
+
+/** The edited manifest as it is now on disk (PostToolUse: the edit is already written), parsed lazily; null when unreadable. */
+function onDisk(path) {
+  let cached;
+  return () => {
+    if (cached !== undefined) return cached;
+    try {
+      cached = readFileSync(path, "utf8");
+    } catch {
+      cached = null;
+    }
+    return cached;
+  };
+}
+
+/**
+ * Whether `name` in a package.json is a dependency: the snippet's own section when it shows it,
+ * else the file on disk; a key the file has only outside the dependency sections is not one.
+ */
+function npmDependency(text, index, name, disk) {
+  const section = enclosingJsonKey(text, index);
+  if (section !== null) return NPM_DEPENDENCY_SECTIONS.has(section);
+  const raw = disk();
+  if (raw) {
+    try {
+      const doc = JSON.parse(raw);
+      const inDeps = [...NPM_DEPENDENCY_SECTIONS].some((s) => doc?.[s] && typeof doc[s] === "object" && Object.hasOwn(doc[s], name));
+      if (inDeps) return true;
+      const elsewhere = Object.hasOwn(doc ?? {}, name) || (doc?.engines && Object.hasOwn(doc.engines, name)) || (doc?.volta && Object.hasOwn(doc.volta, name));
+      if (elsewhere) return false;
+    } catch {
+      // Not JSON (yet): the snippet alone decides.
+    }
+  }
+  return !NPM_NOT_DEPENDENCIES.has(name);
+}
+
+/**
+ * The dependency a TOML `key = ...` line declares, or null: the snippet's table when it shows
+ * one, else the table the key sits under in the file on disk.
+ */
+function tomlDependency(text, index, key, disk) {
+  let table = enclosingTomlTable(text, index);
+  if (table === null) {
+    const raw = disk();
+    if (raw) {
+      const at = new RegExp(`^\\s*["']?${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']?\\s*=`, "m").exec(raw);
+      if (at) table = enclosingTomlTable(raw, at.index) ?? "";
+    }
+  }
+  if (table !== null) {
+    const one = TOML_ONE_DEPENDENCY.exec(table);
+    if (one) return key === "version" ? one[1] : null;
+    if (!TOML_DEPENDENCY_TABLE.test(table)) return null;
+  }
+  return TOML_NOT_DEPENDENCIES.has(key.toLowerCase()) ? null : key;
+}
+
+/** name -> version specifier pairs a manifest snippet declares, in its dependency sections only. */
+function declaredVersions(file, text, disk = () => null) {
   const out = new Map();
   if (!text) return out;
   if (file === "package.json") {
-    for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([~^<>=]*\s*v?\d[^"]*)"/gi)) out.set(m[1], m[2]);
+    for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([~^<>=]*\s*v?\d[^"]*)"/gi)) {
+      if (npmDependency(text, m.index, m[1], disk)) out.set(m[1], m[2]);
+    }
   } else if (file === "Cargo.toml") {
-    for (const m of text.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=\s*"([~^<>=]*\s*\d[^"]*)"/gm)) out.set(m[1], m[2]);
-    for (const m of text.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=\s*\{[^}]*\bversion\s*=\s*"([^"]+)"/gm)) out.set(m[1], m[2]);
+    for (const m of text.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=\s*"([~^<>=]*\s*\d[^"]*)"/gm)) {
+      const name = tomlDependency(text, m.index, m[1], disk);
+      if (name) out.set(name, m[2]);
+    }
+    for (const m of text.matchAll(/^\s*([A-Za-z_][\w-]*)\s*=\s*\{[^}]*\bversion\s*=\s*"([^"]+)"/gm)) {
+      const name = tomlDependency(text, m.index, m[1], disk);
+      if (name) out.set(name, m[2]);
+    }
   } else if (file === "pyproject.toml" || file === "requirements.txt") {
+    // A requirement string ("requests>=2.31") is a dependency wherever it is written.
     for (const m of text.matchAll(/["']?([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(===?|~=|>=)\s*([0-9][^"',;\s]*)/g)) out.set(m[1].toLowerCase(), `${m[2]}${m[3]}`);
-    for (const m of text.matchAll(/^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*=\s*"([~^<>=]*\s*\d[^"]*)"/gm)) out.set(m[1].toLowerCase(), m[2]);
+    if (file === "pyproject.toml") {
+      for (const m of text.matchAll(/^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*=\s*"([~^<>=]*\s*\d[^"]*)"/gm)) {
+        const name = tomlDependency(text, m.index, m[1], disk);
+        if (name) out.set(name.toLowerCase(), m[2]);
+      }
+    }
   } else if (file === "go.mod") {
     for (const m of text.matchAll(/^\s*(?:require\s+)?([a-z0-9.-]+\.[a-z]{2,}\/\S+)\s+(v\d\S*)/gm)) out.set(m[1], m[2]);
   }
@@ -39,10 +155,10 @@ function declaredVersions(file, text) {
 }
 
 /** Changed or added dependency versions between two snippets of one manifest. */
-function versionChanges(file, before, after) {
-  const old = declaredVersions(file, before);
+function versionChanges(file, before, after, disk) {
+  const old = declaredVersions(file, before, disk);
   const changes = [];
-  for (const [name, spec] of declaredVersions(file, after)) {
+  for (const [name, spec] of declaredVersions(file, after, disk)) {
     const prev = old.get(name);
     if (prev !== spec) changes.push({ name, from: prev ?? null, to: spec });
   }
@@ -112,10 +228,11 @@ async function main() {
   if (!MANIFESTS.has(file)) return;
 
   let changes = [];
+  const disk = onDisk(String(toolInput.file_path));
   if (input.tool_name === "Edit") {
-    changes = versionChanges(file, toolInput.old_string ?? "", toolInput.new_string ?? "");
+    changes = versionChanges(file, toolInput.old_string ?? "", toolInput.new_string ?? "", disk);
   } else if (input.tool_name === "MultiEdit" && Array.isArray(toolInput.edits)) {
-    changes = toolInput.edits.flatMap((e) => versionChanges(file, e?.old_string ?? "", e?.new_string ?? ""));
+    changes = toolInput.edits.flatMap((e) => versionChanges(file, e?.old_string ?? "", e?.new_string ?? "", disk));
   }
   // Write replaces the whole file and its payload carries no "before": stay quiet
   // rather than report every dependency as changed.

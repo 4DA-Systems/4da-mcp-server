@@ -10,6 +10,8 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 
@@ -100,5 +102,59 @@ describe("manifest-edit hook", () => {
       expect(status).toBe(0);
       expect(stdout).toBe("");
     }
+  });
+});
+
+describe("manifest-edit hook: only dependency sections declare dependencies (pre-publish audit of 5d709ff)", () => {
+  const silent = (payload: unknown) => {
+    const { status, stdout } = run(payload);
+    expect(status).toBe(0);
+    expect(stdout).toBe("");
+  };
+
+  it("package.json: the package's own version and engines are not dependencies", () => {
+    silent({ tool_name: "Edit", tool_input: { file_path: "package.json", old_string: '"version": "1.0.0"', new_string: '"version": "1.1.0"' } });
+    silent({ tool_name: "Edit", tool_input: { file_path: "package.json", old_string: '"engines": { "node": ">=18" }', new_string: '"engines": { "node": ">=20" }' } });
+    const text = context(
+      run({
+        tool_name: "Edit",
+        tool_input: {
+          file_path: "package.json",
+          old_string: '{\n  "name": "app",\n  "version": "1.0.0",\n  "dependencies": {\n    "vite": "^6.0.0"\n  }\n}',
+          new_string: '{\n  "name": "app",\n  "version": "1.1.0",\n  "dependencies": {\n    "vite": "^7.0.0"\n  }\n}',
+        },
+      }).stdout,
+    );
+    expect(text).toContain("vite: ^6.0.0 -> ^7.0.0");
+    expect(text).not.toMatch(/\bversion:/);
+  });
+
+  it("an edit that does not show its section is placed by the manifest on disk", () => {
+    const dir = mkdtempSync(join(tmpdir(), "4da-hook-"));
+    try {
+      const pkg = join(dir, "package.json");
+      writeFileSync(pkg, JSON.stringify({ name: "app", version: "1.1.0", engines: { node: ">=20" }, dependencies: { vite: "^7.0.0" } }, null, 2));
+      silent({ tool_name: "Edit", tool_input: { file_path: pkg, old_string: '"node": ">=18"', new_string: '"node": ">=20"' } });
+      expect(context(run({ tool_name: "Edit", tool_input: { file_path: pkg, old_string: '"vite": "^6.0.0"', new_string: '"vite": "^7.0.0"' } }).stdout)).toContain("vite: ^6.0.0 -> ^7.0.0");
+
+      const cargo = join(dir, "Cargo.toml");
+      writeFileSync(cargo, '[package]\nname = "app"\nversion = "0.2.0"\nedition = "2021"\n\n[dependencies]\nserde = "1.0.200"\n');
+      silent({ tool_name: "Edit", tool_input: { file_path: cargo, old_string: 'version = "0.1.0"', new_string: 'version = "0.2.0"' } });
+      expect(context(run({ tool_name: "Edit", tool_input: { file_path: cargo, old_string: 'serde = "1.0.100"', new_string: 'serde = "1.0.200"' } }).stdout)).toContain("serde: 1.0.100 -> 1.0.200");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("Cargo.toml and pyproject.toml: [package] / [project] fields are not dependencies; a [dependencies.x] version is x's", () => {
+    silent({ tool_name: "Edit", tool_input: { file_path: "Cargo.toml", old_string: '[package]\nversion = "0.1.0"\nedition = "2018"\nrust-version = "1.70"', new_string: '[package]\nversion = "0.2.0"\nedition = "2021"\nrust-version = "1.80"' } });
+    const one = context(run({ tool_name: "Edit", tool_input: { file_path: "Cargo.toml", old_string: '[dependencies.serde]\nversion = "1.0.100"', new_string: '[dependencies.serde]\nversion = "1.0.200"' } }).stdout);
+    expect(one).toContain("serde: 1.0.100 -> 1.0.200");
+    silent({ tool_name: "Edit", tool_input: { file_path: "pyproject.toml", old_string: '[project]\nversion = "1.0"\nrequires-python = ">=3.9"', new_string: '[project]\nversion = "1.1"\nrequires-python = ">=3.10"' } });
+    const poetry = context(
+      run({ tool_name: "Edit", tool_input: { file_path: "pyproject.toml", old_string: '[tool.poetry.dependencies]\npython = "^3.9"\nrequests = "^2.30"', new_string: '[tool.poetry.dependencies]\npython = "^3.10"\nrequests = "^2.31"' } }).stdout,
+    );
+    expect(poetry).toContain("requests: ^2.30 -> ^2.31");
+    expect(poetry).not.toContain("python:");
   });
 });
