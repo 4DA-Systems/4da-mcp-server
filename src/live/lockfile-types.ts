@@ -54,6 +54,11 @@ export interface VersionSource {
   /** PyPI: `--extra-index-url` indexes a requirements file adds beside pypi.org (not public ones). */
   extraIndexes?: Array<{ file: string; index: string }>;
   /**
+   * PyPI: requirements files whose `--index-url`, extra index or find-links location is not public,
+   * with the option: pip may fetch any name of that install from it (pre-publish round 10, W4).
+   */
+  registryWide?: Array<{ file: string; registry: string; setting: string }>;
+  /**
    * PyPI: every file read records the index each package came from (uv.lock, poetry.lock,
    * Pipfile.lock), so the configured indexes need not be judged for them. Not set when a pdm.lock
    * (which records none) or a requirements file was read (R8, B4).
@@ -156,7 +161,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "indexRecorded"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "registryWide" | "indexRecorded"> = {},
 ): VersionSource {
   return {
     versions,

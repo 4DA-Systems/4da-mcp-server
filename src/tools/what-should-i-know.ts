@@ -367,15 +367,13 @@ export async function executeWhatShouldIKnow(
   const ecosystemDeps = () => [...allDeps(), ...(liveIntel?.getPrivateAuditDeps?.() ?? [])];
   // A name looked up in an ecosystem whose registry, index or proxy is not public may be published only
   // there: it is private, said so, and never sent; a guessed alternative under such a registry is dropped.
-  // So is one in an ecosystem every installed package of which is private (a requirements file's
-  // `--index-url`, a lockfile that installs all of them from a private host): a new one comes from there too.
-  const publicEco = new Set<string>(allDeps().map((d) => d.ecosystem));
-  const privateEco = new Map<string, string>();
-  for (const d of liveIntel?.getPrivateDependencies?.() ?? []) {
-    if (!publicEco.has(d.ecosystem) && !privateEco.has(d.ecosystem)) privateEco.set(d.ecosystem, `every ${d.ecosystem} package this project installs is private (${d.why})`);
-  }
+  // The policy is the live layer's, the one the request guard and dependency_check apply
+  // (LiveIntelligence.registryPrivate, through lookupPrivateReason): only a source that serves ANY
+  // name makes a new name private. The briefing's own rule ("every installed package of the
+  // ecosystem is private") also fired for a scope, so a project whose only npm packages were
+  // `@acme/*` reported "add lodash" NOT CHECKED (private) (pre-publish round 10, W4).
   const lookup = liveIntel?.lookupPrivateReason as ((ecosystem: string, name: string) => string | null) | undefined;
-  const registryReason = (ecosystem: string, name: string) => lookup?.call(liveIntel, ecosystem, name) ?? privateEco.get(ecosystem) ?? null;
+  const registryReason = (ecosystem: string, name: string) => lookup?.call(liveIntel, ecosystem, name) ?? null;
   const registryPrivate = <T extends { name: string; ecosystem: string; alternatives?: string[] }>(items: T[]): T[] => {
     const why = registryReason;
     const kept: T[] = [];
