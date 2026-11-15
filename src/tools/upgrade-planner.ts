@@ -112,7 +112,9 @@ interface UpgradeRecommendation {
    * newer release is known-affected: remove or replace the dependency. A malware record with a
    * clean later release (fsevents 1.2.9, MAL-2023-462, clean from 1.2.11) is an upgrade instead;
    * `hold_current` = no advisory affects the installed version, and every newer release is
-   * known-affected or withdrawn: stay on it (the reasons say why).
+   * known-affected or withdrawn: stay on it (the reasons say why);
+   * `not_checked` = OSV.dev gave no answer for the installed copy (risk "unknown") and no newer
+   * release is offered: its advisories are not known, so it is neither vulnerable nor clean.
    * Every release a row offers, the newest one included, is checked against the package's
    * advisories and the registry's withdrawals, as dependency_check checks one.
    */
@@ -127,7 +129,8 @@ interface UpgradeRecommendation {
     | "no_fix_available"
     | "not_built_on_this_host"
     | "remove_dependency"
-    | "hold_current";
+    | "hold_current"
+    | "not_checked";
   /** upgrade_parent / override_or_replace: the parent release that admits a clean version, per blocking parent that can move. */
   parentUpgrades?: ParentUpgrade[];
   /**
@@ -230,7 +233,7 @@ const PROVENANCE_NOTE =
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev), the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update = route undecided or mixed, mixed, no_fix) and `next_step` in words; a blocked_upstream step names no upgrade: its `blocked_upstream` holds say what keeps each copy and list the options; flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream when nothing could be read; direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\": the plan then misses whatever those dependencies carry. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev), the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update = route undecided or mixed, mixed, no_fix) and `next_step` in words; a blocked_upstream step names no upgrade: its `blocked_upstream` holds say what keeps each copy and list the options; flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream when nothing could be read; direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -621,7 +624,12 @@ async function executeStandalonePlanner(
               : "hold_current"
             : targetVersion || unconfirmedOffer
               ? "upgrade_direct"
-              : "no_fix_available";
+              : // No advisory is known because OSV.dev never answered, not because none exists: never
+                // "no_fix_available", which the summary counts as "vulnerable with no fixed release
+                // yet" (pre-publish round 10, W8: three unchecked rows read as three vulnerable).
+                noAnswer
+                ? "not_checked"
+                : "no_fix_available";
 
     const rec: UpgradeRecommendation = {
       package: dep.name,
