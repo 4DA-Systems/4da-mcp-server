@@ -59,6 +59,11 @@
     the cache. dependency_check names cached advisories for an exact version
     and leaves the verdict `unknown`. `force_refresh` offline no longer wipes
     the cache.
+  - *upgrade_planner counts.* A dependency OSV.dev gave no answer for, with
+    no newer release to offer, was counted as "vulnerable with no fixed
+    release yet". It now has the action `not_checked` and is counted only as
+    NOT CHECKED, never as vulnerable or clean. Clients that read `action`
+    should handle the new value.
   - *Protocol.* In a 2025-03-26 session, a JSON-RPC batch with a cancelled
     request is answered without it, over stdio and Streamable HTTP. Before,
     the batch waited forever, and a later request reusing the id was folded
