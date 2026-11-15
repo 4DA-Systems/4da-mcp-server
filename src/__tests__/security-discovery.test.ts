@@ -164,7 +164,8 @@ describe("the server applies the FOURDA_DB_PATH rules", () => {
   const indexSource = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "index.ts"), "utf8");
 
   it("opens the database without passing FOURDA_DB_PATH as an explicit path (that bypassed the rules)", () => {
-    expect(indexSource).toMatch(/db = createDatabase\(\);/);
+    // The init opens it in a step of its own (openInit, pre-publish round 10, W9): still with no argument.
+    expect(indexSource).toMatch(/= createDatabase\(\);/);
     expect(indexSource).not.toMatch(/createDatabase\(process\.env\.FOURDA_DB_PATH\)|createDatabase\(dbPath\)/);
   });
 

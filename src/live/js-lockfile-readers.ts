@@ -306,11 +306,16 @@ export function pnpmEntryIdentities(content: string): Map<string, [string, strin
  * package key. pnpm 9 dropped that field, so its copies have unknown scope.
  */
 export function readPnpmLock(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): ReadonlySet<string> {
-  const transitive: Array<[string, string]> = [];
+  // Each registry (name, version) the entries install, once, under its `name\0version` key, in the
+  // order first seen. Lockfile 9 lists every package twice (`packages:` and `snapshots:`): a list of
+  // every sighting, plus a key string per sighting for the set, the dev map and the instance set
+  // each, held 300,000 pairs and 600,000 strings for a 150,000-entry file (pre-publish round 10, W9).
+  const transitive = new Map<string, [string, string]>();
   const devByKey = new Map<string, boolean>();
   // Every (name, version) an importer pins, for the check that each has a `packages:` entry.
   const directPins = new Map<string, string>();
-  const setFirst = (name: string, version: string): void => {
+  const setFirst = (rawName: string, rawVersion: string): void => {
+    const [name, version] = detachPair(rawName, rawVersion);
     directPins.set(`${name}@${version}`, name);
     if (!versions.has(name)) versions.set(name, version);
   };
@@ -319,8 +324,9 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   let pending: string | null = null; // v6/v9: a name whose `version:` line follows
   const entries = pnpmEntryReader(
     (_key, id, dev) => {
-      transitive.push(id);
-      if (dev !== undefined) devByKey.set(`${id[0]}\0${id[1]}`, dev);
+      const key = `${id[0]}\0${id[1]}`;
+      if (!transitive.has(key)) transitive.set(key, detachedFromKey(key, id[0].length));
+      if (dev !== undefined) devByKey.set(key, dev);
     },
     report ? (other) => report.uncheckable.push(other) : undefined,
   );
@@ -370,23 +376,41 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   entries.finish();
   // A Set, not `transitive.some` per entry: that was O(n²), and a 200k-entry pnpm-lock.yaml
   // held the single-threaded stdio server for 409 s (audit 6.2.5 C-8).
-  const seen = new Set(transitive.map(([n, v]) => `${n}\0${v}`));
+  const seen = new Set(transitive.keys());
   if (report) {
     // In a whole lockfile every version an importer pins has a `packages:` entry: one without lies past where the file stops.
     for (const [pin, name] of directPins) {
       if (!seen.has(`${name}\0${pin.slice(name.length + 1)}`)) report.missingDirect.push(pin);
     }
   }
-  for (const [name, version] of transitive) {
+  for (const [name, version] of transitive.values()) {
     if (!versions.has(name)) versions.set(name, version);
   }
   if (!instances) return seen;
   for (const [name, version] of versions) {
     if (!seen.has(`${name}\0${version}`)) instances.add(name, version);
   }
-  for (const [name, version] of transitive) instances.add(name, version, devByKey.get(`${name}\0${version}`));
+  for (const [key, [name, version]] of transitive) instances.add(name, version, devByKey.get(key), key);
   // Every registry (name, version) an entry installs, as `name\0version`: pnpmLockDamage reuses it.
   return seen;
+}
+
+/**
+ * The name and version of a `name\0version` key, cut from the key itself. A name cut from a line
+ * of the lockfile keeps the whole file's text alive for as long as the name lives (V8 keeps a
+ * longer substring as a view of its parent): 40 MB held through the rest of the read by the names
+ * of a 150,000-entry pnpm-lock.yaml. The key is a fresh string, flattened when it was hashed, and
+ * kept anyway (pre-publish round 10, W9).
+ */
+function detachedFromKey(key: string, nameLength: number): [string, string] {
+  return [key.slice(0, nameLength), key.slice(nameLength + 1)];
+}
+
+/** A name and version as fresh strings, sharing nothing with the lockfile text (detachedFromKey). */
+function detachPair(name: string, version: string): [string, string] {
+  // A JSON round trip copies exactly, a lone surrogate included (a UTF-8 round trip would not).
+  const key = JSON.parse(JSON.stringify(`${name}\0${version}`)) as string;
+  return detachedFromKey(key, name.length);
 }
 
 /** What is wrong with a lockfile that was read: how to say it, and how many packages are known to be missing (a lower bound). */
@@ -462,7 +486,11 @@ export function pnpmLockDamage(content: string, missingDirect: string[] = [], id
       const ref = pnpmKeyRef(key);
       keys.add(ref);
       if (section === "packages") packageKeys.add(ref);
-      else snapshotBases.add(ref.split("(")[0]);
+      else {
+        // The key up to its peer suffix, as `split("(")[0]` gave it, without an array per entry (pre-publish round 10, W9).
+        const peers = ref.indexOf("(");
+        snapshotBases.add(peers < 0 ? ref : ref.slice(0, peers));
+      }
       entryOpen = true;
       entryResolved = false;
     } else if (indent === 4 && text.startsWith("resolution:")) {
