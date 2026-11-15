@@ -17,7 +17,7 @@
 
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
-import { excludedReleases } from "../live/withdrawn-releases.js";
+import { deprecationAvoids } from "../live/withdrawn-releases.js";
 import { heldSeverity, heldText, type HeldCheck } from "../live/held-dependencies.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 
@@ -501,7 +501,8 @@ export function withdrawnSignal(item: CheckItem, to: ReleaseRecord, index?: Pack
     const value = { deprecated: true };
     // The same notice on other releases too: a "please upgrade" notice about the line or the package.
     const shared = index ? Object.values(index.releases).filter((r) => r.version !== to.version && r.deprecated === to.deprecated).length : 0;
-    if (index && item.ecosystem === "npm" && shared > 0 && !excludedReleases(index).has(to.version)) {
+    // One rule with the safe picks (withdrawn-releases.ts deprecationAvoids), so no pick is a release judged avoid here.
+    if (index && item.ecosystem === "npm" && !deprecationAvoids(index, to.version)) {
       return {
         id: "yanked_or_deprecated",
         value: { ...value, withdrawn: false },

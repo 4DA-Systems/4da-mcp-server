@@ -232,7 +232,8 @@ export async function getRegistryIndex(
     ecosystem === "crates.io" ? name.replace(/-/g, "_") : ecosystem === "PyPI" ? normalizePypiName(name) : name;
   // v2 (r7): npm indexes carry `unpublished`, and `repository` is held to a URL's shape and length.
   // v3 (pre-publish round 10, W6): npm indexes carry `heldSpecs`; a v2 entry has none, which would read as "holds nothing".
-  const key = `upgrade-impact:index:v3:${ecosystem}:${keyName}`;
+  // v4 (pre-publish round 10, W13): `heldSpecs` carry wide ranges and npm aliases; a v3 entry misses them.
+  const key = `upgrade-impact:index:v4:${ecosystem}:${keyName}`;
   const index = await cached(net, key, INDEX_TTL, () => {
     switch (ecosystem) {
       case "npm":

@@ -15,9 +15,15 @@
  * - a narrow range: one capped below the dependency's next major (`~1.2.3`, `^0.1.2`, `1.2.x`,
  *   anything with a `<` bound, a hyphen range), whose newest admitted release is the best any
  *   install can do (npm takes `latest` when the range admits it, else the highest it admits).
- * A wide range (`^6.14.0`, `>=1`) is not held: a refresh can resolve it to the dependency's newest
- * release on that major, and moving it is upgrade_planner's lever logic.
- *
+ * - a wide range (`^6.0.2`, `>=1`, `*`), judged the same way: by the newest release it admits,
+ *   which is what a fresh install or a lockfile refresh resolves it to.
+ * Wide ranges were once left out on the premise that a refresh reaches a clean release. That holds
+ * only when one exists: mocha 10.6.0 to 10.8.2 require serialize-javascript "^6.0.2", and every
+ * 6.x is affected (GHSA-5c6j-r48x-rmvq, fixed 7.0.3), yet upgrade_impact named 10.6.0 the first
+ * clean release and dependency_check said proceed (pre-publish round 10, W13). A wide range whose
+ * newest admitted release is clean brings nothing, so upgrade_planner's lever logic is untouched.
+ * An npm alias (`"x": "npm:event-stream@3.3.6"`) installs the aliased package and is judged as it.
+
  * A held dependency whose installed version an advisory affects brings that advisory with the
  * release. The question is asked of OSV through the scanner the tools already use
  * (LiveIntelligence.queryAdvisories: batched, cached per dependency, rate-limited), in one call per
@@ -54,7 +60,7 @@ export interface HeldDependency {
   name: string;
   /** The release's own spec for it, as published. */
   spec: string;
-  /** True for an exact pin; false for a narrow range. */
+  /** True for an exact pin; false for a range (narrow or wide). */
   exact: boolean;
   /** What an install of the release gets: the pin, or the newest release the range admits. */
   version: string;
@@ -83,30 +89,36 @@ export function exactPinVersion(spec: unknown): string | null {
   return m ? m[1] : null;
 }
 
-/** Whether an npm range is capped below its dependency's next major (see the module comment). */
-export function isNarrowRange(spec: string): boolean {
-  const s = spec.trim();
-  if (s === "" || s.includes("||") || exactPinVersion(s) !== null) return false;
-  // Protocols, paths, aliases and dist-tags are not registry ranges this reads.
-  if (/^[a-z][a-z+]*:/i.test(s) || s.includes("/") || /^(?!v\d)[a-z]/i.test(s)) return false;
-  if (s.startsWith("~")) return true;
-  if (/^\^?\s*v?0\./.test(s)) return true;
-  if (/^v?\d+\.\d+(?:\.[xX*])?$/.test(s)) return true;
-  if (s.includes("<")) return true;
-  return /^\S+\s+-\s+\S+$/.test(s);
+/**
+ * The package and spec an npm alias installs: `npm:event-stream@3.3.6` -> event-stream "3.3.6",
+ * `npm:@scope/x` -> @scope/x "*" (no spec is the latest). Null for anything that is not an alias.
+ */
+export function npmAliasTarget(spec: string): { name: string; spec: string } | null {
+  const m = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@(.*))?$/.exec(spec.trim());
+  if (!m) return null;
+  return { name: m[1], spec: m[2] === undefined || m[2].trim() === "" ? "*" : m[2].trim() };
 }
 
-/** A release's held specs: exact pins and narrow ranges, dependencies and optionalDependencies (npm installs both). */
+/**
+ * A release's held specs, dependencies and optionalDependencies (npm installs both): every
+ * registry spec, exact, narrow or wide, keyed by the package it installs (an alias by its target).
+ */
 export function heldSpecsOf(dependencies?: Record<string, unknown>, optionalDependencies?: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
   // An optional dependency's spec wins over the same name in dependencies, as npm reads it.
-  for (const [name, spec] of Object.entries({ ...dependencies, ...optionalDependencies })) {
-    if (typeof spec !== "string") continue;
+  for (const [key, raw] of Object.entries({ ...dependencies, ...optionalDependencies })) {
+    if (typeof raw !== "string") continue;
+    // An alias installs another package: judge that one (pre-publish round 10, W13).
+    const alias = npmAliasTarget(raw);
+    const name = alias ? alias.name : key;
+    const spec = alias ? alias.spec : raw;
     // Names and specs are whatever the publisher wrote, and both are printed ("requires qs
     // "~6.14.0""). Only a real package name with a plain version range is a held dependency: a
     // key or a "range" that is free text installs nothing from the registry and is never shown.
-    if (!isNpmPackageName(name) || !isReadableNpmSpec(spec)) continue;
-    if (exactPinVersion(spec) !== null || isNarrowRange(spec)) out[name] = spec.trim();
+    if (!isNpmPackageName(key) || !isNpmPackageName(name) || !isReadableNpmSpec(spec)) continue;
+    // An alias and a plain entry on one package both install; one spec per package is kept, and an
+    // exact pin wins over a range, since a pin is what a refresh can never move off an affected copy.
+    if (out[name] === undefined || (exactPinVersion(spec) !== null && exactPinVersion(out[name]) === null)) out[name] = spec.trim();
   }
   return out;
 }
