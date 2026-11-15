@@ -18,8 +18,22 @@
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { asName, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, type NameCheckLive } from "./briefing-new-packages.js";
-import { ENGLISH_TASK_WORDS, installedGoModule, isManifestFile, isVersionSpec, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES, SPEC_JOINERS, specText } from "./briefing-names.js";
+import { POPULAR_NPM } from "../live/popular-npm.js";
+import { POPULAR_PYPI } from "../live/popular-pypi.js";
+import { asName, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import {
+  checkableSpec,
+  ENGLISH_TASK_WORDS,
+  installedGoModule,
+  isManifestFile,
+  isTomlEntry,
+  isVersionSpec,
+  normalizePypiName,
+  normalizeVersionSyntax,
+  NOT_A_PACKAGE_ADJECTIVES,
+  SPEC_JOINERS,
+  specText,
+} from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
@@ -202,6 +216,16 @@ const TOKEN = new RegExp("(?:->|=>|→)|[@A-Za-z0-9`'\"(^~<>=][\\w./@*=<>~^!`'\"
 const LIST_JOINERS = new Set(["and", "plus"]);
 /** Words between a package and its version that are no package ("by one patch to 0.7.29"). */
 const STOP_WORDS = new Set(["one", "two", "three", "a", "an", "minor", "major", "patch", "level", "levels", "step", "steps", "notch", "bit", "release", "releases", "line"]);
+/** Words that only lead to a version: "debug to 4.4.2", "chalk at version 5.6.1". */
+const VERSION_LEADS = new Set(["to", "at", "version", "v", "=", "==", "===", ":", "->", "=>", "→"]);
+const POPULAR = new Set<string>([...POPULAR_NPM, ...POPULAR_PYPI.map(normalizePypiName)]);
+/**
+ * A name on the bundled popular lists (npm's or PyPI's): it is sent to a registry with a version written
+ * right after it even in a task with no dependency word or verb ("chalk 5.6.1/debug 4.4.2", the September
+ * 2025 hijacked releases, left both versions unread; pre-publish round 10, W3). The lists are offline, so
+ * a name off them (an internal codename) is still never sent on a guess.
+ */
+const popularName = (lower: string) => POPULAR.has(lower) || POPULAR.has(normalizePypiName(lower));
 
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
   task = normalizeVersionSyntax(task);
@@ -304,9 +328,12 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     if (at > 0) {
       const name = token.slice(0, at);
       const after = token.slice(at + 1);
-      const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : stated === "crates.io" ? "crates.io" : "npm";
+      // A TOML manifest entry (`smallvec = { version = "..." }`) is the clause reader's crates.io or PyPI
+      // package, never npm's (pre-publish round 10, W3: one package listed as avoid and as unknown).
+      const tomlEntry = isTomlEntry(task, at0(i) + raw[i].indexOf(token));
+      const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : tomlEntry ? tomlEcosystem(stated, deps) : stated === "crates.io" ? "crates.io" : "npm";
       if (VERSIONISH.test(after) || after.toLowerCase() === "latest") {
-        if (!add(nameFor(name, deps, eco, true, stated), after.toLowerCase() === "latest" ? "latest" : after) && DOTTED.test(after)) unread.push(specText(token));
+        if (!add(nameFor(name, deps, eco, true, tomlEntry ? eco : stated), after.toLowerCase() === "latest" ? "latest" : after) && DOTTED.test(after)) unread.push(specText(token));
         continue;
       }
       // Whatever else follows `name@` (a dist-tag, a branch, a tarball, a version in a form not read
@@ -347,7 +374,11 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       const quotedName = /^[`'"]/.test(raw[k]);
       // A name right before a dotted version is written as one ("debug 4.4.2"), common word or not.
       const adjacent = k === i - 1 && DOTTED.test(token);
-      const who = nameFor(raw[k], deps, fallback, quotedName || adjacent, stated);
+      // A popular name before a dotted version, over words that only lead to it ("debug to 4.4.2"), is
+      // one too: "bump chalk to 5.6.1 / debug to 4.4.2" passed over `debug` (a common word) and tied 4.4.2
+      // to chalk (pre-publish round 10, W3).
+      const popularLead = DOTTED.test(token) && popularName(w) && words.slice(k + 1, i).every((x) => VERSION_LEADS.has(x));
+      const who = nameFor(raw[k], deps, fallback, quotedName || adjacent || popularLead, stated);
       if (who?.guessed && !quotedName && SETTING_NOUNS.has(w)) {
         tied = true; // "timeout to 30", "port 8080": a setting, not a package to judge
         break;
@@ -355,7 +386,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       // A word that is no package, or English prose ("one", "patch", "release"): passed over.
       if (!who || (who.guessed && !quotedName && (ENGLISH_TASK_WORDS.has(w) || STOP_WORDS.has(w)))) continue;
       const bareNumberOk = !who.guessed || quotedName || !BARE_NUMBER.test(token) || aboutPackages;
-      tied = (!who.guessed || aboutDependencies || quotedName) && bareNumberOk && add(who, token, true);
+      tied = (!who.guessed || aboutDependencies || quotedName || popularLead || (adjacent && popularName(w))) && bareNumberOk && add(who, token, true);
       break;
     }
     // "version 1.2.3 of name"
@@ -391,7 +422,8 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
       return await Promise.race([
         executeDependencyCheck(
           null,
-          { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: r.to, ...(r.from ? { from: r.from } : {}) })) },
+          // In the form dependency_check reads for that ecosystem (briefing-names.ts checkableSpec; round 10, W3).
+          { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: checkableSpec(r.ecosystem, r.to) ?? r.to, ...(r.from ? { from: r.from } : {}) })) },
           liveIntel as LiveIntelligence,
           now ? { now } : {},
         ),
@@ -420,12 +452,24 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
     };
   };
   const unpublished = (item: Answer["results"][number] | undefined) => Boolean(item && item.verdict === "unknown" && /is not a published version on|a hallucinated package/.test(item.reason));
+  // dependency_check refuses a whole call over one constraint it cannot read: that one is unknown, said,
+  // and the rest are still checked; an ecosystem tried on a guess that cannot read it is not tried
+  // (pre-publish round 10, W3).
+  const plan = requested.map((r): RequestedVersion | null => {
+    const ecosystems = [r.ecosystem, ...(r.alternatives ?? [])].filter((e) => checkableSpec(e, r.to) !== null);
+    if (ecosystems.length === 0) return null;
+    const [ecosystem, ...alternatives] = ecosystems;
+    return { ...r, ecosystem, alternatives: alternatives.length > 0 ? alternatives : undefined };
+  });
+  const asked = plan.filter((r): r is RequestedVersion => r !== null);
   try {
-    const answer = await run(requested);
+    const answer = asked.length > 0 ? await run(asked) : { results: [] as Answer["results"] };
     if (!answer) return requested.map((r) => unknown(r, "the lookups did not finish in time"));
-    const out = requested.map((r, i) => finding(r, answer.results[i]));
+    /** dependency_check's answer for requested[i], when it was asked. */
+    const results = plan.map((r) => (r ? answer.results[asked.indexOf(r)] : undefined));
+    const out = requested.map((r, i) => (plan[i] ? finding(plan[i]!, results[i]) : unknown(r, `dependency_check reads no ${r.ecosystem} version or constraint in "${r.to}"`)));
     // A guessed ecosystem with no such release: the project's other ecosystems, in one more run.
-    const retries = requested.flatMap((r, i) => (unpublished(answer.results[i]) ? (r.alternatives ?? []).map((ecosystem) => ({ i, r: { ...r, ecosystem, alternatives: undefined } })) : []));
+    const retries = plan.flatMap((r, i) => (r && unpublished(results[i]) ? (r.alternatives ?? []).map((ecosystem) => ({ i, r: { ...r, ecosystem, alternatives: undefined } })) : []));
     if (retries.length > 0) {
       const again = await run(retries.map((x) => x.r)).catch(() => null);
       if (again) {
