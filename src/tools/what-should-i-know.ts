@@ -220,6 +220,7 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
       | "getPrivateAuditDeps"
       | "getPrivateDependencies"
       | "privateReason"
+      | "lookupPrivateReason"
     >
   >;
 
@@ -360,14 +361,54 @@ export async function executeWhatShouldIKnow(
   const privateShort = new Set(privateTask.flatMap((p) => [p.package.toLowerCase(), p.package.split("/").pop()!.toLowerCase()]));
   const notPrivate = (p: { name: string }) =>
     privateAnywhere(liveIntel, p.name) === null && !privateShort.has(p.name.toLowerCase()) && !privateShort.has(p.name.split("/").pop()!.toLowerCase());
-  const named = detectAllNewPackages(task, allDeps()).filter(notPrivate);
+  // The ecosystem a name with none stated is guessed in counts the project's private dependencies too:
+  // a project whose every dependency comes from a private index guessed npm, and sent the name to
+  // OSV.dev and registry.npmjs.org (round-9 blind check, B1). The private copies are never looked up.
+  const ecosystemDeps = () => [...allDeps(), ...(liveIntel?.getPrivateAuditDeps?.() ?? [])];
+  // A name looked up in an ecosystem whose registry, index or proxy is not public may be published only
+  // there: it is private, said so, and never sent; a guessed alternative under such a registry is dropped.
+  // So is one in an ecosystem every installed package of which is private (a requirements file's
+  // `--index-url`, a lockfile that installs all of them from a private host): a new one comes from there too.
+  const publicEco = new Set<string>(allDeps().map((d) => d.ecosystem));
+  const privateEco = new Map<string, string>();
+  for (const d of liveIntel?.getPrivateDependencies?.() ?? []) {
+    if (!publicEco.has(d.ecosystem) && !privateEco.has(d.ecosystem)) privateEco.set(d.ecosystem, `every ${d.ecosystem} package this project installs is private (${d.why})`);
+  }
+  const lookup = liveIntel?.lookupPrivateReason as ((ecosystem: string, name: string) => string | null) | undefined;
+  const registryReason = (ecosystem: string, name: string) => lookup?.call(liveIntel, ecosystem, name) ?? privateEco.get(ecosystem) ?? null;
+  const registryPrivate = <T extends { name: string; ecosystem: string; alternatives?: string[] }>(items: T[]): T[] => {
+    const why = registryReason;
+    const kept: T[] = [];
+    for (const item of items) {
+      const reason = why(item.ecosystem, item.name);
+      if (reason) {
+        if (!privateTask.some((p) => p.package.toLowerCase() === item.name.toLowerCase())) {
+          privateTask.push({ package: item.name, ecosystem: item.ecosystem, installed: [], why: reason });
+        }
+        continue;
+      }
+      if (!item.alternatives) {
+        kept.push(item);
+        continue;
+      }
+      const { alternatives, ...rest } = item;
+      const open = alternatives.filter((e) => why(e, item.name) === null);
+      kept.push((open.length > 0 ? { ...rest, alternatives: open } : rest) as T);
+    }
+    return kept;
+  };
+  const NAME_ECOSYSTEMS = ["npm", "crates.io", "PyPI"] as const;
+  const named = registryPrivate(detectAllNewPackages(task, ecosystemDeps()).filter(notPrivate)).map((p) => {
+    const closed = NAME_ECOSYSTEMS.filter((e) => e !== p.ecosystem && registryReason(e, p.name) !== null);
+    return closed.length > 0 ? { ...p, closed } : p;
+  });
   const newPackages = await checkNewPackages(liveIntel, named.slice(0, MAX_NEW_PACKAGES));
   // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14). Past their
   // own cap they are named NOT CHECKED too: the sixth version a task named was dropped without a word (r8).
-  const taskVersions = readTaskVersions(task, allDeps());
-  const wantedVersions = taskVersions.requested.filter(notPrivate);
+  const taskVersions = readTaskVersions(task, ecosystemDeps());
+  const wantedVersions = registryPrivate(taskVersions.requested.filter(notPrivate));
   const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions.slice(0, MAX_REQUESTED));
   const uncheckedPackages = [
     ...new Set([...named.slice(MAX_NEW_PACKAGES).map((p) => p.name), ...wantedVersions.slice(MAX_REQUESTED).map((r) => `${r.name} ${r.to}`), ...overflowTask]),

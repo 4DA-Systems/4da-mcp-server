@@ -2,6 +2,15 @@
 
 ## 6.3.0 — 2026-11-15
 
+- **Pre-publish fix (round 9).** In a project whose every dependency comes
+  from a private index or registry (pip behind `PIP_INDEX_URL` or a
+  requirements file's `--index-url`, Cargo with crates.io replaced), a briefing
+  task naming a new package with no ecosystem ("add zqxpy-new") guessed npm
+  and sent the name to OSV.dev and registry.npmjs.org. The guess now counts
+  the private dependencies, and a name that would be looked up in an
+  ecosystem whose registry is not public, or whose installed packages are all
+  private, is reported NOT CHECKED (private) and never sent. The
+  malicious-package check across other ecosystems skips those ecosystems too.
 - **Pre-publish fixes (round 8).**
   - *Briefing.* A list no longer stops at a common or standard-library word:
     "add uuid and electorn", "add ms, crossenv" and "add json and ctx" said

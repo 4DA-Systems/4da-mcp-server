@@ -88,6 +88,8 @@ export interface NewPackage {
   loose?: true;
   /** The task gave no ecosystem for it: a name none of the project's ecosystems has is also checked for malware in the others. */
   guessed?: true;
+  /** Ecosystems whose registry, index or proxy for this project is not public: the name is never asked about there (r9, B1). */
+  closed?: CheckEcosystem[];
 }
 
 /** What the name check found for one package a task adds. */
@@ -598,7 +600,7 @@ function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
   return null;
 }
 
-function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -665,7 +667,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, ...p } = pkg;
     if (!r) return unchecked(p, "no answer");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
@@ -693,7 +695,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     // (GHSA-7pwq-f4pq-78gm; pre-publish audit of 5d709ff). Only a malware answer there is kept.
     const elsewhere = packages.flatMap((p, i) =>
       p.guessed && answered[i].every(nameNotFound)
-        ? NAME_ECOSYSTEMS.filter((e) => !answered[i].some((f) => f.ecosystem === e) && asName(p.name, e) !== null).map((ecosystem) => ({ i, q: { name: p.name, ecosystem } as NewPackage }))
+        ? NAME_ECOSYSTEMS.filter((e) => !answered[i].some((f) => f.ecosystem === e) && !p.closed?.includes(e) && asName(p.name, e) !== null).map((ecosystem) => ({ i, q: { name: p.name, ecosystem } as NewPackage }))
         : [],
     );
     if (elsewhere.length > 0) {
