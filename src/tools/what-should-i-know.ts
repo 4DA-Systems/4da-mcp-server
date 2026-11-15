@@ -409,7 +409,14 @@ export async function executeWhatShouldIKnow(
   const wantedVersions = registryPrivate(taskVersions.requested.filter(notPrivate));
   const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions.slice(0, MAX_REQUESTED));
   const uncheckedPackages = [
-    ...new Set([...named.slice(MAX_NEW_PACKAGES).map((p) => p.name), ...wantedVersions.slice(MAX_REQUESTED).map((r) => `${r.name} ${r.to}`), ...overflowTask]),
+    ...new Set([
+      ...named.slice(MAX_NEW_PACKAGES).map((p) => p.name),
+      ...wantedVersions.slice(MAX_REQUESTED).map((r) => `${r.name} ${r.to}`),
+      ...overflowTask,
+      // `gem install rails`, `composer require x`, `conda install numpy`: a registry this server does not
+      // read, named NOT CHECKED, never looked up in npm (pre-publish round 10, W14).
+      ...(taskVersions.foreign ?? []),
+    ]),
   ];
   // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
   const unreadVersions = taskVersions.unread;
@@ -920,7 +927,9 @@ function summarize(
   for (const note of notCovered) parts.push(note.replace(/[.]$/, ""));
   // Every checked item says its worst verdict (r8: "add chalk to 5.6.1" said "Task adds chalk (proceed)"
   // while the 5.6.1 it writes was avoid, and "npm i debug@4.4.2" named nothing at all).
-  const sameAs = (p: NewPackageFinding, r: RequestedVersionFinding) => p.ecosystem === r.ecosystem && p.name.toLowerCase() === r.name.toLowerCase() && (!p.version || p.version === r.to);
+  // One name in two ecosystems is one row, its worst answer: never a "proceed" for the name beside an
+  // "avoid" (pre-publish round 10, W14: "add flask<2.2.5" listed npm's flask proceed and PyPI's avoid).
+  const sameAs = (p: NewPackageFinding, r: RequestedVersionFinding) => p.name.toLowerCase() === r.name.toLowerCase() && (!p.version || p.version === r.to);
   const shown = new Set<RequestedVersionFinding>();
   const adds = newPackages.map((p) => {
     const mine = requested.filter((r) => sameAs(p, r));
