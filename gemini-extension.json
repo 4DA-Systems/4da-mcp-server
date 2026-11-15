@@ -1,6 +1,6 @@
 {
   "name": "4da",
-  "version": "6.2.7",
+  "version": "6.3.0",
   "description": "Upgrade intelligence for your agent: what an upgrade changes and where it touches your code, CVE scans against your real lockfiles, upgrade plans, decision memory. Public package names and versions go to OSV.dev and the package registries when a tool needs them; private ones (.npmrc private scopes, GOPRIVATE, private indexes) never do (GitHub only if you opt in to release notes); source code never leaves the machine.",
   "mcpServers": {
     "4da": {

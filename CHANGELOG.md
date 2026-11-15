@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.3.0 — unreleased
+## 6.3.0 — 2026-11-15
 
 - **Pre-publish fixes (round 8).**
   - *Briefing.* A list no longer stops at a common or standard-library word:

@@ -6,12 +6,12 @@
     "url": "https://github.com/4DA-Systems/4da-mcp-server",
     "source": "github"
   },
-  "version": "6.2.7",
+  "version": "6.3.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@4da/mcp-server",
-      "version": "6.2.7",
+      "version": "6.3.0",
       "transport": {
         "type": "stdio"
       }
