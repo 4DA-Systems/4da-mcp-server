@@ -32,14 +32,16 @@ export function noteRegistryFacts(r: Asked, to: string, release: ReleaseRecord |
   if (release?.withdrawn) noteCallFinding(key(r), "avoid", `${r.package} ${to} was ${release.withdrawn} from the registry`);
 }
 
-/** Advisories of the package's list (OSV.dev /v1/query) that affect `to`: malware is avoid, any other at least review. */
+/** Advisories of the package's list (OSV.dev /v1/query) that affect `to`: avoid (an unread grade counts as high). */
 export function noteListFacts(r: Asked, to: string, list: readonly AdvisoryRanges[] | null | undefined): void {
   if (!list) return;
   const hits = list.filter((a) => !a.maintenance && advisoryAffects(a, to, r.ecosystem));
   const malware = hits.filter((a) => a.malware).map((a) => a.id);
   if (malware.length > 0) noteCallFinding(key(r), "avoid", `MALWARE: ${r.package} ${to} is a malicious release (${ids(malware)})`);
   const other = hits.filter((a) => !a.malware).map((a) => a.id);
-  if (other.length > 0) noteCallFinding(key(r), "review", `${ids(other)} ${other.length === 1 ? "affects" : "affect"} ${r.package} ${to} (OSV.dev's advisory list; severity not yet read)`);
+  // An advisory whose grade was not read counts as high, as everywhere else (AdvisoryRef.unread): missing
+  // data never turns a healthy avoid into review (round 8).
+  if (other.length > 0) noteCallFinding(key(r), "avoid", `${ids(other)} ${other.length === 1 ? "affects" : "affect"} ${r.package} ${to} (OSV.dev's advisory list; severity not yet read, so it counts as high)`);
 }
 
 /** The batch query's answer for `to`: malware, high or critical is avoid; anything else at least review. */

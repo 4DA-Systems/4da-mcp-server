@@ -40,6 +40,11 @@ export interface PrivateNameSource {
    * a name it visibly installs from there is public for it, whatever another project said.
    */
   installsPublicly?(ecosystem: string, name: string): boolean;
+  /**
+   * Why any name looked up in `ecosystem` is private for this project (its registry, index or proxy
+   * for it is not public), or null. Asked only for a request that names its ecosystem.
+   */
+  ecosystemPrivate?(ecosystem: string, name: string): string | null;
 }
 
 /** True when the source's project directory no longer exists. */
@@ -122,6 +127,16 @@ export function rememberedPrivate(
       if (why && !installsPublicly?.(eco, n)) return { ecosystem: eco, why: `found private by a scan in this session: ${why}` };
     }
   }
+  // A Go package path under a remembered private module (R8, B5); the longest module path wins.
+  for (const form of forms) {
+    const segments = form.split("/");
+    for (let k = segments.length - 1; k >= 1; k--) {
+      const prefix = segments.slice(0, k).join("/");
+      if (installsPublicly?.("Go", prefix)) break;
+      const why = remembered.get(`Go\0${prefix}`);
+      if (why) return { ecosystem: "Go", why: `a package of ${prefix}, found private by a scan in this session: ${why}` };
+    }
+  }
   for (const form of forms) {
     if (form.includes("/")) continue;
     const bare = form.replace(/^@/, "").toLowerCase();
@@ -164,14 +179,23 @@ const INVISIBLE = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿�
  * `@acme/vault-core` (black-box round 3, 2026-11-14). A malformed escape is left as written.
  */
 export function readableText(text: string): string {
-  const decoded = text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
-    try {
-      return decodeURIComponent(run);
-    } catch {
-      // Not UTF-8 as a whole: each escape that is a single ASCII byte on its own.
-      return run.replace(/%([0-7][0-9a-f])/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-    }
-  });
+  const decodeOnce = (t: string) =>
+    t.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        // Not UTF-8 as a whole: each escape that is a single ASCII byte on its own.
+        return run.replace(/%([0-7][0-9a-f])/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+      }
+    });
+  // Until nothing changes (at most 8 rounds): "install %2540acme%252Fvault-core" decoded once is
+  // still escaped, and was split into fragments that reached OSV.dev and npm (R8).
+  let decoded = text;
+  for (let i = 0; i < 8; i++) {
+    const next = decodeOnce(decoded);
+    if (next === decoded) break;
+    decoded = next;
+  }
   // Look-alikes folded (foldName): "install ＠zqxacme／vault-core" was tokenised as ASCII and
   // `zqxacme` reached OSV.dev and npm; "bump ｚｑｘ-omega-internal" sent `omega-internal`, a fragment
   // of the private `zqx-omega-internal` (blind audit round 5, 1). Every task reader now sees the
@@ -292,6 +316,9 @@ export function nameForms(name: string): string[] {
     next(n.replace(/\/+(?:-\/+)?(?:tree|blob|commits?|releases\/tag|src)\/.*$/i, ""));
     const repo = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:@]+)(?::\d*)?\/+(.+)$/i.exec(n);
     if (repo) next(`${repo[1].toLowerCase()}/${repo[2]}`);
+    // The module proxy's case-encoding (`github.com/!acme!org/core` is `github.com/AcmeOrg/core`):
+    // sent to OSV.dev for a GOPRIVATE module (R8).
+    if (/![a-z]/.test(n)) next(goUnescape(n));
     // A Go module's host is case-insensitive; GOPRIVATE patterns are written in lower case.
     const slash = n.indexOf("/");
     if (slash > 0 && /\./.test(n.slice(0, slash))) next(n.slice(0, slash).toLowerCase() + n.slice(slash));
@@ -356,6 +383,12 @@ function privateWhy(ecosystem: string | null, name: string): string | null {
         const why = source.privateReason(eco, n);
         if (why) return why;
       }
+    }
+    // A request that names its ecosystem, under a registry, index or proxy for it that is not
+    // public: any name, installed or not (R8). Never for a guessed ecosystem (an HN term).
+    if (ecosystem) {
+      const why = source.ecosystemPrivate?.(ecosystem, name);
+      if (why) return why;
     }
   }
   // Found private anywhere in this process (a source may be gone, or not read the memory itself).

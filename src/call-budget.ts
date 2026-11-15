@@ -139,6 +139,7 @@ export async function settleWithin<T>(work: Promise<T>, ms: number, late: () => 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<{ late: true }>((resolve) => {
     timer = setTimeout(() => resolve({ late: true }), Math.max(0, ms));
+    timer.unref?.();
   });
   const settled = work.then((value) => ({ late: false as const, value }));
   try {
@@ -183,6 +184,7 @@ export async function raceCallBudget<T>(work: Promise<T>, late: (budgetMs: numbe
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<{ late: true }>((resolve) => {
     timer = setTimeout(() => resolve({ late: true }), Math.max(0, budget.deadline - Date.now()));
+    timer.unref?.();
   });
   const settled = work.then((value) => ({ late: false as const, value }));
   try {

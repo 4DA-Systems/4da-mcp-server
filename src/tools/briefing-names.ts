@@ -133,25 +133,84 @@ export function normalizeVersionSyntax(task: string): string {
     task
       // A manifest entry written into the task (pre-publish audit of 5d709ff): `"dbg": "npm:debug@4.4.2"`
       // installs debug 4.4.2 under the name dbg, and was read as the packages dbg and npm, both clean.
-      .replace(JSON_ALIAS_ENTRY, (_m, _q1, _key, _q2, name: string, spec: string | undefined) => (spec ? `${name}@${spec.replace(/\s+/g, "")}` : name))
-      // `"lodash": "^4.17.20"`, `"lodash": "4.17.20"`: the version is the package's.
-      .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${name}@${spec.replace(/\s+/g, "")}`))
+      .replace(JSON_ALIAS_ENTRY, (_m, _q1, _key, _q2, name: string, spec: string | undefined) => (spec ? `${name}@${joinSpec(spec)}` : name))
+      // `"lodash": "^4.17.20"`, `"minimist": ">=1.2.5 <1.2.6"`: the whole range is the package's (r8, B2:
+      // only `<1.2.6` was read, and judged as the release 1.2.6).
+      .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${name}@${joinSpec(spec)}`))
       // Cargo.toml / Poetry: `serde = { version = "1.0.200", features = [...] }`.
-      .replace(TOML_TABLE_ENTRY, (m, pre: string, name: string, _q, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${pre}${name}@${spec.replace(/\s+/g, "")}`))
-      // `serde = "1.0.200"`: a dotted version, or any version in a task that names a TOML manifest
-      // (`timeout = "30"` in prose is a setting, not a crate).
+      .replace(TOML_TABLE_ENTRY, (m, pre: string, name: string, _q, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${pre}${name}@${joinSpec(spec)}`))
+      // `serde = "1.0.200"`, `serde = ">=1.0, <1.0.100"`: a dotted version, or any version in a task that
+      // names a TOML manifest (`timeout = "30"` in prose is a setting, not a crate).
       .replace(TOML_VERSION_ENTRY, (m, pre: string, name: string, _q, spec: string) =>
-        NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) || (!toml && !/\d\.\d/.test(spec)) ? m : `${pre}${name}@${spec.replace(/\s+/g, "")}`,
+        NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) || (!toml && !/\d\.\d/.test(spec)) ? m : `${pre}${name}@${joinSpec(spec)}`,
       )
       .replace(/((?:^|[\s`'"(])@?[\w.~-]+(?:\/[\w.~-]+)?)@npm:(?=@?[\w.~-])/gi, (_m, pre: string) => pre.replace(/@?[\w.~-]+(?:\/[\w.~-]+)?$/, ""))
-      .replace(/@(["'])([^"'\s]+)\1/g, "@$2")
+      // `minimist@'>=1.2.5 <1.2.6'`, `lodash@"4.17.20"`.
+      .replace(/@(["'])([^"'\n]+?)\1/g, (m, _q, spec: string) => (/\d/.test(spec) && QUOTED_SPEC_ONLY.test(spec) ? `@${joinSpec(spec)}` : m))
+      // A constraint written in prose is one constraint (r8, B2): `minimist <1.2.6`, `chalk to >=5.6.1
+      // <5.6.2`, `^1.2.0 || ^0.2.0`, `django>=2,<3`, `1.2.3 - 1.4.0`. Only `<5.6.2` (or `>=2` and `<3`
+      // as two packages' versions) was read before.
+      .replace(PROSE_CHAIN, (m) => joinSpec(m))
+      // "chalk 5.6.1/debug 4.4.2": after a version, "/" separates two items, never a path.
+      .replace(/(?<![\w/.-])((?:[<>=~^]=?)?v?\d+\.\d[\w.+-]*)\/(?=@?[A-Za-z])/g, "$1, ")
   );
 }
 
+/**
+ * Joiners that keep a multi-part constraint one token in the normalized task (a space, a comma, an
+ * `||`), so the readers bind the whole of it to its package; specText turns them back.
+ * Private-use characters: never in a task (readableText keeps them out of names, and they are
+ * invisible), so they cannot be forged into one.
+ */
+const JOIN_SPACE = "";
+const JOIN_COMMA = "";
+const JOIN_OR = "";
+/** The joiners, as a regex character class body (for the tokenizers). */
+export const SPEC_JOINERS = "-";
+
+/** A constraint as one token: operators closed up to their versions, `||`, `,` and spaces joined. */
+function joinSpec(spec: string): string {
+  return spec
+    .trim()
+    .replace(/([<>=~^!]=?)\s+(?=v?\d)/g, "$1")
+    .replace(/\s*\|\|\s*/g, JOIN_OR)
+    .replace(/\s*,\s*/g, JOIN_COMMA)
+    .replace(/\s+/g, JOIN_SPACE);
+}
+
+/** A version token as the package manager reads it: the joiners back to a space, a comma and ` || `. */
+export function specText(token: string): string {
+  return token.replaceAll(JOIN_SPACE, " ").replaceAll(JOIN_COMMA, ",").replaceAll(JOIN_OR, " || ");
+}
+
+/** One comparator: 4.17.20, v1.2.3, ^1.2, ~2.0, >=2, <3, ==3.3.6, ~=3.1, !=1.5, 7.x, 1.2.*. */
+const ONE_SPEC = /^(?:={1,3}|~=|!=|[~^]|[<>]=?)?v?\d+(?:\.(?:\d+|x|\*))*(?:-[\w.-]+)?(?:\+[\w.-]+)?$/i;
+
+/** Whether a token is a version or a constraint (a joined one included). */
+export function isVersionSpec(token: string): boolean {
+  if (!/[-]/.test(token)) return ONE_SPEC.test(token);
+  const parts = token.split(/[-]/).filter((p) => p !== "" && p !== "-");
+  return parts.length > 0 && parts.every((p) => ONE_SPEC.test(p));
+}
+
+/** A quoted spec that is only constraint text: comparators, versions, `||`, `,`, `-` and spaces. */
+const QUOTED_SPEC_ONLY = /^\s*(?:[~^<>=!]=?|v?\d)[\w.*+<>=~^!|,\s-]*$/;
+const OP_VERSION = String.raw`(?:[<>]=?|={1,3}|~=?|\^|!=)\s*v?\d[\w.*+-]*`;
+const BARE_VERSION = String.raw`v?\d[\w.*+-]*`;
+/**
+ * Two or more comparators in prose that make one constraint: an operator version, or a bare one
+ * before an operator, followed by more operator versions (space or `,` between), `|| version`, or
+ * ` - version` (a hyphen range). A single operator version is joined too (`<1.2.6`, `>= 2`).
+ */
+const PROSE_CHAIN = new RegExp(
+  String.raw`(?:(?<![-=])${OP_VERSION}|(?<![\w.])${BARE_VERSION}(?=(?:\s*\|\|\s*|\s+|\s*,\s*)(?:[<>=~^!]|v?\d)|\s+-\s+v?\d))(?:\s*\|\|\s*(?:${OP_VERSION}|${BARE_VERSION})|\s*,\s*${OP_VERSION}|\s+${OP_VERSION}|\s+-\s+${BARE_VERSION})*`,
+  "g",
+);
+
 /** A package name as a manifest key: `lodash`, `@scope/name`. */
 const KEY = String.raw`@?[\w.~-]+(?:\/[\w.~-]+)?`;
-/** A version or range a manifest entry gives: `4.17.20`, `^1.2`, `~2.0.1`, `>=2`, `=1.0.0`, `7.x`. */
-const SPEC = String.raw`(?:[~^]|[<>]=?|={1,2})?\s*v?\d[\w.*+-]*`;
+/** A version or range a manifest entry gives: `4.17.20`, `^1.2`, `~2.0.1`, `>=2`, `=1.0.0`, `7.x`, `>=1.2.5 <1.2.6`, `>=1.0, <2`. */
+const SPEC = String.raw`(?:[~^]|[<>]=?|={1,2})?\s*v?\d[\w.*+<>=~^!|,\s-]*?`;
 const JSON_ALIAS_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])npm:(${KEY})(?:@([^"'\s]+))?\3`, "g");
 const JSON_VERSION_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])(${SPEC})\3`, "g");
 const TOML_TABLE_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]*)\s*=\s*\{[^}]*?\bversion\s*=\s*(["'])(${SPEC})\3[^}]*\}`, "gm");

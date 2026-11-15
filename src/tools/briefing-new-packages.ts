@@ -47,7 +47,19 @@ import type { LiveIntelligence } from "../live/index.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { closestPopularPypi, ENGLISH_TASK_WORDS, installedGoModule, isManifestFile, MANIFEST_FIELDS, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES, PYTHON_STDLIB } from "./briefing-names.js";
+import {
+  closestPopularPypi,
+  ENGLISH_TASK_WORDS,
+  installedGoModule,
+  isManifestFile,
+  isVersionSpec,
+  MANIFEST_FIELDS,
+  normalizeVersionSyntax,
+  NOT_A_PACKAGE_ADJECTIVES,
+  PYTHON_STDLIB,
+  SPEC_JOINERS,
+  specText,
+} from "./briefing-names.js";
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
@@ -67,6 +79,13 @@ export interface NewPackage {
    * with advisories, a lookup that could not run) stands.
    */
   weak?: true;
+  /**
+   * Weak, and read after a verb that names a way of working as often as a package ("use blueprints",
+   * "try generators"): only a finding about the NAME (malware, a near-miss) stands; a release-level
+   * one on a word read that way is prose (r8: "use blueprints" was review_needed on npm's
+   * `blueprints` 0.1.3 and its vulnerable `cli` dependency).
+   */
+  loose?: true;
   /** The task gave no ecosystem for it: a name none of the project's ecosystems has is also checked for malware in the others. */
   guessed?: true;
 }
@@ -109,6 +128,8 @@ const ADD_VERBS = new Set([
   "add", "adding", "adds", "use", "using", "adopt", "adopting", "introduce", "introducing", "import", "importing", "require", "requiring", "try", "trying", "need", "needs",
   "include", "includes",
 ]);
+/** Adding verbs that name a way of working as often as a package: a bare word after them is `loose`. */
+const LOOSE_VERBS = new Set(["use", "using", "adopt", "adopting", "introduce", "introducing", "import", "importing", "require", "requiring", "try", "trying", "need", "needs", "include", "includes"]);
 /** Verbs that bring a package in with "in" after them: "bring in ctx", "pull in left-pad". */
 const IN_VERBS = new Set(["bring", "bringing", "brings", "pull", "pulling", "pulls"]);
 const INSTALL_VERBS = new Set(["install", "installing", "installs", "reinstall"]);
@@ -153,10 +174,15 @@ const ENGLISH_ENDING = /^[a-z]{3,}(?:ing|tion|sion|ment|ness|ity|ance|ence|ism|s
 /** Punctuation and shapes no English word has: a name like this after "add" is a package ("logger-libs", "flatmap-stream"). */
 const NAME_SHAPED = /[-_.@/\d]/;
 const VERSION_ONLY = /^v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][\w.]+)?$/i;
-/** A version or range a task binds to the name before it: 4.17.21, v1.2.3, ^1.2, ~2.0, >=2, ==3.3.6, ~=3.1, 7.x. */
-const BINDABLE_VERSION = /^(?:={1,3}|~=|[~^]|[<>]=?)?v?\d+(?:\.(?:\d+|x|\*))*(?:-[\w.-]+)?(?:\+[\w.-]+)?$/i;
-/** Words between a name and its version: "event-stream at version 3.3.6". */
-const VERSION_LEADS = new Set(["at", "version", "@"]);
+/**
+ * Words between a name and its version: "event-stream at version 3.3.6", "add chalk to 5.6.1" (r8: the
+ * 5.6.1 was judged avoid in requested_versions while the summary said "Task adds chalk (proceed)").
+ */
+const VERSION_LEADS = new Set(["at", "version", "v", "@", "to"]);
+/** "depend on X", "depends upon X": the verb is the pair (r8: "depend on event-stream 3.3.6" left 3.3.6 unread). */
+const ON_VERBS = new Set(["depend", "depends", "depending"]);
+/** How far an item the reader passes over (prose, not a name) may run before the list is taken to have ended. */
+const MAX_SKIPPED_ITEM = 8;
 /** Words that join items of a list ("a, b and c", "a & b", "a + b", "a plus b"); commas, "&" and "+" are read from the text between words. */
 const LIST_WORDS = new Set(["and", "plus", "&", "+"]);
 
@@ -267,10 +293,23 @@ export interface TaskItems {
  *
  * `task` must already be normalized (normalizeVersionSyntax).
  */
+/** Word-ish tokens of a (normalized) task: package punctuation kept, a version with its operator, a joined constraint whole. */
+const TOKEN = new RegExp(
+  String.raw`(?:--?[A-Za-z][\w-]*)|(?:[<>]=?|={1,3}|~=?|\^|!=)v?\d[\w./@*=<>~^!${SPEC_JOINERS}-]*|[@A-Za-z0-9][\w./@*=<>~^!${SPEC_JOINERS}-]*`,
+  "g",
+);
+
+/** A version token as the package manager reads it: an exact pin's `==` dropped, a joined constraint as text. */
+export function taskVersionText(token: string): string {
+  const text = specText(token);
+  return /^={1,2}(?!=)[^,|\s]+$/.test(text) ? text.replace(/^==?/, "") : text;
+}
+
 export function readTaskItems(task: string, deps: readonly ResolvedDependency[]): TaskItems {
   const quoted = new Set((task.match(/`([^`\s]+)`/g) ?? []).map((q) => q.slice(1, -1).toLowerCase()));
-  // Word-ish tokens that keep package punctuation; a leading "-" marks a command flag.
-  const tokens = [...task.matchAll(/(?:--?[A-Za-z][\w-]*)|[@A-Za-z0-9][\w./@*=<>~^!-]*/g)];
+  // Word-ish tokens that keep package punctuation; a leading "-" marks a command flag; a version may
+  // start with its operator (`<1.2.6`, `^4.0.0`: the operator was dropped, and `^4.0.0` read as 4.0.0).
+  const tokens = [...task.matchAll(TOKEN)];
   const raw = tokens.map((t) => t[0]);
   const starts = tokens.map((t) => t.index ?? 0);
   const words = raw.map((t) => t.replace(/[.,;:)]+$/, "").toLowerCase());
@@ -280,16 +319,19 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   // it is checked in every ecosystem the project uses (checkNewPackages takes the worst answer).
   const others = stated ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
   const guessed = new Set<CheckEcosystem>([fallback, ...others]);
+  // A Python standard-library name is English, except one npm's popular list has in a project that does
+  // not install from PyPI: "add uuid and electorn" in an npm project ended the list at `uuid` (r8, B1).
+  const stdlib = (n: string) => PYTHON_STDLIB.has(n) && (guessed.has("PyPI") || !POPULAR.has(n));
   const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
   const installedName = (name: string) => deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps) !== null;
   const found: NewPackage[] = [];
   const bound: BoundVersion[] = [];
   const ignored: TaskSpan[] = [];
-  const add = (name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false, version: string | null = null) => {
-    if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`) || isManifestFile(name)) return false;
+  const add = (name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false, version: string | null = null, loose = false): NewPackage | null => {
+    if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`) || isManifestFile(name)) return null;
     // A guessed name the project already has, in any ecosystem or as a Go module's short name
     // ("install gin" with github.com/gin-gonic/gin in go.mod), is not new (blind audit round 4).
-    if (guess && installedName(name)) return false;
+    if (guess && installedName(name)) return null;
     const alternatives = guess ? others.filter((e) => asName(name, e) !== null) : [];
     const at = found.findIndex((f) => f.ecosystem === ecosystem && f.name === name);
     if (at < 0) {
@@ -300,12 +342,14 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         ...(alternatives.length > 0 ? { alternatives } : {}),
         ...(guess && !stated ? { guessed: true as const } : {}),
         ...(weak ? { weak: true as const } : {}),
+        ...(weak && loose ? { loose: true as const } : {}),
       });
-    } else {
-      if (!weak) delete found[at].weak;
-      if (version && !found[at].version) found[at].version = version;
+      return found[found.length - 1];
     }
-    return true;
+    if (!weak) delete found[at].weak;
+    if (!weak || !loose) delete found[at].loose;
+    if (version && !found[at].version) found[at].version = version;
+    return found[at];
   };
   /** The span of token `k` in the task, trailing punctuation aside. */
   const span = (k: number): TaskSpan => ({ start: starts[k], end: starts[k] + raw[k].replace(/[.,;:)]+$/, "").length });
@@ -316,17 +360,17 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     if (/[,&+]/.test(gap)) return "list";
     return null;
   };
-  /** The version token `k` carries itself: `axios@0.21.0`, `requests==2.19.0`. */
+  /** The version token `k` carries itself: `axios@0.21.0`, `requests==2.19.0`, `django>=2,<3`. */
   const inlineVersion = (k: number): string | null => {
     const token = raw[k].replace(/[.,;:)]+$/, "");
     const at = token.indexOf("@", 1);
     const spec = at > 0 ? token.slice(at + 1) : (/^[A-Za-z0-9][\w.-]*((?:===?|~=|>=|<=|!=|>|<)\S+)$/.exec(token)?.[1] ?? null);
-    return spec && BINDABLE_VERSION.test(spec) ? spec.replace(/^==?(?!=)/, "") : null;
+    return spec && isVersionSpec(spec) ? taskVersionText(spec) : null;
   };
   /**
-   * The version written after item `k` ("axios 0.21.0", "event-stream at version 3.3.6"), and the
-   * token after it. A version with no dot ("ctx 2") is bound only after add and install, where a
-   * number after a name is a release; elsewhere it is as often a count.
+   * The version written after item `k` ("axios 0.21.0", "event-stream at version 3.3.6", "chalk to
+   * 5.6.1"), and the token it is. A version with no dot ("ctx 2") is bound only after add and install,
+   * where a number after a name is a release; elsewhere it is as often a count.
    */
   const versionAfter = (k: number, bareNumbers: boolean): { version: string; at: number } | null => {
     let v = k + 1;
@@ -334,8 +378,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     while (v < words.length && VERSION_LEADS.has(words[v]) && separatorAfter(v) === null) v++;
     if (v >= words.length) return null;
     const token = raw[v].replace(/[.,;:)]+$/, "");
-    if (!BINDABLE_VERSION.test(token) || (!bareNumbers && !/\d\.(?:\d|x|\*)/i.test(token))) return null;
-    return { version: token.replace(/^==?(?!=)/, ""), at: v };
+    if (!isVersionSpec(token) || (!bareNumbers && !/\d\.(?:\d|x|\*)|[<>~^!=-]/i.test(token))) return null;
+    return { version: taskVersionText(token), at: v };
   };
   /**
    * The words after a name (or a list of names) put it in a manifest or the dependency list:
@@ -346,7 +390,10 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     // Past the rest of an "a and b" / "a, b" list, and the versions in it.
     while (
       j < words.length &&
-      (LIST_WORDS.has(words[j]) || BINDABLE_VERSION.test(words[j]) || VERSION_LEADS.has(words[j]) || (asName(raw[j], fallback) !== null && !DESTINATION_PREPOSITIONS.has(words[j]) && words[j] !== "as"))
+      (LIST_WORDS.has(words[j]) ||
+        isVersionSpec(words[j]) ||
+        (VERSION_LEADS.has(words[j]) && words[j] !== "to") ||
+        (asName(raw[j], fallback) !== null && !DESTINATION_PREPOSITIONS.has(words[j]) && words[j] !== "as"))
     ) {
       if (j - from > 10) return false;
       j++;
@@ -367,8 +414,10 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     const n = name.toLowerCase();
     if (ENGLISH.has(n)) return true;
     if (!bareAdd) return false;
-    return COMMON_WORDS.has(n) || PYTHON_STDLIB.has(n) || (!NAME_SHAPED.test(n) && ENGLISH_ENDING.test(n));
+    return COMMON_WORDS.has(n) || stdlib(n) || (!NAME_SHAPED.test(n) && ENGLISH_ENDING.test(n));
   };
+  /** A word that ends a list: a new clause, or another verb. */
+  const endsList = (j: number) => j >= words.length || words[j] === "then" || CLAUSE_VERBS.has(words[j]) || IN_VERBS.has(words[j]) || ON_VERBS.has(words[j]);
 
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
@@ -389,8 +438,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       continue;
     }
     const installing = INSTALL_VERBS.has(word);
-    // "bring in ctx", "pull in left-pad": the verb is the pair.
-    const bringingIn = IN_VERBS.has(word) && (words[i + 1] === "in" || words[i + 1] === "into");
+    // "bring in ctx", "pull in left-pad", "depend on event-stream": the verb is the pair.
+    const bringingIn =
+      (IN_VERBS.has(word) && (words[i + 1] === "in" || words[i + 1] === "into")) || (ON_VERBS.has(word) && (words[i + 1] === "on" || words[i + 1] === "upon"));
     if (bringingIn) i++;
     // "replace lodash with lodahs", "swap express for expres", "switch to dayjs": what comes in.
     let swapped = false;
@@ -409,28 +459,69 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       // "switch to B" / "migrate to B" name only what comes in; "replace X with Y" must name X.
       if (end === c && words[end] !== "to") continue;
       // "migrate lodash from 4.17.20 to 4.17.21" moves one package between versions: no swap.
-      if (end + 1 < words.length && BINDABLE_VERSION.test(words[end + 1])) continue;
+      if (end + 1 < words.length && isVersionSpec(words[end + 1])) continue;
       swappedFromDependency = words.slice(c, end).some((w) => installedName(w) || PACKAGE_WORDS.has(w) || quoted.has(w));
       // The version of what goes out is not one the task writes.
-      for (let o = c; o < end; o++) if (BINDABLE_VERSION.test(words[o])) ignored.push(span(o));
+      for (let o = c; o < end; o++) if (isVersionSpec(words[o])) ignored.push(span(o));
       swapped = true;
       i = end;
     } else if (!installing && !bringingIn && !ADD_VERBS.has(word)) continue;
     // A number after a name is a release after add and install; after "use" or "need" it may be a count.
-    const bareNumbers = installing || word.startsWith("add");
+    const bareNumbers = installing || word.startsWith("add") || ON_VERBS.has(word);
+    /** Past the articles and adjectives before an item: where its first word is, or null when the list ended. */
+    const itemStart = (from: number): { at: number; skipped: number; saidPackage: boolean } | null => {
+      let n = from;
+      if (words[n] === "also") n++;
+      if (endsList(n)) return null;
+      let skipped = 0;
+      let saidPackage = false;
+      // "install the private @acme scope": an adjective there is no package (blind audit round 4).
+      while (n < words.length && (FILLERS.has(words[n]) || PACKAGE_WORDS.has(words[n]) || (NOT_A_PACKAGE_ADJECTIVES.has(words[n]) && !quoted.has(words[n])))) {
+        if (PACKAGE_WORDS.has(words[n])) saidPackage = true;
+        n++;
+        skipped++;
+      }
+      return n < words.length ? { at: n, skipped, saidPackage } : null;
+    };
+    /**
+     * Where the item after the one at `from` starts, when a list separator follows within the clause:
+     * a list item that is prose ("add uuid and electorn", "add a logger, lodahs", "add json and ctx")
+     * is passed over and the list goes on (r8, B1: it ended the list, and electorn, lodahs and ctx were
+     * never checked). Null when the clause ends first.
+     */
+    const nextItem = (from: number, word: boolean): number | null => {
+      for (let n = from; n < words.length && n - from < MAX_SKIPPED_ITEM; n++) {
+        if (n > from && LIST_WORDS.has(words[n])) return n + 1;
+        if (n > from && endsList(n)) return null;
+        const sep = separatorAfter(n);
+        if (sep === "clause") return null;
+        if (sep === "list") return LIST_WORDS.has(words[n + 1] ?? "") ? n + 2 : n + 1;
+        // `install a b c` lists without separators: after an English word, the next word is the next item
+        // (what is not a name at all ends the command, as it always did).
+        if (installing) return word ? n + 1 : null;
+      }
+      return null;
+    };
     // The verb, then only articles and package words, then the list of items.
-    let k = i + 1;
-    let saidPackage = false;
-    let skipped = 0;
-    // "install the private @acme scope": an adjective there is no package (blind audit round 4).
-    while (k < words.length && (FILLERS.has(words[k]) || PACKAGE_WORDS.has(words[k]) || (NOT_A_PACKAGE_ADJECTIVES.has(words[k]) && !quoted.has(words[k])))) {
-      if (PACKAGE_WORDS.has(words[k])) saidPackage = true;
-      k++;
-      skipped++;
-    }
-    while (k < words.length) {
+    let start = itemStart(i + 1);
+    let afterSeparator = false;
+    let proseSeen = false;
+    /** This list's packages, and whether anything marked each as one. */
+    const listed: Array<{ pkg: NewPackage; strong: boolean }> = [];
+    while (start) {
+      const k: number = start.at;
+      const skipped = start.skipped;
       const name = asName(raw[k], fallback);
-      if (!name) break;
+      const skip = (word = true) => {
+        const n = nextItem(k, word);
+        start = n === null ? null : itemStart(n);
+        afterSeparator = true;
+      };
+      if (!name) {
+        proseSeen = true;
+        skip(false);
+        continue;
+      }
       const inline = inlineVersion(k);
       const after = inline ? null : versionAfter(k, bareNumbers);
       const version = inline ?? after?.version ?? null;
@@ -441,25 +532,37 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       // so an unknown word is never sent anywhere for it.
       // A near-miss of a popular PyPI project too, in a project that installs from PyPI: "add colourama",
       // "add jeIlyfish" and "add python3-dateutil" read as prose (black-box audit of 60c9edc, 2026-11-14).
+      // After a prose item, a popular name that is also an everyday word is prose too: "add logging and
+      // retry around the upload" is no npm `retry`.
       const known =
+        !(proseSeen && ENGLISH_TASK_WORDS.has(name)) &&
         !COMMON_WORDS.has(name) &&
         !ENGLISH.has(name) &&
-        !PYTHON_STDLIB.has(name) &&
+        !stdlib(name) &&
         ((guessed.has("npm") && (POPULAR.has(name) || nearMissOf(name) !== null)) || (guessed.has("PyPI") && closestPopularPypi(name) !== null));
       // "add ctx to requirements.txt", "add extrahtml to the dependencies": the destination says it is a package
       // (both came back safe_to_delegate in a Python project; round 5 audits). A manifest's own fields are not.
       const manifest = goesInManifest(next) && !MANIFEST_FIELDS.has(name.toLowerCase());
       // A version written after it says it is a package: "pull in node-ipc 10.1.1".
-      const strong = saidPackage || PACKAGE_WORDS.has(words[next] ?? "") || isQuoted || known || manifest || version !== null || (swapped && swappedFromDependency);
+      const strong = start.saidPackage || PACKAGE_WORDS.has(words[next] ?? "") || isQuoted || known || manifest || version !== null || (swapped && swappedFromDependency);
       if (!strong) {
         // A bare "add X" (or "install X", "replace A with X") reads X as a package for any plausible
         // name ("add ctx", "add flatmap-stream" came back safe_to_delegate; round 5 audits), unless it
         // is English ("install steps", "add routes"). After an article only a name-shaped word counts
-        // ("add a footer" is prose, "add the logger-libs" is not).
-        if (english(name, !installing)) break;
-        if (!installing && skipped > 0 && !NAME_SHAPED.test(name)) break;
+        // ("add a footer" is prose, "add the logger-libs" is not), unless a list separator came before
+        // it: an item of a list is always a candidate (r8, B1).
+        // A word before an English noun, after an article, names the thing, not a package: "install the
+        // git hooks" judged npm's `git` (avoid) (r8).
+        const modifier = skipped > 0 && separatorAfter(k) === null && ENGLISH.has(words[k + 1] ?? "") && !PACKAGE_WORDS.has(words[k + 1] ?? "");
+        const prose = english(name, !installing) || (proseSeen && ENGLISH_TASK_WORDS.has(name)) || modifier || (!installing && !afterSeparator && skipped > 0 && !NAME_SHAPED.test(name));
+        if (prose) {
+          proseSeen = true;
+          skip();
+          continue;
+        }
       }
-      add(name, fallback, true, !strong && !installing, version);
+      const pkg = add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
+      if (pkg) listed.push({ pkg, strong });
       if (after) bound.push({ name: raw[k].replace(/[.,;:)]+$/, ""), version: after.version, ...span(after.at) });
       // "the lodahs package, and expres": a package word may close the item.
       if (PACKAGE_WORDS.has(words[next] ?? "") && separatorAfter(next - 1) === null) next++;
@@ -467,22 +570,20 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       // ("install omega-flag-beta and set lodash ..." added a package named `set`).
       const separator = separatorAfter(next - 1);
       if (separator === "clause") break;
-      if (LIST_WORDS.has(words[next] ?? "")) next++;
-      else if (separator !== "list") {
-        // "install zqx omega risk": a bare list without separators is one name, unless installing.
-        if (!installing) break;
-        k = next;
-        skipped = 0;
-        continue;
+      const joined = LIST_WORDS.has(words[next] ?? "");
+      if (joined) next++;
+      else if (separator !== "list" && !installing) break; // "add zqx omega risk": one name, unless installing.
+      start = itemStart(next);
+      afterSeparator = joined || separator === "list";
+    }
+    // A list that names a package for certain names packages: its other items are not prose to drop
+    // when they come back clean ("add zod, valibot, superstruct, io-ts and is-even" listed only zod and
+    // the other popular names; r8).
+    if (listed.length > 1 && listed.some((l) => l.strong)) {
+      for (const l of listed) {
+        delete l.pkg.weak;
+        delete l.pkg.loose;
       }
-      if (words[next] === "also") next++;
-      if (next >= words.length || words[next] === "then" || CLAUSE_VERBS.has(words[next]) || IN_VERBS.has(words[next])) break;
-      skipped = 0;
-      while (next < words.length && (FILLERS.has(words[next]) || (NOT_A_PACKAGE_ADJECTIVES.has(words[next]) && !quoted.has(words[next])))) {
-        next++;
-        skipped++;
-      }
-      k = next;
     }
   }
   return { packages: found, bound, ignored };
@@ -497,7 +598,7 @@ function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
   return null;
 }
 
-function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -564,7 +665,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, ...p } = pkg;
     if (!r) return unchecked(p, "no answer");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
@@ -613,8 +714,13 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       const also = answers.filter((f) => f !== pick).map((f) => ({ ecosystem: f.ecosystem, verdict: notFound(f) ? ("not_found" as const) : f.verdict, ...(f.malicious ? { malicious: true as const } : {}) }));
       return { ...pick, also_checked: also };
     });
-    /** A weak name no registry has and no malware record covers was prose; a clean one adds nothing to say. */
-    const prose = (f: NewPackageFinding, i: number) => packages[i].weak === true && !f.malicious && f.name_finding === null && (f.verdict === "proceed" || notFound(f));
+    /**
+     * A weak name no registry has and no malware record covers was prose; a clean one adds nothing to
+     * say; a loose one ("use blueprints") stands only on a finding about the name, or a check that
+     * could not run.
+     */
+    const prose = (f: NewPackageFinding, i: number) =>
+      packages[i].weak === true && !f.malicious && f.name_finding === null && (f.verdict === "proceed" || notFound(f) || (packages[i].loose === true && f.verdict !== "unknown"));
     return out.filter((f, i) => !prose(f, i));
   } catch (error) {
     return packages.map((p) => unchecked(p, `the check failed: ${String(error instanceof Error ? error.message : error).slice(0, 120)}`));

@@ -40,6 +40,7 @@ export async function batchAnswer(query: AdvisoryQuery, releases: Array<{ ecosys
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+    timer.unref?.();
   });
   let answer: Awaited<ReturnType<AdvisoryQuery>> | null;
   try {

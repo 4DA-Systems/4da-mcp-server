@@ -64,6 +64,8 @@ export interface GroupResolution {
   privateIndex: PrivateIndexEntry[];
   /** PyPI: `--extra-index-url` indexes beside pypi.org, by file. */
   extraIndexes: Array<{ file: string; index: string }>;
+  /** PyPI: every file read records each package's index (VersionSource.indexRecorded). */
+  indexRecorded?: true;
   /** PyPI: requirements with no pinned version anywhere in this directory, by the file that lists them. */
   unpinned: UnpinnedRequirements[];
   /** Lockfiles present in this directory that could not be read, with the reason. */
@@ -175,6 +177,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     uncheckable: read.uncheckable ?? [],
     privateIndex: read.privateIndex ?? [],
     extraIndexes: read.extraIndexes ?? [],
+    ...(read.indexRecorded ? { indexRecorded: true as const } : {}),
     unpinned,
     problems: read.problems ?? [],
     signatures,

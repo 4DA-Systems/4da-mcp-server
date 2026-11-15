@@ -452,8 +452,9 @@ describe("what was already right stays right", () => {
       privateReason: (_eco: string, name: string) => (name.toLowerCase() === "acme-vault" ? "private by .npmrc @acme registry" : null),
     });
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
-    // left-pad is a bare name that comes back clean, so it is dropped as before; electorn is malware.
-    expect(r.new_packages?.map((p) => p.name)).toEqual(["electorn"]);
+    // left-pad is listed beside a name that is certainly a package, so it is said (clean), not dropped
+    // as prose (r8: a long list dropped its clean bare names without a word); electorn is malware.
+    expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["left-pad=proceed", "electorn=avoid"]);
     expect(ASKED.some((u) => u === "https://registry.npmjs.org/left-pad")).toBe(true);
     expect(r.delegation_assessment.level).toBe("human_only");
   });

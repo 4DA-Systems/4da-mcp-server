@@ -120,6 +120,7 @@ async function settle<T>(work: Promise<T | null>, deadline: number): Promise<T |
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+    timer.unref?.();
   });
   try {
     return await Promise.race([work.catch(() => null), late]);

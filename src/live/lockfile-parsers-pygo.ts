@@ -22,7 +22,7 @@ import { emptySource, found, InstanceSet, type LockfileProblem, type Uncheckable
 import { readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
-import { privateDirectReference } from "./private-configs.js";
+import { findLinksLabel, isPublicFindLinks, pipLineOptions, privateDirectReference } from "./private-configs.js";
 
 // =============================================================================
 // Python: every lockfile and requirements file in the directory, merged
@@ -110,6 +110,8 @@ export function resolvePython(cwd: string): VersionSource {
   const privateIndex: PrivateIndexEntry[] = [];
   const damaged: LockfileProblem[] = [];
   let lockfile = false;
+  /** Whether a file read here installs packages without recording the index each came from (pdm.lock, a requirements file). */
+  let indexUnrecorded = false;
   const take = (name: string, version: string, dev: boolean | undefined) => {
     instances.add(name, version, dev);
     if (!versions.has(name)) versions.set(name, version);
@@ -123,6 +125,8 @@ export function resolvePython(cwd: string): VersionSource {
       const read = readTomlPackageLock(content);
       for (const other of read.uncheckable) uncheckable.push({ ...other, file: lockPath });
       for (const p of read.privateIndex) privateIndex.push({ ...p, file: lockPath });
+      // pdm.lock records no index per package: what its configured sources serve is not visible in it.
+      if (file === "pdm.lock") indexUnrecorded = true;
       if (read.instances.size === 0) continue;
       for (const i of read.instances.toArray()) take(i.name, i.version, i.dev);
       sources.push(lockPath);
@@ -150,6 +154,7 @@ export function resolvePython(cwd: string): VersionSource {
           .filter((s: { name?: unknown; url?: unknown }) => typeof s?.name === "string" && typeof s?.url === "string")
           .map((s: { name: string; url: string }) => [s.name, s.url]),
       );
+      const defaultSource = [...indexes.values()][0];
       for (const [section, dev] of [["default", false], ["develop", true]] as const) {
         for (const [name, info] of Object.entries(lock[section] ?? {})) {
           const entry = info as { version?: string; git?: string; file?: string; path?: string; index?: string };
@@ -158,9 +163,14 @@ export function resolvePython(cwd: string): VersionSource {
             // `{"git": "https://…", "ref": "…"}` or `{"file": "https://…/x.whl"}`: installed, but not an index release.
             if (typeof entry.git === "string") uncheckable.push({ name: normalizePythonName(name), version: null, kind: "git", file: pipfileLock });
             else if (typeof entry.file === "string" && /^https?:/i.test(entry.file)) uncheckable.push({ name: normalizePythonName(name), version: null, kind: "url", file: pipfileLock });
+            // From a host that is not public, or local code: the name is private (R8, B4).
+            const location = typeof entry.git === "string" ? entry.git : typeof entry.file === "string" ? entry.file : typeof entry.path === "string" ? `file:${entry.path}` : null;
+            if (location && privateDirectReference(location)) privateIndex.push({ name: normalizePythonName(name), version: null, registry: directLabel(location), file: pipfileLock, ...(/^file:/i.test(location) ? { local: true as const } : {}) });
             continue;
           }
-          const index = typeof entry.index === "string" ? indexes.get(entry.index) : undefined;
+          // An entry that names no index came from the default source, the first one (pipenv): a
+          // Pipfile whose only source is private wrote no `index` at all, and every name was sent (R8, B4).
+          const index = typeof entry.index === "string" ? indexes.get(entry.index) : defaultSource;
           if (index && !isPublicPypiIndex(index)) privateIndex.push({ name: normalizePythonName(name), version, registry: sourceLabel(index), file: pipfileLock });
           take(normalizePythonName(name), version, dev);
           any = true;
@@ -180,6 +190,7 @@ export function resolvePython(cwd: string): VersionSource {
     const dev = devRequirementsFile(file) ? true : undefined;
     const pins = readRequirementsFile(file, new Set(), cwd, collected, extras);
     if (pins === null) continue;
+    indexUnrecorded = true;
     for (const { name, version } of pins) take(name, version, dev);
     sources.push(file);
     // `--index-url` / `-i` replaces pypi.org for every pin of the file: private when it is not a
@@ -219,7 +230,7 @@ export function resolvePython(cwd: string): VersionSource {
   };
 
   if (sources.length === 0) return { ...emptySource(), ...extra };
-  return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1), ...extra });
+  return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1), ...extra, ...(lockfile && !indexUnrecorded ? { indexRecorded: true } : {}) });
 }
 
 function dedupeUncheckable(list: UncheckableDependency[]): UncheckableDependency[] {
@@ -383,16 +394,24 @@ function safeRead(file: string): string {
   }
 }
 
-/** `-r file` / `--requirement=file` / `-c file` / `--constraint file` lines (local paths only). */
-/** A requirements file's `--index-url` / `-i` (the last one, as pip takes it) and every `--extra-index-url`. */
+/**
+ * A requirements file's `--index-url` / `-i` (the last one, as pip takes it), every
+ * `--extra-index-url`, and every `--find-links` / `-f` location that is not public (read as an extra
+ * index: pip may take any package from it). Options are read as pip's optparse reads them
+ * (pipLineOptions): `-i<url>` attached, and any unambiguous prefix of a long option (`--index`,
+ * `--extra-index`, `--find`). Each of those spellings sent every pin to OSV.dev (R8, B4).
+ */
 export function indexOptions(content: string): { index: string | null; extra: string[] } {
   let index: string | null = null;
   const extra: string[] = [];
   for (const raw of requirementLines(content)) {
-    const m = /^\s*(?:(-i)|--(index-url|extra-index-url))(?:\s*=\s*|\s+)(\S+)/.exec(raw);
-    if (!m) continue;
-    if (m[2] === "extra-index-url") extra.push(m[3]);
-    else index = m[3];
+    if (!raw.includes("-")) continue;
+    for (const { option, value } of pipLineOptions(raw)) {
+      if (!value) continue;
+      if (option === "index-url") index = value;
+      else if (option === "extra-index-url") extra.push(value);
+      else if (option === "find-links" && !isPublicFindLinks(value)) extra.push(findLinksLabel(value));
+    }
   }
   return { index, extra };
 }
@@ -425,12 +444,15 @@ export function requirementIndexOptions(file: string, root: string, visited: Set
   return { index, extra };
 }
 
+/** `-r file` / `--requirement=file` / `-c file` / `--constraint file` (and `-rfile`, `--requir`...): local paths only. */
 export function requirementOptions(content: string): Array<{ option: "r" | "c"; target: string }> {
   const out: Array<{ option: "r" | "c"; target: string }> = [];
   for (const raw of requirementLines(content)) {
-    const m = /^\s*(?:-(r|c)|--(requirement|constraint))(?:\s*=\s*|\s+)(\S+)/.exec(raw);
-    if (!m || /^[a-z][a-z+]*:\/\//i.test(m[3])) continue;
-    out.push({ option: (m[1] ?? (m[2] === "requirement" ? "r" : "c")) as "r" | "c", target: m[3] });
+    if (!/^\s*-/.test(raw)) continue;
+    for (const { option, value } of pipLineOptions(raw)) {
+      if (!value || (option !== "requirement" && option !== "constraint") || /^[a-z][a-z+]*:\/\//i.test(value)) continue;
+      out.push({ option: option === "requirement" ? "r" : "c", target: value });
+    }
   }
   return out;
 }
@@ -664,13 +686,17 @@ export function readTomlPackageLock(content: string): {
   versions: Map<string, string>;
   instances: InstanceSet;
   uncheckable: Array<{ name: string; version: string | null; kind: "git" | "url" | "file" }>;
-  /** Index releases from an index other than pypi.org (uv `registry`, a poetry `legacy` source): private. */
-  privateIndex: Array<{ name: string; version: string; registry: string }>;
+  /**
+   * Index releases from an index other than pypi.org (uv `registry`, a poetry `legacy` source), git
+   * or URL packages from a host that is not public, and local code (a path, a directory, the project
+   * itself): private, never sent (R8, B4: a uv.lock git source on a private host reached OSV.dev).
+   */
+  privateIndex: Array<{ name: string; version: string; registry: string; local?: true }>;
 } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: Array<{ name: string; version: string | null; kind: "git" | "url" | "file" }> = [];
-  const privateIndex: Array<{ name: string; version: string; registry: string }> = [];
+  const privateIndex: Array<{ name: string; version: string; registry: string; local?: true }> = [];
   for (const block of content.split(/^\[\[package\]\]\s*$/m).slice(1)) {
     // Stop at the next table header (e.g. [package.dependencies], [metadata]).
     const body = block.split(/^\[/m)[0];
@@ -682,6 +708,9 @@ export function readTomlPackageLock(content: string): {
     const origin = packageOrigin(block, body);
     if (origin !== "index") {
       if (origin !== "local") uncheckable.push({ name: normalized, version, kind: origin });
+      const location = originLocation(block, body);
+      if (origin === "local" || origin === "file") privateIndex.push({ name: normalized, version, registry: `local code${location ? ` (${location})` : ""}`, local: true });
+      else if (location && privateDirectReference(location)) privateIndex.push({ name: normalized, version, registry: directLabel(location) });
       continue;
     }
     const index = indexUrl(block, body);
@@ -691,6 +720,19 @@ export function readTomlPackageLock(content: string): {
     if (!versions.has(normalized)) versions.set(normalized, version);
   }
   return { versions, instances, uncheckable, privateIndex };
+}
+
+/** Where a git, URL or local package comes from: uv `source = { git = "..." }` (or url, path, ...), a poetry `[package.source]` url. */
+function originLocation(block: string, body: string): string | null {
+  const uv = /^source\s*=\s*\{\s*[a-z-]+\s*=\s*"([^"]+)"/m.exec(body)?.[1];
+  if (uv) return uv;
+  const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
+  return /^url\s*=\s*"([^"]+)"/m.exec(poetrySource)?.[1] ?? null;
+}
+
+/** A direct location as it may be shown: no credentials, query or fragment. */
+function directLabel(location: string): string {
+  return /^file:/i.test(location) ? "a local file" : sourceLabel(location.replace(/^git\+/i, ""));
 }
 
 /** The index an index release came from: uv `source = { registry = "..." }`, a poetry `[package.source]` url. */
@@ -809,6 +851,13 @@ export function resolveGo(cwd: string): VersionSource {
     }
   }
   const versions = new Map<string, string>();
+  // Local code: the module itself, and every module `replace` points at a directory. Never a proxy
+  // release, so never sent: `replace github.com/acme/core => ../core` sent the module path from
+  // dependency_check, upgrade_impact and the briefing (R8).
+  const privateIndex: PrivateIndexEntry[] = [];
+  const local = (module: string, why: string) => privateIndex.push({ name: module, version: null, registry: why, file: goModPath, local: true });
+  if (mod.module) local(mod.module, "local code (this go.mod's own module)");
+  for (const module of mod.localReplaced) local(module, "local code (replaced by a directory in go.mod)");
   for (const [module, version] of selected) {
     const target = mod.replacement(module, version);
     if (target === null) continue; // replaced by a local directory: local code, not a registry module
@@ -817,7 +866,7 @@ export function resolveGo(cwd: string): VersionSource {
   }
   const instances = new InstanceSet();
   for (const [module, version] of versions) instances.add(module, version);
-  return found(versions, instances, goModPath, "lockfile");
+  return found(versions, instances, goModPath, "lockfile", privateIndex.length > 0 ? { privateIndex } : {});
 }
 
 /** A `replace` target: another module version, or null for a local directory. */
@@ -836,6 +885,10 @@ export function parseGoMod(content: string): {
   /** What `replace` maps a module version to: undefined for nothing, null for local code. */
   replacement: (module: string, version: string) => GoReplacement | undefined;
   goVersionAtLeast117: boolean;
+  /** The `module` directive's path, or null. */
+  module: string | null;
+  /** Modules a `replace` points at a local directory. */
+  localReplaced: string[];
 } {
   const requires = new Map<string, { module: string; version: string; indirect: boolean }>();
   const replaces = new Map<string, GoReplacement>();
@@ -884,7 +937,9 @@ export function parseGoMod(content: string): {
 
   const go = /^go\s+(\d+)\.(\d+)/m.exec(content);
   const goVersionAtLeast117 = go ? Number(go[1]) > 1 || Number(go[2]) >= 17 : false;
-  return { requires: result, rawRequires, replacement, goVersionAtLeast117 };
+  const module = /^module\s+"?([^\s"/]+(?:\/[^\s"]+)*)"?\s*(?:\/\/.*)?$/m.exec(content)?.[1] ?? null;
+  const localReplaced = [...new Set([...replaces].filter(([, target]) => target === null).map(([key]) => key.split(" ")[0]))];
+  return { requires: result, rawRequires, replacement, goVersionAtLeast117, module, localReplaced };
 }
 
 /**

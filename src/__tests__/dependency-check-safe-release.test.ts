@@ -333,13 +333,15 @@ describe("nothing in range is safe because of what the releases hold: Next.js 15
     }
   });
 
-  it("the clean line itself is proceed, and the release inside the age hold is not the alternative", async () => {
+  it("the clean line resolves to its newest release, inside the age hold: wait, and the settled one is the pin", async () => {
     nextShape("HIGH");
     const [r] = (await check([{ ecosystem: "npm", package: "next", to: "^16.0" }])).results;
-    expect(r).toMatchObject({ to: "16.1.0", verdict: "proceed" });
+    // Round 8 (B2): npm installs 16.2.0 for ^16.0; 16.1.0 is the safe exact pin.
+    expect(r).toMatchObject({ to: "16.2.0", verdict: "wait" });
+    expect(r.reason).toContain("Pin exactly 16.1.0; the range as written resolves to 16.2.0 (wait).");
   });
 
-  it("the range answer is about the newest release whose only issue is a low or moderate held dependency", async () => {
+  it("the range answer is about the release it installs, with the held dependency and its override named", async () => {
     // 3.2.0, the newest, holds a child with a HIGH advisory; 3.1.0 holds one with a moderate advisory only.
     NPM.framework = {
       latest: "3.2.0",
@@ -354,12 +356,13 @@ describe("nothing in range is safe because of what the releases hold: Next.js 15
       npmRecord("GHSA-chld-0000-0001", "child", [{ introduced: "0" }, { fixed: "1.0.1" }], "MODERATE"),
       npmRecord("GHSA-chld-0000-0002", "child", [{ introduced: "1.1.0" }, { fixed: "1.2.0" }], "HIGH"),
     );
+    // Round 8 (B2): npm installs 3.2.0 for ^3.0, and 3.2.0 holds child 1.1.0 (high): avoid, with the override.
     const [r] = (await check([{ ecosystem: "npm", package: "framework", to: "^3.0" }])).results;
-    expect(r).toMatchObject({ to: "3.1.0", to_requested: "^3.0", verdict: "review" });
+    expect(r).toMatchObject({ to: "3.2.0", to_requested: "^3.0", verdict: "avoid" });
     expect(r.range_check).toMatchObject({ smallest_safe_in_range: null, held_excluded: 3 });
-    expect(r.range_check.held_advice.dependencies).toEqual([{ package: "child", installs: "1.0.0", advisories: ["GHSA-chld-0000-0001"], severity: "medium", fixed_in: "1.0.1" }]);
-    expect(r.reason).toContain("3.1.0 holds child 1.0.0 (GHSA-chld-0000-0001, medium)");
-    expect(r.reason).toContain("To install 3.1.0 without it, override child to 1.0.1");
+    expect(r.range_check.held_advice.dependencies).toEqual([{ package: "child", installs: "1.1.0", advisories: ["GHSA-chld-0000-0002"], severity: "high", fixed_in: "1.2.0" }]);
+    expect(r.reason).toContain("3.2.0 holds child 1.1.0 (GHSA-chld-0000-0002, high)");
+    expect(r.reason).toContain("To install 3.2.0 without it, override child to 1.2.0");
     // With `from`, never a release at or below the installed one.
     const [up] = (await check([{ ecosystem: "npm", package: "framework", from: "3.1.0", to: "^3.0" }])).results;
     expect(up).toMatchObject({ to: "3.2.0", verdict: "avoid" });

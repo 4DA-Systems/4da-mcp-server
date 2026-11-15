@@ -158,7 +158,7 @@ export interface VulnerabilityEntry {
    * cached by 6.2.4 without it are never read (osv:v4 since CVSS v4.0 grades and OSV-read range
    * bounds changed what an entry holds; osv:v5 since round-4 text cleaning and malware reading; osv:v6 since round-5 advisory-id validation and release-level malware; osv:v7 since summaries are capped at
    * ADVISORY_SUMMARY_MAX and quoted, and a record already in hand grades an advisory whose /v1/vulns fetch failed;
-   * osv:v8 since an alias with whitespace or a control character inside is dropped, not glued into one id, r7).
+   * osv:v9 since RustSec's malicious class and "removed from ... for malicious code" read as malware (round 8, B3); v8 since an alias with whitespace or a control character inside is dropped, not glued into one id, r7).
    */
   maintenance?: boolean;
   /**

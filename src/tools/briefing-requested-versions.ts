@@ -18,8 +18,8 @@
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { asName, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
-import { installedGoModule, isManifestFile, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES } from "./briefing-names.js";
+import { asName, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, type NameCheckLive } from "./briefing-new-packages.js";
+import { ENGLISH_TASK_WORDS, installedGoModule, isManifestFile, isVersionSpec, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES, SPEC_JOINERS, specText } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
@@ -47,21 +47,32 @@ export interface RequestedVersionFinding extends RequestedVersion {
   critical?: string[];
 }
 
-const MAX_REQUESTED = 5;
+/** How many named versions a briefing checks; past it the rest are NOT CHECKED, by name (what-should-i-know.ts). */
+export const MAX_REQUESTED = 8;
 const CHECK_BUDGET_MS = 10_000;
 /**
  * A version or constraint as tasks write them: 4.17.20, v1.2.3, ^1.2, ~2.0.1, >=2, 7.x, 1.2.*,
  * ==3.3.6, prereleases with dashes (1.4.44-liberty-2) and Go pseudo-versions
  * (v0.0.0-20210226172049-e18ecbb05110).
  */
-const VERSIONISH = /^(?:={1,3}|[~^]|[<>]=?)?v?\d+(?:\.(?:\d+|x|\*))*(?:-[\w.-]+)?(?:\+[\w.-]+)?$/i;
+const VERSIONISH = { test: (token: string) => isVersionSpec(token) };
 /** A dotted version (or a pseudo-version): a token the briefing must tie to a package or say it could not. */
 const DOTTED = /^(?:={1,3}|[~^]|[<>]=?)?v?\d+\.(?:\d+|x|\*)/i;
 /** Words that come before a package name and are never one. */
 const VERBS = new Set([
   "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
   "move", "moving", "set", "setting", "use", "using", "change", "changing", "lock", "require", "version", "release", "it", "them", "everything", "all",
-  "dependency", "package", "roll", "revert", "restore", "write", "put", "get", "and", "or", "with", "then", "also",
+  "dependency", "package", "roll", "revert", "restore", "write", "put", "get", "and", "or", "with", "then", "also", "depend", "depends", "depending",
+]);
+/**
+ * Words a version is never tied past: another verb or a list word starts another item ("add nanoid and
+ * bump x to 1.2"). Other words that are no package ("by one patch to 0.7.29") are passed over (r8:
+ * the 0.7.29 was judged as a package called `patch`).
+ */
+const TIE_BOUNDARIES = new Set([
+  "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
+  "move", "moving", "set", "setting", "use", "using", "change", "changing", "lock", "require", "roll", "revert", "restore", "write", "put", "get",
+  "and", "or", "with", "then", "also", "plus", "&", "+", "replace", "swap", "remove", "drop", "fix", "need", "depend", "depends",
 ]);
 /** Words between a package and its version: "lodash to 4.17.20", "event-stream at version 3.3.6", "lodash: 4.18.1 -> 4.17.20". */
 const CONNECTORS = new Set([
@@ -77,7 +88,7 @@ const RUNTIMES = new Set([
 /** Verbs that change a dependency: a task with one is about dependencies. */
 const DEPENDENCY_VERBS = new Set([
   "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
-  "set", "setting", "change", "changing", "roll", "revert", "require", "lock", "use", "using",
+  "set", "setting", "change", "changing", "roll", "revert", "require", "lock", "use", "using", "depend", "depends", "depending",
 ]);
 /**
  * A manifest, lockfile or packaging word: the task is about dependencies. It once held literal
@@ -94,6 +105,7 @@ const PYPI_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)((?:===?|~=|>=|<=|!=|>|<)[^\s]+)
  */
 const PACKAGE_VERBS = new Set([
   "add", "adding", "install", "installing", "pin", "pinning", "bump", "bumping", "upgrade", "upgrading", "update", "updating", "downgrade", "downgrading",
+  "depend", "depends", "depending",
 ]);
 /** A version with no dot (30, v2, ^5): in prose it is as often a setting as a release. */
 const BARE_NUMBER = /^(?:={1,3}|[~^]|[<>]=?)?v?\d+$/i;
@@ -170,7 +182,7 @@ export interface TaskVersions {
   unread: string[];
 }
 
-/** The (package, version) pairs a task names, in the order named. At most five. */
+/** The (package, version) pairs a task names, in the order named (uncapped: the briefing checks MAX_REQUESTED and names the rest NOT CHECKED). */
 export function detectRequestedVersions(task: string, deps: readonly ResolvedDependency[]): RequestedVersion[] {
   return readTaskVersions(task, deps).requested;
 }
@@ -184,15 +196,25 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
  * 3, B3); now a dotted version tied to nothing is reported as unread, which keeps the briefing from
  * safe_to_delegate.
  */
+/** Tokens of a (normalized) task: arrows, and words that keep package and version punctuation (a joined constraint whole). */
+const TOKEN = new RegExp("(?:->|=>|→)|[@A-Za-z0-9`'\"(^~<>=][\\w./@*=<>~^!`'\"+:" + SPEC_JOINERS + "-]*", "g");
+/** Words that join two items of a list. */
+const LIST_JOINERS = new Set(["and", "plus"]);
+/** Words between a package and its version that are no package ("by one patch to 0.7.29"). */
+const STOP_WORDS = new Set(["one", "two", "three", "a", "an", "minor", "major", "patch", "level", "levels", "step", "steps", "notch", "bit", "release", "releases", "line"]);
+
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
   task = normalizeVersionSyntax(task);
   // The versions the clause reader bound to a name ("pull in node-ipc 10.1.1", "replace request with
   // axios 0.21.0", "add lodash 4.17.21 and crossenv 6.1.1"), and the versions of what a swap takes out.
   const { bound, ignored } = readTaskItems(task, deps);
-  const tokens = [...task.matchAll(/(?:->|=>|→)|[@A-Za-z0-9`'"(^~<>=][\w./@*=<>~^!`'"+:-]*/g)];
+  const tokens = [...task.matchAll(TOKEN)];
   const raw = tokens.map((t) => t[0]);
-  const overlaps = (i: number, s: { start: number; end: number }) => (tokens[i].index ?? 0) < s.end && s.start < (tokens[i].index ?? 0) + raw[i].length;
+  const at0 = (i: number) => tokens[i].index ?? 0;
+  const overlaps = (i: number, s: { start: number; end: number }) => at0(i) < s.end && s.start < at0(i) + raw[i].length;
   const words = raw.map((t) => cleanToken(t).toLowerCase());
+  /** The text between token `k` and the next one. */
+  const gapAfter = (k: number) => task.slice(at0(k) + raw[k].length, k + 1 < raw.length ? at0(k + 1) : task.length);
   const stated = statedEcosystem(words);
   const fallback = proseEcosystem(words, deps);
   // The ecosystem of a bare name nobody installs is only a guess when the task names none and the
@@ -205,10 +227,11 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   const found = new Map<string, RequestedVersion & { order: number }>();
   const unread: string[] = [];
   let order = 0;
-  const add = (who: { name: string; ecosystem: CheckEcosystem; guessed?: true } | null, version: string, guess = false): boolean => {
+  const add = (who: { name: string; ecosystem: CheckEcosystem; guessed?: true } | null, version: string, guess = false, another = false): boolean => {
     if (!who || !version) return false;
-    const to = version.replace(/^==?(?!=)/, "");
-    const key = `${who.ecosystem}\0${who.name}`;
+    const to = taskVersionText(version);
+    // A pairing the task leaves open ("a, b to x, y, z") keeps every candidate version of a package.
+    const key = `${who.ecosystem}\0${who.name}${another ? `\0${to}` : ""}`;
     const copies = deps.filter((d) => d.ecosystem === who.ecosystem && d.name === who.name && d.version);
     const versions = [...new Set(copies.map((d) => d.version!))];
     const alternatives = guess && who.guessed && who.ecosystem === fallback ? others.filter((e) => asName(who.name, e) !== null) : [];
@@ -224,7 +247,50 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     return true;
   };
 
+  // "upgrade chalk, debug to 5.6.1 and 4.4.2": a list of names, then "to", then a list of versions
+  // (r8: neither version was read). The same number of each pairs them in order; any other count
+  // leaves the pairing open, so every pairing is checked and the worst stands.
+  const paired = new Set<number>();
+  /** A list joiner between token `k` and the one after it: a comma, or the next token is "and" / "&". */
+  const joinedAfter = (k: number) => /[,&+]/.test(gapAfter(k));
+  for (let i = 1; i + 1 < raw.length; i++) {
+    if (words[i] !== "to" && words[i] !== "at") continue;
+    // The versions after the connector.
+    const versions: number[] = [];
+    let v = i + 1;
+    while (v < raw.length && VERSIONISH.test(cleanToken(raw[v])) && !ignored.some((s) => overlaps(v, s))) {
+      versions.push(v);
+      if (joinedAfter(v)) v += 1;
+      else if (v + 2 < raw.length && LIST_JOINERS.has(words[v + 1])) v += 2;
+      else break;
+    }
+    if (versions.length === 0 || !versions.every((x) => DOTTED.test(cleanToken(raw[x])))) continue;
+    // The names before it, back to a verb.
+    const names: Array<{ name: string; ecosystem: CheckEcosystem; guessed?: true }> = [];
+    let k = i - 1;
+    while (k >= 0) {
+      const w = words[k];
+      if (TIE_BOUNDARIES.has(w) || RUNTIMES.has(w) || SETTING_NOUNS.has(w) || ENGLISH_TASK_WORDS.has(w)) break;
+      // Explicit: the list shape says these are packages ("debug" is a common word, not here).
+      const who = nameFor(raw[k], deps, fallback, true, stated);
+      if (!who) break;
+      names.unshift(who);
+      if (k > 0 && LIST_JOINERS.has(words[k - 1])) k -= 2;
+      else if (k > 0 && joinedAfter(k - 1)) k -= 1;
+      else break;
+    }
+    // One version is the nearest name's alone ("add nanoid and ua-parser-js at 0.7.29" is ua-parser-js's).
+    if (versions.length < 2 || names.length === 0 || (!aboutDependencies && names.some((n) => n.guessed))) continue;
+    const text = versions.map((x) => cleanToken(raw[x]));
+    const pairs: Array<[number, number]> =
+      text.length === names.length ? names.map((_n, a) => [a, a]) : names.flatMap((_n, a) => text.map((_t, b) => [a, b] as [number, number]));
+    const open = text.length !== names.length;
+    for (const [a, b] of pairs) add(names[a], text[b], true, open);
+    for (const x of versions) paired.add(x);
+  }
+
   for (let i = 0; i < raw.length; i++) {
+    if (paired.has(i)) continue;
     const token = cleanToken(raw[i]);
     if (ignored.some((s) => overlaps(i, s))) continue;
     const pair = bound.find((b) => overlaps(i, b));
@@ -240,26 +306,29 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       const after = token.slice(at + 1);
       const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : stated === "crates.io" ? "crates.io" : "npm";
       if (VERSIONISH.test(after) || after.toLowerCase() === "latest") {
-        if (!add(nameFor(name, deps, eco, true, stated), after.toLowerCase() === "latest" ? "latest" : after) && DOTTED.test(after)) unread.push(token);
+        if (!add(nameFor(name, deps, eco, true, stated), after.toLowerCase() === "latest" ? "latest" : after) && DOTTED.test(after)) unread.push(specText(token));
         continue;
       }
       // Whatever else follows `name@` (a dist-tag, a branch, a tarball, a version in a form not read
       // here) is a version this briefing could not judge: unread, never dropped (`lodash@"4.17.20"`
       // came back safe_to_delegate; round 5 audits). An email address is not a package.
-      if (after && !EMAIL_DOMAIN.test(after) && (aboutDependencies || eco === "Go" || /^[\d^~<>=v"'`]/i.test(after)) && asName(name, eco) !== null) unread.push(token);
+      if (after && !EMAIL_DOMAIN.test(after) && (aboutDependencies || eco === "Go" || /^[\d^~<>=v"'`]/i.test(after)) && asName(name, eco) !== null) unread.push(specText(token));
       continue;
     }
-    // name==1.2.3, name~=3.1, name>=2,<3 (PyPI)
+    // name==1.2.3, name~=3.1, name>=2,<3 (PyPI): the whole specifier is one constraint.
     const spec = PYPI_SPEC.exec(token);
     if (spec) {
-      if (!add(nameFor(spec[1], deps, "PyPI", true, stated), spec[2])) unread.push(token);
+      if (!add(nameFor(spec[1], deps, "PyPI", true, stated), spec[2])) unread.push(specText(token));
       continue;
     }
     if (!VERSIONISH.test(token)) continue;
-    // A version: the package before it, over connector words and other versions.
+    // A version: the package before it in the same item, over connector words, other versions and
+    // words that are no package ("bump ua-parser-js by one patch to 0.7.29"); never past another verb,
+    // a list word or a comma (r8: "patch" was judged as the package).
     let tied = false;
     for (let k = i - 1, steps = 0; k >= 0 && steps < 6; k--, steps++) {
       const w = words[k];
+      if (/[,;]/.test(gapAfter(k))) break;
       if (CONNECTORS.has(w) || VERSIONISH.test(cleanToken(raw[k]))) continue;
       // "lodash in package.json to 4.17.20": the file the version goes in, and its preposition, are skipped.
       if (isManifestFile(raw[k])) continue;
@@ -268,6 +337,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
         tied = true; // "node 20", "python 3.12": a runtime, not a package to judge
         break;
       }
+      if (TIE_BOUNDARIES.has(w)) break;
       // "upgrade the @acme scope to 2.0": the word after a bare scope names the group, not a package
       // (it was read as a package called `scope`; blind audit round 4). The version is unread.
       if (GROUP_NOUNS.has(w) && k > 0 && BARE_SCOPE.test(cleanToken(raw[k - 1]))) break;
@@ -275,21 +345,25 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       // quoted: "apply the 2.4.1 hotfix" is not a package called `apply`, and an internal codename in
       // a task is never sent to a registry on a guess. The version is then unread instead.
       const quotedName = /^[`'"]/.test(raw[k]);
-      const who = nameFor(raw[k], deps, fallback, quotedName, stated);
+      // A name right before a dotted version is written as one ("debug 4.4.2"), common word or not.
+      const adjacent = k === i - 1 && DOTTED.test(token);
+      const who = nameFor(raw[k], deps, fallback, quotedName || adjacent, stated);
       if (who?.guessed && !quotedName && SETTING_NOUNS.has(w)) {
         tied = true; // "timeout to 30", "port 8080": a setting, not a package to judge
         break;
       }
-      const bareNumberOk = !who?.guessed || quotedName || !BARE_NUMBER.test(token) || aboutPackages;
-      tied = who !== null && (!who.guessed || aboutDependencies || quotedName) && bareNumberOk && add(who, token, true);
+      // A word that is no package, or English prose ("one", "patch", "release"): passed over.
+      if (!who || (who.guessed && !quotedName && (ENGLISH_TASK_WORDS.has(w) || STOP_WORDS.has(w)))) continue;
+      const bareNumberOk = !who.guessed || quotedName || !BARE_NUMBER.test(token) || aboutPackages;
+      tied = (!who.guessed || aboutDependencies || quotedName) && bareNumberOk && add(who, token, true);
       break;
     }
     // "version 1.2.3 of name"
     if (!tied && aboutDependencies && words[i - 1] === "version" && words[i + 1] === "of" && raw[i + 2]) tied = add(nameFor(raw[i + 2], deps, fallback, false, stated), token, true);
-    if (!tied && DOTTED.test(token)) unread.push(token);
+    if (!tied && DOTTED.test(token)) unread.push(specText(token));
   }
   const requested = [...found.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...r }) => r);
-  return { requested: requested.slice(0, MAX_REQUESTED), unread: [...new Set(unread)] };
+  return { requested, unread: [...new Set(unread)] };
 }
 
 /**

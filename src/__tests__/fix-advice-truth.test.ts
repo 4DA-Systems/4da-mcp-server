@@ -612,6 +612,7 @@ describe("6. M7 regressions on the scan: the two false 'upgrade the parent' clai
   it("navcal: glob through sucrase through tailwindcss is `npm update sucrase`, no tailwindcss upgrade", async () => {
     ADVISORIES.glob = [adv("GHSA-3g3m-2fjr-6pw4", "glob", fixedIn("11.1.0"))];
     NPM.glob = { latest: "11.1.0", versions: { "10.3.10": {}, "10.5.0": {}, "11.0.0": {}, "11.1.0": {} } };
+    NPM.tinyglobby = { latest: "0.2.15", versions: { "0.2.11": {}, "0.2.15": {} } }; // sucrase 3.35.1 narrowly ranges it (round 8, B6)
     NPM.sucrase = { latest: "3.35.1", versions: { "3.35.0": { dependencies: { glob: "^10.3.10" } }, "3.35.1": { dependencies: { tinyglobby: "^0.2.11" } } } };
     NPM.tailwindcss = { latest: "3.4.19", versions: { "3.4.18": { dependencies: { sucrase: "^3.35.0" } }, "3.4.19": { dependencies: { sucrase: "^3.35.1" } } } };
     npmProject({ tailwindcss: "^3.4.1" }, {

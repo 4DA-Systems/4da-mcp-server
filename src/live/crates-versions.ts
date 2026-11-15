@@ -180,7 +180,7 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
     const now = Date.now();
     const start = Math.max(now, this.nextSlotMs);
     this.nextSlotMs = start + this.minIntervalMs;
-    if (start > now) await new Promise((resolve) => setTimeout(resolve, start - now));
+    if (start > now) await new Promise((resolve) => setTimeout(resolve, start - now).unref());
   }
 
   /** version -> runtime dependency names (normal + build; renamed deps by their real crate name). */

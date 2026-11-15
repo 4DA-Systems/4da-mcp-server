@@ -242,6 +242,18 @@ describe("1. upgrade_planner under an OSV.dev batch failure: no unconfirmed targ
     const r = await plan({ risk_threshold: "critical" });
     expect(r.recommendations.map((s: { package: string }) => s.package)).toContain("express");
   });
+
+  it("r8: the whole OSV scan does not finish in the call: rows are unknown risk, never low, and risk_threshold high keeps them", async () => {
+    expressProject();
+    const li = await liveFor();
+    vi.spyOn(li, "ensureVulnerabilities").mockResolvedValue(null as never);
+    vi.spyOn(li, "getVulnerabilities").mockReturnValue(null as never);
+    const r = (await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50, risk_threshold: "high" }, li)) as Record<string, any>;
+    const row = r.recommendations.find((s: { package: string }) => s.package === "express");
+    expect(row).toBeTruthy();
+    expect(row.risk).toBe("unknown");
+    expect(row.reasons[0]).toMatch(/^NOT CHECKED: /);
+  });
 });
 
 describe("2. a call that runs out of time keeps the findings already in hand", () => {

@@ -58,11 +58,16 @@ import {
   pep508DirectReferences,
   privateDirectReference,
   declaredMirror,
+  findLinksLabel,
   goProxyPrivate,
+  isPublicFindLinks,
   npmEnvConfig,
   npmGlobalConfigFiles,
+  pipEnvIndexes,
+  pipfilePrivate,
   publicMirrorHosts,
   pythonIndexConfig,
+  resolvePipOption,
   uvConfigFiles,
   uvEnvIndexes,
   yarnEnvConfig,
@@ -90,6 +95,12 @@ export interface PrivateIndexEntry {
   registry: string;
   /** Absolute path of the lockfile. */
   file: string;
+  /**
+   * Local code (a path dependency, a workspace member, a Go `replace` to a directory): never a
+   * registry release, so its name is never sent, but it does not make a registry copy of the same
+   * name private (R8).
+   */
+  local?: true;
 }
 
 /** Scopes one `.npmrc` maps to a non-public registry (`@acme:registry=...`). */
@@ -419,39 +430,76 @@ export function pipConfigFiles(env: NodeJS.ProcessEnv, platform: NodeJS.Platform
   return [...new Set(files)];
 }
 
-/** `index-url` and `extra-index-url` from a pip config file's [global] and [install] sections. */
+/**
+ * `index-url`, `extra-index-url` and `find-links` from a pip config file's [global] and [install]
+ * sections. A value may continue on indented lines, for every key (INI continuation, as Python's
+ * configparser reads it): `index-url =` with the URL on the next line set a private index that was
+ * never read, and the requirements' names reached OSV.dev and pypi.org (R8, B4). A `find-links`
+ * location that is not public counts as an extra index. Keys are read as pip's options are, an
+ * unambiguous prefix included (resolvePipOption).
+ */
 export function pipConfigIndexes(content: string): { index: string | null; extra: string[] } {
   let section = "";
   let index: string | null = null;
   const extra: string[] = [];
-  let continuing: "extra" | null = null;
-  for (const raw of content.split(/\r?\n/)) {
-    const line = raw.replace(/[#;].*$/, "");
-    const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+  let current: { option: string | null; values: string[] } | null = null;
+  const flush = () => {
+    if (!current) return;
+    if (current.option === "index-url" && current.values[0]) index = current.values[0];
+    if (current.option === "extra-index-url") pushAll(extra, current.values);
+    if (current.option === "find-links") pushAll(extra, current.values.filter((v) => !isPublicFindLinks(v)).map(findLinksLabel));
+    current = null;
+  };
+  for (const line of content.split(/\r?\n/)) {
+    // Comment lines, and a `#` or `;` comment after whitespace.
+    if (/^\s*[#;]/.test(line)) continue;
+    const raw = line.replace(/\s+[#;].*$/, "");
+    const header = /^\s*\[([^\]]+)\]\s*$/.exec(raw);
     if (header) {
+      flush();
       section = header[1].trim().toLowerCase();
-      continuing = null;
       continue;
     }
-    if (section !== "global" && section !== "install") continue;
-    const kv = /^([\w-]+)\s*[=:]\s*(.*)$/.exec(line.trim());
-    if (kv && /^\S/.test(line)) {
-      const key = kv[1].toLowerCase().replaceAll("_", "-");
-      const values = kv[2].split(/\s+/).filter(Boolean);
-      if (key === "index-url" && values[0]) index = values[0];
-      if (key === "extra-index-url") pushAll(extra, values);
-      continuing = key === "extra-index-url" ? "extra" : null;
-    } else if (continuing === "extra" && line.trim()) {
-      pushAll(extra, line.trim().split(/\s+/));
+    if (/^\s/.test(raw)) {
+      // A continuation line: more of the value of the key above it.
+      if (current && raw.trim()) pushAll(current.values, raw.trim().split(/\s+/));
+      continue;
     }
+    flush();
+    if (section !== "global" && section !== "install") continue;
+    const kv = /^([\w.-]+)\s*[=:]\s*(.*)$/.exec(raw.trim());
+    if (!kv) continue;
+    current = { option: resolvePipOption(kv[1]), values: kv[2].split(/\s+/).filter(Boolean) };
   }
+  flush();
   return { index, extra };
 }
 
 /** The environment that decides the rules: a change to any of them re-reads them. */
 const RULE_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE", "FOURDA_PRIVATE_PACKAGES", "FOURDA_PUBLIC_MIRRORS", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOPROXY", "GOENV", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "VIRTUAL_ENV", "ProgramData", "PROGRAMDATA", "ALLUSERSPROFILE", "PREFIX", "CARGO_HOME", "UV_CONFIG_FILE", "UV_NO_CONFIG", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_INDEX", "UV_EXTRA_INDEX_URL"];
-/** Variables read by prefix, any case: npm's `npm_config_*` and yarn's `YARN_*`. */
-const RULE_ENV_PREFIX = /^(?:npm_config_|yarn_)/i;
+/** Variables read by prefix, any case: npm's `npm_config_*`, yarn's `YARN_*` and pip's `PIP_*`. */
+const RULE_ENV_PREFIX = /^(?:npm_config_|yarn_|pip_)/i;
+
+/**
+ * A setting read from a file inside a directory applies to that directory and below (`scope`); one
+ * from the user's or the system's configuration, or the environment, applies everywhere (null).
+ */
+interface ScopedSetting extends PrivateSetting {
+  scope: string | null;
+}
+
+/** Whether `dir` is `scope` or below it (any directory when `scope` is null). */
+function within(dir: string, scope: string | null): boolean {
+  if (scope === null) return true;
+  const rel = path.relative(scope, dir);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/** The first setting that applies to `dir` (null: only the user's, the system's, the environment's). */
+function settingFor(list: readonly ScopedSetting[], dir: string | null): PrivateSetting | null {
+  const hit = list.find((s) => (dir === null ? s.scope === null : within(path.resolve(dir), s.scope)));
+  return hit ? { url: hit.url, from: hit.from } : null;
+}
 
 /** The environment the rules depend on, as one string. */
 const envKeyOf = (env: NodeJS.ProcessEnv): string =>
@@ -496,24 +544,29 @@ export class PrivatePackageRules {
   /** The first such extra index and where it is set, for the reason line. */
   readonly pipExtraFrom: PrivateSetting | null = null;
   /**
-   * An index uv, Poetry or PDM consults for any name that is not public: a `[[tool.uv.index]]` that
-   * is the default or not `explicit`, `[tool.uv] index-url` / `extra-index-url`, `uv.toml` (the
+   * Indexes uv, Poetry, PDM or pipenv consult for any name that are not public: a `[[tool.uv.index]]`
+   * that is the default or not `explicit`, `[tool.uv] index-url` / `extra-index-url`, `uv.toml` (the
    * project's, the user's, the system's), UV_DEFAULT_INDEX / UV_INDEX_URL / UV_INDEX /
-   * UV_EXTRA_INDEX_URL, a Poetry source that is not `explicit`, a PDM source (R7, 2).
+   * UV_EXTRA_INDEX_URL, a Poetry source that is not `explicit`, a PDM source (R7, 2), a Pipfile
+   * `[[source]]` (R8). Each applies under the directory its file is in (pythonIndexFor).
    */
-  readonly pythonIndex: PrivateSetting | null = null;
+  private readonly pythonIndexes: ScopedSetting[] = [];
   /**
-   * The default npm registry when it is not public: `registry=` in any `.npmrc` npm reads (the
+   * Default npm registries that are not public: `registry=` in any `.npmrc` npm reads (the
    * project's and those above it, the user's, the global one), `npm_config_registry`, yarn's
-   * `npmRegistryServer` (or YARN_NPM_REGISTRY_SERVER), bun's `[install] registry`.
+   * `npmRegistryServer` (or YARN_NPM_REGISTRY_SERVER), bun's `[install] registry`. Each applies
+   * under the directory its file is in (npmRegistryFor).
    */
-  readonly npmRegistry: PrivateSetting | null = null;
+  private readonly npmDefaults: ScopedSetting[] = [];
   /** GOPROXY naming a proxy that is not public (the environment, else the `go env -w` file). */
   readonly goProxy: PrivateSetting | null = null;
-  /** The registry a Cargo configuration replaces crates.io with, when it is not crates.io. */
-  readonly cargoMirror: PrivateSetting | null = null;
+  /** Cargo configuration files (`.cargo/config.toml` at every level, CARGO_HOME's), each with the directory it applies under. */
+  private readonly cargoConfigs: Array<{ file: string; content: string; scope: string | null }> = [];
+  private readonly cargoMirrors = new Map<string, PrivateSetting | null>();
   /** Crates a Cargo configuration `[patch.*]` takes from git or another registry, by normalised name. */
   private readonly cargoPatched = new Map<string, string>();
+  /** Packages a Pipfile with a source that is not public declares, PEP 503-normalised, with why. */
+  private readonly pipfileNames = new Map<string, string>();
   /** Every file the rules were read from (present or not), with its signature then. */
   private readonly inputs: Map<string, FileSignature>;
   private readonly envKey: string;
@@ -536,34 +589,34 @@ export class PrivatePackageRules {
     const isMirror = (url: string) => declaredMirror(url, mirrors);
     // Each directory and every one above it: npm applies a workspace root's `.npmrc` to every member,
     // and a server started in `packages/app` sent `@acme/vault-core` that `../../.npmrc` made private
-    // (blind audit round 3, B2). Reading more files can only add private names.
+    // (blind audit round 3, B2). Reading more files can only add private names. A file in a directory
+    // applies to that directory and below (ScopedSetting): a `.cargo/config.toml` or PDM source in one
+    // project of a tree made every crate and PyPI package of its siblings private (R8, nit).
     const withParents = [...new Set(dirs.flatMap((d) => ancestorsOf(path.resolve(d))))];
     const scopeDirs = [...new Set([...withParents, ...memberDirs.map((d) => path.resolve(d))])];
     const npmEnv = npmEnvConfig(env);
+    type Scoped = { file: string; scope: string | null };
+    const inDirs = (name: string): Scoped[] => scopeDirs.map((d) => ({ file: path.resolve(d, name), scope: d }));
+    const global = (files: Array<string | null>): Scoped[] => files.filter((f): f is string => Boolean(f)).map((f) => ({ file: path.resolve(f), scope: null }));
     // The user's `.npmrc` (`npm_config_userconfig` in any case) and the global one (R7, 5).
-    const npmrcs = [
-      ...scopeDirs.map((d) => path.join(d, ".npmrc")),
-      npmEnv.userconfig || (home ? path.join(home, ".npmrc") : null),
-      ...npmGlobalConfigFiles(env),
-    ].filter((f): f is string => Boolean(f));
+    const npmrcs = [...inDirs(".npmrc"), ...global([npmEnv.userconfig || (home ? path.join(home, ".npmrc") : null), ...npmGlobalConfigFiles(env)])];
     // yarn reads its rc file (YARN_RC_FILENAME) in the project and above, and in the home directory.
     const yarnName = yarnRcFilename(env);
-    const yarnrcs = [...scopeDirs.map((d) => path.resolve(d, yarnName)), ...(home ? [path.resolve(home, yarnName)] : [])];
+    const yarnrcs = [...inDirs(yarnName), ...global([home ? path.join(home, yarnName) : null])];
     // bun reads the project's bunfig.toml and the user's ($XDG_CONFIG_HOME/.bunfig.toml, ~/.bunfig.toml).
     const xdg = env.XDG_CONFIG_HOME || null;
-    const bunfigs = [
-      ...scopeDirs.map((d) => path.resolve(d, "bunfig.toml")),
-      ...(xdg ? [path.resolve(xdg, ".bunfig.toml")] : []),
-      ...(home ? [path.resolve(home, ".bunfig.toml")] : []),
-    ];
+    const bunfigs = [...inDirs("bunfig.toml"), ...global([xdg ? path.join(xdg, ".bunfig.toml") : null, home ? path.join(home, ".bunfig.toml") : null])];
     const goFile = goEnvPath(env);
     const pipFiles = pipConfigFiles(env);
-    // uv finds `uv.toml` and `pyproject.toml` in the project and the directories above it.
-    const uvFiles = [...withParents.map((d) => path.join(d, "uv.toml")), ...uvConfigFiles(env)];
-    const pyprojects = withParents.map((d) => path.join(d, "pyproject.toml"));
-    const cargoFiles = cargoConfigFiles(dirs, env, ancestorsOf);
+    // uv finds `uv.toml` and `pyproject.toml` in the project and the directories above it; pipenv the Pipfile.
+    const uvFiles = [...withParents.map((d) => ({ file: path.join(d, "uv.toml"), scope: d })), ...global(uvConfigFiles(env))];
+    const pyprojects = withParents.map((d) => ({ file: path.join(d, "pyproject.toml"), scope: d }));
+    const pipfiles = inDirs("Pipfile");
+    const cargoHome = env.CARGO_HOME?.trim() || (home ? path.join(home, ".cargo") : null);
+    const cargoGlobal = new Set(cargoHome ? [path.resolve(cargoHome, "config.toml"), path.resolve(cargoHome, "config")] : []);
+    const cargoFiles = cargoConfigFiles(dirs, env, ancestorsOf).map((file) => ({ file, scope: cargoGlobal.has(file) ? null : path.dirname(path.dirname(file)) }));
     // Signatures first: a write that lands while a file is read still reads as a change.
-    this.inputs = signatureMap([...npmrcs.map((f) => path.resolve(f)), ...yarnrcs, ...bunfigs, ...(goFile ? [goFile] : []), ...pipFiles, ...uvFiles, ...pyprojects, ...cargoFiles]);
+    this.inputs = signatureMap([...[...npmrcs, ...yarnrcs, ...bunfigs, ...uvFiles, ...pyprojects, ...pipfiles, ...cargoFiles].map((f) => f.file), ...(goFile ? [goFile] : []), ...pipFiles]);
     this.envKey = envKeyOf(env);
 
     // pip. Later files win in pip, but which one wins can depend on a file this server cannot see
@@ -578,46 +631,61 @@ export class PrivatePackageRules {
       if (read.index) noteIndex(read.index, file);
       pushAll(extra, read.extra.map((url) => ({ url, from: file })));
     }
-    if (env.PIP_INDEX_URL?.trim()) noteIndex(env.PIP_INDEX_URL.trim(), "PIP_INDEX_URL");
-    pushAll(extra, (env.PIP_EXTRA_INDEX_URL ?? "").split(/\s+/).filter(Boolean).map((url) => ({ url, from: "PIP_EXTRA_INDEX_URL" })));
+    // PIP_INDEX_URL, PIP_EXTRA_INDEX_URL, PIP_FIND_LINKS, and the prefixes pip's options accept (R8, B4).
+    const pipEnv = pipEnvIndexes(env);
+    for (const setting of pipEnv.index) noteIndex(setting.url.trim(), setting.from);
+    pushAll(extra, pipEnv.extra);
     const chosen = pipIndex as PrivateSetting | null;
     this.pipIndex = chosen && !isPublicPypiIndex(chosen.url) && !isMirror(chosen.url) ? { url: sourceLabel(chosen.url), from: chosen.from } : null;
     const extraPrivate = extra.filter((e) => !isPublicExtraPypiIndex(e.url) && !isMirror(e.url));
     this.pipExtra = [...new Set(extraPrivate.map((e) => sourceLabel(e.url)))];
     this.pipExtraFrom = extraPrivate.length > 0 ? { url: sourceLabel(extraPrivate[0].url), from: extraPrivate[0].from } : null;
 
-    // uv, Poetry, PDM.
-    const python: PrivateSetting[] = [...uvEnvIndexes(env)];
-    for (const file of uvFiles) pushAll(python, pythonIndexConfig(safeRead(file), "uv.toml").map((url) => ({ url, from: file })));
-    for (const file of pyprojects) pushAll(python, pythonIndexConfig(safeRead(file), "pyproject").map((url) => ({ url, from: file })));
-    const pythonPrivate = python.find((p) => !isMirror(p.url));
-    this.pythonIndex = pythonPrivate ? { url: sourceLabel(pythonPrivate.url), from: pythonPrivate.from } : null;
+    // uv, Poetry, PDM, pipenv.
+    const python: ScopedSetting[] = uvEnvIndexes(env).map((s) => ({ ...s, scope: null }));
+    for (const { file, scope } of uvFiles) pushAll(python, pythonIndexConfig(safeRead(file), "uv.toml").map((url) => ({ url, from: file, scope })));
+    for (const { file, scope } of pyprojects) pushAll(python, pythonIndexConfig(safeRead(file), "pyproject").map((url) => ({ url, from: file, scope })));
+    for (const { file, scope } of pipfiles) {
+      const read = pipfilePrivate(safeRead(file));
+      const index = read.indexes.find((url) => !isMirror(url));
+      if (!index) continue;
+      python.push({ url: index, from: file, scope });
+      // Its packages are private wherever they are named: no lockfile or tree group may list them.
+      for (const name of read.names) if (!this.pipfileNames.has(pep503(name))) this.pipfileNames.set(pep503(name), `${file} installs it from ${sourceLabel(index)} (a Pipfile source), not pypi.org`);
+    }
+    pushAll(this.pythonIndexes, python.filter((p) => !isMirror(p.url)).map((p) => ({ ...p, url: sourceLabel(p.url) })));
 
     // npm, yarn, bun.
-    const npmDefaults: PrivateSetting[] = [];
+    const npmDefaults: ScopedSetting[] = [];
     for (const { scope, from } of npmEnv.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, from);
-    if (npmEnv.registry) npmDefaults.push(npmEnv.registry);
-    for (const file of new Set(npmrcs.map((f) => path.resolve(f)))) {
+    if (npmEnv.registry) npmDefaults.push({ ...npmEnv.registry, scope: null });
+    const seen = new Set<string>();
+    for (const { file, scope } of npmrcs) {
+      if (seen.has(file)) continue;
+      seen.add(file);
       const read = npmrcRead(safeRead(file));
-      for (const scope of read.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
-      if (read.defaultRegistry && !isPublicNpmRegistry(read.defaultRegistry)) npmDefaults.push({ url: read.defaultRegistry, from: file });
+      for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      if (read.defaultRegistry && !isPublicNpmRegistry(read.defaultRegistry)) npmDefaults.push({ url: read.defaultRegistry, from: file, scope });
     }
-    for (const file of new Set(yarnrcs)) {
+    for (const { file, scope } of yarnrcs) {
+      if (seen.has(file)) continue;
+      seen.add(file);
       const text = safeRead(file);
-      for (const scope of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
+      for (const s of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
       const server = yarnrcRegistry(text);
-      if (server && !isPublicNpmRegistry(server)) npmDefaults.push({ url: server, from: file });
+      if (server && !isPublicNpmRegistry(server)) npmDefaults.push({ url: server, from: file, scope });
     }
     const yarnEnv = yarnEnvConfig(env, (text) => parseFlow(text).value);
     for (const { scope, from } of yarnEnv.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, from);
-    if (yarnEnv.registry) npmDefaults.push(yarnEnv.registry);
-    for (const file of new Set(bunfigs)) {
+    if (yarnEnv.registry) npmDefaults.push({ ...yarnEnv.registry, scope: null });
+    for (const { file, scope } of bunfigs) {
+      if (seen.has(file)) continue;
+      seen.add(file);
       const read = bunfigRegistries(safeRead(file));
-      for (const scope of read.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, file);
-      if (read.registry && !isPublicNpmRegistry(read.registry)) npmDefaults.push({ url: read.registry, from: file });
+      for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      if (read.registry && !isPublicNpmRegistry(read.registry)) npmDefaults.push({ url: read.registry, from: file, scope });
     }
-    const npmPrivate = npmDefaults.find((d) => hostOf(d.url) !== null && !isMirror(d.url));
-    this.npmRegistry = npmPrivate ? { url: sourceLabel(npmPrivate.url), from: npmPrivate.from } : null;
+    pushAll(this.npmDefaults, npmDefaults.filter((d) => hostOf(d.url) !== null && !isMirror(d.url)).map((d) => ({ ...d, url: sourceLabel(d.url) })));
 
     // Go.
     const fromFile = goEnvFile(goFile);
@@ -632,8 +700,9 @@ export class PrivatePackageRules {
     this.goProxy = proxy ? { url: sourceLabel(proxy), from: proxyFromEnv !== undefined ? "GOPROXY" : `GOPROXY in ${goFile}` } : null;
 
     // Cargo.
-    const cargo = cargoConfigPrivate(cargoFiles.map((file) => ({ file, content: safeRead(file) })));
-    this.cargoMirror = cargo.mirror && !isMirror(cargo.mirror.url) ? cargo.mirror : null;
+    pushAll(this.cargoConfigs, cargoFiles.map(({ file, scope }) => ({ file, scope, content: safeRead(file) })));
+    // `[patch]` names one crate: private wherever it is named. The source replacement is per directory (cargoMirrorFor).
+    const cargo = cargoConfigPrivate(this.cargoConfigs);
     for (const p of cargo.patched) {
       const key = normName("crates.io", p.name);
       if (!this.cargoPatched.has(key)) this.cargoPatched.set(key, `${p.file} patches it from ${p.registry}, not crates.io`);
@@ -668,11 +737,12 @@ export class PrivatePackageRules {
       [...this.publicMirrors].sort(),
       this.pipIndex?.url ?? "",
       [...this.pipExtra].sort(),
-      this.pythonIndex?.url ?? "",
-      this.npmRegistry?.url ?? "",
+      this.pythonIndexes.map((s) => `${s.scope ?? "*"}|${s.url}`),
+      this.npmDefaults.map((s) => `${s.scope ?? "*"}|${s.url}`),
       this.goProxy?.url ?? "",
-      this.cargoMirror?.url ?? "",
+      this.cargoConfigs.filter((c) => c.content).map((c) => `${c.scope ?? "*"}|${c.content}`),
       [...this.cargoPatched.keys()].sort(),
+      [...this.pipfileNames.keys()].sort(),
     ]);
   }
 
@@ -705,24 +775,57 @@ export class PrivatePackageRules {
       }
     }
     if (ecosystem === "crates.io" && this.cargoPatched.size > 0) return this.cargoPatched.get(normName("crates.io", name)) ?? null;
+    if (ecosystem === "PyPI" && this.pipfileNames.size > 0) return this.pipfileNames.get(pep503(name)) ?? null;
     return null;
+  }
+
+  /** The default npm registry that is not public and applies to `dir` (null: the user's, global or environment setting only). */
+  npmRegistryFor(dir: string | null): PrivateSetting | null {
+    return settingFor(this.npmDefaults, dir);
+  }
+
+  /** The index uv, Poetry, PDM or pipenv consults for any name that is not public and applies to `dir`. */
+  pythonIndexFor(dir: string | null): PrivateSetting | null {
+    return settingFor(this.pythonIndexes, dir);
+  }
+
+  /**
+   * The registry the Cargo configuration that applies to `dir` replaces crates.io with, when it is
+   * not crates.io: the `.cargo/config.toml` files in `dir` and above (nearest first), then CARGO_HOME's.
+   */
+  cargoMirrorFor(dir: string | null): PrivateSetting | null {
+    const key = dir === null ? "*" : path.resolve(dir);
+    if (this.cargoMirrors.has(key)) return this.cargoMirrors.get(key) ?? null;
+    const files = this.cargoConfigs
+      .filter((c) => (dir === null ? c.scope === null : within(key, c.scope)))
+      .sort((a, b) => (b.scope?.length ?? -1) - (a.scope?.length ?? -1));
+    const mirror = cargoConfigPrivate(files).mirror;
+    const result = mirror && !declaredMirror(mirror.url, this.publicMirrors) ? mirror : null;
+    this.cargoMirrors.set(key, result);
+    return result;
   }
 
   /**
    * Why every package of `ecosystem` this project installs is private, or null: a default registry,
    * index or proxy (or one added beside the public one) that is not public and that the package
-   * manager consults for any name (R7: one policy for npm, PyPI, Go and Cargo). For PyPI only what
-   * pip, uv or Poetry resolves at install time is judged: a lockfile records each package's index.
+   * manager consults for any name (R7: one policy for npm, PyPI, Go and Cargo). `dir` is the directory
+   * whose configuration applies (a group's own directory and above, the user's and the environment's;
+   * null: only the latter). For PyPI the settings are not judged when `indexRecorded`: uv.lock,
+   * poetry.lock and Pipfile.lock record each package's index. pdm.lock records none, and a
+   * `[[tool.pdm.source]]` with a pdm.lock sent every private name (R8, B4).
    */
-  ecosystemWide(ecosystem: string, fromLockfile: boolean): string | null {
+  ecosystemWide(ecosystem: string, dir: string | null, indexRecorded: boolean): string | null {
     const hint = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
-    if (ecosystem === "npm" && this.npmRegistry) return `npm installs it from ${this.npmRegistry.url} (${this.npmRegistry.from}), not the public registry; ${hint}`;
+    const npm = ecosystem === "npm" ? this.npmRegistryFor(dir) : null;
+    if (npm) return `npm installs it from ${npm.url} (${npm.from}), not the public registry; ${hint}`;
     if (ecosystem === "Go" && this.goProxy) return `go downloads it through ${this.goProxy.url} (${this.goProxy.from}), not the public proxy; ${hint}`;
-    if (ecosystem === "crates.io" && this.cargoMirror) return `cargo replaces crates.io with ${this.cargoMirror.url} (${this.cargoMirror.from}); ${hint}`;
-    if (ecosystem === "PyPI" && !fromLockfile) {
+    const cargo = ecosystem === "crates.io" ? this.cargoMirrorFor(dir) : null;
+    if (cargo) return `cargo replaces crates.io with ${cargo.url} (${cargo.from}); ${hint}`;
+    if (ecosystem === "PyPI" && !indexRecorded) {
       if (this.pipIndex) return `pip installs it from ${this.pipIndex.url} (${this.pipIndex.from}), not pypi.org`;
       if (this.pipExtraFrom) return `pip may install it from ${this.pipExtraFrom.url} (an extra index, ${this.pipExtraFrom.from}), not pypi.org`;
-      if (this.pythonIndex) return `uv or Poetry may install it from ${this.pythonIndex.url} (${this.pythonIndex.from}), not pypi.org; ${hint}`;
+      const python = this.pythonIndexFor(dir);
+      if (python) return `uv, Poetry, PDM or pipenv may install it from ${python.url} (${python.from}), not pypi.org; ${hint}`;
     }
     return null;
   }
@@ -741,10 +844,11 @@ export class PrivatePackageRules {
    * mirror and unscoped names were sent (review of #64, S5). Said in every coverage note and
    * dependency_check answer that concerns npm.
    */
-  npmRegistryNotice(): string | null {
-    if (!this.npmRegistry) return null;
-    const host = hostOf(this.npmRegistry.url) ?? this.npmRegistry.url;
-    return `Your npm registry is ${host} (${this.npmRegistry.from}), not the public registry. Any package may be published only there, so the npm packages of this project were treated as private: never sent, and not checked. If ${host} only mirrors registry.npmjs.org, set FOURDA_PUBLIC_MIRRORS=${host} to check them.`;
+  npmRegistryNotice(dirs: ReadonlyArray<string | null>): string | null {
+    const registry = dirs.map((d) => this.npmRegistryFor(d)).find(Boolean);
+    if (!registry) return null;
+    const host = hostOf(registry.url) ?? registry.url;
+    return `Your npm registry is ${host} (${registry.from}), not the public registry. Any package may be published only there, so the npm packages of this project were treated as private: never sent, and not checked. If ${host} only mirrors registry.npmjs.org, set FOURDA_PUBLIC_MIRRORS=${host} to check them.`;
   }
 
   /** Which file maps `scope` (`@acme`) to a private registry, or null. */
@@ -754,7 +858,7 @@ export class PrivatePackageRules {
 
   /** Whether any rule exists (a project with none skips the per-name checks). */
   get empty(): boolean {
-    return this.npmScopes.size === 0 && this.goPatterns.length === 0 && this.listed.length === 0 && this.cargoPatched.size === 0;
+    return this.npmScopes.size === 0 && this.goPatterns.length === 0 && this.listed.length === 0 && this.cargoPatched.size === 0 && this.pipfileNames.size === 0;
   }
 }
 
@@ -861,18 +965,20 @@ export function npmLockPrivateSources(dir: string, mirrorHosts: ReadonlySet<stri
  * `[target.<cfg>.dependencies]`, `[workspace.dependencies]`, the `[dependencies.<name>]` form) and
  * in `[patch.<source>]`. With no Cargo.lock the exact pin `omega-ledger = { version = "=1.2.0",
  * registry = "acme" }` was sent to OSV.dev and crates.io (blind audit round 4); a `git =` one too (R7, 4).
+ * A `path =` dependency is local code, never a crates.io release: its name is private too (R8).
  */
 export function cargoManifestPrivate(content: string): Array<{ name: string; registry: string }> {
   const out: Array<{ name: string; registry: string }> = [];
   const isDepTable = (name: string) => /(?:^|\.)(?:dev-|build-)?dependencies$/.test(name) || /^patch\.(?:[^.]+|.+:\/\/.+)$/.test(name);
-  const fromElsewhere = (registry: string | null, git: string | null): string | null => {
+  const fromElsewhere = (registry: string | null, git: string | null, local: string | null = null): string | null => {
     if (git) return git;
+    if (local) return `the local path ${local}`;
     return registry && registry !== "crates-io" && !isPublicCratesSource(registry) ? registry : null;
   };
   let table = "";
-  let single: { key: string; pkg: string | null; registry: string | null; git: string | null } | null = null;
+  let single: { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null } | null = null;
   const flush = () => {
-    const where = single ? fromElsewhere(single.registry, single.git) : null;
+    const where = single ? fromElsewhere(single.registry, single.git, single.local) : null;
     if (single && where) out.push({ name: single.pkg ?? single.key, registry: where });
     single = null;
   };
@@ -882,7 +988,7 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
       flush();
       table = header.name;
       const sub = /^(.*(?:^|\.)(?:dev-|build-)?dependencies|patch\.(?:[^.]+|.+:\/\/.+))\.([^.]+)$/.exec(table);
-      if (sub && !header.array) single = { key: sub[2], pkg: null, registry: null, git: null };
+      if (sub && !header.array) single = { key: sub[2], pkg: null, registry: null, git: null, local: null };
       continue;
     }
     const kv = tomlKeyValue(line);
@@ -890,11 +996,12 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
     if (single) {
       if (kv.key === "registry" || kv.key === "registry-index") single.registry = tomlString(kv.value);
       if (kv.key === "git") single.git = tomlString(kv.value);
+      if (kv.key === "path") single.local = tomlString(kv.value);
       if (kv.key === "package") single.pkg = tomlString(kv.value);
       continue;
     }
     if (!isDepTable(table) || !kv.value.startsWith("{")) continue;
-    const where = fromElsewhere(inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index"), inlineKey(kv.value, "git"));
+    const where = fromElsewhere(inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index"), inlineKey(kv.value, "git"), inlineKey(kv.value, "path"));
     if (where) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry: where });
   }
   flush();
@@ -984,18 +1091,27 @@ export function pyprojectManifestPrivate(content: string): Array<{ name: string;
  * pyproject.toml.
  */
 export function manifestPrivateSources(dir: string, ecosystem: string): PrivateIndexEntry[] {
-  const read = (file: string, parse: (content: string) => Array<{ name: string; registry: string }>): PrivateIndexEntry[] => {
+  const read = (file: string, parse: (content: string) => Array<{ name: string; registry: string; local?: true }>): PrivateIndexEntry[] => {
     const text = safeRead(file);
     if (!text) return [];
     try {
-      return parse(text).map((p) => ({ name: p.name, version: null, registry: p.registry, file }));
+      return parse(text).map((p) => ({ name: p.name, version: null, registry: p.registry, file, ...(p.local ? { local: true as const } : {}) }));
     } catch {
       return [];
     }
   };
   if (ecosystem === "crates.io") {
     const cargo = (text: string) =>
-      cargoManifestPrivate(text).map((p) => ({ name: p.name, registry: /^[a-z+]*https?:\/\//i.test(p.registry) || /^(?:ssh|git):/i.test(p.registry) ? sourceLabel(p.registry) : `the "${p.registry}" registry` }));
+      cargoManifestPrivate(text).map((p) => ({
+        name: p.name,
+        ...(p.registry.startsWith("the local path ") ? { local: true as const } : {}),
+        registry: p.registry.startsWith("the local path ") ? p.registry : /^[a-z+]*https?:\/\//i.test(p.registry) || /^(?:ssh|git):/i.test(p.registry) ? sourceLabel(p.registry) : `the "${p.registry}" registry`,
+      }));
+    // The workspace's own crates (the root package and every member) are local code too (R8).
+    const ownName = (text: string) => {
+      const name = cargoPackageName(text);
+      return name ? [{ name, registry: "a local workspace crate (not a crates.io release)", local: true as const }] : [];
+    };
     const root = path.join(dir, "Cargo.toml");
     let members: string[] = [];
     try {
@@ -1003,10 +1119,25 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
     } catch {
       members = [];
     }
-    return [root, ...members].flatMap((file) => read(file, cargo));
+    return [root, ...members].flatMap((file) => [...read(file, cargo), ...read(file, ownName)]);
   }
   if (ecosystem === "PyPI") return read(path.join(dir, "pyproject.toml"), pyprojectManifestPrivate);
   return [];
+}
+
+/** A Cargo.toml's `[package] name`, or null. */
+function cargoPackageName(content: string): string | null {
+  let table = "";
+  for (const line of tomlLines(content)) {
+    const header = tomlHeader(line);
+    if (header) {
+      table = header.name;
+      continue;
+    }
+    const kv = tomlKeyValue(line);
+    if (kv && table === "package" && kv.key === "name") return tomlString(kv.value);
+  }
+  return null;
 }
 
 /** Lockfiles are bounded by the readers (bounded-read.ts); this pass reads at most this much. */

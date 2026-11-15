@@ -139,6 +139,7 @@ export async function vetOfferedReleases(
       let timer: ReturnType<typeof setTimeout> | undefined;
       const late = new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+        timer.unref?.();
       });
       try {
         const vet = await Promise.race([vetOfferedRelease(sources, item.ecosystem, item.name, item.installed, item.offered).catch(() => null), late]);

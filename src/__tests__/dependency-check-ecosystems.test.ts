@@ -200,9 +200,10 @@ describe("constraint checks: the G7 pin tasks", () => {
     expect(r.reason).toMatch(/Safe on 7\.5\.10's line \(7\.x\): smallest 7\.5\.11, newest 7\.5\.13/);
   });
 
-  it("with `from`, a constraint picks the smallest safe upgrade, not the newest", async () => {
+  it("with `from`, a constraint is judged at what it installs (the newest), and names the smallest safe upgrade", async () => {
+    // Round 8 (B2): npm installs the highest release ^7.4.6 admits, so that is the release judged.
     const r = (await check([{ ecosystem: "npm", package: "ws", from: "7.4.6", to: "^7.4.6" }])).results[0];
-    expect(r).toMatchObject({ to: "7.5.11", verdict: "proceed" });
+    expect(r).toMatchObject({ to: "7.5.13", verdict: "proceed" });
     expect(r.range_check!.smallest_safe_upgrade).toBe("7.5.11");
   });
 
@@ -321,8 +322,10 @@ describe("PyPI", () => {
     ]);
     expect(out.results[0].verdict).toBe("avoid");
     expect(signal(out.results[0], "yanked_or_deprecated").evidence).toContain("yanked");
-    expect(out.results[1]).toMatchObject({ to: "1.0.0", verdict: "proceed" });
+    // Round 8 (B2): pip installs the newest release 1.* admits, 1.1.0, inside the hold: wait, and pin 1.0.0.
+    expect(out.results[1]).toMatchObject({ to: "1.1.0", verdict: "wait" });
     expect(out.results[1].range_check!.safe_versions).toEqual(["1.0.0", "1.1.0"]);
+    expect(out.results[1].reason).toContain("Pin exactly 1.0.0; the range as written resolves to 1.1.0 (wait).");
     expect(out.results[2].verdict).toBe("wait");
     // A release with no files cannot be installed.
     expect(out.results[3]).toMatchObject({ verdict: "unknown" });
@@ -337,11 +340,15 @@ describe("PyPI", () => {
 });
 
 describe("Go", () => {
-  it('"golang.org/x/net v0" -> v0.60.0: the newest safe release is under the 3-day hold, so the one before it', async () => {
+  it('"golang.org/x/net v0" resolves to v0.61.0, under the 3-day hold: wait, and pin v0.60.0', async () => {
+    // Round 8 (B2): `go get golang.org/x/net@v0` installs the newest v0 release; the settled safe one is the pin.
     const r = (await check([{ ecosystem: "Go", package: "golang.org/x/net", to: "v0" }])).results[0];
-    expect(r.range_check).toMatchObject({ smallest_safe_in_range: "v0.60.0", newest_safe_in_range: "v0.61.0" });
-    expect(r).toMatchObject({ to: "v0.60.0", to_requested: "v0", verdict: "proceed" });
-    expect(signal(r, "release_age")).toMatchObject({ effect: "proceed", value: { published_at: "2026-10-08T17:22:58Z" } });
+    expect(r.range_check).toMatchObject({ smallest_safe_in_range: "v0.60.0", newest_safe_in_range: "v0.60.0", too_new: ["v0.61.0"] });
+    expect(r).toMatchObject({ to: "v0.61.0", to_requested: "v0", verdict: "wait" });
+    expect(r.reason).toContain("Pin exactly v0.60.0; the range as written resolves to v0.61.0 (wait).");
+    const pinned = (await check([{ ecosystem: "Go", package: "golang.org/x/net", to: "v0.60.0" }])).results[0];
+    expect(signal(pinned, "release_age")).toMatchObject({ effect: "proceed", value: { published_at: "2026-10-08T17:22:58Z" } });
+    expect(pinned.verdict).toBe("proceed");
     expect(signal(r, "publish_trust")).toMatchObject({ value: "not_applicable", effect: "info" });
     expect(signal(r, "install_script_added").evidence).toMatch(/Go runs no package code/);
   });

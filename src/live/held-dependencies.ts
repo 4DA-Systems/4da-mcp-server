@@ -131,6 +131,7 @@ async function byDeadline<T>(work: Promise<T>, deadline: number, late: T): Promi
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((resolve) => {
     timer = setTimeout(() => resolve(late), Math.max(0, deadline - Date.now()));
+    timer.unref?.();
   });
   try {
     return await Promise.race([work.catch(() => late), timeout]);

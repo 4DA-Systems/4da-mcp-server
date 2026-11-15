@@ -199,8 +199,10 @@ describe("defect 2: safe.smallest and safe.newest never name a release the hold 
   it('{npm, ws, "7.x"}: newest is the newest settled safe release, and 7.5.14 (1.4 days) is listed as too new (it was newest)', async () => {
     const [r] = (await check([{ ecosystem: "npm", package: "ws", to: "7.x" }])).results;
     expect(r.range_check).toMatchObject({ smallest_safe_in_range: "7.5.10", newest_safe_in_range: "7.5.13", too_new: ["7.5.14"] });
-    expect(r.to).toBe("7.5.13");
+    // Round 8 (B2): npm installs 7.5.14 for 7.x, so the verdict is wait, and 7.5.13 is the pin.
+    expect(r).toMatchObject({ to: "7.5.14", verdict: "wait" });
     expect(r.reason).toContain("7.5.14 is safe but published under 3 days ago, inside the release hold");
+    expect(r.reason).toContain("Pin exactly 7.5.13; the range as written resolves to 7.5.14 (wait).");
     const [alone] = (await check([{ ecosystem: "npm", package: "ws", to: "7.5.14" }])).results;
     expect(alone.verdict).toBe("wait");
   });

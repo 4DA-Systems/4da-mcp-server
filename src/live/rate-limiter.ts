@@ -48,7 +48,7 @@ export class RateLimiter {
       if (this.consume(source)) return true;
       const wait = Math.max(1, this.waitTimeMs(source));
       if (Date.now() + wait > deadline) return false;
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      await new Promise((resolve) => setTimeout(resolve, wait).unref());
     }
   }
 

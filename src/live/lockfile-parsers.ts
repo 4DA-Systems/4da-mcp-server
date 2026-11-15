@@ -271,9 +271,9 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const report = emptyReadReport();
-      readPnpmLock(content, versions, instances, report);
+      const installs = readPnpmLock(content, versions, instances, report);
       if (versions.size === 0) return null;
-      const damage = pnpmLockDamage(content, report.missingDirect);
+      const damage = pnpmLockDamage(content, report.missingDirect, installs);
       return { versions, instances, uncheckable: report.uncheckable, problems: damage ? [damagedProblem(file, damage)] : [] };
     },
   },
@@ -705,7 +705,12 @@ function resolveRust(cwd: string): VersionSource {
     const cargoWritten = packages.some((pkg) => pkg.source !== null);
     const isLocal = (pkg: CargoPackage) => cargoWritten && pkg.source === null;
     for (const pkg of packages) {
-      if (isLocal(pkg)) continue;
+      // Local code is no crates.io release: its name is never sent either (R8: a path workspace member
+      // went to crates.io and OSV.dev from dependency_check, upgrade_impact and the briefing).
+      if (isLocal(pkg)) {
+        privateIndex.push({ name: pkg.name, version: pkg.version, registry: "local code (a workspace member or path dependency)", file: lockPath, local: true });
+        continue;
+      }
       // From a registry other than crates.io, or from git: private (private-packages.ts). Kept as
       // an instance so the set is whole; the live layer leaves it out of every lookup.
       if (pkg.source && !isPublicCratesSource(pkg.source)) privateIndex.push({ name: pkg.name, version: pkg.version, registry: sourceLabel(pkg.source), file: lockPath });

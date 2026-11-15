@@ -209,6 +209,23 @@ function pnpmNonRegistry(entry: PnpmEntry): NonRegistryEntry | null {
   return { name, version: entry.version ?? null, kind };
 }
 
+/**
+ * Each line of `content`, without its line ending, one at a time: the same lines, in the same
+ * order, as `content.split(/\r?\n/)`, without an array of all of them. A 150,000-entry
+ * pnpm-lock.yaml is about two million lines, and one read split it three times over: the pnpm read
+ * peaked at 613 MB against 6.2.7's 327 MB (blind audit of e3aba98).
+ */
+export function* textLines(content: string): Generator<string> {
+  let start = 0;
+  for (;;) {
+    const end = content.indexOf("\n", start);
+    const stop = end < 0 ? content.length : end;
+    yield stop > start && content.charCodeAt(stop - 1) === 13 ? content.slice(start, stop - 1) : content.slice(start, stop);
+    if (end < 0) return;
+    start = end + 1;
+  }
+}
+
 /** A `packages:`/`snapshots:` key, or a dependency value that points at one, in one spelling: unquoted, no leading `/`. */
 export function pnpmKeyRef(raw: string): string {
   return unquote(raw.trim()).replace(/^\//, "");
@@ -260,7 +277,7 @@ export function pnpmEntryIdentities(content: string): Map<string, [string, strin
   const ids = new Map<string, [string, string]>();
   const reader = pnpmEntryReader((key, id) => ids.set(pnpmKeyRef(key), id));
   let inEntries = false;
-  for (const line of content.split(/\r?\n/)) {
+  for (const line of textLines(content)) {
     const text = line.trim();
     if (text === "" || text.startsWith("#")) continue;
     const indent = line.length - line.trimStart().length;
@@ -288,7 +305,7 @@ export function pnpmEntryIdentities(content: string): Map<string, [string, strin
  * two copies), with the `dev: true|false` that v5/v6 lockfiles write under each
  * package key. pnpm 9 dropped that field, so its copies have unknown scope.
  */
-export function readPnpmLock(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): void {
+export function readPnpmLock(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): ReadonlySet<string> {
   const transitive: Array<[string, string]> = [];
   const devByKey = new Map<string, boolean>();
   // Every (name, version) an importer pins, for the check that each has a `packages:` entry.
@@ -308,7 +325,7 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
     report ? (other) => report.uncheckable.push(other) : undefined,
   );
 
-  for (const line of content.split(/\r?\n/)) {
+  for (const line of textLines(content)) {
     const text = line.trim();
     if (text === "" || text.startsWith("#")) continue;
     const indent = line.length - line.trimStart().length;
@@ -363,11 +380,13 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   for (const [name, version] of transitive) {
     if (!versions.has(name)) versions.set(name, version);
   }
-  if (!instances) return;
+  if (!instances) return seen;
   for (const [name, version] of versions) {
     if (!seen.has(`${name}\0${version}`)) instances.add(name, version);
   }
   for (const [name, version] of transitive) instances.add(name, version, devByKey.get(`${name}\0${version}`));
+  // Every registry (name, version) an entry installs, as `name\0version`: pnpmLockDamage reuses it.
+  return seen;
 }
 
 /** What is wrong with a lockfile that was read: how to say it, and how many packages are known to be missing (a lower bound). */
@@ -394,37 +413,40 @@ function listed(items: string[], limit = 3): string {
  * - every dependency an entry names with a plain version has an entry;
  * - lockfile 9: `packages:` comes with `snapshots:`, one or more per package.
  */
-export function pnpmLockDamage(content: string, missingDirect: string[] = []): LockDamage | null {
+export function pnpmLockDamage(content: string, missingDirect: string[] = [], identities?: ReadonlySet<string>): LockDamage | null {
   const lockMajor = Number(/^lockfileVersion:[ \t]*['"]?(\d+)/m.exec(content)?.[1] ?? "0");
   const sections = new Set<string>();
+  // Every entry key as written (both sections), the `packages:` keys, and the `snapshots:` keys
+  // without their peer suffix. One set each: no copy of the keys in a fourth (blind audit of e3aba98,
+  // a 150,000-entry lockfile).
+  const keys = new Set<string>();
   const packageKeys = new Set<string>();
-  const snapshotKeys = new Set<string>();
-  // Every entry, as written and as the registry (name@version) it installs.
-  const known = new Set<string>([...pnpmEntryIdentities(content).values()].map(([n, v]) => `${n}@${v}`));
-  const refs: Array<{ name: string; value: string }> = [];
+  const snapshotBases = new Set<string>();
+  // The registry (name, version) each entry installs, as readPnpmLock read them (`name\0version`).
+  const installs = identities ?? new Set([...pnpmEntryIdentities(content).values()].map(([n, v]) => `${n}\0${v}`));
   const malformed: number[] = [];
   let section = "";
   let unresolvedEntries = 0;
   let entryOpen = false;
   let entryResolved = false;
-  let inDependencies = false;
   const closeEntry = () => {
     if (entryOpen && section === "packages" && !entryResolved) unresolvedEntries++;
     entryOpen = false;
   };
 
-  const lines = content.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  // Pass 1: the syntax, the sections and every entry key. Line by line (textLines), no array of lines.
+  let lineNumber = 0;
+  for (const line of textLines(content)) {
+    lineNumber++;
     if (line.length > MAX_LOCKFILE_LINE) continue;
     const text = line.trim();
     if (text === "" || text.startsWith("#")) continue;
     if (/^[ ]*\t/.test(line)) {
-      malformed.push(i + 1);
+      malformed.push(lineNumber);
       continue;
     }
     const flow = /^(?:- |(?:'[^']*'|"[^"]*"|[^\s:'"][^:]*):[ ]+)([{[].*)$/.exec(text)?.[1];
-    if (flow && !flow.endsWith(flow[0] === "{" ? "}" : "]")) malformed.push(i + 1);
+    if (flow && !flow.endsWith(flow[0] === "{" ? "}" : "]")) malformed.push(lineNumber);
     const indent = line.length - line.trimStart().length;
     if (indent === 0) {
       closeEntry();
@@ -438,32 +460,53 @@ export function pnpmLockDamage(content: string, missingDirect: string[] = []): L
       const key = /^(.*?):(?:[ ]*\{\})?$/.exec(text)?.[1];
       if (!key) continue;
       const ref = pnpmKeyRef(key);
-      (section === "packages" ? packageKeys : snapshotKeys).add(ref);
-      known.add(ref);
+      keys.add(ref);
+      if (section === "packages") packageKeys.add(ref);
+      else snapshotBases.add(ref.split("(")[0]);
       entryOpen = true;
       entryResolved = false;
-      inDependencies = false;
-    } else if (indent === 4) {
-      if (text.startsWith("resolution:")) entryResolved = true;
-      inDependencies = text === "dependencies:";
-    } else if (indent === 6 && inDependencies) {
-      const dep = /^(?:'([^']+)'|"([^"]+)"|([^\s:'"]+)):[ ]+(.+)$/.exec(text);
-      if (dep) refs.push({ name: dep[1] ?? dep[2] ?? dep[3], value: unquote(dep[4].trim()) });
+    } else if (indent === 4 && text.startsWith("resolution:")) {
+      entryResolved = true;
     }
   }
   closeEntry();
 
-  // Only a plain version is checked: an alias, a link or a git reference points at an entry in a spelling of its own.
+  // Pass 2: every dependency an entry names, checked against the keys as it is read: no list of
+  // the (hundreds of thousands of) references is kept. Only a plain version is checked: an alias,
+  // a link or a git reference points at an entry in a spelling of its own.
+  const known = (name: string, value: string, version: string): boolean =>
+    keys.has(`${name}@${value}`) || keys.has(`${name}/${value}`) || keys.has(`${name}@${version}`) || installs.has(`${name}\0${value}`) || installs.has(`${name}\0${version}`);
   const dangling = new Set<string>();
-  for (const { name, value } of refs) {
-    if (!/^\d/.test(value)) continue;
-    const version = exactVersion(value) ?? value;
-    const candidates = [`${name}@${value}`, `${name}/${value}`, `${name}@${version}`];
-    if (!candidates.some((c) => known.has(c))) dangling.add(`${name}@${version}`);
+  section = "";
+  let inDependencies = false;
+  for (const line of textLines(content)) {
+    if (line.length > MAX_LOCKFILE_LINE) continue;
+    const text = line.trim();
+    if (text === "" || text.startsWith("#") || /^[ ]*\t/.test(line)) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0) {
+      section = text.endsWith(":") ? text.slice(0, -1) : "";
+      inDependencies = false;
+      continue;
+    }
+    if (section !== "packages" && section !== "snapshots") continue;
+    if (indent === 2) {
+      inDependencies = false;
+    } else if (indent === 4) {
+      inDependencies = text === "dependencies:";
+    } else if (indent === 6 && inDependencies) {
+      const dep = /^(?:'([^']+)'|"([^"]+)"|([^\s:'"]+)):[ ]+(.+)$/.exec(text);
+      if (!dep) continue;
+      const name = dep[1] ?? dep[2] ?? dep[3];
+      const value = unquote(dep[4].trim());
+      if (!/^\d/.test(value)) continue;
+      const version = exactVersion(value) ?? value;
+      if (!known(name, value, version)) dangling.add(`${name}@${version}`);
+    }
   }
-  const snapshotBases = new Set([...snapshotKeys].map((k) => k.split("(")[0]));
   const noSnapshots = lockMajor >= 9 && packageKeys.size > 0 && !sections.has("snapshots");
-  const unsnapshotted = lockMajor >= 9 && !noSnapshots ? [...packageKeys].filter((k) => !snapshotBases.has(k)) : [];
+  const unsnapshotted: string[] = [];
+  if (lockMajor >= 9 && !noSnapshots) for (const k of packageKeys) if (!snapshotBases.has(k)) unsnapshotted.push(k);
 
   const parts: string[] = [];
   if (malformed.length > 0) {
