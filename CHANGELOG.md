@@ -2,6 +2,68 @@
 
 ## 6.3.0 — 2026-11-15
 
+- **Pre-publish fixes (round 10).**
+  - *Privacy, one rule.* A name the project does not install yet is private
+    only for a registry-wide reason: the package manager would fetch any name
+    from a source that is not public. That covers a default registry, index or
+    proxy; a requirements file's `--index-url`, `--extra-index-url` or
+    `--find-links`; `registry`/`registries` in `pnpm-workspace.yaml`; a Cargo
+    source replacement; GOPROXY; and a lockfile that installs everything from
+    one private host. The request guard, dependency_check, upgrade_impact and
+    the briefing now share this rule. dependency_check and upgrade_impact sent
+    a new name to OSV.dev and pypi.org when the private index was set only in
+    requirements.txt; they no longer do. Round 9's rule also made "add lodash"
+    private in a project whose only npm packages are a privately scoped
+    `@acme/*`; that is checked again. A `pyproject.toml` in a subfolder with no
+    lockfile now applies its own index settings. Each private answer names the
+    setting that makes it private and the `FOURDA_PUBLIC_MIRRORS` escape.
+    Behaviour to know: under a private pip index, extra index or find-links,
+    public names such as `requests` are NOT CHECKED (private), because pip may
+    take any name from that index. One subfolder with a private index makes new
+    names in that ecosystem private for the whole project.
+  - *Versions as the package manager reads them.* A bare crates.io version
+    ("1.6.0") is what Cargo reads as `^1.6.0`. It is now judged both as that
+    release (a Cargo.lock already holding it keeps it) and as the range (a
+    fresh resolve installs the newest 1.x), and the worse answer stands. When
+    that newest release is under 3 days old, the answer is `wait`, with an
+    exact `=X` pin given as the safe alternative. An npm range is judged at
+    npm's own pick (the `latest` tag when the range admits it and it is not
+    deprecated, else the highest non-deprecated release) and at the highest
+    release Yarn or pnpm may install; both are named when they differ.
+    `serde-json` is checked as `serde_json`, the spelling crates.io publishes.
+  - *Briefing.* Ranges are read the way dependency_check reads them, so
+    "add minimist >= 1.2.0, < 1.2.6" is avoid. An unreadable range no longer
+    turns every other package in the call to unknown, which had hidden ctx's
+    malware. A TOML entry (`smallvec = { version = ">=1.6.0, <1.6.1" }`) is
+    filed under its own ecosystem and gives one verdict. Tasks with no verb are
+    checked: "chalk 5.6.1/debug 4.4.2", "chalk@5.6.1, debug@4.4.2" and
+    "pin chalk 5.6.1 and debug 4.4.2" are avoid. " / " separates items.
+    "add debug, chalk and ms" checks all three. A loose word ("use blueprints")
+    is checked by name only, with one lookup instead of two.
+  - *upgrade_impact names what the target installs.* express 4.17.1 → 4.21.2
+    said 2 advisories fixed and nothing remaining. 4.21.2 exact-pins
+    vulnerable qs, body-parser and path-to-regexp; they are now listed in
+    `held_dependencies_affected`. The answer gives `first_clean_release`
+    (4.22.3, confirmed with OSV.dev). If the registry or OSV.dev can't be
+    read, the answer is NOT CHECKED, never clean.
+  - *Fix-path wording.* "no 3.x release clears every advisory" for
+    event-stream 3.3.6 was false: 3.3.5 is clean. Scan and planner now say
+    "No 3.x release after 3.3.6 exists; 3.3.5 (a downgrade) is clean; 4.0.0 is
+    the smallest safe upgrade". A downgrade is only named after OSV.dev and its
+    pinned dependencies confirm it. "No published version clears every
+    advisory" now names the range that was checked.
+  - *Offline answers from the cache.* With `FOURDA_OFFLINE=1` (or no
+    network), vulnerability_scan, upgrade_planner and dependency_health answer
+    from cached OSV.dev results, kept for 7 days past their 1-hour life. They
+    name the oldest answer's age and keep NOT CHECKED for everything not in
+    the cache. dependency_check names cached advisories for an exact version
+    and leaves the verdict `unknown`. `force_refresh` offline no longer wipes
+    the cache.
+  - *Protocol.* In a 2025-03-26 session, a JSON-RPC batch with a cancelled
+    request is answered without it, over stdio and Streamable HTTP. Before,
+    the batch waited forever, and a later request reusing the id was folded
+    into it. A repeated id in a batch is refused with -32600. An open stdio
+    batch is written at the tool-call budget plus 10 s at the latest.
 - **Pre-publish fix (round 9).** In a project whose every dependency comes
   from a private index or registry (pip behind `PIP_INDEX_URL` or a
   requirements file's `--index-url`, Cargo with crates.io replaced), a briefing
