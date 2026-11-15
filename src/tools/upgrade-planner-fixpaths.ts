@@ -1301,10 +1301,11 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
     const clause = own.any ? ` both admits a clean ${pkg} (>= ${target}) and is clear of ${parent}'s own advisories` : ` admits a clean ${pkg} (>= ${target})`;
     return goesAway(ctx, b, parent, from, route, `${deprecated}no ${parent} release up to ${newest ?? "its latest"}${clause}`, "none_admits");
   }
-  const requirementClause =
+  const clauseOf = (found: NonNullable<typeof smallestOwn>) =>
     found.requirement === null
       ? `${parent} ${found.version} is the smallest ${parent} release that no longer depends on ${pkg}`
       : `${parent} ${found.version} is the smallest ${parent} release whose ${found.peer ? "peer " : ""}requirement "${found.requirement}" ${admitsWords(ctx, found.requirement, dialect, found.resolvesTo, found.peer)}`;
+  const requirementClause = clauseOf(found);
   const ownClause =
     (!own.read
       ? `; not checked against ${parent}'s own advisories (OSV.dev did not answer)`
@@ -1406,12 +1407,19 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       LEVER_ADMITS.set(lever, (x) => pkgAt(x));
       upgrade.levers = [lever];
       setParentAt(v);
-      if (v !== found.version) upgrade.smallest = found.version;
+      // `smallest` is the smallest release that admits a clean copy (the shared parent_release
+      // vectors), even when what it holds lifts the move past it (round 8, B6).
+      const smallestNamed = smallestOwn?.version ?? found.version;
+      if (v !== smallestNamed) upgrade.smallest = smallestNamed;
       else delete upgrade.smallest;
       const refreshes = refreshAt(v);
       if (refreshes.length > 0) upgrade.refreshCommands = refreshes;
       else delete upgrade.refreshCommands;
-      return `${head}; ${requirementClause}${ownClause}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}`;
+      const heldLift =
+        smallestOwn && smallestOwn.version !== found.version && v === found.version
+          ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} exact-pins or narrowly ranges a dependency with a known advisory, and ${found.version} is the smallest release past it whose held dependencies are clean`
+          : "";
+      return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}`;
     };
     const text = render(new Map())!;
     MOVES.set(upgrade, { text, render });
