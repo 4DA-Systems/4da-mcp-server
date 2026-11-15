@@ -293,7 +293,8 @@ describe("dependency_check: the names that read proceed", () => {
     expect(r.verdict).toBe("review");
     expect(advisories(r).value.affecting_to).toEqual(["RUSTSEC-2025-0010"]);
     expect(r.reason).toContain("worded as an unmaintained-package notice, but not declared as one or it names a fixed release, so it counts");
-    expect(r.range_check).toMatchObject({ basis: "same_line", range: "0.16.x", smallest_safe_in_range: null, newest_safe_outside_range: "0.17.14" });
+    // A bare "0.16.20" is Cargo's ^0.16.20 (round 10, W2): the range check is over what it admits.
+    expect(r.range_check).toMatchObject({ basis: "requested", range: "^0.16.20", smallest_safe_in_range: null, newest_safe_outside_range: "0.17.14" });
     // The fixed line itself is clean.
     const [fixed] = (await check([{ ecosystem: "crates.io", package: "ring", to: "0.17.14" }])).results;
     expect(fixed.verdict).toBe("proceed");
