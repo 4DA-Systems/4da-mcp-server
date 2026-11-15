@@ -42,7 +42,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { extractAuthClaims, getAuthSecret, type TeamClaims } from "./auth.js";
 import { runWithAuthContext } from "./auth-context.js";
 import { envFlag } from "./env-flags.js";
-import { batchRefusedMessage } from "./stdio-gate.js";
+import { batchCancellation, batchRefusedMessage } from "./stdio-gate.js";
 import { abortBackgroundWork } from "./shutdown.js";
 
 const DEFAULT_PORT = 4840;
@@ -222,14 +222,29 @@ function requestRevision(header: string | string[] | undefined, messages: unknow
   return "2025-03-26";
 }
 
+/** A served batch the transport changed before the SDK sees it (pre-publish round 10, W1). */
+interface ServedBatch {
+  /** The members handed to the SDK. */
+  passed: Array<Record<string, unknown>>;
+  /** The transport's own answers to members it did not hand on (a repeated request id). */
+  answers: Array<Record<string, unknown>>;
+}
+
 /**
  * Peeks at a POST body for a JSON-RPC batch, and answers one the way stdio does (stdio-gate.ts):
  * -32600, id null. A batch is passed on only when the request speaks 2025-03-26 or earlier, the
  * revisions that require a server to accept one (pre-publish round 7: HTTP served every batch
  * while stdio refused them). The body read here is handed on unchanged as a replayed stream, so
  * the SDK parses it, sizes it and answers its errors exactly as before.
+ *
+ * A served batch is read as stdio reads one (`batchCancellation`, pre-publish round 10, W1). The
+ * SDK closes a batch's event stream only once every request in it has answered, and it never
+ * answers a cancelled one, so `[tools/call 20, notifications/cancelled 20, ping 21]` held the
+ * response open for good (the blind check saw no byte in 15 s). Now a request its own batch
+ * cancels is not run, a repeated id is refused instead of losing one of the two answers, and the
+ * rest goes to the SDK as `served.passed`.
  */
-async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<string, unknown> | null; body: IncomingMessage }> {
+async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<string, unknown> | null; body: IncomingMessage; served?: ServedBatch }> {
   const chunks: Buffer[] = [];
   let size = 0;
   const iterator = req[Symbol.asyncIterator]();
@@ -267,8 +282,54 @@ async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<str
   }
   if (!Array.isArray(parsed)) return { refusal: null, body: replay };
   const revision = requestRevision(req.headers["mcp-protocol-version"], parsed);
-  if (revision < FIRST_REVISION_WITHOUT_BATCHES) return { refusal: null, body: replay };
-  return { refusal: { jsonrpc: "2.0", id: null, error: { code: -32600, message: batchRefusedMessage("http") } }, body: replay };
+  if (revision >= FIRST_REVISION_WITHOUT_BATCHES) {
+    return { refusal: { jsonrpc: "2.0", id: null, error: { code: -32600, message: batchRefusedMessage("http") } }, body: replay };
+  }
+  // Members that are not JSON-RPC objects stay as they are: the SDK refuses such a batch whole.
+  if (!parsed.every(isPlainObject)) return { refusal: null, body: replay };
+  const served = batchCancellation(parsed, () => null);
+  if (served.answers.length === 0 && served.passed.length === parsed.length) return { refusal: null, body: replay };
+  return { refusal: null, body: replay, served };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Writes the transport's own answers to a served batch into the SDK's event stream, ahead of its
+ * first event (or at its end, when it writes none), so the batch gets an answer for every request
+ * it holds. A response that is not an event stream (the SDK refused the POST whole) is left as is.
+ */
+function addBatchAnswers(res: ServerResponse, answers: Array<Record<string, unknown>>): void {
+  if (answers.length === 0) return;
+  let added = false;
+  // The SDK's adapter passes its headers to writeHead() as an object, which getHeader() never sees.
+  let eventStream = false;
+  const events = answers.map((a) => `event: message\ndata: ${JSON.stringify(a)}\n\n`).join("");
+  const add = (): void => {
+    if (added) return;
+    added = true;
+    if (eventStream || String(res.getHeader("content-type") ?? "").startsWith("text/event-stream")) originalWrite(events);
+  };
+  const originalWriteHead = res.writeHead.bind(res) as (...args: unknown[]) => ServerResponse;
+  res.writeHead = ((...args: unknown[]) => {
+    const headers = args.find((a, i) => i > 0 && typeof a === "object" && a !== null && !Array.isArray(a)) as Record<string, unknown> | undefined;
+    const type = headers && Object.entries(headers).find(([k]) => k.toLowerCase() === "content-type")?.[1];
+    eventStream = String(type ?? "").startsWith("text/event-stream");
+    return originalWriteHead(...args);
+  }) as ServerResponse["writeHead"];
+  const originalWrite = res.write.bind(res) as (chunk: string) => boolean;
+  const originalEnd = res.end.bind(res) as (...args: unknown[]) => ServerResponse;
+  res.write = ((...args: Parameters<ServerResponse["write"]>) => {
+    add();
+    return (originalWrite as unknown as (...a: unknown[]) => boolean)(...args);
+  }) as ServerResponse["write"];
+  // A last chunk passed to end() follows our events, as any other chunk does.
+  res.end = ((...args: unknown[]) => {
+    add();
+    return originalEnd(...args);
+  }) as ServerResponse["end"];
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -401,6 +462,25 @@ export async function startHttpServer(
       const refused = await batchRefusal(req);
       if (refused.refusal) {
         sendJson(res, 400, refused.refusal);
+        return;
+      }
+      const served = refused.served;
+      if (served) {
+        // A served batch the transport changed (pre-publish round 10, W1): the SDK gets what is
+        // left of it as an already-parsed body.
+        const requests = served.passed.some((m) => typeof m.method === "string" && (typeof m.id === "string" || typeof m.id === "number"));
+        if (!requests && served.answers.length > 0) {
+          sendJson(res, 200, served.answers);
+          return;
+        }
+        if (served.passed.length === 0) {
+          // Nothing to run and nothing to answer (a request and its cancel): as a batch of notifications.
+          res.writeHead(202);
+          res.end();
+          return;
+        }
+        addBatchAnswers(res, served.answers);
+        await runWithAuthContext({ claims, enforced: policy.authRequired }, () => handleMcpRequest(refused.body, res, served.passed));
         return;
       }
       await runWithAuthContext({ claims, enforced: policy.authRequired }, () => handleMcpRequest(refused.body, res));
