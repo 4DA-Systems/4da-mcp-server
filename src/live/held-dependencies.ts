@@ -224,6 +224,19 @@ export function andList(parts: string[]): string {
 }
 
 /**
+ * What releases holding `affected` do, in words chosen per case: an exact pin, a range whose newest
+ * admitted release is affected (narrow or wide), or both. Since W13 a wide range counts too, so the
+ * old "exact-pins or narrowly ranges" misdescribed mocha 12.x's glob "^13.0.0" (pre-publish round 10, W16).
+ */
+export function heldVerb(affected: HeldDependency[]): string {
+  const exact = affected.some((d) => d.exact);
+  const ranged = affected.some((d) => !d.exact);
+  if (exact && !ranged) return "exact-pins a dependency with a known advisory";
+  if (ranged && !exact) return "holds a dependency range whose newest admitted release is affected";
+  return "exact-pins a dependency with a known advisory or holds a range whose newest admitted release is affected";
+}
+
+/**
  * "4.20.0 exact-pins qs 6.11.0 (GHSA-a, GHSA-b) and cookie 0.6.0 (GHSA-c)", and for a narrow range
  * "4.22.0 requires qs "~6.14.0", whose newest admitted release 6.14.2 is affected (GHSA-d)".
  * At most three dependencies are named; the rest are counted.

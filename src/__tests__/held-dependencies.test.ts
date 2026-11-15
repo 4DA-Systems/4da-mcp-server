@@ -201,7 +201,7 @@ describe("vulnerability_scan: a fix target is judged by what it installs (audit 
     const concise = await scan();
     // The advisories' own target, never a release picked without the check, and never "all_advisories".
     expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: null, fix_note: expect.stringMatching(/^NOT CHECKED: 4.20.0 /), fix_checked: "installed_advisories_only" });
-    expect(concise.recommendations[0]).toMatch(/whether the dependencies 4\.20\.0 exact-pins or narrowly ranges are affected was NOT CHECKED/);
+    expect(concise.recommendations[0]).toMatch(/whether the dependencies 4\.20\.0 holds are affected was NOT CHECKED/);
   });
 });
 
@@ -276,7 +276,7 @@ describe("upgrade_planner: a transitive row's target is judged the same way (pr-
       const blocked = (await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50 }, await liveFor())) as Record<string, any>;
       const stuck = blocked.recommendations.find((s: { package: string; currentVersion: string }) => s.package === "serve-static" && s.currentVersion === "1.13.2");
       expect(stuck).toMatchObject({ targetVersion: null, reasons: expect.arrayContaining([expect.stringMatching(/^NOT CHECKED: 1.16.0 /)]), fixPathChecked: "installed_advisories_only" });
-      expect(blocked.summary).toMatch(/1 fix target NOT a clean fix: the release pins \(or narrowly ranges\) an affected dependency/);
+      expect(blocked.summary).toMatch(/1 fix target NOT a clean fix: the release exact-pins, narrowly ranges or holds a range whose newest release is affected/);
       expect(blocked.summary).not.toMatch(/did not answer in time/);
     } finally {
       delete ADVISORIES["serve-static"];
@@ -440,7 +440,7 @@ describe("upgrade_impact: the target is judged by what it installs (pre-publish 
     expect(r.held_dependencies_unchecked).toEqual(expect.any(String));
     expect(r).not.toHaveProperty("held_dependencies_affected");
     expect(r).not.toHaveProperty("first_clean_release");
-    expect(r.summary).toMatch(/; NOT CHECKED: whether the dependencies 4\.21\.2 exact-pins or narrowly ranges have known advisories could not be checked \(.+\); installing 4\.21\.2 installs them, so this is not a clean result\.$/);
+    expect(r.summary).toMatch(/; NOT CHECKED: whether the dependencies 4\.21\.2 holds \(its exact pins and ranges\) have known advisories could not be checked \(.+\); installing 4\.21\.2 installs them, so this is not a clean result\.$/);
   });
 
   it("fails closed: with no advisory lookup at all (no live layer), a target that holds something is NOT CHECKED", async () => {

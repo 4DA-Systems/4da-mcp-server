@@ -20,7 +20,7 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, nameClean, nameOnlyReview, NO_SUCH_RELEASE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -46,6 +46,8 @@ export interface RequestedVersion {
   from?: string;
   /** Other ecosystems the project uses, tried when the guessed one has no such release. */
   alternatives?: CheckEcosystem[];
+  /** `alternatives` count only when `ecosystem` has no such name or release (a pip-style comparator in a project that uses PyPI; pre-publish round 10, W16). */
+  fallbackOnly?: true;
 }
 
 export interface RequestedVersionFinding extends RequestedVersion {
@@ -253,14 +255,20 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   const found = new Map<string, RequestedVersion & { order: number }>();
   const unread: string[] = [];
   let order = 0;
-  const add = (who: { name: string; ecosystem: CheckEcosystem; guessed?: true; fixed?: true } | null, version: string, guess = false, another = false): boolean => {
+  const add = (
+    who: { name: string; ecosystem: CheckEcosystem; guessed?: true; fixed?: true; alternatives?: CheckEcosystem[]; fallbackOnly?: true } | null,
+    version: string,
+    guess = false,
+    another = false,
+  ): boolean => {
     if (!who || !version) return false;
     const to = taskVersionText(version, who.ecosystem);
     // A pairing the task leaves open ("a, b to x, y, z") keeps every candidate version of a package.
     const key = `${who.ecosystem}\0${who.name}${another ? `\0${to}` : ""}`;
     const copies = deps.filter((d) => d.ecosystem === who.ecosystem && d.name === who.name && d.version);
     const versions = [...new Set(copies.map((d) => d.version!))];
-    const alternatives = guess && who.guessed && !who.fixed && who.ecosystem === fallback ? others.filter((e) => asName(who.name, e) !== null) : [];
+    // A comparator-inferred PyPI reading carries its own fallback, npm (pre-publish round 10, W16).
+    const alternatives = who.fixed ? (who.alternatives ?? []) : guess && who.guessed && who.ecosystem === fallback ? others.filter((e) => asName(who.name, e) !== null) : [];
     // A later version for the same package is its target ("from 1.0 to 1.2", "1.0 -> 1.2").
     found.set(key, {
       name: who.name,
@@ -268,6 +276,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       to,
       ...(versions.length === 1 && versions[0] !== to ? { from: versions[0] } : {}),
       ...(alternatives.length > 0 ? { alternatives } : {}),
+      ...(alternatives.length > 0 && who.fallbackOnly ? { fallbackOnly: true as const } : {}),
       order: found.get(key)?.order ?? order++,
     });
     return true;
@@ -321,10 +330,18 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
    * judged as npm's pyyaml in an npm project).
    */
   const fixedName = (i: number, name: string) => {
-    const eco = fixed.find((s) => overlaps(i, s))?.ecosystem;
+    const span = fixed.find((s) => overlaps(i, s));
+    const eco = span?.ecosystem;
     if (!eco) return undefined;
     const who = nameFor(name, deps.filter((d) => d.ecosystem === eco), eco, true, eco);
-    return who ? { ...who, fixed: true as const } : null;
+    if (!who) return null;
+    // A comparator-inferred PyPI reading is also judged on npm (W16); an explicit manager command is not.
+    const npmName = span.alternatives?.includes("npm") ? asName(name, "npm") : null;
+    return {
+      ...who,
+      fixed: true as const,
+      ...(npmName === who.name ? { alternatives: span.alternatives, ...(span.fallbackOnly ? { fallbackOnly: true as const } : {}) } : {}),
+    };
   };
   for (let i = 0; i < raw.length; i++) {
     if (paired.has(i)) continue;
@@ -422,7 +439,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
  */
 export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
-  const unknown = ({ alternatives: _a, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
+  const unknown = ({ alternatives: _a, fallbackOnly: _f, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
     verdict: "unknown",
     resolved: null,
@@ -456,11 +473,11 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (r: RequestedVersion, item: Answer["results"][number] | undefined): RequestedVersionFinding => {
-    const { alternatives: _alternatives, ...own } = r;
+    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, ...own } = r;
     if (!item) return unknown(own, "no answer");
     const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
     const rc = item.range_check;
-    return {
+    const out: RequestedVersionFinding = {
       ...own,
       verdict: item.verdict,
       resolved: item.to,
@@ -469,8 +486,16 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
       malicious: Boolean(advisories?.malicious_package),
       ...(advisories?.critical_affecting_to?.length ? { critical: advisories.critical_affecting_to } : {}),
     };
+    if (nameOnlyReview(item.verdict, item.signals)) nameOnly.add(out);
+    else if (item.verdict !== "unknown" && nameClean(item.signals)) real.add(out);
+    return out;
   };
-  const unpublished = (item: Answer["results"][number] | undefined) => Boolean(item && item.verdict === "unknown" && /is not a published version on|a hallucinated package/.test(item.reason));
+  /** A namesake's near-miss review, and an answer about a release the ecosystem has and a name it knows (W16). */
+  const nameOnly = new WeakSet<RequestedVersionFinding>();
+  const real = new WeakSet<RequestedVersionFinding>();
+  // No release matching the version (or no such name) is not an answer for it: "No published,
+  // non-withdrawn release of rsa matches 4.7" on npm outranked PyPI's proceed (pre-publish round 10, W16).
+  const unpublished = (item: Answer["results"][number] | undefined) => Boolean(item && item.verdict === "unknown" && NO_SUCH_RELEASE.test(item.reason));
   // dependency_check refuses a whole call over one constraint it cannot read: that one is unknown, said,
   // and the rest are still checked; an ecosystem tried on a guess that cannot read it is not tried
   // (pre-publish round 10, W3).
@@ -496,8 +521,11 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
       if (again) {
         for (const i of new Set(retries.map((x) => x.i))) {
           const own = unpublished(results[i]) ? [] : [out[i]];
-          const more = retries.flatMap((x, k) => (x.i === i && again.results[k] && !unpublished(again.results[k]) ? [finding(x.r, again.results[k])] : []));
-          const answers = [...own, ...more];
+          // A fallback counts only when the task's own ecosystem has no such name or release (W16).
+          const more = plan[i]?.fallbackOnly && own.length > 0 ? [] : retries.flatMap((x, k) => (x.i === i && again.results[k] && !unpublished(again.results[k]) ? [finding(x.r, again.results[k])] : []));
+          let answers = [...own, ...more];
+          // A namesake's near-miss review never outranks a real answer; malware and avoid still win (W16).
+          if (answers.some((a) => real.has(a))) answers = answers.filter((a) => !nameOnly.has(a));
           if (answers.length > 0) out[i] = answers.reduce((a, b) => (worse(b) > worse(a) ? b : a));
         }
       }

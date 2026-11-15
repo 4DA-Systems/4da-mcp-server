@@ -460,7 +460,7 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expect(ptr.parentUpgrades).toMatchObject([{ parent: "express", to: "4.22.3", requirement: "~0.1.13", levers: [{ to: "4.22.3", commands: [{ command: "npm install express@4.22.3 --save-exact" }] }] }]);
     // Round 8 (B6): the lift is decided by what 4.22.0 holds (an affected qs), before the rows are reconciled.
     expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.0 is the smallest express release whose requirement "~0\.1\.12"/);
-    expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.3, not 4\.22\.0: 4\.22\.0 exact-pins or narrowly ranges a dependency with a known advisory/);
+    expect(ptr.reasons.join(" ")).toMatch(/express 4\.22\.3, not 4\.22\.0: 4\.22\.0 brings in a dependency with a known advisory \(an exact pin, or a range whose newest admitted release is affected\)/);
     expect(ptr.reasons.join(" ")).not.toMatch(/upgrade express to 4\.22\.0/);
     expect(new Set([...commandsIn(ptr), ...commandsIn(step("qs")), ...commandsIn(step("express"))])).toEqual(new Set(["npm install express@4.22.3 --save-exact"]));
   });

@@ -93,7 +93,39 @@ export interface NewPackage {
   guessed?: true;
   /** Ecosystems whose registry, index or proxy for this project is not public: the name is never asked about there (r9, B1). */
   closed?: CheckEcosystem[];
+  /**
+   * `alternatives` count only when `ecosystem` has no such name or release: a pip-style comparator
+   * read as PyPI in a project that uses PyPI is tried on npm only as a fallback (pre-publish round 10, W16).
+   */
+  fallbackOnly?: true;
 }
+
+/** dependency_check's signals, as far as the briefing reads them. */
+type Signals = ReadonlyArray<{ id: string; effect?: string }>;
+
+/**
+ * The answer is "review" only because the name is a near-miss of a popular one in that ecosystem:
+ * no release-level signal says review or avoid. Such an answer from a namesake must not outrank a
+ * real answer from the ecosystem that has the release (pre-publish round 10, W16: "add numpy 2.1" in an
+ * npm + PyPI project was review_needed on npm's numpy namesake).
+ */
+export function nameOnlyReview(verdict: string, signals: Signals): boolean {
+  const flagged = signals.filter((s) => s.effect === "review" || s.effect === "avoid");
+  return verdict === "review" && flagged.length > 0 && flagged.every((s) => s.id === "name_check");
+}
+
+/** The ecosystem knows the name as no near-miss: its answer is about the package being added. */
+export function nameClean(signals: Signals): boolean {
+  const name = signals.find((s) => s.id === "name_check");
+  return !name || (name.effect !== "review" && name.effect !== "avoid");
+}
+
+/**
+ * dependency_check found no release matching the requested version or constraint, or no such name:
+ * that ecosystem's answer is not an answer for the name ("No published, non-withdrawn release of rsa
+ * matches 4.7" outranked PyPI's proceed; pre-publish round 10, W16).
+ */
+export const NO_SUCH_RELEASE = /is not a published version on|a hallucinated package|No published, non-withdrawn release of .+ matches /;
 
 /** What the name check found for one package a task adds. */
 export interface NewPackageFinding extends NewPackage {
@@ -320,7 +352,7 @@ export interface TaskItems {
    * PEP 440 specifier (`requests~=2.31`, `flask<2.2.5`): the version reader files them there too, never
    * under the project's guess (pre-publish round 10, W14).
    */
-  fixed: Array<TaskSpan & { ecosystem: CheckEcosystem }>;
+  fixed: Array<TaskSpan & { ecosystem: CheckEcosystem; alternatives?: CheckEcosystem[]; fallbackOnly?: true }>;
   /** Arguments of a manager whose registry this server does not read (`gem install rails`): named NOT CHECKED. */
   foreign: Array<TaskSpan & { name: string; registry: string }>;
 }
@@ -690,8 +722,18 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           continue;
         }
       }
-      if (pep) fixed.push({ ...span(k), ecosystem: pep });
+      // A comparator the task did not tie to PyPI by name or command is a guess, not a fixed ecosystem:
+      // "add event-stream==3.3.6" in an npm project was judged on PyPI alone (no such name: unknown),
+      // hiding npm's malware. npm is judged too with the same constraint, and the worst answer stands; in a
+      // project that uses PyPI, only when PyPI has no such name or release (pre-publish round 10, W16).
+      const pepAlternatives: CheckEcosystem[] = pep === "PyPI" && !stated && asName(raw[k].replace(/(?:[=~<>!]=?).*$/, ""), "npm") !== null ? ["npm"] : [];
+      const pepFallbackOnly = pepAlternatives.length > 0 && projectEcosystems(deps).includes("PyPI");
+      if (pep) fixed.push({ ...span(k), ecosystem: pep, ...(pepAlternatives.length > 0 ? { alternatives: pepAlternatives } : {}), ...(pepFallbackOnly ? { fallbackOnly: true as const } : {}) });
       const pkg = tomlEntry || pep ? add(name, itemEcosystem, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
+      if (pkg && pep && pepAlternatives.length > 0) {
+        pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
+        if (pepFallbackOnly) pkg.fallbackOnly = true;
+      }
       if (pkg) listed.push({ pkg, strong });
       if (after) bound.push({ name: raw[k].replace(/[.,;:)]+$/, ""), version: after.version, ...span(after.at) });
       // "the lodahs package, and expres": a package word may close the item.
@@ -729,7 +771,7 @@ function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
   return null;
 }
 
-function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -744,7 +786,10 @@ function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed
 /** No registry of that ecosystem has the name and no malicious-package record covers it. */
 const nameNotFound = (f: NewPackageFinding) => !f.malicious && f.verdict === "unknown" && /a hallucinated package/.test(f.reason);
 /** That ecosystem has neither the name nor, for a named version, that release: its answer says nothing about the others. */
-const notFound = (f: NewPackageFinding) => nameNotFound(f) || (Boolean(f.version) && !f.malicious && f.verdict === "unknown" && /is not a published version on/.test(f.reason));
+const notFound = (f: NewPackageFinding) => nameNotFound(f) || (Boolean(f.version) && !f.malicious && f.verdict === "unknown" && NO_SUCH_RELEASE.test(f.reason));
+/** Findings whose "review" is only a near-miss of the name in that ecosystem, and those whose name check is clean (nameOnlyReview, nameClean). */
+const NAME_ONLY = new WeakSet<NewPackageFinding>();
+const NAME_CLEAN = new WeakSet<NewPackageFinding>();
 /** The checkable ecosystems a bare name can be in (a Go module is a host path, never a bare name). */
 const NAME_ECOSYSTEMS: readonly CheckEcosystem[] = ["npm", "crates.io", "PyPI"];
 
@@ -809,12 +854,12 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     );
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, ...p } = pkg;
     if (!r) return unchecked(p, "no answer");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
     const nearMiss = (nameCheck?.value as { near_miss_of?: string } | undefined)?.near_miss_of;
-    return {
+    const out: NewPackageFinding = {
       ...p,
       verdict: r.verdict,
       latest: !p.version && r.to !== "latest" ? r.to : null,
@@ -823,6 +868,9 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       did_you_mean: advisories?.malicious_package?.did_you_mean ?? nearMiss ?? nearMissName(p.name, p.ecosystem),
       name_finding: nameCheck?.effect === "avoid" || nameCheck?.effect === "review" ? nameCheck.effect : null,
     };
+    if (nameOnlyReview(r.verdict, r.signals)) NAME_ONLY.add(out);
+    if (nameClean(r.signals)) NAME_CLEAN.add(out);
+    return out;
   };
   /** A loose word's name-level answer (briefing-task-name-check.ts) as a finding. */
   const nameFinding = (q: NewPackage, a: NameOnlyAnswer | undefined): NewPackageFinding => {
@@ -875,7 +923,16 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       }
     }
     const out = packages.map((p, i) => {
-      const answers = answered[i];
+      let answers = answered[i];
+      // A fallback ecosystem counts only when the task's own one has no such name or release (W16).
+      const own = p.fallbackOnly ? answers.find((f) => f.ecosystem === p.ecosystem) : undefined;
+      if (own && !notFound(own)) answers = [own];
+      // A namesake's near-miss "review" does not outrank a real answer from an ecosystem that has the
+      // release and knows the name; malware or avoid from any ecosystem that has it still wins (W16).
+      if (answers.some((f) => !notFound(f) && !NAME_ONLY.has(f) && NAME_CLEAN.has(f) && f.verdict !== "unknown")) {
+        const kept = answers.filter((f) => !NAME_ONLY.has(f));
+        if (kept.length > 0) answers = kept;
+      }
       if (answers.length === 0) return unchecked(p, `dependency_check reads no ${p.ecosystem} version or constraint in "${p.version ?? ""}"`);
       if (answers.length === 1) return answers[0];
       // The worst answer; when no ecosystem has the name, the one that knows what it resembles.

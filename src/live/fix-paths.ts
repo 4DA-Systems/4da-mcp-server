@@ -729,7 +729,7 @@ export function aboveListedText(target: string): string {
 }
 
 /** A reason heldNote writes for a target that is not a clean fix (heldBlocked / heldUnchecked): the plan summary counts those rows apart. */
-export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|exact-pins or narrowly ranges are affected was NOT CHECKED \(/;
+export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|(?:exact-pins or narrowly ranges|holds) are affected was NOT CHECKED \(/;
 
 /** The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked), or null when there is nothing to say. */
 export function heldNote(clean: FixTargetResult): string | null {
@@ -750,7 +750,7 @@ export function heldNote(clean: FixTargetResult): string | null {
     return `${heldText(clean.target, clean.heldBlocked.affected)}; no later release on its line ${upTo}that its own advisories leave clean clears ${clean.heldBlocked.affected.length === 1 ? "it" : "them"}${partial}, so ${clean.target} is NOT a clean fix: confirm a release with dependency_check before pinning it`;
   }
   if (clean.heldUnchecked !== undefined && clean.target) {
-    return `whether the dependencies ${clean.target} exact-pins or narrowly ranges are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
+    return `whether the dependencies ${clean.target} holds are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
   }
   return null;
 }

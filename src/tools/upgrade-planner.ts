@@ -819,7 +819,7 @@ async function executeStandalonePlanner(
   if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated, already its latest release, or no release admits a clean version): override the version or replace the parent`);
   if (heldRows.length > 0) {
     parts.push(
-      `${heldRows.length} fix target${heldRows.length !== 1 ? "s" : ""} NOT a clean fix: the release pins (or narrowly ranges) an affected dependency, or what it pins could not be checked (see reasons; confirm with dependency_check)`,
+      `${heldRows.length} fix target${heldRows.length !== 1 ? "s" : ""} NOT a clean fix: the release exact-pins, narrowly ranges or holds a range whose newest release is affected, or what it holds could not be checked (see reasons; confirm with dependency_check)`,
     );
   }
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
