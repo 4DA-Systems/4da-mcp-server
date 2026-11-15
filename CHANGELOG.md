@@ -73,10 +73,41 @@
     stands. A renamed crate is explained by the difference that applies
     (letter case, "-"/"_", or both). Offline, a fix release that was not
     checked says live lookups are off, not that a check did not finish.
+  - *A wide range no release of which is clean is held.* A dependency spec
+    is now judged at the newest release it admits, the one a fresh install
+    or refresh gets. A range whose newest admitted release is affected makes
+    the parent release affected; one that can't be read is NOT CHECKED. Until
+    now any wide range counted as "not held", even when no release it admits
+    is clean. mocha 10.6.0-10.8.2 require `serialize-javascript ^6.0.2`, every
+    6.x of which is affected (an RCE among them), and 10.6.0 was named a clean
+    target. It is now avoid, and upgrade_impact names no clean release in
+    that line. An npm alias (`npm:event-stream@3.3.6`) is judged as the
+    package it aliases. A safe pick is never a release the same answer calls
+    avoid: react-native's deprecated 1000.0.0 placeholder is no longer offered.
+    The shared rule vector ft-086 is amended in the 4DA corpus to match.
+  - *uv's find-links.* `find-links` and `no-index` (`UV_FIND_LINKS`,
+    `UV_NO_INDEX`, `uv.toml`, `[tool.uv]`, `[tool.uv.pip]`) were not read, so
+    private names in a project that installs private wheels through uv were
+    sent. They are now treated like pip's find-links.
+  - *Briefing commands and specifiers.* `poetry add`, `uv add`, `pdm add`,
+    `pipenv install`, `pipx`, `rye`, `cargo add` and `go get` fix the
+    ecosystem for everything they name. "poetry add pyyaml@5.3" in an npm
+    project is now checked on PyPI and comes back human_only. `gem`,
+    `bundle`, `composer` and `conda` arguments are NOT CHECKED, never looked
+    up on npm. A comparator glued to a name (`requests~=2.31`,
+    `flask<2.2.5`) reads as PyPI, and a name checked in several ecosystems
+    reports its worst answer once. A release carrying a crypto-miner (e.g.
+    PYSEC-2024-154, ultralytics 8.3.41) counts as malware and is human_only.
+    A Cargo `=1.6.0` pin keeps its `=`. "add a retry with backoff" and "add a
+    progress bar" no longer read `retry` or `progress` as packages.
   - *Startup.* The first tool call no longer holds up a concurrent `ping`
     (242-2,905 ms before, 4-5 ms after, measured on the built server); the
-    database schema is created in one transaction. A 150,000-entry pnpm
-    lockfile is read with less memory (peak heap 316 to 243 MB).
+    database schema is created in one transaction. Resolving a very large
+    lockfile pauses every 15 ms. On a 150,000-entry pnpm lockfile the worst
+    ping during the first call went from 2.4 s to about 150 ms, with
+    identical findings. The lockfile is read with less heap (peak 316 to
+    243 MB). Known limit: the process peak on that lockfile is still about
+    440 MB.
   - *Protocol.* In a 2025-03-26 session, a JSON-RPC batch with a cancelled
     request is answered without it, over stdio and Streamable HTTP. Before,
     the batch waited forever, and a later request reusing the id was folded
