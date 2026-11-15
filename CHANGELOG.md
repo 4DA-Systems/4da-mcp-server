@@ -85,6 +85,16 @@
     package it aliases. A safe pick is never a release the same answer calls
     avoid: react-native's deprecated 1000.0.0 placeholder is no longer offered.
     The shared rule vector ft-086 is amended in the 4DA corpus to match.
+  - *Final review fixes.* A pip-style comparator on a name the task did not
+    tie to PyPI ("add event-stream==3.3.6" in an npm project) is also judged
+    on npm, and the worst answer stands, so event-stream 3.3.6 is human_only.
+    In a project with both npm and PyPI, an ecosystem with no such release,
+    or only a near-miss namesake, no longer outranks a real answer:
+    "add rsa 4.7" and "add pandas 2.2.3" are judged on PyPI. Planner rows say
+    which dependencies a parent release holds (exact pin or range) and never
+    say "could not be read" for releases that were read. The planner's
+    pinned-dependency checks now run within its time budget, and a row whose
+    check did not finish is NOT CHECKED with no target named.
   - *uv's find-links.* `find-links` and `no-index` (`UV_FIND_LINKS`,
     `UV_NO_INDEX`, `uv.toml`, `[tool.uv]`, `[tool.uv.pip]`) were not read, so
     private names in a project that installs private wheels through uv were
