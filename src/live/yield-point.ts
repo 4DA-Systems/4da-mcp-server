@@ -56,6 +56,12 @@ export function runSteps<T>(steps: Steps<T>): T {
 export async function runStepsYielding<T, S>(steps: Steps<T>, current: () => boolean, superseded: S): Promise<T | S> {
   for (;;) {
     const r = steps.next();
+    // Checked at every step, not only after a pause: a run superseded between two steps that never
+    // reached a pause returned its own result, and on a fast machine the caller took it (CI, round 10).
+    if (!current()) {
+      if (!r.done) steps.return(undefined as unknown as T);
+      return superseded;
+    }
     if (r.done) return r.value;
     const turn = yieldIfDue();
     if (turn) {
