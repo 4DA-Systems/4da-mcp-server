@@ -87,7 +87,9 @@ export async function confirmTargets(
   if (todo.length === 0) return out;
   const answer = await batchAnswer(
     query,
-    todo.flatMap((i) => [i.clean.target!, ...(i.clean.newestSafe ? [i.clean.newestSafe] : [])].map((version) => ({ ecosystem: i.ecosystem, name: i.name, version }))),
+    todo.flatMap((i) =>
+      [i.clean.target!, ...(i.clean.newestSafe ? [i.clean.newestSafe] : []), ...(i.clean.lineDowngrade ? [i.clean.lineDowngrade.version] : [])].map((version) => ({ ecosystem: i.ecosystem, name: i.name, version })),
+    ),
     deadline,
   );
   // Each target's advisory list is read at once, not one package after another (blind audit round 6).
@@ -95,14 +97,21 @@ export async function confirmTargets(
     todo.map(async (i) => {
       const why = await unconfirmedWhy(sources, answer, i.ecosystem, i.name, i.clean.target!);
       if (why) {
-        const { newestSafe: _n, lineDead: _l, ...rest } = i.clean;
+        const { newestSafe: _n, lineDead: _l, lineHasLater: _h, lineDowngrade: _d, ...rest } = i.clean;
         out.set(i.key, { ...rest, advisoriesUnread: true, unconfirmed: why });
         return;
       }
-      if (i.clean.newestSafe && (await unconfirmedWhy(sources, answer, i.ecosystem, i.name, i.clean.newestSafe))) {
-        const { newestSafe: _n, ...rest } = i.clean;
-        out.set(i.key, rest);
+      let next = i.clean;
+      if (next.newestSafe && (await unconfirmedWhy(sources, answer, i.ecosystem, i.name, next.newestSafe))) {
+        const { newestSafe: _n, ...rest } = next;
+        next = rest;
       }
+      // A downgrade on the installed line is named clean only when the batch answer agrees (W6); not
+      // confirmed, it stays unnamed, and still stops "no X.x release clears every advisory".
+      if (next.lineDowngrade && !(await unconfirmedWhy(sources, answer, i.ecosystem, i.name, next.lineDowngrade.version))) {
+        next = { ...next, lineDowngrade: { ...next.lineDowngrade, confirmed: true } };
+      }
+      if (next !== i.clean) out.set(i.key, next);
     }),
   );
   return out;

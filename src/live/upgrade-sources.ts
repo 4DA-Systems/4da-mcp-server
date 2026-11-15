@@ -30,6 +30,7 @@ import { isPrereleaseVersion } from "./osv-ranges.js";
 import { looksLikeZip, readZipRootTextFiles } from "./zip-archive.js";
 import { loadPypiIndex, normalizePypiName, PYPI_NAME } from "./upgrade-pypi.js";
 import { GO_MODULE, goZipUrl, loadGoIndex } from "./upgrade-go.js";
+import { heldSpecsOf } from "./held-dependencies.js";
 
 export type UpgradeEcosystem = "npm" | "crates.io" | "PyPI" | "Go";
 export const UPGRADE_ECOSYSTEMS: readonly UpgradeEcosystem[] = ["npm", "crates.io", "PyPI", "Go"];
@@ -88,6 +89,12 @@ export interface RegistryIndex {
   changelogLinks?: string[];
   /** npm: releases listed in `time` that the registry no longer serves (unpublished). */
   unpublished?: string[];
+  /**
+   * npm: per release, the dependencies it exact-pins or narrowly ranges (held-dependencies.ts
+   * heldSpecsOf); a release that holds none is absent. Installing the target installs them, so
+   * upgrade_impact judges them too (pre-publish round 10, W6: express 4.21.2 pins qs 6.13.0).
+   */
+  heldSpecs?: Record<string, Record<string, string>>;
 }
 
 export interface ChangelogResult {
@@ -152,7 +159,7 @@ async function cached<T>(net: UpgradeNet, key: string, ttl: number, load: () => 
 
 interface NpmPackument {
   name?: string;
-  versions?: Record<string, { deprecated?: unknown; dist?: { tarball?: string } }>;
+  versions?: Record<string, { deprecated?: unknown; dist?: { tarball?: string }; dependencies?: Record<string, unknown>; optionalDependencies?: Record<string, unknown> }>;
   time?: Record<string, string>;
   repository?: unknown;
 }
@@ -190,7 +197,12 @@ async function loadNpmIndex(net: UpgradeNet, name: string): Promise<RegistryInde
   // hijack). A refusal to analyse one says so instead of "not published" (r7).
   const served = new Set(Object.keys(doc.versions ?? {}));
   const unpublished = Object.keys(doc.time ?? {}).filter((v) => v !== "created" && v !== "modified" && !served.has(v) && parseSemverPrecedence(v) !== null);
-  return { name: doc.name ?? name, ecosystem: "npm", versions, repository: repositoryUrl(doc.repository), ...(unpublished.length > 0 ? { unpublished } : {}) };
+  const heldSpecs: Record<string, Record<string, string>> = {};
+  for (const [version, meta] of Object.entries(doc.versions ?? {})) {
+    const held = heldSpecsOf(meta?.dependencies, meta?.optionalDependencies);
+    if (Object.keys(held).length > 0) heldSpecs[version] = held;
+  }
+  return { name: doc.name ?? name, ecosystem: "npm", versions, repository: repositoryUrl(doc.repository), heldSpecs, ...(unpublished.length > 0 ? { unpublished } : {}) };
 }
 
 async function loadCratesIndex(net: UpgradeNet, name: string): Promise<RegistryIndex | null> {
@@ -219,7 +231,8 @@ export async function getRegistryIndex(
   const keyName =
     ecosystem === "crates.io" ? name.replace(/-/g, "_") : ecosystem === "PyPI" ? normalizePypiName(name) : name;
   // v2 (r7): npm indexes carry `unpublished`, and `repository` is held to a URL's shape and length.
-  const key = `upgrade-impact:index:v2:${ecosystem}:${keyName}`;
+  // v3 (pre-publish round 10, W6): npm indexes carry `heldSpecs`; a v2 entry has none, which would read as "holds nothing".
+  const key = `upgrade-impact:index:v3:${ecosystem}:${keyName}`;
   const index = await cached(net, key, INDEX_TTL, () => {
     switch (ecosystem) {
       case "npm":

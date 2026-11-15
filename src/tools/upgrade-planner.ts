@@ -107,7 +107,7 @@ interface UpgradeRecommendation {
    * `upgrade_parent_unverified` = transitive, a parent release that admits a clean version exists,
    * but no release of the declared dependency that brings it in was verified (every lever's `to`
    * is null): `parentUpgrades` says what to check; nothing is counted as fixed;
-   * `remove_dependency` = the installed copy is flagged malicious and no release is clean of
+   * `remove_dependency` = the installed copy is flagged malicious and no later release is clean of
    * it (crossenv: 1.0.0 and 1.0.1 are malware), or the installed version is a placeholder and every
    * newer release is known-affected: remove or replace the dependency. A malware record with a
    * clean later release (fsevents 1.2.9, MAL-2023-462, clean from 1.2.11) is an upgrade instead;
@@ -805,7 +805,8 @@ async function executeStandalonePlanner(
     );
   }
   if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream`);
-  if (removals > 0) parts.push(`${removals} to remove or replace: no release is clean of the malware or advisories affecting the installed copy`);
+  // "later": only releases above the installed copy were judged; an earlier one is not denied (W6).
+  if (removals > 0) parts.push(`${removals} to remove or replace: no later release is clean of the malware or advisories affecting the installed copy`);
   if (holds > 0) parts.push(`${holds} to keep where ${holds === 1 ? "it is" : "they are"}: every newer release is known-affected or withdrawn`);
   if (overrides > 0) parts.push(`${overrides} transitive, blocked by a parent that will not move (deprecated, already its latest release, or no release admits a clean version): override the version or replace the parent`);
   if (heldRows.length > 0) {

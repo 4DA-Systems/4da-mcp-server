@@ -28,6 +28,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
 import { restampDepContext } from "../live/osv-scanner.js";
+import { deadLineText } from "../live/fix-paths.js";
 import type { OsvVulnerability, ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
@@ -58,7 +59,11 @@ let GOMOD: Record<string, string> = {};
 
 const cmp = (a: string, b: string) => a.replace(/^v/, "").localeCompare(b.replace(/^v/, ""), undefined, { numeric: true });
 const affects = (v: OsvVulnerability, version: string) => {
-  const fixed = v.affected![0].ranges[0].events.find((e) => e.fixed)?.fixed;
+  const events = v.affected![0].ranges[0].events;
+  const fixed = events.find((e) => e.fixed)?.fixed;
+  // An `introduced` above 0 (event-stream's GHSA-mh6f-8j2x-4483: 3.3.6 only) leaves earlier releases out.
+  const introduced = events.find((e) => e.introduced)?.introduced;
+  if (introduced && introduced !== "0" && cmp(version, introduced) < 0) return false;
   return fixed ? cmp(version, fixed) < 0 : true;
 };
 
@@ -382,6 +387,63 @@ describe("4. a dead installed line names the smallest safe release on a later li
     npmProject({ lodash: "4.17.20" }, { lodash: { version: "4.17.20" } });
     const { step } = await plan();
     expect(step("lodash").reasons.join(" ")).not.toMatch(/release clears every advisory/);
+  });
+});
+
+describe("4b. a dead line above the installed release is not a dead line below it (event-stream 3.3.6, pre-publish round 10, W6)", () => {
+  // GHSA-mh6f-8j2x-4483 affects 3.3.6 only (introduced 3.3.6, fixed 4.0.0), the last 3.x. Every tool
+  // said "no 3.x release clears every advisory: 4.0.0 is the smallest safe release", while
+  // dependency_check {3.x} rightly named 3.3.5 safe.
+  function eventStream(extra: Record<string, NpmVersion> = {}) {
+    ADVISORIES["event-stream"] = [adv("GHSA-mh6f-8j2x-4483", "event-stream", [{ introduced: "3.3.6" }, { fixed: "4.0.0" }], "npm", "CRITICAL")];
+    // 3.3.5 narrowly ranges `through`, so what it holds is judged before it is named clean.
+    NPM["event-stream"] = { latest: "4.0.1", versions: { "3.3.4": {}, "3.3.5": { dependencies: { through: "~2.3.1" } }, ...extra, "4.0.0": {}, "4.0.1": {} } };
+    NPM.through = { latest: "2.3.8", versions: { "2.3.1": {}, "2.3.8": {} } };
+    npmProject({ "event-stream": "3.3.6" }, { "event-stream": { version: "3.3.6" } });
+  }
+  const WORDS = "o 3.x release after 3.3.6 exists; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release";
+
+  it("upgrade_planner and vulnerability_scan: no later 3.x exists, 3.3.5 (a downgrade) is clean, 4.0.0 the smallest clean upgrade", async () => {
+    eventStream();
+    const { step } = await plan();
+    const row = step("event-stream");
+    expect(row).toMatchObject({ targetVersion: "4.0.0", latestVersion: "4.0.1" });
+    expect(row.reasons).toContain(`N${WORDS}`);
+    expect(row.reasons.join(" ")).not.toMatch(/no 3\.x release clears every advisory|smallest safe release/i);
+    const detailed = await scan("detailed");
+    expect(lineFor(detailed, "event-stream", "3.3.6")).toContain(`n${WORDS}`);
+    expect(detailed.fix_targets["event-stream@3.3.6"]).toMatchObject({ target: "4.0.0", newest_safe: "4.0.1", note: expect.stringContaining(`n${WORDS}`) });
+  });
+
+  it("later 3.x releases that are all affected: they do not clear it, and the downgrade is still named", async () => {
+    eventStream({ "3.3.7": {} });
+    const { step } = await plan();
+    expect(step("event-stream").reasons).toContain(
+      "No 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release",
+    );
+  });
+
+  it("a downgrade whose held dependency is affected is not named clean, and the line is still not called dead below", async () => {
+    eventStream();
+    ADVISORIES.through = [adv("GHSA-thru-0000-0001", "through", fixedIn("2.4.0"))];
+    const { step } = await plan();
+    const reasons = step("event-stream").reasons.join(" | ");
+    expect(reasons).toContain("No 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    expect(reasons).not.toMatch(/3\.3\.5|no 3\.x release clears every advisory/i);
+  });
+});
+
+describe("deadLineText: a downgrade is named only once checked (pre-publish round 10, W6)", () => {
+  const base = { target: "4.0.0", basis: "advisory_fixes" as const, floor: "4.0.0", floorAffectedBy: [], stillAffectedBy: [], unfixable: [], withheld: [], lineDead: true as const, newestSafe: "4.0.1" };
+  it("whole line affected: the original words; a downgrade unconfirmed: neither named nor denied", () => {
+    expect(deadLineText("8.5.1", base)).toBe("no 8.x release clears every advisory: 4.0.0 is the smallest safe release, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    for (const down of [{ confirmed: false, heldClean: true }, { confirmed: true, heldClean: false }]) {
+      const text = deadLineText("3.3.6", { ...base, lineDowngrade: { version: "3.3.5", ...down } });
+      expect(text).toBe("no 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    }
+    expect(deadLineText("3.3.6", { ...base, lineHasLater: true, lineDowngrade: { version: "3.3.5", confirmed: true, heldClean: true } })).toBe(
+      "no 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release",
+    );
   });
 });
 

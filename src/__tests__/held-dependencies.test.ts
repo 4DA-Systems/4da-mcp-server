@@ -24,6 +24,8 @@ import type { OsvVulnerability } from "../live/types.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
+import { analyzeUpgradeImpact, executeUpgradeImpact } from "../tools/upgrade-impact.js";
+import { createUpgradeNet } from "../live/upgrade-sources.js";
 import type { FourDADatabase } from "../db.js";
 
 const noDb = null as unknown as FourDADatabase;
@@ -91,8 +93,10 @@ function stubNetwork() {
       return found ? json(found) : json({}, 404);
     }
     if (url === "https://api.osv.dev/v1/query") {
-      const q = JSON.parse(String(init?.body)) as { package: { name: string } };
-      return json({ vulns: ADVISORIES[q.package.name] ?? [] });
+      // With a version (upgrade_impact asks about one release): only the advisories that affect it.
+      const q = JSON.parse(String(init?.body)) as { package: { name: string }; version?: string };
+      const all = ADVISORIES[q.package.name] ?? [];
+      return json({ vulns: q.version ? all.filter((v) => affects(v, q.version!)) : all });
     }
     const npm = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
     if (npm) {
@@ -177,7 +181,7 @@ describe("vulnerability_scan: a fix target is judged by what it installs (audit 
     NPM.express.versions["4.22.3"] = { dependencies: { qs: "6.13.0", "path-to-regexp": "0.1.13", cookie: "0.7.1" } };
     const concise = await scan();
     expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: null, fix_note: expect.stringMatching(/^NOT CHECKED: 4.20.0 /), fix_checked: "installed_advisories_only" });
-    expect(concise.recommendations[0]).toMatch(/4\.20\.0 exact-pins qs 6\.11\.0 .*no release on its line up to 4\.22\.3 that its own advisories leave clean clears them, so 4\.20\.0 is NOT a clean fix/);
+    expect(concise.recommendations[0]).toMatch(/4\.20\.0 exact-pins qs 6\.11\.0 .*no later release on its line up to 4\.22\.3 that its own advisories leave clean clears them, so 4\.20\.0 is NOT a clean fix/);
   });
 
   it("a release whose held dependencies cannot be judged is named NOT CHECKED, never counted as not clearing them (4DA #1039)", async () => {
@@ -187,7 +191,7 @@ describe("vulnerability_scan: a fix target is judged by what it installs (audit 
     const concise = await scan();
     expect(concise.vulnerable_packages[0]).toMatchObject({ fixed_version: null, fix_note: expect.stringMatching(/^NOT CHECKED: 4.20.0 /), fix_checked: "installed_advisories_only" });
     expect(concise.recommendations[0]).toMatch(
-      /no release on its line up to 4\.22\.3 that its own advisories leave clean clears them, of the releases that could be checked \(4\.21\.2 NOT CHECKED\), so 4\.20\.0 is NOT a clean fix/,
+      /no later release on its line up to 4\.22\.3 that its own advisories leave clean clears them, of the releases that could be checked \(4\.21\.2 NOT CHECKED\), so 4\.20\.0 is NOT a clean fix/,
     );
   });
 
@@ -396,5 +400,61 @@ describe("r7 blocker: a held check that could not run never widens the safe set"
     HELD_LOOKUP_DOWN = true;
     const r = (await check([{ ecosystem: "npm", package: "express", to: "^4.21.0" }])).results[0];
     expect(r.range_check?.smallest_safe_in_range ?? null).toBeNull();
+  });
+});
+
+describe("upgrade_impact: the target is judged by what it installs (pre-publish round 10, W6)", () => {
+  // express 4.21.2 exact-pins qs 6.13.0 and path-to-regexp 0.1.12; upgrade_impact said
+  // `advisories_remaining: []` and "2 advisories fixed", as if installing it were clean.
+  const impact = async (to: string) =>
+    (await executeUpgradeImpact(noDb, { ecosystem: "npm", package: "express", from_version: "4.16.4", to_version: to }, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
+
+  it("4.21.2 names the held advisories, is not summarised as clean, and names 4.22.3 as the first clean release", async () => {
+    const r = await impact("4.21.2");
+    expect(r.advisories_remaining).toEqual([]);
+    expect(r.held_dependencies_affected.map((d: { package: string; installs: string }) => `${d.package}@${d.installs}`).sort()).toEqual(["path-to-regexp@0.1.12", "qs@6.13.0"]);
+    expect(r.held_dependencies_affected.find((d: { package: string }) => d.package === "qs").advisories).toEqual(["GHSA-4mjr-xmp4-gh2g"]);
+    expect(r.first_clean_release).toBe("4.22.3");
+    expect(r.summary).toMatch(/advisories fixed; but 4\.21\.2 exact-pins qs 6\.13\.0 \(GHSA-4mjr-xmp4-gh2g\) and path-to-regexp 0\.1\.12 \(GHSA-37ch-88jc-xwx2\): installing 4\.21\.2 installs them, so 4\.21\.2 is not a clean target; 4\.22\.3 is the first later release on its line/);
+    expect(r.held_note).toBe(r.summary.split("; but ")[1].replace(/\.$/, ""));
+  });
+
+  it("a target whose held dependencies are clean (4.22.3) carries no held fields", async () => {
+    const r = await impact("4.22.3");
+    expect(r).not.toHaveProperty("held_dependencies_affected");
+    expect(r).not.toHaveProperty("held_dependencies_unchecked");
+    expect(r.summary).not.toMatch(/; but |NOT CHECKED/);
+  });
+
+  it("no later release on the line clears them: nothing is named clean", async () => {
+    NPM.express.versions["4.22.3"] = { dependencies: { qs: "6.13.0", "path-to-regexp": "0.1.13", cookie: "0.7.1" } };
+    const r = await impact("4.21.2");
+    expect(r.first_clean_release).toBeNull();
+    expect(r.summary).toMatch(/so 4\.21\.2 is not a clean target; no later release on its line up to 4\.22\.3 that its own advisories leave clean clears them: confirm a release with dependency_check/);
+  });
+
+  it("fails closed: the held lookup down is NOT CHECKED, never clean", async () => {
+    HELD_LOOKUP_DOWN = true;
+    const r = await impact("4.21.2");
+    expect(r.held_dependencies_unchecked).toEqual(expect.any(String));
+    expect(r).not.toHaveProperty("held_dependencies_affected");
+    expect(r).not.toHaveProperty("first_clean_release");
+    expect(r.summary).toMatch(/; NOT CHECKED: whether the dependencies 4\.21\.2 exact-pins or narrowly ranges have known advisories could not be checked \(.+\); installing 4\.21\.2 installs them, so this is not a clean result\.$/);
+  });
+
+  it("fails closed: with no advisory lookup at all (no live layer), a target that holds something is NOT CHECKED", async () => {
+    const r = (await analyzeUpgradeImpact(
+      { ecosystem: "npm", package: "express", from_version: "4.16.4", to_version: "4.21.2" },
+      { net: createUpgradeNet(null), projectRoot: null, installed: [], offline: false, held: null },
+    )) as Record<string, any>;
+    expect(r.held_dependencies_unchecked).toBe("this server has no advisory lookup for them");
+    expect(r.summary).toMatch(/NOT CHECKED/);
+    // A release that holds nothing needs no lookup, and says nothing of the kind.
+    NPM.express.versions["4.21.2"] = { dependencies: { debug: "^2.6.9" } };
+    const clean = (await analyzeUpgradeImpact(
+      { ecosystem: "npm", package: "express", from_version: "4.16.4", to_version: "4.21.2" },
+      { net: createUpgradeNet(null), projectRoot: null, installed: [], offline: false, held: null },
+    )) as Record<string, any>;
+    expect(clean).not.toHaveProperty("held_dependencies_unchecked");
   });
 });
