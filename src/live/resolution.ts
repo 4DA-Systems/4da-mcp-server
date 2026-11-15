@@ -28,7 +28,7 @@ import { mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./v
 import { parsePyprojectDependencies } from "../project-manifests.js";
 import { readTextFile } from "./text-file.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
-import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
+import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements, VersionSource } from "./lockfile-types.js";
 import type { PrivateIndexEntry } from "./private-packages.js";
 
 /** The inputs of one resolution, kept so the same resolution can be re-run. */
@@ -64,6 +64,8 @@ export interface GroupResolution {
   privateIndex: PrivateIndexEntry[];
   /** PyPI: `--extra-index-url` indexes beside pypi.org, by file. */
   extraIndexes: Array<{ file: string; index: string }>;
+  /** PyPI: requirements options that make every name of the install private (VersionSource.registryWide). */
+  registryWide: NonNullable<VersionSource["registryWide"]>;
   /** PyPI: every file read records each package's index (VersionSource.indexRecorded). */
   indexRecorded?: true;
   /** PyPI: requirements with no pinned version anywhere in this directory, by the file that lists them. */
@@ -104,6 +106,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
       uncheckable: [],
       privateIndex: [],
       extraIndexes: [],
+      registryWide: [],
       unpinned: [],
       signatures,
       resolvedAt,
@@ -177,6 +180,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     uncheckable: read.uncheckable ?? [],
     privateIndex: read.privateIndex ?? [],
     extraIndexes: read.extraIndexes ?? [],
+    registryWide: read.registryWide ?? [],
     ...(read.indexRecorded ? { indexRecorded: true as const } : {}),
     unpinned,
     problems: read.problems ?? [],
@@ -214,6 +218,33 @@ function pyprojectUnpinned(dir: string, uncheckable: UncheckableDependency[]): U
   const elsewhere = new Set(uncheckable.map((u) => u.name));
   const names = declared.filter((name) => !elsewhere.has(name));
   return names.length > 0 ? [{ file, names }] : [];
+}
+
+/**
+ * A resolution group for each pyproject.toml below the root that has no lockfile beside it and no
+ * workspace lockfile above it (`discovery.unlockedManifests`). Such a manifest was only counted:
+ * its `[tool.uv] index-url`, `[[tool.uv.index]]`, `[[tool.poetry.source]]` or `[[tool.pdm.source]]`
+ * was never read for that folder, its dependencies were never named, and dependency_check and the
+ * briefing sent them, and a new name, to OSV.dev and pypi.org (pre-publish round 10, W4). As a
+ * group, its index rules apply under it (PrivatePackageRules reads a group's directory) and its
+ * dependencies are listed as unpinned, never checked (pyprojectUnpinned).
+ */
+export function unlockedPythonGroups(root: string, manifests: ReadonlyArray<{ path: string; ecosystem: string }>, known: ReadonlyArray<ResolutionGroup>): ResolutionGroup[] {
+  const taken = new Set(known.filter((g) => g.language === "python").map((g) => path.resolve(g.dir).toLowerCase()));
+  const out: ResolutionGroup[] = [];
+  for (const m of manifests) {
+    if (m.ecosystem !== "PyPI" || path.basename(m.path) !== "pyproject.toml") continue;
+    const dir = path.resolve(root, path.dirname(m.path));
+    if (taken.has(dir.toLowerCase())) continue;
+    taken.add(dir.toLowerCase());
+    try {
+      const parsed = parsePyprojectDependencies(readTextFile(path.join(dir, "pyproject.toml")));
+      out.push({ dir, language: "python", deps: parsed.deps, devDeps: parsed.devDeps, targets: {} });
+    } catch {
+      // unreadable: the discovery note already says it was not checked
+    }
+  }
+  return out;
 }
 
 /** True when any file the resolution depended on changed, appeared, or vanished. */

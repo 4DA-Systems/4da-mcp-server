@@ -85,7 +85,22 @@ export interface PrivateDependency {
   version: string | null;
   /** In this server's words: which file or setting says it is private. */
   why: string;
+  /**
+   * `registry`: private because the package manager fetches ANY name of this ecosystem from a source
+   * that is not public here (a default registry, index or proxy, a requirements `--index-url`, an
+   * extra index or find-links location, a Cargo source replacement, GOPROXY, a lockfile that installs
+   * every package from one private host), so a name not installed yet is private too. `name`: a rule
+   * that covers this name only (a scope, GOPRIVATE, a per-package index, FOURDA_PRIVATE_PACKAGES).
+   * Carried as data so no caller reads it back out of `why` (pre-publish round 10, W4).
+   */
+  kind: PrivateKind;
 }
+
+/** What makes a name private: a source that serves any name (`registry`), or a rule for the name (`name`). */
+export type PrivateKind = "registry" | "name";
+
+/** Said with every registry-kind reason: how to have a host that only mirrors the public registry checked. */
+export const PUBLIC_MIRRORS_HINT = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
 
 /** A lockfile entry installed from a registry that is not the public one (or from git). */
 export interface PrivateIndexEntry {
@@ -101,6 +116,12 @@ export interface PrivateIndexEntry {
    * name private (R8).
    */
   local?: true;
+  /**
+   * The requirements option that makes every name of the file private (`--index-url`,
+   * `--extra-index-url`, `--find-links`): a registry-kind reason, which the answer names with the
+   * FOURDA_PUBLIC_MIRRORS escape (pre-publish round 10, W4).
+   */
+  wide?: string;
 }
 
 /** Scopes one `.npmrc` maps to a non-public registry (`@acme:registry=...`). */
@@ -293,6 +314,99 @@ export function bunfigRegistries(content: string): { scopes: string[]; registry:
       if (url && !isPublicNpmRegistry(url)) scopes.push(tableScope);
     } else if (section === "install" && key === "registry" && url) {
       registry = url;
+    }
+  }
+  return { scopes: [...new Set(scopes)], registry };
+}
+
+/**
+ * pnpm-workspace.yaml: pnpm v10+ reads registry settings from it (pnpm.io/settings: "Env variables
+ * are not expanded in settings of pnpm-workspace.yaml that define registry URLs: registry and the URL
+ * values of registries and namedRegistries"), in either shape of `registries` (pnpm.io/registries):
+ * scope to URL (`default: <url>`, `"@acme": <url>`) or URL-keyed (`<url>: { scopes: ["@acme"] }`,
+ * where a bare `"@"` routes the default registry). Only `.npmrc` was read, so a scope or default
+ * registry set here let private names reach OSV.dev and npm (pre-publish round 10, W4). Returns the
+ * scopes mapped to a registry that is not public, and the default registry (null when none is set).
+ */
+export function pnpmWorkspaceRegistries(content: string): { scopes: string[]; registry: string | null } {
+  const scopes: string[] = [];
+  let registry: string | null = null;
+  const lines = content.split(/\r?\n/).map((l) => stripComment(l).replace(/\s+$/, ""));
+  const indentOf = (l: string) => l.length - l.trimStart().length;
+  // `key: value`, the key quoted or plain; a plain key ends at the first `:` followed by a space or
+  // the line's end, so a URL key (`https://npm.acme.dev/:`) is read whole.
+  const keyValue = (l: string): { key: string; value: string } | null => {
+    const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|.+?):(?=\s|$)\s*(.*)$/.exec(l);
+    return m ? { key: unquote(m[1]), value: m[2].trim() } : null;
+  };
+  const note = (scope: string, url: string) => {
+    if (!url) return;
+    const s = scope.trim();
+    if (s === "default" || s === "@") registry = url;
+    else if (s.startsWith("@") && !isPublicNpmRegistry(url)) scopes.push(s.toLowerCase());
+  };
+  /** A list value: a flow `["@a", "@b"]` on the line, else the `- item` lines below it. */
+  const listAt = (value: string, from: number, indent: number): string[] => {
+    if (value.startsWith("[")) {
+      const parsed = parseFlow(value).value;
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    }
+    const out: string[] = [];
+    for (let j = from; j < lines.length; j++) {
+      if (!lines[j].trim()) continue;
+      if (indentOf(lines[j]) <= indent && !lines[j].trimStart().startsWith("-")) break;
+      const item = /^\s*-\s*(.+)$/.exec(lines[j]);
+      if (item) out.push(unquote(item[1]));
+      else break;
+    }
+    return out;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim() || indentOf(line) !== 0) continue;
+    const top = keyValue(line);
+    if (!top) continue;
+    if (top.key === "registry" && top.value) registry = unquote(top.value);
+    if (top.key !== "registries") continue;
+    if (top.value.startsWith("{")) {
+      const map = parseFlow(top.value).value;
+      if (map && typeof map === "object" && !Array.isArray(map)) {
+        for (const [k, v] of Object.entries(map)) {
+          if (typeof v === "string") note(k, v);
+          else if (v && typeof v === "object" && !Array.isArray(v) && Array.isArray(v.scopes)) for (const s of v.scopes) if (typeof s === "string") note(s, k);
+        }
+      }
+      continue;
+    }
+    // The block below `registries:`: its entries are the lines at the first child indentation.
+    let child = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j];
+      if (!l.trim()) continue;
+      const indent = indentOf(l);
+      if (indent === 0) break;
+      if (child < 0) child = indent;
+      if (indent !== child) continue;
+      const entry = keyValue(l);
+      if (!entry) continue;
+      if (entry.value && !entry.value.startsWith("{")) {
+        note(entry.key, unquote(entry.value));
+        continue;
+      }
+      // URL-keyed: the registry's own fields, `scopes` among them (inline or on the lines below).
+      if (entry.value.startsWith("{")) {
+        const fields = parseFlow(entry.value).value;
+        if (fields && typeof fields === "object" && !Array.isArray(fields) && Array.isArray(fields.scopes)) for (const s of fields.scopes) if (typeof s === "string") note(s, entry.key);
+        continue;
+      }
+      for (let k = j + 1; k < lines.length; k++) {
+        const f = lines[k];
+        if (!f.trim()) continue;
+        const fIndent = indentOf(f);
+        if (fIndent <= child) break;
+        const field = keyValue(f);
+        if (field?.key === "scopes") for (const s of listAt(field.value, k + 1, fIndent)) note(s, entry.key);
+      }
     }
   }
   return { scopes: [...new Set(scopes)], registry };
@@ -606,6 +720,8 @@ export class PrivatePackageRules {
     // bun reads the project's bunfig.toml and the user's ($XDG_CONFIG_HOME/.bunfig.toml, ~/.bunfig.toml).
     const xdg = env.XDG_CONFIG_HOME || null;
     const bunfigs = [...inDirs("bunfig.toml"), ...global([xdg ? path.join(xdg, ".bunfig.toml") : null, home ? path.join(home, ".bunfig.toml") : null])];
+    // pnpm v10+ reads `registry` and `registries` from pnpm-workspace.yaml (pnpmWorkspaceRegistries).
+    const pnpmWorkspaces = inDirs("pnpm-workspace.yaml");
     const goFile = goEnvPath(env);
     const pipFiles = pipConfigFiles(env);
     // uv finds `uv.toml` and `pyproject.toml` in the project and the directories above it; pipenv the Pipfile.
@@ -616,7 +732,7 @@ export class PrivatePackageRules {
     const cargoGlobal = new Set(cargoHome ? [path.resolve(cargoHome, "config.toml"), path.resolve(cargoHome, "config")] : []);
     const cargoFiles = cargoConfigFiles(dirs, env, ancestorsOf).map((file) => ({ file, scope: cargoGlobal.has(file) ? null : path.dirname(path.dirname(file)) }));
     // Signatures first: a write that lands while a file is read still reads as a change.
-    this.inputs = signatureMap([...[...npmrcs, ...yarnrcs, ...bunfigs, ...uvFiles, ...pyprojects, ...pipfiles, ...cargoFiles].map((f) => f.file), ...(goFile ? [goFile] : []), ...pipFiles]);
+    this.inputs = signatureMap([...[...npmrcs, ...yarnrcs, ...bunfigs, ...pnpmWorkspaces, ...uvFiles, ...pyprojects, ...pipfiles, ...cargoFiles].map((f) => f.file), ...(goFile ? [goFile] : []), ...pipFiles]);
     this.envKey = envKeyOf(env);
 
     // pip. Later files win in pip, but which one wins can depend on a file this server cannot see
@@ -651,7 +767,7 @@ export class PrivatePackageRules {
       if (!index) continue;
       python.push({ url: index, from: file, scope });
       // Its packages are private wherever they are named: no lockfile or tree group may list them.
-      for (const name of read.names) if (!this.pipfileNames.has(pep503(name))) this.pipfileNames.set(pep503(name), `${file} installs it from ${sourceLabel(index)} (a Pipfile source), not pypi.org`);
+      for (const name of read.names) if (!this.pipfileNames.has(pep503(name))) this.pipfileNames.set(pep503(name), `${file} installs it from ${sourceLabel(index)} (a Pipfile [[source]]), not pypi.org; ${PUBLIC_MIRRORS_HINT}`);
     }
     pushAll(this.pythonIndexes, python.filter((p) => !isMirror(p.url)).map((p) => ({ ...p, url: sourceLabel(p.url) })));
 
@@ -682,6 +798,13 @@ export class PrivatePackageRules {
       if (seen.has(file)) continue;
       seen.add(file);
       const read = bunfigRegistries(safeRead(file));
+      for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      if (read.registry && !isPublicNpmRegistry(read.registry)) npmDefaults.push({ url: read.registry, from: file, scope });
+    }
+    for (const { file, scope } of pnpmWorkspaces) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const read = pnpmWorkspaceRegistries(safeRead(file));
       for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
       if (read.registry && !isPublicNpmRegistry(read.registry)) npmDefaults.push({ url: read.registry, from: file, scope });
     }
@@ -815,15 +938,17 @@ export class PrivatePackageRules {
    * `[[tool.pdm.source]]` with a pdm.lock sent every private name (R8, B4).
    */
   ecosystemWide(ecosystem: string, dir: string | null, indexRecorded: boolean): string | null {
-    const hint = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
+    const hint = PUBLIC_MIRRORS_HINT;
     const npm = ecosystem === "npm" ? this.npmRegistryFor(dir) : null;
     if (npm) return `npm installs it from ${npm.url} (${npm.from}), not the public registry; ${hint}`;
     if (ecosystem === "Go" && this.goProxy) return `go downloads it through ${this.goProxy.url} (${this.goProxy.from}), not the public proxy; ${hint}`;
     const cargo = ecosystem === "crates.io" ? this.cargoMirrorFor(dir) : null;
     if (cargo) return `cargo replaces crates.io with ${cargo.url} (${cargo.from}); ${hint}`;
     if (ecosystem === "PyPI" && !indexRecorded) {
-      if (this.pipIndex) return `pip installs it from ${this.pipIndex.url} (${this.pipIndex.from}), not pypi.org`;
-      if (this.pipExtraFrom) return `pip may install it from ${this.pipExtraFrom.url} (an extra index, ${this.pipExtraFrom.from}), not pypi.org`;
+      // The setting and the escape are named: under a private pip index a public `requests` is not
+      // looked up either, and the answer said neither why nor how to have it checked (pre-publish round 10, W4).
+      if (this.pipIndex) return `pip installs it from ${this.pipIndex.url} (index-url, ${this.pipIndex.from}), not pypi.org; ${hint}`;
+      if (this.pipExtraFrom) return `pip may install it from ${this.pipExtraFrom.url} (an extra index or find-links location, ${this.pipExtraFrom.from}), not pypi.org; ${hint}`;
       const python = this.pythonIndexFor(dir);
       if (python) return `uv, Poetry, PDM or pipenv may install it from ${python.url} (${python.from}), not pypi.org; ${hint}`;
     }
@@ -1138,6 +1263,51 @@ function cargoPackageName(content: string): string | null {
     if (kv && table === "package" && kv.key === "name") return tomlString(kv.value);
   }
   return null;
+}
+
+/**
+ * Why a group's lockfile shows a private DEFAULT registry, or null: every package it installs comes
+ * from one host that is not public, and no rule that names packages (a scope mapped to that host, a
+ * per-package index or registry in the manifest) explains it. Then the package manager fetched names
+ * from there with no visible configuration (an Artifactory set in a CI environment, a deleted
+ * `.npmrc`), and a name not installed yet would come from there too (pre-publish round 10, W4).
+ * `entries`: the group's lockfile entries from a private source (mirrors already removed);
+ * `installed`: the names the lockfile installs; `explained(name)`: a name rule covers it.
+ */
+export function lockfileRegistryWide(
+  ecosystem: string,
+  entries: readonly PrivateIndexEntry[],
+  installed: readonly string[],
+  explained: (name: string) => boolean,
+): string | null {
+  // A registry location: git, a local path or file names one package, never a default registry.
+  const registries = entries.filter((p) => !p.local && !p.wide && !/^(?:git\+|git:|ssh:)|\.git(?:[#?/]|$)/i.test(p.registry));
+  const hostOfEntry = (p: PrivateIndexEntry) => hostOf(p.registry.replace(/^[a-z]+\+/i, ""));
+  const hosts = new Set(registries.map(hostOfEntry));
+  if (registries.length === 0 || hosts.size !== 1 || hosts.has(null)) return null;
+  const local = new Set(entries.filter((p) => p.local).map((p) => normName(ecosystem, p.name)));
+  const fromHost = new Set(registries.map((p) => normName(ecosystem, p.name)));
+  const names = installed.filter((n) => !local.has(normName(ecosystem, n)));
+  if (names.length === 0 || !names.every((n) => fromHost.has(normName(ecosystem, n)))) return null;
+  if (names.every(explained)) return null;
+  const host = [...hosts][0] as string;
+  return `${registries[0].file} installs every ${ecosystem} package from ${host}, not the public registry, so a package not installed yet would come from there too; ${PUBLIC_MIRRORS_HINT}`;
+}
+
+/**
+ * Why a lockfile or manifest entry from a private source is private. A registry or index location
+ * (not git, not local code) names the FOURDA_PUBLIC_MIRRORS escape: a mirror of the public registry
+ * declared there is checked again, and the answer never said so (pre-publish round 10, W4).
+ */
+export function lockEntryReason(entry: PrivateIndexEntry): string {
+  const base = `${entry.file} installs it from ${entry.registry}, not the public registry`;
+  const registry = !entry.local && hostOf(entry.registry.replace(/^[a-z]+\+/i, "")) !== null && !/^(?:git\+|git:|ssh:)|\.git(?:[#?/]|$)/i.test(entry.registry);
+  return registry ? `${base}; ${PUBLIC_MIRRORS_HINT}` : base;
+}
+
+/** The reason for a requirements file's `--index-url`, extra index or find-links location that is not public. */
+export function requirementsWideReason(file: string, setting: string, registry: string): string {
+  return `${file} sets ${setting} ${registry}: pip may install any package of it from there, not pypi.org; ${PUBLIC_MIRRORS_HINT}`;
 }
 
 /** Lockfiles are bounded by the readers (bounded-read.ts); this pass reads at most this much. */

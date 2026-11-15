@@ -216,12 +216,21 @@ describe("r6: public names are checked as before", () => {
     ["npm", "@types/node"],
   ];
   for (const [ecosystem, name] of PUBLIC) {
-    it(`{${ecosystem}, ${JSON.stringify(name)}} is not refused as private`, async () => {
+    // Under the fixture's requirements `--index-url`, pip may install ANY PyPI name from the private
+    // index, so a PyPI name looked up by ecosystem is private for dependency_check, as under a pip.conf
+    // index (R8 "N."); until round 10 the requirements option was not read for that, and an uninstalled
+    // name reached OSV.dev and pypi.org (pre-publish round 10, W4). The name rules (privateReason,
+    // which the briefing's guessed ecosystems use) still call it public.
+    const underPrivateIndex = ecosystem === "PyPI";
+    it(`{${ecosystem}, ${JSON.stringify(name)}} is ${underPrivateIndex ? "private only by the private index" : "not refused as private"}`, async () => {
       const live = liveFor(zqProject());
       const out = (await executeDependencyCheck(noDb, { items: [{ ecosystem, package: name, to: "4.17.21" }] }, live)) as unknown as {
-        results: Array<{ not_checked?: string }>;
+        results: Array<{ not_checked?: string; reason?: string }>;
       };
-      expect(out.results[0].not_checked).not.toBe("private");
+      if (underPrivateIndex) {
+        expect(out.results[0].not_checked).toBe("private");
+        expect(out.results[0].reason).toMatch(/--index-url https:\/\/pypi\.zq\.internal\/simple.*FOURDA_PUBLIC_MIRRORS/);
+      } else expect(out.results[0].not_checked).not.toBe("private");
       expect(live.privateReason(ecosystem, name)).toBeNull();
     });
   }
