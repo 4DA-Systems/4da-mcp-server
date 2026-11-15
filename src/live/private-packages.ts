@@ -319,97 +319,189 @@ export function bunfigRegistries(content: string): { scopes: string[]; registry:
   return { scopes: [...new Set(scopes)], registry };
 }
 
+/** The registry label of a pnpm-workspace.yaml setting this reader cannot follow and that names no URL. */
+const UNREAD_REGISTRY = "a registry pnpm-workspace.yaml sets";
+
+/** What pnpmWorkspaceRegistries read from one pnpm-workspace.yaml. */
+export interface PnpmWorkspaceRegistries {
+  /** Scopes mapped to a registry that is not public. */
+  scopes: string[];
+  /** The default registry (null when none is set). */
+  registry: string | null;
+  /**
+   * Set when a `registry`, `registries` or `namedRegistries` value is in a form this reader does not
+   * fully understand (an anchor or alias, a block scalar, a tag, a key it does not know): pnpm may
+   * fetch every name from a registry this server cannot name, so the caller treats npm as having a
+   * non-public default registry (fail closed). `url` is the first non-public URL in that value, if any.
+   */
+  unread?: { url: string | null };
+}
+
+/** `key: value`, the key quoted or plain; a plain key ends at the first `:` followed by a space or the line's end, so a URL key (`https://npm.acme.dev/:`) is read whole. */
+function yamlKeyValue(l: string): { key: string; value: string } | null {
+  const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|.+?):(?=\s|$)\s*(.*)$/.exec(l);
+  return m ? { key: unquote(m[1]), value: m[2].trim() } : null;
+}
+
+/** Whether a flow collection's brackets (outside quotes) balance. */
+function flowDepth(text: string): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (const c of text) {
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") depth--;
+  }
+  return depth;
+}
+
+/** A YAML feature this reader does not follow: an anchor, alias, tag, block scalar, complex key or directive. */
+const UNFOLLOWED = /^[&*!|>?%`]/;
+const followedKey = (k: string) => k !== "<<" && !UNFOLLOWED.test(k);
+
+/** A whole flow collection, else undefined (unbalanced, trailing text, or an anchor, alias or tag inside). */
+function strictFlow(text: string): YamlValue | undefined {
+  if (flowDepth(text) !== 0) return undefined;
+  const { value, end } = parseFlow(text);
+  if (text.slice(end).trim()) return undefined;
+  const plain = (v: YamlValue): boolean => (typeof v === "string" ? !UNFOLLOWED.test(v) : Array.isArray(v) ? v.every(plain) : Object.entries(v).every(([k, x]) => followedKey(k) && plain(x)));
+  return plain(value) ? value : undefined;
+}
+
+const indentOf = (l: string) => l.length - l.trimStart().length;
+const isItem = (l: string) => /^-(?:\s|$)/.test(l.trimStart());
+const hasContent = (lines: readonly string[], from: number, to: number) => lines.slice(from, to).some((l) => l.trim());
+
+/** The end (exclusive) of the node on line `at` with inline `text`: the lines below it indented past `indent`, and (no inline text) a same-indent block sequence. */
+function nodeEnd(lines: readonly string[], at: number, to: number, indent: number, text: string, items = !text): number {
+  let j = at + 1;
+  // A flow collection runs to the line its brackets balance on, whatever that line's indentation
+  // (`registries: {` ... `}` at column 0), then any lines indented below it (trailing text, unread).
+  if (text.startsWith("{") || text.startsWith("[")) {
+    let depth = flowDepth(text);
+    while (depth > 0 && j < to) depth += flowDepth(lines[j++]);
+    while (j < to && (!lines[j].trim() || indentOf(lines[j]) > indent)) j++;
+    return j;
+  }
+  while (j < to && (!lines[j].trim() || indentOf(lines[j]) > indent)) j++;
+  if (!items || hasContent(lines, at + 1, j)) return j;
+  while (j < to && (!lines[j].trim() || indentOf(lines[j]) > indent || (indentOf(lines[j]) === indent && isItem(lines[j])))) j++;
+  return j;
+}
+
+/** The value of the node on line `at` whose inline text is `text` and whose lines end at `end`. */
+function yamlNodeValue(lines: readonly string[], at: number, end: number, text: string): YamlValue | undefined {
+  if (text.startsWith("{") || text.startsWith("[")) return strictFlow([text, ...lines.slice(at + 1, end).map((l) => l.trim())].join(" "));
+  // A plain scalar continued on the next lines, or an anchor, alias, tag or block scalar: not followed.
+  if (text) return hasContent(lines, at + 1, end) || UNFOLLOWED.test(text) ? undefined : unquote(text);
+  return yamlBlock(lines, at + 1, end);
+}
+
+/**
+ * The value of a block YAML node: the lines `from`..`to` (comment-stripped), every one indented more
+ * than its parent. Block maps, block sequences of scalars or flow collections, flow collections that
+ * span lines, plain and quoted scalars. Undefined for anything else, so the caller can fail closed.
+ */
+function yamlBlock(lines: readonly string[], from: number, to: number): YamlValue | undefined {
+  let i = from;
+  while (i < to && !lines[i].trim()) i++;
+  if (i >= to) return "";
+  const indent = indentOf(lines[i]);
+  const sequence = isItem(lines[i]);
+  const map: YamlMap = {};
+  const list: YamlValue[] = [];
+  while (i < to) {
+    const line = lines[i];
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+    if (indentOf(line) !== indent) return undefined;
+    let text: string;
+    let key: string | null = null;
+    if (sequence) {
+      if (!isItem(line)) return undefined;
+      text = line.trimStart().slice(1).trim();
+    } else {
+      const kv = yamlKeyValue(line);
+      if (!kv || !followedKey(kv.key)) return undefined;
+      key = kv.key;
+      text = kv.value;
+    }
+    // The node's own lines: those below it indented further, and (a map entry with no inline value)
+    // a block sequence at its own indentation, which YAML allows (`scopes:` then `- "@acme"`).
+    const j = nodeEnd(lines, i, to, indent, text, !sequence && !text);
+    const value = yamlNodeValue(lines, i, j, text);
+    if (value === undefined) return undefined;
+    if (sequence) list.push(value);
+    else map[key as string] = value;
+    i = j;
+  }
+  return sequence ? list : map;
+}
+
+const isUrl = (v: YamlValue | undefined): boolean => typeof v === "string" && /^https?:\/\/[^\s/]+/i.test(v);
+
 /**
  * pnpm-workspace.yaml: pnpm v10+ reads registry settings from it (pnpm.io/settings: "Env variables
  * are not expanded in settings of pnpm-workspace.yaml that define registry URLs: registry and the URL
  * values of registries and namedRegistries"), in either shape of `registries` (pnpm.io/registries):
  * scope to URL (`default: <url>`, `"@acme": <url>`) or URL-keyed (`<url>: { scopes: ["@acme"] }`,
  * where a bare `"@"` routes the default registry). Only `.npmrc` was read, so a scope or default
- * registry set here let private names reach OSV.dev and npm (pre-publish round 10, W4). Returns the
- * scopes mapped to a registry that is not public, and the default registry (null when none is set).
+ * registry set here let private names reach OSV.dev and npm (pre-publish round 10, W4). A flow map
+ * or sequence that spans lines was not read either, and `zqx-newlib` went to OSV.dev and npm; any
+ * value of these keys this reader cannot follow is now `unread` and the caller fails closed
+ * (pre-publish round 10, W10).
  */
-export function pnpmWorkspaceRegistries(content: string): { scopes: string[]; registry: string | null } {
+export function pnpmWorkspaceRegistries(content: string): PnpmWorkspaceRegistries {
   const scopes: string[] = [];
   let registry: string | null = null;
+  let unread = false;
+  const raw: string[] = [];
   const lines = content.split(/\r?\n/).map((l) => stripComment(l).replace(/\s+$/, ""));
-  const indentOf = (l: string) => l.length - l.trimStart().length;
-  // `key: value`, the key quoted or plain; a plain key ends at the first `:` followed by a space or
-  // the line's end, so a URL key (`https://npm.acme.dev/:`) is read whole.
-  const keyValue = (l: string): { key: string; value: string } | null => {
-    const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|.+?):(?=\s|$)\s*(.*)$/.exec(l);
-    return m ? { key: unquote(m[1]), value: m[2].trim() } : null;
-  };
   const note = (scope: string, url: string) => {
-    if (!url) return;
     const s = scope.trim();
     if (s === "default" || s === "@") registry = url;
-    else if (s.startsWith("@") && !isPublicNpmRegistry(url)) scopes.push(s.toLowerCase());
+    else if (s.startsWith("@")) {
+      if (!isPublicNpmRegistry(url)) scopes.push(s.toLowerCase());
+    } else unread = true;
   };
-  /** A list value: a flow `["@a", "@b"]` on the line, else the `- item` lines below it. */
-  const listAt = (value: string, from: number, indent: number): string[] => {
-    if (value.startsWith("[")) {
-      const parsed = parseFlow(value).value;
-      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  const registries = (value: YamlValue) => {
+    if (value === "") return;
+    if (typeof value === "string" || Array.isArray(value)) return void (unread = true);
+    for (const [k, v] of Object.entries(value)) {
+      if (typeof v === "string" && isUrl(v)) note(k, v);
+      else if (isUrl(k) && (v === "" || (typeof v === "object" && !Array.isArray(v)))) {
+        // URL-keyed: the registry's own fields; `scopes` a list of strings, or absent.
+        const listed = typeof v === "object" ? v.scopes : undefined;
+        if (listed === undefined) continue;
+        if (!Array.isArray(listed) || !listed.every((s) => typeof s === "string")) unread = true;
+        else for (const s of listed as string[]) note(s, k);
+      } else unread = true;
     }
-    const out: string[] = [];
-    for (let j = from; j < lines.length; j++) {
-      if (!lines[j].trim()) continue;
-      if (indentOf(lines[j]) <= indent && !lines[j].trimStart().startsWith("-")) break;
-      const item = /^\s*-\s*(.+)$/.exec(lines[j]);
-      if (item) out.push(unquote(item[1]));
-      else break;
-    }
-    return out;
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!line.trim() || indentOf(line) !== 0) continue;
-    const top = keyValue(line);
-    if (!top) continue;
-    if (top.key === "registry" && top.value) registry = unquote(top.value);
-    if (top.key !== "registries") continue;
-    if (top.value.startsWith("{")) {
-      const map = parseFlow(top.value).value;
-      if (map && typeof map === "object" && !Array.isArray(map)) {
-        for (const [k, v] of Object.entries(map)) {
-          if (typeof v === "string") note(k, v);
-          else if (v && typeof v === "object" && !Array.isArray(v) && Array.isArray(v.scopes)) for (const s of v.scopes) if (typeof s === "string") note(s, k);
-        }
-      }
-      continue;
-    }
-    // The block below `registries:`: its entries are the lines at the first child indentation.
-    let child = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j];
-      if (!l.trim()) continue;
-      const indent = indentOf(l);
-      if (indent === 0) break;
-      if (child < 0) child = indent;
-      if (indent !== child) continue;
-      const entry = keyValue(l);
-      if (!entry) continue;
-      if (entry.value && !entry.value.startsWith("{")) {
-        note(entry.key, unquote(entry.value));
-        continue;
-      }
-      // URL-keyed: the registry's own fields, `scopes` among them (inline or on the lines below).
-      if (entry.value.startsWith("{")) {
-        const fields = parseFlow(entry.value).value;
-        if (fields && typeof fields === "object" && !Array.isArray(fields) && Array.isArray(fields.scopes)) for (const s of fields.scopes) if (typeof s === "string") note(s, entry.key);
-        continue;
-      }
-      for (let k = j + 1; k < lines.length; k++) {
-        const f = lines[k];
-        if (!f.trim()) continue;
-        const fIndent = indentOf(f);
-        if (fIndent <= child) break;
-        const field = keyValue(f);
-        if (field?.key === "scopes") for (const s of listAt(field.value, k + 1, fIndent)) note(s, entry.key);
-      }
-    }
+    if (!line.trim() || /^\s/.test(line)) continue;
+    const top = yamlKeyValue(line);
+    if (!top || !["registry", "registries", "namedRegistries"].includes(top.key)) continue;
+    const end = nodeEnd(lines, i, lines.length, 0, top.value);
+    pushAll(raw, lines.slice(i, end));
+    const value = yamlNodeValue(lines, i, end, top.value);
+    i = end - 1;
+    if (value === undefined) unread = true;
+    else if (top.key === "registry") {
+      if (typeof value === "string" && isUrl(value)) registry = value;
+      else if (value !== "") unread = true;
+    } else if (top.key === "registries") registries(value);
+    // namedRegistries: aliases (`work:pkg@1`) mapped to URLs, which no default or scope follows.
+    else if (value !== "" && (typeof value !== "object" || Array.isArray(value) || !Object.values(value).every(isUrl))) unread = true;
   }
-  return { scopes: [...new Set(scopes)], registry };
+  if (!unread) return { scopes: [...new Set(scopes)], registry };
+  const url = (raw.join("\n").match(/https?:\/\/[^\s"',}\]]+/gi) ?? []).find((u) => !isPublicNpmRegistry(u)) ?? null;
+  return { scopes: [...new Set(scopes)], registry, unread: { url } };
 }
 
 /** The `go env -w` file: GOENV, else the user config directory's `go/env`; null when off. */
@@ -807,8 +899,11 @@ export class PrivatePackageRules {
       const read = pnpmWorkspaceRegistries(safeRead(file));
       for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
       if (read.registry && !isPublicNpmRegistry(read.registry)) npmDefaults.push({ url: read.registry, from: file, scope });
+      // A registry setting this reader cannot follow fails closed: pnpm may fetch any name from a
+      // registry it names, so npm under this folder is registry-private (pre-publish round 10, W10).
+      if (read.unread) npmDefaults.push({ url: read.unread.url ?? UNREAD_REGISTRY, from: `${file}, a registry setting this server cannot read; write it as plain registry/registries URLs`, scope });
     }
-    pushAll(this.npmDefaults, npmDefaults.filter((d) => hostOf(d.url) !== null && !isMirror(d.url)).map((d) => ({ ...d, url: sourceLabel(d.url) })));
+    pushAll(this.npmDefaults, npmDefaults.filter((d) => (d.url === UNREAD_REGISTRY || hostOf(d.url) !== null) && !isMirror(d.url)).map((d) => ({ ...d, url: d.url === UNREAD_REGISTRY ? d.url : sourceLabel(d.url) })));
 
     // Go.
     const fromFile = goEnvFile(goFile);
@@ -973,6 +1068,7 @@ export class PrivatePackageRules {
     const registry = dirs.map((d) => this.npmRegistryFor(d)).find(Boolean);
     if (!registry) return null;
     const host = hostOf(registry.url) ?? registry.url;
+    if (registry.url === UNREAD_REGISTRY) return `Your npm registry could not be read (${registry.from}), so it may not be the public registry. The npm packages of this project were treated as private: never sent, and not checked. If it only mirrors registry.npmjs.org, write its URL plainly and set FOURDA_PUBLIC_MIRRORS to its host to check them.`;
     return `Your npm registry is ${host} (${registry.from}), not the public registry. Any package may be published only there, so the npm packages of this project were treated as private: never sent, and not checked. If ${host} only mirrors registry.npmjs.org, set FOURDA_PUBLIC_MIRRORS=${host} to check them.`;
   }
 

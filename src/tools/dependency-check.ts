@@ -103,7 +103,7 @@ import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { lengthProblem } from "../tool-args.js";
 import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
-import { cargoBareVersion, mergeCargoBare, mergeNpmPicks, npmPick, type NpmWhy, type Resolution } from "./dependency-check-resolution.js";
+import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, npmPick, type NpmWhy, type Resolution } from "./dependency-check-resolution.js";
 import { samePackageName } from "../live/version-compare.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
 
@@ -386,7 +386,12 @@ async function checkDependencies(
   const plan = asked.map((r) => {
     const bare = r.ecosystem === "crates.io" && r.target.kind === "exact" ? cargoBareVersion(r.raw) : null;
     // The caret check keeps the raw `to`, so what it finds is kept under the item as asked (r7 facts).
-    return bare ? { bare, checks: [r, { ...r, target: { kind: "range" as const, range: `^${bare}` } }] } : { bare: null, checks: [r] };
+    if (bare) return { bare, partial: null, checks: [r, { ...r, target: { kind: "range" as const, range: `^${bare}` } }] };
+    // "1.6" / "1": a caret range too; each release in it this project's Cargo.lock holds is kept
+    // by Cargo, so it is judged exactly beside the range (pre-publish round 10, W10).
+    const partial = r.ecosystem === "crates.io" && r.target.kind === "range" ? cargoPartialBare(r.raw) : null;
+    if (partial) return { bare: null, partial, checks: [r, ...lockedCrateVersions(liveIntel, r.package, partial).map((version) => ({ ...r, target: { kind: "exact" as const, version } }))] };
+    return { bare: null, partial: null, checks: [r] };
   });
   const flat = plan.flatMap((p) => p.checks);
   const first = await checkPass(flat, liveIntel, opts);
@@ -401,8 +406,10 @@ async function checkDependencies(
   let next = 0;
   for (const p of plan) {
     const [one, two] = [results[next], results[next + 1]];
+    const rest = results.slice(next + 1, next + p.checks.length);
     next += p.checks.length;
-    merged.push(p.bare && two ? (mergeCargoBare(one, two, p.checks[0].raw, p.bare) as ItemResult) : one);
+    if (p.partial) merged.push(mergeCargoPartial(one, rest, p.checks[0].raw, p.partial) as ItemResult);
+    else merged.push(p.bare && two ? (mergeCargoBare(one, two, p.checks[0].raw, p.bare) as ItemResult) : one);
   }
   const priv = merged.filter((x) => x.not_checked === "private").length;
   const notice = first.meta.registryNotice ?? second?.meta.registryNotice;
@@ -412,6 +419,16 @@ async function checkDependencies(
     ...(priv > 0 ? { private: priv } : {}),
     ...(notice ? { registryNotice: notice } : {}),
   });
+}
+
+/** The releases of crate `name` in `req` this project's lockfiles hold (crates.io folds case and "-"/"_"). */
+function lockedCrateVersions(liveIntel: LiveIntelligence | null, name: string, req: string): string[] {
+  if (!liveIntel?.isInitialized?.()) return [];
+  const fold = (n: string) => n.toLowerCase().replace(/_/g, "-");
+  const versions = [...liveIntel.getResolvedDeps(), ...liveIntel.getAuditDeps()]
+    .filter((d) => d.ecosystem === "crates.io" && fold(d.name) === fold(name) && d.version !== null && rangeAdmits("crates.io", req, d.version) === true)
+    .map((d) => d.version as string);
+  return [...new Set(versions)];
 }
 
 interface PassMeta {
@@ -883,10 +900,23 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   results.forEach((res, i) => {
     const asked = items[i].asked;
     if (asked) {
-      res.reason = `${asked} is published as ${res.package}: crates.io and Cargo read "-" and "_" in a crate name as the same crate, so it was checked as ${res.package}; write the published spelling, ${res.package}, in Cargo.toml. | ${res.reason}`;
+      res.reason = `${asked} is published as ${res.package}: ${crateSpellingReason(asked, res.package)}, so it was checked as ${res.package}; write the published spelling, ${res.package}, in Cargo.toml. | ${res.reason}`;
     }
   });
   return pass(results, { offline: scan.offline, osvCached: scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
+}
+
+/**
+ * Why crates.io took `asked` as `published`: letter case, "-" against "_", or both. "Smallvec" was
+ * told crates.io read "-" and "_" as the same when the difference was case (pre-publish round 10, W10).
+ */
+export function crateSpellingReason(asked: string, published: string): string {
+  const fold = (s: string) => s.replace(/_/g, "-");
+  const caseDiffers = fold(asked) !== fold(published);
+  const dashDiffers = asked.toLowerCase() !== published.toLowerCase();
+  if (caseDiffers && dashDiffers) return `crates.io treats crate names that differ only in letter case or in "-" against "_" as the same crate`;
+  if (caseDiffers) return "crates.io treats crate names that differ only in letter case as the same crate";
+  return `crates.io and Cargo read "-" and "_" in a crate name as the same crate`;
 }
 
 /**

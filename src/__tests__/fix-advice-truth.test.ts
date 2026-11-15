@@ -705,3 +705,57 @@ describe("6. M7 regressions on the scan: the two false 'upgrade the parent' clai
     expect(concise.vulnerable_packages.find((p: { package: string }) => p.package === "@azure/msal-node")).toMatchObject({ fix_action: "lockfile_refresh" });
   });
 });
+
+describe("W10 (pre-publish round 10): an unchecked fix target gives the right cause", () => {
+  const unchecked = async () => {
+    const { formatScanResult } = await import("../tools/vulnerability-scan-format.js");
+    const vuln = {
+      package: "lodash", currentVersion: "4.17.20", ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true,
+      vulnId: "GHSA-35jh-r3h4-6jhm", aliases: [], severity: "high", cvssScore: 7.2, summary: "lodash", fixedVersion: "4.18.0",
+      published: "2026-01-01T00:00:00Z", references: [], target: null, platformActive: true, sourceDirs: [dir],
+    } as unknown as VulnerabilityEntry;
+    const result = {
+      scannedAt: new Date().toISOString(), projectPath: dir, ecosystemsScanned: ["npm"], totalScanned: 1, totalVulnerable: 1,
+      platformInactiveVulnerable: 0, bySeverity: { critical: 0, high: 1, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [vuln],
+      cleanCount: 0, scanDurationMs: 1, cached: true, offline: process.env.FOURDA_OFFLINE === "true",
+    } as unknown as VulnerabilityScanResult;
+    // No verified target: the check of 4.18.0 against every advisory of lodash never ran.
+    const out = formatScanResult(result, undefined, { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true });
+    return out.recommendations.find((r: string) => r.includes("lodash 4.17.20"))!;
+  };
+
+  it("offline: says live lookups are off, not that the check did not finish", async () => {
+    process.env.FOURDA_OFFLINE = "true";
+    const line = await unchecked();
+    expect(line).toContain("4.18.0 was NOT CHECKED against every advisory of lodash (live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked)");
+    expect(line).not.toContain("the check did not finish");
+  });
+
+  it("online: the check did not finish", async () => {
+    const line = await unchecked();
+    expect(line).toContain("4.18.0 was NOT CHECKED against every advisory of lodash (the check did not finish)");
+  });
+});
+
+describe("W10 end to end: an offline vulnerability_scan from a warm cache", () => {
+  it("names the fix as not looked up because live lookups are off", async () => {
+    ADVISORIES.lodash = [adv("GHSA-35jh-r3h4-6jhm", "lodash", fixedIn("4.18.0"))];
+    NPM.lodash = { latest: "4.18.0", versions: { "4.17.20": {}, "4.18.0": {} } };
+    npmProject({ lodash: "4.17.20" }, { lodash: { version: "4.17.20" } });
+    const db = new Database(":memory:");
+    const liveOn = (): Promise<LiveIntelligence> => (async () => {
+      const li = new LiveIntelligence(db);
+      const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
+      const { entries, discovery } = scanProjectTree(dir);
+      li.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
+      return li;
+    })();
+    await executeVulnerabilityScan(null, { project_path: dir }, await liveOn());
+    process.env.FOURDA_OFFLINE = "true";
+    const offline = (await executeVulnerabilityScan(null, { project_path: dir }, await liveOn())) as Record<string, any>;
+    const text = JSON.stringify(offline);
+    expect(text).toContain("lodash");
+    expect(text).not.toContain("the check did not finish");
+    expect(offline.recommendations.join(" ")).toContain("4.18.0 was NOT CHECKED against every advisory of lodash (live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked)");
+  });
+});
