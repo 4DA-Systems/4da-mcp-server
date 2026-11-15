@@ -27,7 +27,6 @@ import { FixPathSources } from "./fix-paths.js";
 import type { CheckEcosystem, ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
 import { commonPathRoot, dedupeDependencies, emptyVulnResult } from "./dependency-set.js";
-import { LOOKUPS_DISABLED } from "./scan-coverage.js";
 import { groupIsStale, resolveGroup, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
 import { mapEcosystem } from "./version-resolver.js";
 import type { TreeDiscovery } from "../project-tree.js";
@@ -861,9 +860,9 @@ export class LiveIntelligence {
     projectPath: string,
     options?: { includeDev?: boolean; forceRefresh?: boolean },
   ): Promise<VulnerabilityScanResult> {
-    if (!this.enabled) {
-      return this.withPrivate(emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: LOOKUPS_DISABLED }), options?.includeDev ?? false);
-    }
+    // Offline (FOURDA_OFFLINE) the scan still runs, from the cache alone: OsvScanner's cacheOnly
+    // mode asks nothing, states every cached answer's age, and leaves a dependency without one
+    // NOT CHECKED (pre-publish round 10, W5).
 
     // Names the guard would refuse are taken out first, each with why (takeOutRefused).
     this.takeOutRefused();
@@ -876,7 +875,8 @@ export class LiveIntelligence {
       return this.withPrivate(emptyVulnResult(projectPath, false), options?.includeDev ?? false);
     }
 
-    if (options?.forceRefresh) {
+    // Offline the cache is the only answer there is: a forced refresh cannot fetch, so it keeps it.
+    if (options?.forceRefresh && this.enabled) {
       this.cache.invalidateSource("osv");
     }
 
@@ -898,7 +898,7 @@ export class LiveIntelligence {
     const generation = this.generation;
     const request = ++this.scanRequests;
     try {
-      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath), includeDev);
+      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled }), includeDev);
       if (generation === this.generation && request > this.storedScanRequest) {
         this.lastVulnScan = result;
         this.lastVulnScanIncludesDev = includeDev;
@@ -949,7 +949,13 @@ export class LiveIntelligence {
     timeoutMs: number,
     options?: { includeDev?: boolean },
   ): Promise<VulnerabilityScanResult | null> {
-    if (!this.enabled) return null;
+    // Offline there is no current scan: null, as before. With none stored, the cache-only scan
+    // (local reads, no lookup) is run and stored, so a caller falling back to getVulnerabilities
+    // reads the cached answers with their age, never as a current all-clear (pre-publish round 10, W5).
+    if (!this.enabled) {
+      if (!this.getVulnerabilities()) await this.scanVulnerabilities(projectPath, { includeDev: options?.includeDev ?? false });
+      return null;
+    }
     this.refreshIfLockfilesChanged();
     // A scan past its hour is not an answer about today's advisories: scan again (bounded, below).
     this.dropExpiredScan();
@@ -1099,6 +1105,15 @@ export class LiveIntelligence {
     return this.enabled;
   }
 
+  /**
+   * Whether vulnerability answers can be read with live lookups off: from the cache alone, each
+   * with its age, never as a current all-clear (pre-publish round 10, W5). True whenever lookups
+   * are off; an empty cache then leaves every dependency NOT CHECKED.
+   */
+  answersFromCache(): boolean {
+    return !this.enabled;
+  }
+
   isInitialized(): boolean {
     return this.initialized;
   }
@@ -1147,14 +1162,14 @@ export class LiveIntelligence {
   }
 
   private async queryAdvisoriesIn(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
-    if (!this.enabled) return emptyVulnResult("dependency_check", true, { count: deps.length, reason: LOOKUPS_DISABLED });
+    // Offline: answered from the cache alone, each answer's age stated (OsvScanner cacheOnly; W5).
     // A private name is never asked about (a held dependency of a private parent): it has no
     // answer, so the result is not checked for it, never clean.
     const priv = deps.filter((d) => this.privateReason(d.ecosystem, d.name));
     const open = priv.length > 0 ? deps.filter((d) => !priv.includes(d)) : deps;
     let result: VulnerabilityScanResult;
     try {
-      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check") : emptyVulnResult("dependency_check", false);
+      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check", { cacheOnly: !this.enabled }) : emptyVulnResult("dependency_check", false);
     } catch (error) {
       return emptyVulnResult("dependency_check", true, { count: deps.length, reason: `the scan failed (${String(error).slice(0, 120)})` });
     }

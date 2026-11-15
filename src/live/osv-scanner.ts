@@ -29,6 +29,7 @@ import type {
 } from "./types.js";
 import { pushAll } from "../array-utils.js";
 import { isOfflineMode } from "../env-flags.js";
+import { LOOKUPS_DISABLED } from "./scan-coverage.js";
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns/";
@@ -480,13 +481,17 @@ export class OsvScanner {
     if (keys.length > 0) this.cache.deleteMany(keys);
   }
 
-  async scan(deps: ResolvedDependency[], projectPath: string): Promise<VulnerabilityScanResult> {
+  async scan(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean } = {}): Promise<VulnerabilityScanResult> {
     const start = Date.now();
     const scannable = deps.filter((d) => d.version !== null);
     const ecosystems = [...new Set(scannable.map((d) => d.ecosystem))];
     // Per-dependency caching and the rate limit are for network answers; a
     // pinned source answers locally and must never seed the shared cache.
     const network = this.source.network;
+    // Live lookups off (FOURDA_OFFLINE): nothing is asked, and every answer is a cached one, read
+    // with its fetched_at so the result states its age, fresh or past its TTL. Offline scans
+    // used to ignore the cache and call every dependency NOT CHECKED (pre-publish round 10, W5).
+    const cacheOnly = network && options.cacheOnly === true;
 
     // Check cache for each dep individually
     const uncached: ResolvedDependency[] = [];
@@ -494,7 +499,7 @@ export class OsvScanner {
 
     // Read in batches, yielding to the event loop between them: one statement per dependency kept a
     // 250,000-entry lockfile's scan from answering `ping` for 7.4 s (blind audit round 4).
-    const cachedFor = network ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
+    const cachedFor = network && !cacheOnly ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
     for (const dep of scannable) {
       const cached = cachedFor.get(osvCacheKey(dep)) ?? null;
       if (cached !== null) {
@@ -527,7 +532,7 @@ export class OsvScanner {
       uncached.length = 0;
       pushAll(uncached, releases);
     }
-    const theirs = network ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
+    const theirs = network && !cacheOnly ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
     const mine = theirs.length > 0 ? uncached.filter((d) => !this.inFlight.has(osvCacheKey(d))) : uncached;
     const ask = async (batch: ResolvedDependency[]) => {
       try {
@@ -544,7 +549,14 @@ export class OsvScanner {
         };
       }
     };
-    const own = mine.length === 0 ? null : network ? this.registered(mine, () => ask(mine)) : ask(mine);
+    const own =
+      mine.length === 0
+        ? null
+        : cacheOnly
+          ? { vulns: [] as VulnerabilityEntry[], unanswered: mine, failure: LOOKUPS_DISABLED }
+          : network
+            ? this.registered(mine, () => ask(mine))
+            : ask(mine);
     const waited = (async () => {
       if (theirs.length === 0) return [] as ResolvedDependency[];
       await Promise.all([...new Set(theirs.map((d) => this.inFlight.get(osvCacheKey(d))))].map((p) => p?.catch(() => undefined)));
@@ -567,22 +579,27 @@ export class OsvScanner {
     }
 
     let staleAnswers = 0;
+    let staleExpired = 0;
     let staleOldest: string | null = null;
     const unchecked: ResolvedDependency[] = [];
     const staleFor = network
       ? await readInBatches(unanswered, (keys) => this.cache.getStaleMany<VulnerabilityEntry[]>(keys))
       : new Map<string, { data: VulnerabilityEntry[]; fetchedAt: string }>();
+    // fetched_at is SQLite UTC text, so it sorts as a time; an answer fetched before this is past its life.
+    const expiredBefore = new Date(Date.now() - OSV_CACHE_TTL * 1000).toISOString().replace("T", " ").slice(0, 19);
     for (const dep of unanswered) {
       const stale = staleFor.get(osvCacheKey(dep)) ?? null;
       if (stale) {
         staleAnswers++;
+        if (stale.fetchedAt < expiredBefore) staleExpired++;
         if (!staleOldest || stale.fetchedAt < staleOldest) staleOldest = stale.fetchedAt;
         pushAll(cachedVulns, stale.data.map((v) => restampDepContext(v, dep)));
       } else {
         unchecked.push(dep);
       }
     }
-    const offline = unchecked.length > 0;
+    // A cache-only answer is never a current one: offline even when every dependency had a cached answer.
+    const offline = unchecked.length > 0 || cacheOnly;
 
     // npm's security holding packages (`fs@0.0.1-security`) are empty
     // placeholders npm publishes after taking a malicious package down; the
@@ -615,14 +632,15 @@ export class OsvScanner {
       // Answered dependencies with no advisory; an unchecked one is never clean.
       cleanCount: Math.max(0, scannable.length - unchecked.length - vulnerableDependencyCount(allVulns)),
       scanDurationMs: Date.now() - start,
-      cached: uncached.length === 0,
+      cached: cacheOnly || uncached.length === 0,
       offline,
       unchecked: unchecked.length,
       ...(unchecked.length > 0 ? { uncheckedDependencies: unchecked.map((d) => `${d.ecosystem}\0${d.name}\0${d.version}`) } : {}),
-      uncheckedReason: offline ? (failure ?? notReleaseWhy ?? "OSV.dev could not be queried") : null,
+      uncheckedReason: unchecked.length > 0 ? (failure ?? notReleaseWhy ?? "OSV.dev could not be queried") : null,
       staleAnswers,
       // An expired answer is not a current one: every consumer says so (audit 6.2.5 B-2).
       ...(staleAnswers > 0 ? { staleReason: failure ?? "OSV.dev could not be queried", staleOldestFetchedAt: staleOldest } : {}),
+      ...(cacheOnly ? { cacheOnly: true as const, staleExpired } : {}),
       ...(detailsUnchecked.length > 0 ? { detailsUnchecked } : {}),
       ...(rated.report ? { aliasSeverity: rated.report } : {}),
     };

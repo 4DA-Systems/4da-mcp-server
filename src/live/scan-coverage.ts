@@ -111,8 +111,27 @@ function detailsLine(ids: string[]): string {
 /** "N dependencies were answered only from an expired cached answer (the oldest fetched ...)". */
 function staleLine(result: VulnerabilityScanResult, stale: number): string {
   const n = stale.toLocaleString("en-US");
+  if (result.cacheOnly) {
+    // Offline: every answer is a cached one, and its age is the whole of what it is worth (pre-publish round 10, W5).
+    const at = result.staleOldestFetchedAt;
+    const age = at ? ageText(at) : null;
+    const oldest = at ? ` (the oldest checked ${at} UTC${age ? `, ${age} ago` : ""})` : "";
+    const expired = result.staleExpired ?? 0;
+    const past = expired > 0 ? ` ${expired.toLocaleString("en-US")} of them ${expired === 1 ? "is" : "are"} past the 1 h cache life.` : "";
+    return `${n} dependenc${stale === 1 ? "y was" : "ies were"} answered only from the local cache, not asked now${oldest}; an advisory published since would not show, so this is not a current all-clear.${past} Call again with live lookups on (unset FOURDA_OFFLINE).`;
+  }
   const oldest = result.staleOldestFetchedAt ? ` (the oldest fetched ${result.staleOldestFetchedAt} UTC)` : "";
   return `${n} dependenc${stale === 1 ? "y was" : "ies were"} answered only from an expired cached answer${oldest}; an advisory published since would not show, so this is not a current all-clear. Call again once OSV.dev answers (force_refresh).`;
+}
+
+/** "3 h", "2 days": how long ago a SQLite UTC timestamp ("YYYY-MM-DD HH:MM:SS") was; null when unreadable. */
+export function ageText(sqliteUtc: string, now = Date.now()): string | null {
+  const at = Date.parse(`${sqliteUtc.replace(" ", "T")}Z`);
+  if (!Number.isFinite(at)) return null;
+  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  if (minutes < 120) return `${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h` : `${Math.round(hours / 24)} days`;
 }
 
 function build(total: number, unchecked: number, reason: string): VulnerabilityCoverage {

@@ -50,6 +50,8 @@ export function closeServerCacheDb(): void {
  * stale, and is purged at start. Five minutes of skew between processes is tolerated.
  */
 const SANE_FETCHED_AT = "fetched_at <= datetime('now', '+5 minutes')";
+/** How long past its expiry an OSV answer is kept as a stale stand-in (SQLite datetime modifier; W5). */
+const STALE_OSV_RETENTION = "-7 days";
 /** Keys per IN (...) query in getMany: well under SQLite's 999-variable floor of older builds. */
 const MANY_CHUNK = 500;
 
@@ -279,8 +281,12 @@ export class LiveCache {
       for (const [key, row] of this.memory) if (!this.live(row) && this.memory.delete(key)) purged++;
       return purged;
     }
+    // OSV answers are kept for STALE_OSV_RETENTION past their life: they are what an offline scan, or
+    // one whose lookup fails, answers from, always with their fetched_at stated (OsvScanner). Purged
+    // at the life's end, a restart an hour after the last online scan left an offline scan nothing
+    // (pre-publish round 10, W5). Nothing else is read past its life.
     const result = this.conn().prepare(
-      `DELETE FROM live_cache WHERE expires_at <= datetime('now') OR NOT (${SANE_FETCHED_AT})`,
+      `DELETE FROM live_cache WHERE (expires_at <= datetime('now') AND (source <> 'osv' OR expires_at <= datetime('now', '${STALE_OSV_RETENTION}'))) OR NOT (${SANE_FETCHED_AT})`,
     ).run();
     return result.changes;
   }
