@@ -136,8 +136,8 @@ export function emptySource(): VersionSource {
 export class InstanceSet {
   private byKey = new Map<string, PackageInstance>();
 
-  add(name: string, version: string, dev?: boolean): void {
-    const key = `${name}\0${version}`;
+  /** `key` is `${name}\0${version}`, passed when the caller holds it already: one string per instance, not two (pre-publish round 10, W9). */
+  add(name: string, version: string, dev?: boolean, key = `${name}\0${version}`): void {
     const existing = this.byKey.get(key);
     if (!existing) {
       this.byKey.set(key, dev === undefined ? { name, version } : { name, version, dev });
