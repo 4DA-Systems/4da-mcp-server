@@ -103,6 +103,7 @@ import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { lengthProblem } from "../tool-args.js";
 import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
+import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
@@ -405,10 +406,13 @@ async function checkDependencies(
 
   if (!liveIntel || !liveIntel.isEnabled()) {
     const reason = "Live lookups are disabled (FOURDA_OFFLINE=true); nothing about these versions could be checked.";
+    // An exact version OSV.dev answered for before is named with that cached answer and its age.
+    // The verdict stays `unknown`: a cached answer is not a current one (pre-publish round 10, W5).
+    const cached = liveIntel?.answersFromCache?.() ? await cachedAdvisoryNotes(liveIntel, requested) : new Map<Requested, string>();
     return finish(
       checkedAt,
-      inOrder(requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason, signals: [] }))),
-      { offline: true, osvCached: false, ...privateMeta },
+      inOrder(requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason: cached.has(r) ? `Live lookups are disabled (FOURDA_OFFLINE=true), so this version was not checked now. ${cached.get(r)}` : reason, signals: [] }))),
+      { offline: true, osvCached: cached.size > 0, ...privateMeta },
     );
   }
 
