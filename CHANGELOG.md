@@ -90,9 +90,11 @@
     on npm, and the worst answer stands, so event-stream 3.3.6 is human_only.
     In a project with both npm and PyPI, an ecosystem with no such release,
     or only a near-miss namesake, no longer outranks a real answer:
-    "add rsa 4.7" and "add pandas 2.2.3" are judged on PyPI. Planner rows say
-    which dependencies a parent release holds (exact pin or range) and never
-    say "could not be read" for releases that were read. The planner's
+    "add rsa 4.7" and "add pandas 2.2.3" are judged on PyPI. When the guess and the
+    project's own ecosystem give the same answer, the project's is reported. Planner rows say
+    which dependencies a parent release holds (exact pin or range), never
+    say "could not be read" for releases that were read, and say how many
+    releases were checked when not all were. The planner's
     pinned-dependency checks now run within its time budget, and a row whose
     check did not finish is NOT CHECKED with no target named.
   - *uv's find-links.* `find-links` and `no-index` (`UV_FIND_LINKS`,

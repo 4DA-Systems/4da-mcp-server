@@ -98,6 +98,8 @@ export interface NewPackage {
    * read as PyPI in a project that uses PyPI is tried on npm only as a fallback (pre-publish round 10, W16).
    */
   fallbackOnly?: true;
+  /** On equal answers, report this ecosystem (the project's own), not the comparator's guess (pre-publish round 10, final check). */
+  preferOnTie?: CheckEcosystem;
 }
 
 /** dependency_check's signals, as far as the briefing reads them. */
@@ -733,6 +735,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       if (pkg && pep && pepAlternatives.length > 0) {
         pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
         if (pepFallbackOnly) pkg.fallbackOnly = true;
+        else pkg.preferOnTie = "npm";
       }
       if (pkg) listed.push({ pkg, strong });
       if (after) bound.push({ name: raw[k].replace(/[.,;:)]+$/, ""), version: after.version, ...span(after.at) });
@@ -771,7 +774,7 @@ function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
   return null;
 }
 
-function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -854,7 +857,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     );
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...p } = pkg;
     if (!r) return unchecked(p, "no answer");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
@@ -936,7 +939,9 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       if (answers.length === 0) return unchecked(p, `dependency_check reads no ${p.ecosystem} version or constraint in "${p.version ?? ""}"`);
       if (answers.length === 1) return answers[0];
       // The worst answer; when no ecosystem has the name, the one that knows what it resembles.
-      const worst = answers.reduce((a, b) => (badness(b) > badness(a) ? b : a));
+      // On a tie the project's own ecosystem is reported: "add event-stream<=3.3.6" in an npm-only project
+      // named PyPI's namesake release 1.6.3, which npm does not have (pre-publish round 10, final check).
+      const worst = answers.reduce((a, b) => (badness(b) > badness(a) || (badness(b) === badness(a) && p.preferOnTie !== undefined && b.ecosystem === p.preferOnTie) ? b : a));
       const pick = notFound(worst) ? (answers.find((f) => f.did_you_mean) ?? worst) : worst;
       const also = answers.filter((f) => f !== pick).map((f) => ({ ecosystem: f.ecosystem, verdict: notFound(f) ? ("not_found" as const) : f.verdict, ...(f.malicious ? { malicious: true as const } : {}) }));
       return { ...pick, also_checked: also };

@@ -124,7 +124,7 @@ describe("a parent whose releases were read and judged affected is not 'could no
     expect(text).not.toMatch(/could not be read/);
     expect(text).not.toMatch(/NOT CHECKED/);
     expect(text).not.toMatch(/exact-pins or narrowly ranges/);
-    expect(text).toMatch(/every parent release that admits a clean version brings in an affected dependency/);
+    expect(text).toMatch(/each parent release checked that admits a clean version brings in an affected dependency/);
     expect(text).toMatch(
       /every mocha release from 12\.0\.0 to 12\.0\.3 that admits a clean serialize-javascript holds a dependency range whose newest admitted release is affected \(12\.0\.0 requires glob "\^13\.0\.0", whose newest admitted release 13\.0\.7 is affected \(GHSA-glob-0000-0000\)\)/,
     );

@@ -916,7 +916,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     standings.length < blocking.length
       ? "the releases of some parents were not checked"
       : judged
-        ? "every parent release that admits a clean version brings in an affected dependency"
+        ? "each parent release checked that admits a clean version brings in an affected dependency"
         : unknowns.some((s) => s.kind === "unknown" && s.checked)
           ? "a parent's releases could not be read, or each one admitting a clean version brings in an affected dependency"
           : "the releases of a parent could not be read";
@@ -1686,7 +1686,9 @@ async function heldCleanAdmitting(
   // release is affected), never "could not be read" (pre-publish round 10, W16).
   const affectedOf = (v: string) => (checks?.get(v) as { affected: HeldDependency[] } | undefined)?.affected ?? [];
   const all = candidates.flatMap((c) => affectedOf(c.version));
-  const span = candidates.length === 1 ? `the ${parent} release ${last}` : `every ${parent} release from ${candidates[0].version} to ${last}`;
+  // Only the first HELD_CANDIDATES admitting releases are judged: the words never claim more (final check).
+  const cut = admitting.length > candidates.length ? ` (the first ${candidates.length} of ${admitting.length}; later ones were not checked)` : "";
+  const span = candidates.length === 1 ? `the ${parent} release ${last}${cut}` : `every ${parent} release from ${candidates[0].version} to ${last}${cut}`;
   return { kind: "affected", text: `${span} that admits a clean ${ctx.pkg} ${heldVerb(all)} (${heldText(candidates[0].version, affectedOf(candidates[0].version))})` };
 }
 

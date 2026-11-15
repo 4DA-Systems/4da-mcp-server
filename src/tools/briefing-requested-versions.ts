@@ -48,6 +48,8 @@ export interface RequestedVersion {
   alternatives?: CheckEcosystem[];
   /** `alternatives` count only when `ecosystem` has no such name or release (a pip-style comparator in a project that uses PyPI; pre-publish round 10, W16). */
   fallbackOnly?: true;
+  /** On equal answers, report this ecosystem (the project's own), not the comparator's guess. */
+  preferOnTie?: CheckEcosystem;
 }
 
 export interface RequestedVersionFinding extends RequestedVersion {
@@ -256,7 +258,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   const unread: string[] = [];
   let order = 0;
   const add = (
-    who: { name: string; ecosystem: CheckEcosystem; guessed?: true; fixed?: true; alternatives?: CheckEcosystem[]; fallbackOnly?: true } | null,
+    who: { name: string; ecosystem: CheckEcosystem; guessed?: true; fixed?: true; alternatives?: CheckEcosystem[]; fallbackOnly?: true; preferOnTie?: CheckEcosystem } | null,
     version: string,
     guess = false,
     another = false,
@@ -277,6 +279,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       ...(versions.length === 1 && versions[0] !== to ? { from: versions[0] } : {}),
       ...(alternatives.length > 0 ? { alternatives } : {}),
       ...(alternatives.length > 0 && who.fallbackOnly ? { fallbackOnly: true as const } : {}),
+      ...(alternatives.length > 0 && who.preferOnTie ? { preferOnTie: who.preferOnTie } : {}),
       order: found.get(key)?.order ?? order++,
     });
     return true;
@@ -340,7 +343,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     return {
       ...who,
       fixed: true as const,
-      ...(npmName === who.name ? { alternatives: span.alternatives, ...(span.fallbackOnly ? { fallbackOnly: true as const } : {}) } : {}),
+      ...(npmName === who.name ? { alternatives: span.alternatives, ...(span.fallbackOnly ? { fallbackOnly: true as const } : { preferOnTie: "npm" as const }) } : {}),
     };
   };
   for (let i = 0; i < raw.length; i++) {
@@ -439,7 +442,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
  */
 export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
-  const unknown = ({ alternatives: _a, fallbackOnly: _f, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
+  const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
     verdict: "unknown",
     resolved: null,
@@ -473,7 +476,7 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (r: RequestedVersion, item: Answer["results"][number] | undefined): RequestedVersionFinding => {
-    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, ...own } = r;
+    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...own } = r;
     if (!item) return unknown(own, "no answer");
     const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
     const rc = item.range_check;
@@ -526,7 +529,9 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
           let answers = [...own, ...more];
           // A namesake's near-miss review never outranks a real answer; malware and avoid still win (W16).
           if (answers.some((a) => real.has(a))) answers = answers.filter((a) => !nameOnly.has(a));
-          if (answers.length > 0) out[i] = answers.reduce((a, b) => (worse(b) > worse(a) ? b : a));
+          // On a tie the project's own ecosystem is reported, not the comparator's guess (final check).
+          const prefer = plan[i]?.preferOnTie;
+          if (answers.length > 0) out[i] = answers.reduce((a, b) => (worse(b) > worse(a) || (worse(b) === worse(a) && prefer !== undefined && b.ecosystem === prefer) ? b : a));
         }
       }
     }

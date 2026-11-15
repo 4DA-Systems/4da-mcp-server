@@ -136,3 +136,21 @@ describe("3. an ecosystem with no such release, or a namesake's near-miss, is no
     expect(r.delegation_assessment.level).toBe("human_only");
   });
 });
+
+describe("a tie between the comparator's guess and the project's own ecosystem reports the project's (round 10, final check)", () => {
+  it("add event-stream<=3.3.6 in an npm-only project: npm is reported, never PyPI's namesake release", async () => {
+    PYPI["event-stream"] = ["1.6.3"];
+    try {
+      const r = await brief("add event-stream<=3.3.6");
+      const rows = (r.requested_versions ?? []).filter((x) => x.name === "event-stream");
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(row.ecosystem).toBe("npm");
+        expect(row.resolved ?? "").not.toBe("1.6.3");
+      }
+      for (const p of (r.new_packages ?? []).filter((x) => x.name === "event-stream")) expect(p.ecosystem).toBe("npm");
+    } finally {
+      delete PYPI["event-stream"];
+    }
+  });
+});
