@@ -6,6 +6,7 @@
  */
 
 import type { ResolvedDependency, VulnerabilityScanResult } from "./types.js";
+import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 
 /**
  * Deepest common ancestor of a set of directories (segment-wise, both slash
@@ -42,11 +43,18 @@ export function commonPathRoot(dirs: string[]): string | null {
  * is aimed at the directories that build it.
  */
 export function dedupeDependencies(deps: ResolvedDependency[]): ResolvedDependency[] {
+  return runSteps(dedupeDependenciesSteps(deps));
+}
+
+/** dedupeDependencies, pausing every STEP_MASK + 1 dependencies (runStepsYielding; pre-publish round 10, W11). */
+export function* dedupeDependenciesSteps(deps: ResolvedDependency[]): Steps<ResolvedDependency[]> {
   const unique = new Map<string, ResolvedDependency>();
+  let step = 0;
   const add = (list: string[], dirs: readonly string[] | undefined) => {
     for (const dir of dirs ?? []) if (!list.includes(dir)) list.push(dir);
   };
   for (const dep of deps) {
+    if ((++step & STEP_MASK) === 0) yield;
     const key = `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
     const existing = unique.get(key);
     if (existing) {

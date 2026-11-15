@@ -19,6 +19,7 @@
  */
 
 import type { InstanceSet } from "./lockfile-types.js";
+import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 
 const DEPENDENCY_BLOCKS = new Set(["dependencies:", "devDependencies:", "optionalDependencies:"]);
 
@@ -306,6 +307,12 @@ export function pnpmEntryIdentities(content: string): Map<string, [string, strin
  * package key. pnpm 9 dropped that field, so its copies have unknown scope.
  */
 export function readPnpmLock(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): ReadonlySet<string> {
+  return runSteps(readPnpmLockSteps(content, versions, instances, report));
+}
+
+/** readPnpmLock, pausing every STEP_MASK + 1 lines and entries (runStepsYielding; pre-publish round 10, W11). */
+export function* readPnpmLockSteps(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): Steps<ReadonlySet<string>> {
+  let step = 0;
   // Each registry (name, version) the entries install, once, under its `name\0version` key, in the
   // order first seen. Lockfile 9 lists every package twice (`packages:` and `snapshots:`): a list of
   // every sighting, plus a key string per sighting for the set, the dev map and the instance set
@@ -332,6 +339,7 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   );
 
   for (const line of textLines(content)) {
+    if ((++step & STEP_MASK) === 0) yield;
     const text = line.trim();
     if (text === "" || text.startsWith("#")) continue;
     const indent = line.length - line.trimStart().length;
@@ -388,9 +396,13 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   }
   if (!instances) return seen;
   for (const [name, version] of versions) {
+    if ((++step & STEP_MASK) === 0) yield;
     if (!seen.has(`${name}\0${version}`)) instances.add(name, version);
   }
-  for (const [key, [name, version]] of transitive) instances.add(name, version, devByKey.get(key), key);
+  for (const [key, [name, version]] of transitive) {
+    if ((++step & STEP_MASK) === 0) yield;
+    instances.add(name, version, devByKey.get(key), key);
+  }
   // Every registry (name, version) an entry installs, as `name\0version`: pnpmLockDamage reuses it.
   return seen;
 }
@@ -438,6 +450,12 @@ function listed(items: string[], limit = 3): string {
  * - lockfile 9: `packages:` comes with `snapshots:`, one or more per package.
  */
 export function pnpmLockDamage(content: string, missingDirect: string[] = [], identities?: ReadonlySet<string>): LockDamage | null {
+  return runSteps(pnpmLockDamageSteps(content, missingDirect, identities));
+}
+
+/** pnpmLockDamage, pausing every STEP_MASK + 1 lines (runStepsYielding; pre-publish round 10, W11). */
+export function* pnpmLockDamageSteps(content: string, missingDirect: string[] = [], identities?: ReadonlySet<string>): Steps<LockDamage | null> {
+  let step = 0;
   const lockMajor = Number(/^lockfileVersion:[ \t]*['"]?(\d+)/m.exec(content)?.[1] ?? "0");
   const sections = new Set<string>();
   // Every entry key as written (both sections), the `packages:` keys, and the `snapshots:` keys
@@ -461,6 +479,7 @@ export function pnpmLockDamage(content: string, missingDirect: string[] = [], id
   // Pass 1: the syntax, the sections and every entry key. Line by line (textLines), no array of lines.
   let lineNumber = 0;
   for (const line of textLines(content)) {
+    if ((++step & STEP_MASK) === 0) yield;
     lineNumber++;
     if (line.length > MAX_LOCKFILE_LINE) continue;
     const text = line.trim();
@@ -508,6 +527,7 @@ export function pnpmLockDamage(content: string, missingDirect: string[] = [], id
   section = "";
   let inDependencies = false;
   for (const line of textLines(content)) {
+    if ((++step & STEP_MASK) === 0) yield;
     if (line.length > MAX_LOCKFILE_LINE) continue;
     const text = line.trim();
     if (text === "" || text.startsWith("#") || /^[ ]*\t/.test(line)) continue;
@@ -534,7 +554,12 @@ export function pnpmLockDamage(content: string, missingDirect: string[] = [], id
   }
   const noSnapshots = lockMajor >= 9 && packageKeys.size > 0 && !sections.has("snapshots");
   const unsnapshotted: string[] = [];
-  if (lockMajor >= 9 && !noSnapshots) for (const k of packageKeys) if (!snapshotBases.has(k)) unsnapshotted.push(k);
+  if (lockMajor >= 9 && !noSnapshots) {
+    for (const k of packageKeys) {
+      if ((++step & STEP_MASK) === 0) yield;
+      if (!snapshotBases.has(k)) unsnapshotted.push(k);
+    }
+  }
 
   const parts: string[] = [];
   if (malformed.length > 0) {

@@ -23,10 +23,11 @@ import * as path from "node:path";
 import { oversize, tooLargeText } from "./bounded-read.js";
 import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
 import { checkInstallState } from "./install-state.js";
-import { lockfileCandidates, manifestCandidate, resolveVersionSource } from "./lockfile-parsers.js";
+import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
 import { readTextFile } from "./text-file.js";
+import { runSteps, type Steps } from "./yield-point.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements, VersionSource } from "./lockfile-types.js";
 import type { PrivateIndexEntry } from "./private-packages.js";
@@ -77,6 +78,14 @@ export interface GroupResolution {
 }
 
 export function resolveGroup(group: ResolutionGroup): GroupResolution {
+  return runSteps(resolveGroupSteps(group));
+}
+
+/**
+ * resolveGroup as steps: the same resolution, pausing inside the lockfile read and between its
+ * stages when run by runStepsYielding (the first call's init; pre-publish round 10, W11).
+ */
+export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolution> {
   const resolvedAt = new Date().toISOString();
   const ecosystem = mapEcosystem(group.language);
   const manifest = manifestCandidate(group.dir, ecosystem);
@@ -113,7 +122,8 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     };
   }
 
-  const read = resolveVersionSource(group.dir, ecosystem);
+  const read = yield* resolveVersionSourceSteps(group.dir, ecosystem);
+  yield;
   const readFiles = read.source ? [read.source, ...(read.extraSources ?? [])] : [];
   // The manifest only matters when the resolver fell back to it; editing a
   // script in package.json must not throw away a scan of an unchanged lockfile.
@@ -134,6 +144,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
       return declaredRange ? { ...dep, declaredRange } : dep;
     });
   }
+  yield;
   let drift: InstallDriftRecord[] = [];
   let driftAudit: ResolvedDependency[] = [];
   // Only a lockfile pins exact versions; comparing node_modules against a
@@ -146,6 +157,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     for (const [file, signature] of install.signatures) signatures.set(file, signature);
   }
 
+  yield;
   const audit = [
     ...resolveAuditVersionsFrom(
       group.dir,
@@ -160,6 +172,7 @@ export function resolveGroup(group: ResolutionGroup): GroupResolution {
     ...driftAudit,
   ].filter((dep) => !dep.declaredRange);
 
+  yield;
   const sources: ResolutionSourceRecord[] = read.kind
     ? readFiles.map((file) => ({ path: file, kind: read.kind!, mtimeMs: signatureMtime(signatures.get(file)) }))
     : [];

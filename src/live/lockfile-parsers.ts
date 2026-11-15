@@ -31,13 +31,14 @@ import {
   emptyReadReport,
   MAX_LOCKFILE_LINE,
   nonRegistrySource,
-  pnpmLockDamage,
-  readPnpmLock,
+  pnpmLockDamageSteps,
+  readPnpmLockSteps,
   readYarnLock,
   type LockDamage,
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
 import { requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
+import { runSteps, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import { readTextFile } from "./text-file.js";
@@ -87,10 +88,15 @@ export function manifestCandidate(cwd: string, ecosystem: OsvEcosystem): string 
  * lockfile" (audit B-9): now the answer names the file and the error.
  */
 export function resolveVersionSource(cwd: string, ecosystem: OsvEcosystem): VersionSource {
+  return runSteps(resolveVersionSourceSteps(cwd, ecosystem));
+}
+
+/** resolveVersionSource, pausing inside the readers that can take seconds (pnpm; pre-publish round 10, W11). */
+export function* resolveVersionSourceSteps(cwd: string, ecosystem: OsvEcosystem): Steps<VersionSource> {
   let read: VersionSource;
   let thrown: LockfileProblem | null = null;
   try {
-    read = readVersionSource(cwd, ecosystem);
+    read = yield* readVersionSourceSteps(cwd, ecosystem);
   } catch (error) {
     read = emptySource();
     const file = (LOCKFILES[ecosystem] ?? []).map((n) => path.join(cwd, n)).find((f) => fs.existsSync(f));
@@ -101,10 +107,10 @@ export function resolveVersionSource(cwd: string, ecosystem: OsvEcosystem): Vers
   return problems.length > 0 ? { ...read, problems: problems.map((p) => ({ ...p, ecosystem })) } : read;
 }
 
-function readVersionSource(cwd: string, ecosystem: OsvEcosystem): VersionSource {
+function* readVersionSourceSteps(cwd: string, ecosystem: OsvEcosystem): Steps<VersionSource> {
   switch (ecosystem) {
     case "npm":
-      return resolveNpm(cwd);
+      return yield* resolveNpmSteps(cwd);
     case "crates.io":
       return resolveRust(cwd);
     case "PyPI":
@@ -260,20 +266,21 @@ interface NpmLockRead {
  * reader. A reader returns null for a file that holds no package at all and
  * throws for one it cannot parse.
  */
-const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) => NpmLockRead | null }> = [
+const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) => NpmLockRead | null | Steps<NpmLockRead | null> }> = [
   { name: "package-lock.json", read: readNpmLockFile },
   { name: "npm-shrinkwrap.json", read: readNpmLockFile },
   {
     // v5.x, v6 and v9, read by column; see js-lockfile-readers.ts
     name: "pnpm-lock.yaml",
-    read(file) {
+    // A generator: the read that can take seconds pauses where it may (resolveNpmSteps, W11).
+    *read(file) {
       const content = readTextFile(file);
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const report = emptyReadReport();
-      const installs = readPnpmLock(content, versions, instances, report);
+      const installs = yield* readPnpmLockSteps(content, versions, instances, report);
       if (versions.size === 0) return null;
-      const damage = pnpmLockDamage(content, report.missingDirect, installs);
+      const damage = yield* pnpmLockDamageSteps(content, report.missingDirect, installs);
       return { versions, instances, uncheckable: report.uncheckable, problems: damage ? [damagedProblem(file, damage)] : [] };
     },
   },
@@ -319,7 +326,7 @@ function readNpmLockFile(file: string): NpmLockRead | null {
   return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [] };
 }
 
-function resolveNpm(cwd: string): VersionSource {
+function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
   let chosen: { name: string; file: string; read: NpmLockRead } | null = null;
   const others: string[] = [];
   for (const reader of NPM_LOCK_READERS) {
@@ -330,7 +337,8 @@ function resolveNpm(cwd: string): VersionSource {
       continue;
     }
     try {
-      const read = reader.read(file, cwd);
+      const out = reader.read(file, cwd);
+      const read = out && isSteps(out) ? yield* out : out;
       if (read) chosen = { name: reader.name, file, read };
     } catch { /* unreadable: the next lockfile; unreadLockfiles names this one and why */ }
   }
@@ -392,6 +400,11 @@ function resolveNpm(cwd: string): VersionSource {
   return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
 }
 
+/** A reader that returned its work as steps (a generator) rather than its result. */
+function isSteps<T>(value: T | Steps<T>): value is Steps<T> {
+  return typeof (value as Partial<Steps<T>>).next === "function" && typeof (value as Partial<Steps<T>>)[Symbol.iterator] === "function";
+}
+
 /** How many differing names a conflict note spells out. */
 const CONFLICT_EXAMPLES = 3;
 
@@ -418,7 +431,8 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     let other: NpmLockRead | null = null;
     let failure: string | null = null;
     try {
-      other = NPM_LOCK_READERS.find((r) => r.name === name)?.read(file, cwd) ?? null;
+      const out = NPM_LOCK_READERS.find((r) => r.name === name)?.read(file, cwd) ?? null;
+      other = out && isSteps(out) ? runSteps(out) : out;
       if (!other) failure = describeParseError(file, null);
     } catch (error) {
       failure = describeParseError(file, error) ?? "could not be parsed";
