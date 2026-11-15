@@ -69,7 +69,9 @@ import {
   pythonIndexConfig,
   resolvePipOption,
   uvConfigFiles,
+  UV_NO_INDEX_LABEL,
   uvEnvIndexes,
+  uvFindLinksConfig,
   yarnEnvConfig,
   yarnRcFilename,
   yarnrcRegistry,
@@ -682,7 +684,7 @@ export function pipConfigIndexes(content: string): { index: string | null; extra
 }
 
 /** The environment that decides the rules: a change to any of them re-reads them. */
-const RULE_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE", "FOURDA_PRIVATE_PACKAGES", "FOURDA_PUBLIC_MIRRORS", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOPROXY", "GOENV", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "VIRTUAL_ENV", "ProgramData", "PROGRAMDATA", "ALLUSERSPROFILE", "PREFIX", "CARGO_HOME", "UV_CONFIG_FILE", "UV_NO_CONFIG", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_INDEX", "UV_EXTRA_INDEX_URL"];
+const RULE_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE", "FOURDA_PRIVATE_PACKAGES", "FOURDA_PUBLIC_MIRRORS", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOPROXY", "GOENV", "HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "VIRTUAL_ENV", "ProgramData", "PROGRAMDATA", "ALLUSERSPROFILE", "PREFIX", "CARGO_HOME", "UV_CONFIG_FILE", "UV_NO_CONFIG", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_INDEX", "UV_EXTRA_INDEX_URL", "UV_FIND_LINKS", "UV_NO_INDEX"];
 /** Variables read by prefix, any case: npm's `npm_config_*`, yarn's `YARN_*` and pip's `PIP_*`. */
 const RULE_ENV_PREFIX = /^(?:npm_config_|yarn_|pip_)/i;
 
@@ -753,7 +755,8 @@ export class PrivatePackageRules {
    * Indexes uv, Poetry, PDM or pipenv consult for any name that are not public: a `[[tool.uv.index]]`
    * that is the default or not `explicit`, `[tool.uv] index-url` / `extra-index-url`, `uv.toml` (the
    * project's, the user's, the system's), UV_DEFAULT_INDEX / UV_INDEX_URL / UV_INDEX /
-   * UV_EXTRA_INDEX_URL, a Poetry source that is not `explicit`, a PDM source (R7, 2), a Pipfile
+   * UV_EXTRA_INDEX_URL, uv's `find-links` / `no-index` (uv.toml, `[tool.uv]`, `[tool.uv.pip]`,
+   * UV_FIND_LINKS, UV_NO_INDEX; pre-publish round 10, W12), a Poetry source that is not `explicit`, a PDM source (R7, 2), a Pipfile
    * `[[source]]` (R8). Each applies under the directory its file is in (pythonIndexFor).
    */
   private readonly pythonIndexes: ScopedSetting[] = [];
@@ -851,8 +854,17 @@ export class PrivatePackageRules {
 
     // uv, Poetry, PDM, pipenv.
     const python: ScopedSetting[] = uvEnvIndexes(env).map((s) => ({ ...s, scope: null }));
-    for (const { file, scope } of uvFiles) pushAll(python, pythonIndexConfig(safeRead(file), "uv.toml").map((url) => ({ url, from: file, scope })));
-    for (const { file, scope } of pyprojects) pushAll(python, pythonIndexConfig(safeRead(file), "pyproject").map((url) => ({ url, from: file, scope })));
+    for (const { file, scope } of uvFiles) {
+      const text = safeRead(file);
+      pushAll(python, pythonIndexConfig(text, "uv.toml").map((url) => ({ url, from: file, scope })));
+      // find-links and no-index, under pip's find-links policy, the setting named in the reason (pre-publish round 10, W12).
+      pushAll(python, uvFindLinksConfig(text, "uv.toml").map(({ url, setting }) => ({ url, from: `${setting}, ${file}`, scope })));
+    }
+    for (const { file, scope } of pyprojects) {
+      const text = safeRead(file);
+      pushAll(python, pythonIndexConfig(text, "pyproject").map((url) => ({ url, from: file, scope })));
+      pushAll(python, uvFindLinksConfig(text, "pyproject").map(({ url, setting }) => ({ url, from: `${setting}, ${file}`, scope })));
+    }
     for (const { file, scope } of pipfiles) {
       const read = pipfilePrivate(safeRead(file));
       const index = read.indexes.find((url) => !isMirror(url));
@@ -861,7 +873,8 @@ export class PrivatePackageRules {
       // Its packages are private wherever they are named: no lockfile or tree group may list them.
       for (const name of read.names) if (!this.pipfileNames.has(pep503(name))) this.pipfileNames.set(pep503(name), `${file} installs it from ${sourceLabel(index)} (a Pipfile [[source]]), not pypi.org; ${PUBLIC_MIRRORS_HINT}`);
     }
-    pushAll(this.pythonIndexes, python.filter((p) => !isMirror(p.url)).map((p) => ({ ...p, url: sourceLabel(p.url) })));
+    // The no-index label is not a URL: kept as it is, and no mirror can declare it public.
+    pushAll(this.pythonIndexes, python.filter((p) => !isMirror(p.url)).map((p) => ({ ...p, url: p.url === UV_NO_INDEX_LABEL ? p.url : sourceLabel(p.url) })));
 
     // npm, yarn, bun.
     const npmDefaults: ScopedSetting[] = [];

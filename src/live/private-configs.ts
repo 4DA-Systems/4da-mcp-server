@@ -384,9 +384,57 @@ export function pythonIndexConfig(content: string, kind: "pyproject" | "uv.toml"
   return found;
 }
 
-/** uv's index variables that are not public: UV_DEFAULT_INDEX and UV_INDEX_URL replace pypi.org, UV_INDEX and UV_EXTRA_INDEX_URL add indexes. */
+/**
+ * The label of a uv `no-index` setting: uv consults no index at all, so every name comes from a
+ * find-links location or a local source, never pypi.org (pre-publish round 10, W12).
+ */
+export const UV_NO_INDEX_LABEL = "find-links locations and local sources only";
+
+/** A uv boolean switch that is on (`1`, `true`, `yes`, `on`), as uv reads its environment. */
+const uvSwitchOn = (value: string | undefined): boolean => /^(?:1|true|yes|on|y|t)$/i.test(value?.trim() ?? "");
+
+/**
+ * uv's `find-links` and `no-index` in uv.toml (top level and `[pip]`) or pyproject.toml (`[tool.uv]`
+ * and `[tool.uv.pip]`), each with the setting that names it. uv may take ANY name from a find-links
+ * location, as pip does with `--find-links`, so one that is not public makes every PyPI name of the
+ * project private; `no-index = true` leaves only find-links locations and local sources. Neither key
+ * was read, and the reviewer's `zqx-billing` reached api.osv.dev and pypi.org in 14-18 requests per
+ * layout (pre-publish round 10, W12). Keys are matched with their table prefix, so a dotted
+ * `tool.uv.find-links = [...]` is read too.
+ */
+export function uvFindLinksConfig(content: string, kind: "pyproject" | "uv.toml"): Array<{ url: string; setting: string }> {
+  const prefix = kind === "pyproject" ? "tool.uv." : "";
+  const keys = (name: string) => new Set([`${prefix}${name}`, `${prefix}pip.${name}`, `${prefix}${name.replace(/-/g, "_")}`, `${prefix}pip.${name.replace(/-/g, "_")}`]);
+  const findLinks = keys("find-links");
+  const noIndex = keys("no-index");
+  let table = "";
+  const out: Array<{ url: string; setting: string }> = [];
+  for (const line of tomlLines(content)) {
+    const header = tomlHeader(line);
+    if (header) {
+      table = header.array ? "" : header.name;
+      continue;
+    }
+    const kv = tomlKeyValue(line);
+    if (!kv) continue;
+    const key = `${table ? `${table}.` : ""}${kv.key}`.toLowerCase();
+    if (findLinks.has(key)) pushAll(out, tomlStrings(kv.value).filter((v) => v.trim() && !isPublicFindLinks(v)).map((v) => ({ url: findLinksLabel(v), setting: "find-links" })));
+    if (noIndex.has(key) && kv.value.startsWith("true")) out.push({ url: UV_NO_INDEX_LABEL, setting: "no-index" });
+  }
+  return out;
+}
+
+/**
+ * uv's index variables that are not public: UV_DEFAULT_INDEX and UV_INDEX_URL replace pypi.org, UV_INDEX and UV_EXTRA_INDEX_URL add indexes.
+ * UV_FIND_LINKS (comma- or space-separated) and UV_NO_INDEX were not read, so a private find-links
+ * location set only in the environment let every name reach OSV.dev and pypi.org (pre-publish round 10, W12).
+ */
 export function uvEnvIndexes(env: NodeJS.ProcessEnv): PrivateSetting[] {
   const out: PrivateSetting[] = [];
+  for (const location of (env.UV_FIND_LINKS ?? "").split(/[\s,]+/).filter(Boolean)) {
+    if (!isPublicFindLinks(location)) out.push({ url: findLinksLabel(location), from: "find-links, UV_FIND_LINKS" });
+  }
+  if (uvSwitchOn(env.UV_NO_INDEX)) out.push({ url: UV_NO_INDEX_LABEL, from: "no-index, UV_NO_INDEX" });
   for (const key of ["UV_DEFAULT_INDEX", "UV_INDEX_URL"]) {
     const url = env[key]?.trim();
     if (url && !isPublicPypiIndex(url)) out.push({ url, from: key });
