@@ -79,7 +79,7 @@ export function heldAffectedRows(affected: HeldDependency[]): Array<{ package: s
  */
 export function heldImpactText(to: string, impact: HeldImpact, firstCleanOwn?: string[] | null): string {
   if (impact.status === "unchecked") {
-    return `NOT CHECKED: whether the dependencies ${to} exact-pins or narrowly ranges have known advisories could not be checked (${impact.reason}); installing ${to} installs them, so this is not a clean result`;
+    return `NOT CHECKED: whether the dependencies ${to} holds (its exact pins and ranges) have known advisories could not be checked (${impact.reason}); installing ${to} installs them, so this is not a clean result`;
   }
   const n = impact.affected.length;
   const base = `${heldText(to, impact.affected)}: installing ${to} installs ${n === 1 ? "it" : "them"}, so ${to} is not a clean target`;

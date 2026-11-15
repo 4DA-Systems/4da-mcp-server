@@ -187,7 +187,7 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: H
   const own = ownAdvisoriesSignal(item, facts);
   if (!held || (held.status === "checked" && held.affected.length === 0)) return own;
   if (held.status === "unchecked") {
-    const note = `Whether the dependencies ${item.to} exact-pins or narrowly ranges have known advisories was not checked (${held.reason}).`;
+    const note = `Whether the dependencies ${item.to} holds (its exact pins and ranges) have known advisories was not checked (${held.reason}).`;
     return {
       ...own,
       value: own.value === null ? { held_dependencies_unchecked: held.reason } : { ...(own.value as object), held_dependencies_unchecked: held.reason },
