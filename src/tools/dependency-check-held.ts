@@ -20,7 +20,7 @@ import { cleanFixTarget, type FixPathSources } from "../live/fix-paths.js";
 import { advisoriesAffecting, advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
 import type { PackageReleaseIndex } from "../live/release-metadata.js";
 import { compareVersions } from "../live/version-compare.js";
-import { excludedReleases } from "../live/withdrawn-releases.js";
+import { unofferedReleases } from "../live/withdrawn-releases.js";
 import { isPrereleaseIn, rangeAdmits, versionParts, type HeldAdvice, type RangeCheck } from "./dependency-check-versions.js";
 
 /** Time a dependency_check call may spend judging held dependencies, in all. */
@@ -29,7 +29,7 @@ const HELD_CHECK_BUDGET_MS = 10_000;
 const NEWEST_LISTED = 8;
 
 export const HELD_RANGE_NOTE =
-  "releases that exact-pin or narrowly range a dependency with a known advisory (installing them installs it), or whose such dependencies could not be checked, are not counted safe";
+  "releases that install a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), or whose such dependencies could not be checked, are not counted safe";
 
 export class HeldJudge {
   private readonly checks = new Map<string, HeldCheck>();
@@ -154,7 +154,7 @@ export class HeldJudge {
     return {
       unsafe: (v) => unchecked(v) || this.affected(pkg, v),
       notChecked: unchecked,
-      reason: reasons[0] ?? "the dependencies they exact-pin or narrowly range were not judged",
+      reason: reasons[0] ?? "the dependencies they pin or require were not judged",
       note: HELD_RANGE_NOTE,
     };
   }
@@ -223,7 +223,11 @@ export async function adviseNoSafeRelease(input: {
   if (rc.held_not_checked && (rc.affecting_all_total ?? 0) === 0) return;
   const published = (v: string) => input.index.releases[v]?.publishedAt ?? null;
   // "None known" may only mean none was judged: judge the newest ones before saying there is none.
-  if (!rc.newest_safe_outside_range && input.advisories) await offerJudgedOutside(input, published);
+  // So may a far-back one: newer releases that hold a wide range are judged now, not assumed clean,
+  // so the release-free-of-specs found first can be years old (pre-publish round 10, W13).
+  const known = rc.newest_safe_outside_range;
+  const farBack = known ? tooFarBack(input.to, known, published(known), input.now) !== null : false;
+  if ((!known || farBack) && input.advisories) await offerJudgedOutside(input, published);
   const outside = rc.newest_safe_outside_range ?? null;
   const why = outside ? tooFarBack(input.to, outside, published(outside), input.now) : null;
   const notOffered = outside && why ? { version: outside, published: published(outside), reason: why } : undefined;
@@ -243,7 +247,7 @@ export async function adviseNoSafeRelease(input: {
   if (!notOffered || !input.advisories) return;
 
   // (b) The newest release clear of the package's own advisories, past the far-back one.
-  const excluded = excludedReleases(input.index);
+  const excluded = unofferedReleases(input.index);
   const candidate = Object.values(input.index.releases)
     .map((r) => r.version)
     .filter(
@@ -286,7 +290,7 @@ async function offerJudgedOutside(
   published: (v: string) => string | null,
 ): Promise<void> {
   const { rc, judge, pkg } = input;
-  const excluded = excludedReleases(input.index);
+  const excluded = unofferedReleases(input.index);
   const settled = (v: string) => {
     const at = published(v);
     return !at || (input.now.getTime() - Date.parse(at)) / DAY_MS >= SETTLED_DAYS;

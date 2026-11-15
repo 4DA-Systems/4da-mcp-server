@@ -32,7 +32,7 @@ import { compareVersions, parsePep440 } from "../live/version-compare.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
-import { excludedReleases, withdrawalText, withheldNote } from "../live/withdrawn-releases.js";
+import { unofferedReleases, withdrawalText, withheldNote } from "../live/withdrawn-releases.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 
 export type Target =
@@ -336,7 +336,7 @@ export function describeReading(ecosystem: CheckEcosystem, raw: string, target: 
  * dependencies of the smallest and newest of these (audit 6.2.5 D-4).
  */
 export function ownSafeInRange(input: { ecosystem: CheckEcosystem; index: PackageReleaseIndex; range: string; advisories: AdvisoryRanges[]; allowPrerelease?: boolean }): string[] {
-  const excluded = excludedReleases(input.index);
+  const excluded = unofferedReleases(input.index);
   const installable = Object.values(input.index.releases).filter((r) => !excluded.has(r.version)).map((r) => r.version);
   return rangeCandidates(input.ecosystem, installable, input.range, input.allowPrerelease ?? false).candidates.filter(
     (v) => advisoriesAffecting(input.advisories, v, input.ecosystem).length === 0,
@@ -418,7 +418,8 @@ export function checkRange(input: {
   young?: (version: string) => boolean;
 }): RangeCheck {
   const { ecosystem, index, range, basis } = input;
-  const excluded = excludedReleases(index);
+  // Withdrawn releases and those the deprecation signal judges avoid are never a safe pick (round 10, W13).
+  const excluded = unofferedReleases(index);
   const installable = Object.values(index.releases).filter((r) => !excluded.has(r.version)).map((r) => r.version);
   const { candidates, stable, prereleasesLeftOut } = rangeCandidates(ecosystem, installable, range, input.allowPrerelease ?? false);
   // The same predicate every tool runs on a release it offers (osv-ranges.ts advisoriesAffecting).

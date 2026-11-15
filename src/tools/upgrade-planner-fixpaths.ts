@@ -1856,6 +1856,26 @@ function findRoute(ctx: MoveContext, lockfile: string, parent: string, version: 
  * The advisory lookups are bounded (RECONCILE_BUDGET_MS); a release that could not be checked in
  * time is not chosen, and nothing is written after the budget runs out.
  */
+/** Judges what a raised npm release holds: clean, it is checked against every advisory; else NOT CHECKED or not a clean fix, with the reason. */
+async function judgeRaisedHolds(own: FixPathStep, release: string, liveIntel: Intel, sources: ReturnType<Intel["getFixPathSources"]>): Promise<void> {
+  const query = liveIntel.queryAdvisories?.bind(liveIntel);
+  const facts = sources ? await sources.releaseFacts("npm", own.package).catch(() => null) : null;
+  const specs = facts?.heldSpecs?.[release];
+  let check: HeldCheck | undefined;
+  if (facts?.heldSpecs && !specs) check = { status: "checked", affected: [] };
+  else if (sources && query && specs) check = (await heldAdvisories(sources, query, [{ key: release, specs }], Date.now() + HELD_BUDGET_MS).catch(() => null))?.get(release);
+  if (check?.status === "checked" && check.affected.length === 0) {
+    own.fixPathChecked = "all_advisories";
+    return;
+  }
+  own.fixPathChecked = "installed_advisories_only";
+  own.reasons.push(
+    check?.status === "checked"
+      ? `${heldText(release, check.affected)}: installing ${release} installs them, so ${release} is NOT a clean fix: confirm a release with dependency_check before pinning it`
+      : `whether the dependencies ${release} holds are affected was NOT CHECKED (${check?.status === "unchecked" ? check.reason : "the registry or OSV.dev could not be asked"}): confirm it with dependency_check before pinning it`,
+  );
+}
+
 export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs = withinCallBudget(RECONCILE_BUDGET_MS, 500)): Promise<void> {
   const sources = liveIntel.getFixPathSources();
   const key = (eco: string, name: string, version: string) => `${eco}\0${name}\0${version}`;
@@ -1957,6 +1977,11 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
       if (!fixRow(own) && cmp(old, release) > 0) own.latestVersion = old;
       setTarget(own, release);
       if (own.latestVersion === own.targetVersion) delete own.latestVersion;
+      // npm: the raised release is a fix only once what it holds is judged too. par 1.0.1 required
+      // child "^1.0.0" with every 1.x affected, and a raise past it was named on its own advisories
+      // alone; now it is checked against every advisory only when its held dependencies are clean
+      // (pre-publish round 10, W13).
+      if (eco === "npm") await judgeRaisedHolds(own, release, liveIntel, sources);
       const input = inputs.find((i) => i.step === own) ?? { step: own, fixes: [], sourceDirs: declaredDirs(liveIntel, eco, own.package, own.currentVersion!) };
       withUpgradeCommands(input, liveIntel);
     }

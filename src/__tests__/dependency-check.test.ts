@@ -99,6 +99,9 @@ beforeEach(() => {
       axios: fixture("npm-axios.json"),
       "plain-crypto-js": fixture("npm-plain-crypto-js.json"),
       "steady-lib": fixture("npm-steady-lib.json"),
+      // steady-lib requires tiny-dep "^2.0.0": a wide range is judged by the release it resolves to,
+      // so the registry has to serve it (pre-publish round 10, W13).
+      "tiny-dep": { name: "tiny-dep", "dist-tags": { latest: "2.1.0" }, time: { created: "2025-01-01T00:00:00.000Z", "2.1.0": "2025-06-01T00:00:00.000Z" }, versions: { "2.1.0": {} } },
     },
     cratesVersions: { "fixture-crate": fixture("crates-fixture-crate-versions.json") },
     sparse: {

@@ -63,9 +63,10 @@ const MAX_OSV_PAGES = 10;
  * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable;
  * 13: npm facts withdraw the releases a maintainer flagged on a line that carries another notice, withdrawn-releases.ts npmFlaggedReleases;
  * 14: PyPI facts carry each release's `requiresPython`; 15: npm deprecation messages are quoted and capped, untrusted-text.ts quoteThirdParty;
- * 16: `withdrawnWhy` holds this server's words only and the registry's message moves to `withdrawnQuote`, r7).
+ * 16: `withdrawnWhy` holds this server's words only and the registry's message moves to `withdrawnQuote`, r7;
+ * 17: `heldSpecs` carry wide ranges and npm aliases too, so a v16 entry would read mocha 10.6.0 as holding nothing: round 10, W13).
  */
-const CACHE_VERSION = 16;
+const CACHE_VERSION = 17;
 /** How long "the registry does not serve this version" is believed: it may be published later. */
 const ABSENT_TTL = 3600;
 

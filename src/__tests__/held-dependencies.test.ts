@@ -19,7 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
-import { exactPinVersion, heldSpecsOf, isNarrowRange } from "../live/held-dependencies.js";
+import { exactPinVersion, heldSpecsOf, npmAliasTarget } from "../live/held-dependencies.js";
 import type { OsvVulnerability } from "../live/types.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
@@ -154,14 +154,15 @@ const check = async (items: unknown[]) =>
 const advisoriesOf = (r: { signals: Array<{ id: string }> }) => r.signals.find((s) => s.id === "advisories") as { value: any; effect: string; evidence: string };
 
 describe("held dependencies: what an npm spec installs whatever the lockfile holds", () => {
-  it("an exact pin is a bare version or =version; a narrow range is capped below the next major", () => {
+  it("an exact pin is a bare version or =version; every registry range is held, wide ones too (round 10, W13)", () => {
     expect(exactPinVersion("6.11.0")).toBe("6.11.0");
     expect(exactPinVersion("=6.11.0")).toBe("6.11.0");
     expect(exactPinVersion("v1.2.3-beta.1")).toBe("1.2.3-beta.1");
     for (const spec of ["^6.11.0", "~6.11.0", "6.x", ">=6", "*", "latest", "npm:qs@6.11.0", "git+https://x/y.git"]) expect(exactPinVersion(spec), spec).toBeNull();
-    for (const spec of ["~6.14.0", "^0.1.12", "0.1.x", "1.2", ">=1.2.0 <1.3.0", "1.2.0 - 1.4.0"]) expect(isNarrowRange(spec), spec).toBe(true);
-    for (const spec of ["^6.14.0", ">=1", "*", "latest", "6.11.0", "1.x || 2.x", "file:../x"]) expect(isNarrowRange(spec), spec).toBe(false);
-    expect(heldSpecsOf({ qs: "6.11.0", send: "~0.19.0", debug: "^2.6.9" }, { fsevents: "1.2.9" })).toEqual({ qs: "6.11.0", send: "~0.19.0", fsevents: "1.2.9" });
+    // A wide range is held too: whether a refresh reaches a clean release is judged, not assumed.
+    expect(heldSpecsOf({ qs: "6.11.0", send: "~0.19.0", debug: "^2.6.9", any: "*" }, { fsevents: "1.2.9" })).toEqual({ qs: "6.11.0", send: "~0.19.0", debug: "^2.6.9", any: "*", fsevents: "1.2.9" });
+    // Not registry ranges: dist-tags, protocols, paths install nothing this can judge.
+    expect(heldSpecsOf({ a: "latest", b: "file:../x", c: "git+https://x/y.git", d: "github:u/r" })).toEqual({});
   });
 });
 
@@ -450,7 +451,7 @@ describe("upgrade_impact: the target is judged by what it installs (pre-publish 
     expect(r.held_dependencies_unchecked).toBe("this server has no advisory lookup for them");
     expect(r.summary).toMatch(/NOT CHECKED/);
     // A release that holds nothing needs no lookup, and says nothing of the kind.
-    NPM.express.versions["4.21.2"] = { dependencies: { debug: "^2.6.9" } };
+    NPM.express.versions["4.21.2"] = { dependencies: {} };
     const clean = (await analyzeUpgradeImpact(
       { ecosystem: "npm", package: "express", from_version: "4.16.4", to_version: "4.21.2" },
       { net: createUpgradeNet(null), projectRoot: null, installed: [], offline: false, held: null },
