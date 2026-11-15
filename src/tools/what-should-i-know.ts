@@ -496,7 +496,7 @@ export async function executeWhatShouldIKnow(
             : withheld
               ? `Review ${dep.package}: ${withheld}`
               : clean && fixes.length > 0
-              ? `Review ${dep.package}: no published version clears every advisory (${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")})`
+              ? `Review ${dep.package}: no published release from ${clean.floor} up clears every advisory (${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")})`
               : `Review ${dep.package}: no fixed release published`,
       url: null,
       scope: "task",

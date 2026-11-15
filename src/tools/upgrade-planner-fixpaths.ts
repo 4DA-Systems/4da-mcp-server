@@ -486,8 +486,10 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     return "verified";
   }
   if (clean.target === null) {
+    // "from <floor> up": only releases at or above the highest per-advisory fix were judged; an
+    // earlier one (a downgrade) can be clean and is not denied (pre-publish round 10, W6).
     step.reasons.push(
-      `No published version clears every known advisory: ${clean.floor}, the highest per-advisory fix, is still affected by ${clean.stillAffectedBy.join(", ")}`,
+      `No published release from ${clean.floor} up clears every known advisory: ${clean.floor}, the highest per-advisory fix, is still affected by ${clean.stillAffectedBy.join(", ")}`,
     );
     step.targetVersion = null;
     step.upgradeType = "unknown";
@@ -557,7 +559,7 @@ function inactiveTarget(step: FixPathStep, clean: FixTargetResult | null, ecosys
     step.targetVersion = null;
     step.upgradeType = "unknown";
     step.breaking = false;
-    step.reasons.push(why ?? (clean.stillAffectedBy.length > 0 ? `No published version clears every known advisory: ${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")}` : "No release is named"));
+    step.reasons.push(why ?? (clean.stillAffectedBy.length > 0 ? `No published release from ${clean.floor} up clears every known advisory: ${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")}` : "No release is named"));
   } else if (step.targetVersion !== clean.target) {
     const note = targetNote(clean, ecosystem);
     setTarget(step, clean.target);

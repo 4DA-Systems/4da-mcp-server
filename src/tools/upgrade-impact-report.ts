@@ -262,6 +262,12 @@ export interface SummaryInput {
   githubHint?: string | null;
   /** Go: the upgrade moves to another module path. */
   pathChange?: { from: string; to: string; files: number } | null;
+  /**
+   * npm: what the target exact-pins or narrowly ranges, when that is affected or could not be
+   * checked (upgrade-impact-held.ts). Said in the summary: "2 advisories fixed" alone read as a
+   * clean target for express 4.21.2 (pre-publish round 10, W6).
+   */
+  held?: string | null;
 }
 
 /** The one sentence a human or agent reads first. */
@@ -294,5 +300,6 @@ export function summarize(input: SummaryInput): string {
   const path = input.pathChange
     ? `, module path changes to ${input.pathChange.to} (${input.pathChange.files} ${input.pathChange.files === 1 ? "file imports" : "files import"} ${input.pathChange.from})`
     : "";
-  return `${input.pkg} ${input.fromLabel ?? input.from} -> ${input.toLabel ?? input.to}: ${parts.join(", ")}${path}, ${breaking}, ${advisories}.`;
+  const held = input.held ? (input.held.startsWith("NOT CHECKED") ? `; ${input.held}` : `; but ${input.held}`) : "";
+  return `${input.pkg} ${input.fromLabel ?? input.from} -> ${input.toLabel ?? input.to}: ${parts.join(", ")}${path}, ${breaking}, ${advisories}${held}.`;
 }
