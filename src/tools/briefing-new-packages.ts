@@ -48,10 +48,12 @@ import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import {
+  checkableSpec,
   closestPopularPypi,
   ENGLISH_TASK_WORDS,
   installedGoModule,
   isManifestFile,
+  isTomlEntry,
   isVersionSpec,
   MANIFEST_FIELDS,
   normalizeVersionSyntax,
@@ -64,6 +66,7 @@ import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
+import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
 export interface NewPackage {
   name: string;
@@ -240,6 +243,16 @@ export function statedEcosystem(words: string[]): CheckEcosystem | null {
   return null;
 }
 
+/**
+ * The ecosystem of a manifest entry the task writes in TOML (`name = { version = "..." }`): a
+ * Cargo.toml or pyproject entry, never npm. The one the task names, else the one of the two the
+ * project installs from most, else crates.io (pre-publish round 10, W3).
+ */
+export function tomlEcosystem(stated: CheckEcosystem | null, deps: readonly ResolvedDependency[]): CheckEcosystem {
+  if (stated === "crates.io" || stated === "PyPI") return stated;
+  return projectEcosystems(deps).find((e) => e === "crates.io" || e === "PyPI") ?? "crates.io";
+}
+
 /** The checkable ecosystems the project installs from, most dependencies first. */
 export function projectEcosystems(deps: readonly ResolvedDependency[]): CheckEcosystem[] {
   const counts = new Map<CheckEcosystem, number>();
@@ -317,6 +330,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const words = raw.map((t) => t.replace(/[.,;:)]+$/, "").toLowerCase());
   const fallback = proseEcosystem(words, deps);
   const stated = statedEcosystem(words);
+  // A TOML manifest entry is Cargo's or Poetry's, filed as the version reader files it (round 10, W3).
+  const toml = tomlEcosystem(stated, deps);
   // A name filed under the project's main ecosystem only because the task names none is a guess:
   // it is checked in every ecosystem the project uses (checkNewPackages takes the worst answer).
   const others = stated ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
@@ -513,7 +528,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     while (start) {
       const k: number = start.at;
       const skipped = start.skipped;
-      const name = asName(raw[k], fallback);
+      const tomlEntry = isTomlEntry(task, starts[k]);
+      const name = asName(raw[k], tomlEntry ? toml : fallback);
       const skip = (word = true) => {
         const n = nextItem(k, word);
         start = n === null ? null : itemStart(n);
@@ -536,9 +552,27 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       // "add jeIlyfish" and "add python3-dateutil" read as prose (black-box audit of 60c9edc, 2026-11-14).
       // After a prose item, a popular name that is also an everyday word is prose too: "add logging and
       // retry around the upload" is no npm `retry`.
+      // A popular name that is also an everyday word ("debug", "ms") is a package where the list shape
+      // says so: leading an add list, closed by a comma ("add debug, then wire it into the logger"), or
+      // a whole item of a list that already names a package for certain ("add debug, chalk and ms": only
+      // chalk was read; pre-publish round 10, W3). Followed by more words ("add debug output") it is prose.
+      const itemEnds = separatorAfter(k) !== null || endsList(k + 1) || LIST_WORDS.has(words[k + 1] ?? "");
+      // Leading, only when what follows the comma is no English list: the clause ends ("then ..."), a
+      // pronoun goes on about it ("it is tiny"), or a package follows ("chalk"); "add open, close and
+      // save buttons" names no package.
+      const afterComma = (() => {
+        let n = k + 1;
+        if (LIST_WORDS.has(words[n] ?? "")) n++;
+        const w = words[n];
+        if (w === undefined || endsList(n) || NOT_A_NAME.has(w)) return true;
+        return (POPULAR.has(w) && !COMMON_WORDS.has(w) && !ENGLISH.has(w)) || nearMissOf(w) !== null || NAME_SHAPED.test(w);
+      })();
+      const leadsList = skipped === 0 && !afterSeparator && !proseSeen && listed.length === 0 && separatorAfter(k) === "list" && afterComma;
+      const inPackageList = afterSeparator && !proseSeen && listed.some((l) => l.strong) && itemEnds;
+      const commonPackage = !ENGLISH_TASK_WORDS.has(name) && (leadsList || inPackageList);
       const known =
         !(proseSeen && ENGLISH_TASK_WORDS.has(name)) &&
-        !COMMON_WORDS.has(name) &&
+        (!COMMON_WORDS.has(name) || commonPackage) &&
         !ENGLISH.has(name) &&
         !stdlib(name) &&
         ((guessed.has("npm") && (POPULAR.has(name) || nearMissOf(name) !== null)) || (guessed.has("PyPI") && closestPopularPypi(name) !== null));
@@ -563,7 +597,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           continue;
         }
       }
-      const pkg = add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
+      const pkg = tomlEntry ? add(name, toml, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
       if (pkg) listed.push({ pkg, strong });
       if (after) bound.push({ name: raw[k].replace(/[.,;:)]+$/, ""), version: after.version, ...span(after.at) });
       // "the lodahs package, and expres": a package word may close the item.
@@ -591,7 +625,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   return { packages: found, bound, ignored };
 }
 
-export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;
+export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &
+  Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories" | "lookupPrivateReason" | "privateReason">>;
 
 /** The popular package a name resembles in its ecosystem's bundled list, when there is one. */
 function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
@@ -651,12 +686,12 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     return packages.map((p) => unchecked(p, "the registry lookups are not available in this session"));
   }
   const deadline = Date.now() + NAME_CHECK_BUDGET_MS;
-  /** One dependency_check run within what is left of the budget; null past it. */
-  const run = async (list: NewPackage[]) => {
+  /** Work within what is left of the budget; null past it. */
+  const inBudget = async <T>(work: Promise<T>): Promise<T | null> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        executeDependencyCheck(null, { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: p.version ?? "latest" })) }, liveIntel as LiveIntelligence, now ? { now } : {}),
+        work,
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
         }),
@@ -665,6 +700,19 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       if (timer) clearTimeout(timer);
     }
   };
+  /**
+   * One dependency_check run within the budget. A constraint goes in the form dependency_check reads
+   * for that ecosystem: npm's `>=1.2.0 <1.2.6` for the task's `>= 1.2.0, < 1.2.6` (checkableSpec; round 10, W3).
+   */
+  const run = (list: NewPackage[]) =>
+    inBudget(
+      executeDependencyCheck(
+        null,
+        { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: p.version ? (checkableSpec(p.ecosystem, p.version) ?? p.version) : "latest" })) },
+        liveIntel as LiveIntelligence,
+        now ? { now } : {},
+      ),
+    );
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
     const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, ...p } = pkg;
@@ -682,19 +730,44 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       name_finding: nameCheck?.effect === "avoid" || nameCheck?.effect === "review" ? nameCheck.effect : null,
     };
   };
+  /** A loose word's name-level answer (briefing-task-name-check.ts) as a finding. */
+  const nameFinding = (q: NewPackage, a: NameOnlyAnswer | undefined): NewPackageFinding => {
+    if (!a) return unchecked(q, "no answer");
+    if (a.kind === "unchecked") return unchecked(q, a.why);
+    const base = { ...q, latest: null, reason: a.reason, name_finding: null };
+    if (a.kind === "malware") return { ...base, verdict: "avoid", malicious: true, did_you_mean: a.found.didYouMean ?? nearMissName(q.name, q.ecosystem) };
+    return { ...base, verdict: a.kind === "clean" ? "proceed" : "unknown", malicious: false, did_you_mean: nearMissName(q.name, q.ecosystem) };
+  };
   // Every ecosystem a guessed name may be in, in one run: the lookups go out together, so a
-  // second ecosystem costs no more wall time than the first, within the same budget.
-  const items = packages.flatMap((p, i) => [p, ...(p.alternatives ?? []).map((ecosystem) => ({ name: p.name, ecosystem, ...(p.version ? { version: p.version } : {}) }))].map((q) => ({ i, q })));
+  // second ecosystem costs no more wall time than the first, within the same budget. Not one that
+  // cannot read the constraint the task writes: dependency_check refuses the whole run over it, and
+  // "add lodash-es 1.2.3 - 1.4.0 and ctx" lost ctx's malware to PyPI's refusal (round 10, W3).
+  const items = packages.flatMap((p, i) =>
+    [p.ecosystem, ...(p.alternatives ?? [])]
+      .filter((ecosystem) => !p.version || checkableSpec(ecosystem, p.version) !== null)
+      .map((ecosystem) => ({ i, q: { name: p.name, ecosystem, ...(p.version ? { version: p.version } : {}) } as NewPackage })),
+  );
+  // A loose word ("use blueprints") is checked by its name alone, one advisory-list read: the full
+  // run also judged its newest release, a second OSV.dev lookup of the name whose answer is dropped
+  // for a loose word anyway (round 10, W3). A near-miss of a popular name gets the full run (name_check).
+  const byName = (x: { i: number; q: NewPackage }) => packages[x.i].loose === true && nearMissName(x.q.name, x.q.ecosystem) === null;
+  const full = items.filter((x) => !byName(x));
+  const named = items.filter(byName);
   try {
-    const answer = await run(items.map((x) => x.q));
+    const [answer, names] = await Promise.all([
+      full.length > 0 ? run(full.map((x) => x.q)) : Promise.resolve({ results: [] as Answer["results"] }),
+      named.length > 0 ? inBudget(Promise.all(named.map((x) => checkNameOnly(liveIntel, x.q.ecosystem, x.q.name)))) : Promise.resolve([] as NameOnlyAnswer[]),
+    ]);
     if (!answer) return packages.map((p) => unchecked(p, "the lookups did not finish in time"));
-    const answered = packages.map((_p, i) => items.flatMap((x, k) => (x.i === i ? [finding(x.q, answer.results[k])] : [])));
+    const answerFor = (x: { i: number; q: NewPackage }) =>
+      byName(x) ? (names ? nameFinding(x.q, names[named.indexOf(x)]) : unchecked(x.q, "the lookups did not finish in time")) : finding(x.q, answer.results[full.indexOf(x)]);
+    const answered = packages.map((_p, i) => items.filter((x) => x.i === i).map(answerFor));
     // A name the task gives no ecosystem for that none of the project's ecosystems has: the others'
     // malicious-package records are read too. "bring in rustdecimal" in an npm project came back
     // safe_to_delegate: npm has no such name, and crates.io's rustdecimal is malware
     // (GHSA-7pwq-f4pq-78gm; pre-publish audit of 5d709ff). Only a malware answer there is kept.
     const elsewhere = packages.flatMap((p, i) =>
-      p.guessed && answered[i].every(nameNotFound)
+      p.guessed && answered[i].length > 0 && answered[i].every(nameNotFound)
         ? NAME_ECOSYSTEMS.filter((e) => !answered[i].some((f) => f.ecosystem === e) && !p.closed?.includes(e) && asName(p.name, e) !== null).map((ecosystem) => ({ i, q: { name: p.name, ecosystem } as NewPackage }))
         : [],
     );
@@ -709,6 +782,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     }
     const out = packages.map((p, i) => {
       const answers = answered[i];
+      if (answers.length === 0) return unchecked(p, `dependency_check reads no ${p.ecosystem} version or constraint in "${p.version ?? ""}"`);
       if (answers.length === 1) return answers[0];
       // The worst answer; when no ecosystem has the name, the one that knows what it resembles.
       const worst = answers.reduce((a, b) => (badness(b) > badness(a) ? b : a));
