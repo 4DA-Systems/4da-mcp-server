@@ -16,12 +16,16 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { LiveIntelligence } from "../live/index.js";
 import { clearNpmDownloadsMemo } from "../live/npm-downloads.js";
 import { advisoryAffects, advisoryRanges } from "../live/osv-ranges.js";
 import type { PackageReleaseIndex } from "../live/release-metadata.js";
 import type { OsvVulnerability } from "../live/types.js";
-import { executeDependencyCheck, runDependencyCheck } from "../tools/dependency-check.js";
+import { crateSpellingReason, executeDependencyCheck, runDependencyCheck } from "../tools/dependency-check.js";
 import { cargoBareVersion, npmPick, worseVerdict } from "../tools/dependency-check-resolution.js";
 import type { FourDADatabase } from "../db.js";
 import { callFindingKey } from "../call-budget.js";
@@ -358,5 +362,73 @@ describe("crates.io: a crate asked under another spelling is checked as publishe
     const [r] = (await check([{ ecosystem: "crates.io", package: "serde-json", to: "=1.0.154" }])).results;
     expect(r.verdict).toBe("unknown");
     expect(r.reason).toContain("published spelling could not be read");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// W10 (pre-publish round 10): a bare "X" / "X.Y" is a caret range too; crate spelling reasons
+// ---------------------------------------------------------------------------------------------
+
+describe("W10: a bare crates.io requirement short of X.Y.Z, and the reason a spelling was folded", () => {
+  let dir: string | null = null;
+  beforeEach(() => {
+    CRATES.smallvec = { "1.5.1": daysAgo(2200), "1.6.0": daysAgo(2100), "1.6.1": daysAgo(2090), "1.15.1": daysAgo(200), "1.16.5": daysAgo(40) };
+    OSV.push(rustsec("RUSTSEC-2021-0003", "smallvec", [{ introduced: "0.6.3" }, { fixed: "0.6.14" }, { introduced: "1.0.0" }, { fixed: "1.6.1" }]));
+  });
+  afterEach(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
+  /** A LiveIntelligence over a project whose Cargo.lock holds smallvec `locked`. */
+  const withLock = (locked: string): LiveIntelligence => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "4da-w10-cargo-"));
+    fs.writeFileSync(path.join(dir, "Cargo.toml"), '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\nsmallvec = "1.6"\n');
+    fs.writeFileSync(path.join(dir, "Cargo.lock"), `version = 3\n\n[[package]]\nname = "app"\nversion = "0.1.0"\ndependencies = ["smallvec"]\n\n[[package]]\nname = "smallvec"\nversion = "${locked}"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n`);
+    const l = live();
+    const { entries, discovery } = scanProjectTree(dir);
+    l.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
+    return l;
+  };
+
+  for (const to of ["1.6", "1"]) {
+    it(`smallvec "${to}" with no lockfile: the range's verdict, and a note that a locked older release is kept`, async () => {
+      const [r] = (await check([{ ecosystem: "crates.io", package: "smallvec", to }])).results;
+      expect(r).toMatchObject({ to: "1.16.5", verdict: "proceed" });
+      expect(r.reason).toContain(`Cargo reads a bare "${to}" as ^${to}, a caret range: a Cargo.lock that already holds a release in it keeps that release`);
+      expect(r.reason).toMatch(/have a known advisory \(the smallest without one is 1\.6\.1\); a Cargo\.lock holding one keeps it/);
+    });
+  }
+
+  it('smallvec "1.6" when the project\'s Cargo.lock holds 1.6.0: not proceed, and the locked release named with its advisory', async () => {
+    const l = withLock("1.6.0");
+    const [r] = ((await executeDependencyCheck(noDb, { items: [{ ecosystem: "crates.io", package: "smallvec", to: "1.6" }] } as never, l, { now: NOW })) as unknown as { results: Result[] }).results;
+    expect(r.verdict).not.toBe("proceed");
+    expect(r.verdict).toBe("avoid");
+    expect(r.reason).toContain("1.6.0 in your Cargo.lock is affected by RUSTSEC-2021-0003");
+    expect(judged(r)).toEqual([
+      ["1.6.0", "avoid"],
+      ["1.16.5", "proceed"],
+    ]);
+    expect(r.reason).toContain("cargo update -p smallvec");
+  });
+
+  it('smallvec "1.6" when the Cargo.lock holds a clean 1.15.1: proceed, the locked release judged', async () => {
+    const l = withLock("1.15.1");
+    const [r] = ((await executeDependencyCheck(noDb, { items: [{ ecosystem: "crates.io", package: "smallvec", to: "1.6" }] } as never, l, { now: NOW })) as unknown as { results: Result[] }).results;
+    expect(r.verdict).toBe("proceed");
+    expect(judged(r)[0]).toEqual(["1.15.1", "proceed"]);
+  });
+
+  it('"Smallvec" (case only) says letter case; "serde-json" says "-" and "_"; both differences say both', () => {
+    expect(crateSpellingReason("Smallvec", "smallvec")).toBe("crates.io treats crate names that differ only in letter case as the same crate");
+    expect(crateSpellingReason("serde-json", "serde_json")).toBe('crates.io and Cargo read "-" and "_" in a crate name as the same crate');
+    expect(crateSpellingReason("Serde-Json", "serde_json")).toMatch(/letter case or in "-" against "_"/);
+  });
+
+  it('{crates.io, "Smallvec", "=1.6.0"}: the answer gives letter case as the reason', async () => {
+    const [r] = (await check([{ ecosystem: "crates.io", package: "Smallvec", to: "=1.6.0" }])).results;
+    expect(r.package).toBe("smallvec");
+    expect(r.reason).toMatch(/^Smallvec is published as smallvec: crates\.io treats crate names that differ only in letter case as the same crate/);
+    expect(r.reason).not.toContain('"-" and "_"');
   });
 });

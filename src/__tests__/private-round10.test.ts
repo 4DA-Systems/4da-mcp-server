@@ -433,3 +433,58 @@ describe("item 6: under a private pip index, public requests is not looked up, a
     });
   }
 });
+
+describe("W10: pnpm-workspace.yaml registry values in any shape, unread ones failing closed", () => {
+  it("reads multi-line flow maps and flow sequences", async () => {
+    const { pnpmWorkspaceRegistries } = await import("../live/private-packages.js");
+    expect(pnpmWorkspaceRegistries('registries: {\n  default: "https://npm.zqx.internal/"\n}\n')).toEqual({ scopes: [], registry: "https://npm.zqx.internal/" });
+    expect(pnpmWorkspaceRegistries('registries:\n  https://npm.acme.internal/:\n    scopes: [\n      "@zqa",\n      "@zqb"\n    ]\n')).toEqual({ scopes: ["@zqa", "@zqb"], registry: null });
+    expect(pnpmWorkspaceRegistries('registries:\n  https://npm.acme.internal/: {\n    scopes: ["@zqc"]\n  }\n')).toEqual({ scopes: ["@zqc"], registry: null });
+    // A same-indent block sequence, and the four shapes that already worked.
+    expect(pnpmWorkspaceRegistries('registries:\n  https://npm.acme.internal/:\n    scopes:\n    - "@zqd"\n')).toEqual({ scopes: ["@zqd"], registry: null });
+    expect(pnpmWorkspaceRegistries("registries:\n  default: https://npm.zq.internal/\n")).toEqual({ scopes: [], registry: "https://npm.zq.internal/" });
+    expect(pnpmWorkspaceRegistries("registry: https://npm.zq.internal/\n\npackages:\n  - apps/*\n")).toEqual({ scopes: [], registry: "https://npm.zq.internal/" });
+    expect(pnpmWorkspaceRegistries('registries:\n  "@zqe": https://npm.acme.internal/\n')).toEqual({ scopes: ["@zqe"], registry: null });
+    expect(pnpmWorkspaceRegistries("namedRegistries:\n  work: https://npm.acme.internal/\n")).toEqual({ scopes: [], registry: null });
+  });
+
+  it("an anchor, alias, block scalar, unknown key or non-URL value is unread (fail closed)", async () => {
+    const { pnpmWorkspaceRegistries } = await import("../live/private-packages.js");
+    for (const yaml of [
+      "registries: *corp\n",
+      "registry: |\n  https://npm.zq.internal/\n",
+      "registries:\n  default: &r https://npm.zq.internal/\n",
+      "registries:\n  <<: *base\n",
+      "registries:\n  mirror: https://npm.zq.internal/\n",
+      "registry: ${NPM_REGISTRY}\n",
+      "registries: { default: https://npm.zq.internal/\n",
+      "namedRegistries: [https://npm.zq.internal/]\n",
+    ]) expect(pnpmWorkspaceRegistries(yaml).unread, yaml).toBeDefined();
+    expect(pnpmWorkspaceRegistries("registries:\n  default: &r https://npm.zq.internal/\n").unread).toEqual({ url: "https://npm.zq.internal/" });
+    expect(pnpmWorkspaceRegistries("registries: *corp\n").unread).toEqual({ url: null });
+  });
+
+  it("the reviewer's multi-line flow map: zqx-newlib and @zqxs/core are never sent", async () => {
+    const live = liveFor({ "pnpm-workspace.yaml": 'registries: {\n  default: "https://npm.zqx.internal/"\n}\n', ...npmProject({ "zq-left": "1.0.0" }, () => undefined) });
+    expect(live.registryPrivate("npm")).toMatch(/npm\.zqx\.internal/);
+    await call("dependency_check", { items: [{ ecosystem: "npm", package: "zqx-newlib", to: "1.2.3" }, { ecosystem: "npm", package: "@zqxs/core", to: "^2.0.0" }] });
+    await call("vulnerability_scan", { include_dev: true });
+    expect(leaks(/zq/i)).toEqual([]);
+  });
+
+  it("an unread registry value makes npm private for the folder, naming the file and FOURDA_PUBLIC_MIRRORS", async () => {
+    const live = liveFor({ "pnpm-workspace.yaml": "registries: *corp\n", ...npmProject({ "zq-left": "1.0.0" }, () => undefined) });
+    expect(live.registryPrivate("npm")).toMatch(/pnpm-workspace\.yaml/);
+    expect(live.registryPrivate("npm")).toMatch(/FOURDA_PUBLIC_MIRRORS/);
+    const check = await call("dependency_check", { items: [{ ecosystem: "npm", package: "zqx-newlib", to: "1.2.3" }] });
+    await call("vulnerability_scan", { include_dev: true });
+    expect(leaks(/zq/i)).toEqual([]);
+    expect(check).toMatch(/pnpm-workspace\.yaml/);
+  });
+
+  it("an unread value naming a declared public mirror is checked again", () => {
+    setEnv("FOURDA_PUBLIC_MIRRORS", "npm.mirror.example");
+    const live = liveFor({ "pnpm-workspace.yaml": "registries:\n  default: &m https://npm.mirror.example/\n", ...NPM_CONTROL });
+    expect(live.registryPrivate("npm")).toBeNull();
+  });
+});

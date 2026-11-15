@@ -298,6 +298,23 @@ describe("HTTP (stateless, no session id): a served batch's response always ends
     expect(events(reply.text).map((m) => m.id).sort()).toEqual([20, 21]);
   });
 
+  it("W10: a cancel ahead of its own request in the batch cancels nothing: [cancel 41, call 41] answers 41", async () => {
+    // The SDK registered 41, then its cancel handler aborted it in a later microtask, and the stream never ended.
+    const reply = await post([cancel(41), slowCall(41, 50)], v0326);
+    expect(reply).toMatchObject({ status: 200, ended: true });
+    expect(events(reply.text)).toEqual([{ jsonrpc: "2.0", id: 41, result: { content: [{ type: "text", text: "slept 50" }] } }]);
+    // With a ping beside it, and with the cancel between two requests.
+    const mixed = await post([rpc(40, "ping"), cancel(41), slowCall(41, 0)], v0326);
+    expect(mixed.ended).toBe(true);
+    expect(events(mixed.text).map((m) => m.id).sort()).toEqual([40, 41]);
+  });
+
+  it("W10: a cancel of an id outside the batch is harmless: [cancel 99, ping 7] answers 7", async () => {
+    const reply = await post([cancel(99), rpc(7, "ping")], v0326);
+    expect(reply).toMatchObject({ status: 200, ended: true });
+    expect(events(reply.text)).toEqual([{ jsonrpc: "2.0", id: 7, result: {} }]);
+  });
+
   it("a batch on a 2025-06-18 session is refused whole: 400, -32600, id null, nothing run", async () => {
     for (const headers of [{ "mcp-protocol-version": "2025-06-18" }, { "mcp-protocol-version": "2025-11-25" }]) {
       const reply = await post([slowCall(20, -1), cancel(20), rpc(21, "ping")], headers);

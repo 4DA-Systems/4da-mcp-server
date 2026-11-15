@@ -287,9 +287,28 @@ async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<str
   }
   // Members that are not JSON-RPC objects stay as they are: the SDK refuses such a batch whole.
   if (!parsed.every(isPlainObject)) return { refusal: null, body: replay };
-  const served = batchCancellation(parsed, () => null);
+  const read = batchCancellation(parsed, () => null);
+  const served = { ...read, passed: withoutInBatchCancels(read.passed) };
   if (served.answers.length === 0 && served.passed.length === parsed.length) return { refusal: null, body: replay };
   return { refusal: null, body: replay, served };
+}
+
+/**
+ * The members of a served batch without a cancellation that names a request of the same batch.
+ * `batchCancellation` keeps `[cancel 41, call 41]` whole (a cancel ahead of a call means an EARLIER
+ * 41, never this one), but the SDK registers every request of the body before its cancel handler
+ * runs, so it aborted the new 41, never answered it, and held the batch's stream open for good
+ * (pre-publish round 10, W10). Over stateless HTTP each POST is its own server, so such a cancel can
+ * reach nothing else: it is dropped. With no cancel of its own requests forwarded, nothing can abort
+ * a request of the batch, so every one is answered and the stream ends.
+ */
+function withoutInBatchCancels(members: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const requestIds = new Set(members.filter((m) => typeof m.method === "string" && "id" in m).map((m) => m.id));
+  return members.filter((m) => {
+    if (m.method !== "notifications/cancelled" || "id" in m) return true;
+    const params = m.params as { requestId?: unknown } | undefined;
+    return !(isPlainObject(params) && requestIds.has(params.requestId));
+  });
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

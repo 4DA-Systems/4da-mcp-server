@@ -205,3 +205,54 @@ export function mergeNpmPicks(picked: MergeItem, highest: MergeItem, why: NpmWhy
     },
   };
 }
+
+/**
+ * A bare crates.io requirement short of X.Y.Z ("1.6", "1", "v1.6"): Cargo reads it as the caret
+ * range ^1.6 / ^1, so a Cargo.lock that already holds a release in it (1.6.0) keeps that release.
+ * Only X.Y.Z was read as a caret, and "1.6" said proceed (for the newest 1.x) without saying that a
+ * locked 1.6.0 stays (pre-publish round 10, W10). The requirement, or null for anything else.
+ */
+export function cargoPartialBare(raw: string): string | null {
+  const m = /^v?(\d+(?:\.\d+)?)$/.exec(raw.trim());
+  return m ? `^${m[1]}` : null;
+}
+
+/**
+ * One answer for a partial bare crates.io requirement from its range check and, for each release in
+ * it the project's own Cargo.lock holds, that release judged exactly. A locked release the range
+ * keeps is installed as surely as the newest one, so the worse verdict stands; with no locked
+ * release the verdict is the range's, and a note says what a Cargo.lock entry would keep.
+ */
+export function mergeCargoPartial(range: MergeItem, locked: MergeItem[], raw: string, req: string): MergeItem {
+  if (range.not_checked && locked.length === 0) return range;
+  const head = `Cargo reads a bare "${raw}" as ${req}, a caret range: a Cargo.lock that already holds a release in it keeps that release, and a fresh resolve (no Cargo.lock entry, or cargo update) installs ${range.to}.`;
+  if (locked.length === 0) {
+    const rc = range.range_check;
+    const note =
+      rc && rc.vulnerable_in_range > 0
+        ? ` ${rc.vulnerable_in_range} of the releases ${req} admits have a known advisory${rc.smallest_safe_in_range ? ` (the smallest without one is ${rc.smallest_safe_in_range})` : ""}; a Cargo.lock holding one keeps it, so check the locked release with dependency_check.`
+        : "";
+    return { ...range, reason: `${head}${note} | ${range.reason}` };
+  }
+  let verdict = range.verdict;
+  const said: string[] = [];
+  const judged: Resolution["judged"] = [];
+  for (const l of locked) {
+    const unjudged = l.not_checked || judgedNothing(l);
+    const v: Verdict = unjudged ? "unknown" : l.verdict;
+    verdict = worseVerdict(verdict, v);
+    const ids = advisoriesOf(l);
+    said.push(unjudged ? `${l.to} in your Cargo.lock could not be checked: ${l.reason}` : ids.length > 0 ? `${l.to} in your Cargo.lock is affected by ${ids.join(", ")} (${l.verdict})` : `${l.to} in your Cargo.lock: ${l.verdict}`);
+    judged.push({ version: l.to, installed_when: `your Cargo.lock holds ${l.to}`, verdict: v, advisories: ids, signals: l.signals });
+  }
+  if (!range.not_checked && !judgedNothing(range)) {
+    judged.push({ version: range.to, installed_when: "a fresh resolve (no Cargo.lock entry, or cargo update)", verdict: range.verdict, advisories: advisoriesOf(range), signals: range.signals });
+  }
+  const advice = verdict === "proceed" || range.verdict !== "proceed" ? "" : ` | Run cargo update -p ${range.package} (or write "${range.to}") so the lockfile moves to ${range.to} (proceed).`;
+  return {
+    ...range,
+    verdict,
+    reason: `${head} ${said.join("; ")}. Both were judged; the worse verdict stands. | ${range.to} (fresh resolve): ${range.reason}${advice}`,
+    resolution: { reads_as: req, judged },
+  };
+}
