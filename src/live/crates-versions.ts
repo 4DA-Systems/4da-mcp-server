@@ -53,6 +53,8 @@ interface CratesVersionsPage {
 }
 
 interface SparseLine {
+  /** The crate's published spelling (the index files it under that name only). */
+  name?: string;
   vers: string;
   deps?: Array<{ name: string; kind?: string | null; package?: string }>;
 }
@@ -75,7 +77,8 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
   ) {}
 
   async getReleases(name: string, wanted: string[]): Promise<RegistryLookup<PackageReleaseIndex>> {
-    const key = `crates-versions:${name}`;
+    // v2: the index carries the crate's published spelling in `name` (pre-publish round 10, W2).
+    const key = `crates-versions:v2:${name}`;
     const cached = this.cache.get<{ index: PackageReleaseIndex; complete: boolean }>(key);
     if (cached && (cached.complete || pagesSatisfy(Object.keys(cached.index.releases), wanted))) {
       return { status: "ok", data: cached.index };
@@ -84,13 +87,18 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
     const releases: Record<string, ReleaseRecord> = {};
     let query: string | null = "?per_page=100&sort=semver";
     let pages = 0;
+    /** The crate's published spelling, once a read has named it. */
+    let canonical: string | null = null;
+    let wholeRead = false;
     // The whole list (a constraint, "latest"): `/crates/<name>` carries every version in ONE
     // request. Paging it 100 at a time at crates.io's one request a second took clap 5 s
     // (5 pages) and a 25-item check 16 s of crates.io alone (audit 2026-11-11 W1 M2-5).
     if (wanted.length === 0) {
       const whole = await this.wholeList(name);
       if (whole) {
-        for (const v of whole) releases[v.num] = toRecord(v);
+        for (const v of whole.versions) releases[v.num] = toRecord(v);
+        canonical = whole.name;
+        wholeRead = true;
         query = null;
       }
     }
@@ -113,14 +121,30 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
 
     // Dependency lists come from the sparse index; without them the
     // new-dependency signal reports "unknown" rather than "none".
-    const deps = await this.sparseDependencies(name);
-    if (deps) {
-      for (const [version, names] of Object.entries(deps)) {
+    // crates.io and Cargo read `-` and `_` (and case) in a crate name as one crate, and the API
+    // answers `serde-json` with serde_json's versions, but the sparse index files a crate under its
+    // published spelling only: `serde-json` read no dependency lists and came back unknown while
+    // `serde_json` was proceed (pre-publish round 10, W2). The published spelling comes from the
+    // registry's own answer: `/crates/<name>`, or the sparse index's `name` field.
+    let sparse = await this.sparseDependencies(canonical ?? name);
+    // `/crates/<name>` already answered (the whole list) when wholeRead: asking it again names nothing new.
+    if (sparse === "not_found" && canonical === null && !wholeRead) {
+      const published = await this.publishedName(name);
+      // The spelling could not be confirmed: never judged as if it had been (fail closed).
+      if (published.status !== "ok") {
+        return { status: "unreachable", detail: `crates.io: the sparse index has no entry under "${name}" and its published spelling could not be read (${published.detail})` };
+      }
+      canonical = published.data;
+      if (canonical !== name) sparse = await this.sparseDependencies(canonical);
+    }
+    if (sparse && sparse !== "not_found") {
+      canonical ??= sparse.name;
+      for (const [version, names] of Object.entries(sparse.deps)) {
         if (releases[version]) releases[version].dependencies = names;
       }
     }
 
-    const index: PackageReleaseIndex = { ecosystem: "crates.io", name, createdAt: null, releases };
+    const index: PackageReleaseIndex = { ecosystem: "crates.io", name: canonical ?? name, createdAt: null, releases };
     this.cache.set(key, { index, complete: query === null }, "crates", VERSIONS_TTL);
     return { status: "ok", data: index };
   }
@@ -149,18 +173,31 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
    * returns is shorter than the crate's version count (the caller then pages). Its creation date
    * is kept for getCreatedAt.
    */
-  private async wholeList(name: string): Promise<CratesVersion[] | null> {
+  private async wholeList(name: string): Promise<{ versions: CratesVersion[]; name: string | null } | null> {
     try {
-      const body = await this.apiGet<{ crate?: { created_at?: string; num_versions?: number; versions?: unknown[] }; versions?: CratesVersion[] }>(
+      const body = await this.apiGet<{ crate?: { name?: string; created_at?: string; num_versions?: number; versions?: unknown[] }; versions?: CratesVersion[] }>(
         `${CRATES_API}/${encodeURIComponent(name)}`,
       );
       const versions = body.versions ?? [];
       const expected = body.crate?.num_versions ?? body.crate?.versions?.length ?? null;
       if (versions.length === 0 || expected === null || versions.length < expected) return null;
       if (body.crate?.created_at) this.cache.set(`crates-created:${name}`, { createdAt: body.crate.created_at }, "crates", CREATED_TTL);
-      return versions;
+      return { versions, name: typeof body.crate?.name === "string" && body.crate.name ? body.crate.name : null };
     } catch {
       return null;
+    }
+  }
+
+  /** The crate's published spelling, from `/crates/<name>` (crates.io answers any `-`/`_` or case spelling of it). */
+  private async publishedName(name: string): Promise<RegistryLookup<string>> {
+    try {
+      const body = await this.apiGet<{ crate?: { name?: string } }>(`${CRATES_API}/${encodeURIComponent(name)}`);
+      // An answer that names no crate renames nothing: the dependency lists stay unread, which the
+      // new-dependency signal reports as unknown, never as none.
+      const published = body.crate?.name;
+      return { status: "ok", data: typeof published === "string" && published ? published : name };
+    } catch (err) {
+      return { status: "unreachable", detail: errorText(err) };
     }
   }
 
@@ -183,10 +220,14 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
     if (start > now) await new Promise((resolve) => setTimeout(resolve, start - now).unref());
   }
 
-  /** version -> runtime dependency names (normal + build; renamed deps by their real crate name). */
-  private async sparseDependencies(name: string): Promise<Record<string, string[]> | null> {
-    const key = `crates-sparse-deps:${name}`;
-    const cached = this.cache.get<Record<string, string[]>>(key);
+  /**
+   * version -> runtime dependency names (normal + build; renamed deps by their real crate name), and
+   * the crate's published spelling from the index lines (null when they carry none). "not_found":
+   * the index has no file under this spelling; null: it could not be read.
+   */
+  private async sparseDependencies(name: string): Promise<{ deps: Record<string, string[]>; name: string | null } | "not_found" | null> {
+    const key = `crates-sparse-deps:v2:${name}`;
+    const cached = this.cache.get<{ deps: Record<string, string[]>; name: string | null }>(key);
     if (cached) return cached;
     try {
       const response = await fetchWithTimeout(
@@ -194,20 +235,24 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
         { headers: { "User-Agent": CRATES_USER_AGENT } },
         TIMEOUT_MS,
       );
+      if (response.status === 404) return "not_found";
       if (!response.ok) return null;
-      const out: Record<string, string[]> = {};
+      const deps: Record<string, string[]> = {};
+      let published: string | null = null;
       for (const line of (await response.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
           const entry = JSON.parse(line) as SparseLine;
+          if (published === null && typeof entry.name === "string" && entry.name) published = entry.name;
           const names = (entry.deps ?? [])
             .filter((d) => d.kind !== "dev")
             .map((d) => d.package ?? d.name);
-          out[entry.vers] = [...new Set(names)];
+          deps[entry.vers] = [...new Set(names)];
         } catch {
           // skip a malformed line
         }
       }
+      const out = { deps, name: published };
       this.cache.set(key, out, "crates", VERSIONS_TTL);
       return out;
     } catch {

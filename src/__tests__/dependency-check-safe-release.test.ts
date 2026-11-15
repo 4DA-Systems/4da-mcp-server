@@ -336,9 +336,15 @@ describe("nothing in range is safe because of what the releases hold: Next.js 15
   it("the clean line resolves to its newest release, inside the age hold: wait, and the settled one is the pin", async () => {
     nextShape("HIGH");
     const [r] = (await check([{ ecosystem: "npm", package: "next", to: "^16.0" }])).results;
-    // Round 8 (B2): npm installs 16.2.0 for ^16.0; 16.1.0 is the safe exact pin.
-    expect(r).toMatchObject({ to: "16.2.0", verdict: "wait" });
-    expect(r.reason).toContain("Pin exactly 16.1.0; the range as written resolves to 16.2.0 (wait).");
+    // Round 8 (B2) judged what ^16.0 installs. Round 10 (W2): npm installs the `latest` tag, 16.1.0,
+    // which ^16.0 admits; Yarn and pnpm can install the highest, 16.2.0 (a day old). Both are
+    // judged and the worse (wait) stands; 16.1.0 is the exact pin.
+    expect(r).toMatchObject({ to: "16.1.0", verdict: "wait" });
+    expect(r.resolution.judged.map((j: { version: string; verdict: string }) => [j.version, j.verdict])).toEqual([
+      ["16.1.0", "proceed"],
+      ["16.2.0", "wait"],
+    ]);
+    expect(r.reason).toContain("Pin exactly 16.1.0 (proceed): the range as written lets Yarn or pnpm install 16.2.0 (wait).");
   });
 
   it("the range answer is about the release it installs, with the held dependency and its override named", async () => {

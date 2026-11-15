@@ -21,6 +21,10 @@ export type DependencyCheckFormat = "concise" | "detailed";
 export interface DetailedItem {
   ecosystem: string;
   package: string;
+  /** crates.io: the spelling asked, when the crate is published under another. */
+  package_requested?: string;
+  /** Each release what was asked can install, judged, when that is more than one (dependency-check-resolution.ts). */
+  resolution?: { reads_as: string; judged: Array<{ version: string; installed_when: string; verdict: Verdict; advisories: string[]; signals?: Signal[] }> };
   from: string | null;
   to: string;
   to_requested?: string;
@@ -70,6 +74,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
   return {
     ecosystem: item.ecosystem,
     package: item.package,
+    ...(item.package_requested ? { package_requested: item.package_requested } : {}),
     ...(item.from ? { from: item.from } : {}),
     to: item.to,
     ...(item.to_requested ? { to_requested: item.to_requested, to_read_as: item.to_read_as } : {}),
@@ -82,6 +87,10 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
     ...(value?.malicious_package ? { malicious_package: value.malicious_package } : {}),
     ...(value?.held_dependencies_affected ? { held_dependencies_affected: value.held_dependencies_affected } : {}),
     ...(safe ? { safe } : {}),
+    // Round 10, W2: every release the write can install, with its verdict (signals only in the detailed form).
+    ...(item.resolution
+      ? { resolution: { reads_as: item.resolution.reads_as, judged: item.resolution.judged.map(({ signals: _signals, ...j }) => j) } }
+      : {}),
     ...(item.maintenance_notices?.length ? { maintenance_notices: item.maintenance_notices } : {}),
     ...(Object.keys(quoted).length > 0 ? { quoted_from_registry: quoted } : {}),
   };
