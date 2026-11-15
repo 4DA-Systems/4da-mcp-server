@@ -163,14 +163,50 @@ function yieldToEventLoop(): Promise<void> {
  */
 async function prepareDatabase(): Promise<void> {
   if (db) return;
-  await yieldToEventLoop();
-  if (db) return;
-  openInit();
-  await yieldToEventLoop();
-  if (!db) finishInit(openInit());
+  // One init in flight, shared by every caller that arrives while it runs.
+  preparing ??= prepareInSteps().finally(() => {
+    preparing = null;
+  });
+  return preparing;
 }
 
-function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }): void {
+let preparing: Promise<void> | null = null;
+
+async function prepareInSteps(): Promise<void> {
+  await yieldToEventLoop();
+  if (db) return;
+  const step = openInit();
+  await yieldToEventLoop();
+  if (db) return;
+  const prepared = await resolveInSteps(step);
+  if (!db) finishInit(step, prepared);
+}
+
+/** The project tree of a standalone init, and whether the live layer already resolved it (resolveInSteps). */
+interface PreparedTree {
+  cwd: string;
+  tree: ReturnType<typeof projectTreeFor>;
+  resolved: boolean;
+}
+
+/**
+ * Standalone mode: the project tree, and its lockfiles resolved into `step.live` in steps
+ * (initFromProjectTreeYielding), before the init is finished. The resolution was one synchronous
+ * step of 2.3 s on a 150,000-entry pnpm-lock.yaml, and a `ping` sent during the first tool call
+ * waited for all of it (pre-publish round 10, W11). A caller that needs the database meanwhile
+ * (getDatabase) finishes the init synchronously; this one then stops at its next pause and
+ * leaves the set to it (`db` is set, so prepareInSteps does not finish again).
+ */
+async function resolveInSteps(step: { db: FourDADatabase; live: LiveIntelligence }): Promise<PreparedTree | null> {
+  if (!step.db.isStandalone) return null;
+  const cwd = resolveProjectDir();
+  const tree = projectTreeFor(cwd);
+  if (tree.entries.length === 0) return { cwd, tree, resolved: false };
+  const resolved = await step.live.initFromProjectTreeYielding(cwd, treeResolutionGroups(tree.entries), tree.discovery);
+  return { cwd, tree, resolved };
+}
+
+function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }, prepared: PreparedTree | null = null): void {
   opened = null;
   db = step.db;
 
@@ -183,10 +219,10 @@ function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }): void 
   // (Claude Desktop launches extension servers from an app directory, not
   // the user's code) — the .mcpb bundle wires its directory picker to this.
   if (db.isStandalone) {
-    const cwd = resolveProjectDir();
+    const cwd = prepared?.cwd ?? resolveProjectDir();
     // The root and every independently-locked project below it
     // (project-tree.ts): a repo root's own lockfile is often not the only one.
-    const { entries: tree, discovery } = projectTreeFor(cwd);
+    const { entries: tree, discovery } = prepared?.tree ?? projectTreeFor(cwd);
     if (tree.length === 0) {
       // A system directory: nothing is scanned (projectTreeFor). The tools say so and ask for project_path.
       liveIntel.initFromProjectTree(cwd, [], discovery);
@@ -210,8 +246,9 @@ function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }): void 
     // report of what it found but does not read (pom.xml, build.gradle,
     // test-fixture lockfiles) is what every tool's coverage note is built
     // from. Started inside spring-petclinic, 6.2.5 kept nothing and said
-    // "none of an unsupported one either" (readiness audit H3).
-    liveIntel.initFromProjectTree(cwd, groups, discovery);
+    // "none of an unsupported one either" (readiness audit H3). Already done, in steps, when
+    // the init came from a tool call (resolveInSteps).
+    if (!prepared?.resolved) liveIntel.initFromProjectTree(cwd, groups, discovery);
     if (groups.length > 0) {
       console.error(
         `[4DA]   Detected: ${detected.join(", ") || "lockfiles"} | ${scan.dependencies.length} deps, ${scan.devDependencies.length} dev deps at the root`

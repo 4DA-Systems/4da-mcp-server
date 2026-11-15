@@ -35,6 +35,8 @@ import * as path from "node:path";
 import { stripTrailingCommas } from "./bun-lockfile.js";
 import { anySignatureChanged, signatureMap, type FileSignature } from "./file-signature.js";
 import { pushAll } from "../array-utils.js";
+import { textLines } from "./js-lockfile-readers.js";
+import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 import {
   CODE_HOSTS,
   hostOf,
@@ -1104,7 +1106,13 @@ export class PrivatePackageRules {
  * Git, codeload and file locations are left to the readers, which report them as not checkable.
  */
 export function npmLockPrivateSources(dir: string, mirrorHosts: ReadonlySet<string>): PrivateIndexEntry[] {
+  return runSteps(npmLockPrivateSourcesSteps(dir, mirrorHosts));
+}
+
+/** npmLockPrivateSources, pausing every STEP_MASK + 1 pnpm-lock.yaml lines (runStepsYielding; pre-publish round 10, W11). */
+export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySet<string>): Steps<PrivateIndexEntry[]> {
   const out: PrivateIndexEntry[] = [];
+  let step = 0;
   const take = (file: string, name: string, version: string | null, location: string) => {
     if (!/^https?:\/\//i.test(location)) return;
     const host = hostOf(location);
@@ -1180,7 +1188,11 @@ export function npmLockPrivateSources(dir: string, mirrorHosts: ReadonlySet<stri
   const pnpm = path.join(dir, "pnpm-lock.yaml");
   const pnpmText = safeRead(pnpm, LOCK_READ_CAP);
   let current: { name: string; version: string | null } | null = null;
-  for (const line of pnpmText.split(/\r?\n/)) {
+  // Line by line (textLines: the lines `split(/\r?\n/)` gives, in order), not an array of all of
+  // them: about two million strings for a 150,000-entry lockfile, held at once, and a 0.3 s stretch
+  // with no pause in the first call's init (pre-publish round 10, W11).
+  for (const line of textLines(pnpmText)) {
+    if ((++step & STEP_MASK) === 0) yield;
     const key = /^ {2}['"]?\/?((?:@[^@/'"\s]+\/)?[^@/'"\s(]+)[@/]([^:('"\s]+)[^:]*['"]?:\s*$/.exec(line);
     if (key) {
       current = { name: key[1], version: key[2] };

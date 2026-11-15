@@ -26,8 +26,9 @@ import { GoReleasesReader } from "./go-releases.js";
 import { FixPathSources } from "./fix-paths.js";
 import type { CheckEcosystem, ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
-import { commonPathRoot, dedupeDependencies, emptyVulnResult } from "./dependency-set.js";
-import { groupIsStale, resolveGroup, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
+import { commonPathRoot, dedupeDependencies, dedupeDependenciesSteps, emptyVulnResult } from "./dependency-set.js";
+import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
+import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
 import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
@@ -38,7 +39,7 @@ import {
   lockfileRegistryWide,
   manifestPrivateSources,
   normName,
-  npmLockPrivateSources,
+  npmLockPrivateSourcesSteps,
   PrivatePackageRules,
   requirementsWideReason,
   type PrivateDependency,
@@ -153,6 +154,11 @@ export class LiveIntelligence {
   /** privateShortIndex of this project, reset with privateSet. */
   private privateShorts: ReturnType<typeof privateShortIndex> | null = null;
   private initialized = false;
+  /**
+   * Bumped by every resolution that starts: an init run in steps (initFromProjectTreeYielding)
+   * stops at its next pause once another one has started, so it never writes over a newer set.
+   */
+  private initRun = 0;
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
   private groupResults: GroupResolution[] = [];
@@ -270,6 +276,21 @@ export class LiveIntelligence {
   }
 
   /**
+   * initFromProjectTree, giving the event loop a turn whenever a slice is due (runStepsYielding):
+   * the same resolution, so a `ping` sent with the first tool call is answered while a
+   * 150,000-entry lockfile is read (it waited 2.3 s; pre-publish round 10, W11). False, with the
+   * set left to the resolution that superseded it, when a synchronous init ran meanwhile.
+   */
+  async initFromProjectTreeYielding(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
+    const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
+    const run = ++this.initRun;
+    const steps = this.applyGroupsSteps(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
+    const done = await runStepsYielding(steps, () => this.initRun === run, false);
+    if (done) this.discovery = discovery;
+    return done;
+  }
+
+  /**
    * Manifests with no lockfile beside them, whose ranged dependencies were not
    * scanned: their versions are declared ranges, not installs.
    */
@@ -339,11 +360,23 @@ export class LiveIntelligence {
   }
 
   private applyGroups(groups: ResolutionGroup[], projectRoot: string | null, memberConfigDirs: string[] = []): void {
+    this.initRun++;
+    runSteps(this.applyGroupsSteps(groups, projectRoot, memberConfigDirs));
+  }
+
+  /** applyGroups as steps (runSteps / runStepsYielding, pre-publish round 10, W11); true when done. */
+  private *applyGroupsSteps(groups: ResolutionGroup[], projectRoot: string | null, memberConfigDirs: string[]): Steps<true> {
     this.privateRules = new PrivatePackageRules([...new Set([...(projectRoot ? [projectRoot] : []), ...groups.map((g) => g.dir)])], process.env, memberConfigDirs);
-    this.groupResults = groups.map(resolveGroup);
-    this.rebuildDependencySet();
+    const results: GroupResolution[] = [];
+    for (const group of groups) {
+      results.push(yield* resolveGroupSteps(group));
+      yield;
+    }
+    this.groupResults = results;
+    yield* this.rebuildDependencySetSteps();
     this.projectRoot = projectRoot;
     this.initialized = true;
+    return true;
   }
 
   /**
@@ -351,20 +384,27 @@ export class LiveIntelligence {
    * send. They are kept in `privateDeps` so every answer says they were not checked.
    */
   private rebuildDependencySet(): void {
+    runSteps(this.rebuildDependencySetSteps());
+  }
+
+  /** rebuildDependencySet as steps, pausing between its passes (pre-publish round 10, W11). */
+  private *rebuildDependencySetSteps(): Steps<void> {
     this.lockPrivateIndexes = new WeakMap();
     this.publicNames = null;
     this.privateSet = null;
     this.privateShorts = null;
-    this.npmLockPrivate = new Map(
-      this.groupResults
-        .filter((r) => mapEcosystem(r.group.language) === "npm")
-        .map((r) => [r, npmLockPrivateSources(r.group.dir, this.privateRules.publicMirrors)] as const),
-    );
+    this.npmLockPrivate = new Map();
+    for (const r of this.groupResults) {
+      if (mapEcosystem(r.group.language) !== "npm") continue;
+      this.npmLockPrivate.set(r, yield* npmLockPrivateSourcesSteps(r.group.dir, this.privateRules.publicMirrors));
+    }
+    yield;
     // A private registry or index the manifest itself names (Cargo `registry =`, uv `index =`,
     // Poetry `source =`): private with no lockfile too (blind audit round 4).
     this.manifestPrivate = new Map(
       this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
     );
+    yield;
     // A registry, index or proxy that is not public and is consulted for any name: every name the
     // group knows, ranged and unpinned ones included, so no tool sends one (R7, 2). A requirements
     // `--index-url` / extra index / find-links and a lockfile that installs everything from one
@@ -391,6 +431,7 @@ export class LiveIntelligence {
         const k = `${ecosystem}\0${normName(ecosystem, name)}`;
         if (!this.wideNames.has(k)) this.wideNames.set(k, why);
       }
+      yield;
     }
     const key = (dep: { ecosystem: string; name: string; version: string | null }) => `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
     const privateWhy = new Map<string, { why: string; kind: PrivateKind }>();
@@ -399,10 +440,23 @@ export class LiveIntelligence {
       if (found && !privateWhy.has(key(dep))) privateWhy.set(key(dep), found);
       return !found;
     };
-    this.resolvedDeps = dedupeDependencies(this.groupResults.flatMap((r) => r.resolved.filter((dep) => isPublic(r, dep))));
-    const audit = this.groupResults.flatMap((r) => r.audit.map((dep) => ({ dep, open: isPublic(r, dep) })));
-    this.auditDeps = dedupeDependencies(audit.filter((a) => a.open).map((a) => a.dep));
-    this.privateAudit = dedupeDependencies(audit.filter((a) => !a.open).map((a) => a.dep));
+    const resolvedOpen: ResolvedDependency[] = [];
+    for (const r of this.groupResults) for (const dep of r.resolved) if (isPublic(r, dep)) resolvedOpen.push(dep);
+    this.resolvedDeps = yield* dedupeDependenciesSteps(resolvedOpen);
+    // Every copy the lockfiles hold, in their order, split as it is checked: no wrapper object per
+    // copy and no filtered copies of the list (150,000 of each for a 150,000-entry lockfile), with a
+    // pause every STEP_MASK + 1 copies (pre-publish round 10, W11).
+    const auditOpen: ResolvedDependency[] = [];
+    const auditPrivate: ResolvedDependency[] = [];
+    let step = 0;
+    for (const r of this.groupResults) {
+      for (const dep of r.audit) {
+        if ((++step & STEP_MASK) === 0) yield;
+        (isPublic(r, dep) ? auditOpen : auditPrivate).push(dep);
+      }
+    }
+    this.auditDeps = yield* dedupeDependenciesSteps(auditOpen);
+    this.privateAudit = yield* dedupeDependenciesSteps(auditPrivate);
     this.privateDeps = this.privateAudit.map((dep) => ({
       ecosystem: dep.ecosystem,
       name: dep.name,
