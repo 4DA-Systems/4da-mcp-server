@@ -18,6 +18,7 @@
  */
 
 import { heldAdvisories, heldCandidates, type AdvisoryQuery, type HeldCheck } from "./held-dependencies.js";
+import { isOfflineMode } from "../env-flags.js";
 import { cleanReleases } from "./osv-ranges.js";
 import { lineNoticeText, type FixPathSources, type FixTargetResult } from "./fix-paths.js";
 
@@ -83,7 +84,7 @@ export async function withHeldTargets(
 
   for (const { item, candidates, facts } of plans) {
     const target = item.clean.target!;
-    const at = (v: string): HeldCheck => checks.get(`${item.name}@${v}`) ?? { status: "unchecked", reason: "the check did not finish in time" };
+    const at = (v: string): HeldCheck => checks.get(`${item.name}@${v}`) ?? { status: "unchecked", reason: isOfflineMode() ? "live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked" : "the check did not finish in time" };
     const own = at(target);
     if (own.status === "unchecked") {
       out.set(item.key, { ...item.clean, heldUnchecked: own.reason });

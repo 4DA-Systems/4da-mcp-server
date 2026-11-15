@@ -64,6 +64,19 @@
     release yet". It now has the action `not_checked` and is counted only as
     NOT CHECKED, never as vulnerable or clean. Clients that read `action`
     should handle the new value.
+  - *Review fixes.* A `pnpm-workspace.yaml` whose `registries` map spans
+    several lines was not read, so new names were sent; registry values are
+    now read in every YAML shape, and one the reader cannot follow makes npm
+    private for that folder (fail closed). A bare Cargo requirement "1.6" or
+    "1" is read as Cargo reads it, a caret range; a release in that range
+    held by the project's Cargo.lock is judged too, and the worse answer
+    stands. A renamed crate is explained by the difference that applies
+    (letter case, "-"/"_", or both). Offline, a fix release that was not
+    checked says live lookups are off, not that a check did not finish.
+  - *Startup.* The first tool call no longer holds up a concurrent `ping`
+    (242-2,905 ms before, 4-5 ms after, measured on the built server); the
+    database schema is created in one transaction. A 150,000-entry pnpm
+    lockfile is read with less memory (peak heap 316 to 243 MB).
   - *Protocol.* In a 2025-03-26 session, a JSON-RPC batch with a cancelled
     request is answered without it, over stdio and Streamable HTTP. Before,
     the batch waited forever, and a later request reusing the id was folded

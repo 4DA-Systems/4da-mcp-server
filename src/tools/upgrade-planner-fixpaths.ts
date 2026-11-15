@@ -27,6 +27,7 @@
  */
 
 import * as fs from "node:fs";
+import { isOfflineMode } from "../env-flags.js";
 import * as path from "node:path";
 import type { LiveIntelligence } from "../live/index.js";
 import {
@@ -1663,7 +1664,7 @@ async function heldCleanAdmitting(
     if (!facts.heldSpecs?.[c.version]) return { kind: "clean", release: c }; // holds nothing at a fixed version
     const check = checks?.get(c.version);
     if (!check || check.status === "unchecked") {
-      return { kind: "unchecked", text: `${parent} ${c.version} admits a clean ${ctx.pkg}, but whether what it exact-pins or narrowly ranges is affected could not be checked (${check?.status === "unchecked" ? check.reason : "the check did not finish"})` };
+      return { kind: "unchecked", text: `${parent} ${c.version} admits a clean ${ctx.pkg}, but whether what it exact-pins or narrowly ranges is affected could not be checked (${check?.status === "unchecked" ? check.reason : isOfflineMode() ? "live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked" : "the check did not finish"})` };
     }
     if (check.affected.length === 0) return { kind: "clean", release: c };
   }
