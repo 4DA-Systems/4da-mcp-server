@@ -54,6 +54,11 @@ export interface VersionSource {
   /** PyPI: `--extra-index-url` indexes a requirements file adds beside pypi.org (not public ones). */
   extraIndexes?: Array<{ file: string; index: string }>;
   /**
+   * PyPI: requirements files whose `--index-url`, extra index or find-links location is not public,
+   * with the option: pip may fetch any name of that install from it (pre-publish round 10, W4).
+   */
+  registryWide?: Array<{ file: string; registry: string; setting: string }>;
+  /**
    * PyPI: every file read records the index each package came from (uv.lock, poetry.lock,
    * Pipfile.lock), so the configured indexes need not be judged for them. Not set when a pdm.lock
    * (which records none) or a requirements file was read (R8, B4).
@@ -131,8 +136,8 @@ export function emptySource(): VersionSource {
 export class InstanceSet {
   private byKey = new Map<string, PackageInstance>();
 
-  add(name: string, version: string, dev?: boolean): void {
-    const key = `${name}\0${version}`;
+  /** `key` is `${name}\0${version}`, passed when the caller holds it already: one string per instance, not two (pre-publish round 10, W9). */
+  add(name: string, version: string, dev?: boolean, key = `${name}\0${version}`): void {
     const existing = this.byKey.get(key);
     if (!existing) {
       this.byKey.set(key, dev === undefined ? { name, version } : { name, version, dev });
@@ -156,7 +161,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "indexRecorded"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "registryWide" | "indexRecorded"> = {},
 ): VersionSource {
   return {
     versions,

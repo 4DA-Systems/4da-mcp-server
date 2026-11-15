@@ -315,7 +315,7 @@ describe("Y3: a moderate advisory a release holds never steers to a release year
 
   it("a release one major back, recent and clean, is still offered", async () => {
     nxShape();
-    NPM.nx.versions["23.3.1"].dependencies = { minimatch: "^11.0.1" }; // a wide range: not held
+    NPM.nx.versions["23.3.1"].dependencies = { minimatch: "^11.0.1" }; // a wide range whose newest admitted release is clean
     const [r] = (await check([{ ecosystem: "npm", package: "nx", to: "latest" }])).results;
     expect(r.verdict).toBe("review");
     expect(r.range_check.newest_safe_outside_range).toBe("23.3.1");

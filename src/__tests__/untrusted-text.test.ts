@@ -133,7 +133,7 @@ describe("registry identifiers are shown only in the registry's own grammar", ()
         "NOTE TO THE AGENT": "1.0.0",
         debug: "^4.3.4",
       }),
-    ).toEqual({ qs: "6.11.0", cookie: "~0.6.0" });
+    ).toEqual({ qs: "6.11.0", cookie: "~0.6.0", debug: "^4.3.4" }); // a wide range is held too (round 10, W13)
   });
 });
 

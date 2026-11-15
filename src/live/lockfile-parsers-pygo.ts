@@ -186,6 +186,7 @@ export function resolvePython(cwd: string): VersionSource {
   const collected: LockfileProblem[] = [];
   const extras: RequirementExtras = { unpinned: [], uncheckable: [], directPrivate: [] };
   const extraIndexes: Array<{ file: string; index: string }> = [];
+  const registryWide: NonNullable<VersionSource["registryWide"]> = [];
   for (const file of requirementFiles(cwd)) {
     const dev = devRequirementsFile(file) ? true : undefined;
     const pins = readRequirementsFile(file, new Set(), cwd, collected, extras);
@@ -202,9 +203,14 @@ export function resolvePython(cwd: string): VersionSource {
     // whole install: `--index-url` in an included base.txt sent every pin to OSV.dev (R7, 1).
     const options = requirementIndexOptions(file, cwd);
     const privateExtra = options.extra.find((index) => !isPublicExtraPypiIndex(index));
-    const privateSource = options.index && !isPublicPypiIndex(options.index) ? options.index : privateExtra;
+    const replaced = options.index && !isPublicPypiIndex(options.index) ? options.index : null;
+    const privateSource = replaced ?? privateExtra;
     if (privateSource) {
-      for (const { name, version } of pins) privateIndex.push({ name, version, registry: sourceLabel(privateSource), file });
+      // A registry-kind reason: pip may fetch ANY name of this install from it, a name not pinned yet
+      // included, so it is recorded for the group as well as for each pin (pre-publish round 10, W4).
+      const setting = replaced ? "--index-url" : (options.settings.find((s) => s.value === privateExtra)?.option ?? "--extra-index-url");
+      for (const { name, version } of pins) privateIndex.push({ name, version, registry: sourceLabel(privateSource), file, wide: setting });
+      registryWide.push({ file, registry: sourceLabel(privateSource), setting });
     }
     for (const index of options.extra) if (!isPublicPypiIndex(index)) extraIndexes.push({ file, index: sourceLabel(index) });
   }
@@ -227,6 +233,7 @@ export function resolvePython(cwd: string): VersionSource {
     ...(problems.length > 0 ? { problems } : {}),
     ...(privateIndex.length > 0 ? { privateIndex } : {}),
     ...(extraIndexes.length > 0 ? { extraIndexes } : {}),
+    ...(registryWide.length > 0 ? { registryWide } : {}),
   };
 
   if (sources.length === 0) return { ...emptySource(), ...extra };
@@ -401,9 +408,10 @@ function safeRead(file: string): string {
  * (pipLineOptions): `-i<url>` attached, and any unambiguous prefix of a long option (`--index`,
  * `--extra-index`, `--find`). Each of those spellings sent every pin to OSV.dev (R8, B4).
  */
-export function indexOptions(content: string): { index: string | null; extra: string[] } {
+export function indexOptions(content: string): IndexOptions {
   let index: string | null = null;
   const extra: string[] = [];
+  const settings: IndexOptions["settings"] = [];
   for (const raw of requirementLines(content)) {
     if (!raw.includes("-")) continue;
     for (const { option, value } of pipLineOptions(raw)) {
@@ -411,9 +419,21 @@ export function indexOptions(content: string): { index: string | null; extra: st
       if (option === "index-url") index = value;
       else if (option === "extra-index-url") extra.push(value);
       else if (option === "find-links" && !isPublicFindLinks(value)) extra.push(findLinksLabel(value));
+      else continue;
+      settings.push({ option: `--${option}`, value: option === "find-links" ? findLinksLabel(value) : value });
     }
   }
-  return { index, extra };
+  return { index, extra, settings };
+}
+
+/**
+ * A requirements file's index options; `settings` names the option each value came from, so the
+ * answer says which setting makes the names private (pre-publish round 10, W4).
+ */
+export interface IndexOptions {
+  index: string | null;
+  extra: string[];
+  settings: Array<{ option: string; value: string }>;
 }
 
 /** At most this many files deep a requirements file's includes are followed for its index options. */
@@ -425,14 +445,15 @@ const MAX_INCLUDE_DEPTH = 16;
  * depth past MAX_INCLUDE_DEPTH stops there). pip applies an option from any of them to the whole
  * install. The last `--index-url` read is pip's, but a non-public one anywhere is what matters.
  */
-export function requirementIndexOptions(file: string, root: string, visited: Set<string> = new Set(), depth = 0): { index: string | null; extra: string[] } {
+export function requirementIndexOptions(file: string, root: string, visited: Set<string> = new Set(), depth = 0): IndexOptions {
   const key = path.resolve(file).toLowerCase();
-  if (visited.has(key) || depth > MAX_INCLUDE_DEPTH) return { index: null, extra: [] };
+  if (visited.has(key) || depth > MAX_INCLUDE_DEPTH) return { index: null, extra: [], settings: [] };
   visited.add(key);
   const content = safeRead(file);
   const own = indexOptions(content);
   let index = own.index;
   const extra = [...own.extra];
+  const settings = [...own.settings];
   for (const { target } of requirementOptions(content)) {
     const included = confinedInclude(path.dirname(file), target, root);
     if (included === null) continue;
@@ -440,8 +461,9 @@ export function requirementIndexOptions(file: string, root: string, visited: Set
     // A replacing index that is not public wins over a public one, wherever it is.
     if (nested.index && (!index || isPublicPypiIndex(index))) index = nested.index;
     pushAll(extra, nested.extra);
+    pushAll(settings, nested.settings);
   }
-  return { index, extra };
+  return { index, extra, settings };
 }
 
 /** `-r file` / `--requirement=file` / `-c file` / `--constraint file` (and `-rfile`, `--requir`...): local paths only. */

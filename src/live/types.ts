@@ -238,6 +238,13 @@ export interface VulnerabilityScanResult {
   /** fetched_at (SQLite UTC, "YYYY-MM-DD HH:MM:SS") of the oldest stale answer used. */
   staleOldestFetchedAt?: string | null;
   /**
+   * Live lookups are off (FOURDA_OFFLINE): OSV.dev was not asked, and every answer in this result
+   * (counted in `staleAnswers`) is a cached one, fresh or past its 1 h life; `staleExpired` of them
+   * are past it. Without a cached answer a dependency is unchecked (pre-publish round 10, W5).
+   */
+  cacheOnly?: true;
+  staleExpired?: number;
+  /**
    * Ids of advisories OSV matched whose record it did not return (rows with
    * `detailUnavailable`). Their severity and fix version are not known, so
    * the scan is not a complete answer: absent when every record was read.

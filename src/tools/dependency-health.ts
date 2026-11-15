@@ -149,7 +149,19 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
     ? [...new Set((liveIntel?.getAuditDeps() ?? []).map((d) => d.ecosystem))].sort()
     : [];
   const problems = (liveIntel?.getLockfileProblems() ?? []).filter((p) => !only || !p.ecosystem || p.ecosystem === only.ecosystem);
+  // Every dependency private (a private pip index, a Pipfile source, an npm default registry): the
+  // answer said "No manifest or lockfile of a supported ecosystem was found" beside a requirements.txt
+  // it had read, and named neither the setting nor the FOURDA_PUBLIC_MIRRORS escape (pre-publish round 10, W4).
+  const priv = (liveIntel?.getPrivateDependencies?.() ?? []).filter((p) => !only || p.ecosystem === only.ecosystem);
+  const privateNote =
+    priv.length > 0
+      ? `NOT CHECKED (private): ${priv.length === 1 ? "1 dependency is" : `${priv.length.toLocaleString("en-US")} dependencies are`} private and ${priv.length === 1 ? "was" : "were"} never sent to OSV.dev or a registry: ${priv
+          .slice(0, 3)
+          .map((p) => `${p.name} (${p.why})`)
+          .join("; ")}${priv.length > 3 ? `; and ${priv.length - 3} more (vulnerability_scan lists each with why)` : ""}.`
+      : null;
   const notes = [
+    ...(privateNote ? [privateNote] : []),
     ...exclusionNotes(discovery),
     ...lockfileProblemNotes(problems),
     ...[discoveryNote(discovery)].filter((n): n is string => n !== null),

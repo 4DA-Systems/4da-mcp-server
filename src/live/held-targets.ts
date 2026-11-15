@@ -18,6 +18,7 @@
  */
 
 import { heldAdvisories, heldCandidates, type AdvisoryQuery, type HeldCheck } from "./held-dependencies.js";
+import { isOfflineMode } from "../env-flags.js";
 import { cleanReleases } from "./osv-ranges.js";
 import { lineNoticeText, type FixPathSources, type FixTargetResult } from "./fix-paths.js";
 
@@ -43,6 +44,9 @@ export async function withHeldTargets(
   // one that was not is already reported as checked against the installed version's advisories only.
   const todo = items.filter((i) => i.clean.target && !i.clean.advisoriesUnread);
   const plans: Array<{ item: HeldTargetItem; candidates: string[]; facts: NonNullable<Awaited<ReturnType<FixPathSources["releaseFacts"]>>> }> = [];
+  // A downgrade on a dead installed line (fix-paths.ts lineDowngrade) is named clean only when what it
+  // holds is clean too; judged in the same lookup as the targets (pre-publish round 10, W6).
+  const downgrades: Array<{ item: HeldTargetItem; version: string; specs: Record<string, string> }> = [];
   await Promise.all(
     todo.map(async (item) => {
       const target = item.clean.target!;
@@ -55,6 +59,8 @@ export async function withHeldTargets(
         out.set(item.key, { ...item.clean, heldUnchecked: "the npm registry facts carry no dependency specs" });
         return;
       }
+      const down = item.clean.lineDowngrade;
+      if (down && !down.heldClean && facts.heldSpecs[down.version]) downgrades.push({ item, version: down.version, specs: facts.heldSpecs[down.version] });
       // A target the registry does not list yet (an advisory's fix newer than the facts, `aboveListed`):
       // what it pins cannot be read, which is never "holds nothing" (6.2.6 second review I2).
       if (!facts.versions.includes(target) && !facts.withdrawn.includes(target)) {
@@ -68,14 +74,17 @@ export async function withHeldTargets(
       plans.push({ item, candidates, facts });
     }),
   );
-  if (plans.length === 0) return out;
+  if (plans.length === 0 && downgrades.length === 0) return out;
 
-  const releases = plans.flatMap((p) => p.candidates.map((v) => ({ key: `${p.item.name}@${v}`, specs: p.facts.heldSpecs![v] ?? {} })));
+  const releases = [
+    ...plans.flatMap((p) => p.candidates.map((v) => ({ key: `${p.item.name}@${v}`, specs: p.facts.heldSpecs![v] ?? {} }))),
+    ...downgrades.map((d) => ({ key: `${d.item.name}@${d.version}`, specs: d.specs })),
+  ];
   const checks = await heldAdvisories(sources, query, releases, deadline);
 
   for (const { item, candidates, facts } of plans) {
     const target = item.clean.target!;
-    const at = (v: string): HeldCheck => checks.get(`${item.name}@${v}`) ?? { status: "unchecked", reason: "the check did not finish in time" };
+    const at = (v: string): HeldCheck => checks.get(`${item.name}@${v}`) ?? { status: "unchecked", reason: isOfflineMode() ? "live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked" : "the check did not finish in time" };
     const own = at(target);
     if (own.status === "unchecked") {
       out.set(item.key, { ...item.clean, heldUnchecked: own.reason });
@@ -111,6 +120,13 @@ export async function withHeldTargets(
       heldPast: past,
       ...(notice ? { targetNotice: lineNoticeText(chosen, notice, item.name) } : {}),
     });
+  }
+  // Last, onto whatever the target's judgment made of the result.
+  for (const d of downgrades) {
+    const c = checks.get(`${d.item.name}@${d.version}`);
+    if (c?.status !== "checked" || c.affected.length > 0) continue; // not named: neither clean nor denied
+    const current = out.get(d.item.key) ?? d.item.clean;
+    if (current.lineDowngrade?.version === d.version) out.set(d.item.key, { ...current, lineDowngrade: { ...current.lineDowngrade, heldClean: true } });
   }
   return out;
 }

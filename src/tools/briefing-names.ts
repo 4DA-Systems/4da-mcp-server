@@ -6,8 +6,10 @@
  */
 
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
+import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { editDistance } from "./dependency-check-malicious.js";
+import { parseTarget } from "./dependency-check-versions.js";
 
 const POPULAR_PYPI_SET = new Set(POPULAR_PYPI);
 
@@ -137,12 +139,15 @@ export function normalizeVersionSyntax(task: string): string {
       // `"lodash": "^4.17.20"`, `"minimist": ">=1.2.5 <1.2.6"`: the whole range is the package's (r8, B2:
       // only `<1.2.6` was read, and judged as the release 1.2.6).
       .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${name}@${joinSpec(spec)}`))
-      // Cargo.toml / Poetry: `serde = { version = "1.0.200", features = [...] }`.
-      .replace(TOML_TABLE_ENTRY, (m, pre: string, name: string, _q, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${pre}${name}@${joinSpec(spec)}`))
+      // Cargo.toml / Poetry: `serde = { version = "1.0.200", features = [...] }`. Marked as a TOML entry
+      // (TOML_MARK), so both readers file it under crates.io or PyPI, never npm (pre-publish round 10, W3:
+      // the clause reader filed `smallvec = { version = ">=1.6.0, <1.6.1" }` under crates.io and the
+      // version reader under npm, and the briefing listed it twice, avoid and unknown).
+      .replace(TOML_TABLE_ENTRY, (m, pre: string, name: string, _q, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${pre}${TOML_MARK}${name}@${joinSpec(spec)}`))
       // `serde = "1.0.200"`, `serde = ">=1.0, <1.0.100"`: a dotted version, or any version in a task that
       // names a TOML manifest (`timeout = "30"` in prose is a setting, not a crate).
       .replace(TOML_VERSION_ENTRY, (m, pre: string, name: string, _q, spec: string) =>
-        NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) || (!toml && !/\d\.\d/.test(spec)) ? m : `${pre}${name}@${joinSpec(spec)}`,
+        NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) || (!toml && !/\d\.\d/.test(spec)) ? m : `${pre}${TOML_MARK}${name}@${joinSpec(spec)}`,
       )
       .replace(/((?:^|[\s`'"(])@?[\w.~-]+(?:\/[\w.~-]+)?)@npm:(?=@?[\w.~-])/gi, (_m, pre: string) => pre.replace(/@?[\w.~-]+(?:\/[\w.~-]+)?$/, ""))
       // `minimist@'>=1.2.5 <1.2.6'`, `lodash@"4.17.20"`.
@@ -151,8 +156,9 @@ export function normalizeVersionSyntax(task: string): string {
       // <5.6.2`, `^1.2.0 || ^0.2.0`, `django>=2,<3`, `1.2.3 - 1.4.0`. Only `<5.6.2` (or `>=2` and `<3`
       // as two packages' versions) was read before.
       .replace(PROSE_CHAIN, (m) => joinSpec(m))
-      // "chalk 5.6.1/debug 4.4.2": after a version, "/" separates two items, never a path.
-      .replace(/(?<![\w/.-])((?:[<>=~^]=?)?v?\d+\.\d[\w.+-]*)\/(?=@?[A-Za-z])/g, "$1, ")
+      // "chalk 5.6.1/debug 4.4.2": after a version, "/" separates two items, never a path. With spaces
+      // around it too: "bump chalk to 5.6.1 / debug to 4.4.2" judged chalk at debug's 4.4.2 (round 10, W3).
+      .replace(/(?<![\w/.-])((?:[<>=~^]=?)?v?\d+\.\d[\w.+-]*)[ \t]*\/[ \t]*(?=@?[A-Za-z])/g, "$1, ")
   );
 }
 
@@ -165,6 +171,12 @@ export function normalizeVersionSyntax(task: string): string {
 const JOIN_SPACE = "";
 const JOIN_COMMA = "";
 const JOIN_OR = "";
+/**
+ * Put before the name of a manifest entry written in TOML (`name = "1.2"`, `name = { version = "1.2" }`):
+ * a Cargo.toml or pyproject entry, so never an npm package. Outside every token (no tokenizer reads
+ * it), so a reader sees it only as the character before a name (isTomlEntry). Private-use, as the joiners.
+ */
+export const TOML_MARK = "";
 /** The joiners, as a regex character class body (for the tokenizers). */
 export const SPEC_JOINERS = "-";
 
@@ -176,6 +188,30 @@ function joinSpec(spec: string): string {
     .replace(/\s*\|\|\s*/g, JOIN_OR)
     .replace(/\s*,\s*/g, JOIN_COMMA)
     .replace(/\s+/g, JOIN_SPACE);
+}
+
+/** Whether the token that starts at `start` of a normalized task is the name of a TOML manifest entry. */
+export function isTomlEntry(task: string, start: number): boolean {
+  return start > 0 && task[start - 1] === TOML_MARK;
+}
+
+/**
+ * A constraint in the form dependency_check reads it in for that ecosystem, or null when it has no
+ * reading there. npm (and Go) join comparators with spaces and read no comma, PyPI joins them with
+ * commas and reads no space, Cargo reads both: "add minimist >= 1.2.0, < 1.2.6" went to dependency_check
+ * as npm's `>=1.2.0,<1.2.6`, which it refused, and the briefing said unknown where the range is avoid
+ * (pre-publish round 10, W3). The constraint is the task's; only its joiners change.
+ */
+export function checkableSpec(ecosystem: CheckEcosystem, spec: string): string | null {
+  const text = spec.trim();
+  const spaced = text
+    .split("||")
+    .map((alt) => alt.split(",").map((part) => part.trim()).filter(Boolean).join(" "))
+    .join(" || ");
+  const parts = text.split(/\s+/);
+  const commas = parts.length > 1 && parts.every((part) => /^(?:[<>]=?|={2,3}|~=|!=)v?\d/.test(part)) ? parts.join(",") : text;
+  for (const candidate of [text, spaced, commas]) if (parseTarget(ecosystem, candidate)) return candidate;
+  return null;
 }
 
 /** A version token as the package manager reads it: the joiners back to a space, a comma and ` || `. */

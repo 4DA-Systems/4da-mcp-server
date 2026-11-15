@@ -28,6 +28,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
 import { restampDepContext } from "../live/osv-scanner.js";
+import { deadLineText } from "../live/fix-paths.js";
 import type { OsvVulnerability, ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
@@ -58,7 +59,11 @@ let GOMOD: Record<string, string> = {};
 
 const cmp = (a: string, b: string) => a.replace(/^v/, "").localeCompare(b.replace(/^v/, ""), undefined, { numeric: true });
 const affects = (v: OsvVulnerability, version: string) => {
-  const fixed = v.affected![0].ranges[0].events.find((e) => e.fixed)?.fixed;
+  const events = v.affected![0].ranges[0].events;
+  const fixed = events.find((e) => e.fixed)?.fixed;
+  // An `introduced` above 0 (event-stream's GHSA-mh6f-8j2x-4483: 3.3.6 only) leaves earlier releases out.
+  const introduced = events.find((e) => e.introduced)?.introduced;
+  if (introduced && introduced !== "0" && cmp(version, introduced) < 0) return false;
   return fixed ? cmp(version, fixed) < 0 : true;
 };
 
@@ -385,6 +390,63 @@ describe("4. a dead installed line names the smallest safe release on a later li
   });
 });
 
+describe("4b. a dead line above the installed release is not a dead line below it (event-stream 3.3.6, pre-publish round 10, W6)", () => {
+  // GHSA-mh6f-8j2x-4483 affects 3.3.6 only (introduced 3.3.6, fixed 4.0.0), the last 3.x. Every tool
+  // said "no 3.x release clears every advisory: 4.0.0 is the smallest safe release", while
+  // dependency_check {3.x} rightly named 3.3.5 safe.
+  function eventStream(extra: Record<string, NpmVersion> = {}) {
+    ADVISORIES["event-stream"] = [adv("GHSA-mh6f-8j2x-4483", "event-stream", [{ introduced: "3.3.6" }, { fixed: "4.0.0" }], "npm", "CRITICAL")];
+    // 3.3.5 narrowly ranges `through`, so what it holds is judged before it is named clean.
+    NPM["event-stream"] = { latest: "4.0.1", versions: { "3.3.4": {}, "3.3.5": { dependencies: { through: "~2.3.1" } }, ...extra, "4.0.0": {}, "4.0.1": {} } };
+    NPM.through = { latest: "2.3.8", versions: { "2.3.1": {}, "2.3.8": {} } };
+    npmProject({ "event-stream": "3.3.6" }, { "event-stream": { version: "3.3.6" } });
+  }
+  const WORDS = "o 3.x release after 3.3.6 exists; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release";
+
+  it("upgrade_planner and vulnerability_scan: no later 3.x exists, 3.3.5 (a downgrade) is clean, 4.0.0 the smallest clean upgrade", async () => {
+    eventStream();
+    const { step } = await plan();
+    const row = step("event-stream");
+    expect(row).toMatchObject({ targetVersion: "4.0.0", latestVersion: "4.0.1" });
+    expect(row.reasons).toContain(`N${WORDS}`);
+    expect(row.reasons.join(" ")).not.toMatch(/no 3\.x release clears every advisory|smallest safe release/i);
+    const detailed = await scan("detailed");
+    expect(lineFor(detailed, "event-stream", "3.3.6")).toContain(`n${WORDS}`);
+    expect(detailed.fix_targets["event-stream@3.3.6"]).toMatchObject({ target: "4.0.0", newest_safe: "4.0.1", note: expect.stringContaining(`n${WORDS}`) });
+  });
+
+  it("later 3.x releases that are all affected: they do not clear it, and the downgrade is still named", async () => {
+    eventStream({ "3.3.7": {} });
+    const { step } = await plan();
+    expect(step("event-stream").reasons).toContain(
+      "No 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release",
+    );
+  });
+
+  it("a downgrade whose held dependency is affected is not named clean, and the line is still not called dead below", async () => {
+    eventStream();
+    ADVISORIES.through = [adv("GHSA-thru-0000-0001", "through", fixedIn("2.4.0"))];
+    const { step } = await plan();
+    const reasons = step("event-stream").reasons.join(" | ");
+    expect(reasons).toContain("No 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    expect(reasons).not.toMatch(/3\.3\.5|no 3\.x release clears every advisory/i);
+  });
+});
+
+describe("deadLineText: a downgrade is named only once checked (pre-publish round 10, W6)", () => {
+  const base = { target: "4.0.0", basis: "advisory_fixes" as const, floor: "4.0.0", floorAffectedBy: [], stillAffectedBy: [], unfixable: [], withheld: [], lineDead: true as const, newestSafe: "4.0.1" };
+  it("whole line affected: the original words; a downgrade unconfirmed: neither named nor denied", () => {
+    expect(deadLineText("8.5.1", base)).toBe("no 8.x release clears every advisory: 4.0.0 is the smallest safe release, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    for (const down of [{ confirmed: false, heldClean: true }, { confirmed: true, heldClean: false }]) {
+      const text = deadLineText("3.3.6", { ...base, lineDowngrade: { version: "3.3.5", ...down } });
+      expect(text).toBe("no 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    }
+    expect(deadLineText("3.3.6", { ...base, lineHasLater: true, lineDowngrade: { version: "3.3.5", confirmed: true, heldClean: true } })).toBe(
+      "no 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release",
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 5: Python and Go transitive copies
 // ---------------------------------------------------------------------------
@@ -641,5 +703,59 @@ describe("6. M7 regressions on the scan: the two false 'upgrade the parent' clai
     expect(line).toMatch(/^Refresh @azure\/msal-node 5\.2\.2 → 7\.1\.0 .*`npm update @azure\/identity` in \./);
     expect(line).not.toMatch(/@vscode\/vsce 4\.0\.0|a major upgrade|npm install/);
     expect(concise.vulnerable_packages.find((p: { package: string }) => p.package === "@azure/msal-node")).toMatchObject({ fix_action: "lockfile_refresh" });
+  });
+});
+
+describe("W10 (pre-publish round 10): an unchecked fix target gives the right cause", () => {
+  const unchecked = async () => {
+    const { formatScanResult } = await import("../tools/vulnerability-scan-format.js");
+    const vuln = {
+      package: "lodash", currentVersion: "4.17.20", ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true,
+      vulnId: "GHSA-35jh-r3h4-6jhm", aliases: [], severity: "high", cvssScore: 7.2, summary: "lodash", fixedVersion: "4.18.0",
+      published: "2026-01-01T00:00:00Z", references: [], target: null, platformActive: true, sourceDirs: [dir],
+    } as unknown as VulnerabilityEntry;
+    const result = {
+      scannedAt: new Date().toISOString(), projectPath: dir, ecosystemsScanned: ["npm"], totalScanned: 1, totalVulnerable: 1,
+      platformInactiveVulnerable: 0, bySeverity: { critical: 0, high: 1, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [vuln],
+      cleanCount: 0, scanDurationMs: 1, cached: true, offline: process.env.FOURDA_OFFLINE === "true",
+    } as unknown as VulnerabilityScanResult;
+    // No verified target: the check of 4.18.0 against every advisory of lodash never ran.
+    const out = formatScanResult(result, undefined, { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true });
+    return out.recommendations.find((r: string) => r.includes("lodash 4.17.20"))!;
+  };
+
+  it("offline: says live lookups are off, not that the check did not finish", async () => {
+    process.env.FOURDA_OFFLINE = "true";
+    const line = await unchecked();
+    expect(line).toContain("4.18.0 was NOT CHECKED against every advisory of lodash (live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked)");
+    expect(line).not.toContain("the check did not finish");
+  });
+
+  it("online: the check did not finish", async () => {
+    const line = await unchecked();
+    expect(line).toContain("4.18.0 was NOT CHECKED against every advisory of lodash (the check did not finish)");
+  });
+});
+
+describe("W10 end to end: an offline vulnerability_scan from a warm cache", () => {
+  it("names the fix as not looked up because live lookups are off", async () => {
+    ADVISORIES.lodash = [adv("GHSA-35jh-r3h4-6jhm", "lodash", fixedIn("4.18.0"))];
+    NPM.lodash = { latest: "4.18.0", versions: { "4.17.20": {}, "4.18.0": {} } };
+    npmProject({ lodash: "4.17.20" }, { lodash: { version: "4.17.20" } });
+    const db = new Database(":memory:");
+    const liveOn = (): Promise<LiveIntelligence> => (async () => {
+      const li = new LiveIntelligence(db);
+      const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
+      const { entries, discovery } = scanProjectTree(dir);
+      li.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
+      return li;
+    })();
+    await executeVulnerabilityScan(null, { project_path: dir }, await liveOn());
+    process.env.FOURDA_OFFLINE = "true";
+    const offline = (await executeVulnerabilityScan(null, { project_path: dir }, await liveOn())) as Record<string, any>;
+    const text = JSON.stringify(offline);
+    expect(text).toContain("lodash");
+    expect(text).not.toContain("the check did not finish");
+    expect(offline.recommendations.join(" ")).toContain("4.18.0 was NOT CHECKED against every advisory of lodash (live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked)");
   });
 });

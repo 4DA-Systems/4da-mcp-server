@@ -26,15 +26,26 @@ import { GoReleasesReader } from "./go-releases.js";
 import { FixPathSources } from "./fix-paths.js";
 import type { CheckEcosystem, ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
-import { commonPathRoot, dedupeDependencies, emptyVulnResult } from "./dependency-set.js";
-import { LOOKUPS_DISABLED } from "./scan-coverage.js";
-import { groupIsStale, resolveGroup, type GroupResolution, type ResolutionGroup } from "./resolution.js";
+import { commonPathRoot, dedupeDependencies, dedupeDependenciesSteps, emptyVulnResult } from "./dependency-set.js";
+import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
+import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
 import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
-import { manifestPrivateSources, normName, npmLockPrivateSources, PrivatePackageRules, type PrivateDependency, type PrivateIndexEntry } from "./private-packages.js";
+import {
+  lockEntryReason,
+  lockfileRegistryWide,
+  manifestPrivateSources,
+  normName,
+  npmLockPrivateSourcesSteps,
+  PrivatePackageRules,
+  requirementsWideReason,
+  type PrivateDependency,
+  type PrivateIndexEntry,
+  type PrivateKind,
+} from "./private-packages.js";
 import { declaredMirror } from "./private-configs.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
 import { nameForms, privateShortIndex, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
@@ -129,6 +140,13 @@ export class LiveIntelligence {
    * ecosystem's registry, index or proxy is not public (PrivatePackageRules.ecosystemWide), with why.
    */
   private wideNames = new Map<string, string>();
+  /**
+   * Per ecosystem, why a name this project does not install yet is private: the first group whose
+   * package manager would fetch any name of it from a source that is not public (registryPrivate).
+   */
+  private registryWide = new Map<string, string>();
+  /** groupRegistryReason for each group's installed packages, computed once per dependency set (privateReasonIn runs per dependency). */
+  private groupWide = new Map<GroupResolution, string>();
   /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
@@ -136,6 +154,11 @@ export class LiveIntelligence {
   /** privateShortIndex of this project, reset with privateSet. */
   private privateShorts: ReturnType<typeof privateShortIndex> | null = null;
   private initialized = false;
+  /**
+   * Bumped by every resolution that starts: an init run in steps (initFromProjectTreeYielding)
+   * stops at its next pause once another one has started, so it never writes over a newer set.
+   */
+  private initRun = 0;
   private projectRoot: string | null = null;
   /** One entry per resolution group: its inputs, result, and the file signatures that say when it went stale. */
   private groupResults: GroupResolution[] = [];
@@ -245,8 +268,26 @@ export class LiveIntelligence {
    * its manifest's platform targets; `root` is the reported project root.
    */
   initFromProjectTree(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
-    this.applyGroups(groups, root, discovery?.registryConfigDirs ?? []);
+    // A pyproject.toml in a subfolder with no lockfile is a group too (unlockedPythonGroups): its
+    // index rules apply to its names and its dependencies are listed, never sent (pre-publish round 10, W4).
+    const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
+    this.applyGroups(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
     this.discovery = discovery;
+  }
+
+  /**
+   * initFromProjectTree, giving the event loop a turn whenever a slice is due (runStepsYielding):
+   * the same resolution, so a `ping` sent with the first tool call is answered while a
+   * 150,000-entry lockfile is read (it waited 2.3 s; pre-publish round 10, W11). False, with the
+   * set left to the resolution that superseded it, when a synchronous init ran meanwhile.
+   */
+  async initFromProjectTreeYielding(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
+    const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
+    const run = ++this.initRun;
+    const steps = this.applyGroupsSteps(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
+    const done = await runStepsYielding(steps, () => this.initRun === run, false);
+    if (done) this.discovery = discovery;
+    return done;
   }
 
   /**
@@ -319,11 +360,23 @@ export class LiveIntelligence {
   }
 
   private applyGroups(groups: ResolutionGroup[], projectRoot: string | null, memberConfigDirs: string[] = []): void {
+    this.initRun++;
+    runSteps(this.applyGroupsSteps(groups, projectRoot, memberConfigDirs));
+  }
+
+  /** applyGroups as steps (runSteps / runStepsYielding, pre-publish round 10, W11); true when done. */
+  private *applyGroupsSteps(groups: ResolutionGroup[], projectRoot: string | null, memberConfigDirs: string[]): Steps<true> {
     this.privateRules = new PrivatePackageRules([...new Set([...(projectRoot ? [projectRoot] : []), ...groups.map((g) => g.dir)])], process.env, memberConfigDirs);
-    this.groupResults = groups.map(resolveGroup);
-    this.rebuildDependencySet();
+    const results: GroupResolution[] = [];
+    for (const group of groups) {
+      results.push(yield* resolveGroupSteps(group));
+      yield;
+    }
+    this.groupResults = results;
+    yield* this.rebuildDependencySetSteps();
     this.projectRoot = projectRoot;
     this.initialized = true;
+    return true;
   }
 
   /**
@@ -331,27 +384,41 @@ export class LiveIntelligence {
    * send. They are kept in `privateDeps` so every answer says they were not checked.
    */
   private rebuildDependencySet(): void {
+    runSteps(this.rebuildDependencySetSteps());
+  }
+
+  /** rebuildDependencySet as steps, pausing between its passes (pre-publish round 10, W11). */
+  private *rebuildDependencySetSteps(): Steps<void> {
     this.lockPrivateIndexes = new WeakMap();
     this.publicNames = null;
     this.privateSet = null;
     this.privateShorts = null;
-    this.npmLockPrivate = new Map(
-      this.groupResults
-        .filter((r) => mapEcosystem(r.group.language) === "npm")
-        .map((r) => [r, npmLockPrivateSources(r.group.dir, this.privateRules.publicMirrors)] as const),
-    );
+    this.npmLockPrivate = new Map();
+    for (const r of this.groupResults) {
+      if (mapEcosystem(r.group.language) !== "npm") continue;
+      this.npmLockPrivate.set(r, yield* npmLockPrivateSourcesSteps(r.group.dir, this.privateRules.publicMirrors));
+    }
+    yield;
     // A private registry or index the manifest itself names (Cargo `registry =`, uv `index =`,
     // Poetry `source =`): private with no lockfile too (blind audit round 4).
     this.manifestPrivate = new Map(
       this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
     );
+    yield;
     // A registry, index or proxy that is not public and is consulted for any name: every name the
-    // group knows, ranged and unpinned ones included, so no tool sends one (R7, 2).
+    // group knows, ranged and unpinned ones included, so no tool sends one (R7, 2). A requirements
+    // `--index-url` / extra index / find-links and a lockfile that installs everything from one
+    // private host are the same kind of reason (pre-publish round 10, W4).
     this.wideNames = new Map();
+    this.registryWide = new Map();
+    this.groupWide = new Map();
     for (const r of this.groupResults) {
       const ecosystem = mapEcosystem(r.group.language);
-      const why = this.privateRules.ecosystemWide(ecosystem, r.group.dir, Boolean(r.indexRecorded));
+      const forNew = this.groupRegistryReason(r, false);
+      if (forNew && !this.registryWide.has(ecosystem)) this.registryWide.set(ecosystem, forNew);
+      const why = this.groupRegistryReason(r, Boolean(r.indexRecorded));
       if (!why) continue;
+      this.groupWide.set(r, why);
       const names = [
         ...r.group.deps,
         ...r.group.devDeps,
@@ -364,23 +431,38 @@ export class LiveIntelligence {
         const k = `${ecosystem}\0${normName(ecosystem, name)}`;
         if (!this.wideNames.has(k)) this.wideNames.set(k, why);
       }
+      yield;
     }
     const key = (dep: { ecosystem: string; name: string; version: string | null }) => `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
-    const privateWhy = new Map<string, string>();
+    const privateWhy = new Map<string, { why: string; kind: PrivateKind }>();
     const isPublic = (r: GroupResolution, dep: ResolvedDependency) => {
-      const why = this.privateReasonIn(r, dep.ecosystem, dep.name, dep.version);
-      if (why && !privateWhy.has(key(dep))) privateWhy.set(key(dep), why);
-      return !why;
+      const found = this.privateReasonIn(r, dep.ecosystem, dep.name, dep.version);
+      if (found && !privateWhy.has(key(dep))) privateWhy.set(key(dep), found);
+      return !found;
     };
-    this.resolvedDeps = dedupeDependencies(this.groupResults.flatMap((r) => r.resolved.filter((dep) => isPublic(r, dep))));
-    const audit = this.groupResults.flatMap((r) => r.audit.map((dep) => ({ dep, open: isPublic(r, dep) })));
-    this.auditDeps = dedupeDependencies(audit.filter((a) => a.open).map((a) => a.dep));
-    this.privateAudit = dedupeDependencies(audit.filter((a) => !a.open).map((a) => a.dep));
+    const resolvedOpen: ResolvedDependency[] = [];
+    for (const r of this.groupResults) for (const dep of r.resolved) if (isPublic(r, dep)) resolvedOpen.push(dep);
+    this.resolvedDeps = yield* dedupeDependenciesSteps(resolvedOpen);
+    // Every copy the lockfiles hold, in their order, split as it is checked: no wrapper object per
+    // copy and no filtered copies of the list (150,000 of each for a 150,000-entry lockfile), with a
+    // pause every STEP_MASK + 1 copies (pre-publish round 10, W11).
+    const auditOpen: ResolvedDependency[] = [];
+    const auditPrivate: ResolvedDependency[] = [];
+    let step = 0;
+    for (const r of this.groupResults) {
+      for (const dep of r.audit) {
+        if ((++step & STEP_MASK) === 0) yield;
+        (isPublic(r, dep) ? auditOpen : auditPrivate).push(dep);
+      }
+    }
+    this.auditDeps = yield* dedupeDependenciesSteps(auditOpen);
+    this.privateAudit = yield* dedupeDependenciesSteps(auditPrivate);
     this.privateDeps = this.privateAudit.map((dep) => ({
       ecosystem: dep.ecosystem,
       name: dep.name,
       version: dep.version,
-      why: privateWhy.get(key(dep)) ?? "private",
+      why: privateWhy.get(key(dep))?.why ?? "private",
+      kind: privateWhy.get(key(dep))?.kind ?? "name",
     }));
     // Private for the rest of the process, for every project (private-guard.ts, blind audit round 5, 4).
     for (const p of this.privateDeps) rememberPrivateName(p.ecosystem, p.name, p.why);
@@ -407,26 +489,58 @@ export class LiveIntelligence {
     this.auditDeps = this.auditDeps.filter((d) => !refused.has(key(d)));
     this.resolvedDeps = this.resolvedDeps.filter((d) => !refused.has(key(d)));
     this.privateAudit = dedupeDependencies([...this.privateAudit, ...out]);
-    this.privateDeps = [...this.privateDeps, ...out.map((d) => ({ ecosystem: d.ecosystem, name: d.name, version: d.version, why: refused.get(key(d)) ?? "private" }))];
+    this.privateDeps = [...this.privateDeps, ...out.map((d) => ({ ecosystem: d.ecosystem, name: d.name, version: d.version, why: refused.get(key(d)) ?? "private", kind: "name" as const }))];
     for (const d of out) rememberPrivateName(d.ecosystem, d.name, refused.get(key(d)) ?? "private");
     this.publicNames = null;
     this.privateSet = null;
     this.privateShorts = null;
   }
 
-  /** Why a dependency of this group is private, or null: its lockfile's source, then the name rules. */
-  private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): string | null {
+  /**
+   * Why a dependency of this group is private, and the kind of reason, or null: its lockfile's
+   * source, then a source that serves any name, then the name rules.
+   */
+  private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): { why: string; kind: PrivateKind } | null {
     const fromLock = this.lockPrivateIndex(r, ecosystem)
       .get(normName(ecosystem, name))
       // A local entry a manifest names (no version) says nothing about a registry copy a lockfile installs.
       ?.find((p) => (p.version === null || version === null || p.version === version) && !(p.local && p.version === null && r.source?.kind === "lockfile"));
-    if (fromLock) return `${fromLock.file} installs it from ${fromLock.registry}, not the public registry`;
     // A registry, index or proxy that is not public and serves any name: pip's configured index or
     // an extra one (for what a requirements file installs), uv's, Poetry's, npm's default registry,
-    // GOPROXY, a Cargo source replacement (PrivatePackageRules.ecosystemWide).
-    const wide = mapEcosystem(r.group.language) === ecosystem ? this.privateRules.ecosystemWide(ecosystem, r.group.dir, Boolean(r.indexRecorded)) : null;
-    if (wide) return wide;
-    return this.privateRules.reasonFor(ecosystem, name);
+    // GOPROXY, a Cargo source replacement (PrivatePackageRules.ecosystemWide), a requirements option,
+    // a lockfile that installs everything from one private host (groupRegistryReason).
+    const wide = mapEcosystem(r.group.language) === ecosystem ? (this.groupWide.get(r) ?? null) : null;
+    if (fromLock?.wide) return { why: requirementsWideReason(fromLock.file, fromLock.wide, fromLock.registry), kind: "registry" };
+    if (fromLock) return { why: lockEntryReason(fromLock), kind: wide && !fromLock.local ? "registry" : "name" };
+    if (wide) return { why: wide, kind: "registry" };
+    const byName = this.privateRules.reasonFor(ecosystem, name);
+    return byName ? { why: byName, kind: "name" } : null;
+  }
+
+  /**
+   * Why the package manager of this group would fetch ANY name of its ecosystem from a source that
+   * is not public, or null: its configuration (PrivatePackageRules.ecosystemWide; `indexRecorded`
+   * as there), a requirements `--index-url` / extra index / find-links location, or a lockfile that
+   * installs every package from one private host that no name rule explains. A reason of this kind
+   * makes a name not installed yet private; a scope, GOPRIVATE or a per-package index does not
+   * (a project whose only npm packages are `@acme/*` checked no new name at all: pre-publish round 10, W4).
+   */
+  private groupRegistryReason(r: GroupResolution, indexRecorded: boolean): string | null {
+    const ecosystem = mapEcosystem(r.group.language);
+    const config = this.privateRules.ecosystemWide(ecosystem, r.group.dir, indexRecorded);
+    if (config) return config;
+    const mirrors = this.privateRules.publicMirrors;
+    const option = (r.registryWide ?? []).find((w) => !declaredMirror(w.registry.replace(/^[a-z]+\+/i, ""), mirrors));
+    if (option) return requirementsWideReason(option.file, option.setting, option.registry);
+    const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? [])].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
+    if (fromLockfile.length === 0) return null;
+    const pinned = new Set((this.manifestPrivate.get(r) ?? []).map((p) => normName(ecosystem, p.name)));
+    return lockfileRegistryWide(
+      ecosystem,
+      fromLockfile,
+      r.audit.filter((d) => d.ecosystem === ecosystem).map((d) => d.name),
+      (n) => pinned.has(normName(ecosystem, n)) || this.privateRules.reasonFor(ecosystem, n) !== null,
+    );
   }
 
   /**
@@ -555,7 +669,22 @@ export class LiveIntelligence {
   ecosystemPrivate(ecosystem: string, name: string): string | null {
     if (!ALL_PRIVATE_ECOSYSTEMS.includes(ecosystem)) return null;
     if (nameForms(name).some((form) => this.installsPublicly(ecosystem, form))) return null;
-    return this.privateRules.ecosystemWide(ecosystem, this.projectRoot, false);
+    return this.registryPrivate(ecosystem);
+  }
+
+  /**
+   * THE policy for a name this project does not install yet, in one place: the request guard
+   * (private-guard.ts, through ecosystemPrivate), lookupPrivateReason (dependency_check,
+   * upgrade_impact given an ecosystem) and the briefing all ask it (pre-publish round 10, W4). Why
+   * any name looked up in `ecosystem` is private, or null: the project root's configuration (its
+   * directory and above, the user's, the environment's), else any group of that ecosystem whose
+   * package manager would fetch any name from a source that is not public (groupRegistryReason).
+   * Only a REGISTRY-kind reason counts: a scope, a GOPRIVATE pattern or a per-package index makes
+   * only the names it covers private. Until round 10 a requirements file's `--index-url` was not
+   * read here, and `{PyPI, zqxpy-new}` reached OSV.dev and pypi.org.
+   */
+  registryPrivate(ecosystem: string): string | null {
+    return this.privateRules.ecosystemWide(ecosystem, this.projectRoot, false) ?? this.registryWide.get(ecosystem) ?? null;
   }
 
   /** The directories whose npm registry the notice is about: every npm group's, else the project root's. */
@@ -579,7 +708,7 @@ export class LiveIntelligence {
     for (const r of this.groupResults) {
       if (mapEcosystem(r.group.language) !== ecosystem) continue;
       const hit = this.lockPrivateIndex(r, ecosystem).get(n)?.[0];
-      if (hit) return `${hit.file} installs it from ${hit.registry}, not the public registry`;
+      if (hit) return hit.wide ? requirementsWideReason(hit.file, hit.wide, hit.registry) : lockEntryReason(hit);
     }
     return null;
   }
@@ -680,7 +809,7 @@ export class LiveIntelligence {
     const scoped = applyInstanceDevScope(this.db, this.privateAudit);
     const inScope = includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));
     if (inScope.length === 0) return result;
-    const why = new Map(this.privateDeps.map((p) => [`${p.ecosystem}\0${p.name}\0${p.version ?? ""}`, p.why]));
+    const why = new Map(this.privateDeps.map((p) => [`${p.ecosystem}\0${p.name}\0${p.version ?? ""}`, p]));
     return {
       ...result,
       privateExcluded: {
@@ -689,7 +818,8 @@ export class LiveIntelligence {
           ecosystem: d.ecosystem,
           name: d.name,
           version: d.version,
-          why: why.get(`${d.ecosystem}\0${d.name}\0${d.version ?? ""}`) ?? "private",
+          why: why.get(`${d.ecosystem}\0${d.name}\0${d.version ?? ""}`)?.why ?? "private",
+          kind: why.get(`${d.ecosystem}\0${d.name}\0${d.version ?? ""}`)?.kind ?? "name",
         })),
       },
     };
@@ -784,9 +914,9 @@ export class LiveIntelligence {
     projectPath: string,
     options?: { includeDev?: boolean; forceRefresh?: boolean },
   ): Promise<VulnerabilityScanResult> {
-    if (!this.enabled) {
-      return this.withPrivate(emptyVulnResult(projectPath, true, { count: this.auditDeps.length, reason: LOOKUPS_DISABLED }), options?.includeDev ?? false);
-    }
+    // Offline (FOURDA_OFFLINE) the scan still runs, from the cache alone: OsvScanner's cacheOnly
+    // mode asks nothing, states every cached answer's age, and leaves a dependency without one
+    // NOT CHECKED (pre-publish round 10, W5).
 
     // Names the guard would refuse are taken out first, each with why (takeOutRefused).
     this.takeOutRefused();
@@ -799,7 +929,8 @@ export class LiveIntelligence {
       return this.withPrivate(emptyVulnResult(projectPath, false), options?.includeDev ?? false);
     }
 
-    if (options?.forceRefresh) {
+    // Offline the cache is the only answer there is: a forced refresh cannot fetch, so it keeps it.
+    if (options?.forceRefresh && this.enabled) {
       this.cache.invalidateSource("osv");
     }
 
@@ -821,7 +952,7 @@ export class LiveIntelligence {
     const generation = this.generation;
     const request = ++this.scanRequests;
     try {
-      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath), includeDev);
+      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled }), includeDev);
       if (generation === this.generation && request > this.storedScanRequest) {
         this.lastVulnScan = result;
         this.lastVulnScanIncludesDev = includeDev;
@@ -872,7 +1003,13 @@ export class LiveIntelligence {
     timeoutMs: number,
     options?: { includeDev?: boolean },
   ): Promise<VulnerabilityScanResult | null> {
-    if (!this.enabled) return null;
+    // Offline there is no current scan: null, as before. With none stored, the cache-only scan
+    // (local reads, no lookup) is run and stored, so a caller falling back to getVulnerabilities
+    // reads the cached answers with their age, never as a current all-clear (pre-publish round 10, W5).
+    if (!this.enabled) {
+      if (!this.getVulnerabilities()) await this.scanVulnerabilities(projectPath, { includeDev: options?.includeDev ?? false });
+      return null;
+    }
     this.refreshIfLockfilesChanged();
     // A scan past its hour is not an answer about today's advisories: scan again (bounded, below).
     this.dropExpiredScan();
@@ -1022,6 +1159,15 @@ export class LiveIntelligence {
     return this.enabled;
   }
 
+  /**
+   * Whether vulnerability answers can be read with live lookups off: from the cache alone, each
+   * with its age, never as a current all-clear (pre-publish round 10, W5). True whenever lookups
+   * are off; an empty cache then leaves every dependency NOT CHECKED.
+   */
+  answersFromCache(): boolean {
+    return !this.enabled;
+  }
+
   isInitialized(): boolean {
     return this.initialized;
   }
@@ -1070,14 +1216,14 @@ export class LiveIntelligence {
   }
 
   private async queryAdvisoriesIn(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
-    if (!this.enabled) return emptyVulnResult("dependency_check", true, { count: deps.length, reason: LOOKUPS_DISABLED });
+    // Offline: answered from the cache alone, each answer's age stated (OsvScanner cacheOnly; W5).
     // A private name is never asked about (a held dependency of a private parent): it has no
     // answer, so the result is not checked for it, never clean.
     const priv = deps.filter((d) => this.privateReason(d.ecosystem, d.name));
     const open = priv.length > 0 ? deps.filter((d) => !priv.includes(d)) : deps;
     let result: VulnerabilityScanResult;
     try {
-      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check") : emptyVulnResult("dependency_check", false);
+      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check", { cacheOnly: !this.enabled }) : emptyVulnResult("dependency_check", false);
     } catch (error) {
       return emptyVulnResult("dependency_check", true, { count: deps.length, reason: `the scan failed (${String(error).slice(0, 120)})` });
     }

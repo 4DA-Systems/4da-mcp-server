@@ -47,6 +47,33 @@ export function excludedReleases(index: PackageReleaseIndex): Map<string, string
   return out;
 }
 
+/**
+ * Whether dependency_check judges a deprecated release avoid (dependency-check-signals.ts
+ * withdrawnSignal): deprecated, and either withdrawn by the rule above or carrying a notice no
+ * other release shares (a "please upgrade" notice on many releases grades review instead).
+ */
+export function deprecationAvoids(index: PackageReleaseIndex, version: string, excluded: ReadonlyMap<string, string> = excludedReleases(index)): boolean {
+  const record = index.releases[version];
+  if (!record?.deprecated) return false;
+  if (index.ecosystem !== "npm" || excluded.has(version)) return true;
+  return !Object.values(index.releases).some((r) => r.version !== version && r.deprecated === record.deprecated);
+}
+
+/**
+ * The releases never offered as a safe pick: the withdrawn ones (excludedReleases), plus a
+ * deprecated release the same answer would judge avoid. react-native 1000.0.0 (deprecated, "accidentally
+ * published") was named `safe.newest` for ">=0.80.0" while the answer judged it avoid; npm's own
+ * pick (npm-pick-manifest) prefers a non-deprecated release too (pre-publish round 10, W13).
+ */
+export function unofferedReleases(index: PackageReleaseIndex): Map<string, string> {
+  const out = excludedReleases(index);
+  const withdrawn = new Map(out);
+  for (const r of Object.values(index.releases)) {
+    if (!out.has(r.version) && deprecationAvoids(index, r.version, withdrawn)) out.set(r.version, withdrawalText(index.ecosystem, r.version));
+  }
+  return out;
+}
+
 /** npm's per-version `deprecated`: a non-empty message, or `true` (the app's `npm_deprecated`). */
 export function isNpmDeprecated(value: unknown): boolean {
   return (typeof value === "string" && value !== "") || value === true;

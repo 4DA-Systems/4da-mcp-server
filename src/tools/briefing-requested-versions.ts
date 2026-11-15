@@ -18,8 +18,22 @@
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { asName, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, type NameCheckLive } from "./briefing-new-packages.js";
-import { ENGLISH_TASK_WORDS, installedGoModule, isManifestFile, isVersionSpec, normalizeVersionSyntax, NOT_A_PACKAGE_ADJECTIVES, SPEC_JOINERS, specText } from "./briefing-names.js";
+import { POPULAR_NPM } from "../live/popular-npm.js";
+import { POPULAR_PYPI } from "../live/popular-pypi.js";
+import { asName, nameClean, nameOnlyReview, NO_SUCH_RELEASE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import {
+  checkableSpec,
+  ENGLISH_TASK_WORDS,
+  installedGoModule,
+  isManifestFile,
+  isTomlEntry,
+  isVersionSpec,
+  normalizePypiName,
+  normalizeVersionSyntax,
+  NOT_A_PACKAGE_ADJECTIVES,
+  SPEC_JOINERS,
+  specText,
+} from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
@@ -32,6 +46,10 @@ export interface RequestedVersion {
   from?: string;
   /** Other ecosystems the project uses, tried when the guessed one has no such release. */
   alternatives?: CheckEcosystem[];
+  /** `alternatives` count only when `ecosystem` has no such name or release (a pip-style comparator in a project that uses PyPI; pre-publish round 10, W16). */
+  fallbackOnly?: true;
+  /** On equal answers, report this ecosystem (the project's own), not the comparator's guess. */
+  preferOnTie?: CheckEcosystem;
 }
 
 export interface RequestedVersionFinding extends RequestedVersion {
@@ -180,6 +198,8 @@ export interface TaskVersions {
   requested: RequestedVersion[];
   /** Versions the task writes that no package (or runtime) could be read for: never safe to delegate on. */
   unread: string[];
+  /** Packages a manager this server does not read installs (`gem install rails`): named NOT CHECKED (round 10, W14). */
+  foreign?: string[];
 }
 
 /** The (package, version) pairs a task names, in the order named (uncapped: the briefing checks MAX_REQUESTED and names the rest NOT CHECKED). */
@@ -202,12 +222,22 @@ const TOKEN = new RegExp("(?:->|=>|→)|[@A-Za-z0-9`'\"(^~<>=][\\w./@*=<>~^!`'\"
 const LIST_JOINERS = new Set(["and", "plus"]);
 /** Words between a package and its version that are no package ("by one patch to 0.7.29"). */
 const STOP_WORDS = new Set(["one", "two", "three", "a", "an", "minor", "major", "patch", "level", "levels", "step", "steps", "notch", "bit", "release", "releases", "line"]);
+/** Words that only lead to a version: "debug to 4.4.2", "chalk at version 5.6.1". */
+const VERSION_LEADS = new Set(["to", "at", "version", "v", "=", "==", "===", ":", "->", "=>", "→"]);
+const POPULAR = new Set<string>([...POPULAR_NPM, ...POPULAR_PYPI.map(normalizePypiName)]);
+/**
+ * A name on the bundled popular lists (npm's or PyPI's): it is sent to a registry with a version written
+ * right after it even in a task with no dependency word or verb ("chalk 5.6.1/debug 4.4.2", the September
+ * 2025 hijacked releases, left both versions unread; pre-publish round 10, W3). The lists are offline, so
+ * a name off them (an internal codename) is still never sent on a guess.
+ */
+const popularName = (lower: string) => POPULAR.has(lower) || POPULAR.has(normalizePypiName(lower));
 
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
   task = normalizeVersionSyntax(task);
   // The versions the clause reader bound to a name ("pull in node-ipc 10.1.1", "replace request with
   // axios 0.21.0", "add lodash 4.17.21 and crossenv 6.1.1"), and the versions of what a swap takes out.
-  const { bound, ignored } = readTaskItems(task, deps);
+  const { bound, ignored, fixed, foreign } = readTaskItems(task, deps);
   const tokens = [...task.matchAll(TOKEN)];
   const raw = tokens.map((t) => t[0]);
   const at0 = (i: number) => tokens[i].index ?? 0;
@@ -227,14 +257,20 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   const found = new Map<string, RequestedVersion & { order: number }>();
   const unread: string[] = [];
   let order = 0;
-  const add = (who: { name: string; ecosystem: CheckEcosystem; guessed?: true } | null, version: string, guess = false, another = false): boolean => {
+  const add = (
+    who: { name: string; ecosystem: CheckEcosystem; guessed?: true; fixed?: true; alternatives?: CheckEcosystem[]; fallbackOnly?: true; preferOnTie?: CheckEcosystem } | null,
+    version: string,
+    guess = false,
+    another = false,
+  ): boolean => {
     if (!who || !version) return false;
-    const to = taskVersionText(version);
+    const to = taskVersionText(version, who.ecosystem);
     // A pairing the task leaves open ("a, b to x, y, z") keeps every candidate version of a package.
     const key = `${who.ecosystem}\0${who.name}${another ? `\0${to}` : ""}`;
     const copies = deps.filter((d) => d.ecosystem === who.ecosystem && d.name === who.name && d.version);
     const versions = [...new Set(copies.map((d) => d.version!))];
-    const alternatives = guess && who.guessed && who.ecosystem === fallback ? others.filter((e) => asName(who.name, e) !== null) : [];
+    // A comparator-inferred PyPI reading carries its own fallback, npm (pre-publish round 10, W16).
+    const alternatives = who.fixed ? (who.alternatives ?? []) : guess && who.guessed && who.ecosystem === fallback ? others.filter((e) => asName(who.name, e) !== null) : [];
     // A later version for the same package is its target ("from 1.0 to 1.2", "1.0 -> 1.2").
     found.set(key, {
       name: who.name,
@@ -242,6 +278,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       to,
       ...(versions.length === 1 && versions[0] !== to ? { from: versions[0] } : {}),
       ...(alternatives.length > 0 ? { alternatives } : {}),
+      ...(alternatives.length > 0 && who.fallbackOnly ? { fallbackOnly: true as const } : {}),
+      ...(alternatives.length > 0 && who.preferOnTie ? { preferOnTie: who.preferOnTie } : {}),
       order: found.get(key)?.order ?? order++,
     });
     return true;
@@ -289,14 +327,36 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     for (const x of versions) paired.add(x);
   }
 
+  /**
+   * The name in token `i` when a manager command or a PEP 440 specifier fixed its ecosystem: only that
+   * ecosystem's installed copy, never the project's guess (round 10, W14: `poetry add pyyaml@5.3` was
+   * judged as npm's pyyaml in an npm project).
+   */
+  const fixedName = (i: number, name: string) => {
+    const span = fixed.find((s) => overlaps(i, s));
+    const eco = span?.ecosystem;
+    if (!eco) return undefined;
+    const who = nameFor(name, deps.filter((d) => d.ecosystem === eco), eco, true, eco);
+    if (!who) return null;
+    // A comparator-inferred PyPI reading is also judged on npm (W16); an explicit manager command is not.
+    const npmName = span.alternatives?.includes("npm") ? asName(name, "npm") : null;
+    return {
+      ...who,
+      fixed: true as const,
+      ...(npmName === who.name ? { alternatives: span.alternatives, ...(span.fallbackOnly ? { fallbackOnly: true as const } : { preferOnTie: "npm" as const }) } : {}),
+    };
+  };
   for (let i = 0; i < raw.length; i++) {
     if (paired.has(i)) continue;
     const token = cleanToken(raw[i]);
     if (ignored.some((s) => overlaps(i, s))) continue;
+    // A manager whose registry is not read (`gem install rails -v 5.0.0`): its packages are named NOT CHECKED.
+    if (foreign.some((s) => overlaps(i, s))) continue;
     const pair = bound.find((b) => overlaps(i, b));
     if (pair) {
       // Bound by the clause reader: this version is that name's, whatever stands nearer to it.
-      if (!add(nameFor(pair.name, deps, fallback, true, stated), pair.version, true)) unread.push(pair.version);
+      const own = fixedName(i, pair.name);
+      if (!add(own !== undefined ? own : nameFor(pair.name, deps, fallback, true, stated), pair.version, true)) unread.push(pair.version);
       continue;
     }
     // name@version (npm, `cargo add`, Go module@v1.2.3); a scoped npm name keeps its leading @.
@@ -304,9 +364,13 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     if (at > 0) {
       const name = token.slice(0, at);
       const after = token.slice(at + 1);
-      const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : stated === "crates.io" ? "crates.io" : "npm";
+      // A TOML manifest entry (`smallvec = { version = "..." }`) is the clause reader's crates.io or PyPI
+      // package, never npm's (pre-publish round 10, W3: one package listed as avoid and as unknown).
+      const tomlEntry = isTomlEntry(task, at0(i) + raw[i].indexOf(token));
+      const eco: CheckEcosystem = GO_HOST_PATH.test(name) ? "Go" : tomlEntry ? tomlEcosystem(stated, deps) : stated === "crates.io" ? "crates.io" : "npm";
+      const own = fixedName(i, name);
       if (VERSIONISH.test(after) || after.toLowerCase() === "latest") {
-        if (!add(nameFor(name, deps, eco, true, stated), after.toLowerCase() === "latest" ? "latest" : after) && DOTTED.test(after)) unread.push(specText(token));
+        if (!add(own !== undefined ? own : nameFor(name, deps, eco, true, tomlEntry ? eco : stated), after.toLowerCase() === "latest" ? "latest" : after) && DOTTED.test(after)) unread.push(specText(token));
         continue;
       }
       // Whatever else follows `name@` (a dist-tag, a branch, a tarball, a version in a form not read
@@ -318,7 +382,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     // name==1.2.3, name~=3.1, name>=2,<3 (PyPI): the whole specifier is one constraint.
     const spec = PYPI_SPEC.exec(token);
     if (spec) {
-      if (!add(nameFor(spec[1], deps, "PyPI", true, stated), spec[2])) unread.push(specText(token));
+      const own = fixedName(i, spec[1]);
+      if (!add(own !== undefined ? own : nameFor(spec[1], deps, "PyPI", true, stated), spec[2])) unread.push(specText(token));
       continue;
     }
     if (!VERSIONISH.test(token)) continue;
@@ -347,7 +412,11 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       const quotedName = /^[`'"]/.test(raw[k]);
       // A name right before a dotted version is written as one ("debug 4.4.2"), common word or not.
       const adjacent = k === i - 1 && DOTTED.test(token);
-      const who = nameFor(raw[k], deps, fallback, quotedName || adjacent, stated);
+      // A popular name before a dotted version, over words that only lead to it ("debug to 4.4.2"), is
+      // one too: "bump chalk to 5.6.1 / debug to 4.4.2" passed over `debug` (a common word) and tied 4.4.2
+      // to chalk (pre-publish round 10, W3).
+      const popularLead = DOTTED.test(token) && popularName(w) && words.slice(k + 1, i).every((x) => VERSION_LEADS.has(x));
+      const who = nameFor(raw[k], deps, fallback, quotedName || adjacent || popularLead, stated);
       if (who?.guessed && !quotedName && SETTING_NOUNS.has(w)) {
         tied = true; // "timeout to 30", "port 8080": a setting, not a package to judge
         break;
@@ -355,7 +424,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       // A word that is no package, or English prose ("one", "patch", "release"): passed over.
       if (!who || (who.guessed && !quotedName && (ENGLISH_TASK_WORDS.has(w) || STOP_WORDS.has(w)))) continue;
       const bareNumberOk = !who.guessed || quotedName || !BARE_NUMBER.test(token) || aboutPackages;
-      tied = (!who.guessed || aboutDependencies || quotedName) && bareNumberOk && add(who, token, true);
+      tied = (!who.guessed || aboutDependencies || quotedName || popularLead || (adjacent && popularName(w))) && bareNumberOk && add(who, token, true);
       break;
     }
     // "version 1.2.3 of name"
@@ -363,7 +432,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     if (!tied && DOTTED.test(token)) unread.push(specText(token));
   }
   const requested = [...found.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...r }) => r);
-  return { requested, unread: [...new Set(unread)] };
+  const notRead = foreign.filter((f) => f.name).map((f) => `${f.name} (${f.registry}: not read by this server)`);
+  return { requested, unread: [...new Set(unread)], ...(notRead.length > 0 ? { foreign: [...new Set(notRead)] } : {}) };
 }
 
 /**
@@ -372,7 +442,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
  */
 export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
-  const unknown = ({ alternatives: _a, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
+  const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
     verdict: "unknown",
     resolved: null,
@@ -391,7 +461,8 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
       return await Promise.race([
         executeDependencyCheck(
           null,
-          { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: r.to, ...(r.from ? { from: r.from } : {}) })) },
+          // In the form dependency_check reads for that ecosystem (briefing-names.ts checkableSpec; round 10, W3).
+          { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: checkableSpec(r.ecosystem, r.to) ?? r.to, ...(r.from ? { from: r.from } : {}) })) },
           liveIntel as LiveIntelligence,
           now ? { now } : {},
         ),
@@ -405,11 +476,11 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (r: RequestedVersion, item: Answer["results"][number] | undefined): RequestedVersionFinding => {
-    const { alternatives: _alternatives, ...own } = r;
+    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...own } = r;
     if (!item) return unknown(own, "no answer");
     const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
     const rc = item.range_check;
-    return {
+    const out: RequestedVersionFinding = {
       ...own,
       verdict: item.verdict,
       resolved: item.to,
@@ -418,20 +489,49 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
       malicious: Boolean(advisories?.malicious_package),
       ...(advisories?.critical_affecting_to?.length ? { critical: advisories.critical_affecting_to } : {}),
     };
+    if (nameOnlyReview(item.verdict, item.signals)) nameOnly.add(out);
+    else if (item.verdict !== "unknown" && nameClean(item.signals)) real.add(out);
+    return out;
   };
-  const unpublished = (item: Answer["results"][number] | undefined) => Boolean(item && item.verdict === "unknown" && /is not a published version on|a hallucinated package/.test(item.reason));
+  /** A namesake's near-miss review, and an answer about a release the ecosystem has and a name it knows (W16). */
+  const nameOnly = new WeakSet<RequestedVersionFinding>();
+  const real = new WeakSet<RequestedVersionFinding>();
+  // No release matching the version (or no such name) is not an answer for it: "No published,
+  // non-withdrawn release of rsa matches 4.7" on npm outranked PyPI's proceed (pre-publish round 10, W16).
+  const unpublished = (item: Answer["results"][number] | undefined) => Boolean(item && item.verdict === "unknown" && NO_SUCH_RELEASE.test(item.reason));
+  // dependency_check refuses a whole call over one constraint it cannot read: that one is unknown, said,
+  // and the rest are still checked; an ecosystem tried on a guess that cannot read it is not tried
+  // (pre-publish round 10, W3).
+  const plan = requested.map((r): RequestedVersion | null => {
+    const ecosystems = [r.ecosystem, ...(r.alternatives ?? [])].filter((e) => checkableSpec(e, r.to) !== null);
+    if (ecosystems.length === 0) return null;
+    const [ecosystem, ...alternatives] = ecosystems;
+    return { ...r, ecosystem, alternatives: alternatives.length > 0 ? alternatives : undefined };
+  });
+  const asked = plan.filter((r): r is RequestedVersion => r !== null);
   try {
-    const answer = await run(requested);
+    const answer = asked.length > 0 ? await run(asked) : { results: [] as Answer["results"] };
     if (!answer) return requested.map((r) => unknown(r, "the lookups did not finish in time"));
-    const out = requested.map((r, i) => finding(r, answer.results[i]));
-    // A guessed ecosystem with no such release: the project's other ecosystems, in one more run.
-    const retries = requested.flatMap((r, i) => (unpublished(answer.results[i]) ? (r.alternatives ?? []).map((ecosystem) => ({ i, r: { ...r, ecosystem, alternatives: undefined } })) : []));
+    /** dependency_check's answer for requested[i], when it was asked. */
+    const results = plan.map((r) => (r ? answer.results[asked.indexOf(r)] : undefined));
+    const out = requested.map((r, i) => (plan[i] ? finding(plan[i]!, results[i]) : unknown(r, `dependency_check reads no ${r.ecosystem} version or constraint in "${r.to}"`)));
+    // A guessed ecosystem: the project's other ecosystems too, in one more run, and the worst answer of
+    // those that publish the release stands. Only the first ecosystem that had it used to be kept, so
+    // npm's flask "proceed" could stand beside PyPI's "avoid" for one name (pre-publish round 10, W14).
+    const retries = plan.flatMap((r, i) => (r ? (r.alternatives ?? []).map((ecosystem) => ({ i, r: { ...r, ecosystem, alternatives: undefined } })) : []));
     if (retries.length > 0) {
       const again = await run(retries.map((x) => x.r)).catch(() => null);
       if (again) {
         for (const i of new Set(retries.map((x) => x.i))) {
-          const hit = retries.findIndex((x, k) => x.i === i && again.results[k] && !unpublished(again.results[k]));
-          if (hit >= 0) out[i] = finding(retries[hit].r, again.results[hit]);
+          const own = unpublished(results[i]) ? [] : [out[i]];
+          // A fallback counts only when the task's own ecosystem has no such name or release (W16).
+          const more = plan[i]?.fallbackOnly && own.length > 0 ? [] : retries.flatMap((x, k) => (x.i === i && again.results[k] && !unpublished(again.results[k]) ? [finding(x.r, again.results[k])] : []));
+          let answers = [...own, ...more];
+          // A namesake's near-miss review never outranks a real answer; malware and avoid still win (W16).
+          if (answers.some((a) => real.has(a))) answers = answers.filter((a) => !nameOnly.has(a));
+          // On a tie the project's own ecosystem is reported, not the comparator's guess (final check).
+          const prefer = plan[i]?.preferOnTie;
+          if (answers.length > 0) out[i] = answers.reduce((a, b) => (worse(b) > worse(a) || (worse(b) === worse(a) && prefer !== undefined && b.ecosystem === prefer) ? b : a));
         }
       }
     }
@@ -440,6 +540,13 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
     // dependency_check refuses a malformed item (a version it cannot read): unknown, said.
     return requested.map((r) => unknown(r, `the check failed: ${String(error instanceof Error ? error.message : error).slice(0, 120)}`));
   }
+}
+
+/** How bad a named version's answer is: a malicious release, a critical advisory, then the verdict. */
+function worse(f: RequestedVersionFinding): number {
+  if (f.malicious) return 7;
+  if (f.verdict === "avoid" && (f.critical?.length ?? 0) > 0) return 6;
+  return { avoid: 5, review: 4, unknown: 3, wait: 2, proceed: 1 }[f.verdict];
 }
 
 /** How a finding reads in the delegation reason. */

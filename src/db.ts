@@ -691,6 +691,13 @@ export class FourDADatabase {
    * Called once when creating a brand-new standalone database.
    */
   private createMinimalSchema(): void {
+    // One transaction, so one commit: each of the ~45 statements committed on its own, a WAL
+    // sync each, and the first tool call of a fresh install spent ~140 ms here with the event
+    // loop held (pre-publish round 10, W9). Nothing reads the file before this returns.
+    this.db.transaction(() => this.createMinimalSchemaStatements())();
+  }
+
+  private createMinimalSchemaStatements(): void {
     this.db.exec(`
       -- Schema version tracking
       CREATE TABLE IF NOT EXISTS schema_version (

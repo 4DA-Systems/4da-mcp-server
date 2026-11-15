@@ -63,9 +63,10 @@ const MAX_OSV_PAGES = 10;
  * are read the OSV way, osv-ranges.ts coerceBound, so GHSA-92cp-5422-2mw7's `9.6.0b1` is a bound, not unreadable;
  * 13: npm facts withdraw the releases a maintainer flagged on a line that carries another notice, withdrawn-releases.ts npmFlaggedReleases;
  * 14: PyPI facts carry each release's `requiresPython`; 15: npm deprecation messages are quoted and capped, untrusted-text.ts quoteThirdParty;
- * 16: `withdrawnWhy` holds this server's words only and the registry's message moves to `withdrawnQuote`, r7).
+ * 16: `withdrawnWhy` holds this server's words only and the registry's message moves to `withdrawnQuote`, r7;
+ * 17: `heldSpecs` carry wide ranges and npm aliases too, so a v16 entry would read mocha 10.6.0 as holding nothing: round 10, W13).
  */
-const CACHE_VERSION = 16;
+const CACHE_VERSION = 17;
 /** How long "the registry does not serve this version" is believed: it may be published later. */
 const ABSENT_TTL = 3600;
 
@@ -694,8 +695,23 @@ export type FixTargetResult = CleanTarget & {
   heldUnchecked?: string;
   /** The newest stable release no advisory leaves unclean, when it is above `target` (withLineFacts). */
   newestSafe?: string;
-  /** No release on the installed version's line clears every advisory: `target` is on the nearest later line that has one (withLineFacts). */
+  /** No release on the installed version's line above it clears every advisory: `target` is on the nearest later line that has one (withLineFacts). */
   lineDead?: true;
+  /**
+   * With `lineDead`: whether the installed line has any stable release above the installed one at
+   * all. event-stream 3.3.6 is the last 3.x, so "no 3.x release after 3.3.6 exists" is the fact,
+   * not "none clears every advisory" (pre-publish round 10, W6).
+   */
+  lineHasLater?: true;
+  /**
+   * With `lineDead`: the newest release on the installed line BELOW the installed one that no known
+   * advisory affects, a downgrade. event-stream 3.3.5 is clean (GHSA-mh6f-8j2x-4483 affects 3.3.6
+   * only), and "no 3.x release clears every advisory" denied it (pre-publish round 10, W6). Its
+   * presence alone stops that claim; it is named clean only once `confirmed` (OSV.dev's batch query,
+   * batch-confirm.ts) and `heldClean` (npm: what it exact-pins or narrowly ranges, held-targets.ts;
+   * true elsewhere, and for an npm release that holds nothing).
+   */
+  lineDowngrade?: { version: string; confirmed: boolean; heldClean: boolean };
 };
 
 /**
@@ -713,7 +729,7 @@ export function aboveListedText(target: string): string {
 }
 
 /** A reason heldNote writes for a target that is not a clean fix (heldBlocked / heldUnchecked): the plan summary counts those rows apart. */
-export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|exact-pins or narrowly ranges are affected was NOT CHECKED \(/;
+export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|(?:exact-pins or narrowly ranges|holds) are affected was NOT CHECKED \(/;
 
 /** The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked), or null when there is nothing to say. */
 export function heldNote(clean: FixTargetResult): string | null {
@@ -730,10 +746,11 @@ export function heldNote(clean: FixTargetResult): string | null {
     const upTo = last && last !== clean.target ? `up to ${last} ` : "";
     const unchecked = clean.heldBlocked.unchecked ?? [];
     const partial = unchecked.length > 0 ? `, of the releases that could be checked (${andList(unchecked)} NOT CHECKED)` : "";
-    return `${heldText(clean.target, clean.heldBlocked.affected)}; no release on its line ${upTo}that its own advisories leave clean clears ${clean.heldBlocked.affected.length === 1 ? "it" : "them"}${partial}, so ${clean.target} is NOT a clean fix: confirm a release with dependency_check before pinning it`;
+    // "later": only the target and the releases after it were searched; an earlier one is not denied (W6).
+    return `${heldText(clean.target, clean.heldBlocked.affected)}; no later release on its line ${upTo}that its own advisories leave clean clears ${clean.heldBlocked.affected.length === 1 ? "it" : "them"}${partial}, so ${clean.target} is NOT a clean fix: confirm a release with dependency_check before pinning it`;
   }
   if (clean.heldUnchecked !== undefined && clean.target) {
-    return `whether the dependencies ${clean.target} exact-pins or narrowly ranges are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
+    return `whether the dependencies ${clean.target} holds are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
   }
   return null;
 }
@@ -829,8 +846,25 @@ function withLineFacts(
   const newestSafe = newest && compareVersions(newest, clean.target, ecosystem) > 0 ? newest : null;
   const crosses = computeSemverDistance(installed, clean.target)?.label === "major";
   const onLine = above.some((v) => computeSemverDistance(installed, v)?.label !== "major");
-  const lineDead = crosses && !onLine && lineLabel(installed) !== null && above[0] === clean.target;
-  return { ...clean, ...(newestSafe ? { newestSafe } : {}), ...(lineDead ? { lineDead: true as const } : {}) };
+  const line = lineLabel(installed);
+  const lineDead = crosses && !onLine && line !== null && above[0] === clean.target;
+  if (!lineDead) return { ...clean, ...(newestSafe ? { newestSafe } : {}) };
+  // "Dead" is about the releases ABOVE the installed one. Below it the line can be clean: event-stream
+  // 3.3.6 (malware) is the last 3.x and 3.3.5 is clean, and "no 3.x release clears every advisory"
+  // denied it (pre-publish round 10, W6). So the answer says whether any later release on the line
+  // exists, and which earlier one is clean (a downgrade), checked like any release a tool names.
+  const sameLine = (v: string) => isComparable(v, ecosystem) && !isPrereleaseVersion(v, ecosystem) && lineLabel(v) === line;
+  const lineHasLater = [...facts.versions, ...facts.withdrawn].some((v) => sameLine(v) && compareVersions(v, installed, ecosystem) > 0);
+  const earlier = facts.versions.filter((v) => sameLine(v) && compareVersions(v, installed, ecosystem) < 0 && safe(v)).sort((a, b) => compareVersions(a, b, ecosystem)).pop();
+  // npm: what the downgrade holds is judged with the target's (held-targets.ts); one that holds nothing needs no judging.
+  const heldClean = ecosystem !== "npm" || (facts.heldSpecs !== undefined && earlier !== undefined && !facts.heldSpecs[earlier]);
+  return {
+    ...clean,
+    ...(newestSafe ? { newestSafe } : {}),
+    lineDead: true as const,
+    ...(lineHasLater ? { lineHasLater: true as const } : {}),
+    ...(earlier ? { lineDowngrade: { version: earlier, confirmed: false, heldClean } } : {}),
+  };
 }
 
 /** "8.x", "0.21.x" or "3.x": the release line a version is on (its caret line); null when unreadable or 0.0.x. */
@@ -843,13 +877,24 @@ export function lineLabel(version: string): string | null {
   return m[2] && m[2] !== "0" ? `0.${m[2]}.x` : null;
 }
 
-/** The words for a dead installed line (FixTargetResult.lineDead): the smallest safe release on a later line, and the newest. */
+/**
+ * The words for a dead installed line (FixTargetResult.lineDead): the smallest safe release on a
+ * later line, and the newest. "No 8.x release clears every advisory" is said only when that is
+ * true of the whole line; when an earlier release on it is clean (a downgrade) the claim is about
+ * the releases after the installed one, and the downgrade is named once it was checked like any
+ * release a tool names (pre-publish round 10, W6: event-stream 3.3.6, where 3.3.5 is clean).
+ */
 export function deadLineText(installed: string, clean: FixTargetResult): string | null {
   if (!clean.lineDead || !clean.target) return null;
   const line = lineLabel(installed);
   if (!line) return null;
   const newest = clean.newestSafe ? `; ${clean.newestSafe} is the newest safe release` : `; it is also the newest safe release`;
-  return `no ${line} release clears every advisory: ${clean.target} is the smallest safe release, on the nearest later line that has one${newest}`;
+  const down = clean.lineDowngrade;
+  if (!down) return `no ${line} release clears every advisory: ${clean.target} is the smallest safe release, on the nearest later line that has one${newest}`;
+  const after = clean.lineHasLater ? `no ${line} release after ${installed} clears every advisory` : `no ${line} release after ${installed} exists`;
+  // Unconfirmed: neither named clean nor denied.
+  const named = down.confirmed && down.heldClean ? `; ${down.version} (a downgrade) is clean` : "";
+  return `${after}${named}; ${clean.target} is the smallest safe upgrade, on the nearest later line that has one${newest}`;
 }
 
 /** Fix targets above every listed release that are asked for by name, per package (the rest keep the "confirm it is published" note). */

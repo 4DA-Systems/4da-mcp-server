@@ -48,10 +48,12 @@ import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import {
+  checkableSpec,
   closestPopularPypi,
   ENGLISH_TASK_WORDS,
   installedGoModule,
   isManifestFile,
+  isTomlEntry,
   isVersionSpec,
   MANIFEST_FIELDS,
   normalizeVersionSyntax,
@@ -64,6 +66,7 @@ import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
+import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
 export interface NewPackage {
   name: string;
@@ -90,7 +93,41 @@ export interface NewPackage {
   guessed?: true;
   /** Ecosystems whose registry, index or proxy for this project is not public: the name is never asked about there (r9, B1). */
   closed?: CheckEcosystem[];
+  /**
+   * `alternatives` count only when `ecosystem` has no such name or release: a pip-style comparator
+   * read as PyPI in a project that uses PyPI is tried on npm only as a fallback (pre-publish round 10, W16).
+   */
+  fallbackOnly?: true;
+  /** On equal answers, report this ecosystem (the project's own), not the comparator's guess (pre-publish round 10, final check). */
+  preferOnTie?: CheckEcosystem;
 }
+
+/** dependency_check's signals, as far as the briefing reads them. */
+type Signals = ReadonlyArray<{ id: string; effect?: string }>;
+
+/**
+ * The answer is "review" only because the name is a near-miss of a popular one in that ecosystem:
+ * no release-level signal says review or avoid. Such an answer from a namesake must not outrank a
+ * real answer from the ecosystem that has the release (pre-publish round 10, W16: "add numpy 2.1" in an
+ * npm + PyPI project was review_needed on npm's numpy namesake).
+ */
+export function nameOnlyReview(verdict: string, signals: Signals): boolean {
+  const flagged = signals.filter((s) => s.effect === "review" || s.effect === "avoid");
+  return verdict === "review" && flagged.length > 0 && flagged.every((s) => s.id === "name_check");
+}
+
+/** The ecosystem knows the name as no near-miss: its answer is about the package being added. */
+export function nameClean(signals: Signals): boolean {
+  const name = signals.find((s) => s.id === "name_check");
+  return !name || (name.effect !== "review" && name.effect !== "avoid");
+}
+
+/**
+ * dependency_check found no release matching the requested version or constraint, or no such name:
+ * that ecosystem's answer is not an answer for the name ("No published, non-withdrawn release of rsa
+ * matches 4.7" outranked PyPI's proceed; pre-publish round 10, W16).
+ */
+export const NO_SUCH_RELEASE = /is not a published version on|a hallucinated package|No published, non-withdrawn release of .+ matches /;
 
 /** What the name check found for one package a task adds. */
 export interface NewPackageFinding extends NewPackage {
@@ -187,8 +224,19 @@ const ON_VERBS = new Set(["depend", "depends", "depending"]);
 const MAX_SKIPPED_ITEM = 8;
 /** Words that join items of a list ("a, b and c", "a & b", "a + b", "a plus b"); commas, "&" and "+" are read from the text between words. */
 const LIST_WORDS = new Set(["and", "plus", "&", "+"]);
+/** Articles before a word that, followed by more prose, names a thing ("a retry with backoff"). */
+const ARTICLES = new Set(["a", "an", "the", "some"]);
 
-type Manager = { ecosystem: CheckEcosystem; commands: ReadonlySet<string> };
+/**
+ * A package manager command: the ecosystem it installs from fixes the ecosystem of every argument,
+ * for both readers (pre-publish round 10, W14: in an npm project `poetry add pyyaml@5.3` judged npm's
+ * `pyyaml` in requested_versions while new_packages judged PyPI's, and PyPI's 5.3 has a critical
+ * advisory). `ecosystem: null` is a manager whose registry this server does not read (RubyGems,
+ * Packagist, conda channels): its arguments are named NOT CHECKED, never looked up in npm.
+ * conda installs from conda channels, whose builds and version numbers are not PyPI's: a PyPI answer
+ * would be a guess about another registry, so conda is not read as PyPI.
+ */
+type Manager = { ecosystem: CheckEcosystem | null; commands: ReadonlySet<string>; registry?: string };
 const MANAGERS: Record<string, Manager> = {
   npm: { ecosystem: "npm", commands: new Set(["install", "i", "add"]) },
   pnpm: { ecosystem: "npm", commands: new Set(["install", "i", "add"]) },
@@ -200,7 +248,16 @@ const MANAGERS: Record<string, Manager> = {
   uv: { ecosystem: "PyPI", commands: new Set(["add"]) },
   poetry: { ecosystem: "PyPI", commands: new Set(["add"]) },
   pipenv: { ecosystem: "PyPI", commands: new Set(["install"]) },
+  pdm: { ecosystem: "PyPI", commands: new Set(["add"]) },
+  pipx: { ecosystem: "PyPI", commands: new Set(["install"]) },
+  rye: { ecosystem: "PyPI", commands: new Set(["add"]) },
   go: { ecosystem: "Go", commands: new Set(["get"]) },
+  gem: { ecosystem: null, commands: new Set(["install"]), registry: "RubyGems" },
+  bundle: { ecosystem: null, commands: new Set(["add"]), registry: "RubyGems" },
+  composer: { ecosystem: null, commands: new Set(["require"]), registry: "Packagist" },
+  conda: { ecosystem: null, commands: new Set(["install"]), registry: "conda" },
+  mamba: { ecosystem: null, commands: new Set(["install"]), registry: "conda" },
+  micromamba: { ecosystem: null, commands: new Set(["install"]), registry: "conda" },
 };
 
 /** A token as a package name of the ecosystem (a trailing `@version` / `==version` dropped), or null. */
@@ -238,6 +295,16 @@ export function statedEcosystem(words: string[]): CheckEcosystem | null {
   if (has("go.mod", "go.sum")) return "Go";
   if (has("npm", "pnpm", "yarn", "bun", "node", "nodejs", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock")) return "npm";
   return null;
+}
+
+/**
+ * The ecosystem of a manifest entry the task writes in TOML (`name = { version = "..." }`): a
+ * Cargo.toml or pyproject entry, never npm. The one the task names, else the one of the two the
+ * project installs from most, else crates.io (pre-publish round 10, W3).
+ */
+export function tomlEcosystem(stated: CheckEcosystem | null, deps: readonly ResolvedDependency[]): CheckEcosystem {
+  if (stated === "crates.io" || stated === "PyPI") return stated;
+  return projectEcosystems(deps).find((e) => e === "crates.io" || e === "PyPI") ?? "crates.io";
 }
 
 /** The checkable ecosystems the project installs from, most dependencies first. */
@@ -282,6 +349,14 @@ export interface TaskItems {
   bound: BoundVersion[];
   /** Versions of what a swap takes out ("replace request 2.88.0 with axios"): not written by the task. */
   ignored: TaskSpan[];
+  /**
+   * Tokens whose ecosystem the task fixes, by a manager command (`poetry add pyyaml@5.3`) or a
+   * PEP 440 specifier (`requests~=2.31`, `flask<2.2.5`): the version reader files them there too, never
+   * under the project's guess (pre-publish round 10, W14).
+   */
+  fixed: Array<TaskSpan & { ecosystem: CheckEcosystem; alternatives?: CheckEcosystem[]; fallbackOnly?: true }>;
+  /** Arguments of a manager whose registry this server does not read (`gem install rails`): named NOT CHECKED. */
+  foreign: Array<TaskSpan & { name: string; registry: string }>;
 }
 
 /**
@@ -301,11 +376,19 @@ const TOKEN = new RegExp(
   "g",
 );
 
-/** A version token as the package manager reads it: an exact pin's `==` dropped, a joined constraint as text. */
-export function taskVersionText(token: string): string {
+/**
+ * A version token as the package manager reads it: an exact pin's `==` dropped, a joined constraint as
+ * text. Cargo's `=1.6.0` keeps its `=`: Cargo reads a bare 1.6.0 as ^1.6.0, so dropping it told the agent a
+ * fresh resolve installs 1.16.5, where `=1.6.0` installs only 1.6.0 (pre-publish round 10, W14).
+ */
+export function taskVersionText(token: string, ecosystem?: CheckEcosystem): string {
   const text = specText(token);
+  if (ecosystem === "crates.io" && /^=(?!=)/.test(text)) return text;
   return /^={1,2}(?!=)[^,|\s]+$/.test(text) ? text.replace(/^==?/, "") : text;
 }
+
+/** A specifier only PyPI writes right after the name: `requests~=2.31`, `flask<2.2.5`, `x===1.0`, `x==2.*`. */
+const PEP440_INLINE = /^[A-Za-z0-9][\w.-]*(?:~=|===|==|!=|>=|<=|<|>)\S/;
 
 export function readTaskItems(task: string, deps: readonly ResolvedDependency[]): TaskItems {
   const quoted = new Set((task.match(/`([^`\s]+)`/g) ?? []).map((q) => q.slice(1, -1).toLowerCase()));
@@ -317,6 +400,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const words = raw.map((t) => t.replace(/[.,;:)]+$/, "").toLowerCase());
   const fallback = proseEcosystem(words, deps);
   const stated = statedEcosystem(words);
+  // A TOML manifest entry is Cargo's or Poetry's, filed as the version reader files it (round 10, W3).
+  const toml = tomlEcosystem(stated, deps);
   // A name filed under the project's main ecosystem only because the task names none is a guess:
   // it is checked in every ecosystem the project uses (checkNewPackages takes the worst answer).
   const others = stated ? [] : projectEcosystems(deps).filter((e) => e !== fallback);
@@ -329,7 +414,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const found: NewPackage[] = [];
   const bound: BoundVersion[] = [];
   const ignored: TaskSpan[] = [];
-  const add = (name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false, version: string | null = null, loose = false): NewPackage | null => {
+  const fixed: TaskItems["fixed"] = [];
+  const foreign: TaskItems["foreign"] = [];
+  const add =(name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false, version: string | null = null, loose = false): NewPackage | null => {
     if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`) || isManifestFile(name)) return null;
     // A guessed name the project already has, in any ecosystem or as a Go module's short name
     // ("install gin" with github.com/gin-gonic/gin in go.mod), is not new (blind audit round 4).
@@ -363,25 +450,25 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     return null;
   };
   /** The version token `k` carries itself: `axios@0.21.0`, `requests==2.19.0`, `django>=2,<3`. */
-  const inlineVersion = (k: number): string | null => {
+  const inlineVersion = (k: number, ecosystem?: CheckEcosystem): string | null => {
     const token = raw[k].replace(/[.,;:)]+$/, "");
     const at = token.indexOf("@", 1);
     const spec = at > 0 ? token.slice(at + 1) : (/^[A-Za-z0-9][\w.-]*((?:===?|~=|>=|<=|!=|>|<)\S+)$/.exec(token)?.[1] ?? null);
-    return spec && isVersionSpec(spec) ? taskVersionText(spec) : null;
+    return spec && isVersionSpec(spec) ? taskVersionText(spec, ecosystem) : null;
   };
   /**
    * The version written after item `k` ("axios 0.21.0", "event-stream at version 3.3.6", "chalk to
    * 5.6.1"), and the token it is. A version with no dot ("ctx 2") is bound only after add and install,
    * where a number after a name is a release; elsewhere it is as often a count.
    */
-  const versionAfter = (k: number, bareNumbers: boolean): { version: string; at: number } | null => {
+  const versionAfter = (k: number, bareNumbers: boolean, ecosystem?: CheckEcosystem): { version: string; at: number } | null => {
     let v = k + 1;
     if (separatorAfter(k) !== null) return null;
     while (v < words.length && VERSION_LEADS.has(words[v]) && separatorAfter(v) === null) v++;
     if (v >= words.length) return null;
     const token = raw[v].replace(/[.,;:)]+$/, "");
     if (!isVersionSpec(token) || (!bareNumbers && !/\d\.(?:\d|x|\*)|[<>~^!=-]/i.test(token))) return null;
-    return { version: taskVersionText(token), at: v };
+    return { version: taskVersionText(token, ecosystem), at: v };
   };
   /**
    * The words after a name (or a list of names) put it in a manifest or the dependency list:
@@ -428,12 +515,30 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     let j = i + 1;
     if (manager && word === "uv" && words[j] === "pip") j++;
     if (manager && (manager.commands.has(words[j]) || (word === "uv" && words[j] === "install"))) {
+      const ecosystem = manager.ecosystem;
+      if (ecosystem === null) {
+        // A registry this server does not read: every argument to the clause's end is named NOT CHECKED,
+        // and none of it (a name, `-v 5.0.0`) is read as an npm package or version (round 10, W14).
+        for (j++; j < words.length && !endsList(j); j++) {
+          foreign.push({ ...span(j), name: "", registry: manager.registry ?? word });
+          if (!words[j].startsWith("-") && !isVersionSpec(words[j]) && !LIST_WORDS.has(words[j]) && words[j - 1] !== "-v" && words[j - 1] !== "--version") {
+            const name = raw[j].replace(/[),.;:!?'"]+$/, "").replace(/(?:[=~<>!]=?|[:@]).*$/, "");
+            if (/^[a-z0-9][\w./-]*$/i.test(name) && !NOT_A_NAME.has(name.toLowerCase())) foreign[foreign.length - 1].name = name;
+          }
+          if (separatorAfter(j) === "clause") break;
+        }
+        // The verb that ended the command is the next clause's ("gem install rails and add lodahs").
+        i = j < words.length && endsList(j) ? j - 1 : j;
+        continue;
+      }
       for (j++; j < words.length; j++) {
         if (words[j].startsWith("-")) continue;
         // The first argument that is not a name ends the command; one the project already has does not.
-        const name = asName(raw[j], manager.ecosystem);
+        const name = asName(raw[j], ecosystem);
         if (!name) break;
-        add(name, manager.ecosystem, false, false, inlineVersion(j));
+        // The command fixes the ecosystem for the version reader too (round 10, W14).
+        fixed.push({ ...span(j), ecosystem });
+        add(name, ecosystem, false, false, inlineVersion(j, ecosystem));
         if (separatorAfter(j) === "clause") break;
       }
       i = j - 1;
@@ -513,7 +618,22 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     while (start) {
       const k: number = start.at;
       const skipped = start.skipped;
-      const name = asName(raw[k], fallback);
+      const tomlEntry = isTomlEntry(task, starts[k]);
+      // A comparator glued to the name (`requests~=2.31`, `flask<2.2.5`) is pip's syntax: npm writes
+      // `name@range` and Cargo `name = "range"`. Read as PyPI, not as the project's guess, by both readers:
+      // in an npm project "add requests~=2.31" offered npm's deprecated `request` as the fix, and "add
+      // flask<2.2.5" listed npm's flask proceed beside PyPI's avoid (round 10, W14). A name the project
+      // already has in another ecosystem, and no PyPI copy, stays that one's.
+      const pepEcosystem = (): CheckEcosystem | null => {
+        if (tomlEntry || raw[k].includes("@") || !PEP440_INLINE.test(raw[k])) return null;
+        if (stated) return stated;
+        const bare = raw[k].replace(/(?:[=~<>!]=?).*$/, "").toLowerCase();
+        const other = deps.find((d) => d.name.toLowerCase() === bare && d.ecosystem !== "PyPI");
+        return other && !have.has(`PyPI\0${bare}`) ? null : "PyPI";
+      };
+      const pep = pepEcosystem();
+      const itemEcosystem: CheckEcosystem = tomlEntry ? toml : (pep ?? fallback);
+      const name = asName(raw[k], itemEcosystem);
       const skip = (word = true) => {
         const n = nextItem(k, word);
         start = n === null ? null : itemStart(n);
@@ -524,8 +644,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         skip(false);
         continue;
       }
-      const inline = inlineVersion(k);
-      const after = inline ? null : versionAfter(k, bareNumbers);
+      const inline = inlineVersion(k, itemEcosystem);
+      const after = inline ? null : versionAfter(k, bareNumbers, itemEcosystem);
       const version = inline ?? after?.version ?? null;
       let next = after ? after.at + 1 : k + 1;
       const isQuoted = quoted.has(words[k]) || quoted.has(name.toLowerCase());
@@ -536,9 +656,27 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       // "add jeIlyfish" and "add python3-dateutil" read as prose (black-box audit of 60c9edc, 2026-11-14).
       // After a prose item, a popular name that is also an everyday word is prose too: "add logging and
       // retry around the upload" is no npm `retry`.
+      // A popular name that is also an everyday word ("debug", "ms") is a package where the list shape
+      // says so: leading an add list, closed by a comma ("add debug, then wire it into the logger"), or
+      // a whole item of a list that already names a package for certain ("add debug, chalk and ms": only
+      // chalk was read; pre-publish round 10, W3). Followed by more words ("add debug output") it is prose.
+      const itemEnds = separatorAfter(k) !== null || endsList(k + 1) || LIST_WORDS.has(words[k + 1] ?? "");
+      // Leading, only when what follows the comma is no English list: the clause ends ("then ..."), a
+      // pronoun goes on about it ("it is tiny"), or a package follows ("chalk"); "add open, close and
+      // save buttons" names no package.
+      const afterComma = (() => {
+        let n = k + 1;
+        if (LIST_WORDS.has(words[n] ?? "")) n++;
+        const w = words[n];
+        if (w === undefined || endsList(n) || NOT_A_NAME.has(w)) return true;
+        return (POPULAR.has(w) && !COMMON_WORDS.has(w) && !ENGLISH.has(w)) || nearMissOf(w) !== null || NAME_SHAPED.test(w);
+      })();
+      const leadsList = skipped === 0 && !afterSeparator && !proseSeen && listed.length === 0 && separatorAfter(k) === "list" && afterComma;
+      const inPackageList = afterSeparator && !proseSeen && listed.some((l) => l.strong) && itemEnds;
+      const commonPackage = !ENGLISH_TASK_WORDS.has(name) && (leadsList || inPackageList);
       const known =
         !(proseSeen && ENGLISH_TASK_WORDS.has(name)) &&
-        !COMMON_WORDS.has(name) &&
+        (!COMMON_WORDS.has(name) || commonPackage) &&
         !ENGLISH.has(name) &&
         !stdlib(name) &&
         ((guessed.has("npm") && (POPULAR.has(name) || nearMissOf(name) !== null)) || (guessed.has("PyPI") && closestPopularPypi(name) !== null));
@@ -547,6 +685,29 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const manifest = goesInManifest(next) && !MANIFEST_FIELDS.has(name.toLowerCase());
       // A version written after it says it is a package: "pull in node-ipc 10.1.1".
       const strong = start.saidPackage || PACKAGE_WORDS.has(words[next] ?? "") || isQuoted || known || manifest || version !== null || (swapped && swappedFromDependency);
+      // After an article, a popular name followed by more prose names a thing, not a package: "add a retry
+      // with backoff to the client" checked npm's `retry`, "add a progress bar" `progress` (round 10, W14).
+      // A version, a manifest, backticks, a packaging word or a near-miss of a popular name still say it is one.
+      const articleProse =
+        ARTICLES.has(words[k - 1] ?? "") &&
+        !afterSeparator &&
+        version === null &&
+        !isQuoted &&
+        !manifest &&
+        !start.saidPackage &&
+        !NAME_SHAPED.test(name) &&
+        separatorAfter(k) === null &&
+        k + 1 < words.length &&
+        !endsList(k + 1) &&
+        !LIST_WORDS.has(words[k + 1]) &&
+        !PACKAGE_WORDS.has(words[k + 1]) &&
+        nearMissOf(name) === null &&
+        !(guessed.has("PyPI") && closestPopularPypi(name) !== null);
+      if (articleProse) {
+        proseSeen = true;
+        skip();
+        continue;
+      }
       if (!strong) {
         // A bare "add X" (or "install X", "replace A with X") reads X as a package for any plausible
         // name ("add ctx", "add flatmap-stream" came back safe_to_delegate; round 5 audits), unless it
@@ -563,7 +724,19 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           continue;
         }
       }
-      const pkg = add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
+      // A comparator the task did not tie to PyPI by name or command is a guess, not a fixed ecosystem:
+      // "add event-stream==3.3.6" in an npm project was judged on PyPI alone (no such name: unknown),
+      // hiding npm's malware. npm is judged too with the same constraint, and the worst answer stands; in a
+      // project that uses PyPI, only when PyPI has no such name or release (pre-publish round 10, W16).
+      const pepAlternatives: CheckEcosystem[] = pep === "PyPI" && !stated && asName(raw[k].replace(/(?:[=~<>!]=?).*$/, ""), "npm") !== null ? ["npm"] : [];
+      const pepFallbackOnly = pepAlternatives.length > 0 && projectEcosystems(deps).includes("PyPI");
+      if (pep) fixed.push({ ...span(k), ecosystem: pep, ...(pepAlternatives.length > 0 ? { alternatives: pepAlternatives } : {}), ...(pepFallbackOnly ? { fallbackOnly: true as const } : {}) });
+      const pkg = tomlEntry || pep ? add(name, itemEcosystem, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
+      if (pkg && pep && pepAlternatives.length > 0) {
+        pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
+        if (pepFallbackOnly) pkg.fallbackOnly = true;
+        else pkg.preferOnTie = "npm";
+      }
       if (pkg) listed.push({ pkg, strong });
       if (after) bound.push({ name: raw[k].replace(/[.,;:)]+$/, ""), version: after.version, ...span(after.at) });
       // "the lodahs package, and expres": a package word may close the item.
@@ -588,10 +761,11 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
     }
   }
-  return { packages: found, bound, ignored };
+  return { packages: found, bound, ignored, fixed, foreign };
 }
 
-export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> & Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories">>;
+export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &
+  Partial<Pick<LiveIntelligence, "getReleaseSources" | "getFixPathSources" | "queryAdvisories" | "lookupPrivateReason" | "privateReason">>;
 
 /** The popular package a name resembles in its ecosystem's bundled list, when there is one. */
 function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
@@ -600,7 +774,7 @@ function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
   return null;
 }
 
-function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -615,7 +789,10 @@ function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed
 /** No registry of that ecosystem has the name and no malicious-package record covers it. */
 const nameNotFound = (f: NewPackageFinding) => !f.malicious && f.verdict === "unknown" && /a hallucinated package/.test(f.reason);
 /** That ecosystem has neither the name nor, for a named version, that release: its answer says nothing about the others. */
-const notFound = (f: NewPackageFinding) => nameNotFound(f) || (Boolean(f.version) && !f.malicious && f.verdict === "unknown" && /is not a published version on/.test(f.reason));
+const notFound = (f: NewPackageFinding) => nameNotFound(f) || (Boolean(f.version) && !f.malicious && f.verdict === "unknown" && NO_SUCH_RELEASE.test(f.reason));
+/** Findings whose "review" is only a near-miss of the name in that ecosystem, and those whose name check is clean (nameOnlyReview, nameClean). */
+const NAME_ONLY = new WeakSet<NewPackageFinding>();
+const NAME_CLEAN = new WeakSet<NewPackageFinding>();
 /** The checkable ecosystems a bare name can be in (a Go module is a host path, never a bare name). */
 const NAME_ECOSYSTEMS: readonly CheckEcosystem[] = ["npm", "crates.io", "PyPI"];
 
@@ -651,12 +828,12 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     return packages.map((p) => unchecked(p, "the registry lookups are not available in this session"));
   }
   const deadline = Date.now() + NAME_CHECK_BUDGET_MS;
-  /** One dependency_check run within what is left of the budget; null past it. */
-  const run = async (list: NewPackage[]) => {
+  /** Work within what is left of the budget; null past it. */
+  const inBudget = async <T>(work: Promise<T>): Promise<T | null> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        executeDependencyCheck(null, { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: p.version ?? "latest" })) }, liveIntel as LiveIntelligence, now ? { now } : {}),
+        work,
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
         }),
@@ -665,14 +842,27 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       if (timer) clearTimeout(timer);
     }
   };
+  /**
+   * One dependency_check run within the budget. A constraint goes in the form dependency_check reads
+   * for that ecosystem: npm's `>=1.2.0 <1.2.6` for the task's `>= 1.2.0, < 1.2.6` (checkableSpec; round 10, W3).
+   */
+  const run = (list: NewPackage[]) =>
+    inBudget(
+      executeDependencyCheck(
+        null,
+        { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: p.version ? (checkableSpec(p.ecosystem, p.version) ?? p.version) : "latest" })) },
+        liveIntel as LiveIntelligence,
+        now ? { now } : {},
+      ),
+    );
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...p } = pkg;
     if (!r) return unchecked(p, "no answer");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
     const nearMiss = (nameCheck?.value as { near_miss_of?: string } | undefined)?.near_miss_of;
-    return {
+    const out: NewPackageFinding = {
       ...p,
       verdict: r.verdict,
       latest: !p.version && r.to !== "latest" ? r.to : null,
@@ -681,20 +871,48 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       did_you_mean: advisories?.malicious_package?.did_you_mean ?? nearMiss ?? nearMissName(p.name, p.ecosystem),
       name_finding: nameCheck?.effect === "avoid" || nameCheck?.effect === "review" ? nameCheck.effect : null,
     };
+    if (nameOnlyReview(r.verdict, r.signals)) NAME_ONLY.add(out);
+    if (nameClean(r.signals)) NAME_CLEAN.add(out);
+    return out;
+  };
+  /** A loose word's name-level answer (briefing-task-name-check.ts) as a finding. */
+  const nameFinding = (q: NewPackage, a: NameOnlyAnswer | undefined): NewPackageFinding => {
+    if (!a) return unchecked(q, "no answer");
+    if (a.kind === "unchecked") return unchecked(q, a.why);
+    const base = { ...q, latest: null, reason: a.reason, name_finding: null };
+    if (a.kind === "malware") return { ...base, verdict: "avoid", malicious: true, did_you_mean: a.found.didYouMean ?? nearMissName(q.name, q.ecosystem) };
+    return { ...base, verdict: a.kind === "clean" ? "proceed" : "unknown", malicious: false, did_you_mean: nearMissName(q.name, q.ecosystem) };
   };
   // Every ecosystem a guessed name may be in, in one run: the lookups go out together, so a
-  // second ecosystem costs no more wall time than the first, within the same budget.
-  const items = packages.flatMap((p, i) => [p, ...(p.alternatives ?? []).map((ecosystem) => ({ name: p.name, ecosystem, ...(p.version ? { version: p.version } : {}) }))].map((q) => ({ i, q })));
+  // second ecosystem costs no more wall time than the first, within the same budget. Not one that
+  // cannot read the constraint the task writes: dependency_check refuses the whole run over it, and
+  // "add lodash-es 1.2.3 - 1.4.0 and ctx" lost ctx's malware to PyPI's refusal (round 10, W3).
+  const items = packages.flatMap((p, i) =>
+    [p.ecosystem, ...(p.alternatives ?? [])]
+      .filter((ecosystem) => !p.version || checkableSpec(ecosystem, p.version) !== null)
+      .map((ecosystem) => ({ i, q: { name: p.name, ecosystem, ...(p.version ? { version: p.version } : {}) } as NewPackage })),
+  );
+  // A loose word ("use blueprints") is checked by its name alone, one advisory-list read: the full
+  // run also judged its newest release, a second OSV.dev lookup of the name whose answer is dropped
+  // for a loose word anyway (round 10, W3). A near-miss of a popular name gets the full run (name_check).
+  const byName = (x: { i: number; q: NewPackage }) => packages[x.i].loose === true && nearMissName(x.q.name, x.q.ecosystem) === null;
+  const full = items.filter((x) => !byName(x));
+  const named = items.filter(byName);
   try {
-    const answer = await run(items.map((x) => x.q));
+    const [answer, names] = await Promise.all([
+      full.length > 0 ? run(full.map((x) => x.q)) : Promise.resolve({ results: [] as Answer["results"] }),
+      named.length > 0 ? inBudget(Promise.all(named.map((x) => checkNameOnly(liveIntel, x.q.ecosystem, x.q.name)))) : Promise.resolve([] as NameOnlyAnswer[]),
+    ]);
     if (!answer) return packages.map((p) => unchecked(p, "the lookups did not finish in time"));
-    const answered = packages.map((_p, i) => items.flatMap((x, k) => (x.i === i ? [finding(x.q, answer.results[k])] : [])));
+    const answerFor = (x: { i: number; q: NewPackage }) =>
+      byName(x) ? (names ? nameFinding(x.q, names[named.indexOf(x)]) : unchecked(x.q, "the lookups did not finish in time")) : finding(x.q, answer.results[full.indexOf(x)]);
+    const answered = packages.map((_p, i) => items.filter((x) => x.i === i).map(answerFor));
     // A name the task gives no ecosystem for that none of the project's ecosystems has: the others'
     // malicious-package records are read too. "bring in rustdecimal" in an npm project came back
     // safe_to_delegate: npm has no such name, and crates.io's rustdecimal is malware
     // (GHSA-7pwq-f4pq-78gm; pre-publish audit of 5d709ff). Only a malware answer there is kept.
     const elsewhere = packages.flatMap((p, i) =>
-      p.guessed && answered[i].every(nameNotFound)
+      p.guessed && answered[i].length > 0 && answered[i].every(nameNotFound)
         ? NAME_ECOSYSTEMS.filter((e) => !answered[i].some((f) => f.ecosystem === e) && !p.closed?.includes(e) && asName(p.name, e) !== null).map((ecosystem) => ({ i, q: { name: p.name, ecosystem } as NewPackage }))
         : [],
     );
@@ -708,10 +926,22 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       }
     }
     const out = packages.map((p, i) => {
-      const answers = answered[i];
+      let answers = answered[i];
+      // A fallback ecosystem counts only when the task's own one has no such name or release (W16).
+      const own = p.fallbackOnly ? answers.find((f) => f.ecosystem === p.ecosystem) : undefined;
+      if (own && !notFound(own)) answers = [own];
+      // A namesake's near-miss "review" does not outrank a real answer from an ecosystem that has the
+      // release and knows the name; malware or avoid from any ecosystem that has it still wins (W16).
+      if (answers.some((f) => !notFound(f) && !NAME_ONLY.has(f) && NAME_CLEAN.has(f) && f.verdict !== "unknown")) {
+        const kept = answers.filter((f) => !NAME_ONLY.has(f));
+        if (kept.length > 0) answers = kept;
+      }
+      if (answers.length === 0) return unchecked(p, `dependency_check reads no ${p.ecosystem} version or constraint in "${p.version ?? ""}"`);
       if (answers.length === 1) return answers[0];
       // The worst answer; when no ecosystem has the name, the one that knows what it resembles.
-      const worst = answers.reduce((a, b) => (badness(b) > badness(a) ? b : a));
+      // On a tie the project's own ecosystem is reported: "add event-stream<=3.3.6" in an npm-only project
+      // named PyPI's namesake release 1.6.3, which npm does not have (pre-publish round 10, final check).
+      const worst = answers.reduce((a, b) => (badness(b) > badness(a) || (badness(b) === badness(a) && p.preferOnTie !== undefined && b.ecosystem === p.preferOnTie) ? b : a));
       const pick = notFound(worst) ? (answers.find((f) => f.did_you_mean) ?? worst) : worst;
       const also = answers.filter((f) => f !== pick).map((f) => ({ ecosystem: f.ecosystem, verdict: notFound(f) ? ("not_found" as const) : f.verdict, ...(f.malicious ? { malicious: true as const } : {}) }));
       return { ...pick, also_checked: also };

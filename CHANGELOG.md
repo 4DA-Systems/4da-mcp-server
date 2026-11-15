@@ -2,6 +2,129 @@
 
 ## 6.3.0 — 2026-11-15
 
+- **Pre-publish fixes (round 10).**
+  - *Privacy, one rule.* A name the project does not install yet is private
+    only for a registry-wide reason: the package manager would fetch any name
+    from a source that is not public. That covers a default registry, index or
+    proxy; a requirements file's `--index-url`, `--extra-index-url` or
+    `--find-links`; `registry`/`registries` in `pnpm-workspace.yaml`; a Cargo
+    source replacement; GOPROXY; and a lockfile that installs everything from
+    one private host. The request guard, dependency_check, upgrade_impact and
+    the briefing now share this rule. dependency_check and upgrade_impact sent
+    a new name to OSV.dev and pypi.org when the private index was set only in
+    requirements.txt; they no longer do. Round 9's rule also made "add lodash"
+    private in a project whose only npm packages are a privately scoped
+    `@acme/*`; that is checked again. A `pyproject.toml` in a subfolder with no
+    lockfile now applies its own index settings. Each private answer names the
+    setting that makes it private and the `FOURDA_PUBLIC_MIRRORS` escape.
+    Behaviour to know: under a private pip index, extra index or find-links,
+    public names such as `requests` are NOT CHECKED (private), because pip may
+    take any name from that index. One subfolder with a private index makes new
+    names in that ecosystem private for the whole project.
+  - *Versions as the package manager reads them.* A bare crates.io version
+    ("1.6.0") is what Cargo reads as `^1.6.0`. It is now judged both as that
+    release (a Cargo.lock already holding it keeps it) and as the range (a
+    fresh resolve installs the newest 1.x), and the worse answer stands. When
+    that newest release is under 3 days old, the answer is `wait`, with an
+    exact `=X` pin given as the safe alternative. An npm range is judged at
+    npm's own pick (the `latest` tag when the range admits it and it is not
+    deprecated, else the highest non-deprecated release) and at the highest
+    release Yarn or pnpm may install; both are named when they differ.
+    `serde-json` is checked as `serde_json`, the spelling crates.io publishes.
+  - *Briefing.* Ranges are read the way dependency_check reads them, so
+    "add minimist >= 1.2.0, < 1.2.6" is avoid. An unreadable range no longer
+    turns every other package in the call to unknown, which had hidden ctx's
+    malware. A TOML entry (`smallvec = { version = ">=1.6.0, <1.6.1" }`) is
+    filed under its own ecosystem and gives one verdict. Tasks with no verb are
+    checked: "chalk 5.6.1/debug 4.4.2", "chalk@5.6.1, debug@4.4.2" and
+    "pin chalk 5.6.1 and debug 4.4.2" are avoid. " / " separates items.
+    "add debug, chalk and ms" checks all three. A loose word ("use blueprints")
+    is checked by name only, with one lookup instead of two.
+  - *upgrade_impact names what the target installs.* express 4.17.1 → 4.21.2
+    said 2 advisories fixed and nothing remaining. 4.21.2 exact-pins
+    vulnerable qs, body-parser and path-to-regexp; they are now listed in
+    `held_dependencies_affected`. The answer gives `first_clean_release`
+    (4.22.3, confirmed with OSV.dev). If the registry or OSV.dev can't be
+    read, the answer is NOT CHECKED, never clean.
+  - *Fix-path wording.* "no 3.x release clears every advisory" for
+    event-stream 3.3.6 was false: 3.3.5 is clean. Scan and planner now say
+    "No 3.x release after 3.3.6 exists; 3.3.5 (a downgrade) is clean; 4.0.0 is
+    the smallest safe upgrade". A downgrade is only named after OSV.dev and its
+    pinned dependencies confirm it. "No published version clears every
+    advisory" now names the range that was checked.
+  - *Offline answers from the cache.* With `FOURDA_OFFLINE=1` (or no
+    network), vulnerability_scan, upgrade_planner and dependency_health answer
+    from cached OSV.dev results, kept for 7 days past their 1-hour life. They
+    name the oldest answer's age and keep NOT CHECKED for everything not in
+    the cache. dependency_check names cached advisories for an exact version
+    and leaves the verdict `unknown`. `force_refresh` offline no longer wipes
+    the cache.
+  - *upgrade_planner counts.* A dependency OSV.dev gave no answer for, with
+    no newer release to offer, was counted as "vulnerable with no fixed
+    release yet". It now has the action `not_checked` and is counted only as
+    NOT CHECKED, never as vulnerable or clean. Clients that read `action`
+    should handle the new value.
+  - *Review fixes.* A `pnpm-workspace.yaml` whose `registries` map spans
+    several lines was not read, so new names were sent; registry values are
+    now read in every YAML shape, and one the reader cannot follow makes npm
+    private for that folder (fail closed). A bare Cargo requirement "1.6" or
+    "1" is read as Cargo reads it, a caret range; a release in that range
+    held by the project's Cargo.lock is judged too, and the worse answer
+    stands. A renamed crate is explained by the difference that applies
+    (letter case, "-"/"_", or both). Offline, a fix release that was not
+    checked says live lookups are off, not that a check did not finish.
+  - *A wide range no release of which is clean is held.* A dependency spec
+    is now judged at the newest release it admits, the one a fresh install
+    or refresh gets. A range whose newest admitted release is affected makes
+    the parent release affected; one that can't be read is NOT CHECKED. Until
+    now any wide range counted as "not held", even when no release it admits
+    is clean. mocha 10.6.0-10.8.2 require `serialize-javascript ^6.0.2`, every
+    6.x of which is affected (an RCE among them), and 10.6.0 was named a clean
+    target. It is now avoid, and upgrade_impact names no clean release in
+    that line. An npm alias (`npm:event-stream@3.3.6`) is judged as the
+    package it aliases. A safe pick is never a release the same answer calls
+    avoid: react-native's deprecated 1000.0.0 placeholder is no longer offered.
+    The shared rule vector ft-086 is amended in the 4DA corpus to match.
+  - *Final review fixes.* A pip-style comparator on a name the task did not
+    tie to PyPI ("add event-stream==3.3.6" in an npm project) is also judged
+    on npm, and the worst answer stands, so event-stream 3.3.6 is human_only.
+    In a project with both npm and PyPI, an ecosystem with no such release,
+    or only a near-miss namesake, no longer outranks a real answer:
+    "add rsa 4.7" and "add pandas 2.2.3" are judged on PyPI. When the guess and the
+    project's own ecosystem give the same answer, the project's is reported. Planner rows say
+    which dependencies a parent release holds (exact pin or range), never
+    say "could not be read" for releases that were read, and say how many
+    releases were checked when not all were. The planner's
+    pinned-dependency checks now run within its time budget, and a row whose
+    check did not finish is NOT CHECKED with no target named.
+  - *uv's find-links.* `find-links` and `no-index` (`UV_FIND_LINKS`,
+    `UV_NO_INDEX`, `uv.toml`, `[tool.uv]`, `[tool.uv.pip]`) were not read, so
+    private names in a project that installs private wheels through uv were
+    sent. They are now treated like pip's find-links.
+  - *Briefing commands and specifiers.* `poetry add`, `uv add`, `pdm add`,
+    `pipenv install`, `pipx`, `rye`, `cargo add` and `go get` fix the
+    ecosystem for everything they name. "poetry add pyyaml@5.3" in an npm
+    project is now checked on PyPI and comes back human_only. `gem`,
+    `bundle`, `composer` and `conda` arguments are NOT CHECKED, never looked
+    up on npm. A comparator glued to a name (`requests~=2.31`,
+    `flask<2.2.5`) reads as PyPI, and a name checked in several ecosystems
+    reports its worst answer once. A release carrying a crypto-miner (e.g.
+    PYSEC-2024-154, ultralytics 8.3.41) counts as malware and is human_only.
+    A Cargo `=1.6.0` pin keeps its `=`. "add a retry with backoff" and "add a
+    progress bar" no longer read `retry` or `progress` as packages.
+  - *Startup.* The first tool call no longer holds up a concurrent `ping`
+    (242-2,905 ms before, 4-5 ms after, measured on the built server); the
+    database schema is created in one transaction. Resolving a very large
+    lockfile pauses every 15 ms. On a 150,000-entry pnpm lockfile the worst
+    ping during the first call went from 2.4 s to about 150 ms, with
+    identical findings. The lockfile is read with less heap (peak 316 to
+    243 MB). Known limit: the process peak on that lockfile is still about
+    440 MB.
+  - *Protocol.* In a 2025-03-26 session, a JSON-RPC batch with a cancelled
+    request is answered without it, over stdio and Streamable HTTP. Before,
+    the batch waited forever, and a later request reusing the id was folded
+    into it. A repeated id in a batch is refused with -32600. An open stdio
+    batch is written at the tool-call budget plus 10 s at the latest.
 - **Pre-publish fix (round 9).** In a project whose every dependency comes
   from a private index or registry (pip behind `PIP_INDEX_URL` or a
   requirements file's `--index-url`, Cargo with crates.io replaced), a briefing

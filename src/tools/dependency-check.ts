@@ -103,6 +103,9 @@ import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { lengthProblem } from "../tool-args.js";
 import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
+import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, npmPick, type NpmWhy, type Resolution } from "./dependency-check-resolution.js";
+import { samePackageName } from "../live/version-compare.js";
+import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
@@ -137,7 +140,7 @@ export const dependencyCheckTool = {
     "",
     "Per item (concise, the default): `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason` carrying the evidence of every avoid/review/unknown/wait finding, `safe` (the safe releases to write), `advisories` (ids affecting `to`) and any registry text in `quoted_from_registry`. With `response_format: \"detailed\"`: also `to_read_as` (how `to` was read), `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release. A prerelease is never named as safe unless you asked for one.",
     "`to` is read as its ecosystem reads it: a full version is that release everywhere; a bare PyPI \"3.1\" is the ONE release 3.1.0 (as pip reads ==3.1), so ask \"3.1.*\" or \"~=3.1.0\" for the series; a bare npm \"7\" / \"7.5\", Cargo \"1\" / \"0.17\" and Go \"v1\" are ranges, as package.json, Cargo.toml and go get read them.",
-    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm: a dependency `to` exact-pins, or narrowly ranges with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones.",
+    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm: a dependency `to` exact-pins, or ranges (narrow or wide) with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones.",
     "  A package name that is malware itself (npm took it down and holds it with a `0.0.N-security` placeholder, or a malicious-package record covers every release) -> avoid, with `malicious_package` and the popular package it likely imitates. When no release in range is safe only because of an advisory on a held dependency, `range_check.held_advice` names it and the override that clears it (the verdict is review for a low or moderate one, avoid for high or critical); a release more than one major or about 18 months older is not offered instead.",
     "  An advisory is passed over as an unmaintained-package notice only when its record declares that class (RustSec `informational`) and carries no grade, exploit category or fixed release; one that merely says \"unmaintained\" counts.",
     "- name_check (npm, a dependency this project's lockfiles do not hold, `from` or not): a name one or two edits from a popular package (`expres`, `reactt`) -> review with \"did you mean\", unless its weekly downloads and age show it is established; avoid when it is also brand new or runs install scripts. Downloads that cannot be read never count as established.",
@@ -190,6 +193,10 @@ export const dependencyCheckTool = {
 interface ItemResult {
   ecosystem: string;
   package: string;
+  /** crates.io: the spelling asked, when the crate is published under another (`serde-json` is serde_json). */
+  package_requested?: string;
+  /** Every release what was asked can install, each judged, when that is more than one (dependency-check-resolution.ts). */
+  resolution?: Resolution;
   from: string | null;
   to: string;
   /** "latest" or the constraint, when the caller asked for one and `to` is what it resolved to. */
@@ -215,6 +222,8 @@ interface ItemResult {
 interface Requested {
   ecosystem: CheckEcosystem;
   package: string;
+  /** crates.io: the spelling asked, once `package` is the crate's published spelling (round 10, W2). */
+  asked?: string;
   /** What the caller passed as `to`, trimmed. */
   raw: string;
   target: Target;
@@ -241,6 +250,10 @@ interface Resolved extends CheckItem {
   batchUnread?: string;
   /** `to` is the release the constraint resolves to (resolvedRelease), not a pick among its safe releases. */
   resolvesRange?: boolean;
+  /** crates.io: the spelling asked, when `package` is the published one. */
+  asked?: string;
+  /** npm: `to` is npm's pick (npmPick) and Yarn or pnpm can install `highest`, which is judged too (round 10, W2). */
+  npmAlso?: { highest: string; why: NpmWhy };
 }
 
 /** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
@@ -357,13 +370,83 @@ function coalescingAdvisories(liveIntel: LiveIntelligence): LiveIntelligence {
   });
 }
 
+/**
+ * The items as asked, each judged at every release what the agent writes can install, the worse
+ * verdict standing (dependency-check-resolution.ts; pre-publish round 10, W2): a bare crates.io
+ * version is checked as the release itself and as the caret requirement Cargo reads it as, and an
+ * npm range whose npm pick is not its highest release has that release checked too.
+ */
 async function checkDependencies(
   _db: FourDADatabase | null,
   params: DependencyCheckParams,
   liveIntel: LiveIntelligence | null,
   opts: { now?: Date },
 ) {
-  const all = validateItems(params.items);
+  const asked = validateItems(params.items);
+  const plan = asked.map((r) => {
+    const bare = r.ecosystem === "crates.io" && r.target.kind === "exact" ? cargoBareVersion(r.raw) : null;
+    // The caret check keeps the raw `to`, so what it finds is kept under the item as asked (r7 facts).
+    if (bare) return { bare, partial: null, checks: [r, { ...r, target: { kind: "range" as const, range: `^${bare}` } }] };
+    // "1.6" / "1": a caret range too; each release in it this project's Cargo.lock holds is kept
+    // by Cargo, so it is judged exactly beside the range (pre-publish round 10, W10).
+    const partial = r.ecosystem === "crates.io" && r.target.kind === "range" ? cargoPartialBare(r.raw) : null;
+    if (partial) return { bare: null, partial, checks: [r, ...lockedCrateVersions(liveIntel, r.package, partial).map((version) => ({ ...r, target: { kind: "exact" as const, version } }))] };
+    return { bare: null, partial: null, checks: [r] };
+  });
+  const flat = plan.flatMap((p) => p.checks);
+  const first = await checkPass(flat, liveIntel, opts);
+  // npm: the highest release the range admits, where npm picks another, judged as an exact version.
+  const extra = first.npmAlso.flatMap((also, i) => (also ? [{ at: i, why: also.why, r: { ...flat[i], target: { kind: "exact" as const, version: also.highest } } }] : []));
+  const second = extra.length > 0 ? await checkPass(extra.map((e) => e.r), liveIntel, opts) : null;
+  const results = first.results.map((res, i) => {
+    const k = extra.findIndex((e) => e.at === i);
+    return k >= 0 && second ? (mergeNpmPicks(res, second.results[k], extra[k].why) as ItemResult) : res;
+  });
+  const merged: ItemResult[] = [];
+  let next = 0;
+  for (const p of plan) {
+    const [one, two] = [results[next], results[next + 1]];
+    const rest = results.slice(next + 1, next + p.checks.length);
+    next += p.checks.length;
+    if (p.partial) merged.push(mergeCargoPartial(one, rest, p.checks[0].raw, p.partial) as ItemResult);
+    else merged.push(p.bare && two ? (mergeCargoBare(one, two, p.checks[0].raw, p.bare) as ItemResult) : one);
+  }
+  const priv = merged.filter((x) => x.not_checked === "private").length;
+  const notice = first.meta.registryNotice ?? second?.meta.registryNotice;
+  return finish(first.checkedAt, merged, {
+    offline: first.meta.offline || Boolean(second?.meta.offline),
+    osvCached: first.meta.osvCached && (second?.meta.osvCached ?? true),
+    ...(priv > 0 ? { private: priv } : {}),
+    ...(notice ? { registryNotice: notice } : {}),
+  });
+}
+
+/** The releases of crate `name` in `req` this project's lockfiles hold (crates.io folds case and "-"/"_"). */
+function lockedCrateVersions(liveIntel: LiveIntelligence | null, name: string, req: string): string[] {
+  if (!liveIntel?.isInitialized?.()) return [];
+  const fold = (n: string) => n.toLowerCase().replace(/_/g, "-");
+  const versions = [...liveIntel.getResolvedDeps(), ...liveIntel.getAuditDeps()]
+    .filter((d) => d.ecosystem === "crates.io" && fold(d.name) === fold(name) && d.version !== null && rangeAdmits("crates.io", req, d.version) === true)
+    .map((d) => d.version as string);
+  return [...new Set(versions)];
+}
+
+interface PassMeta {
+  offline: boolean;
+  osvCached: boolean;
+  private?: number;
+  registryNotice?: string;
+}
+
+/** One pass over validated items: the results in the order given, and the npm ranges whose highest release must be judged too. */
+interface Pass {
+  checkedAt: string;
+  results: ItemResult[];
+  meta: PassMeta;
+  npmAlso: Array<{ highest: string; why: NpmWhy } | null>;
+}
+
+async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, opts: { now?: Date }): Promise<Pass> {
   const now = opts.now ?? new Date();
   const checkedAt = now.toISOString();
 
@@ -399,16 +482,32 @@ async function checkDependencies(
   const privateCount = privateWhy.filter(Boolean).length;
   const privateMeta = { ...(privateCount > 0 ? { private: privateCount } : {}), ...(notice ? { registryNotice: notice } : {}) };
 
+  const pass = (results: ItemResult[], meta: PassMeta, npmAlso: Array<{ highest: string; why: NpmWhy } | null> = []): Pass => ({
+    checkedAt,
+    results: inOrder(results),
+    meta,
+    npmAlso: inOrderOf(npmAlso),
+  });
+  /** Per-item extras in the order asked, null at the private items. */
+  const inOrderOf = <T>(checked: T[]): Array<T | null> => {
+    const out: Array<T | null> = [];
+    let next = 0;
+    for (let i = 0; i < all.length; i++) out.push(privateItems.some((x) => x.at === i) ? null : (checked[next++] ?? null));
+    return out;
+  };
+
   if (requested.length === 0) {
-    return finish(checkedAt, inOrder([]), { offline: false, osvCached: false, ...privateMeta });
+    return pass([], { offline: false, osvCached: false, ...privateMeta });
   }
 
   if (!liveIntel || !liveIntel.isEnabled()) {
     const reason = "Live lookups are disabled (FOURDA_OFFLINE=true); nothing about these versions could be checked.";
-    return finish(
-      checkedAt,
-      inOrder(requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason, signals: [] }))),
-      { offline: true, osvCached: false, ...privateMeta },
+    // An exact version OSV.dev answered for before is named with that cached answer and its age.
+    // The verdict stays `unknown`: a cached answer is not a current one (pre-publish round 10, W5).
+    const cached = liveIntel?.answersFromCache?.() ? await cachedAdvisoryNotes(liveIntel, requested) : new Map<Requested, string>();
+    return pass(
+      requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason: cached.has(r) ? `Live lookups are disabled (FOURDA_OFFLINE=true), so this version was not checked now. ${cached.get(r)}` : reason, signals: [] })),
+      { offline: true, osvCached: cached.size > 0, ...privateMeta },
     );
   }
 
@@ -440,6 +539,21 @@ async function checkDependencies(
     // Constraints are judged against the package's whole advisory list.
     packageAdvisoryLists(requested.filter((r) => r.target.kind === "range")),
   ]);
+  // crates.io and Cargo read `-` and `_` (and case) in a crate name as one crate; the registry's
+  // answer names the published spelling (crates-versions.ts). Everything after this is asked under
+  // it, OSV.dev included, and the answer says so: `serde-json` was unknown while `serde_json` was
+  // proceed (pre-publish round 10, W2). A spelling the registry could not confirm stays unknown.
+  const renamed: Requested[] = [];
+  for (const r of requested) {
+    const lookup = indexes.get(lookupKey(r));
+    if (r.ecosystem !== "crates.io" || lookup?.status !== "ok") continue;
+    const published = lookup.data.name;
+    if (published === r.package || !samePackageName(published, r.package, "crates.io")) continue;
+    r.asked = r.package;
+    r.package = published;
+    renamed.push(r);
+  }
+  for (const [k, v] of await packageAdvisoryLists(renamed.filter((r) => r.target.kind === "range"))) advisoryLists.set(k, v);
   // One package at a time, yielding between them: a package with hundreds of releases and advisories
   // is CPU work, and the event loop must stay free for the call budget's timer and other calls
   // (pre-publish audit 2026-11-12, S1: ping and lodash waited 22 s behind django).
@@ -782,7 +896,27 @@ async function checkDependencies(
     return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, decided.verdict), signals, ...extra, ...noticesOf(advisories) };
   });
 
-  return finish(checkedAt, inOrder(results), { offline: scan.offline, osvCached: scan.cached, ...privateMeta });
+  // A crate asked under another spelling is named as published (round 10, W2).
+  results.forEach((res, i) => {
+    const asked = items[i].asked;
+    if (asked) {
+      res.reason = `${asked} is published as ${res.package}: ${crateSpellingReason(asked, res.package)}, so it was checked as ${res.package}; write the published spelling, ${res.package}, in Cargo.toml. | ${res.reason}`;
+    }
+  });
+  return pass(results, { offline: scan.offline, osvCached: scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
+}
+
+/**
+ * Why crates.io took `asked` as `published`: letter case, "-" against "_", or both. "Smallvec" was
+ * told crates.io read "-" and "_" as the same when the difference was case (pre-publish round 10, W10).
+ */
+export function crateSpellingReason(asked: string, published: string): string {
+  const fold = (s: string) => s.replace(/_/g, "-");
+  const caseDiffers = fold(asked) !== fold(published);
+  const dashDiffers = asked.toLowerCase() !== published.toLowerCase();
+  if (caseDiffers && dashDiffers) return `crates.io treats crate names that differ only in letter case or in "-" against "_" as the same crate`;
+  if (caseDiffers) return "crates.io treats crate names that differ only in letter case as the same crate";
+  return `crates.io and Cargo read "-" and "_" in a crate name as the same crate`;
 }
 
 /**
@@ -921,7 +1055,7 @@ function batchUnreadConfirmedText(pkg: string): string {
 /** NOT CHECKED: no release in range is named safe because what they hold could not be judged (r7 blocker). */
 function heldNotCheckedText(pkg: string, where: string, rc: RangeCheck): string {
   const n = rc.held_not_checked ?? 0;
-  return `NOT CHECKED: no release of ${pkg} ${where} is named safe: ${n} release${n === 1 ? "" : "s"} clear of ${pkg}'s own advisories ${n === 1 ? "exact-pins or narrowly ranges" : "exact-pin or narrowly range"} dependencies whose advisories could not be checked (${rc.held_not_checked_reason}). This is not a clean result and names no version to write: check again later.`;
+  return `NOT CHECKED: no release of ${pkg} ${where} is named safe: ${n} release${n === 1 ? "" : "s"} clear of ${pkg}'s own advisories ${n === 1 ? "holds" : "hold"} dependencies (exact pins or ranges) whose advisories could not be checked (${rc.held_not_checked_reason}). This is not a clean result and names no version to write: check again later.`;
 }
 
 /** NOT CHECKED: the batch query gave no current answer (Resolved.batchUnread), so no release is named. */
@@ -1006,7 +1140,7 @@ function hasRealAdvisory(facts: AdvisoryFacts): boolean {
 /** Before resolution: an exact `to` as is, anything else shown as the caller wrote it. */
 function provisional(r: Requested): Resolved {
   const to = r.target.kind === "exact" ? r.target.version : r.raw;
-  return { ecosystem: r.ecosystem, package: r.package, to, readAs: describeReading(r.ecosystem, r.raw, r.target), ...(r.from ? { from: r.from } : {}) };
+  return { ecosystem: r.ecosystem, package: r.package, to, readAs: describeReading(r.ecosystem, r.raw, r.target), ...(r.from ? { from: r.from } : {}), ...(r.asked ? { asked: r.asked } : {}) };
 }
 
 function needsFullList(r: Requested): boolean {
@@ -1060,10 +1194,14 @@ function resolveTarget(
     const which = sorted.length === 1 ? sorted[0] : `${sorted[0]} to ${sorted[sorted.length - 1]}`;
     return `No stable release of ${r.package} matches ${range}: the ${sorted.length} release${sorted.length === 1 ? "" : "s"} it admits (${which}) ${sorted.length === 1 ? "is a prerelease" : "are prereleases"}, and a prerelease is never offered as the safe release. Ask for one by its exact version to have it judged.`;
   };
+  // npm installs its own pick (the `latest` tag first), which need not be the highest release the
+  // range admits; Yarn and pnpm can install the highest. `to` is npm's, and the highest is judged
+  // too when it differs (dependency-check-resolution.ts; pre-publish round 10, W2).
+  const highest = (fallback: string) => (r.ecosystem === "npm" && !onlyPrereleases ? npmResolution(index, admitted, fallback) : { to: fallback });
   if (!advisories) {
     if (onlyPrereleases) return { ...base, requested: r.raw, unresolved: noStable() };
     // Without the advisory list no release can be called safe; judge the newest one on its own advisories.
-    return { ...base, to: newestOf(r.ecosystem, admitted)!, requested: r.raw };
+    return { ...base, ...highest(newestOf(r.ecosystem, admitted)!), requested: r.raw };
   }
   const rangeCheck = checkRange({
     ecosystem: r.ecosystem,
@@ -1083,7 +1221,14 @@ function resolveTarget(
   // proceed (judged as 0.2.4) while npm installs 1.2.5 (GHSA-xvch-5gv4-984h, critical); cargo
   // resolves smallvec "<1.6.1" to 1.6.0 (RUSTSEC-2021-0003). The safe exact pins stay in
   // range_check, and the reason says to pin one (withAlternatives).
-  return { ...base, to: resolvedRelease(r.ecosystem, admitted, allowPrerelease), requested: r.raw, rangeCheck, resolvesRange: true };
+  return { ...base, ...highest(resolvedRelease(r.ecosystem, admitted, allowPrerelease)), requested: r.raw, rangeCheck, resolvesRange: true };
+}
+
+/** npm: `to` is npm's pick; `npmAlso` names the highest admitted release when npm picks another. */
+function npmResolution(index: PackageReleaseIndex, admitted: string[], highest: string): { to: string; npmAlso?: { highest: string; why: NpmWhy } } {
+  const pick = npmPick(index, admitted);
+  if (!pick || pick.version === highest) return { to: highest };
+  return { to: pick.version, npmAlso: { highest, why: pick.why } };
 }
 
 /**
@@ -1226,7 +1371,10 @@ function advisoryListReader(fixSources: FixPathSources | null): AdvisoryListRead
   return async (items) => {
     const out = new Map<string, AdvisoryRanges[] | null>();
     if (!fixSources) return out;
-    const unique = new Map(items.map((i) => [lookupKey(i), i]));
+    // A crate is asked for under the spelling given: one renamed to its published spelling asks
+    // OSV.dev again under that one (round 10, W2). The answer is filed under the registry's identity.
+    const requestKey = (i: { ecosystem: CheckEcosystem; package: string }) => (i.ecosystem === "crates.io" ? `${lookupKey(i)}\0${i.package}` : lookupKey(i));
+    const unique = new Map(items.map((i) => [requestKey(i), i]));
     for (const [key, i] of unique) {
       if (!lists.has(key)) {
         lists.set(
@@ -1237,7 +1385,7 @@ function advisoryListReader(fixSources: FixPathSources | null): AdvisoryListRead
         );
       }
     }
-    for (const key of unique.keys()) out.set(key, await lists.get(key)!);
+    for (const [key, i] of unique) out.set(lookupKey(i), await lists.get(key)!);
     return out;
   };
 }
@@ -1451,13 +1599,15 @@ export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices:
   });
 }
 
-const instanceKey = (eco: string, name: string, version: string) => `${eco}\0${eco === "PyPI" ? normalizePypi(name) : name}\0${version}`;
-const normalizePypi = (name: string) => name.toLowerCase().replace(/[-_.]+/g, "-");
-const lookupKey = (item: { ecosystem: string; package: string }) =>
-  `${item.ecosystem}\0${item.ecosystem === "PyPI" ? normalizePypi(item.package) : item.package}`;
+/** A package name as its registry compares it: PEP 503 for PyPI; `-`/`_` and case folded for crates.io (round 10, W2). */
+const keyName = (eco: string, name: string) =>
+  eco === "PyPI" ? name.toLowerCase().replace(/[-_.]+/g, "-") : eco === "crates.io" ? name.toLowerCase().replace(/_/g, "-") : name;
+const instanceKey = (eco: string, name: string, version: string) => `${eco}\0${keyName(eco, name)}\0${version}`;
+const lookupKey = (item: { ecosystem: string; package: string }) => `${item.ecosystem}\0${keyName(item.ecosystem, item.package)}`;
 const head = (item: Resolved) => ({
   ecosystem: item.ecosystem,
   package: item.package,
+  ...(item.asked ? { package_requested: item.asked } : {}),
   from: item.from ?? null,
   to: item.to,
   ...(item.requested ? { to_requested: item.requested } : {}),

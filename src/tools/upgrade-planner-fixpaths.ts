@@ -27,6 +27,7 @@
  */
 
 import * as fs from "node:fs";
+import { isOfflineMode } from "../env-flags.js";
 import * as path from "node:path";
 import type { LiveIntelligence } from "../live/index.js";
 import {
@@ -64,7 +65,7 @@ import { computeSemverDistance } from "../live/semver-utils.js";
 import type { OsvEcosystem } from "../live/types.js";
 import { withHeldTargets } from "../live/held-targets.js";
 import { confirmTargets, listConfirmed } from "../live/batch-confirm.js";
-import { heldAdvisories, heldText, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
+import { heldAdvisories, heldText, heldVerb, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
@@ -486,8 +487,10 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     return "verified";
   }
   if (clean.target === null) {
+    // "from <floor> up": only releases at or above the highest per-advisory fix were judged; an
+    // earlier one (a downgrade) can be clean and is not denied (pre-publish round 10, W6).
     step.reasons.push(
-      `No published version clears every known advisory: ${clean.floor}, the highest per-advisory fix, is still affected by ${clean.stillAffectedBy.join(", ")}`,
+      `No published release from ${clean.floor} up clears every known advisory: ${clean.floor}, the highest per-advisory fix, is still affected by ${clean.stillAffectedBy.join(", ")}`,
     );
     step.targetVersion = null;
     step.upgradeType = "unknown";
@@ -557,7 +560,7 @@ function inactiveTarget(step: FixPathStep, clean: FixTargetResult | null, ecosys
     step.targetVersion = null;
     step.upgradeType = "unknown";
     step.breaking = false;
-    step.reasons.push(why ?? (clean.stillAffectedBy.length > 0 ? `No published version clears every known advisory: ${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")}` : "No release is named"));
+    step.reasons.push(why ?? (clean.stillAffectedBy.length > 0 ? `No published release from ${clean.floor} up clears every known advisory: ${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")}` : "No release is named"));
   } else if (step.targetVersion !== clean.target) {
     const note = targetNote(clean, ecosystem);
     setTarget(step, clean.target);
@@ -905,9 +908,19 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   }
   const unknownWhy = standings.flatMap((s) => (s.kind === "unknown" && s.text ? [s.text] : []));
   const known = `${unknownWhy.length > 0 ? `; ${unknownWhy.join("; ")}` : ""}${moves.length > 0 ? `; meanwhile ${moves.map((m) => m.text).join("; ")}` : ""}`;
-  replaceReason(
-    `Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version, and the releases of ${standings.length < blocking.length ? "some parents were not checked" : "a parent could not be read"}${known}`,
-  );
+  // A parent whose releases were read and judged affected was checked: "could not be read" was false
+  // for mocha 10.8.2's serialize-javascript row (pre-publish round 10, W16).
+  const unknowns = standings.filter((s) => s.kind === "unknown");
+  const judged = unknowns.length > 0 && unknowns.every((s) => s.kind === "unknown" && s.checked);
+  const why =
+    standings.length < blocking.length
+      ? "the releases of some parents were not checked"
+      : judged
+        ? "each parent release checked that admits a clean version brings in an affected dependency"
+        : unknowns.some((s) => s.kind === "unknown" && s.checked)
+          ? "a parent's releases could not be read, or each one admitting a clean version brings in an affected dependency"
+          : "the releases of a parent could not be read";
+  replaceReason(`Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version, and ${why}${known}`);
 }
 
 /** "request 2.88.2 requires "^3.3.2"", or the bundled form. */
@@ -1036,7 +1049,8 @@ type Standing =
   | { kind: "stuck"; text: string; outcome?: StuckOutcome }
   /** `refresh`: the parent moves by a lockfile refresh alone (parentRefresh); no declared dependency is upgraded. */
   | { kind: "move"; upgrade: ParentUpgrade; text: string; refresh?: true }
-  | { kind: "unknown"; text?: string; undecided?: boolean }
+  /** `checked`: the parent's releases were read and each one judged holds something affected (W16). */
+  | { kind: "unknown"; text?: string; undecided?: boolean; checked?: boolean }
   /** The installed parent or lever is flagged malicious: the row names no release (#981 round 3). */
   | { kind: "malicious"; text: string };
 
@@ -1286,7 +1300,9 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   // no release and no command.
   const heldPick = smallestOwn ? await heldCleanAdmitting(ctx, parent, facts, admittingReleases(ctx, facts, from, history, dialect, own.clean, true)) : null;
   if (heldPick && heldPick.kind !== "clean") {
-    return { kind: "unknown", undecided: true, text: `NOT CHECKED: ${heldPick.text}; no ${parent} release is named and no command is given. Run dependency_check on a ${parent} release before installing it` };
+    // "affected" was checked: no NOT CHECKED on it (pre-publish round 10, W16).
+    const checked = heldPick.kind === "affected";
+    return { kind: "unknown", undecided: true, ...(checked ? { checked } : {}), text: `${checked ? "" : "NOT CHECKED: "}${heldPick.text}; no ${parent} release is named and no command is given. Run dependency_check on a ${parent} release before installing it` };
   }
   const found = heldPick?.kind === "clean" ? heldPick.release : smallestOwn;
   if (!found) {
@@ -1417,7 +1433,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       else delete upgrade.refreshCommands;
       const heldLift =
         smallestOwn && smallestOwn.version !== found.version && v === found.version
-          ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} exact-pins or narrowly ranges a dependency with a known advisory, and ${found.version} is the smallest release past it whose held dependencies are clean`
+          ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} brings in a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), and ${found.version} is the smallest release past it whose held dependencies are clean`
           : "";
       return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}`;
     };
@@ -1661,12 +1677,19 @@ async function heldCleanAdmitting(
     if (!facts.heldSpecs?.[c.version]) return { kind: "clean", release: c }; // holds nothing at a fixed version
     const check = checks?.get(c.version);
     if (!check || check.status === "unchecked") {
-      return { kind: "unchecked", text: `${parent} ${c.version} admits a clean ${ctx.pkg}, but whether what it exact-pins or narrowly ranges is affected could not be checked (${check?.status === "unchecked" ? check.reason : "the check did not finish"})` };
+      return { kind: "unchecked", text: `${parent} ${c.version} admits a clean ${ctx.pkg}, but whether what it holds (its exact pins and ranges) is affected could not be checked (${check?.status === "unchecked" ? check.reason : isOfflineMode() ? "live lookups are off: FOURDA_OFFLINE=true, so the registry and OSV.dev were not asked" : "the check did not finish"})` };
     }
     if (check.affected.length === 0) return { kind: "clean", release: c };
   }
   const last = candidates[candidates.length - 1].version;
-  return { kind: "affected", text: `every ${parent} release from ${candidates[0].version} to ${last} that admits a clean ${ctx.pkg} exact-pins or narrowly ranges a dependency with a known advisory (${heldText(candidates[0].version, (checks?.get(candidates[0].version) as { affected: HeldDependency[] } | undefined)?.affected ?? [])})` };
+  // Every one was read and judged: the words say what each holds (a pin, a range whose newest
+  // release is affected), never "could not be read" (pre-publish round 10, W16).
+  const affectedOf = (v: string) => (checks?.get(v) as { affected: HeldDependency[] } | undefined)?.affected ?? [];
+  const all = candidates.flatMap((c) => affectedOf(c.version));
+  // Only the first HELD_CANDIDATES admitting releases are judged: the words never claim more (final check).
+  const cut = admitting.length > candidates.length ? ` (the first ${candidates.length} of ${admitting.length}; later ones were not checked)` : "";
+  const span = candidates.length === 1 ? `the ${parent} release ${last}${cut}` : `every ${parent} release from ${candidates[0].version} to ${last}${cut}`;
+  return { kind: "affected", text: `${span} that admits a clean ${ctx.pkg} ${heldVerb(all)} (${heldText(candidates[0].version, affectedOf(candidates[0].version))})` };
 }
 
 /** The smallest installable release of a parent above `from`, clear of its own advisories, whose requirement admits a clean version. */
@@ -1853,7 +1876,37 @@ function findRoute(ctx: MoveContext, lockfile: string, parent: string, version: 
  * The advisory lookups are bounded (RECONCILE_BUDGET_MS); a release that could not be checked in
  * time is not chosen, and nothing is written after the budget runs out.
  */
+/** Looks up what a raised npm release holds (undefined: it could not be asked). Writes nothing: the caller applies it within its budget. */
+async function raisedHolds(own: FixPathStep, release: string, liveIntel: Intel, sources: ReturnType<Intel["getFixPathSources"]>, deadline: number): Promise<HeldCheck | undefined> {
+  const query = liveIntel.queryAdvisories?.bind(liveIntel);
+  const facts = sources ? await sources.releaseFacts("npm", own.package).catch(() => null) : null;
+  const specs = facts?.heldSpecs?.[release];
+  if (facts?.heldSpecs && !specs) return { status: "checked", affected: [] };
+  if (sources && query && specs) return (await heldAdvisories(sources, query, [{ key: release, specs }], Math.min(deadline, Date.now() + HELD_BUDGET_MS)).catch(() => null))?.get(release);
+  return undefined;
+}
+
+/** Judges what a raised npm release holds: clean, it is checked against every advisory; else NOT CHECKED or not a clean fix, with the reason. */
+function judgeRaisedHolds(own: FixPathStep, release: string, check: HeldCheck | undefined | "late"): void {
+  if (check !== "late" && check?.status === "checked" && check.affected.length === 0) {
+    own.fixPathChecked = "all_advisories";
+    return;
+  }
+  // Not clean, or not judged: the target is withheld downstream (withholdUnconfirmedTargets).
+  own.fixPathChecked = "installed_advisories_only";
+  const why = check === "late" ? "the planner's time budget ran out before it finished" : check?.status === "unchecked" ? check.reason : "the registry or OSV.dev could not be asked";
+  own.reasons.push(
+    check !== "late" && check?.status === "checked"
+      ? `${heldText(release, check.affected)}: installing ${release} installs them, so ${release} is NOT a clean fix: confirm a release with dependency_check before pinning it`
+      : `whether the dependencies ${release} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`,
+  );
+}
+
+/** At most this many raised releases' held checks run at once (pre-publish round 10, W16). */
+const RAISED_HOLDS_CONCURRENCY = 4;
+
 export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs = withinCallBudget(RECONCILE_BUDGET_MS, 500)): Promise<void> {
+  const deadline = Date.now() + budgetMs;
   const sources = liveIntel.getFixPathSources();
   const key = (eco: string, name: string, version: string) => `${eco}\0${name}\0${version}`;
   type Use = { step: FixPathStep; lever: ParentLever; upgrade: ParentUpgrade };
@@ -1897,6 +1950,7 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
   const advisoriesOf = new Map<string, ReturnType<typeof cleanReleases> | null>(looked ?? []);
 
   const lifted = new Map<ParentUpgrade, Map<string, string>>();
+  const raised: Array<{ own: FixPathStep; release: string }> = [];
   const notes = new Map<FixPathStep, string[]>();
   const note = (s: FixPathStep, text: string) => notes.set(s, [...(notes.get(s) ?? []), text]);
   for (const [k, d] of leversOf) {
@@ -1954,6 +2008,12 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
       if (!fixRow(own) && cmp(old, release) > 0) own.latestVersion = old;
       setTarget(own, release);
       if (own.latestVersion === own.targetVersion) delete own.latestVersion;
+      // npm: the raised release is a fix only once what it holds is judged too. par 1.0.1 required
+      // child "^1.0.0" with every 1.x affected, and a raise past it was named on its own advisories
+      // alone; now it is checked against every advisory only when its held dependencies are clean
+      // (pre-publish round 10, W13). Judged after this loop, all at once and within the budget
+      // (pre-publish round 10, W16): awaited here, one row at a time and 5 s each, they outran it.
+      if (eco === "npm") raised.push({ own, release });
       const input = inputs.find((i) => i.step === own) ?? { step: own, fixes: [], sourceDirs: declaredDirs(liveIntel, eco, own.package, own.currentVersion!) };
       withUpgradeCommands(input, liveIntel);
     }
@@ -1966,6 +2026,21 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
       note(u.step, `${d.name} ${release}, not ${u.lever.to}: one release of ${d.name} for every row that names it${own ? ", its own row included" : ""}, and ${release} also brings this fix in`);
     }
   }
+
+  // The raised releases' held checks, bounded in number and by what is left of the budget: one that
+  // did not finish is NOT CHECKED and its target withheld, never clean (pre-publish round 10, W16).
+  const checks = new Array<HeldCheck | undefined | "late">(raised.length).fill("late");
+  let next = 0;
+  const worker = async () => {
+    while (next < raised.length) {
+      const i = next++;
+      const left = deadline - Date.now();
+      if (left <= 0) return;
+      checks[i] = await withTimeout<HeldCheck | undefined | "late">(raisedHolds(raised[i].own, raised[i].release, liveIntel, sources, deadline), left, "late");
+    }
+  };
+  if (raised.length > 0) await Promise.all(Array.from({ length: Math.min(RAISED_HOLDS_CONCURRENCY, raised.length) }, worker));
+  for (const [i, r] of raised.entries()) judgeRaisedHolds(r.own, r.release, checks[i]);
 
   // Re-render each lifted move at its new releases, replacing its text where the step says it.
   for (const s of steps) {

@@ -63,6 +63,7 @@ import { flagOldSyntax } from "./upgrade-impact-literals.js";
 import { nearestVersions, shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
 import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { isOfflineMode } from "../env-flags.js";
+import { heldAffectedRows, heldImpactText, judgeTargetHeld, type HeldContext, type HeldImpact } from "./upgrade-impact-held.js";
 
 export interface UpgradeImpactParams {
   package: string;
@@ -109,6 +110,12 @@ export interface UpgradeImpactContext {
   offline: boolean;
   /** FOURDA_GITHUB_CHANGELOG: read GitHub release notes when the archive has none (opt-in, default off). */
   githubChangelog?: boolean;
+  /**
+   * npm: the planner's sources and the shared advisory lookup, to judge what the target exact-pins
+   * or narrowly ranges (upgrade-impact-held.ts). Absent or null: a target that holds something is
+   * NOT CHECKED, never clean (pre-publish round 10, W6).
+   */
+  held?: HeldContext | null;
 }
 
 const MAX_LISTED_VERSIONS = 200;
@@ -387,8 +394,13 @@ export async function analyzeUpgradeImpact(
   const repository = goOrigin && /github\.com/i.test(goOrigin) ? goOrigin : index.repository;
 
   const py = eco === "PyPI" ? pythonImportNames(ctx.projectRoot, index.name) : null;
+  // npm: what the target exact-pins or narrowly ranges is installed with it, so its advisories come
+  // too (pre-publish round 10, W6: express 4.21.2 pins qs 6.13.0, body-parser 1.20.3 and
+  // path-to-regexp 0.1.12, and the answer said no advisory remained). A release the index says
+  // holds nothing needs no lookup; an index without the facts is judged, never assumed clean.
+  const holds = eco === "npm" && (index.heldSpecs === undefined || Boolean(index.heldSpecs[to]));
   // The local code scan runs alongside the network reads, not after them.
-  const [resolved, advFrom, advTo, yourCode] = await Promise.all([
+  const [resolved, advFrom, advTo, yourCode, heldImpact] = await Promise.all([
     resolveChangelog({
       net: ctx.net,
       index,
@@ -406,8 +418,22 @@ export async function analyzeUpgradeImpact(
     ctx.projectRoot
       ? scanCallSites(ctx.projectRoot, eco === "Go" ? fromName : index.name, eco, { importNames: py?.names })
       : Promise.resolve<CallSiteReport>({ total_files: 0, files: [], symbols_used: [] }),
+    holds ? judgeTargetHeld(ctx.held, index.name, from, to) : Promise.resolve<HeldImpact | null>(null),
   ]);
   const { changelog, range } = resolved;
+  // The release named clean in its place is asked of OSV.dev by itself too: the planner's search
+  // judged it from the package's advisory list, and a name this tool gives is one an agent writes.
+  const firstCleanOwn = heldImpact?.status === "affected" && heldImpact.firstClean ? await getOsvAdvisories(ctx.net, eco, index.name, heldImpact.firstClean) : undefined;
+  const heldNote = heldImpact ? heldImpactText(to, heldImpact, firstCleanOwn) : null;
+  const heldFields: Record<string, unknown> = !heldImpact
+    ? {}
+    : heldImpact.status === "unchecked"
+      ? { held_dependencies_unchecked: heldImpact.reason, held_note: heldNote }
+      : {
+          held_dependencies_affected: heldAffectedRows(heldImpact.affected),
+          first_clean_release: heldImpact.firstClean && Array.isArray(firstCleanOwn) && firstCleanOwn.length === 0 ? heldImpact.firstClean : null,
+          held_note: heldNote,
+        };
 
   // Cargo features this project enables on the crate: a renamed or removed one is a breaking change symbols cannot see.
   const features = eco === "crates.io" ? projectCargoFeatures(ctx.projectRoot, index.name, ctx.installed) : [];
@@ -477,8 +503,10 @@ export async function analyzeUpgradeImpact(
         ? { ...yourCode, cargo_features: features }
         : yourCode,
     advisories_fixed: advisoriesFixed,
+    // The package's own advisories; what the target holds is in held_dependencies_affected (W6).
     advisories_remaining: advTo,
     ...(advFrom === null || advTo === null ? { advisories_note: "OSV.dev could not be reached; advisory fields are null, not empty." } : {}),
+    ...heldFields,
     release_notes_url: thirdPartyUrl(releaseNotesUrl(repository)) ?? thirdPartyUrl(index.changelogLinks?.[0]) ?? null,
     _meta: {
       sources: [...ctx.net.contacted].sort(),
@@ -503,6 +531,7 @@ export async function analyzeUpgradeImpact(
         : null,
       advisoriesFixed: advisoriesFixed ? advisoriesFixed.length : null,
       pathChange: pathChange ? { from: fromName, to: targetName, files: yourCode.total_files } : null,
+      held: heldNote,
     }),
   };
 }
@@ -559,6 +588,11 @@ export async function executeUpgradeImpact(
   if (ready) liveIntel?.refreshIfLockfilesChanged();
   const installed: InstalledDep[] = ready && liveIntel ? [...liveIntel.getResolvedDeps(), ...liveIntel.getAuditDeps()] : [];
   const root = (ready ? liveIntel?.getProjectRoot() : null) ?? process.cwd();
+  // What the target holds is judged with the planner's sources and the shared, private-aware
+  // advisory lookup (W6); without them it is NOT CHECKED.
+  // Optional calls: a caller's stand-in for the live layer (tests) may not have them.
+  const heldSources = liveIntel?.getFixPathSources?.() ?? null;
+  const held: HeldContext | null = liveIntel && heldSources && typeof liveIntel.queryAdvisories === "function" ? { sources: heldSources, query: (deps) => liveIntel.queryAdvisories(deps) } : null;
   // Made for this project (private-guard.ts).
   const analyze = () => analyzeUpgradeImpact(params, {
     net: createUpgradeNet(cacheFor(db)),
@@ -566,6 +600,7 @@ export async function executeUpgradeImpact(
     installed,
     offline: isOfflineMode() || (liveIntel !== null && !liveIntel.isEnabled()),
     githubChangelog: githubChangelogEnabled(),
+    held,
   });
   return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(analyze) : analyze();
 }

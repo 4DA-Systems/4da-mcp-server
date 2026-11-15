@@ -17,7 +17,7 @@
 
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
-import { excludedReleases } from "../live/withdrawn-releases.js";
+import { deprecationAvoids } from "../live/withdrawn-releases.js";
 import { heldSeverity, heldText, type HeldCheck } from "../live/held-dependencies.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 
@@ -187,7 +187,7 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: H
   const own = ownAdvisoriesSignal(item, facts);
   if (!held || (held.status === "checked" && held.affected.length === 0)) return own;
   if (held.status === "unchecked") {
-    const note = `Whether the dependencies ${item.to} exact-pins or narrowly ranges have known advisories was not checked (${held.reason}).`;
+    const note = `Whether the dependencies ${item.to} holds (its exact pins and ranges) have known advisories was not checked (${held.reason}).`;
     return {
       ...own,
       value: own.value === null ? { held_dependencies_unchecked: held.reason } : { ...(own.value as object), held_dependencies_unchecked: held.reason },
@@ -501,7 +501,8 @@ export function withdrawnSignal(item: CheckItem, to: ReleaseRecord, index?: Pack
     const value = { deprecated: true };
     // The same notice on other releases too: a "please upgrade" notice about the line or the package.
     const shared = index ? Object.values(index.releases).filter((r) => r.version !== to.version && r.deprecated === to.deprecated).length : 0;
-    if (index && item.ecosystem === "npm" && shared > 0 && !excludedReleases(index).has(to.version)) {
+    // One rule with the safe picks (withdrawn-releases.ts deprecationAvoids), so no pick is a release judged avoid here.
+    if (index && item.ecosystem === "npm" && !deprecationAvoids(index, to.version)) {
       return {
         id: "yanked_or_deprecated",
         value: { ...value, withdrawn: false },

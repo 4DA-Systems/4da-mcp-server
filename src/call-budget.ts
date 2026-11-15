@@ -62,10 +62,16 @@ export interface CallFinding {
   evidence: string[];
 }
 
-/** The key a finding is kept under: the item as the caller wrote it. */
+/**
+ * The key a finding is kept under: the item as the caller wrote it, the name as its registry
+ * compares it. dependency_check checks a crate under its published spelling (`serde-json` is
+ * serde_json), and a finding read under it still answers for the spelling asked (round 10, W2).
+ */
 export function callFindingKey(ecosystem: unknown, pkg: unknown, to: unknown): string {
   const t = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-  return `${t(ecosystem)}\0${t(pkg)}\0${t(to)}`;
+  const eco = t(ecosystem);
+  const name = eco.toLowerCase() === "crates.io" ? t(pkg).toLowerCase().replace(/_/g, "-") : t(pkg);
+  return `${eco}\0${name}\0${t(to)}`;
 }
 
 /** Keep a finding for this call; the worse verdict stands, and evidence accumulates (deduplicated). */

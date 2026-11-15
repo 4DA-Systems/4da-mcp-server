@@ -197,7 +197,7 @@ const MAX_LISTED_SKIPS = 50;
  * too: one with a private `[[source]]` and no lockfile is no resolution group, and its packages are
  * private wherever they are named (R8, B4).
  */
-const REGISTRY_CONFIG_FILES = new Set([".npmrc", ".yarnrc.yml", "bunfig.toml", "Pipfile"]);
+const REGISTRY_CONFIG_FILES = new Set([".npmrc", ".yarnrc.yml", "bunfig.toml", "Pipfile", "pnpm-workspace.yaml"]);
 /** At most this many such directories are read for private scopes. */
 const MAX_REGISTRY_CONFIG_DIRS = 500;
 /** Manifests listed in `discovery.unlockedManifests`; the count covers the rest. */
