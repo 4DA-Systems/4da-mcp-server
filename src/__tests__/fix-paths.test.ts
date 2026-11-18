@@ -544,12 +544,14 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     expect(mio).toMatchObject({ targetVersion: "0.8.11", action: "lockfile_refresh", refreshCommands: [{ command: "cargo update -p mio@0.8.0 --precise 0.8.11" }] });
   });
 
-  it("a parent that pins the vulnerable version keeps waiting on upstream, and says which requirement blocks", async () => {
+  it("a parent that pins the vulnerable version blocks a refresh, and says which requirement blocks", async () => {
     stubNetwork();
     const li = intel(pinnedDir, "javascript", ["left-pad"], entriesFor(MINIMIST, "minimist", "npm", "1.2.5", pinnedDir));
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const step = plan.recommendations.find((s: { package: string }) => s.package === "minimist");
-    expect(step.action).toBe("waiting_on_upstream");
+    // left-pad's releases are not served here, so whether one admits the fix is unread: not determined, never "waiting on upstream".
+    expect(step.action).toBe("not_determined");
+    expect(plan.waitingOnUpstream).toBe(0);
     expect(step.reasons.join(" ")).toMatch(/left-pad 1\.0\.0 requires "1\.2\.5"/);
   });
 
@@ -589,7 +591,9 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const li = intel(pnpmDir, "javascript", ["chokidar"], entriesFor(BRACES, "braces", "npm", "3.0.2", pnpmDir));
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const step = plan.recommendations.find((s: { package: string }) => s.package === "braces");
-    expect(step.action).toBe("waiting_on_upstream");
+    // Never a refresh on that; micromatch's releases are not served here, so the parent's move is unread: not determined.
+    expect(step.action).toBe("not_determined");
+    expect(step.refreshCommands).toBeUndefined();
     expect(step.refreshInferred).toBeUndefined();
     expect(step.reasons.join(" ")).toMatch(/micromatch 4\.0\.5 requires "3\.0\.2"/);
   });
@@ -600,7 +604,8 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const openssl = plan.recommendations.find((s: { package: string }) => s.package === "openssl");
     // Not confirmed: no targetVersion, the release named in a NOT CHECKED reason (pre-publish audit 2026-11-14).
-    expect(openssl).toMatchObject({ targetVersion: null, action: "waiting_on_upstream", fixPathChecked: "installed_advisories_only" });
+    // Nothing about its parents was read either: the fix path is not determined, never "waiting on upstream".
+    expect(openssl).toMatchObject({ targetVersion: null, action: "not_determined", fixPathChecked: "installed_advisories_only" });
     expect(openssl.reasons[0]).toMatch(/^NOT CHECKED: 0\.10\.79 was not confirmed free of openssl's known advisories/);
     expect(plan.summary).toMatch(/checked only against the installed version's advisories/);
   });

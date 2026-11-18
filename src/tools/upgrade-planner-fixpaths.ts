@@ -69,6 +69,7 @@ import { heldAdvisories, heldText, heldVerb, HELD_CANDIDATES, type AdvisoryQuery
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
+import { pythonParentMove } from "./upgrade-planner-pyparent.js";
 import { yieldIfDue } from "../live/yield-point.js";
 
 /** One dependency the project declares that moves a blocking parent. */
@@ -712,7 +713,33 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   if (ecosystem === "PyPI" || ecosystem === "Go") {
     // Their lockfiles record parents differently (or not at all): upgrade-planner-pygo.ts.
     const all = await sources.packageAdvisories(ecosystem, step.package).catch(() => null);
-    await pygoRefreshOrUpstream(step, input.sourceDirs, sources, liveIntel, target, all?.filter((a) => !unfixable.includes(a.id)) ?? null);
+    const fixable = all?.filter((a) => !unfixable.includes(a.id)) ?? null;
+    await pygoRefreshOrUpstream(step, input.sourceDirs, sources, liveIntel, target, fixable, async (found) => {
+      // A blocking parent the project declares is the project's to move, not something to wait for.
+      const move = await pythonParentMove({
+        pkg: step.package,
+        installed,
+        target,
+        found,
+        sources,
+        intel: liveIntel,
+        advisories: fixable,
+        declaredFixes: (name, from, to, dirs) => declaredFixes(liveIntel, ecosystem, name, from, to, dirs),
+      });
+      if (!move) return false;
+      if (move.kind === "undetermined") {
+        step.reasons.push(`${FIX_PATH_UNDETERMINED}${move.text}`);
+        return true;
+      }
+      step.action = "upgrade_parent";
+      step.parentUpgrades = move.upgrades;
+      delete step.refreshCommands;
+      const at = step.reasons.findIndex((r) => TRANSITIVE_REASON.test(r));
+      const text = `Transitive dependency: ${move.text}`;
+      if (at >= 0) step.reasons[at] = text;
+      else step.reasons.push(text);
+      return true;
+    });
     return;
   }
   const lockfiles = [...new Set(input.sourceDirs)]
@@ -912,16 +939,31 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   // for mocha 10.8.2's serialize-javascript row (pre-publish round 10, W16).
   const unknowns = standings.filter((s) => s.kind === "unknown");
   const judged = unknowns.length > 0 && unknowns.every((s) => s.kind === "unknown" && s.checked);
+  if (standings.length === blocking.length && judged) {
+    replaceReason(
+      `Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version, and each parent release checked that admits a clean version brings in an affected dependency${known}`,
+    );
+    return;
+  }
+  // Not read is not blocked: the pending reason stays (the step is undecided, and every tool says
+  // so), with what was read and what was not beside it.
+  const unread = considered.filter((_, i) => standings[i].kind === "unknown" && (standings[i] as { unread?: true }).unread).map((b) => b.parent);
   const why =
-    standings.length < blocking.length
-      ? "the releases of some parents were not checked"
-      : judged
-        ? "each parent release checked that admits a clean version brings in an affected dependency"
-        : unknowns.some((s) => s.kind === "unknown" && s.checked)
-          ? "a parent's releases could not be read, or each one admitting a clean version brings in an affected dependency"
-          : "the releases of a parent could not be read";
-  replaceReason(`Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version, and ${why}${known}`);
+    unread.length > 0
+      ? `the registry gave no answer for the releases of ${[...new Set(unread)].join(", ")}`
+      : standings.length < blocking.length
+        ? "the releases of some parents were not checked"
+        : "what a parent's releases hold could not be judged";
+  step.reasons.push(
+    `${FIX_PATH_UNDETERMINED}${named}${more}, so a lockfile refresh cannot reach a clean version; whether a parent release admits one was not established (${why})${known}`,
+  );
 }
+
+/**
+ * How a reason starts when a transitive step's fix path was read in part and not decided. The
+ * step keeps its pending reason beside it, so no tool reads it as waiting on upstream.
+ */
+export const FIX_PATH_UNDETERMINED = "Fix path NOT DETERMINED: ";
 
 /** "request 2.88.2 requires "^3.3.2"", or the bundled form. */
 function blockingText(b: Blocking): string {
@@ -1049,8 +1091,11 @@ type Standing =
   | { kind: "stuck"; text: string; outcome?: StuckOutcome }
   /** `refresh`: the parent moves by a lockfile refresh alone (parentRefresh); no declared dependency is upgraded. */
   | { kind: "move"; upgrade: ParentUpgrade; text: string; refresh?: true }
-  /** `checked`: the parent's releases were read and each one judged holds something affected (W16). */
-  | { kind: "unknown"; text?: string; undecided?: boolean; checked?: boolean }
+  /**
+   * `checked`: the parent's releases were read and each one judged holds something affected (W16).
+   * `unread`: the registry gave no answer for the parent's releases, so nothing about them is known.
+   */
+  | { kind: "unknown"; text?: string; undecided?: boolean; checked?: boolean; unread?: true }
   /** The installed parent or lever is flagged malicious: the row names no release (#981 round 3). */
   | { kind: "malicious"; text: string };
 
@@ -1240,7 +1285,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   const parent = b.parent;
   const from = b.parentVersion!;
   const facts = await sources.releaseFacts(ecosystem, parent).catch(() => null);
-  if (!facts) return { kind: "unknown" };
+  if (!facts) return { kind: "unknown", unread: true };
   // 8a/8b (the 4DA H1 review): candidates follow the fix-target withdrawal rule (facts.versions:
   // an npm deprecated release only when a later clean one is on its line, nothing when `latest` is
   // deprecated), and "newest" is the highest stable non-withdrawn release, not the `latest` tag.
@@ -1298,7 +1343,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   // `npm install express@4.22.0` (and 4.20.0, which pins an affected qs) where a healthy run names
   // 4.22.3. One whose held dependencies could not be judged, before any clean one: NOT CHECKED,
   // no release and no command.
-  const heldPick = smallestOwn ? await heldCleanAdmitting(ctx, parent, facts, admittingReleases(ctx, facts, from, history, dialect, own.clean, true)) : null;
+  const heldPick = smallestOwn ? await heldCleanAdmitting(ctx, parent, facts, admittingReleases(ctx, facts, from, history, dialect, own.clean, true), from) : null;
   if (heldPick && heldPick.kind !== "clean") {
     // "affected" was checked: no NOT CHECKED on it (pre-publish round 10, W16).
     const checked = heldPick.kind === "affected";
@@ -1322,6 +1367,13 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       ? `${parent} ${found.version} is the smallest ${parent} release that no longer depends on ${pkg}`
       : `${parent} ${found.version} is the smallest ${parent} release whose ${found.peer ? "peer " : ""}requirement "${found.requirement}" ${admitsWords(ctx, found.requirement, dialect, found.resolvesTo, found.peer)}`;
   const requirementClause = clauseOf(found);
+  // A release taken although it holds affected dependencies: the ones the installed release holds
+  // too. Named, so the move is never read as clean of them.
+  const carried = heldPick?.kind === "clean" ? (heldPick.carried ?? []) : [];
+  const carriedClause =
+    carried.length > 0
+      ? `; ${parent} ${heldText(found.version, carried)}, as ${parent} ${from} does, so this upgrade brings in no advisory the project does not already have and does not fix ${carried.length === 1 ? "that one" : "those"} (${carried.length === 1 ? "its own row says" : "their own rows say"} how)`
+      : "";
   const ownClause =
     (!own.read
       ? `; not checked against ${parent}'s own advisories (OSV.dev did not answer)`
@@ -1331,7 +1383,8 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
           ? `, and no advisory of ${parent} affects it`
           : "") +
     // A package retired as a whole keeps its releases installable (8a); the move says it is deprecated.
-    (facts.deprecatedLatest ? ` (${parent} is deprecated${registryQuote(parent, facts.deprecatedLatest)})` : "");
+    (facts.deprecatedLatest ? ` (${parent} is deprecated${registryQuote(parent, facts.deprecatedLatest)})` : "") +
+    carriedClause;
   const upgrade: ParentUpgrade = {
     parent,
     from,
@@ -1433,7 +1486,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       else delete upgrade.refreshCommands;
       const heldLift =
         smallestOwn && smallestOwn.version !== found.version && v === found.version
-          ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} brings in a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), and ${found.version} is the smallest release past it whose held dependencies are clean`
+          ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} brings in a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), and ${found.version} is the smallest release past it whose held dependencies ${carried.length > 0 ? "bring in none the installed release lacks" : "are clean"}`
           : "";
       return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}`;
     };
@@ -1654,18 +1707,29 @@ function admitsClean(ctx: MoveContext, reqs: string[], dialect: RequirementDiale
 
 type Admitting = ReturnType<typeof admittingReleases>[number];
 
+/** Whether the installed release already holds the very copy `d` names (same package, same version): a move to a release that holds `d` brings in nothing new. */
+function alreadyHeld(installed: HeldDependency[], d: HeldDependency): boolean {
+  return installed.some((i) => i.name === d.name && i.version === d.version);
+}
+
 /**
  * npm: the first of `admitting` (smallest first, at most HELD_CANDIDATES) whose held dependencies
  * (exact pins, narrow ranges: held-dependencies.ts) were judged clean; "unchecked" when one that
  * could not be judged comes first, "affected" when every one judged holds something affected.
  * Null (no gate) outside npm or without a batch lookup.
+ *
+ * When none is clean, the smallest one whose every affected dependency is a copy the installed
+ * release `from` holds too (same package, same version) is taken, with what it carries over
+ * (`carried`): it fixes this copy and brings in no advisory the project lacks. mocha 7.1.1 pins
+ * the same diff, debug and js-yaml as the installed 7.1.0 and moves yargs-parser to its fix.
  */
 async function heldCleanAdmitting(
   ctx: MoveContext,
   parent: string,
   facts: PackageReleaseFacts,
   admitting: Admitting[],
-): Promise<{ kind: "clean"; release: Admitting } | { kind: "unchecked" | "affected"; text: string } | null> {
+  from: string,
+): Promise<{ kind: "clean"; release: Admitting; carried?: HeldDependency[] } | { kind: "unchecked" | "affected"; text: string } | null> {
   const query = ctx.intel.queryAdvisories?.bind(ctx.intel);
   if (ctx.ecosystem !== "npm" || !query || admitting.length === 0) return null;
   const candidates = admitting.slice(0, HELD_CANDIDATES);
@@ -1685,11 +1749,34 @@ async function heldCleanAdmitting(
   // Every one was read and judged: the words say what each holds (a pin, a range whose newest
   // release is affected), never "could not be read" (pre-publish round 10, W16).
   const affectedOf = (v: string) => (checks?.get(v) as { affected: HeldDependency[] } | undefined)?.affected ?? [];
+  // What the installed release holds is judged the same way: an affected dependency it already
+  // holds is carried over by a move, not brought in by it.
+  const installedSpecs = facts.heldSpecs?.[from];
+  const installed = installedSpecs
+    ? (await heldAdvisories(ctx.sources, query, [{ key: from, specs: installedSpecs }], Date.now() + HELD_BUDGET_MS).catch(() => null))?.get(from)
+    : undefined;
+  if (installed?.status === "checked" && installed.affected.length > 0) {
+    for (const c of candidates) {
+      const affected = affectedOf(c.version);
+      if (affected.some((d) => !alreadyHeld(installed.affected, d))) continue;
+      // The rest of what it holds must be judged clean on its own: an affected dependency
+      // answers a check before an unread one does (heldAdvisories).
+      const rest = Object.fromEntries(Object.entries(facts.heldSpecs![c.version]).filter(([name]) => !affected.some((d) => d.name === name)));
+      const others =
+        Object.keys(rest).length === 0
+          ? ({ status: "checked", affected: [] } as HeldCheck)
+          : (await heldAdvisories(ctx.sources, query, [{ key: c.version, specs: rest }], Date.now() + HELD_BUDGET_MS).catch(() => null))?.get(c.version);
+      if (others?.status === "checked" && others.affected.length === 0) return { kind: "clean", release: c, carried: affected };
+    }
+  }
+  // Named first in the example: what a release brings in that the installed one does not hold.
+  const broughtBy = (v: string) => (installed?.status === "checked" ? affectedOf(v).filter((d) => !alreadyHeld(installed.affected, d)) : []);
+  const exampleOf = (v: string) => (broughtBy(v).length > 0 ? [...broughtBy(v), ...affectedOf(v).filter((d) => !broughtBy(v).includes(d))] : affectedOf(v));
   const all = candidates.flatMap((c) => affectedOf(c.version));
   // Only the first HELD_CANDIDATES admitting releases are judged: the words never claim more (final check).
   const cut = admitting.length > candidates.length ? ` (the first ${candidates.length} of ${admitting.length}; later ones were not checked)` : "";
   const span = candidates.length === 1 ? `the ${parent} release ${last}${cut}` : `every ${parent} release from ${candidates[0].version} to ${last}${cut}`;
-  return { kind: "affected", text: `${span} that admits a clean ${ctx.pkg} ${heldVerb(all)} (${heldText(candidates[0].version, affectedOf(candidates[0].version))})` };
+  return { kind: "affected", text: `${span} that admits a clean ${ctx.pkg} ${heldVerb(all)} (${heldText(candidates[0].version, exampleOf(candidates[0].version))})` };
 }
 
 /** The smallest installable release of a parent above `from`, clear of its own advisories, whose requirement admits a clean version. */

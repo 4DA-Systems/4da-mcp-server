@@ -145,7 +145,8 @@ describe("upgrade_planner — CVEs attach to the scanned INSTANCE, not the name"
     );
     expect(transitiveRow).toBeDefined();
     expect(transitiveRow!.currentVersion).toBe("1.0.102");
-    expect(transitiveRow!.action).toBe("waiting_on_upstream");
+    // Offline: its fix path was never read, so it is not determined (not "waiting on upstream").
+    expect(transitiveRow!.action).toBe("not_determined");
     expect(transitiveRow!.reasons.some((r) => r.includes("RUSTSEC-2026-0190"))).toBe(true);
   });
 
