@@ -252,6 +252,25 @@ export interface VulnerabilityScanResult {
   detailsUnchecked?: string[];
   /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
   aliasSeverity?: AliasSeverityReport;
+  /**
+   * Installed copies at npm's security-placeholder version (`0.0.N-security`) of a name a
+   * malicious-package record covers. Not in `vulnerabilities` (the placeholder is not the
+   * malware) and never in `cleanCount`: the step is removing the dependency. Absent when none.
+   */
+  securityPlaceholders?: SecurityPlaceholder[];
+}
+
+/** One installed copy that claims to be npm's empty placeholder for a name taken down as malware. */
+export interface SecurityPlaceholder {
+  ecosystem: OsvEcosystem;
+  package: string;
+  version: string;
+  /** The malicious-package records that name the package, sorted. */
+  ids: string[];
+  isDirect: boolean;
+  isDev: boolean;
+  devScopeKnown: boolean;
+  sourceDirs: string[];
 }
 
 export interface AliasSeverityReport {

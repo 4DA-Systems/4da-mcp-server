@@ -24,6 +24,7 @@ import type {
   AliasSeverityReport,
   ResolvedDependency,
   OsvVulnerability,
+  SecurityPlaceholder,
   VulnerabilityEntry,
   VulnerabilityScanResult,
 } from "./types.js";
@@ -613,13 +614,18 @@ export class OsvScanner {
     // A cache-only answer is never a current one: offline even when every dependency had a cached answer.
     const offline = unchecked.length > 0 || cacheOnly;
 
-    // npm's security holding packages (`fs@0.0.1-security`) are empty
-    // placeholders npm publishes after taking a malicious package down; the
-    // malware advisory covering every version does not apply to them (the
-    // desktop app's osv::matching::is_npm_security_holding; audit A5).
-    const rated = await this.rateFromAliases([...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v)));
+    // npm's security holding packages (`fs@0.0.1-security`) are the empty placeholders npm
+    // publishes after taking a malicious package down: the malware record covering every version
+    // is not a finding against the placeholder (the desktop app's
+    // osv::matching::is_npm_security_holding), and the copy is not a clean dependency either. It
+    // is listed apart (securityPlaceholders), with its records. Only a malicious-package record is
+    // set aside: any other advisory on such a version is a finding like any other.
+    const found = [...cachedVulns, ...fetchedVulns];
+    const securityPlaceholders = securityPlaceholdersOf(found);
+    const rated = await this.rateFromAliases(found.filter((v) => !isPlaceholderMalware(v)));
     // One severity per advisory: every record of an alias group carries the group's most severe grade.
     const allVulns = gradeAliasGroups(rated.vulns);
+    const notClean = new Set([...allVulns.map(copyKey), ...securityPlaceholders.map((p) => `${p.ecosystem}\0${p.package}\0${p.version}`)]);
     const vulnerablePackages = new Set(allVulns.map((v) => v.package));
     const platformInactiveVulnerable = new Set(
       allVulns.filter((v) => !v.platformActive).map((v) => v.package),
@@ -641,8 +647,8 @@ export class OsvScanner {
       platformInactiveVulnerable,
       bySeverity,
       vulnerabilities: allVulns,
-      // Answered dependencies with no advisory; an unchecked one is never clean.
-      cleanCount: Math.max(0, scannable.length - unchecked.length - vulnerableDependencyCount(allVulns)),
+      // Answered dependencies with no advisory; an unchecked one is never clean, nor is a security placeholder.
+      cleanCount: Math.max(0, scannable.length - unchecked.length - notClean.size),
       scanDurationMs: Date.now() - start,
       cached: cacheOnly || uncached.length === 0,
       offline,
@@ -655,6 +661,7 @@ export class OsvScanner {
       ...(cacheOnly ? { cacheOnly: true as const, staleExpired } : {}),
       ...(detailsUnchecked.length > 0 ? { detailsUnchecked } : {}),
       ...(rated.report ? { aliasSeverity: rated.report } : {}),
+      ...(securityPlaceholders.length > 0 ? { securityPlaceholders } : {}),
     };
   }
 
@@ -832,9 +839,36 @@ export class OsvScanner {
   }
 }
 
-/** Distinct (ecosystem, name, version) instances with at least one advisory row. */
-function vulnerableDependencyCount(vulns: VulnerabilityEntry[]): number {
-  return new Set(vulns.map((v) => `${v.ecosystem}\0${v.package}\0${v.currentVersion}`)).size;
+/** One installed copy: (ecosystem, name, version). */
+function copyKey(v: Pick<VulnerabilityEntry, "ecosystem" | "package" | "currentVersion">): string {
+  return `${v.ecosystem}\0${v.package}\0${v.currentVersion}`;
+}
+
+/** A malicious-package record matched to a copy at npm's placeholder version: the name was taken down, the copy is not the malware. */
+function isPlaceholderMalware(v: VulnerabilityEntry): boolean {
+  return v.malware === true && isNpmSecurityHolding(v);
+}
+
+/** The placeholder copies among `found`, one per installed copy, each with every malicious-package record naming it. */
+function securityPlaceholdersOf(found: readonly VulnerabilityEntry[]): SecurityPlaceholder[] {
+  const byCopy = new Map<string, SecurityPlaceholder>();
+  for (const v of found) {
+    if (!isPlaceholderMalware(v)) continue;
+    const key = copyKey(v);
+    const row = byCopy.get(key) ?? {
+      ecosystem: v.ecosystem,
+      package: v.package,
+      version: v.currentVersion,
+      ids: [],
+      isDirect: v.isDirect !== false,
+      isDev: v.isDev === true,
+      devScopeKnown: v.devScopeKnown === true,
+      sourceDirs: [...(v.sourceDirs ?? [])],
+    };
+    if (!row.ids.includes(v.vulnId)) row.ids.push(v.vulnId);
+    byCopy.set(key, row);
+  }
+  return [...byCopy.values()].map((row) => ({ ...row, ids: [...row.ids].sort() }));
 }
 
 /**
@@ -1095,13 +1129,16 @@ export function extractFixedVersion(
 /**
  * npm's security holding placeholder: after a malicious package is taken down,
  * npm republishes the name as an empty `0.0.<n>-security` release ("security
- * holding package"). It has no code, so NO advisory applies to it, whichever
- * database's id flags the name: crossenv 0.0.2-security under
- * GHSA-c2m4-w5hm-vqjw read as installed malware when only MAL- ids were held
- * (4DA audit L4, 2026-10-16). Only npm's own shape counts: a publisher's
- * `1.0.0-security` prerelease is real code and stays affected. The same rule
- * as the app's `fourda_depengine::matching::is_npm_security_holding`
- * (shared vectors `holding.jsonl`).
+ * holding package"). It is not the malware, whichever database's id flags the
+ * name (crossenv 0.0.2-security under GHSA-c2m4-w5hm-vqjw as much as fs under
+ * a MAL- id). Only npm's own shape counts: a publisher's `1.0.0-security`
+ * prerelease is real code and stays affected. The same predicate as the
+ * app's `fourda_depengine::matching::is_npm_security_holding` (shared vectors
+ * `holding.jsonl`).
+ *
+ * The version string is all this says: the copy's contents are not read. So
+ * the scan sets aside only a malicious-package record on such a copy, lists
+ * the copy as a security placeholder to remove, and never counts it clean.
  */
 export function isSecurityHoldingRelease(ecosystem: string, version: string): boolean {
   return ecosystem.trim().toLowerCase() === "npm" && /^0\.0\.\d+-security$/.test(version.trim());
