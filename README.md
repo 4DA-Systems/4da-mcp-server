@@ -33,7 +33,7 @@ The server uses Node's built-in `node:sqlite` (Node 22.13 and later), so it need
 claude mcp add 4da -- npx @4da/mcp-server@6.3.0
 ```
 
-Every command and config on this page pins the version (`@6.2.7`), so what runs changes only when you change it. To update, replace the version with the newest one on npm (`npm view @4da/mcp-server version`); the [changelog](CHANGELOG.md) says what changed. Without a version, npx runs whatever it has cached or the newest release, which you did not review.
+Every command and config on this page pins the version, and so do the plugin, the Gemini extension and the entry `--setup` writes, so what runs changes only when you change it. To update, replace the version with the newest one on npm (`npm view @4da/mcp-server version`); the [changelog](CHANGELOG.md) says what changed. Without a version, npx runs whatever it has cached or the newest release, which you did not review.
 
 **As a Claude Code plugin** (the MCP server plus a hook):
 
@@ -99,9 +99,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```bash
 npx @4da/mcp-server@6.3.0 --setup --dry-run   # show each file and entry, write nothing
 npx @4da/mcp-server@6.3.0 --setup
+npx @4da/mcp-server@6.3.0 --setup --update    # also replace a 4da entry that is already there
 ```
 
-Writes Cursor, VS Code (and Insiders), Windsurf, Devin Desktop and Claude Desktop configs it finds, merging into what is there: other servers, settings and comments are kept, a backup (`.bak`) is written first, and a file it cannot parse is left untouched with the entry to add by hand. For Claude Code it prints the `claude mcp add` command instead of editing `~/.claude.json`.
+Writes the entry, pinned to the version you ran it from, into the Cursor, VS Code (and Insiders), Windsurf, Devin Desktop and Claude Desktop configs it finds, merging into what is there: other servers, settings and comments are kept, and a backup (`.bak`) is written first. A `4da` entry that is already there and differs (another version, a local build, a wrapper command) is kept and reported; `--update` replaces its command and keeps its `env` and other fields. A file it cannot read exactly (invalid JSON, not UTF-8, the same key twice) is left untouched with the entry to add by hand, and the exit code is then 1. For Claude Code it prints the `claude mcp add` command instead of editing `~/.claude.json`.
 </details>
 
 Then ask your AI: **"What changes if I upgrade X to Y?"**, **"Scan for vulnerabilities"** or **"What should I upgrade first?"**

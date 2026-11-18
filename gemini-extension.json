@@ -7,7 +7,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@4da/mcp-server"
+        "@4da/mcp-server@6.3.0"
       ]
     }
   }
