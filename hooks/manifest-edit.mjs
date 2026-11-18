@@ -315,7 +315,8 @@ const exactFor = (ecosystem, spec) => {
  */
 const NAME_TEXT = /^[@A-Za-z0-9][\w.\-/~@]{0,213}$/;
 const SPEC_TEXT = /^[\w.\-+~^<>=!*,| ]{1,80}/;
-const specText = (spec) => (typeof spec === "string" ? (SPEC_TEXT.exec(spec.trim())?.[0] ?? "").trim() : "");
+/** The leading version-specifier run of a value, without an operator left dangling at its end ("4.17.21 <" reads "4.17.21"). */
+const specText = (spec) => (typeof spec === "string" ? (SPEC_TEXT.exec(spec.trim())?.[0] ?? "").replace(/[\s<>=~^!,|]+$/, "") : "");
 
 /** The changes fit to repeat: shaped names, cleaned versions, nothing else. */
 function repeatable(changes) {
