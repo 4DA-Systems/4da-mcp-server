@@ -142,6 +142,13 @@ export interface ParentUpgrade {
   moreLevers?: number;
   leverUnknown?: string;
   /**
+   * Set when the project declares `parent` itself and other installed packages hold the same copy
+   * with a requirement that excludes `to`: they keep the old parent, and the vulnerable copy with
+   * it. `total` counts every holder (the project's declaration is one); `named` those the levers'
+   * releases move. The step is a fix only when the two are equal.
+   */
+  paths?: { total: number; named: number };
+  /**
    * The refresh to run after the lever's install: the new requirement still admits the
    * installed copy, which an install keeps (npm 10.9.2), so the install alone does not fix it.
    * With `refreshOnly`: the whole move, first the parent's own refresh.
@@ -924,12 +931,17 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     // Fixed by upgrading the parent only when every move names the release of what the project
     // declares; a lever with no release (to: null) is a check, not a fix (final audit 7c: victauri
     // rand through tauri, NodeGoat braces and nconf through forever).
-    const verified = moves.every((m) => m.refresh || (m.upgrade.levers.length > 0 && m.upgrade.levers.every((l) => l.to !== null)));
+    // And only when the levers cover every holder of the parent: one path moved is not the copy fixed.
+    const everyPath = (m: (typeof moves)[number]) => !m.upgrade.paths || m.upgrade.paths.named === m.upgrade.paths.total;
+    const verified = moves.every((m) => m.refresh || (m.upgrade.levers.length > 0 && m.upgrade.levers.every((l) => l.to !== null) && everyPath(m)));
     step.action = verified ? "upgrade_parent" : "upgrade_parent_unverified";
+    const partial = moves.some((m) => m.upgrade.paths !== undefined);
     replaceReason(
       verified
         ? `Transitive dependency: ${moves.map((m) => m.text).join("; ")}`
-        : `Transitive dependency, not verified: ${moves.map((m) => m.text).join("; ")}. No release of what this project declares was verified to bring the fixed parent in, so this is not counted as fixed: check the releases named above before upgrading`,
+        : partial
+          ? `Transitive dependency, not verified: ${moves.map((m) => m.text).join("; ")}. Not every path to ${step.package} ${installed} has a release that moves it, so this is not counted as fixed: check what is named above before upgrading`
+          : `Transitive dependency, not verified: ${moves.map((m) => m.text).join("; ")}. No release of what this project declares was verified to bring the fixed parent in, so this is not counted as fixed: check the releases named above before upgrading`,
     );
     return;
   }
@@ -1210,6 +1222,172 @@ async function othersAdmitTarget(ctx: MoveContext, b: Blocking, parent: string, 
   return { any: true, all: true };
 }
 
+/** Another installed package that holds the same copy of a parent the project also declares. */
+interface OtherHolder {
+  name: string;
+  version: string;
+  /** Its requirements on the parent; null when they could not be read, or the copy ships inside its package. */
+  reqs: string[] | null;
+  bundled: boolean;
+  /** The declared dependencies that move it, each with the release found for it (none: the caller names what to check). */
+  via: Array<{ l: { name: string; version: string; dirs: string[] }; hop: Extract<ThroughHop, { kind: "found" }> | null; held?: Exclude<ThroughHop, { kind: "found" }> }>;
+  /** Why no release, or not every one, is named for it. */
+  why?: string;
+}
+
+/** Other holders of one parent copy whose requirements are read (the rest are counted, and named as not examined). */
+const MAX_OTHER_HOLDERS = 12;
+
+/** Whether a holder's every requirement on the parent admits parent release `v`: it then shares the project's upgraded copy. */
+function holderAdmits(h: OtherHolder, dialect: RequirementDialect, v: string): boolean {
+  return h.reqs !== null && h.reqs.every((text) => requirementAdmits({ parent: h.name, text, dialect }, v) === true);
+}
+
+/**
+ * The installed packages, other than the project and its workspace members, that hold
+ * `parent@from`. For each one whose requirement excludes parent release `release`: the declared
+ * dependency that moves it and the release of that dependency that brings a fixed parent in, found
+ * as for a transitive parent (throughRelease). mkdirp 0.5.1 is declared by the project and pinned
+ * by mocha 7.1.0; mocha 7.1.2 brings in mkdirp 0.5.5.
+ */
+async function otherHolders(
+  ctx: MoveContext,
+  b: Blocking,
+  parent: string,
+  from: string,
+  facts: PackageReleaseFacts,
+  history: RequirementHistory,
+  dialect: RequirementDialect,
+  parentClean: (version: string) => boolean,
+  release: string,
+): Promise<OtherHolder[]> {
+  const out: OtherHolder[] = [];
+  const seen = new Set<string>();
+  let lookups = 0;
+  for (const e of parentsReader(ctx, b.lockfile)?.(parent, from) ?? []) {
+    if (e.local || e.parentVersion === null || seen.has(`${e.parent}@${e.parentVersion}`)) continue;
+    seen.add(`${e.parent}@${e.parentVersion}`);
+    const examined = out.length < MAX_OTHER_HOLDERS;
+    const reqs =
+      !examined || e.bundled ? null : e.range !== null ? [e.range] : await ctx.sources.parentRequirements(ctx.ecosystem, e.parent, e.parentVersion, parent).catch(() => null);
+    const holder: OtherHolder = { name: e.parent, version: e.parentVersion, reqs: reqs && reqs.length > 0 ? reqs : null, bundled: e.bundled === true, via: [] };
+    out.push(holder);
+    if (holderAdmits(holder, dialect, release)) continue;
+    if (!examined) {
+      holder.why = "it was not examined";
+      continue;
+    }
+    if (holder.bundled) {
+      holder.why = `only a ${e.parent} release that ships a fixed copy moves it`;
+      continue;
+    }
+    const route = findRoute(ctx, b.lockfile, e.parent, e.parentVersion);
+    if (route.kind === "unknown") {
+      holder.why = route.why;
+      continue;
+    }
+    if (route.kind === "through") {
+      // Declared dependencies further up: what each must bring in is said, not which release of it does.
+      holder.via = route.levers.map((l) => ({ l, hop: null }));
+      if (route.more > 0) holder.why = `${route.more} more declared ${route.more === 1 ? "dependency brings" : "dependencies bring"} it in`;
+      continue;
+    }
+    const l = { name: e.parent, version: e.parentVersion, dirs: route.dirs };
+    if (lookups++ >= MAX_LEVERS) {
+      holder.via = [{ l, hop: null }];
+      continue;
+    }
+    const hop = await throughRelease(ctx, l, parent, from, facts, history, dialect, parentClean);
+    if (hop?.kind === "found") holder.via = [{ l, hop }];
+    else if (hop?.kind === "malicious") holder.via = [{ l, hop: null, held: hop }];
+    else if (hop?.kind === "stuck") {
+      // It cannot bring a fixed parent in; it may still drop the parent from its own requirements.
+      const drop = await dropRelease(ctx, l, parent, dialect);
+      holder.via = [
+        drop
+          ? { l, hop: { kind: "found", version: drop.version, brings: null, keepsParent: false, admitsAt: (v) => (drop.drops(v) ? { brings: null, keepsParent: false } : null) } }
+          : { l, hop: null, held: hop },
+      ];
+    } else holder.via = [{ l, hop: null }];
+  }
+  return out;
+}
+
+/**
+ * The words, levers and refreshes for the holders a parent upgrade leaves behind (`kept`), at the
+ * lever releases in `lifts`. `named` counts the holders every one of whose declared dependencies
+ * has a release named: only then is the path covered. Null when a lifted release no longer brings
+ * the fix in.
+ */
+function alsoThrough(
+  ctx: MoveContext,
+  b: Blocking,
+  kept: OtherHolder[],
+  parent: string,
+  from: string,
+  floor: string,
+  lifts: ReadonlyMap<string, string>,
+): { texts: string[]; levers: ParentLever[]; refreshes: Array<{ dir: string; command: string }>; paths: number; named: number } | null {
+  const texts: string[] = [];
+  const levers: ParentLever[] = [];
+  const refreshes: Array<{ dir: string; command: string }> = [];
+  let named = 0;
+  for (const h of kept) {
+    const holds = h.bundled ? `which ships its own copy of ${parent}` : h.reqs ? `which requires ${parent} "${h.reqs.join('", "')}"` : `whose requirement on ${parent} could not be read`;
+    const ways: string[] = [];
+    let covered = h.via.length > 0 && !h.why;
+    for (const { l, hop, held } of h.via) {
+      const shared = levers.find((x) => x.name === l.name && x.version === l.version);
+      if (held || !hop) {
+        covered = false;
+        if (!shared) levers.push({ name: l.name, version: l.version, to: null, breaking: false, ...(held ? { outcome: held.kind === "malicious" ? ("malicious" as const) : held.outcome } : {}) });
+        ways.push(
+          !held
+            ? `upgrade ${l.name} to a release that brings in ${parent} >= ${floor} (check that it does)`
+            : held.kind === "malicious"
+              ? `${held.text}; no ${l.name} upgrade is named`
+              : held.outcome === "introduces"
+                ? held.text
+                : `${held.text}: replace ${l.name}`,
+        );
+        continue;
+      }
+      const v = lifts.get(l.name) ?? hop.version;
+      const at = v === hop.version ? { brings: hop.brings, keepsParent: hop.keepsParent } : (hop.admitsAt(v) as { brings: string | null; keepsParent: boolean } | null);
+      if (!at) return null;
+      const lever: ParentLever = shared ?? {
+        name: l.name,
+        version: l.version,
+        to: v,
+        breaking: isMajor(l.version, v),
+        ...(v !== hop.version ? { smallest: hop.version } : {}),
+        ...(at.brings !== null ? { floor, brings: at.brings } : {}),
+        ...declaredFixes(ctx.intel, ctx.ecosystem, l.name, l.version, v, l.dirs),
+      };
+      if (!shared) {
+        LEVER_ADMITS.set(lever, hop.admitsAt as (version: string) => { requirement?: string | null; resolvesTo?: string | null } | null);
+        levers.push(lever);
+      }
+      let after = "";
+      if (at.keepsParent && at.brings) {
+        // Its new requirement still admits the old parent, which an install keeps: the parent's refresh follows.
+        const r = refreshFor(ctx, b, parent, from, at.brings);
+        if (!refreshes.some((x) => x.dir === r.dir && x.command === r.command)) refreshes.push(r);
+        after = `; its requirement still admits ${parent} ${from}, which an install keeps, so then run \`${r.command}\``;
+      }
+      ways.push(
+        at.brings === null
+          ? `${l.name} ${v} no longer brings in ${parent}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}`
+          : `${l.name} ${v} ${v === hop.version ? `is the smallest ${l.name} release that brings in` : `(the smallest that does is ${hop.version}) brings in`} ${parent} ${at.brings}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}${after}`,
+      );
+    }
+    if (h.why) ways.push(h.via.length > 0 ? h.why : `no command is named for it (${h.why})`);
+    if (covered) named++;
+    texts.push(`${h.name} ${h.version}, ${holds} and keeps ${parent} ${from} after that upgrade: ${ways.join("; ")}`);
+  }
+  return { texts, levers, refreshes, paths: kept.length, named };
+}
+
 /**
  * A lever release that takes the blocking parent out of the path altogether: the smallest
  * release of `lever` (clear of its own advisories) whose requirements name neither `parent` nor
@@ -1469,12 +1647,23 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   }
 
   if (route.kind === "direct") {
+    // The project's own declaration is one holder of this parent copy. Another installed package
+    // whose requirement excludes the release the project moves to keeps the old parent, and the
+    // vulnerable copy with it: each such path is named with what moves it. Cargo holds one copy per
+    // compatibility line, so there the resolver refuses the upgrade instead and nothing is kept.
+    const co = dialect === "cargo" ? [] : await otherHolders(ctx, b, parent, from, facts, history, dialect, own.clean, found.version);
+    const coveredAt = (v: string) => co.filter((h) => holderAdmits(h, dialect, v));
     const render = (lifts: ReadonlyMap<string, string>): string | null => {
       const v = lifts.get(parent) ?? found.version;
       if (!pkgAt(v)) return null;
       const lever: ParentLever = { name: parent, version: from, to: v, breaking: isMajor(from, v), ...declaredFixes(ctx.intel, ecosystem, parent, from, v, route.dirs) };
-      LEVER_ADMITS.set(lever, (x) => pkgAt(x));
-      upgrade.levers = [lever];
+      // Another release of the parent serves this row only when it leaves no further holder behind.
+      LEVER_ADMITS.set(lever, (x) => (coveredAt(found.version).every((h) => holderAdmits(h, dialect, x)) ? pkgAt(x) : null));
+      const also = alsoThrough(ctx, b, co.filter((h) => !holderAdmits(h, dialect, v)), parent, from, found.version, lifts);
+      if (!also) return null;
+      upgrade.levers = [lever, ...also.levers];
+      if (also.paths > 0) upgrade.paths = { total: 1 + co.length, named: 1 + co.length - also.paths + also.named };
+      else delete upgrade.paths;
       setParentAt(v);
       // `smallest` is the smallest release that admits a clean copy (the shared parent_release
       // vectors), even when what it holds lifts the move past it (round 8, B6).
@@ -1482,13 +1671,15 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       if (v !== smallestNamed) upgrade.smallest = smallestNamed;
       else delete upgrade.smallest;
       const refreshes = refreshAt(v);
-      if (refreshes.length > 0) upgrade.refreshCommands = refreshes;
+      const allRefreshes = [...also.refreshes.filter((r) => !refreshes.some((x) => x.dir === r.dir && x.command === r.command)), ...refreshes];
+      if (allRefreshes.length > 0) upgrade.refreshCommands = allRefreshes;
       else delete upgrade.refreshCommands;
       const heldLift =
         smallestOwn && smallestOwn.version !== found.version && v === found.version
           ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} brings in a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), and ${found.version} is the smallest release past it whose held dependencies ${carried.length > 0 ? "bring in none the installed release lacks" : "are clean"}`
           : "";
-      return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}`;
+      const paths = also.paths > 0 ? `. That upgrade alone covers ${1 + co.length - also.paths} of ${1 + co.length} paths to ${pkg} ${ctx.installed}: it is also installed through ${also.texts.join("; and through ")}` : "";
+      return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}${paths}`;
     };
     const text = render(new Map())!;
     MOVES.set(upgrade, { text, render });
