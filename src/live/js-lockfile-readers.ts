@@ -614,6 +614,21 @@ function yarnBlockField(block: string, lineRe: RegExp): string | null {
   return null;
 }
 
+/**
+ * Every descriptor a yarn.lock entry answers, unquoted. v1 quotes each one
+ * (`"@scope/a@^1.0.0", "@scope/a@^1.1.0":`); berry quotes the whole list
+ * (`"a@npm:^1.2.0, a@npm:^1.2.5":`), so a quote is never part of a descriptor
+ * and the list is split only after the quotes are gone.
+ */
+export function yarnHeaderSpecs(firstLine: string): string[] {
+  return firstLine
+    .replace(/:\s*$/, "")
+    .replaceAll('"', "")
+    .split(",")
+    .map((spec) => spec.trim())
+    .filter((spec) => spec !== "");
+}
+
 /** The `version` of a yarn.lock block: v1 `  version "1.2.3"`, berry `  version: 1.2.3`. */
 export function yarnBlockVersion(block: string): string | null {
   return yarnBlockField(block, /^[ \t]+version:?[ \t]+"?([^"\s]+)"?[ \t]*$/);
@@ -633,7 +648,7 @@ function yarnNonRegistry(block: string, firstLine: string): "git" | "url" | "fil
   }
   const resolved = yarnBlockField(block, /^[ \t]+resolved[ \t]+"([^"]+)"/);
   if (!resolved) return null;
-  const spec = unquote(firstLine.replace(/:\s*$/, "").split(",")[0].trim());
+  const spec = yarnHeaderSpecs(firstLine)[0] ?? "";
   const at = spec.indexOf("@", spec.startsWith("@") ? 1 : 0);
   return nonRegistrySource(resolved, at > 0 ? spec.slice(at + 1) : undefined);
 }
@@ -685,9 +700,7 @@ export function readYarnLock(
     if (!versions.has(name)) versions.set(name, version);
     instances?.add(name, version);
     if (specs) {
-      for (const spec of firstLine.replace(/:\s*$/, "").split(",")) {
-        specs.set(unquote(spec.trim()).replace(/@npm:/, "@"), version);
-      }
+      for (const spec of yarnHeaderSpecs(firstLine)) specs.set(spec.replace(/@npm:/, "@"), version);
     }
   }
   return skipped;
