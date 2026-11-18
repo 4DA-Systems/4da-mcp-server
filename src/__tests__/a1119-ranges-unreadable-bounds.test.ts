@@ -41,6 +41,7 @@ import type { PackageReleaseIndex, ReleaseRecord } from "../live/release-metadat
 import type { OsvVulnerability } from "../live/types.js";
 import { checkRange } from "../tools/dependency-check-versions.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
+import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import type { FourDADatabase } from "../db.js";
 
@@ -338,14 +339,16 @@ describe("dependency_check: the newest release is judged by OSV.dev's own answer
 });
 
 describe("vulnerability_scan: a fix target is named once OSV.dev's answer for it is clean", () => {
-  async function scan(format: "concise" | "detailed" = "concise") {
+  async function project() {
     fs.writeFileSync(path.join(dir, "requirements.txt"), "apache-airflow==2.8.0\ntorch==2.5.0\n");
     const li = new LiveIntelligence(new Database(":memory:"));
     const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
     const { entries, discovery } = scanProjectTree(dir);
     li.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
-    return (await executeVulnerabilityScan(null, { project_path: dir, response_format: format }, li)) as Record<string, any>;
+    return li;
   }
+  const scan = async () => (await executeVulnerabilityScan(null, { project_path: dir, response_format: "concise" }, await project())) as Record<string, any>;
+  const plan = async () => ((await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50 }, await project())) as Record<string, any>).recommendations as Array<Record<string, any>>;
   const row = (s: Record<string, any>, name: string) => (s.vulnerable_packages as Array<Record<string, any>>).find((p) => p.package === name)!;
   const line = (s: Record<string, any>, name: string) => (s.recommendations as string[]).find((r) => r.includes(name))!;
 
@@ -366,5 +369,14 @@ describe("vulnerability_scan: a fix target is named once OSV.dev's answer for it
     expect(line(s, "torch")).toMatch(/NOT CHECKED/);
     // apache-airflow, in the same scan, is unaffected by that.
     expect(row(s, "apache-airflow")).toMatchObject({ fixed_version: "3.3.2", fix_checked: "all_advisories" });
+    const torch = (await plan()).find((p) => p.package === "torch")!;
+    expect(torch.targetVersion).toBeNull();
+    expect(torch.reasons.join(" | ")).toMatch(/NOT CHECKED/);
+  });
+
+  it("upgrade_planner names the same targets as the scan", async () => {
+    const steps = await plan();
+    expect(steps.find((s) => s.package === "apache-airflow")).toMatchObject({ targetVersion: "3.3.2", fixPathChecked: "all_advisories" });
+    expect(steps.find((s) => s.package === "torch")).toMatchObject({ targetVersion: "2.13.0", fixPathChecked: "all_advisories" });
   });
 });
