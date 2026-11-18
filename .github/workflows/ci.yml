@@ -86,9 +86,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm run build
+      # The build is `tsc` over tsconfig.json, so it is also the type check of
+      # every shipped source file: a type error fails here. vitest does not
+      # type-check, so no test would.
+      - name: Build (tsc, the type check of the shipped sources)
+        run: pnpm run build
 
-      - name: Repository gates (SPDX, retired claims, REMOVE BY, pnpm pin)
+      - name: Repository gates (SPDX, retired claims, REMOVE BY, pnpm pin, corpus-gated suites)
         run: pnpm run check
 
       # npm retired the audit endpoint pnpm <= 10 uses (HTTP 410, 2026-07-14);
@@ -119,11 +123,10 @@ jobs:
         run: |
           url=https://raw.githubusercontent.com/4DA-Systems/4DA/main/src-tauri/contract/app-schema.sql
           code=$(curl -sS -o upstream-schema.sql -w '%{http_code}' "$url")
-          if [ "$code" = "404" ]; then
-            echo "::notice::4DA main has no src-tauri/contract/app-schema.sql yet; only the vendored copy was checked."
-            exit 0
-          fi
-          [ "$code" = "200" ] || { echo "::error::$url -> HTTP $code"; exit 1; }
+          # Only the file itself passes. A 404 is a failure like any other status:
+          # a schema that moved or was deleted would otherwise leave this step
+          # green with nothing but the vendored copy checked.
+          [ "$code" = "200" ] || { echo "::error::$url -> HTTP $code: the desktop app's current schema was not checked. If the file moved, update this URL and scripts/sync-app-schema.mjs."; exit 1; }
           pnpm run contract -- --schema upstream-schema.sql
           if ! cmp -s <(tr -d '\r' < upstream-schema.sql) <(tr -d '\r' < contract/app-schema.sql); then
             echo "::warning::contract/app-schema.sql is behind 4DA main. The server passes against both; refresh it with 'pnpm run contract:sync'."
@@ -266,8 +269,18 @@ jobs:
       - name: Fetch the corpus (skipped when the cache holds this commit)
         run: node scripts/fetch-conformance.mjs
 
-      - name: Conformance ratchet and shared rule vectors
-        run: pnpm exec vitest run src/__tests__/conformance.test.ts src/__tests__/conformance-drift.test.ts src/__tests__/rule-vectors.test.ts
+      # Every test file that reads the corpus runs here: this is the only job
+      # that has it, so one left off this list runs nowhere (`pnpm run check`
+      # fails on that). A suite that skips itself still exits 0, so the report
+      # is checked too: each of those files ran, with no test skipped.
+      - name: Conformance ratchet, shared rule vectors and corpus parent edges
+        run: |
+          pnpm exec vitest run --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/conformance-report.json" \
+            src/__tests__/conformance.test.ts \
+            src/__tests__/conformance-drift.test.ts \
+            src/__tests__/rule-vectors.test.ts \
+            src/__tests__/lockfile-parents-names.test.ts
+          node scripts/ci-gates.mjs tests-ran "$RUNNER_TEMP/conformance-report.json"
         env:
           FOURDA_REQUIRE_CONFORMANCE: "1"
 
@@ -305,7 +318,9 @@ jobs:
 
   nightly-report:
     name: Report a nightly failure
-    needs: [test, checks, conformance, conformance-main]
+    # Every job of the nightly: a failed install smoke or bundle build is a
+    # nightly failure too, and one this job does not need would go unreported.
+    needs: [test, checks, install-smoke, bundle, conformance, conformance-main]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
@@ -315,14 +330,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NEEDS: ${{ toJSON(needs) }}
         run: |
           title="Nightly CI failed (app-schema contract or platform tests)"
           existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          failed=$(jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key) (\(.value.result))"] | join(", ")' <<<"$NEEDS")
           body="The nightly run failed: $RUN_URL
+
+          Jobs that did not pass: ${failed:-not reported}
 
           If the contract step failed, the desktop app's schema on 4DA main no longer matches what this server reads. See contract/README.md, 'When it fails'.
 
-          If 'conformance (4DA main)' failed, this server's dependency engine disagrees with the conformance corpus on 4DA main. See conformance/README.md, 'When it fails'."
+          If 'conformance (4DA main)' failed, this server's dependency engine disagrees with the conformance corpus on 4DA main. See conformance/README.md, 'When it fails'.
+
+          If 'install-smoke' or 'bundle' failed, the package as a user installs it (the packed tarball, the .mcpb bundle) no longer starts, though the tests from source pass."
           if [ -n "$existing" ]; then
             gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"
           else

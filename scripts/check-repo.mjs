@@ -25,12 +25,19 @@
  *      "Maximum call stack size exceeded" past ~100,000 elements (a 150,000-entry
  *      pnpm lockfile did, pre-publish round 7). Server code uses pushAll / maxOf
  *      (src/array-utils.ts). Tests are exempt.
+ *   6. Corpus-gated suites run where the corpus is. A test file that reads the
+ *      conformance corpus skips without it, and only ci.yml's `conformance` job
+ *      and release.yml's `verify` job fetch it: each such file must be named in
+ *      the conformance job, and both jobs must require the corpus and check the
+ *      report (scripts/ci-gates.mjs). Two corpus tests ran in no job until this.
  *
  * Exit 1 on any finding.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { corpusGatedTests, workflowGateFindings } from "./ci-gates.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const rel = (p) => relative(root, p).replaceAll("\\", "/");
@@ -135,8 +142,19 @@ for (const file of walk(join(root, "src"), (p) => /\.ts$/.test(p) && !p.replaceA
     });
 }
 
+// 6. Corpus-gated suites run where the corpus is --------------------------------
+const gated = corpusGatedTests(root);
+if (gated.length === 0) findings.push("src/__tests__: no test file reads the conformance corpus (FOURDA_CONFORMANCE_DIR), so gate 6 checks nothing");
+findings.push(
+  ...workflowGateFindings({
+    ci: readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf8"),
+    release: readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8"),
+    gated,
+  }),
+);
+
 if (findings.length) {
   console.error(`check-repo: ${findings.length} finding(s)\n  ${findings.join("\n  ")}`);
   process.exit(1);
 }
-console.log(`check-repo: OK (${sources.length} source files, ${shipped.length} shipped text files)`);
+console.log(`check-repo: OK (${sources.length} source files, ${shipped.length} shipped text files, ${gated.length} corpus-gated test files)`);
