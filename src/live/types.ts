@@ -169,6 +169,11 @@ export interface VulnerabilityEntry {
    * and never worded as "no fix published".
    */
   detailUnavailable?: true;
+  /**
+   * With `detailUnavailable`: the record was not asked for at all in this scan (its limit on
+   * record requests, or the time it had for them), which is not OSV.dev failing to return it.
+   */
+  detailNotAsked?: true;
   summary: string;
   fixedVersion: string | null;
   published: string;
@@ -250,6 +255,9 @@ export interface VulnerabilityScanResult {
    * the scan is not a complete answer: absent when every record was read.
    */
   detailsUnchecked?: string[];
+  /** How many of `detailsUnchecked` the scan did not ask for at all, and why, in words (absent when none). */
+  detailsNotAsked?: number;
+  detailsUncheckedReason?: string;
   /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
   aliasSeverity?: AliasSeverityReport;
   /**

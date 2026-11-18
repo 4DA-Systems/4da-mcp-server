@@ -67,7 +67,8 @@ function osvCoverage(
   const details = result.detailsUnchecked ?? [];
   if (unchecked <= 0 && stale <= 0 && details.length === 0) return null;
   const detailsGap = details.length > 0 ? { details_unchecked: details.length } : {};
-  const withDetails = (note: string) => (details.length > 0 ? `${note} ${detailsLine(details)}` : note);
+  const notAsked = result.detailsUncheckedReason ? { count: result.detailsNotAsked ?? details.length, why: result.detailsUncheckedReason } : null;
+  const withDetails = (note: string) => (details.length > 0 ? `${note} ${detailsLine(details, notAsked)}` : note);
   if (unchecked > 0) {
     const gap = build(result.totalScanned, unchecked, result.uncheckedReason ?? "OSV.dev could not be queried");
     const note = withDetails(stale > 0 ? `${gap.note} ${staleLine(result, stale)}` : gap.note);
@@ -96,15 +97,24 @@ function osvCoverage(
     checked_dependencies: result.totalScanned,
     unchecked_dependencies: 0,
     ...detailsGap,
-    reason: `OSV.dev did not return the record of ${details.length} matched advisor${details.length === 1 ? "y" : "ies"}`,
-    note: `NOT CHECKED (advisory details): ${detailsLine(details)}`,
+    reason: notAsked
+      ? `the record of ${details.length.toLocaleString("en-US")} matched advisor${details.length === 1 ? "y was" : "ies were"} not read (${notAsked.why})`
+      : `OSV.dev did not return the record of ${details.length} matched advisor${details.length === 1 ? "y" : "ies"}`,
+    note: `NOT CHECKED (advisory details): ${detailsLine(details, notAsked)}`,
   };
 }
 
 /** "OSV.dev matched N advisories (ids) but did not return their records ..." */
-function detailsLine(ids: string[]): string {
+function detailsLine(ids: string[], notAsked: { count: number; why: string } | null = null): string {
   const one = ids.length === 1;
   const listed = `${ids.slice(0, 5).join(", ")}${ids.length > 5 ? ", ..." : ""}`;
+  if (notAsked) {
+    // Records the scan did not ask for (its limit, its time): a later call reads on, nothing to force.
+    const n = (x: number) => x.toLocaleString("en-US");
+    const failed = ids.length - notAsked.count;
+    const split = failed > 0 ? `${n(notAsked.count)} of their records were not asked for in this call (${notAsked.why}) and OSV.dev did not return the other ${n(failed)}` : `${one ? "its record was" : "their records were"} not asked for in this call (${notAsked.why})`;
+    return `OSV.dev matched ${n(ids.length)} advisor${one ? "y" : "ies"} (${listed}), but ${split}, so ${one ? "its" : "their"} severity and fix version are unknown: unknown is not low, and no fix version listed is not "no fix published". Call again: the records already read are kept, so each call reads on.`;
+  }
   return `OSV.dev matched ${ids.length.toLocaleString("en-US")} advisor${one ? "y" : "ies"} (${listed}) but did not return ${one ? "its record" : "their records"}, so ${one ? "its" : "their"} severity and fix version are unknown: unknown is not low, and no fix version listed is not "no fix published". Call again (force_refresh), or read https://osv.dev/vulnerability/<id>.`;
 }
 
