@@ -94,6 +94,9 @@ const HEADING = new RegExp(
   "i",
 );
 
+/** `6.0.3 (2025-09-25)`: a version, then only a parenthesised date. */
+const DATED_TITLE = new RegExp(String.raw`^v?(${VERSION})\s+\(([^()]{6,30})\)$`);
+
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 /** ISO date from a heading trailer: `2024-01-01`, `2024/01/01`, `August 1st, 2025`, `1 Aug 2025`. */
@@ -248,7 +251,7 @@ function flush(state: ParseState): void {
  * categories), as opposed to a new document part ("Migration guide", "Older releases").
  */
 const CATEGORY_HEADING =
-  /^\W*(added|changed|changes|deprecated|deprecations|removed|removals|fixed|fixes|bug ?fixes|security|features?|new features|enhancements?|improvements?|performance( improvements)?|breaking( changes?)?|⚠️?\s*breaking( changes?)?|dependencies|dependency updates|documentation|docs|internal|misc(ellaneous)?|other( changes)?|chores?|refactor(ing)?|reverts?|build|tests?)\W*$/i;
+  /^\W*(added|changed|changes|deprecated|deprecations|removed|removals|fixed|fixes|bug ?fixes|security|features?|new features|enhancements?|improvements?|performance( improvements)?|breaking( changes?)?|break(ing)? changes?|⚠️?\s*breaking( changes?)?|dependencies|dependency updates|documentation|docs|internal|misc(ellaneous)?|other( changes)?|chores?|refactor(ing)?|reverts?|build|tests?)\W*$/i;
 
 function isCategoryHeading(raw: string): boolean {
   return CATEGORY_HEADING.test(raw.trim());
@@ -469,6 +472,14 @@ export function parseChangelogWithin(text: string, budgetMs: number = PARSE_BUDG
     const history = new RegExp(String.raw`^v?(${VERSION})\s+/\s+(.+)$`).exec(line.trim());
     if (history && extractDate(history[2])) {
       openSection(state, { version: history[1], date: extractDate(history[2]) }, 2);
+      continue;
+    }
+    // A version and its date in parentheses, alone on a line after a blank one: a release title
+    // with no underline at all. PyYAML's CHANGES has been written that way since 5.3, so 6.0's
+    // "always require `Loader` arg to `yaml.load()`" was never read.
+    const dated = (i === 0 || lines[i - 1].trim() === "") && line.length <= 80 ? DATED_TITLE.exec(line.trim()) : null;
+    if (dated && extractDate(dated[2])) {
+      openSection(state, { version: dated[1], date: extractDate(dated[2]) }, 2);
       continue;
     }
     if (RULE.test(line)) {

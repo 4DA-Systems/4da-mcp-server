@@ -65,6 +65,13 @@ const LEADING_FIX = /^\W*(?:\*\*[^*]{1,40}\*\*:?\s*)?(?:fix|fixed|fixes|fixing)\
  * change release"). Measured 2026-10-02 against a 3-rater panel.
  */
 const EXPLICIT_BREAKING_PROSE = /(?<!\bnot (?:a )?|\bnon[- ]|\bno |-)\bbreaking[- ]changes?\b(?! release)/i;
+/**
+ * The same words denied a few words earlier in the clause: "should not result in breaking
+ * changes", "without any breaking change". The lookbehind above sees only a denial that
+ * touches the words; these were flagged breaking (three of four flags on Jinja 3.1's notes).
+ * A "but" between them ends the denial ("not a fix but a breaking change").
+ */
+const NEGATED_BREAKING = /\b(?:not|no|without|never|none|cannot|[a-z]+n't)\b(?:(?!\bbut\b)[^.;:]){0,40}?\bbreaking[- ]changes?\b/i;
 /** A yank notice mentions breakage without being a change to the API ("Yanked ... due to unforeseen breaking change"). */
 const YANK_NOTICE = /\byanked\b/i;
 /**
@@ -122,6 +129,8 @@ const BREAKING_HEURISTIC = new RegExp(
     "\\b(?:MSRV|minimum supported rust version)\\b.{0,60}?\\b(?:is now|to|bumped to|raised to|increased to)\\s+(?:rust\\s+|rustc\\s+)?v?\\d",
     "\\b(?:MSRV|minimum supported rust version)\\b.{0,60}\\d+\\.\\d+.{0,20}\\bor later\\b",
     "\\bnow (?:requires?|required|returns?|takes?|accepts? only)\\b",
+    // An argument that was optional and is no longer: "always require `Loader` arg to `yaml.load()`" (PyYAML 6.0).
+    "\\balways requires?\\b",
     "\\b(?:function|method|type|the) signatures?\\b",
     "\\bsignatures? (?:of|has|have|changed)\\b",
     "\\b(?:changed?|new|different)\\b[^.]{0,30}\\b(?:return|argument|parameter) types?\\b",
@@ -263,7 +272,7 @@ export function classifyText(raw: string): EntryKind {
   if (LEADING_DEPRECATION.test(text)) return "deprecation";
   // A rename that keeps the old name working ("Rename `x => y`, deprecating the old name").
   if (/\brenam/i.test(text) && DEPRECATION.test(text) && !/\bremov/i.test(text)) return "deprecation";
-  if (EXPLICIT_BREAKING_PROSE.test(text)) return "breaking";
+  if (EXPLICIT_BREAKING_PROSE.test(text) && !NEGATED_BREAKING.test(text)) return "breaking";
   if (SECURITY.test(text)) return "security";
   if (FUTURE_INTENT.test(text)) return DEPRECATION.test(text) ? "deprecation" : "change";
   if (UNDO.test(text)) return DEPRECATION.test(text) ? "deprecation" : "change";
@@ -300,7 +309,8 @@ const ADDITIVE_HEADING =
 
 /** Context implied by a heading or label, or null when it carries no signal ("### Changed"). */
 export function classifyHeading(heading: string): EntryContext | null {
-  if (/(?<!-)\bbreaking\b|⚠|incompatib|migration|\bmajor changes?\b/i.test(heading)) return "breaking";
+  // "BREAK CHANGES" is gin's spelling of the same heading: its `RemoteIP()` signature change read as a plain change.
+  if (/(?<!-)\bbreaking\b|\bbreak changes?\b|⚠|incompatib|migration|\bmajor changes?\b/i.test(heading)) return "breaking";
   // "Removed", "Removals", "Deprecated and Removed", "API changes": a category.
   // "`Cargo.lock` Removed from Tracking" (sqlx 0.9.0) is a news item about the
   // repository, and its three paragraphs were flagged breaking.
