@@ -40,7 +40,7 @@ describe("severity_filter: the advisory's own severity counts as much as the pre
   it("critical: a transitive copy carrying a critical advisory is kept (it is presented as high)", () => {
     const full = formatScanResult(scanOf(TREE), "critical", ctx);
     const rows = full.vulnerabilities.map((v) => `${v.package}@${v.current_version}:${v.severity}/${v.advisory_severity}`);
-    expect(rows).toEqual(["minimist@1.2.5:critical/critical", "minimist@0.2.3:high/critical", "devtool@1.0.0:high/critical"]);
+    expect(rows).toEqual(["minimist@1.2.5:critical/critical", "devtool@1.0.0:high/critical", "minimist@0.2.3:high/critical"]);
     expect(full.advisory_by_severity).toMatchObject({ critical: 3 });
   });
 

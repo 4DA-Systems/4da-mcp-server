@@ -133,9 +133,10 @@ describe("vulnerability_scan recommendations", () => {
       { resolution: null, reResolvedThisCall: false, drift: [], includeDev: true },
     );
     const rsa = out.recommendations.filter((r) => r.includes("rsa"));
+    // At the same grade the direct copy (0.10.0-rc.18) is listed before the transitive one.
     expect(rsa).toEqual([
-      "Review rsa 0.9.10 in relay, src-tauri — 1 known vulnerability [1 medium], no fix version published",
       "Review rsa 0.10.0-rc.18 in src-tauri — 1 known vulnerability [1 medium], no fix version published",
+      "Review rsa 0.9.10 in relay, src-tauri — 1 known vulnerability [1 medium], no fix version published",
     ]);
   });
 });
