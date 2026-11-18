@@ -233,6 +233,13 @@ export class OsvHttpSource implements AdvisorySource {
       }
       try {
         const sent = await this.sendBatch(chunk, deadline);
+        // A chunk contributes exactly one entry per dependency it holds, or none of its answers
+        // are used: the chunks are laid end to end below, so a list of any other length would
+        // put its answers, and every later chunk's, on the wrong dependencies.
+        if (sent.ids.length !== chunk.length) {
+          failure ??= `OSV.dev's answer could not be matched to the dependencies asked about (${sent.ids.length} answers for ${chunk.length})`;
+          return chunk.map(() => null);
+        }
         if (sent.incomplete) failure ??= sent.incomplete;
         return sent.ids;
       } catch (error) {
@@ -280,6 +287,11 @@ export class OsvHttpSource implements AdvisorySource {
         more = await this.postBatch(open.map(({ index, token }) => ({ ...queries[index], page_token: token })));
       } catch (error) {
         abandon(`${describeFailure(error)} while reading page ${page} of the answer`);
+        break;
+      }
+      // One result per query still open, or the page is not attributed to any of them.
+      if (more.length !== open.length) {
+        abandon(`OSV.dev answered ${more.length} results for ${open.length} queries on page ${page} of the answer`);
         break;
       }
       const next: typeof open = [];
