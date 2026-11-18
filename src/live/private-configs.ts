@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { pushAll } from "../array-utils.js";
+import { wildcardMatch } from "./glob-match.js";
 import {
   CODE_HOSTS,
   hostOf,
@@ -491,29 +492,46 @@ export function goProxyPrivate(value: string | undefined, mirrors: ReadonlySet<s
 // Cargo
 // ---------------------------------------------------------------------------------------------
 
-/** A Cargo glob element (`*`, `?`) against a directory name. */
-const globElement = (pattern: string, name: string) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(name);
+/** A Cargo glob element (`*`, `?`) against a directory name. Matched without building a RegExp (glob-match.ts). */
+const globElement = (pattern: string, name: string) => wildcardMatch(pattern, name);
 
-/** Directories under `root` a workspace `members` glob names (`crates/*`, `tools/cli`, `**` at most 4 deep). */
-function expandMemberGlob(root: string, pattern: string): string[] {
+/** Directory listings one `members` pattern may cost, and the directories it may name. */
+const MEMBER_GLOB_LISTINGS = 4000;
+const MEMBER_GLOB_RESULTS = 2000;
+
+/**
+ * Directories under `root` a workspace `members` glob names (`crates/*`, `tools/cli`, `**` at most 4 deep).
+ * The pattern is a manifest's text, so its cost is bounded whatever it holds: a run of `**` is
+ * one `**`, and the whole expansion reads at most MEMBER_GLOB_LISTINGS directories.
+ */
+export function expandMemberGlob(root: string, pattern: string): string[] {
   let current = [root];
-  const parts = pattern.replace(/\\/g, "/").split("/").filter((p) => p && p !== ".");
+  const parts = pattern
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((p) => p && p !== ".")
+    .filter((p, i, all) => !(p === "**" && all[i - 1] === "**"));
+  let listings = 0;
+  const list = (dir: string): string[] => (listings++ < MEMBER_GLOB_LISTINGS ? listDirs(dir) : []);
   for (const part of parts) {
+    if (current.length === 0) break;
     const next: string[] = [];
     for (const dir of current) {
+      if (next.length >= MEMBER_GLOB_RESULTS) break;
       if (part === "..") continue;
       if (part === "**") {
         const walk = (d: string, depth: number) => {
+          if (next.length >= MEMBER_GLOB_RESULTS) return;
           next.push(d);
           if (depth >= 4) return;
-          for (const e of listDirs(d)) walk(path.join(d, e), depth + 1);
+          for (const e of list(d)) walk(path.join(d, e), depth + 1);
         };
         walk(dir, 0);
       } else if (/[*?]/.test(part)) {
-        for (const e of listDirs(dir)) if (globElement(part, e)) next.push(path.join(dir, e));
+        for (const e of list(dir)) if (globElement(part, e)) next.push(path.join(dir, e));
       } else next.push(path.join(dir, part));
     }
-    current = next.slice(0, 2000);
+    current = next.slice(0, MEMBER_GLOB_RESULTS);
   }
   return current;
 }

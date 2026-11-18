@@ -52,6 +52,8 @@ export function closeServerCacheDb(): void {
 const SANE_FETCHED_AT = "fetched_at <= datetime('now', '+5 minutes')";
 /** How long past its expiry an OSV answer is kept as a stale stand-in (SQLite datetime modifier; W5). */
 const STALE_OSV_RETENTION = "-7 days";
+/** The longest value one row may hold, in characters of JSON (about 24 MB). */
+const MAX_ROW_CHARS = 24 * 1024 * 1024;
 /** Keys per IN (...) query in getMany: well under SQLite's 999-variable floor of older builds. */
 const MANY_CHUNK = 500;
 
@@ -242,16 +244,20 @@ export class LiveCache {
   }
 
   set(key: string, data: unknown, source: string, ttlSeconds: number): void {
+    const text = JSON.stringify(data);
+    // One answer is never worth a row this large: it is refetched next time instead. Without the
+    // limit a single oversized registry answer left a 171 MB row in cache.db for a week.
+    if (text.length > MAX_ROW_CHARS) return;
     if (this.memory) {
       const now = Date.now();
       const iso = (ms: number) => new Date(ms).toISOString();
-      this.memory.set(key, { cache_key: key, data: JSON.stringify(data), source, fetched_at: iso(now), expires_at: iso(now + ttlSeconds * 1000) });
+      this.memory.set(key, { cache_key: key, data: text, source, fetched_at: iso(now), expires_at: iso(now + ttlSeconds * 1000) });
       return;
     }
     this.conn().prepare(`
       INSERT OR REPLACE INTO live_cache (cache_key, data, source, fetched_at, expires_at)
       VALUES (?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'))
-    `).run(key, JSON.stringify(data), source, ttlSeconds);
+    `).run(key, text, source, ttlSeconds);
   }
 
   /**

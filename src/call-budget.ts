@@ -47,6 +47,8 @@ interface Budget {
   findings: Map<string, CallFinding>;
   /** The registry's own words this call's sentences point to (untrusted-text.ts registryQuote). */
   quotes: Map<string, string>;
+  /** Every host a request of this call was sent to, redirects included (http-utils.ts). */
+  hosts: Set<string>;
 }
 
 /**
@@ -102,12 +104,22 @@ export function callFinding(key: string): CallFinding | undefined {
   return current.getStore()?.findings.get(key);
 }
 
+/** Record that a request of the running call went to `host` (no-op outside a call). */
+export function noteCallHost(host: string): void {
+  current.getStore()?.hosts.add(host);
+}
+
+/** The hosts the running call has sent a request to so far, sorted; empty outside a call or when it sent none. */
+export function callHosts(): string[] {
+  return [...(current.getStore()?.hosts ?? [])].sort();
+}
+
 const current = new AsyncLocalStorage<Budget>();
 
 /** Run `work` as one tool call whose budget started at `startedAt` (epoch ms). */
 export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>): Promise<T> {
   const budgetMs = callBudgetMs();
-  return current.run({ deadline: startedAt + budgetMs, budgetMs, memo: new Map(), findings: new Map(), quotes: new Map() }, work);
+  return current.run({ deadline: startedAt + budgetMs, budgetMs, memo: new Map(), findings: new Map(), quotes: new Map(), hosts: new Set() }, work);
 }
 
 /**

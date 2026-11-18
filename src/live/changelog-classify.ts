@@ -220,11 +220,26 @@ const API_CHANGE = new RegExp(
  * read as a docs change), GitHub's "by @user in <PR url>" suffix dropped.
  */
 export function classificationText(text: string): string {
-  return text
-    .replace(/``/g, "`")
-    .replace(/\]\([^)]*\)/g, "]")
+  return dropLinkTargets(text.replace(/``/g, "`"))
     .replace(/\bby @[\w-]+(?:\[bot\])? in\s+\S+/g, " ")
     .replace(/https?:\/\/\S+/g, " ");
+}
+/**
+ * `[label](target)` read as `[label]`. Scanned by hand: a pattern for it rescans to the end of the
+ * line from every `](` when no `)` follows, which costs the square of the line's length.
+ */
+function dropLinkTargets(text: string): string {
+  let out = "";
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf("](", from);
+    if (open === -1) break;
+    const close = text.indexOf(")", open + 2);
+    if (close === -1) break;
+    out += text.slice(from, open + 1);
+    from = close + 1;
+  }
+  return out + text.slice(from);
 }
 const DEPRECATION = /deprecat/i;
 /**

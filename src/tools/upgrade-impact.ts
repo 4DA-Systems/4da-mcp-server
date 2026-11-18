@@ -482,6 +482,7 @@ export async function analyzeUpgradeImpact(
           file: changelog.file,
           ...(changelog.source && changelog.source !== "archive" ? { source: changelog.source, url: changelog.url } : {}),
           covers_range: range.coversRange,
+          ...(changelog.incomplete ? { incomplete: changelog.incomplete } : {}),
           sections: shaped.sections,
           ...(shaped.truncated ? { truncated: shaped.truncated } : {}),
           ...(shaped.duplicates ? { duplicates_omitted: shaped.duplicates } : {}),

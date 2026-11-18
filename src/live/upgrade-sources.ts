@@ -21,10 +21,11 @@
  */
 
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
-import { osvAdvisoryId, quoteThirdParty, thirdPartyUrl, URL_MAX } from "../untrusted-text.js";
+import { osvAdvisoryId, quoteThirdParty, thirdPartyTimestamp, thirdPartyUrl, URL_MAX } from "../untrusted-text.js";
 import { isMalwareRecord } from "./malware.js";
-import { ArchiveError, defaultFetch, fetchArchiveBytes, readRootTextFiles, type FetchFn } from "./package-archive.js";
-import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelog, type ChangelogSection, type VersionOrder } from "./changelog.js";
+import { ArchiveError, defaultFetch, displayArchivePath, fetchArchiveBytes, readRootTextFiles, type FetchFn } from "./package-archive.js";
+import { registryEchoedName, registryVersionText } from "./registry-fields.js";
+import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelogWithin, type ChangelogSection, type VersionOrder } from "./changelog.js";
 import { compareVersions, isComparable } from "./version-compare.js";
 import { isPrereleaseVersion } from "./osv-ranges.js";
 import { looksLikeZip, readZipRootTextFiles } from "./zip-archive.js";
@@ -65,6 +66,8 @@ export const CRATES_USER_AGENT = "4da-mcp-server (https://4da.ai; upgrade_impact
 
 const INDEX_TTL = 6 * 3600;
 const CHANGELOG_TTL = 7 * 86_400;
+const INCOMPLETE_TTL = 3600;
+const INCOMPLETE_NOTE = "reading this changelog stopped at the time allowed for one file; sections after the last one listed were not read";
 const OSV_TTL = 3600;
 const CACHE_SOURCE = "upgrade-impact";
 const INDEX_TIMEOUT_MS = 30_000;
@@ -106,6 +109,8 @@ export interface ChangelogResult {
   source?: "archive" | "github-releases" | "github-file";
   /** The page or API the GitHub fallback read. */
   url?: string;
+  /** Present when the changelog was not read to its end (changelog.ts parseChangelogWithin). */
+  incomplete?: string;
 }
 
 /** The cache surface used here; `LiveCache` satisfies it. */
@@ -219,7 +224,7 @@ async function loadCratesIndex(net: UpgradeNet, name: string): Promise<RegistryI
       if (v.yanked) entry.yanked = true;
       return entry;
     });
-  return { name: doc.crate?.name ?? name, ecosystem: "crates.io", versions, repository: doc.crate?.repository ?? null };
+  return { name: doc.crate?.name ?? name, ecosystem: "crates.io", versions, repository: repositoryUrl(doc.crate?.repository) };
 }
 
 /** Registry index with versions in ascending precedence order (unreadable versions dropped). Null = unknown package. */
@@ -248,10 +253,21 @@ export async function getRegistryIndex(
   });
   if (!index) return null;
   const order = versionOrder(ecosystem);
+  // Held to their shapes here, where fresh and cached indexes both pass: a version is a version,
+  // a publication time is a date, and the package is the one that was asked for.
   const versions = index.versions
-    .filter((v) => isReadableVersion(v.version, ecosystem))
+    .filter((v) => registryVersionText(v.version) !== null && isReadableVersion(v.version, ecosystem))
+    .map((v) => ({ ...v, published: thirdPartyTimestamp(v.published) || null }))
     .sort((a, b) => order(a.version, b.version) ?? 0);
-  return { ...index, versions };
+  // crates.io answers `serde_json` for `serde-json` and PyPI its own capitalisation; a document
+  // that names a different package redirects neither the advisory lookup nor the cache row.
+  const canonical = registryEchoedName(
+    name,
+    index.name,
+    (n) => isValidPackageName(n, ecosystem),
+    (a, b) => (ecosystem === "crates.io" ? sameUpgradeName(a.toLowerCase(), b.toLowerCase(), ecosystem) : sameUpgradeName(a, b, ecosystem)),
+  );
+  return { ...index, name: canonical, versions };
 }
 
 const ARCHIVE_HOSTS = new Set(["registry.npmjs.org", "static.crates.io", "files.pythonhosted.org", "proxy.golang.org"]);
@@ -314,14 +330,19 @@ export async function getChangelog(
     if (err instanceof ArchiveError) net.cache?.set(key, result, CACHE_SOURCE, CHANGELOG_TTL);
     return result;
   }
-  const file = findChangelogFile(files.keys());
-  const sections = file ? parseChangelog(files.get(file) ?? "") : [];
+  const archivePath = findChangelogFile(files.keys());
+  const parsed = archivePath ? parseChangelogWithin(files.get(archivePath) ?? "") : { sections: [], complete: true };
+  const sections = parsed.sections;
+  // The path is shown, so it is the plain one or the basename alone (package-archive.ts
+  // displayArchivePath): the directory part of an archive path is the packer's free text.
+  const file = archivePath ? displayArchivePath(archivePath) : null;
   const result: ChangelogResult = !file
     ? { found: false, reason: `the ${version.version} archive ships no changelog file` }
     : sections.length === 0
-      ? { found: false, file, reason: `${file} has no version headings this parser recognises` }
-      : { found: true, file, sections, source: "archive" };
-  net.cache?.set(key, result, CACHE_SOURCE, CHANGELOG_TTL);
+      ? { found: false, file, reason: parsed.complete ? `${file} has no version headings this parser recognises` : `${file} could not be read within the time allowed for one changelog` }
+      : { found: true, file, sections, source: "archive", ...(parsed.complete ? {} : { incomplete: INCOMPLETE_NOTE }) };
+  // A cut-off parse depends on how busy the machine was, so it is not remembered for a week.
+  net.cache?.set(key, result, CACHE_SOURCE, parsed.complete ? CHANGELOG_TTL : INCOMPLETE_TTL);
   return result;
 }
 

@@ -26,6 +26,30 @@ import { fetchWithTimeout } from "./http-utils.js";
 export const MAX_COMPRESSED_BYTES = 20 * 1024 * 1024;
 export const MAX_UNCOMPRESSED_BYTES = 80 * 1024 * 1024;
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
+/**
+ * What one archive may hand back in all: a few root-level text files are wanted, so a few are
+ * kept. Without these an archive of thousands of small entries that each inflate to the
+ * per-file cap exhausted the process's memory (a 390 KB zip, 6,000 entries of 2 MB each).
+ */
+export const MAX_ARCHIVE_TEXT_FILES = 32;
+export const MAX_ARCHIVE_TEXT_BYTES = 8 * 1024 * 1024;
+/** An entry path longer than this is not a file anyone ships; it is skipped unread. */
+export const MAX_ENTRY_PATH = 512;
+
+/** A directory name as registries and packers write them (`package`, `serde-1.0.200`, `github.com`, `bar@v1.2.3`). */
+const PLAIN_SEGMENT = /^[A-Za-z0-9._@+~!-]{1,128}$/;
+
+/**
+ * An archive path as it may be shown: the path itself when every directory in it is a plain
+ * name, otherwise the file's basename alone. The directory part of an archive path is free text
+ * chosen by whoever built the archive; the basename has already matched a known file name.
+ */
+export function displayArchivePath(archivePath: string): string {
+  const parts = archivePath.split("/").filter((s) => s !== "" && s !== ".");
+  const base = parts[parts.length - 1] ?? "";
+  const dirs = parts.slice(0, -1);
+  return archivePath.length <= MAX_ENTRY_PATH && dirs.every((d) => PLAIN_SEGMENT.test(d)) ? parts.join("/") : base;
+}
 
 const BLOCK = 512;
 const ARCHIVE_TIMEOUT_MS = 30_000;
@@ -151,12 +175,16 @@ export function readRootTextFiles(gz: Buffer, accept: (basename: string) => bool
   }
 
   const files = new Map<string, string>();
+  let kept = 0;
   for (const entry of iterateTar(tar)) {
     if (entry.type !== "0" && entry.type !== "7") continue;
+    if (entry.path.length > MAX_ENTRY_PATH) continue;
     const parts = segments(entry.path);
     if (parts.length === 0 || parts.length > 2) continue;
     if (!accept(parts[parts.length - 1])) continue;
     if (entry.data.length > MAX_FILE_BYTES || entry.data.includes(0)) continue;
+    if (files.size >= MAX_ARCHIVE_TEXT_FILES || kept + entry.data.length > MAX_ARCHIVE_TEXT_BYTES) break;
+    kept += entry.data.length;
     files.set(entry.path, entry.data.toString("utf8"));
   }
   return files;

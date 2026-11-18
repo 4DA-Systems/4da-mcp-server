@@ -29,7 +29,7 @@ import { classifyEntry, classifyHeading, sanitizeEntry, type EntryContext, type 
  * for a week unless this changes: bump it with every change to parseChangelog
  * or changelog-classify.ts that can alter a section or an entry's kind.
  */
-export const CHANGELOG_PARSER_VERSION = 4;
+export const CHANGELOG_PARSER_VERSION = 5;
 
 export interface ChangelogEntry {
   kind: EntryKind;
@@ -182,6 +182,9 @@ const BOLD_LABEL = /^\s*\*\*([^*]+)\*\*:?\s*$/;
 const PLAIN_LABEL = /^\s{0,3}([A-Za-z⚠][\w /&,'()⚠️-]{1,58}?)\s*:\s*$/;
 /** A line that opens or closes layout markup rather than describing a change. */
 const HTML_LAYOUT = /^<\/?(?:details|summary|div|p|br|hr|img|picture|source|table|tr|td|th|thead|tbody|center|sup|sub)\b/i;
+/** The longest bullet read as a label, and the most of a bullet that is classified when it opens a list. */
+const MAX_LABEL = 120;
+const MAX_CLASSIFIED = 600;
 /** A bullet that is only a label: "remove:", "**Breaking**:", "deps:". */
 const LABEL_BULLET = /^\W*([A-Za-z][\w -]{0,30}?)\W*:\W*$/;
 
@@ -281,7 +284,8 @@ function addLine(state: ParseState, line: string): void {
     if (outer) {
       state.parentIndent = indent;
       // A label-only bullet ("* remove:", "- Breaking:") is a heading for its children, not an entry.
-      const label = LABEL_BULLET.exec(text);
+      // A label is short; the pattern is not run on a long line (it is quadratic on a run of colons).
+      const label = text.length <= MAX_LABEL ? LABEL_BULLET.exec(text) : null;
       if (label) {
         state.parentKind = classifyHeading(label[1]) ?? state.headingKind;
         state.parentText = contextText(label[1]);
@@ -292,7 +296,8 @@ function addLine(state: ParseState, line: string): void {
       // A breaking bullet lends "breaking" to its sub-points (date-fns 3.0: "**BREAKING**: Functions
       // that accept Interval arguments ..." with one nested bullet per affected function); one
       // ending in ":" lends any signalling kind.
-      const own = classifyEntry(text, state.headingKind);
+      // Classified on what an entry can show (it is capped on output), not on a 4,096-character line.
+      const own = classifyEntry(text.slice(0, MAX_CLASSIFIED), state.headingKind);
       state.parentKind = own === "breaking" || (/:\s*$/.test(text) && own !== "change") ? own : null;
       state.parentText = contextText(text);
     }
@@ -363,8 +368,31 @@ function adornmentLevel(ch: string): number {
   return i === -1 ? 3 : i + 1;
 }
 
+/**
+ * Time one changelog may take to parse. Real ones take milliseconds; this is the backstop for a
+ * file built to be slow, because the parse runs on the event loop and nothing else answers
+ * while it does.
+ */
+export const PARSE_BUDGET_MS = 1500;
+
+export interface ParsedChangelog {
+  sections: ChangelogSection[];
+  /** False when parsing stopped at the time allowance: sections after the last one returned were not read. */
+  complete: boolean;
+}
+
 /** Parse a changelog into version sections, in document order (usually newest first). */
 export function parseChangelog(text: string): ChangelogSection[] {
+  return parseChangelogWithin(text).sections;
+}
+
+/**
+ * parseChangelog under a time allowance. When it runs out, the sections read so far are returned
+ * without the one being read (it may be cut mid-list), and `complete` is false. `now` is the
+ * clock, injectable so the cut-off can be tested without waiting.
+ */
+export function parseChangelogWithin(text: string, budgetMs: number = PARSE_BUDGET_MS, now: () => number = Date.now): ParsedChangelog {
+  const deadline = now() + budgetMs;
   const lines = text
     .replace(/\r\n?/g, "\n")
     .split("\n")
@@ -385,6 +413,10 @@ export function parseChangelog(text: string): ChangelogSection[] {
   let inComment = false;
 
   for (let i = 0; i < lines.length; i++) {
+    if ((i & 0x7f) === 0x7f && now() > deadline) {
+      state.pending = null;
+      return { sections: state.sections.slice(0, -1), complete: false };
+    }
     const line = lines[i];
     if (FENCE.test(line)) {
       flush(state);
@@ -471,7 +503,7 @@ export function parseChangelog(text: string): ChangelogSection[] {
     if (state.current) addLine(state, line);
   }
   flush(state);
-  return state.sections;
+  return { sections: state.sections, complete: true };
 }
 
 /** Version order: 1, -1, 0, or null when either side is unreadable. Semver precedence by default. */

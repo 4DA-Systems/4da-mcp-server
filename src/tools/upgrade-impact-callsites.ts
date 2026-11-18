@@ -35,6 +35,8 @@ const MAX_FILES = 6000;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_REPORTED_FILES = 50;
 const MAX_SYMBOLS = 100;
+/** Characters of one import / `use` statement read: longer than any real one, short enough that no file is slow. */
+const MAX_IMPORT_CLAUSE = 4000;
 
 export interface CallSiteReport {
   total_files: number;
@@ -70,16 +72,25 @@ function parseImportClause(clause: string, into: Set<string>): void {
 export function scanNpmSource(source: string, pkg: string, symbols: Set<string>): number {
   const spec = `${escapeRegex(pkg)}(?:/[^'"\`\\s]*)?`;
   let matches = 0;
-  const fromRe = new RegExp(String.raw`\b(?:import|export)\s+([^;'"\`]*?)\s*from\s*['"]${spec}['"]`, "g");
+  // Found from the `from "pkg"` end and read backwards over a bounded window. A pattern that starts
+  // at every `import` word and runs forward to a `from` that never comes costs the square of the
+  // file's length on a file of unterminated imports.
+  const fromRe = new RegExp(String.raw`\bfrom\s*['"]${spec}['"]`, "g");
   for (const m of source.matchAll(fromRe)) {
+    const window = source.slice(Math.max(0, m.index - MAX_IMPORT_CLAUSE), m.index);
+    const cut = Math.max(window.lastIndexOf(";"), window.lastIndexOf("'"), window.lastIndexOf('"'), window.lastIndexOf("`"));
+    const statement = window.slice(cut + 1);
+    const keyword = /\b(?:import|export)\s+/.exec(statement);
+    if (!keyword) continue;
     matches++;
-    if (!/^\s*\*\s*$/.test(m[1])) parseImportClause(m[1], symbols);
+    const clause = statement.slice(keyword.index + keyword[0].length);
+    if (!/^\s*\*\s*$/.test(clause)) parseImportClause(clause, symbols);
   }
   const bareRe = new RegExp(String.raw`\bimport\s*['"]${spec}['"]`, "g");
   matches += [...source.matchAll(bareRe)].length;
   const dynRe = new RegExp(String.raw`\bimport\s*\(\s*['"]${spec}['"]\s*\)`, "g");
   matches += [...source.matchAll(dynRe)].length;
-  const reqRe = new RegExp(String.raw`(?:(?:const|let|var)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*)?\brequire\s*\(\s*['"]${spec}['"]\s*\)`, "g");
+  const reqRe = new RegExp(String.raw`(?:(?:const|let|var)\s+(\{[^}]{0,${MAX_IMPORT_CLAUSE}}\}|[A-Za-z_$][\w$]*)\s*=\s*)?\brequire\s*\(\s*['"]${spec}['"]\s*\)`, "g");
   for (const m of source.matchAll(reqRe)) {
     matches++;
     const binding = m[1];
@@ -111,7 +122,8 @@ function useTreeLeaves(tree: string, into: Set<string>): void {
 export function scanRustSource(source: string, crateName: string, symbols: Set<string>): number {
   const ident = escapeRegex(crateName.replace(/-/g, "_"));
   let matches = 0;
-  const useRe = new RegExp(String.raw`\buse\s+(?:::)?${ident}::([^;]+);`, "g");
+  // The tree is bounded: with an unbounded `[^;]+`, a file of `use` lines and no semicolon costs its length squared.
+  const useRe = new RegExp(String.raw`\buse\s+(?:::)?${ident}::([^;]{1,${MAX_IMPORT_CLAUSE}});`, "g");
   const withoutUses = source.replace(useRe, (_all, tree: string) => {
     matches++;
     useTreeLeaves(tree, symbols);

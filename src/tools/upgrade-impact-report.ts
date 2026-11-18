@@ -65,6 +65,11 @@ export interface ShapedChangelog {
 const CONCISE_NEUTRAL_PER_VERSION = 20;
 const CONCISE_ADDITIVE_PER_VERSION = 3;
 const DETAILED_ENTRY_CAP = 400;
+/**
+ * Entries a concise answer carries in all. The per-version trims above bound plain changes only:
+ * a changelog whose every line reads as breaking came back whole (19,110 entries, 3 MB of text).
+ */
+const CONCISE_ENTRY_CAP = 150;
 const KIND_ORDER: Record<EntryKind, number> = { breaking: 0, security: 1, deprecation: 2, change: 3 };
 
 /** Flag, order and trim changelog sections. Counts always cover every entry, trimmed or not. */
@@ -161,12 +166,11 @@ export function shapeChangelog(
       if (others.length > keptOthers.length) {
         shaped.omitted_changes = others.length - keptOthers.length;
       }
-    } else {
-      const room = Math.max(0, DETAILED_ENTRY_CAP - emitted);
-      if (kept.length > room) {
-        dropped += kept.length - room;
-        kept = kept.slice(0, room);
-      }
+    }
+    const room = Math.max(0, (format === "concise" ? CONCISE_ENTRY_CAP : DETAILED_ENTRY_CAP) - emitted);
+    if (kept.length > room) {
+      dropped += kept.length - room;
+      kept = kept.slice(0, room);
     }
     emitted += kept.length;
     shaped.entries = kept;
@@ -175,7 +179,10 @@ export function shapeChangelog(
 
   out.touchingSymbols = [...touched].sort();
   if (dropped > 0) {
-    out.truncated = `detailed output is capped at ${DETAILED_ENTRY_CAP} entries; ${dropped} later entries were left out (counts still include them)`;
+    out.truncated =
+      format === "concise"
+        ? `concise output is capped at ${CONCISE_ENTRY_CAP} entries; ${dropped} later entries were left out (counts still include them; ask for a narrower version range to read them)`
+        : `detailed output is capped at ${DETAILED_ENTRY_CAP} entries; ${dropped} later entries were left out (counts still include them)`;
   }
   return out;
 }

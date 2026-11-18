@@ -232,10 +232,10 @@ describe("an operating-system directory is never scanned", () => {
   it("Windows: drive roots, the Windows directory and everything below it, the roots of Program Files, ProgramData and Users", () => {
     const env = { SystemDrive: "C:", SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)", ProgramData: "C:\\ProgramData" };
     const refused = (d: string) => systemDirectoryProblem(d, { platform: "win32", env });
-    for (const d of ["C:\\", "D:\\", "c:\\", "C:\\Windows", "C:\\Windows\\System32", "c:\\windows\\system32\\drivers\\etc", "C:\\WINDOWS\\", "C:\\Program Files", "C:\\Program Files (x86)\\", "C:\\ProgramData", "C:\\Users", "\\\\server\\share\\"]) {
+    for (const d of ["C:\\", "D:\\", "c:\\", "C:\\Windows", "C:\\Windows\\System32", "c:\\windows\\system32\\drivers\\etc", "C:\\WINDOWS\\", "C:\\Program Files", "C:\\Program Files (x86)\\", "C:\\ProgramData", "C:\\Users"]) {
       expect(refused(d), d).toMatch(/is (a drive root|the Windows directory|an operating-system directory[^,]*), not a project, so it is not scanned/);
     }
-    for (const d of ["C:\\Users\\dev\\code\\app", "D:\\4DA", "C:\\Program Files\\MyApp\\src", "C:\\WindowsApps-project", "C:\\Users\\dev", "relative\\path", "\\\\server\\share\\repo"]) {
+    for (const d of ["C:\\Users\\dev\\code\\app", "D:\\4DA", "C:\\Program Files\\MyApp\\src", "C:\\WindowsApps-project", "C:\\Users\\dev", "relative\\path"]) {
       expect(refused(d), d).toBeNull();
     }
     expect(refused("C:\\Windows\\System32")).toBe(
@@ -251,8 +251,7 @@ describe("an operating-system directory is never scanned", () => {
       expect(refused(d), d).not.toBeNull();
     }
     expect(refused("\\\\localhost\\C$\\Windows")).toContain('"\\\\localhost\\C$\\Windows" (C:\\Windows) is the Windows directory');
-    // A share that is not an administrative one, and a project on one, are ordinary paths.
-    expect(refused("\\\\server\\share\\repo")).toBeNull();
+    // A share on another machine is refused for its own reason (a1119-impact-scan-targets.test.ts).
     expect(refused("\\\\?\\D:\\4DA")).toBeNull();
   });
 
