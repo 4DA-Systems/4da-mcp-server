@@ -12,7 +12,8 @@ import { quoteThirdParty, sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchJson } from "./http-utils.js";
-import { computeSemverDistance, isPreRelease, maxStableSemver } from "./semver-utils.js";
+import { computeSemverDistance } from "./semver-utils.js";
+import { maxVersion, parsePep440 } from "./version-compare.js";
 import type { RegistryPackageInfo } from "./types.js";
 
 const PYPI_BASE_URL = "https://pypi.org/pypi";
@@ -134,14 +135,17 @@ function findLatestStable(
   versions: string[],
   releases: Record<string, PyPIReleaseFile[]>,
 ): string | null {
-  // Semver-max among eligible versions, not last-listed (see maxStableSemver).
+  // The highest final release in PEP 440's order, not the last listed. PyPI versions are not
+  // semver: `2026.6` and `26.3` are ordinary releases with two parts, and a pre-release is what
+  // PEP 440 says it is (a / b / rc, or .dev; a .post release is final).
   const eligible = versions.filter((v) => {
-    if (isPreRelease(v)) return false;
+    const parsed = parsePep440(v);
+    if (!parsed || parsed.pre !== null || parsed.dev !== null) return false;
     // Skip if all files for this version are yanked
     const files = releases[v];
     return !(files && files.length > 0 && files.every((f) => f.yanked));
   });
-  return maxStableSemver(eligible);
+  return maxVersion(eligible, "PyPI");
 }
 
 function getLastPublished(files: PyPIReleaseFile[] | undefined): string | null {
