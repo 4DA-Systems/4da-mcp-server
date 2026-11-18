@@ -28,6 +28,7 @@ import type {
   VulnerabilityEntry,
   VulnerabilityScanResult,
 } from "./types.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pushAll } from "../array-utils.js";
 import { isOfflineMode } from "../env-flags.js";
 import { LOOKUPS_DISABLED } from "./scan-coverage.js";
@@ -71,6 +72,19 @@ export const ALIAS_BUDGET_MS = 5_000;
  * them; a concurrent scan now waits on the request already made.
  */
 const detailsInFlight = new Map<string, Promise<OsvVulnerability | null>>();
+
+/**
+ * Requests to OSV.dev made for the scan running in this async context: its own, and any a
+ * concurrent scan made that carried its dependencies or advisory ids (a shared batch, a record
+ * already being fetched). A scan reports the count (`osvRequests`), so an answer can say whether
+ * anything was sent in its call; zero means every answer came from the cache.
+ */
+const osvRequests = new AsyncLocalStorage<{ made: number }>();
+
+function noteOsvRequest(): void {
+  const scan = osvRequests.getStore();
+  if (scan) scan.made++;
+}
 
 /** Run `work` over `items` with at most `limit` in flight; results in input order. */
 async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
@@ -185,6 +199,8 @@ export class OsvHttpSource implements AdvisorySource {
    */
   async query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer> {
     if (deps.length === 0 || deps.length > COALESCE_MAX_DEPS) return this.queryNow(deps);
+    // The shared request is made in the first caller's context: every caller's dependencies are in it.
+    noteOsvRequest();
     return new Promise<AdvisoryAnswer>((resolve) => {
       this.waiting.push({ deps, resolve });
       this.flushTimer ??= setTimeout(() => void this.flush(), COALESCE_MS);
@@ -314,6 +330,7 @@ export class OsvHttpSource implements AdvisorySource {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, BATCH_RETRY_DELAY_MS).unref());
       try {
+        noteOsvRequest();
         const response = await fetchWithTimeout(OSV_BATCH_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -373,6 +390,8 @@ export class OsvHttpSource implements AdvisorySource {
       if (!pending) {
         pending = this.fetchDetail(id).finally(() => detailsInFlight.delete(id));
         detailsInFlight.set(id, pending);
+      } else {
+        noteOsvRequest();
       }
       const detail = await pending;
       if (detail) {
@@ -395,6 +414,7 @@ export class OsvHttpSource implements AdvisorySource {
     let token: string | undefined;
     try {
       for (let page = 0; page < MAX_RESULT_PAGES; page++) {
+        noteOsvRequest();
         const res = await fetchWithTimeout(
           OSV_QUERY_URL,
           {
@@ -426,6 +446,7 @@ export class OsvHttpSource implements AdvisorySource {
   private async fetchDetail(id: string): Promise<OsvVulnerability | null> {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
+        noteOsvRequest();
         const response = await fetchWithTimeout(`${OSV_VULN_URL}${encodeURIComponent(id)}`, {}, OSV_DETAIL_TIMEOUT_MS);
         if (response.ok) {
           // Only the record asked for is an answer: a 200 `{}` (or any other record) crashed the
@@ -495,6 +516,13 @@ export class OsvScanner {
   }
 
   async scan(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean } = {}): Promise<VulnerabilityScanResult> {
+    const requests = { made: 0 };
+    const result = await osvRequests.run(requests, () => this.scanCounted(deps, projectPath, options));
+    // Only a network source sends anything: a pinned source answers from its own records.
+    return this.source.network ? { ...result, osvRequests: requests.made } : result;
+  }
+
+  private async scanCounted(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean }): Promise<VulnerabilityScanResult> {
     const start = Date.now();
     const scannable = deps.filter((d) => d.version !== null);
     const ecosystems = [...new Set(scannable.map((d) => d.ecosystem))];
@@ -572,6 +600,7 @@ export class OsvScanner {
             : ask(mine);
     const waited = (async () => {
       if (theirs.length === 0) return [] as ResolvedDependency[];
+      noteOsvRequest();
       await Promise.all([...new Set(theirs.map((d) => this.inFlight.get(osvCacheKey(d))))].map((p) => p?.catch(() => undefined)));
       const filled = this.cache.getMany<VulnerabilityEntry[]>([...new Set(theirs.map(osvCacheKey))]);
       const still: ResolvedDependency[] = [];

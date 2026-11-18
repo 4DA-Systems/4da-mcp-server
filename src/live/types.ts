@@ -253,6 +253,12 @@ export interface VulnerabilityScanResult {
   /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
   aliasSeverity?: AliasSeverityReport;
   /**
+   * Requests to OSV.dev made for this scan (its own, or a concurrent scan's that carried its
+   * dependencies): 0 when every answer came from the cache. Absent on a result no network scan
+   * produced (a stub, a scan that did not finish), where what was sent is not known from here.
+   */
+  osvRequests?: number;
+  /**
    * Installed copies at npm's security-placeholder version (`0.0.N-security`) of a name a
    * malicious-package record covers. Not in `vulnerabilities` (the placeholder is not the
    * malware) and never in `cleanCount`: the step is removing the dependency. Absent when none.
