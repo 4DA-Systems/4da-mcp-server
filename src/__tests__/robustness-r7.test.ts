@@ -405,7 +405,7 @@ describe("9: command-line arguments", () => {
     expect(parseCliArgs(["--http"])).toEqual({ ok: true, command: { kind: "http", port: 4840, host: "127.0.0.1" } });
     expect(parseCliArgs(["--http", "--port", "8080", "--host", "::1"])).toEqual({ ok: true, command: { kind: "http", port: 8080, host: "::1" } });
     expect(parseCliArgs(["--port=8081", "--http"])).toEqual({ ok: true, command: { kind: "http", port: 8081, host: "127.0.0.1" } });
-    expect(parseCliArgs(["--setup", "--dry-run"])).toEqual({ ok: true, command: { kind: "setup", dryRun: true } });
+    expect(parseCliArgs(["--setup", "--dry-run"])).toEqual({ ok: true, command: { kind: "setup", dryRun: true, update: false } });
     expect(parseCliArgs(["doctor"])).toEqual({ ok: true, command: { kind: "doctor" } });
     expect(parseCliArgs(["-v"])).toEqual({ ok: true, command: { kind: "version" } });
   });

@@ -595,6 +595,8 @@ const USAGE = `
                         is then mandatory for every request.
     --setup             Detect editors and write MCP config
     --dry-run           With --setup: print each file and entry, write nothing
+    --update            With --setup: replace an existing 4da entry that differs
+                        (default: keep it and say so)
     --doctor            Validate database, bindings, and LLM providers
 
   An argument not listed here exits with this text and code 2.
@@ -662,7 +664,8 @@ async function main() {
 
   // Setup command: configure editors
   if (command.kind === "setup") {
-    runSetup(command.dryRun);
+    // Non-zero when a config that was found could not be written (setup.ts).
+    process.exitCode = runSetup({ dryRun: command.dryRun, update: command.update }).exitCode;
     return;
   }
 

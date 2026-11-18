@@ -7,9 +7,18 @@
  * the user can start using 4DA tools immediately after install.
  *
  * Usage:
- *   npx @4da/mcp-server --setup [--dry-run]
- *   4da-mcp-setup [--dry-run]
+ *   npx @4da/mcp-server@<version> --setup [--dry-run] [--update]
+ *   4da-mcp-setup [--dry-run] [--update]
  *   pnpm run setup
+ *
+ * What it holds to:
+ *   - The command it writes pins the version of the package it runs from, so
+ *     what an editor starts changes only when the user changes it.
+ *   - A `4da` entry that is already there and differs is the user's: it is kept
+ *     unless `--update` is given.
+ *   - A config it cannot read exactly (unparseable, not UTF-8, the same key
+ *     twice) is never written.
+ *   - The exit code is non-zero when a detected editor's config was not written.
  *
  * Audited 2026-10-05: three of the four editors were configured in files the
  * editor never reads (`~/.vscode/mcp.json`, `~/.windsurf/mcp.json`, and
@@ -21,6 +30,9 @@
  */
 
 import {
+  accessSync,
+  chmodSync,
+  constants,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -29,24 +41,58 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import jsonc from "jsonc-parser";
-import type { JSONPath, ParseError } from "jsonc-parser";
+import type { JSONPath, Node, ParseError } from "jsonc-parser";
 
-/** The command every editor runs. */
-const SERVER_COMMAND = { command: "npx", args: ["@4da/mcp-server"] };
+import { parseSetupArgs } from "./cli-args.js";
 
-/** MCP config snippet for editors that use the standard mcpServers format */
-const MCP_CONFIG = {
-  "4da": SERVER_COMMAND,
-};
+const PACKAGE = "@4da/mcp-server";
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The version of the package this module ships in, from the package.json beside
+ * `dist/` (or `src/`). Null when it cannot be read: setup then writes nothing,
+ * because the only command it could write would be an unpinned one.
+ */
+export function readPackageVersion(moduleUrl: string = import.meta.url): string | null {
+  try {
+    const manifest = path.join(path.dirname(fileURLToPath(moduleUrl)), "..", "package.json");
+    const pkg: unknown = JSON.parse(readFileSync(manifest, "utf-8"));
+    if (!isPlainObject(pkg) || pkg.name !== PACKAGE || typeof pkg.version !== "string") return null;
+    return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version) ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+export const PACKAGE_VERSION = readPackageVersion();
+
+/** The command every editor runs: npx with the package pinned to `version`. */
+function serverCommand(version: string): { command: string; args: string[] } {
+  return { command: "npx", args: [`${PACKAGE}@${version}`] };
+}
 
 /** The Claude Code command printed instead of editing `~/.claude.json`. */
-export const CLAUDE_CODE_COMMAND = "claude mcp add --scope user 4da -- npx @4da/mcp-server";
+export function claudeCodeCommand(version: string): string {
+  return `claude mcp add --scope user 4da -- npx ${PACKAGE}@${version}`;
+}
+
+/** `claudeCodeCommand` for the running package. */
+export const CLAUDE_CODE_COMMAND = claudeCodeCommand(PACKAGE_VERSION ?? "<version>");
+
+function requireVersion(): string {
+  if (PACKAGE_VERSION === null) throw new Error("this package's version could not be read from its package.json");
+  return PACKAGE_VERSION;
+}
 
 /** Where the paths are resolved: injected so tests can stand in any platform. */
 export interface SetupContext {
@@ -101,11 +147,13 @@ function appDataDir(ctx: SetupContext, name: string): string {
 }
 
 /**
- * Every editor this setup can write, with its config path on `ctx.platform`.
+ * Every editor this setup can write, with its config path on `ctx.platform`
+ * and the entry pinned to `version` (the running package's by default).
  * Pure: nothing is read from disk here.
  */
-export function editorTargets(ctx: SetupContext = currentContext()): EditorTarget[] {
+export function editorTargets(ctx: SetupContext = currentContext(), version: string = requireVersion()): EditorTarget[] {
   const p = pathFor(ctx);
+  const SERVER_COMMAND = serverCommand(version);
   const vscodeEntry = { type: "stdio", ...SERVER_COMMAND };
   const vscode = (name: string, product: string): EditorTarget => {
     const userDir = p.join(appDataDir(ctx, product), "User");
@@ -182,26 +230,37 @@ export function claudeCodeConfigPath(ctx: SetupContext = currentContext()): stri
 // Planning: what would change, decided before anything is written
 // =============================================================================
 
-export type PlanAction = "create" | "update" | "unchanged" | "refuse";
+/**
+ * `create` / `update`: the file gets a `4da` entry it did not have.
+ * `unchanged`: its entry already is the one setup writes.
+ * `keep`: its entry differs and is left as the user has it.
+ * `replace`: its entry differs and `update` was asked.
+ * `refuse`: the file is not written, for `reason`.
+ */
+export type PlanAction = "create" | "update" | "unchanged" | "keep" | "replace" | "refuse";
 
 export interface ConfigPlan {
   action: PlanAction;
-  /** The full new file content for create/update. */
+  /** The full new file content for create/update/replace. */
   content?: string;
   /** Why a file is refused, for the user. */
   reason?: string;
+  /** keep/replace: the fields setup owns, as the existing entry has them. */
+  previous?: Record<string, unknown>;
 }
 
 function lineOf(text: string, offset: number): number {
   return text.slice(0, offset).split("\n").length;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** The property nodes of an object node whose key passes `match`. JSON allows a key twice; a parsed value hides it. */
+function propertiesOf(objectNode: Node | undefined, match: (key: string) => boolean): Node[] {
+  if (objectNode?.type !== "object") return [];
+  return (objectNode.children ?? []).filter((property) => typeof property.children?.[0]?.value === "string" && match(property.children[0].value));
 }
 
 /**
@@ -210,50 +269,86 @@ function sameJson(a: unknown, b: unknown): boolean {
  *
  * The file is parsed as JSONC (comments and trailing commas allowed) and
  * edited in place with `jsonc-parser`'s `modify`, so other servers, other keys,
- * comments and formatting all survive. A file that does not parse is refused,
- * never replaced. An existing `4da` entry keeps its other fields (`env`, say);
- * only the fields setup owns are set.
+ * comments and formatting all survive, and a leading UTF-8 BOM is put back. A
+ * file that does not parse is refused, never replaced; so is one that holds the
+ * servers key or the `4da` entry twice, or `4da` in another casing, because the
+ * entry written might not be the one the editor reads.
+ *
+ * An existing `4da` entry that differs from `entry` is the user's choice (another
+ * pin, a local build, a wrapper): it is kept unless `options.update`, and then
+ * only the fields setup owns are set, so `env`, `disabled` and comments stay.
  */
-export function planConfig(existing: string | null, key: string, entry: Record<string, unknown>): ConfigPlan {
-  if (existing === null || existing.trim() === "") {
+export function planConfig(
+  existing: string | null,
+  key: string,
+  entry: Record<string, unknown>,
+  options: { update?: boolean } = {},
+): ConfigPlan {
+  // A BOM is not JSON: it is set aside for parsing and put back on what is written.
+  const bom = existing?.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const text = existing === null ? null : existing.slice(bom.length);
+  if (text === null || text.trim() === "") {
     return {
-      action: existing === null ? "create" : "update",
-      content: JSON.stringify({ [key]: { "4da": entry } }, null, 2) + "\n",
+      action: text === null ? "create" : "update",
+      content: bom + JSON.stringify({ [key]: { "4da": entry } }, null, 2) + "\n",
     };
   }
 
   const errors: ParseError[] = [];
-  const root: unknown = jsonc.parse(existing, errors, { allowTrailingComma: true, disallowComments: false });
+  const tree = jsonc.parseTree(text, errors, { allowTrailingComma: true, disallowComments: false });
   if (errors.length > 0) {
     const first = errors[0];
     return {
       action: "refuse",
-      reason: `it does not parse (${jsonc.printParseErrorCode(first.error)} at line ${lineOf(existing, first.offset)})`,
+      reason: `it does not parse (${jsonc.printParseErrorCode(first.error)} at line ${lineOf(text, first.offset)})`,
     };
   }
+  const root: unknown = tree ? jsonc.getNodeValue(tree) : undefined;
   if (!isPlainObject(root)) {
     return { action: "refuse", reason: "its top level is not a JSON object" };
+  }
+  const serverKeys = propertiesOf(tree, (name) => name === key);
+  if (serverKeys.length > 1) {
+    return { action: "refuse", reason: `its "${key}" key appears ${serverKeys.length} times, and an editor reads only one of them` };
   }
   const servers = root[key];
   if (servers !== undefined && !isPlainObject(servers)) {
     return { action: "refuse", reason: `its "${key}" is not an object` };
   }
+  const serversNode = serverKeys[0]?.children?.[1];
+  const exact = propertiesOf(serversNode, (name) => name === "4da");
+  if (exact.length > 1) {
+    return { action: "refuse", reason: `its "${key}" holds ${exact.length} "4da" entries, and an editor reads only one of them` };
+  }
+  const otherCasing = propertiesOf(serversNode, (name) => name !== "4da" && name.toLowerCase() === "4da");
+  if (exact.length === 0 && otherCasing.length > 0) {
+    const name = String(otherCasing[0].children?.[0]?.value);
+    return {
+      action: "refuse",
+      reason: `its "${key}" already has an entry named "${name}", and a "4da" entry beside it would be a second server; rename that entry to "4da" or remove it`,
+    };
+  }
   const current = servers?.["4da"];
   if (current !== undefined && !isPlainObject(current)) {
     return { action: "refuse", reason: `its "${key}"."4da" is not an object` };
   }
-  if (current && Object.entries(entry).every(([field, value]) => sameJson(current[field], value))) {
-    return { action: "unchanged" };
+  let previous: Record<string, unknown> | undefined;
+  if (current) {
+    if (Object.entries(entry).every(([field, value]) => sameJson(current[field], value))) {
+      return { action: "unchanged" };
+    }
+    previous = Object.fromEntries(Object.keys(entry).flatMap((field) => (field in current ? [[field, current[field]]] : [])));
+    if (!options.update) return { action: "keep", previous };
   }
 
-  const eol = existing.includes("\r\n") ? "\r\n" : "\n";
-  const indent = /^([ \t]+)\S/m.exec(existing)?.[1] ?? "  ";
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const indent = /^([ \t]+)\S/m.exec(text)?.[1] ?? "  ";
   const formattingOptions = {
     insertSpaces: !indent.startsWith("\t"),
     tabSize: indent.startsWith("\t") ? 1 : indent.length,
     eol,
   };
-  let content = existing;
+  let content = text;
   // Field by field when the entry exists, so its other fields and any
   // comments inside it stay; whole when it does not.
   const edits: Array<[JSONPath, unknown]> = current
@@ -262,12 +357,42 @@ export function planConfig(existing: string | null, key: string, entry: Record<s
   for (const [jsonPath, value] of edits) {
     content = jsonc.applyEdits(content, jsonc.modify(content, jsonPath, value, { formattingOptions }));
   }
-  return { action: "update", content };
+  return current ? { action: "replace", content: bom + content, previous } : { action: "update", content: bom + content };
+}
+
+type ConfigRead = { ok: true; text: string | null } | { ok: false; reason: string };
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A config file's bytes as text, exactly: a byte sequence that is not UTF-8 is
+ * refused, never decoded to U+FFFD, because the rewrite would then save the
+ * damage. A leading BOM stays in the text (`planConfig` keeps it).
+ */
+export function decodeConfig(bytes: Uint8Array): ConfigRead {
+  if (bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))) {
+    return { ok: false, reason: "it is encoded as UTF-16, not UTF-8" };
+  }
+  try {
+    return { ok: true, text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
+  } catch {
+    return {
+      ok: false,
+      reason: "it is not valid UTF-8 (a legacy encoding such as Windows-1252, perhaps), and rewriting it would damage its non-ASCII characters",
+    };
+  }
 }
 
 /** Read a config file's text; null when it does not exist. */
-function readConfig(filePath: string): string | null {
-  return existsSync(filePath) ? readFileSync(filePath, "utf-8") : null;
+function readConfig(filePath: string): ConfigRead {
+  if (!existsSync(filePath)) return { ok: true, text: null };
+  try {
+    return decodeConfig(readFileSync(filePath));
+  } catch (error) {
+    return { ok: false, reason: `it could not be read (${errorMessage(error)})` };
+  }
 }
 
 /** `<file>.bak`, or a timestamped name when that is taken: an earlier backup is never overwritten. */
@@ -286,6 +411,10 @@ function backupPath(filePath: string): string {
  * temp file beside it and rename it over the original, so an interrupted run
  * leaves either the old file or the new one, never half of one. A symlinked
  * config (a dotfiles repo) is written through to its target.
+ *
+ * The new file keeps the original's permission bits (a 0600 config holding
+ * tokens stays 0600), a file the user cannot write is not replaced, and a write
+ * that fails leaves nothing behind: not the temp file, not the backup it made.
  * @returns The backup path, when one was made.
  */
 export function writeConfigAtomic(filePath: string, content: string): string | null {
@@ -294,16 +423,29 @@ export function writeConfigAtomic(filePath: string, content: string): string | n
   const target = existsSync(filePath) && lstatSync(filePath).isSymbolicLink() ? realpathSync(filePath) : filePath;
   mkdirSync(path.dirname(target), { recursive: true });
   let backup: string | null = null;
+  let mode: number | null = null;
   if (existsSync(target)) {
+    // rename() needs only the directory's permission, so it would replace a read-only file.
+    accessSync(target, constants.W_OK);
+    mode = statSync(target).mode & 0o7777;
     backup = backupPath(target);
-    copyFileSync(target, backup);
+    copyFileSync(target, backup, constants.COPYFILE_EXCL);
   }
   const temp = `${target}.4da-${process.pid}.tmp`;
   try {
-    writeFileSync(temp, content);
+    writeFileSync(temp, content, mode === null ? {} : { mode });
+    // The mode given at creation passes through the umask; chmod sets the original's bits exactly.
+    if (mode !== null) chmodSync(temp, mode);
     renameSync(temp, target);
   } catch (error) {
-    rmSync(temp, { force: true });
+    for (const leftover of [temp, backup]) {
+      if (leftover === null) continue;
+      try {
+        rmSync(leftover, { force: true });
+      } catch {
+        // Not ours to remove (a directory by that name): the write error below is the one to report.
+      }
+    }
     throw error;
   }
   return backup;
@@ -334,16 +476,66 @@ function claudeCodeHas4da(configPath: string): boolean {
 }
 
 /**
- * Run the setup wizard: detect editors and write MCP configurations.
- * @param dryRun If true, only report what would be written without modifying files.
+ * An entry's command on one line, for the kept / replacing report. The text is
+ * the user's own config: control characters are dropped and the line is capped.
  */
-export function runSetup(dryRun = false, ctx: SetupContext = currentContext(), log: Log = console.log): void {
+function describeEntry(entry: Record<string, unknown> | undefined): string {
+  const { command, args, type } = entry ?? {};
+  let words: string;
+  if (typeof command === "string" && Array.isArray(args) && args.every((arg) => typeof arg === "string")) words = [command, ...args].join(" ");
+  else if (command === undefined && args === undefined) words = "(no command)";
+  else words = JSON.stringify({ command, args });
+  const line = `${words}${type === undefined ? "" : ` (type ${JSON.stringify(type)})`}`.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ");
+  return line.length > 240 ? `${line.slice(0, 240)}...` : line;
+}
+
+/** True when an entry runs this package through npx with no version: npx then picks the release. */
+function isUnpinned(entry: Record<string, unknown> | undefined): boolean {
+  return Array.isArray(entry?.args) && entry.args.includes(PACKAGE);
+}
+
+export interface SetupOptions {
+  /** Report what would be written; write nothing. */
+  dryRun?: boolean;
+  /** Replace an existing `4da` entry that differs from the one setup writes (default: keep it). */
+  update?: boolean;
+  /** The version to pin. Default: the running package's; null means it could not be read. */
+  version?: string | null;
+}
+
+export interface SetupResult {
+  /** 0, or 1 when a detected editor's config was not written (refused, or the write failed). */
+  exitCode: 0 | 1;
+  /** Config files written (in a dry run: none). */
+  written: string[];
+  /** Config files whose differing `4da` entry was left as the user has it. */
+  kept: string[];
+  /** Config files that already held the entry setup writes. */
+  unchanged: string[];
+  /** Config files setup refused, or failed, to write. */
+  notWritten: string[];
+}
+
+/**
+ * Run the setup wizard: detect editors and write MCP configurations.
+ * @param options `true` / `false` is `{ dryRun }`.
+ */
+export function runSetup(options: boolean | SetupOptions = {}, ctx: SetupContext = currentContext(), log: Log = console.log): SetupResult {
+  const { dryRun = false, update = false, version = PACKAGE_VERSION } = typeof options === "boolean" ? { dryRun: options } : options;
+  const result: SetupResult = { exitCode: 0, written: [], kept: [], unchanged: [], notWritten: [] };
+
   log("\n  4DA MCP Server — Setup\n");
+  if (version === null) {
+    log("  This package's version could not be read from its package.json, so setup");
+    log("  cannot pin the command it writes, and it does not write an unpinned one.");
+    log("  Nothing was written. Reinstall the package and run setup again.\n");
+    result.exitCode = 1;
+    return result;
+  }
   if (dryRun) log("  [DRY RUN] No files will be modified.\n");
   log("  Detecting editors...\n");
 
   let found = 0;
-  let refused = 0;
 
   // Claude Code: print the command, never edit ~/.claude.json.
   const claudeJson = claudeCodeConfigPath(ctx);
@@ -356,43 +548,66 @@ export function runSetup(dryRun = false, ctx: SetupContext = currentContext(), l
     } else {
       log("  Claude Code keeps its MCP servers in ~/.claude.json, which it rewrites");
       log("  itself; setup does not edit it. Add the server with:");
-      log(`    ${CLAUDE_CODE_COMMAND}`);
+      log(`    ${claudeCodeCommand(version)}`);
     }
     log("");
   }
 
-  for (const target of editorTargets(ctx)) {
+  for (const target of editorTargets(ctx, version)) {
     if (!existsSync(target.detectDir)) continue;
     found++;
     log(`  Found: ${target.name}`);
+    const read = readConfig(target.configPath);
     let plan: ConfigPlan;
-    try {
-      plan = planConfig(readConfig(target.configPath), target.key, target.entry);
-    } catch (error) {
-      plan = { action: "refuse", reason: `it could not be read (${error instanceof Error ? error.message : String(error)})` };
+    if (!read.ok) {
+      plan = { action: "refuse", reason: read.reason };
+    } else {
+      try {
+        plan = planConfig(read.text, target.key, target.entry, { update });
+      } catch (error) {
+        plan = { action: "refuse", reason: `it could not be edited (${errorMessage(error)})` };
+      }
     }
 
     if (plan.action === "unchanged") {
+      result.unchanged.push(target.configPath);
       log(`  Already configured: ${target.configPath}`);
+    } else if (plan.action === "keep") {
+      result.kept.push(target.configPath);
+      log(`  Kept your existing entry: ${target.configPath}`);
+      log(`    it runs:      ${describeEntry(plan.previous)}`);
+      if (isUnpinned(plan.previous)) log("                  (no version is pinned: npx runs whatever it has cached, or the newest release)");
+      log(`    setup writes: ${describeEntry(target.entry)}`);
+      log("    To replace it, run setup again with --update (env and its other fields are kept).");
     } else if (plan.action === "refuse") {
-      refused++;
+      result.notWritten.push(target.configPath);
       log(`  Not modified: ${target.configPath}`);
       log(`  Setup left it untouched because ${plan.reason}. Add this by hand:`);
       log(snippet(target));
-    } else if (dryRun) {
-      log(`  Would ${plan.action === "create" ? "create" : "update"}: ${target.configPath}`);
-      log(`  Adding under "${target.key}":`);
-      log(snippet(target));
     } else {
-      try {
-        const backup = writeConfigAtomic(target.configPath, plan.content ?? "");
-        log(`  Written: ${target.configPath}`);
-        if (backup) log(`  Backup:  ${backup}`);
-      } catch (error) {
-        refused++;
-        log(`  Could not write ${target.configPath}: ${error instanceof Error ? error.message : String(error)}`);
-        log("  Add this by hand:");
-        log(snippet(target));
+      if (plan.action === "replace") {
+        log(`  ${dryRun ? "Would replace" : "Replacing"} the 4da entry: ${target.configPath}`);
+        log(`    was: ${describeEntry(plan.previous)}`);
+        log(`    now: ${describeEntry(target.entry)}`);
+      }
+      if (dryRun) {
+        if (plan.action !== "replace") {
+          log(`  Would ${plan.action === "create" ? "create" : "update"}: ${target.configPath}`);
+          log(`  Adding under "${target.key}":`);
+          log(snippet(target));
+        }
+      } else {
+        try {
+          const backup = writeConfigAtomic(target.configPath, plan.content ?? "");
+          result.written.push(target.configPath);
+          log(`  Written: ${target.configPath}`);
+          if (backup) log(`  Backup:  ${backup}`);
+        } catch (error) {
+          result.notWritten.push(target.configPath);
+          log(`  Could not write ${target.configPath}: ${errorMessage(error)}`);
+          log("  Add this by hand:");
+          log(snippet(target));
+        }
       }
     }
     log("");
@@ -401,18 +616,75 @@ export function runSetup(dryRun = false, ctx: SetupContext = currentContext(), l
   if (found === 0) {
     log("  No supported editors detected.\n");
     log("  Manual setup — add to your editor's MCP config:\n");
-    log(`  ${JSON.stringify({ mcpServers: MCP_CONFIG }, null, 2)}\n`);
-    log(`  Claude Code: ${CLAUDE_CODE_COMMAND}\n`);
+    log(`  ${JSON.stringify({ mcpServers: { "4da": serverCommand(version) } }, null, 2)}\n`);
+    log(`  Claude Code: ${claudeCodeCommand(version)}\n`);
   }
 
-  if (refused > 0) log(`  ${refused} config file${refused === 1 ? " needs" : "s need"} the entry added by hand (above).`);
-  log("  Done. Restart your editor to activate 4DA.");
+  // The closing line says what happened, not what was hoped for.
+  const failed = result.notWritten.length;
+  const wrote = result.written.length;
+  if (failed > 0) {
+    result.exitCode = 1;
+    log(`  ${failed} config file${failed === 1 ? " was" : "s were"} not written: add the entry by hand (above).`);
+  }
+  if (dryRun) log("  Dry run: nothing was written.");
+  else if (wrote > 0 && failed === 0) log("  Done. Restart your editor to activate 4DA.");
+  else if (wrote > 0) log(`  ${wrote} config file${wrote === 1 ? " was" : "s were"} written. Restart your editor to activate 4DA.`);
+  else if (failed === 0 && result.kept.length + result.unchanged.length > 0) log("  Nothing was written: every editor config found already has a 4da entry.");
+  else log("  Nothing was written.");
   log("");
   log("  The server works on its own; with the 4DA desktop app installed it");
   log("  also reads the app's scored feed:");
   log("    https://github.com/4DA-Systems/4DA/releases/latest");
   log("");
-  log("  Run: npx @4da/mcp-server --doctor  to verify everything works.\n");
+  log(`  Run: npx ${PACKAGE}@${version} --doctor  to verify everything works.\n`);
+  return result;
+}
+
+/** `4da-mcp-setup --help`, and the text an unknown argument exits with. */
+export const SETUP_USAGE = `
+  4da-mcp-setup — write the 4DA MCP server entry into your editors' configs
+
+  Usage:
+    4da-mcp-setup [--dry-run] [--update]
+
+  Options:
+    --dry-run       Print each file and entry, write nothing
+    --update        Replace an existing 4da entry that differs from the one setup
+                    writes (default: keep it and say so)
+    --version, -v   Print the version
+    --help, -h      Print this text
+
+  The entry pins this package's version. Exit code 1 means a config that was
+  found could not be written. An argument not listed here exits with this text
+  and code 2, and writes nothing.
+`;
+
+/**
+ * The `4da-mcp-setup` bin: only the arguments above do anything.
+ * @returns The process exit code.
+ */
+export function runSetupCli(
+  argv: readonly string[],
+  ctx: SetupContext = currentContext(),
+  log: Log = console.log,
+  logError: Log = console.error,
+): number {
+  const parsed = parseSetupArgs(argv);
+  if (!parsed.ok) {
+    logError(`[4DA] ${parsed.error}`);
+    logError(SETUP_USAGE);
+    return 2;
+  }
+  if (parsed.command.kind === "help") {
+    log(SETUP_USAGE);
+    return 0;
+  }
+  if (parsed.command.kind === "version") {
+    log(`${PACKAGE} ${PACKAGE_VERSION ?? "(version unreadable)"}`);
+    return PACKAGE_VERSION === null ? 1 : 0;
+  }
+  return runSetup({ dryRun: parsed.command.dryRun, update: parsed.command.update }, ctx, log).exitCode;
 }
 
 /**
@@ -435,6 +707,5 @@ export function isEntryPoint(argv1: string | undefined, moduleUrl: string): bool
 
 // Run directly if invoked as a script (bin entry or pnpm run setup)
 if (isEntryPoint(process.argv[1], import.meta.url)) {
-  const dryRun = process.argv.includes("--dry-run");
-  runSetup(dryRun);
+  process.exitCode = runSetupCli(process.argv.slice(2));
 }

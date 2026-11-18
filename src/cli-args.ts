@@ -11,7 +11,7 @@
 export type CliCommand =
   | { kind: "version" }
   | { kind: "help" }
-  | { kind: "setup"; dryRun: boolean }
+  | { kind: "setup"; dryRun: boolean; update: boolean }
   | { kind: "doctor" }
   | { kind: "http"; port: number; host: string }
   | { kind: "stdio" };
@@ -22,7 +22,7 @@ export const DEFAULT_HTTP_PORT = 4840;
 export const DEFAULT_HTTP_HOST = "127.0.0.1";
 
 /** Flags that stand alone. `setup` and `doctor` are also accepted as bare words, as before. */
-const SWITCHES = new Set(["--version", "-v", "--help", "-h", "--setup", "setup", "--doctor", "doctor", "--dry-run", "--http"]);
+const SWITCHES = new Set(["--version", "-v", "--help", "-h", "--setup", "setup", "--doctor", "doctor", "--dry-run", "--update", "--http"]);
 /** Flags that take the next argument as their value. */
 const VALUED = new Set(["--port", "--host"]);
 
@@ -69,8 +69,8 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   if (modes.length === 1 && modes[0] !== "--http" && httpOnly.length > 0) {
     return { ok: false, error: `${httpOnly.join(" and ")} ${httpOnly.length === 1 ? "is" : "are"} used only with --http, not with ${modes[0]}` };
   }
-  if (seen.has("--setup") || seen.has("setup")) return { ok: true, command: { kind: "setup", dryRun: seen.has("--dry-run") } };
-  if (seen.has("--dry-run")) return { ok: false, error: "--dry-run is used only with --setup" };
+  if (seen.has("--setup") || seen.has("setup")) return { ok: true, command: { kind: "setup", dryRun: seen.has("--dry-run"), update: seen.has("--update") } };
+  for (const flag of ["--dry-run", "--update"]) if (seen.has(flag)) return { ok: false, error: `${flag} is used only with --setup` };
   if (seen.has("--doctor") || seen.has("doctor")) return { ok: true, command: { kind: "doctor" } };
   if (seen.has("--http")) {
     const rawPort = values.get("--port");
@@ -80,4 +80,26 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   }
   if (httpOnly.length > 0) return { ok: false, error: `${httpOnly.join(" and ")} ${httpOnly.length === 1 ? "is" : "are"} used only with --http` };
   return { ok: true, command: { kind: "stdio" } };
+}
+
+/** What the `4da-mcp-setup` bin can be asked for. */
+export type SetupCliCommand = { kind: "setup"; dryRun: boolean; update: boolean } | { kind: "help" } | { kind: "version" };
+
+export type SetupCliParse = { ok: true; command: SetupCliCommand } | { ok: false; error: string };
+
+const SETUP_SWITCHES = new Set(["--dry-run", "--update", "--help", "-h", "--version", "-v"]);
+
+/**
+ * Arguments of the `4da-mcp-setup` bin. The rule is the server binary's: an argument it does not
+ * know is refused, never read as "go", because the default action writes editor configs.
+ */
+export function parseSetupArgs(argv: readonly string[]): SetupCliParse {
+  const seen = new Set<string>();
+  for (const arg of argv) {
+    if (!SETUP_SWITCHES.has(arg)) return { ok: false, error: `unknown argument ${JSON.stringify(arg.slice(0, 80))}` };
+    seen.add(arg);
+  }
+  if (seen.has("--version") || seen.has("-v")) return { ok: true, command: { kind: "version" } };
+  if (seen.has("--help") || seen.has("-h")) return { ok: true, command: { kind: "help" } };
+  return { ok: true, command: { kind: "setup", dryRun: seen.has("--dry-run"), update: seen.has("--update") } };
 }
