@@ -9,13 +9,15 @@
  * failing (HTTP 500, truncated JSON) there was nothing to hold it against, and `{npm, lodash, "4.x"}`
  * named 4.0.0, which advisories affect, its smallest safe release (blind audit round 5). The rule
  * now: a release is named safe only when the batch answer for that release was read AND the list
- * holds every id that answer named.
+ * accounts for every id that answer named: it holds the id, and its own reading of that advisory
+ * has the release affected too (a release the answer names an advisory against is never called
+ * clean because this server read the advisory's ranges otherwise).
  */
 
-import { missingFromList, type FixPathSources, type FixTargetResult } from "./fix-paths.js";
+import { missingFromList, unreadableText, type FixPathSources, type FixTargetResult } from "./fix-paths.js";
 import type { AdvisoryQuery } from "./held-dependencies.js";
 import type { OfferedRelease } from "./offered-release.js";
-import type { AdvisoryRanges } from "./osv-ranges.js";
+import { advisoryReading, type AdvisoryRanges } from "./osv-ranges.js";
 import type { OsvEcosystem, ResolvedDependency } from "./types.js";
 
 /** What the batch query said about a set of releases: read, with the ids per release, or not read and why. */
@@ -59,15 +61,52 @@ export async function batchAnswer(query: AdvisoryQuery, releases: Array<{ ecosys
   return { read: true, idsAt: (ecosystem, name, version) => ids.get(keyOf(ecosystem, name, version)) ?? [] };
 }
 
-/** Why a list-based release is not confirmed, or null when the batch answer was read and the list holds every id it named. */
+/**
+ * The ids OSV.dev's batch answer names for one release that the package's advisory list does not
+ * account for. `missing`: the list does not hold them (missingFromList). `misread`: the list holds
+ * them, and no record of that issue in it has the release affected (a maintenance notice accounts
+ * for itself: it never makes a release unclean). OSV.dev's answer for the exact version stands in
+ * both cases, so nothing worked out from the list may call that release clean; a `misread` id also
+ * shows the list's ranges are not read as OSV.dev reads them.
+ *
+ * npm `derby` 4.2.3: OSV.dev names GHSA-82jv-9wjw-pqh6 against it, the list holds that id, and its
+ * ranges were read as not reaching 4.2.3, so the release was called both affected and the newest
+ * safe one in a single answer.
+ */
+export function unaccountedIds(list: readonly AdvisoryRanges[], named: readonly string[], version: string, ecosystem: string): { missing: string[]; misread: string[] } {
+  const missing = missingFromList(list, named);
+  const same = (a: AdvisoryRanges, id: string) => [a.id, ...(a.aliases ?? [])].some((x) => x.toUpperCase() === id.toUpperCase());
+  const accounted = (a: AdvisoryRanges) => {
+    if (a.maintenance) return true;
+    const reading = advisoryReading(a, version, ecosystem);
+    return reading === "affected" || reading === "presumed";
+  };
+  const misread = [...new Set(named)].filter((id) => !missing.includes(id) && !list.some((a) => same(a, id) && accounted(a)));
+  return { missing, misread };
+}
+
+const some = (ids: string[]) => `${ids.slice(0, 3).join(", ")}${ids.length > 3 ? ` and ${ids.length - 3} more` : ""}`;
+
+/** Why a list-based release is not confirmed, or null when the batch answer was read and the list accounts for every id it named (unaccountedIds). */
 async function unconfirmedWhy(sources: FixPathSources, answer: BatchAnswer, ecosystem: OsvEcosystem, name: string, version: string): Promise<string | null> {
   if (!isConcreteVersion(version)) return `"${version}" is not a release number OSV.dev can be asked about`;
   if (!answer.read) return `OSV.dev's batch query gave no current answer for it (${answer.reason})`;
   const named = answer.idsAt(ecosystem, name, version);
   if (named.length === 0) return null;
   const list = await sources.packageAdvisories(ecosystem, name).catch(() => null);
-  const missing = list ? missingFromList(list, named) : named;
-  return missing.length === 0 ? null : `OSV.dev's batch query names ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""} against it, which ${name}'s advisory list (/v1/query) left out`;
+  const { missing, misread } = list ? unaccountedIds(list, named, version, ecosystem) : { missing: named, misread: [] };
+  if (missing.length > 0) return `OSV.dev's batch query names ${some(missing)} against it, which ${name}'s advisory list (/v1/query) left out`;
+  if (misread.length > 0) return `OSV.dev's batch query names ${some(misread)} against it, which the ranges in ${name}'s advisory list (/v1/query) do not show as affecting it`;
+  return null;
+}
+
+/**
+ * The answer that waits on OSV.dev's word for its target (osv-ranges.ts CleanTarget.ifConfirmed):
+ * advisories whose ranges cannot be read stand in its way, and only the batch answer for that
+ * exact release can settle them. Null when nothing waits.
+ */
+function waiting(clean: FixTargetResult): FixTargetResult | null {
+  return clean.target === null && clean.ifConfirmed?.target ? (clean.ifConfirmed as FixTargetResult) : null;
 }
 
 /**
@@ -75,6 +114,11 @@ async function unconfirmedWhy(sources: FixPathSources, answer: BatchAnswer, ecos
  * not confirmed is kept as the highest-fix answer the tools already give when the list could not be
  * read (`advisoriesUnread`, "not checked against the package's other advisories"), with the reason
  * in `unconfirmed`; a newest safe release not confirmed is dropped.
+ *
+ * A target that waits on this answer (`ifConfirmed`: advisories of the package have ranges that
+ * cannot be read) is named only here, when the batch answer for it was read and names none of
+ * them, nor anything else its list does not account for. Otherwise it stays a release that was
+ * NOT confirmed, with why: never called affected on an unreadable range, and never called clean.
  */
 export async function confirmTargets(
   sources: FixPathSources,
@@ -83,7 +127,9 @@ export async function confirmTargets(
   deadline: number,
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
-  const todo = items.filter((i) => i.clean.target && !i.clean.advisoriesUnread);
+  const todo = items
+    .map((i) => ({ ...i, unread: waiting(i.clean) ? (i.clean.unreadable ?? []) : null, clean: waiting(i.clean) ?? i.clean }))
+    .filter((i) => i.clean.target && !i.clean.advisoriesUnread);
   if (todo.length === 0) return out;
   const answer = await batchAnswer(
     query,
@@ -98,9 +144,10 @@ export async function confirmTargets(
       const why = await unconfirmedWhy(sources, answer, i.ecosystem, i.name, i.clean.target!);
       if (why) {
         const { newestSafe: _n, lineDead: _l, lineHasLater: _h, lineDowngrade: _d, ...rest } = i.clean;
-        out.set(i.key, { ...rest, advisoriesUnread: true, unconfirmed: why });
+        out.set(i.key, { ...rest, advisoriesUnread: true, unconfirmed: i.unread ? `${unreadableText(i.unread).replace(/: no release is named$/, "")}, and ${why}` : why });
         return;
       }
+      if (i.unread) out.set(i.key, i.clean);
       let next = i.clean;
       if (next.newestSafe && (await unconfirmedWhy(sources, answer, i.ecosystem, i.name, next.newestSafe))) {
         const { newestSafe: _n, ...rest } = next;
@@ -158,5 +205,8 @@ export async function listConfirmed(
   const releases = [...new Set(versions)].map((version) => ({ ecosystem, name, version }));
   const answer = await batchAnswer(query, releases, deadline);
   if (!answer.read) return false;
-  return releases.every((r) => missingFromList(list, answer.idsAt(ecosystem, name, r.version)).length === 0);
+  return releases.every((r) => {
+    const { missing, misread } = unaccountedIds(list, answer.idsAt(ecosystem, name, r.version), r.version, ecosystem);
+    return missing.length === 0 && misread.length === 0;
+  });
 }

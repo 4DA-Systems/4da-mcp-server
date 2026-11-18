@@ -270,7 +270,8 @@ describe("2. a target is never a yanked release, on a crate this host does not b
     const li = new LiveIntelligence(new Database(":memory:"));
     const scanOf = async (deps: ResolvedDependency[], projectPath: string): Promise<VulnerabilityScanResult> => {
       const vulnerabilities = deps
-        .filter((d) => d.name === "crypto-bigint")
+        // OSV.dev answers per version: the advisory affects the installed 0.5.5, not the release asked about as the target.
+        .filter((d) => d.name === "crypto-bigint" && d.version === "0.5.5")
         .map((d) =>
           restampDepContext(
             {

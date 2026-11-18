@@ -23,7 +23,7 @@
  * counting 1, over the bundled popular-npm.ts list), when there is one: "did you mean lodash?".
  */
 
-import { advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
@@ -66,7 +66,7 @@ export function maliciousName(input: {
     (a) =>
       a.spans.some((s) => s.introduced === "0" && s.fixed === null && s.lastAffected === null) ||
       (gone && real.length === 0) ||
-      (real.length > 0 && real.every((v) => advisoryAffects(a, v, ecosystem))),
+      (real.length > 0 && real.every((v) => advisoryKnownToAffect(a, v, ecosystem))),
   );
   if (!takenDown && covering.length === 0) return null;
   // Every record that covers the name, not only the ones read as malware: the ecosystem's own record

@@ -71,8 +71,9 @@ beforeEach(() => {
         affected: [{ package: { ecosystem: vulnerable.ecosystem, name: vulnerable.name }, ranges: [{ type: "ECOSYSTEM", events: [{ introduced: "0" }, { fixed: vulnerable.fixed }] }] }],
       };
       if (u.hostname === "api.osv.dev" && u.pathname === "/v1/querybatch") {
-        const { queries } = JSON.parse(body) as { queries: Array<{ package: { name: string } }> };
-        return json({ results: queries.map((q) => ({ vulns: advisory && q.package.name === vulnerable!.name ? [{ id: advisory.id, modified: advisory.modified }] : [] })) });
+        const { queries } = JSON.parse(body) as { queries: Array<{ package: { name: string }; version?: string }> };
+        // Per version, as OSV.dev answers: the advisory affects the installed release, not the fixed one.
+        return json({ results: queries.map((q) => ({ vulns: advisory && q.package.name === vulnerable!.name && q.version === vulnerable!.version ? [{ id: advisory.id, modified: advisory.modified }] : [] })) });
       }
       if (u.hostname === "api.osv.dev" && u.pathname.startsWith("/v1/vulns/")) return json(advisory ?? {}, advisory ? 200 : 404);
       if (u.hostname === "api.osv.dev") {

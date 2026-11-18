@@ -808,7 +808,10 @@ export async function cleanFixTarget(
     if (malware.length > 0) Object.assign(clean, { malware });
     if (clean.target === null && clean.maliciousLanding) Object.assign(clean, { landingNote: malwareText(name, clean.maliciousLanding) });
     const result: FixTargetResult = { ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}), ...(absent.length > 0 ? { absent } : {}) };
-    return withLineFacts(withRegistryFacts(name, result, ecosystem, perAdvisoryFixes, advisories, facts, await absentReasons(sources, ecosystem, name, absent)), ecosystem, advisories, facts, installed);
+    const absentWhy = await absentReasons(sources, ecosystem, name, absent);
+    // The answer that waits on OSV.dev's word for its target (CleanTarget.ifConfirmed) carries the same registry facts.
+    if (clean.ifConfirmed) result.ifConfirmed = withRegistryFacts(name, { ...result, ...clean.ifConfirmed, unreadable: undefined, ifConfirmed: undefined }, ecosystem, perAdvisoryFixes, advisories, facts, absentWhy);
+    return withLineFacts(withRegistryFacts(name, result, ecosystem, perAdvisoryFixes, advisories, facts, absentWhy), ecosystem, advisories, facts, installed);
   }
   // Only a registry list can show a release past a last_affected bound.
   if (!published || published.length === 0) return null;

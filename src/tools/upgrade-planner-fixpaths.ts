@@ -372,7 +372,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   let clean = await cleanFixTarget(sources, ecosystem, step.package, input.fixes, step.currentVersion, input.ids ?? []);
   // Blind audit round 5: a target from the package's advisory list is checked only when OSV.dev's
   // batch query, asked about the target itself, confirms the list (batch-confirm.ts).
-  if (clean?.target) {
+  if (clean?.target || clean?.ifConfirmed) {
     const query: AdvisoryQuery = heldQuery ?? (async () => { throw new Error("no batch query"); });
     clean = (await confirmTargets(sources, query, [{ key: "step", ecosystem, name: step.package, clean }], Date.now() + HELD_BUDGET_MS)).get("step") ?? clean;
   }
