@@ -39,7 +39,7 @@ import {
 } from "./js-lockfile-readers.js";
 import { requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
-import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
@@ -154,12 +154,7 @@ function yarnSkips(file: string): number {
  * that is can only be bounded from below (`missing`).
  */
 function damagedProblem(file: string, damage: LockDamage): LockfileProblem {
-  return {
-    file,
-    partial: true,
-    ...(damage.missing > 0 ? { skipped: damage.missing } : {}),
-    error: `${damage.reason}. It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile`,
-  };
+  return partialRead(file, damage.reason, damage.missing);
 }
 
 /** Lines git writes into a file it could not merge. */
@@ -172,6 +167,8 @@ const CONFLICT_MARKER = /^(?:<{7}|>{7})(?: |$)|^={7}$/m;
  */
 function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSource): LockfileProblem[] {
   const readFiles = new Set([read.source, ...(read.extraSources ?? [])].filter((f): f is string => Boolean(f)).map((f) => path.resolve(f)));
+  // A file its reader already named, with the reason, is said once.
+  const named = new Set((read.problems ?? []).map((p) => path.resolve(p.file)));
   const problems: LockfileProblem[] = [];
   for (const name of LOCKFILES[ecosystem] ?? []) {
     if (name === "go.sum") continue; // read with go.mod, never on its own
@@ -181,7 +178,7 @@ function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSour
       if (ecosystem === "PyPI") continue;
       break; // everything after it ranks lower (resolveNpm compares those itself)
     }
-    if (!fs.existsSync(file)) continue;
+    if (!fs.existsSync(file) || named.has(path.resolve(file))) continue;
     // A yarn.lock whose entries were all skipped for length: named with the count, even when the file is short (L5).
     const skipped = name === "yarn.lock" ? yarnSkips(file) : 0;
     if (skipped > 0) {
@@ -192,6 +189,14 @@ function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSour
     if (error) problems.push({ file, error });
   }
   return problems;
+}
+
+/** Lockfiles written as JSON under a name that does not end in `.json`. */
+const JSON_LOCKFILE_NAMES = new Set(["pipfile.lock", "composer.lock"]);
+
+/** Whether a lockfile's format is JSON: it is then valid JSON or damaged, whatever its name or length. */
+function isJsonLockfile(file: string): boolean {
+  return /\.json$/i.test(file) || JSON_LOCKFILE_NAMES.has(path.basename(file).toLowerCase());
 }
 
 /**
@@ -206,7 +211,7 @@ function describeParseError(file: string, error: unknown): string | null {
     return `could not be read (${readError instanceof Error ? readError.message : String(readError)})`;
   }
   if (CONFLICT_MARKER.test(content)) return "it contains git merge-conflict markers (<<<<<<< / >>>>>>>): resolve the conflict and reinstall to regenerate it";
-  if (/\.json$/i.test(file)) {
+  if (isJsonLockfile(file)) {
     try {
       JSON.parse(content);
     } catch (parseError) {
@@ -214,7 +219,7 @@ function describeParseError(file: string, error: unknown): string | null {
     }
   }
   if (error) return `could not be parsed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
-  if (/\.json$/i.test(file)) return null;
+  if (isJsonLockfile(file)) return null;
   // A text lockfile of some size that gave no package at all is damaged or in a format this reader does not know.
   const lines = content.split(/\r?\n/).filter((l) => l.trim() !== "").length;
   return lines > 20 ? "no package versions could be read from it (unsupported format or damaged)" : null;
@@ -659,9 +664,15 @@ const CARGO_LOCK_LINES = [
  * lockfile syntax (an unterminated string, a half-written table header), a
  * `[[package]]` table with no name or version, and a package named in some
  * `dependencies` list that has no table of its own. The last one catches a
- * file cut cleanly between two tables.
+ * file cut cleanly between two tables, unless the cut also took every table
+ * that names the missing ones: `undeclared`, the dependencies the manifest
+ * beside it declares that have no table (cargoLockMissingDeclared), catches that.
  */
-export function cargoLockDamage(content: string, packages: CargoPackage[] = parseCargoLockPackages(content)): LockDamage | null {
+export function cargoLockDamage(
+  content: string,
+  packages: CargoPackage[] = parseCargoLockPackages(content),
+  undeclared: string[] = [],
+): (LockDamage & { behindManifest?: true }) | null {
   const malformed: number[] = [];
   let arrayOpen = false;
   content.split(/\r?\n/).forEach((raw, index) => {
@@ -692,8 +703,115 @@ export function cargoLockDamage(content: string, packages: CargoPackage[] = pars
     const list = [...dangling].sort();
     parts.push(`${dangling.size} package${dangling.size === 1 ? "" : "s"} named as ${dangling.size === 1 ? "a dependency has" : "dependencies have"} no [[package]] table (${list.slice(0, 3).join(", ")}${list.length > 3 ? ", ..." : ""})`);
   }
+  // A crate both a `dependencies` list and the manifest name is one missing table, counted once.
+  const danglingFolded = new Set([...dangling].map(foldCrateName));
+  const unlisted = undeclared.filter((name) => !danglingFolded.has(foldCrateName(name)));
+  if (undeclared.length > 0) {
+    parts.push(`Cargo.toml declares ${undeclared.length === 1 ? "a dependency" : `${undeclared.length} dependencies`} it holds no [[package]] table for (${undeclared.slice(0, 3).join(", ")}${undeclared.length > 3 ? ", ..." : ""})`);
+  }
   if (parts.length === 0) return null;
-  return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: dangling.size + Math.max(0, nameless) };
+  const missing = dangling.size + Math.max(0, nameless) + unlisted.length;
+  // Only the manifest disagrees: cut between two tables, or written before the manifest changed.
+  if (parts.length === 1 && undeclared.length > 0) return { reason: `it is truncated or out of date: ${parts[0]}`, missing, behindManifest: true };
+  return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing };
+}
+
+/** One dependency entry of a Cargo.toml, as cargoDeclaredPackages reads it. */
+interface CargoDeclared {
+  key: string;
+  /** `package = "real-name"`: the crate the lockfile records under this key. */
+  renamed: string | null;
+  /** `workspace = true`: the entry, and any rename, come from `[workspace.dependencies]`. */
+  inherited: boolean;
+}
+
+/**
+ * The crates a Cargo.toml's own dependency tables declare, under the name the lockfile records
+ * them by: `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, their
+ * `[target.<spec>.…]` forms and `[dependencies.<name>]` sub-tables, with `package = "…"` renames
+ * applied. `[workspace.dependencies]` only offers entries to members, so it declares nothing by
+ * itself; an entry inherited with `workspace = true` takes its rename from it.
+ */
+export function cargoDeclaredPackages(content: string): string[] {
+  const declared: CargoDeclared[] = [];
+  const offered = new Map<string, string>();
+  /** The table the current line is in: a dependency table, one entry's sub-table, or neither. */
+  let table: { workspace: boolean; entry: CargoDeclared | null } | null = null;
+  const unquote = (key: string) => key.trim().replace(/^["']|["']$/g, "");
+  for (const raw of content.split(/\r?\n/)) {
+    if (raw.length > MAX_LOCKFILE_LINE) continue;
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    if (line.startsWith("[")) {
+      table = null;
+      const header = /^\[([^[\]]+)\]/.exec(line)?.[1].trim();
+      const at = header ? /(?:^|\.)(?:dev-|build-)?dependencies(?:\.(.+))?$/.exec(header) : null;
+      if (!header || !at) continue;
+      const prefix = header.slice(0, at.index);
+      const workspace = prefix === "workspace";
+      // `[package.metadata.x.dependencies]` and the like are a tool's own data, not cargo's.
+      if (!workspace && prefix !== "" && !prefix.startsWith("target.")) continue;
+      const entry = at[1] ? { key: unquote(at[1]), renamed: null, inherited: false } : null;
+      if (entry && !workspace) declared.push(entry);
+      table = { workspace, entry };
+      continue;
+    }
+    if (!table) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1);
+    const renamedTo = (text: string) => /(?:^|[\s{,])package\s*=\s*"([^"]+)"/.exec(text)?.[1] ?? null;
+    if (table.entry) {
+      // Inside `[dependencies.name]`: one key per line.
+      if (key === "package") table.entry.renamed = /^\s*"([^"]+)"/.exec(value)?.[1] ?? null;
+      else if (key === "workspace" && /^\s*true\b/.test(value)) table.entry.inherited = true;
+      if (table.workspace && key === "package" && table.entry.renamed) offered.set(table.entry.key, table.entry.renamed);
+      continue;
+    }
+    // `name = "1"`, `name = { version = "1", package = "real" }`, `name.workspace = true`. Anything
+    // else before the `=` is the inside of a value that spans lines, not an entry.
+    const entry = /^("[^"]+"|'[^']+'|[A-Za-z0-9_-]+)(?:\s*\.\s*([A-Za-z0-9_-]+))?$/.exec(key);
+    if (!entry) continue;
+    const name = unquote(entry[1]);
+    const field = entry[2] ?? null;
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) continue;
+    const renamed = field === null ? renamedTo(value) : field === "package" ? (/^\s*"([^"]+)"/.exec(value)?.[1] ?? null) : null;
+    const inherited = field === null ? /(?:^|[\s{,])workspace\s*=\s*true\b/.test(value) : field === "workspace" && /^\s*true\b/.test(value);
+    if (table.workspace) {
+      if (renamed) offered.set(name, renamed);
+      continue;
+    }
+    const known = declared.find((d) => d.key === name);
+    if (known) {
+      known.renamed ??= renamed;
+      known.inherited ||= inherited;
+    } else declared.push({ key: name, renamed, inherited });
+  }
+  // A crate name is letters, digits, `-` and `_`: a rename that is anything else names no crate.
+  const crate = (name: string | null | undefined) => (name && /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : null);
+  const lockedAs = (d: CargoDeclared) => crate(d.renamed !== null ? d.renamed : d.inherited && offered.has(d.key) ? offered.get(d.key) : d.key);
+  return [...new Set(declared.map(lockedAs).filter((name): name is string => name !== null))];
+}
+
+/** crates.io reads `-` and `_` as one name; a manifest may spell either. */
+const foldCrateName = (name: string) => name.toLowerCase().replace(/_/g, "-");
+
+/**
+ * The dependencies the Cargo.toml beside a Cargo.lock declares that the lockfile holds no
+ * `[[package]]` table for. Cargo locks every declared dependency (optional, dev, build and
+ * other-platform ones included), so a missing one means the lockfile was cut short between two
+ * tables or was written for an older manifest. Empty when the manifest cannot be read.
+ */
+function cargoLockMissingDeclared(cwd: string, packages: CargoPackage[]): string[] {
+  let manifest: string;
+  try {
+    manifest = readTextFile(path.join(cwd, "Cargo.toml"));
+  } catch {
+    return [];
+  }
+  const locked = new Set(packages.map((pkg) => foldCrateName(pkg.name)));
+  return cargoDeclaredPackages(manifest).filter((name) => !locked.has(foldCrateName(name))).sort();
 }
 
 function resolveRust(cwd: string): VersionSource {
@@ -709,8 +827,13 @@ function resolveRust(cwd: string): VersionSource {
   try {
     const content = readTextFile(lockPath);
     const packages = parseCargoLockPackages(content);
-    const damage = cargoLockDamage(content, packages);
-    if (damage) problems.push(damagedProblem(lockPath, damage));
+    if (packages.length === 0) {
+      // Cargo writes at least the project's own package: a lockfile with none was not read at all.
+      const error = describeParseError(lockPath, null) ?? "it holds no [[package]] table, and cargo always writes at least the project's own: it is truncated or not a Cargo.lock";
+      return { ...emptySource(), problems: [{ file: lockPath, error }] };
+    }
+    const damage = cargoLockDamage(content, packages, cargoLockMissingDeclared(cwd, packages));
+    if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing, damage.behindManifest === true));
     const versionsByName = new Map<string, string[]>();
     // Cargo writes `source` on every registry or git package. In a file it
     // wrote, a package with none is a workspace member or path dependency:
@@ -745,7 +868,10 @@ function resolveRust(cwd: string): VersionSource {
     for (const [name, list] of versionsByName) {
       if (!versions.has(name)) versions.set(name, list[0]);
     }
-  } catch { /* skip */ }
+  } catch (error) {
+    // Present and not read: it is the source of nothing, and the answer says why.
+    return { ...emptySource(), problems: [{ file: lockPath, error: describeParseError(lockPath, error) ?? "could not be parsed" }] };
+  }
 
   return found(versions, instances, lockPath, "lockfile", {
     ...(problems.length > 0 ? { problems } : {}),
@@ -758,23 +884,28 @@ function resolveRustFromManifest(cwd: string): VersionSource {
   const cargoPath = path.join(cwd, "Cargo.toml");
   if (!fs.existsSync(cargoPath)) return emptySource();
 
+  let manifest: string;
   try {
-    // name = "1.0" or name = { version = "1.0", ... }, inside dependency tables
-    // only: [package]'s own `version = "0.1.0"` and `edition = "2021"` were read
-    // as crates named "version" and "edition".
-    let inDeps = false;
-    for (const line of readTextFile(cargoPath).split(/\r?\n/)) {
-      const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
-      if (header) {
-        inDeps = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(header[1].trim());
-        continue;
-      }
-      if (!inDeps) continue;
-      const match = /^\s*([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]+)"|.*?\bversion\s*=\s*"([^"]+)")/.exec(line);
-      const spec = match?.[2] ?? match?.[3];
-      if (match && spec && /^[=^~]?\s*\d/.test(spec)) declared.set(match[1], spec);
+    manifest = readTextFile(cargoPath);
+  } catch (error) {
+    // Present and not readable: what it declares is not known, which is not "declares nothing".
+    return { ...emptySource(), problems: [{ file: cargoPath, error: unreadableReason(error) }] };
+  }
+  // name = "1.0" or name = { version = "1.0", ... }, inside dependency tables
+  // only: [package]'s own `version = "0.1.0"` and `edition = "2021"` were read
+  // as crates named "version" and "edition".
+  let inDeps = false;
+  for (const line of manifest.split(/\r?\n/)) {
+    const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (header) {
+      inDeps = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(header[1].trim());
+      continue;
     }
-  } catch { /* skip */ }
+    if (!inDeps) continue;
+    const match = /^\s*([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]+)"|.*?\bversion\s*=\s*"([^"]+)")/.exec(line);
+    const spec = match?.[2] ?? match?.[3];
+    if (match && spec && /^[=^~]?\s*\d/.test(spec)) declared.set(match[1], spec);
+  }
 
   // Cargo reads "1.0" as "^1.0": only "=1.2.3" names one version.
   return declaredRanges(declared, (spec) => /^=\s*\d+\.\d+\.\d+/.test(spec.trim()), cargoPath);

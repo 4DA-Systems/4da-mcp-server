@@ -256,7 +256,9 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
         result.depsByEcosystem["rust"] = { deps: rustDeps, devDeps: rustDevDeps };
       }
     } catch {
-      // Malformed Cargo.toml — skip
+      // Present and not readable: the ecosystem is here all the same, and its reader says why
+      // nothing was read (resolveRust). With no group, the file went unmentioned.
+      result.depsByEcosystem["rust"] ??= { deps: [], devDeps: [] };
     }
   }
 
@@ -271,6 +273,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   // together: a project often has both, and the old else-if dropped the second.
   const pyDeps = new Set<string>();
   const pyDevDeps = new Set<string>();
+  /** A manifest that is present and could not be read: the Python reader names it (resolvePython). */
+  let pyUnread = false;
   if (fs.existsSync(pyprojectPath)) {
     langSet.add("python");
     try {
@@ -278,7 +282,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       parsed.deps.forEach((d) => pyDeps.add(d));
       parsed.devDeps.forEach((d) => pyDevDeps.add(d));
     } catch {
-      // Skip
+      pyUnread = true;
     }
   }
   if (fs.existsSync(requirementsPath)) {
@@ -299,7 +303,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
     detectPythonFramework(name, fwSet);
   }
   pushAll(result.devDependencies, pyDevDeps);
-  if (pyDeps.size > 0 || pyDevDeps.size > 0) {
+  if (pyDeps.size > 0 || pyDevDeps.size > 0 || pyUnread) {
     result.depsByEcosystem["python"] = { deps: [...pyDeps], devDeps: [...pyDevDeps] };
   }
 
