@@ -16,9 +16,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   cargoWorkspaceDeps,
+  declaredRequirements,
   parseGoModDirectDeps,
   parsePyprojectDependencies,
-  requirementNamesWithIncludes,
 } from "./project-manifests.js";
 import { readTextFile } from "./live/text-file.js";
 import { pushAll } from "./array-utils.js";
@@ -285,14 +285,17 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       pyUnread = true;
     }
   }
-  if (fs.existsSync(requirementsPath)) {
-    langSet.add("python");
-    try {
-      // Included files (`-r sub/inner.txt`) declare their pins too (audit 7g).
-      requirementNamesWithIncludes(requirementsPath, cwd).forEach((d) => pyDeps.add(d));
-    } catch {
-      // Skip
-    }
+  if (fs.existsSync(requirementsPath)) langSet.add("python");
+  try {
+    // Every requirements file declares what it lists, and so do the files it includes
+    // (`-r sub/inner.txt`): requirements-dev.txt and requirements/*.txt as much as
+    // requirements.txt. A name only dev files bring in is a dev dependency.
+    const declared = declaredRequirements(cwd);
+    if (declared.deps.length > 0 || declared.devDeps.length > 0) langSet.add("python");
+    declared.deps.forEach((d) => pyDeps.add(d));
+    declared.devDeps.forEach((d) => pyDevDeps.add(d));
+  } catch {
+    // Skip
   }
   if (fs.existsSync(setupPyPath)) {
     langSet.add("python");

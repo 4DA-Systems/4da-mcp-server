@@ -16,7 +16,16 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { compiledIndirect, compiledRequirements, confinedInclude, normalizePythonName, parseGoMod, requirementOptions } from "./live/lockfile-parsers-pygo.js";
+import {
+  compiledIndirect,
+  compiledRequirements,
+  confinedInclude,
+  devOnlyRequirements,
+  normalizePythonName,
+  parseGoMod,
+  requirementFiles,
+  requirementOptions,
+} from "./live/lockfile-parsers-pygo.js";
 import { readTextFile } from "./live/text-file.js";
 import { pushAll } from "./array-utils.js";
 
@@ -152,6 +161,51 @@ export function requirementNamesWithIncludes(file: string, root: string = path.d
     if (included) pushAll(names, requirementNamesWithIncludes(included, root, visited));
   }
   return [...new Set(names)];
+}
+
+/** Requirement files read for one project's declared names; a project with more is not a hand-written one. */
+const MAX_DECLARING_FILES = 256;
+
+/**
+ * What a project's requirement files declare: every name listed in any of them (requirements.txt,
+ * requirements-*.txt, requirements/*.txt and the files those include with `-r`, confined to
+ * `cwd`), pins and ranges alike. A requirement written in one of the project's own files is the
+ * user's to change there, whatever the file is called; only a compiled file's `# via <package>`
+ * pins are someone else's requirement.
+ *
+ * `devDeps` are the names installed for development only: every file that lists the name is a
+ * dev file by name and so is every file that includes it (devOnlyRequirements). A name any
+ * production file brings in is a dependency.
+ */
+export function declaredRequirements(cwd: string): { deps: string[]; devDeps: string[] } {
+  const listed = new Map<string, string[]>();
+  const includes: Array<{ from: string; to: string }> = [];
+  const read = (file: string) => {
+    const key = path.resolve(file);
+    if (listed.has(key) || listed.size >= MAX_DECLARING_FILES) return;
+    let content: string;
+    try {
+      content = readTextFile(file);
+    } catch {
+      listed.set(key, []); // unreadable: the version reader says so (resolvePython)
+      return;
+    }
+    const compiled = compiledRequirements(content);
+    listed.set(key, parseRequirementNames(content).filter((n) => !compiled || !compiledIndirect(compiled, n)));
+    for (const { option, target } of requirementOptions(content)) {
+      const included = option === "r" ? confinedInclude(path.dirname(file), target, cwd) : null;
+      if (!included) continue;
+      includes.push({ from: key, to: path.resolve(included) });
+      read(included);
+    }
+  };
+  for (const file of requirementFiles(cwd)) read(file);
+
+  const devOnly = devOnlyRequirements(includes);
+  const deps = new Set<string>();
+  const devDeps = new Set<string>();
+  for (const [file, names] of listed) for (const name of names) (devOnly(file) ? devDeps : deps).add(name);
+  return { deps: [...deps], devDeps: [...devDeps].filter((name) => !deps.has(name)) };
 }
 
 /** Direct Go dependencies: go.mod requirements not marked `// indirect`. */

@@ -90,10 +90,48 @@ function includesRequirements(file: string): boolean {
  * dev-requirements.txt, requirements/testing.txt, _test_minimum_requirements.txt,
  * docs-requirements.txt. The convention is near universal, but it is a name:
  * a package any other file also lists keeps an unknown scope, never "dev".
+ * The name of the file alone does not make its pins dev-only: see devOnlyRequirements.
  */
 export function devRequirementsFile(file: string): boolean {
   const name = path.basename(file).replace(/\.txt$/i, "");
   return /(?:^|[-_.])(?:dev|devel|develop|development|test|tests|testing|lint|linting|docs?|ci|typing|mypy|bench|benchmarks?)(?:[-_.]|$)/i.test(name);
+}
+
+/**
+ * Whether what a requirements file lists is installed for development only: the file is a dev
+ * file by name, and so is every file that includes it with `-r`, however far up. `includes`
+ * holds every include read (absolute paths).
+ *
+ * Both directions matter. `requirements-dev.txt` that says `-r prod.txt` installs prod.txt's
+ * pins, but prod.txt is a production file: its pins are production, whoever includes it. And a
+ * dev-named file a production file includes is installed in production with it.
+ */
+export function devOnlyRequirements(includes: ReadonlyArray<{ from: string; to: string }>): (file: string) => boolean {
+  const key = (file: string) => path.resolve(file).toLowerCase();
+  const includedBy = new Map<string, Set<string>>();
+  for (const { from, to } of includes) includedBy.set(key(to), (includedBy.get(key(to)) ?? new Set<string>()).add(key(from)));
+  const known = new Map<string, boolean>();
+  return (file) => {
+    const start = key(file);
+    const cached = known.get(start);
+    if (cached !== undefined) return cached;
+    // The file and everything above it; `seen` ends an include loop.
+    const seen = new Set<string>([start]);
+    const queue = [start];
+    let devOnly = true;
+    while (devOnly && queue.length > 0) {
+      const at = queue.pop() as string;
+      if (!devRequirementsFile(at)) devOnly = false;
+      for (const parent of includedBy.get(at) ?? []) {
+        if (!seen.has(parent)) {
+          seen.add(parent);
+          queue.push(parent);
+        }
+      }
+    }
+    known.set(start, devOnly);
+    return devOnly;
+  };
 }
 
 /**
@@ -170,16 +208,19 @@ export function resolvePython(cwd: string): VersionSource {
   }
 
   const collected: LockfileProblem[] = [];
-  const extras: RequirementExtras = { unpinned: [], uncheckable: [], directPrivate: [] };
+  const origins: NonNullable<RequirementExtras["origins"]> = [];
+  const includes: NonNullable<RequirementExtras["includes"]> = [];
+  const extras: RequirementExtras = { unpinned: [], uncheckable: [], directPrivate: [], origins, includes };
   const extraIndexes: Array<{ file: string; index: string }> = [];
   const registryWide: NonNullable<VersionSource["registryWide"]> = [];
+  /** Every pin the requirement files install, in the order read; its scope is decided once every include is known. */
+  const requirementPins: Array<{ name: string; version: string }> = [];
   for (const file of requirementFiles(cwd)) {
-    const dev = devRequirementsFile(file) ? true : undefined;
     const pins = readRequirementsFile(file, new Set(), cwd, collected, extras);
     // Unreadable: readRequirementsFile named it in `collected`.
     if (pins === null) continue;
     indexUnrecorded = true;
-    for (const { name, version } of pins) take(name, version, dev);
+    pushAll(requirementPins, pins);
     sources.push(file);
     // `--index-url` / `-i` replaces pypi.org for every pin of the file: private when it is not a
     // public index (pre-publish audit 2026-11-13, S4). `--extra-index-url` adds one beside pypi.org,
@@ -200,6 +241,19 @@ export function resolvePython(cwd: string): VersionSource {
       registryWide.push({ file, registry: sourceLabel(privateSource), setting });
     }
     for (const index of options.extra) if (!isPublicPypiIndex(index)) extraIndexes.push({ file, index: sourceLabel(index) });
+  }
+  // A pin is dev-only when every file that pins it is installed for development only
+  // (devOnlyRequirements); any other pin keeps an unknown scope, which is never discounted.
+  const devOnly = devOnlyRequirements(includes);
+  const pinnedIn = new Map<string, Set<string>>();
+  for (const { file, name, version } of origins) {
+    const files = pinnedIn.get(`${name}\0${version}`);
+    if (files) files.add(file);
+    else pinnedIn.set(`${name}\0${version}`, new Set([file]));
+  }
+  for (const { name, version } of requirementPins) {
+    const files = [...(pinnedIn.get(`${name}\0${version}`) ?? [])];
+    take(name, version, files.length > 0 && files.every(devOnly) ? true : undefined);
   }
   pushAll(uncheckable, extras.uncheckable);
   // A direct reference to a location that is not public (`name @ https://pkgs.acme.dev/...`, a private
@@ -410,6 +464,7 @@ export function readRequirementsFile(
   }
   const dir = path.dirname(file);
   const out = parseRequirements(content);
+  if (extras?.origins) for (const pin of out) extras.origins.push({ file: path.resolve(file), ...pin });
   if (extras) {
     // What this file lists but does not pin: a name with a range or no version, a git or URL requirement.
     const listed = unpinnedRequirements(content);
@@ -434,14 +489,20 @@ export function readRequirementsFile(
       problems.push(refusedInclude(file, option, target));
       continue;
     }
-    if (option === "r") pushAll(out, readRequirementsFile(included, visited, root, problems, extras, `\`-r ${target.slice(0, 200)}\` in ${path.basename(file)}`) ?? []);
-    else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
+    if (option === "r") {
+      // Recorded for a file read before, too: who includes a file decides what its pins are for.
+      extras?.includes?.push({ from: path.resolve(file), to: path.resolve(included) });
+      pushAll(out, readRequirementsFile(included, visited, root, problems, extras, `\`-r ${target.slice(0, 200)}\` in ${path.basename(file)}`) ?? []);
+    } else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {
     const pinned = new Set(out.map((p) => p.name));
     for (const name of unpinnedRequirements(content).names) {
       const version = constraints.get(name);
-      if (version && !pinned.has(name)) out.push({ name, version });
+      if (!version || pinned.has(name)) continue;
+      out.push({ name, version });
+      // The constraint gives the version; the file that lists the name is what installs it.
+      extras?.origins?.push({ file: path.resolve(file), name, version });
     }
   }
   return out;
@@ -744,6 +805,10 @@ export interface RequirementExtras {
   uncheckable: UncheckableDependency[];
   /** A direct reference whose location is not public: the name is private. */
   directPrivate: PrivateIndexEntry[];
+  /** When set: every pin read, with the file it is written in (absolute). */
+  origins?: Array<{ file: string; name: string; version: string }>;
+  /** When set: every `-r` include followed, as the including and the included file (absolute). */
+  includes?: Array<{ from: string; to: string }>;
 }
 
 /**
