@@ -16,9 +16,12 @@
  * Major versions 2+ are different module paths (`.../v5`); the proxy lists
  * each path's own versions only.
  *
+ * - A judged release's own `go.mod`: its `require` lines, the minimum versions a
+ *   project that takes the release gets (getRequirements).
+ *
  * Not applicable to Go and reported so by the signals: publisher identity
  * (integrity is checked against sum.golang.org instead), install hooks (Go
- * runs no package code at download), per-release dependency lists.
+ * runs no package code at download), which dependencies a release adds.
  */
 
 import { sanitizeThirdParty } from "../untrusted-text.js";
@@ -27,7 +30,7 @@ import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { compareVersions } from "./version-compare.js";
 import { escapeGoPath } from "./upgrade-go.js";
-import type { PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource, ReleaseRecord } from "./release-metadata.js";
+import type { PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource, ReleaseRecord, ReleaseRequirement, ReleaseRequirements } from "./release-metadata.js";
 
 const GO_PROXY = "https://proxy.golang.org";
 const TIMEOUT_MS = 15_000;
@@ -94,6 +97,47 @@ export function parseRetractions(goMod: string): Retraction[] {
   return out;
 }
 
+/** A module path as go.mod writes one: path elements of letters, digits and `. _ ~ -`, the first with a dot (a host). */
+const GO_MODULE_PATH = /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/;
+const GO_MODULE_PATH_MAX = 255;
+
+/**
+ * The `require` lines of a go.mod, single and in blocks: each module at the minimum version the
+ * release needs (minimal version selection gives a project that takes the release at least these).
+ * `replace` and `exclude` are left out: the go command applies them from the main module only. A
+ * line whose path or version is not one is counted `unreadable`, never passed on.
+ */
+export function parseGoRequires(goMod: string): ReleaseRequirements {
+  const out = new Map<string, ReleaseRequirement>();
+  let unreadable = 0;
+  const entry = (text: string) => {
+    const [body, ...comment] = text.split("//");
+    const parts = body.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return;
+    const path = (parts[0] ?? "").replace(/^"(.*)"$/, "$1");
+    const version = parts[1] ?? "";
+    if (parts.length !== 2 || path.length > GO_MODULE_PATH_MAX || !GO_MODULE_PATH.test(path) || !GO_VERSION.test(version)) {
+      unreadable++;
+      return;
+    }
+    const indirect = /^\s*indirect\b/.test(comment.join("//"));
+    const seen = out.get(path);
+    // One module listed twice: the higher minimum is what selection uses.
+    if (!seen || compareVersions(version, seen.spec, "Go") > 0) out.set(path, { name: path, spec: version, ...(indirect ? { indirect: true as const } : {}) });
+  };
+  const lines = goModLines(goMod);
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s*require\b\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    if (m[1].trim().startsWith("(")) {
+      for (i++; i < lines.length && !/^\s*\)/.test(lines[i]); i++) entry(lines[i]);
+    } else {
+      entry(m[1]);
+    }
+  }
+  return { requirements: [...out.values()], unreadable };
+}
+
 interface CachedList {
   versions: string[];
   retractions: Retraction[];
@@ -130,6 +174,30 @@ export class GoReleasesReader implements ReleaseMetadataSource {
 
   async getCreatedAt(): Promise<RegistryLookup<string | null>> {
     return { status: "ok", data: null };
+  }
+
+  /**
+   * What one release's own go.mod requires (`/@v/<version>.mod`, the file `go get` reads). A
+   * published version's go.mod never changes, so it is kept as long as its `.info`.
+   */
+  async getRequirements(module: string, version: string): Promise<RegistryLookup<ReleaseRequirements>> {
+    const v = goVersion(version);
+    if (!GO_VERSION.test(v)) return { status: "not_found", detail: `"${version.slice(0, 40)}" is not a Go version` };
+    const key = `go-mod-requires:v1:${module}@${v}`;
+    const hit = this.cache.get<ReleaseRequirements>(key);
+    if (hit) return { status: "ok", data: hit };
+    // The registry-CDN bucket (as fix-path lookups): a requirement read never starves the version lists.
+    if (!this.rateLimiter.consume("fixpath-registry")) return { status: "unreachable", detail: "Go module proxy rate limit reached for this minute" };
+    try {
+      const res = await fetchWithTimeout(`${GO_PROXY}/${escapeGoPath(module)}/@v/${escapeGoPath(v)}.mod`, {}, TIMEOUT_MS);
+      if (res.status === 404 || res.status === 410) return { status: "not_found", detail: `the Go proxy has no go.mod for ${v}` };
+      if (!res.ok) return { status: "unreachable", detail: `Go module proxy answered HTTP ${res.status}` };
+      const data = parseGoRequires(await res.text());
+      this.cache.set(key, data, "go", INFO_TTL);
+      return { status: "ok", data };
+    } catch (err) {
+      return { status: "unreachable", detail: `Go module proxy: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
   private async list(module: string): Promise<RegistryLookup<CachedList>> {

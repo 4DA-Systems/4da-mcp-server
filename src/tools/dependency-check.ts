@@ -20,7 +20,8 @@
  * the answer to "is 7.5.10 safe?" names 7.5.11.
  *
  * Signals (see dependency-check-signals.ts): known advisories on the target
- * (OSV), release age (hold releases < 3 days unless they fix an advisory on
+ * (OSV) and on what it brings with it (npm: the dependencies it holds; Go: the
+ * minimum versions its go.mod requires), release age (hold releases < 3 days unless they fix an advisory on
  * the installed version), publish-trust drop and newly added install scripts
  * (npm; trust also crates.io), newly introduced runtime dependencies that are
  * themselves < 30 days old (npm, crates.io), yanked / deprecated / unpublished
@@ -95,7 +96,9 @@ import {
   type RangeCheck,
   type Target,
 } from "./dependency-check-versions.js";
-import { adviseNoSafeRelease, HeldJudge, heldRangeCandidates, type HeldRangeFilter } from "./dependency-check-held.js";
+import { adviseNoSafeRelease, HeldJudge, judgedRangeCandidates as rangeCandidates, minimumsCaveat, RequirementJudge, type HeldRangeFilter, type ReleaseJudge } from "./dependency-check-held.js";
+import { requirementSources } from "../live/release-requirements.js";
+import { GO_VERSION, goVersion } from "../live/go-releases.js";
 import { andList } from "../live/held-dependencies.js";
 import { closestPopularNpm, maliciousName, maliciousSignal, type MaliciousName } from "./dependency-check-malicious.js";
 import { nameCheckSignal, nearMissOf } from "./dependency-check-nearmiss.js";
@@ -125,7 +128,7 @@ const DAY_MS = 86_400_000;
 const PRIVACY_NOTE =
   "Registry requests carried package names only (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list); " +
   "installed and target versions were never sent to a registry, except the Go proxy's per-version .info and .mod for the versions judged (the list has no dates). " +
-  "OSV.dev received package names and versions, as vulnerability_scan does. " +
+  "OSV.dev received package names and versions, as vulnerability_scan does, and those of the modules a judged Go release's go.mod requires. " +
   "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads). " +
   "A private package name (see the README, Privacy) was sent nowhere.";
 
@@ -141,6 +144,7 @@ export const dependencyCheckTool = {
     "Per item (concise, the default): `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason` carrying the evidence of every avoid/review/unknown/wait finding, `safe` (the safe releases to write), `advisories` (ids affecting `to`) and any registry text in `quoted_from_registry`. With `response_format: \"detailed\"`: also `to_read_as` (how `to` was read), `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release. A prerelease is never named as safe unless you asked for one.",
     "`to` is read as its ecosystem reads it: a full version is that release everywhere; a bare PyPI \"3.1\" is the ONE release 3.1.0 (as pip reads ==3.1), so ask \"3.1.*\" or \"~=3.1.0\" for the series; a bare npm \"7\" / \"7.5\", Cargo \"1\" / \"0.17\" and Go \"v1\" are ranges, as package.json, Cargo.toml and go get read them.",
     "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm: a dependency `to` exact-pins, or ranges (narrow or wide) with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones.",
+    "  Go: the modules `to`'s own go.mod requires are minimums your project gets (where your go.mod already selects a newer version, that one is judged). One with a known advisory makes `to` review (`required_minimums_affected`: each module, the version, the advisory count and the release that clears them): after upgrading, raise them in your own go.mod. A safe release named for a constraint carries the same caveat. A requirement list that cannot be read makes `to` unknown.",
     "  A package name that is malware itself (npm took it down and holds it with a `0.0.N-security` placeholder, or a malicious-package record covers every release) -> avoid, with `malicious_package` and the popular package it likely imitates. When no release in range is safe only because of an advisory on a held dependency, `range_check.held_advice` names it and the override that clears it (the verdict is review for a low or moderate one, avoid for high or critical); a release more than one major or about 18 months older is not offered instead.",
     "  An advisory is passed over as an unmaintained-package notice only when its record declares that class (RustSec `informational`) and carries no grade, exploit category or fixed release; one that merely says \"unmaintained\" counts.",
     "- name_check (npm, a dependency this project's lockfiles do not hold, `from` or not): a name one or two edits from a popular package (`expres`, `reactt`) -> review with \"did you mean\", unless its weekly downloads and age show it is established; avoid when it is also brand new or runs install scripts. Downloads that cannot be read never count as established.",
@@ -525,6 +529,18 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     pushAll(heldAsked, deps);
     return liveIntel.queryAdvisories(deps);
   });
+  // crates.io, PyPI and Go: what a release requires comes with it too (live/release-requirements.ts).
+  // Go's minimal version selection keeps the project's own newer selection of a required module.
+  const reqs = new RequirementJudge(
+    fixSources ? requirementSources(sources, fixSources) : null,
+    (deps) => {
+      pushAll(heldAsked, deps);
+      return liveIntel.queryAdvisories(deps);
+    },
+    selectedGoVersions(liveIntel),
+  );
+  /** The judge of what an ecosystem's releases bring with them; null where nothing is read (a source without requirement lists). */
+  const judgeOf = (ecosystem: CheckEcosystem): ReleaseJudge | null => (ecosystem === "npm" ? held : reqs.of(ecosystem));
   void packageAdvisoryLists(requested);
   // r7: each concrete finding is kept for the call as soon as it is read, so a call that runs out
   // of time still answers avoid for a release already known to be malware (dependency-check-facts.ts).
@@ -584,28 +600,42 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     );
   }
 
-  // npm: what a release installs at a fixed version comes with it (audit 6.2.5 D-4: express 4.20.0
-  // exact-pins an affected qs). Judge `to` and, for a constraint, the smallest and newest safe
-  // releases in it, then pick again among the releases that hold nothing affected.
+  // What a release installs or requires comes with it (npm, audit 6.2.5 D-4: express 4.20.0
+  // exact-pins an affected qs; crates.io and PyPI: a requirement held at an affected release; Go: a
+  // required minimum with advisories). Judge `to` and, for a constraint, the smallest and newest
+  // safe releases in it, then pick again among the releases that bring nothing affected.
   const isNpm = (i: Resolved) => i.ecosystem === "npm" && !i.unresolved;
-  await held.judge(
-    items.filter(isNpm).map((item) => {
+  /** A release the registry lists: a requirement list is read for no other. */
+  const isListed = (i: Resolved) => {
+    const lookup = indexes.get(lookupKey(i));
+    return lookup?.status === "ok" && Boolean(lookup.data.releases[i.to]);
+  };
+  const isJudged = (i: Resolved) => !i.unresolved && judgeOf(i.ecosystem) !== null && (i.ecosystem === "npm" || isListed(i));
+  /** One judge() per ecosystem, together. */
+  const judgeAll = (requests: Array<{ ecosystem: CheckEcosystem; pkg: string; versions: string[] }>) =>
+    Promise.all(ECOSYSTEMS.map((eco) => judgeOf(eco)?.judge(requests.filter((r) => r.ecosystem === eco))));
+  await judgeAll(
+    items.filter(isJudged).map((item) => {
+      const eco = item.ecosystem;
       const lookup = indexes.get(lookupKey(item));
       const advisories = advisoryLists.get(lookupKey(item));
       const ownSafe = item.rangeCheck && lookup?.status === "ok" && advisories
-        ? ownSafeInRange({ ecosystem: "npm", index: lookup.data, range: item.rangeCheck.range, advisories, allowPrerelease: rangeNamesPrerelease("npm", item.rangeCheck.range) })
+        ? ownSafeInRange({ ecosystem: eco, index: lookup.data, range: item.rangeCheck.range, advisories, allowPrerelease: rangeNamesPrerelease(eco, item.rangeCheck.range) })
         : [];
-      return { pkg: item.package, versions: [item.to, ...heldRangeCandidates(ownSafe, (v) => !item.from || compareIn("npm", v, item.from) > 0)] };
+      return { ecosystem: eco, pkg: item.package, versions: [item.to, ...rangeCandidates(eco, ownSafe, (v) => !item.from || compareIn(eco, v, item.from) > 0)] };
     }),
   );
   items = items.map((item, i) => {
-    if (!isNpm(item) || item.rangeCheck?.basis !== "requested") return item;
+    const filter = isJudged(item) && item.rangeCheck?.basis === "requested" ? judgeOf(item.ecosystem)!.rangeFilter(item.package) : null;
+    if (!filter) return item;
     const r = requested[i];
-    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, held.rangeFilter(item.package));
+    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter);
   });
   // `to` is what the constraint installs (resolvedRelease, round 8): judge it too (normally a no-op).
-  await held.judge(items.filter(isNpm).map((item) => ({ pkg: item.package, versions: [item.to] })));
-  const heldAt = (item: CheckItem) => (item.ecosystem === "npm" ? held.at(item.package, item.to) : undefined);
+  await judgeAll(items.filter(isJudged).map((item) => ({ ecosystem: item.ecosystem, pkg: item.package, versions: [item.to] })));
+  const heldAt = (item: CheckItem) => judgeOf(item.ecosystem)?.at(item.package, item.to);
+  /** `to` brings in an affected dependency that keeps it out of the safe releases (never a Go minimum: that is a caveat). */
+  const heldAffected = (item: CheckItem) => item.ecosystem !== "Go" && Boolean(judgeOf(item.ecosystem)?.affected(item.package, item.to));
 
   // Round 8 (B7): the batch answer is held against what each package's own advisory list (/v1/query)
   // says about the same releases. Where every judged release is clean by the list, one release the
@@ -674,7 +704,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     liveIntel.forgetAdvisoryAnswers?.([...osvDeps, ...heldAsked]);
     for (const item of items) {
       const why = contradictionOf(item);
-      if (why && item.ecosystem === "npm") held.distrust(item.package, why);
+      if (why) judgeOf(item.ecosystem)?.distrust(item.package, why);
     }
   }
   // A pre-install check needs a current answer: an expired cached one (OSV failed) can predate
@@ -698,7 +728,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     (i) =>
       !i.unresolved &&
       !i.rangeCheck &&
-      ((advisoriesFor(i).available && hasRealAdvisory(advisoriesFor(i))) || (i.ecosystem === "npm" && held.affected(i.package, i.to))),
+      ((advisoriesFor(i).available && hasRealAdvisory(advisoriesFor(i))) || heldAffected(i)),
   );
   const moreLists = await packageAdvisoryLists(affectedExact.filter((i) => !advisoryLists.has(lookupKey(i))));
   for (const [k, v] of moreLists) advisoryLists.set(k, v);
@@ -749,20 +779,22 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     const line = lineOf(item.ecosystem, item.to);
     return lookup.status === "ok" && advisories && line ? [{ item, index: lookup.data, advisories, line }] : [];
   });
-  await held.judge(
+  await judgeAll(
     lines
-      .filter((l) => l.item.ecosystem === "npm")
+      .filter((l) => judgeOf(l.item.ecosystem) !== null)
       .map((l) => ({
+        ecosystem: l.item.ecosystem,
         pkg: l.item.package,
-        versions: heldRangeCandidates(
-          ownSafeInRange({ ecosystem: "npm", index: l.index, range: l.line, advisories: l.advisories, allowPrerelease: isPrereleaseIn("npm", l.item.to) }),
-          (v) => !l.item.from || compareIn("npm", v, l.item.from) > 0,
+        versions: rangeCandidates(
+          l.item.ecosystem,
+          ownSafeInRange({ ecosystem: l.item.ecosystem, index: l.index, range: l.line, advisories: l.advisories, allowPrerelease: isPrereleaseIn(l.item.ecosystem, l.item.to) }),
+          (v) => !l.item.from || compareIn(l.item.ecosystem, v, l.item.from) > 0,
         ),
       })),
   );
   for (const { item, index, advisories, line } of lines) {
     await yieldToEventLoop();
-    const filter = item.ecosystem === "npm" ? held.rangeFilter(item.package) : undefined;
+    const filter = judgeOf(item.ecosystem)?.rangeFilter(item.package) ?? undefined;
     // The safe releases on the line of a stable `to` are stable ones; of a prerelease `to`, prereleases too.
     item.rangeCheck = checkRange({
       ecosystem: item.ecosystem,
@@ -775,6 +807,21 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       ...(filter ? { held: filter } : {}),
       young: (v) => isYoung(index.releases[v]?.publishedAt, now),
     });
+  }
+  // Go: a named pick whose own go.mod requires an affected minimum stays a pick, and says so. `to`
+  // itself is judged above, and its finding is in the verdict.
+  const goJudge = judgeOf("Go");
+  const goPicked = goJudge ? items.filter((i) => i.ecosystem === "Go" && i.rangeCheck) : [];
+  const picksOf = (item: Resolved) => namedPicks(item.rangeCheck!).filter((v) => v !== item.to);
+  if (goJudge && goPicked.length > 0) {
+    await goJudge.judge(goPicked.map((item) => ({ pkg: item.package, versions: picksOf(item) })));
+    for (const item of goPicked) {
+      const caveats = picksOf(item).flatMap((v) => {
+        const text = minimumsCaveat(v, goJudge.at(item.package, v));
+        return text ? [[v, text] as const] : [];
+      });
+      if (caveats.length > 0) item.rangeCheck!.requirement_caveats = Object.fromEntries(caveats);
+    }
   }
   // Nothing in range is safe: never point at a release years older when a low or moderate advisory on a
   // held dependency is what stands in the way; say which, and how to clear it (Y3, nx -> 13.2.4).
@@ -892,7 +939,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       withdrawnSignal(item, to, index!),
       upgradeTypeSignal(item, releasesBack(item, index!)),
     ];
-    const decided = decide(signals);
+    const decided = decide(signals, item.ecosystem);
     return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, decided.verdict), signals, ...extra, ...noticesOf(advisories) };
   });
 
@@ -990,7 +1037,13 @@ function withAlternatives(reason: string, item: Resolved, verdict: Verdict): str
     // r7 blocker: releases left out only because what they hold could not be judged are NOT
     // CHECKED, not affected; a healthy run may name them safe. Say that, never "free of advisories".
     if (rc.held_not_checked && (rc.affecting_all_total ?? 0) === 0) {
-      return `${reason} | ${heldNotCheckedText(item.package, where, rc)}${withheld}`;
+      return `${reason} | ${item.ecosystem === "npm" ? heldNotCheckedText(item.package, where, rc) : requirementsNotCheckedText(item.package, where, rc)}${withheld}`;
+    }
+    // crates.io, PyPI: every release clear of the package's own advisories requires a dependency
+    // held at an affected release. That is why none is named, and it is not the package's own advisory.
+    if (item.ecosystem !== "npm" && rc.held_excluded && (rc.affecting_all_total ?? 0) === 0) {
+      const n = rc.held_excluded;
+      return `${reason} | No release ${where} is named safe: the ${n} release${n === 1 ? "" : "s"} clear of ${item.package}'s own advisories ${n === 1 ? "requires" : "require"} a dependency whose newest admitted release (or exact pin) has a known advisory.${withheld}${outside}`;
     }
     if (!unsafe && ids.length > 0) {
       return `${reason} | OSV.dev lists no advisory against ${item.to}, but the published ranges of ${ids.slice(0, 3).join(", ")}${total > 3 ? ` and ${total - 3} more` : ""} cannot rule out any release ${where}, so no other release there is vouched for.${withheld}${outside}`;
@@ -1004,7 +1057,9 @@ function withAlternatives(reason: string, item: Resolved, verdict: Verdict): str
   const heldOut = rc.held_excluded ? ` ${rc.held_excluded} release${rc.held_excluded === 1 ? "" : "s"} clear of ${item.package}'s own advisories left out: ${rc.held_note}.` : "";
   // Blind audit round 4: a safe release inside the release-age hold is never named silently.
   const tooNew = rc.too_new_note ? ` ${rc.too_new_note}.` : "";
-  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}${heldOut}${tooNew}`;
+  // Go: a named pick that requires an affected minimum is never named without that said.
+  const caveats = rc.requirement_caveats ? ` ${Object.values(rc.requirement_caveats).join(". ")}.` : "";
+  const safe = `Safe ${where}: smallest ${rc.smallest_safe_in_range}${upgrade}, newest ${rc.newest_safe_in_range}.${withheld}${heldOut}${tooNew}${caveats}`;
   if (rc.basis === "same_line" && !unsafe) return reason;
   // Round 8 (B2): the verdict is on what the constraint installs; a safe release in it is written as an exact pin.
   const pin = item.from ? (rc.smallest_safe_upgrade ?? null) : rc.newest_safe_in_range;
@@ -1056,6 +1111,37 @@ function batchUnreadConfirmedText(pkg: string): string {
 function heldNotCheckedText(pkg: string, where: string, rc: RangeCheck): string {
   const n = rc.held_not_checked ?? 0;
   return `NOT CHECKED: no release of ${pkg} ${where} is named safe: ${n} release${n === 1 ? "" : "s"} clear of ${pkg}'s own advisories ${n === 1 ? "holds" : "hold"} dependencies (exact pins or ranges) whose advisories could not be checked (${rc.held_not_checked_reason}). This is not a clean result and names no version to write: check again later.`;
+}
+
+/** The same for crates.io and PyPI, where a release is left out until what it requires has been examined. */
+function requirementsNotCheckedText(pkg: string, where: string, rc: RangeCheck): string {
+  const n = rc.held_not_checked ?? 0;
+  const affected = (rc.held_excluded ?? 0) - n;
+  const examined = affected > 0 ? `, and the ${affected} examined ${affected === 1 ? "requires" : "require"} a dependency whose newest admitted release (or exact pin) has a known advisory` : "";
+  return `NOT CHECKED: no release of ${pkg} ${where} is named safe: what ${n} release${n === 1 ? "" : "s"} clear of ${pkg}'s own advisories ${n === 1 ? "requires" : "require"} was not examined (${rc.held_not_checked_reason})${examined}. This is not a clean result and names no version to write: check a specific release with dependency_check.`;
+}
+
+/** The releases a range check names (smallest, smallest above `from`, newest, newest outside the range). */
+function namedPicks(rc: RangeCheck): string[] {
+  return [...new Set([rc.smallest_safe_in_range, rc.smallest_safe_upgrade, rc.newest_safe_in_range, rc.newest_safe_outside_range].filter((v): v is string => typeof v === "string"))];
+}
+
+/**
+ * Go: the version of each module the project's own go.mod / go.sum selects (the highest it holds).
+ * Minimal version selection keeps it over a lower minimum a new requirement names.
+ */
+function selectedGoVersions(liveIntel: LiveIntelligence): (ecosystem: string, name: string) => string | null {
+  const selected = new Map<string, string>();
+  if (liveIntel.isInitialized?.()) {
+    for (const d of [...liveIntel.getResolvedDeps(), ...liveIntel.getAuditDeps()]) {
+      if (d.ecosystem !== "Go" || !d.version) continue;
+      const v = goVersion(d.version);
+      if (!GO_VERSION.test(v)) continue;
+      const held = selected.get(d.name);
+      if (!held || compareIn("Go", v, held) > 0) selected.set(d.name, v);
+    }
+  }
+  return (ecosystem, name) => (ecosystem === "Go" ? (selected.get(name) ?? null) : null);
 }
 
 /** NOT CHECKED: the batch query gave no current answer (Resolved.batchUnread), so no release is named. */

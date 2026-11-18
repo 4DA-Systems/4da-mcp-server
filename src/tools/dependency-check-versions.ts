@@ -251,6 +251,12 @@ export interface RangeCheck {
    * and the far older release outside the range that is therefore not offered.
    */
   held_advice?: HeldAdvice;
+  /**
+   * Go: the named picks whose own go.mod requires modules at versions with known advisories, or
+   * whose requirements could not be examined (version -> this server's sentence). Such a release
+   * stays a pick: the project raises those minimums in its own go.mod.
+   */
+  requirement_caveats?: Record<string, string>;
 }
 
 export interface HeldAdvice {

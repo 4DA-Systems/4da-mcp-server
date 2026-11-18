@@ -56,6 +56,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
     fixed_by_this_change?: string[];
     malicious_package?: { ids: string[]; taken_down: boolean; did_you_mean: string | null };
     held_dependencies_affected?: unknown;
+    required_minimums_affected?: unknown;
   } | null;
   const rc = item.range_check;
   const safe = rc
@@ -66,6 +67,8 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
         ...(rc.smallest_safe_upgrade !== undefined ? { smallest_upgrade: rc.smallest_safe_upgrade } : {}),
         ...(rc.newest_safe_outside_range ? { newest_outside_range: rc.newest_safe_outside_range } : {}),
         ...(rc.too_new?.length ? { too_new: rc.too_new } : {}),
+        // Go: a named pick whose own go.mod requires an affected minimum is never named without that said.
+        ...(rc.requirement_caveats ? { caveats: rc.requirement_caveats } : {}),
       }
     : null;
   const quoted: Record<string, string> = {};
@@ -86,6 +89,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
     ...(value?.fixed_by_this_change?.length ? { fixes: value.fixed_by_this_change } : {}),
     ...(value?.malicious_package ? { malicious_package: value.malicious_package } : {}),
     ...(value?.held_dependencies_affected ? { held_dependencies_affected: value.held_dependencies_affected } : {}),
+    ...(value?.required_minimums_affected ? { required_minimums_affected: value.required_minimums_affected } : {}),
     ...(safe ? { safe } : {}),
     // Round 10, W2: every release the write can install, with its verdict (signals only in the detailed form).
     ...(item.resolution

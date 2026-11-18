@@ -18,7 +18,7 @@
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
 import { deprecationAvoids } from "../live/withdrawn-releases.js";
-import { heldSeverity, heldText, type HeldCheck } from "../live/held-dependencies.js";
+import { andList, heldSeverity, heldText, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 
 export type Verdict = "proceed" | "wait" | "review" | "avoid" | "unknown";
@@ -185,16 +185,27 @@ export function introducedDependencies(to: ReleaseRecord, base: ReleaseRecord | 
  */
 export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: HeldCheck): Signal {
   const own = ownAdvisoriesSignal(item, facts);
-  if (!held || (held.status === "checked" && held.affected.length === 0)) return own;
+  if (!held) return own;
+  const withValue = (extra: Record<string, unknown>) => (own.value === null ? extra : { ...(own.value as object), ...extra });
+  // crates.io, PyPI, Go: what the release requires was read and judged (release-requirements.ts).
+  const required = item.ecosystem !== "npm";
+  if (held.status === "checked" && held.affected.length === 0) {
+    if (held.examined === undefined) return own;
+    const skipped = held.unreadable ? { requirements_unreadable: held.unreadable } : {};
+    return { ...own, value: withValue({ requirements_examined: held.examined, ...skipped }), evidence: `${own.evidence} ${requirementsCleanText(item, held.examined, held.unreadable ?? 0)}` };
+  }
   if (held.status === "unchecked") {
-    const note = `Whether the dependencies ${item.to} holds (its exact pins and ranges) have known advisories was not checked (${held.reason}).`;
+    const note = required
+      ? `Whether what ${item.to} requires has known advisories was not examined (${held.reason}).`
+      : `Whether the dependencies ${item.to} holds (its exact pins and ranges) have known advisories was not checked (${held.reason}).`;
     return {
       ...own,
-      value: own.value === null ? { held_dependencies_unchecked: held.reason } : { ...(own.value as object), held_dependencies_unchecked: held.reason },
+      value: withValue(required ? { requirements_unchecked: held.reason } : { held_dependencies_unchecked: held.reason }),
       effect: own.effect === "avoid" || own.effect === "review" ? own.effect : "unknown",
       evidence: `${own.evidence} ${note}`,
     };
   }
+  if (held.affected.every((d) => d.minimum)) return minimumsSignal(item, own, held.affected, held.examined ?? held.affected.length);
   const severity = heldSeverity(held.affected);
   // A held advisory whose record could not be read counts as high, as one on `to` does.
   const heldEffect: SignalEffect = severity === "critical" || severity === "high" || held.affected.some((d) => d.unread) ? "avoid" : "review";
@@ -203,13 +214,71 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: H
   const heldNote = `${heldText(item.to, held.affected)}: installing ${item.to} installs ${held.affected.length === 1 ? "it" : "them"}.`;
   return {
     id: "advisories",
-    value: own.value === null ? { held_dependencies_affected: affected } : { ...(own.value as object), held_dependencies_affected: affected },
+    value: withValue({ held_dependencies_affected: affected, ...(held.examined !== undefined ? { requirements_examined: held.examined } : {}) }),
     effect,
     // "No known vulnerability affects X." is about X's own advisories; say what it holds instead.
     evidence:
       own.effect === "proceed"
         ? `${own.evidence.replace(`No known vulnerability affects ${item.to}.`, `No advisory of ${item.package} itself affects ${item.to}, but ${heldNote}`)}`
         : `${own.evidence} ${heldNote}`,
+  };
+}
+
+/** What an examined, clean requirement list adds to the advisories sentence. */
+function requirementsCleanText(item: CheckItem, examined: number, unreadable: number): string {
+  const skipped =
+    unreadable > 0
+      ? ` ${unreadable} requirement${unreadable === 1 ? "" : "s"} it declares ${unreadable === 1 ? "is" : "are"} not a ${item.ecosystem} package with a readable version requirement and ${unreadable === 1 ? "was" : "were"} not examined.`
+      : "";
+  if (item.ecosystem === "Go") {
+    const what = examined === 0 ? `${item.to}'s go.mod requires no other module.` : `None of the ${examined} module${examined === 1 ? "" : "s"} ${item.to}'s go.mod requires has a known advisory at the version your project would select.`;
+    return `${what}${skipped}`;
+  }
+  const what = examined === 0 ? `${item.to} requires no other package.` : `None of the ${examined} package${examined === 1 ? "" : "s"} ${item.to} requires is held at a release with a known advisory.`;
+  return `${what}${skipped}`;
+}
+
+/** Modules named in the sentence; the rest are counted (all are in the signal's value). */
+const MINIMUMS_NAMED = 4;
+
+/**
+ * Go: the release's go.mod names minimum versions that have known advisories. Never worse than
+ * review on its own: minimal version selection gives the project at least these versions, and the
+ * project raises them in its own go.mod, so the sentence says which, to what, and how.
+ */
+function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[], examined: number): Signal {
+  const count = (n: number) => `${n} advisor${n === 1 ? "y" : "ies"}`;
+  const one = affected.length === 1;
+  const named = affected.slice(0, MINIMUMS_NAMED).map((d) => {
+    const which = d.selected ? `${d.name} ${d.version}, which your go.mod already selects over the ${d.spec} it requires` : `${d.name} ${d.version}`;
+    const clears = d.fixedIn ? `${d.fixedIn} clears ${d.ids.length === 1 ? "it" : "them"}` : `no release that clears ${d.ids.length === 1 ? "it" : "them"} is known`;
+    return `${which} (${count(d.ids.length)}; ${clears})`;
+  });
+  const rest = affected.length - named.length;
+  const fixable = affected.filter((d) => d.fixedIn);
+  const raise = fixable.length > 0 ? ` (go get ${fixable.slice(0, 6).map((d) => `${d.name}@${d.fixedIn}`).join(" ")}${fixable.length > 6 ? " ..." : ""})` : "";
+  const requires = `${item.to}'s go.mod requires ${one ? "a module at a version" : `${affected.length} modules at versions`} with known advisories: ${andList(named)}${rest > 0 ? `, and ${rest} more` : ""}.`;
+  const selection = `Go's minimal version selection gives a project that takes ${item.to} at least ${one ? "that version" : "those versions"}, so after upgrading raise ${one ? "it" : "them"} in your own go.mod${raise}.`;
+  const lead =
+    own.effect === "proceed"
+      ? own.evidence.replace(`No known vulnerability affects ${item.to}.`, `No advisory of ${item.package} itself affects ${item.to}, but ${requires}`)
+      : `${own.evidence} Also, ${requires}`;
+  const minimums = affected.map((d) => ({
+    module: d.name,
+    requires: d.spec,
+    selects: d.version,
+    ...(d.selected ? { selected_by: "project" } : {}),
+    ...(d.indirect ? { indirect: true } : {}),
+    advisory_count: d.ids.length,
+    advisories: d.ids.slice(0, 10),
+    severity: d.severity,
+    fixed_in: d.fixedIn ?? null,
+  }));
+  return {
+    id: "advisories",
+    value: own.value === null ? { required_minimums_affected: minimums, requirements_examined: examined } : { ...(own.value as object), required_minimums_affected: minimums, requirements_examined: examined },
+    effect: own.effect === "avoid" ? "avoid" : "review",
+    evidence: `${lead} ${selection}`,
   };
 }
 
@@ -440,7 +509,7 @@ export function newDependenciesSignal(
     return {
       id: "new_dependencies",
       value: "not_applicable",
-      evidence: `not applicable: per-release dependency lists are not read for ${item.ecosystem}.`,
+      evidence: `not applicable: which dependencies a release adds, and how new they are, is not compared for ${item.ecosystem}.`,
       effect: "info",
     };
   }
@@ -582,14 +651,43 @@ export function upgradeType(
   return "patch";
 }
 
+/**
+ * The sentence of a `proceed`: it names only the concerns that were checked for this registry (a
+ * signal that is "not applicable" there is not claimed), and what was found about the release's
+ * requirements when they were examined.
+ */
+function proceedReason(signals: Signal[], ecosystem?: CheckEcosystem): string {
+  const checked = (id: Signal["id"]) => signals.some((s) => s.id === id && s.value !== "not_applicable");
+  const advisories = signals.find((s) => s.id === "advisories");
+  const value = (advisories?.value ?? null) as { requirements_examined?: number } | null;
+  const concerns = [
+    ...(advisories ? ["advisory"] : []),
+    ...(checked("release_age") ? ["age"] : []),
+    ...(checked("publish_trust") ? ["trust"] : []),
+    ...(checked("install_script_added") ? ["script"] : []),
+    ...(checked("new_dependencies") ? ["new-dependency"] : []),
+  ];
+  const list = concerns.length > 1 ? `${concerns.slice(0, -1).join(", ")} or ${concerns[concerns.length - 1]}` : (concerns[0] ?? "");
+  const found = `No ${list ? `${list} ` : ""}concern found`;
+  const noticed = "";
+  const examined = value?.requirements_examined;
+  const required =
+    examined === undefined || examined === 0
+      ? ""
+      : ecosystem === "Go"
+        ? ` The ${examined} module${examined === 1 ? "" : "s"} its go.mod requires ${examined === 1 ? "has" : "have"} no known advisory at the version your project would select.`
+        : ` None of the ${examined} package${examined === 1 ? "" : "s"} it requires is held at a release with a known advisory.`;
+  return `${found}${noticed}.${required}`;
+}
+
 /** The item verdict and its one-line reason, from the strongest signal effect. */
-export function decide(signals: Signal[]): { verdict: Verdict; reason: string } {
+export function decide(signals: Signal[], ecosystem?: CheckEcosystem): { verdict: Verdict; reason: string } {
   for (const verdict of PRECEDENCE) {
     const hits = signals.filter((s) => s.effect === verdict);
     if (hits.length === 0) continue;
     if (verdict === "proceed") {
       const fixes = signals.find((s) => s.id === "release_age" && /security fix/.test(s.evidence));
-      return { verdict, reason: fixes ? fixes.evidence : "No advisory, age, trust, script or new-dependency concern found." };
+      return { verdict, reason: fixes ? fixes.evidence : proceedReason(signals, ecosystem) };
     }
     // A stronger verdict must not hide what could not be checked: crossenv `latest` (the malware
     // 1.0.1) read `review` for "major" alone while its advisory lookup had failed (audit 6.2.5 D-10).

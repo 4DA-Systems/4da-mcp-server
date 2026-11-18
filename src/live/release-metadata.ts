@@ -69,8 +69,41 @@ export type RegistryLookup<T> =
   | { status: "not_found"; detail: string }
   | { status: "unreachable"; detail: string };
 
+/**
+ * One requirement a release declares on another package of its registry: a crates.io dependency
+ * (sparse index), a PyPI `requires_dist` entry, or a `require` line of a Go release's go.mod.
+ * Both strings are registry identifiers a reader has validated, never free text.
+ */
+export interface ReleaseRequirement {
+  /** The required package, crate or module. */
+  name: string;
+  /** The requirement as published: a Cargo requirement, a PEP 440 specifier set ("" admits any release), or for Go the minimum version. */
+  spec: string;
+  /** Go: the line is marked `// indirect`. */
+  indirect?: true;
+  /** PyPI: an environment marker (Python version, platform) decides whether it is installed. */
+  conditional?: true;
+}
+
+/** What one release requires, as its registry publishes it. */
+export interface ReleaseRequirements {
+  requirements: ReleaseRequirement[];
+  /**
+   * Declared requirements that are not a package of this registry with a readable version
+   * requirement (a direct URL, another registry, a name or requirement that is not one): never
+   * judged, and counted so an answer can say so.
+   */
+  unreadable: number;
+}
+
 /** What dependency_check needs from a registry. Live readers and test fakes both implement it. */
 export interface ReleaseMetadataSource {
+  /**
+   * What one published release requires (crates.io, PyPI, Go): the dependencies an install of it
+   * brings in. Absent on a source that does not read them (npm: the packument's held specs,
+   * held-dependencies.ts). `not_found`: the registry does not serve that release.
+   */
+  getRequirements?(name: string, version: string): Promise<RegistryLookup<ReleaseRequirements>>;
   /**
    * The package's release index. `wanted` names the versions the caller is
    * about to read; a reader that pages (crates.io) may stop once it has them

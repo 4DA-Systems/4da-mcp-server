@@ -16,6 +16,7 @@
  */
 
 import { heldAdvisories, heldSeverity, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
+import { isRequirementEcosystem, requirementAdvisories, type RequirementEcosystem, type RequirementSources } from "../live/release-requirements.js";
 import { cleanFixTarget, type FixPathSources } from "../live/fix-paths.js";
 import { advisoriesAffecting, advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
 import type { PackageReleaseIndex } from "../live/release-metadata.js";
@@ -158,6 +159,129 @@ export class HeldJudge {
       note: HELD_RANGE_NOTE,
     };
   }
+}
+
+/** What dependency_check asks of a judge, per package: HeldJudge for npm, RequirementJudge.of() for crates.io, PyPI and Go. */
+export interface ReleaseJudge {
+  judge(requests: Array<{ pkg: string; versions: string[] }>): Promise<void>;
+  at(pkg: string, version: string): HeldCheck | undefined;
+  affected(pkg: string, version: string): boolean;
+  distrust(pkg: string, reason: string): void;
+  /**
+   * checkRange's filter for one package. Null where an affected requirement is a caveat on a
+   * release and not a reason to leave it out (Go: a minimum the project raises in its own go.mod).
+   */
+  rangeFilter(pkg: string): HeldRangeFilter | null;
+}
+
+export const REQUIREMENT_RANGE_NOTE =
+  "releases that require a dependency whose newest admitted release (or exact pin) has a known advisory, or whose requirements were not examined (only the smallest and newest candidates are), are not counted safe";
+
+/**
+ * What crates.io, PyPI and Go releases require, judged per call (live/release-requirements.ts): the
+ * same question HeldJudge answers for npm, with each registry's own rule. A crates.io or PyPI
+ * release that requires a dependency held at an affected release is no safe pick, as on npm; a Go
+ * release whose go.mod names an affected minimum stays a pick, and carries the caveat.
+ */
+export class RequirementJudge {
+  private readonly checks = new Map<string, HeldCheck>();
+  private deadlineAt: number | null = null;
+
+  constructor(
+    private readonly sources: RequirementSources | null,
+    private readonly query: AdvisoryQuery,
+    private readonly selected?: (ecosystem: RequirementEcosystem, name: string) => string | null,
+  ) {}
+
+  private key(ecosystem: string, pkg: string, version: string): string {
+    return `${ecosystem}\0${pkg}@${version}`;
+  }
+
+  /** Whether releases of this ecosystem are judged here at all. */
+  reads(ecosystem: string): ecosystem is RequirementEcosystem {
+    return this.sources !== null && isRequirementEcosystem(ecosystem) && this.sources.reads(ecosystem);
+  }
+
+  /** Judge these releases (those not judged yet): one advisory lookup for all their requirements. */
+  async judge(requests: Array<{ ecosystem: string; pkg: string; versions: string[] }>): Promise<void> {
+    if (!this.sources) return;
+    this.deadlineAt ??= Date.now() + HELD_CHECK_BUDGET_MS;
+    const releases = new Map<string, { key: string; ecosystem: RequirementEcosystem; name: string; version: string }>();
+    for (const { ecosystem, pkg, versions } of requests) {
+      if (!this.reads(ecosystem)) continue;
+      for (const version of new Set(versions)) {
+        const key = this.key(ecosystem, pkg, version);
+        if (!this.checks.has(key)) releases.set(key, { key, ecosystem, name: pkg, version });
+      }
+    }
+    if (releases.size === 0) return;
+    const answer = await requirementAdvisories(this.sources, this.query, [...releases.values()], { deadline: this.deadlineAt, ...(this.selected ? { selected: this.selected } : {}) });
+    for (const [key, check] of answer) this.checks.set(key, check);
+  }
+
+  at(ecosystem: string, pkg: string, version: string): HeldCheck | undefined {
+    return this.checks.get(this.key(ecosystem, pkg, version));
+  }
+
+  /** The judge of one ecosystem's packages, in HeldJudge's terms; null when its requirement lists are not read. */
+  of(ecosystem: string): ReleaseJudge | null {
+    if (!this.reads(ecosystem)) return null;
+    const at = (pkg: string, version: string) => this.at(ecosystem, pkg, version);
+    const affected = (pkg: string, version: string) => {
+      const c = at(pkg, version);
+      return c?.status === "checked" && c.affected.length > 0;
+    };
+    return {
+      judge: (requests) => this.judge(requests.map((r) => ({ ecosystem, ...r }))),
+      at,
+      affected,
+      // The batch answer the clean judgments rest on cannot be trusted (HeldJudge.distrust).
+      distrust: (pkg, reason) => {
+        for (const [key, check] of this.checks) {
+          if (key.startsWith(`${ecosystem}\0${pkg}@`) && check.status === "checked" && check.affected.length === 0 && (check.examined ?? 0) > 0) this.checks.set(key, { status: "unchecked", reason });
+        }
+      },
+      rangeFilter: (pkg) => {
+        if (ecosystem === "Go") return null;
+        // A release whose requirements were not judged is not called safe.
+        const unchecked = (v: string) => at(pkg, v)?.status !== "checked";
+        const reasons = [...this.checks.entries()].filter(([k, c]) => k.startsWith(`${ecosystem}\0${pkg}@`) && c.status === "unchecked").map(([, c]) => (c as { reason: string }).reason);
+        return {
+          unsafe: (v) => unchecked(v) || affected(pkg, v),
+          notChecked: unchecked,
+          reason: reasons[0] ?? "what they require was not examined",
+          note: REQUIREMENT_RANGE_NOTE,
+        };
+      },
+    };
+  }
+}
+
+/** The newest and smallest PyPI candidates judged: each costs a request for that release's own metadata. */
+const PYPI_CANDIDATES_EACH_END = 3;
+
+/**
+ * The releases of a safe list judged before any is named: npm's own (heldRangeCandidates), the
+ * same on crates.io (the sparse index lists every release's requirements in one read), fewer on
+ * PyPI, and none on Go, where the named picks are judged afterwards and never left out.
+ */
+export function judgedRangeCandidates(ecosystem: string, ownSafe: string[], above: (v: string) => boolean): string[] {
+  if (ecosystem === "Go") return [];
+  if (ecosystem === "PyPI") return [...new Set([...ownSafe.filter(above).slice(0, PYPI_CANDIDATES_EACH_END), ...ownSafe.slice(-PYPI_CANDIDATES_EACH_END)])];
+  return heldRangeCandidates(ownSafe, above);
+}
+
+/**
+ * Go: what a named pick's own go.mod brings, in one clause; null when its requirements were
+ * examined and none is affected (or were not asked about at all).
+ */
+export function minimumsCaveat(version: string, check: HeldCheck | undefined): string | null {
+  if (!check) return null;
+  if (check.status === "unchecked") return `Whether what ${version} requires has known advisories was not examined (${check.reason})`;
+  if (check.affected.length === 0) return null;
+  const n = check.affected.length;
+  const named = check.affected.slice(0, 3).map((d) => `${d.name} ${d.version}`);
+  return `${version} requires ${n === 1 ? "a module at a version" : `${n} modules at versions`} with known advisories (${named.join(", ")}${n > 3 ? ` and ${n - 3} more` : ""}): raise ${n === 1 ? "it" : "them"} in your own go.mod when you write it (dependency_check on ${version} names the versions to raise ${n === 1 ? "it" : "them"} to)`;
 }
 
 /** checkRange's held filter (dependency-check-versions.ts RangeCheck.held_not_checked). */
