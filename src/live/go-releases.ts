@@ -63,6 +63,11 @@ export interface Retraction {
   rationale: string | null;
 }
 
+/** The lines of a go.mod, whatever its line endings (LF, CRLF or bare CR): no line keeps a carriage return. */
+export function goModLines(goMod: string): string[] {
+  return goMod.split(/\r\n|\r|\n/);
+}
+
 /** `retract` directives of a go.mod: single versions, `[low, high]` intervals, and blocks of either. */
 export function parseRetractions(goMod: string): Retraction[] {
   const out: Retraction[] = [];
@@ -76,7 +81,7 @@ export function parseRetractions(goMod: string): Retraction[] {
       if (single) out.push({ low: single[1], high: single[1], rationale });
     }
   };
-  const lines = goMod.split("\n");
+  const lines = goModLines(goMod);
   for (let i = 0; i < lines.length; i++) {
     const m = /^\s*retract\s+(.*)$/.exec(lines[i]);
     if (!m) continue;
