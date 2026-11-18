@@ -19,7 +19,7 @@ import { heldAdvisories, heldSeverity, HELD_CANDIDATES, type AdvisoryQuery, type
 import { isRequirementEcosystem, requirementAdvisories, type RequirementEcosystem, type RequirementSources } from "../live/release-requirements.js";
 import { cleanFixTarget, type FixPathSources } from "../live/fix-paths.js";
 import { advisoriesAffecting, advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
-import type { PackageReleaseIndex } from "../live/release-metadata.js";
+import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import { compareVersions } from "../live/version-compare.js";
 import { unofferedReleases } from "../live/withdrawn-releases.js";
 import { isPrereleaseIn, rangeAdmits, versionParts, type HeldAdvice, type RangeCheck } from "./dependency-check-versions.js";
@@ -410,8 +410,9 @@ const SETTLED_DAYS = 3;
  * own advisories leave clean, and offer the first that holds nothing affected.
  */
 async function offerJudgedOutside(
-  input: { judge: HeldJudge; pkg: string; to: string; rc: RangeCheck; index: PackageReleaseIndex; advisories: readonly AdvisoryRanges[] | null | undefined; now: Date },
+  input: { judge: ReleaseJudge; pkg: string; to: string; rc: RangeCheck; index: PackageReleaseIndex; advisories: readonly AdvisoryRanges[] | null | undefined; now: Date },
   published: (v: string) => string | null,
+  ecosystem: CheckEcosystem = "npm",
 ): Promise<void> {
   const { rc, judge, pkg } = input;
   const excluded = unofferedReleases(input.index);
@@ -424,18 +425,45 @@ async function offerJudgedOutside(
     .filter(
       (v) =>
         !excluded.has(v) &&
-        !isPrereleaseIn("npm", v) &&
-        rangeAdmits("npm", rc.range, v) !== true &&
+        !isPrereleaseIn(ecosystem, v) &&
+        rangeAdmits(ecosystem, rc.range, v) !== true &&
         settled(v) &&
-        advisoriesAffecting(input.advisories!, v, "npm").length === 0,
+        advisoriesAffecting(input.advisories!, v, ecosystem).length === 0,
     )
-    .sort((a, b) => compareVersions(b, a, "npm"))
+    .sort((a, b) => compareVersions(b, a, ecosystem))
     .slice(0, OUTSIDE_JUDGED);
   if (candidates.length === 0) return;
   await judge.judge([{ pkg, versions: candidates }]);
-  // Never one that is too far back to be an alternative (the same bar as a release that needed no judging).
-  const clean = candidates.find((v) => judge.clean(pkg, v) && tooFarBack(input.to, v, published(v), input.now) === null);
+  const judgedClean = (v: string) => {
+    const check = judge.at(pkg, v);
+    return check?.status === "checked" && check.affected.length === 0;
+  };
+  // npm: never one that is too far back to be an alternative (the same bar as a release that needed no judging).
+  const clean = candidates.find((v) => judgedClean(v) && (ecosystem !== "npm" || tooFarBack(input.to, v, published(v), input.now) === null));
   if (clean) rc.newest_safe_outside_range = clean;
+}
+
+/**
+ * crates.io and PyPI: no release in range is safe and none outside it is named, which is also what
+ * "none was judged" looks like there (a release is not called safe until what it requires has been
+ * examined). The newest settled, stable releases outside the range that the package's own
+ * advisories leave clean are judged, and the first whose requirements are clean is named.
+ */
+export async function offerRequirementCleanOutside(input: {
+  judge: ReleaseJudge;
+  ecosystem: CheckEcosystem;
+  pkg: string;
+  to: string;
+  rc: RangeCheck;
+  index: PackageReleaseIndex;
+  advisories: readonly AdvisoryRanges[] | null | undefined;
+  now: Date;
+}): Promise<void> {
+  const { rc } = input;
+  if (rc.smallest_safe_in_range !== null || rc.newest_safe_outside_range || !input.advisories) return;
+  // Nothing in range was judged safe only because it could not be checked: no alternative is looked for (r7).
+  if (rc.held_not_checked && (rc.affecting_all_total ?? 0) === 0) return;
+  await offerJudgedOutside(input, (v) => input.index.releases[v]?.publishedAt ?? null, input.ecosystem);
 }
 
 /** A held check whose affected dependencies carry only low or moderate advisories. */

@@ -20,7 +20,7 @@
  * the answer to "is 7.5.10 safe?" names 7.5.11.
  *
  * Signals (see dependency-check-signals.ts): known advisories on the target
- * (OSV) and on what it brings with it (npm: the dependencies it holds; Go: the
+ * (OSV) and on what it brings with it (npm and crates.io: the dependencies it holds; Go: the
  * minimum versions its go.mod requires), release age (hold releases < 3 days unless they fix an advisory on
  * the installed version), publish-trust drop and newly added install scripts
  * (npm; trust also crates.io), newly introduced runtime dependencies that are
@@ -96,7 +96,7 @@ import {
   type RangeCheck,
   type Target,
 } from "./dependency-check-versions.js";
-import { adviseNoSafeRelease, HeldJudge, judgedRangeCandidates as rangeCandidates, minimumsCaveat, RequirementJudge, type HeldRangeFilter, type ReleaseJudge } from "./dependency-check-held.js";
+import { adviseNoSafeRelease, HeldJudge, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside, RequirementJudge, type HeldRangeFilter, type ReleaseJudge } from "./dependency-check-held.js";
 import { requirementSources } from "../live/release-requirements.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
 import { andList } from "../live/held-dependencies.js";
@@ -128,7 +128,7 @@ const DAY_MS = 86_400_000;
 const PRIVACY_NOTE =
   "Registry requests carried package names only (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list); " +
   "installed and target versions were never sent to a registry, except the Go proxy's per-version .info and .mod for the versions judged (the list has no dates). " +
-  "OSV.dev received package names and versions, as vulnerability_scan does, and those of the modules a judged Go release's go.mod requires. " +
+  "OSV.dev received package names and versions, as vulnerability_scan does, and those of what a judged release requires (a Go release's go.mod, a crate's dependencies); crates.io's index was read by name for each required crate. " +
   "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads). " +
   "A private package name (see the README, Privacy) was sent nowhere.";
 
@@ -143,7 +143,7 @@ export const dependencyCheckTool = {
     "",
     "Per item (concise, the default): `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason` carrying the evidence of every avoid/review/unknown/wait finding, `safe` (the safe releases to write), `advisories` (ids affecting `to`) and any registry text in `quoted_from_registry`. With `response_format: \"detailed\"`: also `to_read_as` (how `to` was read), `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release. A prerelease is never named as safe unless you asked for one.",
     "`to` is read as its ecosystem reads it: a full version is that release everywhere; a bare PyPI \"3.1\" is the ONE release 3.1.0 (as pip reads ==3.1), so ask \"3.1.*\" or \"~=3.1.0\" for the series; a bare npm \"7\" / \"7.5\", Cargo \"1\" / \"0.17\" and Go \"v1\" are ranges, as package.json, Cargo.toml and go get read them.",
-    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm: a dependency `to` exact-pins, or ranges (narrow or wide) with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones.",
+    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm and crates.io: a dependency `to` exact-pins, or ranges (narrow or wide) with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones. crates.io reads normal and build dependencies, optional ones only where the default feature enables them.",
     "  Go: the modules `to`'s own go.mod requires are minimums your project gets (where your go.mod already selects a newer version, that one is judged). One with a known advisory makes `to` review (`required_minimums_affected`: each module, the version, the advisory count and the release that clears them): after upgrading, raise them in your own go.mod. A safe release named for a constraint carries the same caveat. A requirement list that cannot be read makes `to` unknown.",
     "  A package name that is malware itself (npm took it down and holds it with a `0.0.N-security` placeholder, or a malicious-package record covers every release) -> avoid, with `malicious_package` and the popular package it likely imitates. When no release in range is safe only because of an advisory on a held dependency, `range_check.held_advice` names it and the override that clears it (the verdict is review for a low or moderate one, avoid for high or critical); a release more than one major or about 18 months older is not offered instead.",
     "  An advisory is passed over as an unmaintained-package notice only when its record declares that class (RustSec `informational`) and carries no grade, exploit category or fixed release; one that merely says \"unmaintained\" counts.",
@@ -822,6 +822,13 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       });
       if (caveats.length > 0) item.rangeCheck!.requirement_caveats = Object.fromEntries(caveats);
     }
+  }
+  // crates.io, PyPI: an alternative outside the range is named only once what it requires has been examined.
+  for (const item of items) {
+    const lookup = indexes.get(lookupKey(item));
+    const judge = item.ecosystem === "npm" || item.ecosystem === "Go" ? null : judgeOf(item.ecosystem);
+    if (!judge || !item.rangeCheck || lookup?.status !== "ok") continue;
+    await offerRequirementCleanOutside({ judge, ecosystem: item.ecosystem, pkg: item.package, to: item.to, rc: item.rangeCheck, index: lookup.data, advisories: advisoryLists.get(lookupKey(item)), now });
   }
   // Nothing in range is safe: never point at a release years older when a low or moderate advisory on a
   // held dependency is what stands in the way; say which, and how to clear it (Y3, nx -> 13.2.4).

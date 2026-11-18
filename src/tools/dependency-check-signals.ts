@@ -230,12 +230,22 @@ function requirementsCleanText(item: CheckItem, examined: number, unreadable: nu
     unreadable > 0
       ? ` ${unreadable} requirement${unreadable === 1 ? "" : "s"} it declares ${unreadable === 1 ? "is" : "are"} not a ${item.ecosystem} package with a readable version requirement and ${unreadable === 1 ? "was" : "were"} not examined.`
       : "";
-  if (item.ecosystem === "Go") {
-    const what = examined === 0 ? `${item.to}'s go.mod requires no other module.` : `None of the ${examined} module${examined === 1 ? "" : "s"} ${item.to}'s go.mod requires has a known advisory at the version your project would select.`;
-    return `${what}${skipped}`;
-  }
-  const what = examined === 0 ? `${item.to} requires no other package.` : `None of the ${examined} package${examined === 1 ? "" : "s"} ${item.to} requires is held at a release with a known advisory.`;
+  const what = examined === 0 ? (item.ecosystem === "Go" ? `${item.to}'s go.mod requires no other module.` : `${item.to} requires no other package.`) : requirementsClean(item.ecosystem, examined, item.to);
   return `${what}${skipped}`;
+}
+
+/** "The 2 modules v1.12.0's go.mod requires have no known advisory ..." / "None of the 3 packages 2.5.0 requires is held ...". */
+function requirementsClean(ecosystem: CheckEcosystem | undefined, examined: number, release: string | null): string {
+  if (ecosystem === "Go") {
+    const whose = release ? `${release}'s` : "its";
+    return examined === 1
+      ? `The one module ${whose} go.mod requires has no known advisory at the version your project would select.`
+      : `The ${examined} modules ${whose} go.mod requires have no known advisory at the version your project would select.`;
+  }
+  const it = release ?? "it";
+  return examined === 1
+    ? `The one package ${it} requires is not held at a release with a known advisory.`
+    : `None of the ${examined} packages ${it} requires is held at a release with a known advisory.`;
 }
 
 /** Modules named in the sentence; the rest are counted (all are in the signal's value). */
@@ -671,12 +681,7 @@ function proceedReason(signals: Signal[], ecosystem?: CheckEcosystem): string {
   const found = `No ${list ? `${list} ` : ""}concern found`;
   const noticed = "";
   const examined = value?.requirements_examined;
-  const required =
-    examined === undefined || examined === 0
-      ? ""
-      : ecosystem === "Go"
-        ? ` The ${examined} module${examined === 1 ? "" : "s"} its go.mod requires ${examined === 1 ? "has" : "have"} no known advisory at the version your project would select.`
-        : ` None of the ${examined} package${examined === 1 ? "" : "s"} it requires is held at a release with a known advisory.`;
+  const required = examined === undefined || examined === 0 ? "" : ` ${requirementsClean(ecosystem, examined, null)}`;
   return `${found}${noticed}.${required}`;
 }
 

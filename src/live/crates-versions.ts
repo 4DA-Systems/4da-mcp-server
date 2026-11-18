@@ -8,7 +8,8 @@
  *   and the crate's creation date; else `crates.io/api/v1/crates/<name>/versions` (paged, newest
  *   semver first, same fields), which stops at the versions asked about.
  * - the sparse index (`index.crates.io`, the CDN file cargo itself reads):
- *   each version's dependency list, which the versions endpoint lacks.
+ *   each version's dependency list, which the versions endpoint lacks, and
+ *   with it what each version requires (getRequirements).
  * - `crates.io/api/v1/crates/<name>`: when a newly introduced dependency
  *   was first published.
  *
@@ -25,11 +26,14 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
+import { cargoReqAdmits } from "./range-satisfies.js";
 import type {
   PackageReleaseIndex,
   RegistryLookup,
   ReleaseMetadataSource,
   ReleaseRecord,
+  ReleaseRequirement,
+  ReleaseRequirements,
 } from "./release-metadata.js";
 
 const CRATES_API = "https://crates.io/api/v1/crates";
@@ -52,11 +56,104 @@ interface CratesVersionsPage {
   meta?: { next_page?: string | null };
 }
 
+interface SparseDep {
+  /** The name the crate uses for the dependency (its key in Cargo.toml). */
+  name: string;
+  req?: string;
+  kind?: string | null;
+  /** The dependency's real crate name, when it is renamed. */
+  package?: string;
+  optional?: boolean;
+  /** Another registry's index URL; absent or null for crates.io. */
+  registry?: string | null;
+}
+
 interface SparseLine {
   /** The crate's published spelling (the index files it under that name only). */
   name?: string;
   vers: string;
-  deps?: Array<{ name: string; kind?: string | null; package?: string }>;
+  deps?: SparseDep[];
+  features?: Record<string, string[]>;
+  /** Features written in the newer syntax (`dep:x`, `x?/y`), merged with `features`. */
+  features2?: Record<string, string[]>;
+}
+
+/** A crate name as crates.io accepts one: up to 64 ASCII letters, digits, `-` and `_`. */
+const CRATE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isCrateName(name: unknown): name is string {
+  return typeof name === "string" && CRATE_NAME.test(name);
+}
+
+/** A Cargo requirement fit to print: a short run of version numbers, operators, commas and spaces that Cargo's own grammar reads. */
+function isReadableCargoReq(req: unknown): req is string {
+  return typeof req === "string" && req.length > 0 && req.length <= 200 && /^[0-9A-Za-z.,*^~<>=+ -]+$/.test(req) && cargoReqAdmits(req, "1.0.0") !== null;
+}
+
+const CRATES_IO_INDEXES = new Set(["https://github.com/rust-lang/crates.io-index", "sparse+https://index.crates.io/", "https://index.crates.io/"]);
+
+/**
+ * The optional dependencies a crate's `default` feature turns on, by the name the crate uses for
+ * them: `dep:x`, `x/feature` (not `x?/feature`), or the feature an optional dependency defines by
+ * its own name, followed through the features `default` enables.
+ */
+function defaultEnabledDependencies(line: SparseLine): Set<string> {
+  const features = new Map<string, string[]>();
+  for (const table of [line.features, line.features2]) {
+    if (!table || typeof table !== "object") continue;
+    for (const [name, values] of Object.entries(table)) {
+      if (Array.isArray(values)) features.set(name, [...(features.get(name) ?? []), ...values.filter((v): v is string => typeof v === "string")]);
+    }
+  }
+  const enabled = new Set<string>();
+  const seen = new Set<string>();
+  const stack = ["default"];
+  while (stack.length > 0 && seen.size < 1_000) {
+    const feature = stack.pop()!;
+    if (seen.has(feature)) continue;
+    seen.add(feature);
+    // An optional dependency defines a feature of its own name unless the crate uses `dep:` for it.
+    if (!features.has(feature)) enabled.add(feature);
+    for (const value of features.get(feature) ?? []) {
+      if (value.startsWith("dep:")) enabled.add(value.slice(4));
+      else if (value.includes("/")) {
+        const dep = value.slice(0, value.indexOf("/"));
+        if (!dep.endsWith("?")) enabled.add(dep);
+      } else stack.push(value);
+    }
+  }
+  return enabled;
+}
+
+/**
+ * What one index line says the release requires at build time: normal and build dependencies from
+ * crates.io, an optional one only when the `default` feature turns it on. Dev-dependencies are not
+ * part of what a dependent builds. One entry per crate and requirement.
+ */
+function requirementsOf(line: SparseLine): ReleaseRequirements {
+  const byDefault = defaultEnabledDependencies(line);
+  const out = new Map<string, ReleaseRequirement>();
+  let unreadable = 0;
+  for (const d of Array.isArray(line.deps) ? line.deps : []) {
+    if (!d || typeof d !== "object" || d.kind === "dev") continue;
+    if (d.optional === true && !byDefault.has(String(d.name))) continue;
+    const crate = d.package ?? d.name;
+    const foreign = typeof d.registry === "string" && d.registry !== "" && !CRATES_IO_INDEXES.has(d.registry);
+    if (foreign || !isCrateName(crate) || !isReadableCargoReq(d.req)) {
+      unreadable++;
+      continue;
+    }
+    const spec = d.req.trim();
+    out.set(`${crate}\0${spec}`, { name: crate, spec });
+  }
+  return { requirements: [...out.values()], unreadable };
+}
+
+interface SparseRead {
+  deps: Record<string, string[]>;
+  name: string | null;
+  /** Per version: what it requires (requirementsOf). */
+  reqs: Record<string, ReleaseRequirements>;
 }
 
 class HttpStatusError extends Error {
@@ -169,6 +266,19 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
   }
 
   /**
+   * What one release requires, from the sparse index (the file cargo itself resolves from): its
+   * normal and build dependencies, optional ones only where the default feature enables them.
+   * `name` is the crate's published spelling (the index files a crate under that one only).
+   */
+  async getRequirements(name: string, version: string): Promise<RegistryLookup<ReleaseRequirements>> {
+    const sparse = await this.sparseDependencies(name);
+    if (sparse === "not_found") return { status: "not_found", detail: "the crates.io index has no entry under this spelling" };
+    if (sparse === null) return { status: "unreachable", detail: "the crates.io index could not be read" };
+    const requirements = sparse.reqs[version];
+    return requirements ? { status: "ok", data: requirements } : { status: "not_found", detail: "the crates.io index does not list this version" };
+  }
+
+  /**
    * Every version of a crate from `/crates/<name>`, or null when that read fails or the list it
    * returns is shorter than the crate's version count (the caller then pages). Its creation date
    * is kept for getCreatedAt.
@@ -225,9 +335,10 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
    * the crate's published spelling from the index lines (null when they carry none). "not_found":
    * the index has no file under this spelling; null: it could not be read.
    */
-  private async sparseDependencies(name: string): Promise<{ deps: Record<string, string[]>; name: string | null } | "not_found" | null> {
-    const key = `crates-sparse-deps:v2:${name}`;
-    const cached = this.cache.get<{ deps: Record<string, string[]>; name: string | null }>(key);
+  private async sparseDependencies(name: string): Promise<SparseRead | "not_found" | null> {
+    // v3: each version's requirements are kept beside its dependency names.
+    const key = `crates-sparse-deps:v3:${name}`;
+    const cached = this.cache.get<SparseRead>(key);
     if (cached) return cached;
     try {
       const response = await fetchWithTimeout(
@@ -238,6 +349,7 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
       if (response.status === 404) return "not_found";
       if (!response.ok) return null;
       const deps: Record<string, string[]> = {};
+      const reqs: Record<string, ReleaseRequirements> = {};
       let published: string | null = null;
       for (const line of (await response.text()).split("\n")) {
         if (!line.trim()) continue;
@@ -248,11 +360,12 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
             .filter((d) => d.kind !== "dev")
             .map((d) => d.package ?? d.name);
           deps[entry.vers] = [...new Set(names)];
+          reqs[entry.vers] = requirementsOf(entry);
         } catch {
           // skip a malformed line
         }
       }
-      const out = { deps, name: published };
+      const out: SparseRead = { deps, name: published, reqs };
       this.cache.set(key, out, "crates", VERSIONS_TTL);
       return out;
     } catch {
