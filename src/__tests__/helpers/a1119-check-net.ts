@@ -121,6 +121,17 @@ export function advisory(
   } as OsvVulnerability;
 }
 
+/** An npm packument: version -> publish time (ISO) and, optionally, its dependencies. `latest` is the last version given. */
+export function npmDoc(name: string, versions: Record<string, { at: string; dependencies?: Record<string, string> }>): unknown {
+  const list = Object.keys(versions);
+  return {
+    name,
+    "dist-tags": { latest: list[list.length - 1] },
+    time: { created: versions[list[0]].at, ...Object.fromEntries(list.map((v) => [v, versions[v].at])) },
+    versions: Object.fromEntries(list.map((v) => [v, { name, version: v, ...(versions[v].dependencies ? { dependencies: versions[v].dependencies } : {}) }])),
+  };
+}
+
 function goEscape(path: string): string {
   return path.replace(/[A-Z]/g, (c) => `!${c.toLowerCase()}`);
 }
