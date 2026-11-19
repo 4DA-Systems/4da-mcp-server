@@ -40,7 +40,6 @@ beforeEach(() => {
   const raw = new Database(":memory:");
   raw.exec(SCHEMA);
   db = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (db as any).db = raw;
 });
 afterEach(() => db.close());

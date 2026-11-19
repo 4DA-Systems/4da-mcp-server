@@ -42,7 +42,6 @@ import { getLiveIntelligence } from "./live-singleton.js";
  * Executor signature — all tool execute functions follow this shape.
  * Awaiting a sync return resolves immediately, so we can await uniformly.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ToolExecutor = (db: FourDADatabase, params: any) => unknown | Promise<unknown>;
 
 /**

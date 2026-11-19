@@ -60,7 +60,7 @@ import { resolveChangelog } from "./upgrade-impact-changelog.js";
 import { pythonImportNames, type PythonImportNames } from "./upgrade-impact-imports.js";
 import { projectCargoFeatures } from "./upgrade-impact-features.js";
 import { flagOldSyntax } from "./upgrade-impact-literals.js";
-import { nearestVersions, shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
+import { shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
 import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { isOfflineMode } from "../env-flags.js";
 import { heldAffectedRows, heldImpactText, judgeTargetHeld, type HeldContext, type HeldImpact } from "./upgrade-impact-held.js";

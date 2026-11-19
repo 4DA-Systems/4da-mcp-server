@@ -96,6 +96,11 @@ jobs:
       - name: Type-check the source and the tests
         run: pnpm run typecheck
 
+      # Correctness rules only (eslint.config.js): lost promises, loose
+      # equality, unreachable code, dead code. No style rules.
+      - name: Lint
+        run: pnpm run lint
+
       # npm retired the audit endpoint pnpm <= 10 uses (HTTP 410, 2026-07-14);
       # pnpm 11 speaks the bulk advisory endpoint. It reads the overrides from
       # pnpm-workspace.yaml (it ignores package.json's `pnpm` field, issue #9).

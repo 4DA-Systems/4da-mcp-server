@@ -274,7 +274,6 @@ export class NodeSqliteDatabase implements SqliteDatabase {
     return rows;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   transaction<F extends (...args: any[]) => unknown>(fn: F): (...args: Parameters<F>) => ReturnType<F> {
     return (...args: Parameters<F>): ReturnType<F> => {
       this.assertOpen();

@@ -349,7 +349,6 @@ function dep(name: string, version: string, ecosystem: ResolvedDependency["ecosy
 
 function briefingDb(): FourDADatabase {
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = new Database(":memory:");
   return instance;
 }

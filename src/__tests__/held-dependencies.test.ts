@@ -19,7 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
-import { exactPinVersion, heldSpecsOf, npmAliasTarget } from "../live/held-dependencies.js";
+import { exactPinVersion, heldSpecsOf } from "../live/held-dependencies.js";
 import type { OsvVulnerability } from "../live/types.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";

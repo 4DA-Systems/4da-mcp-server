@@ -134,6 +134,7 @@ export function validateToolArgs(toolName: string, schema: InputSchema, args: Re
 // - variation selectors (U+FE00..U+FE0F, U+E0100..U+E01EF), which change a glyph and can carry
 //   hidden bits; the BOM (U+FEFF); Unicode tag characters (U+E0000..U+E007F).
 const INVISIBLE =
+  // eslint-disable-next-line no-control-regex -- matches control characters on purpose (the invisible set above)
   /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\uFEFF\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
 
 // The line and paragraph separators (U+2028, U+2029) break a line where no "\n" shows: a space.

@@ -290,6 +290,7 @@ describe("defect 2: an advisory id from OSV.dev is held to OSV's id shape where 
     const scan = await live.queryAdvisories([{ name: "left-pad", version: "1.3.0", ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }]);
     expect(scan.vulnerabilities).toHaveLength(1);
     expect(scan.vulnerabilities[0].vulnId).toBe("(invalid advisory id)");
+    // eslint-disable-next-line no-control-regex -- asserts the ESC character never reaches the output
     expect(JSON.stringify(scan)).not.toMatch(/\r|\n|\u001b|‮|verdict: proceed/);
   });
 
@@ -299,6 +300,7 @@ describe("defect 2: an advisory id from OSV.dev is held to OSV's id shape where 
     expect(["avoid", "review"]).toContain(r.verdict);
     expect(conciseItem(r as never).advisories).toEqual(["(invalid advisory id)"]);
     const text = JSON.stringify(answer);
+    // eslint-disable-next-line no-control-regex -- asserts the ESC character never reaches the output
     expect(text).not.toMatch(/\r|\n|\u001b|‮|verdict: proceed/);
   });
 });

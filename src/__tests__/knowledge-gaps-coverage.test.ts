@@ -35,7 +35,6 @@ function createTestDatabase(): FourDADatabase {
   const rawDb = new Database(":memory:");
   rawDb.exec(SCHEMA);
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = rawDb;
   return instance;
 }

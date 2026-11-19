@@ -27,6 +27,7 @@ export const MAX_ENTRY_CHARS = 400;
 /** The shared third-party cleaning (untrusted-text.ts sanitizeThirdParty), capped for an entry. */
 export function sanitizeEntry(text: string, cap: number = MAX_ENTRY_CHARS): string {
   // Control characters read as a space between words, as before; the rest is the shared rule.
+  // eslint-disable-next-line no-control-regex -- strips control characters from third-party text on purpose
   return sanitizeThirdParty(text.replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, " "), cap);
 }
 
