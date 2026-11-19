@@ -13,7 +13,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { emptySource, found, InstanceSet, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type VersionSource } from "./lockfile-types.js";
 import { sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { readTextFile } from "./text-file.js";
 
@@ -182,19 +182,67 @@ export function readComposerLock(
   return { instances, versions, privateIndex };
 }
 
+/**
+ * Why a Gemfile.lock is not the whole file Bundler wrote, or null. Bundler writes the gems
+ * first and a `DEPENDENCIES` section after them, for a project with no gems too: a file with
+ * none stops before its end, and what it lists may not be every gem.
+ */
+export function gemfileLockDamage(content: string): string | null {
+  return /^DEPENDENCIES[ \t]*\r?$/m.test(content) ? null : "it is truncated: it has no DEPENDENCIES section, which Bundler writes after the gems";
+}
+
+/**
+ * The lockfile Bundler reads in a directory: `gems.locked` when the Gemfile is `gems.rb` (Bundler
+ * prefers that pair), else `Gemfile.lock`, else a `gems.locked` on its own. Same format either way.
+ */
+export function gemLockfile(cwd: string): string | null {
+  const gemfileLock = path.join(cwd, "Gemfile.lock");
+  const gemsLocked = path.join(cwd, "gems.locked");
+  if (fs.existsSync(gemsLocked) && (fs.existsSync(path.join(cwd, "gems.rb")) || !fs.existsSync(gemfileLock))) return gemsLocked;
+  return fs.existsSync(gemfileLock) ? gemfileLock : null;
+}
+
 export function resolveRuby(cwd: string): VersionSource {
-  const lockPath = path.join(cwd, "Gemfile.lock");
-  if (!fs.existsSync(lockPath)) return emptySource();
-  const read = readGemfileLock(readTextFile(lockPath));
-  if (read.instances.size === 0) return emptySource();
+  const lockPath = gemLockfile(cwd);
+  if (lockPath === null) return emptySource();
+  let content: string;
+  try {
+    content = readTextFile(lockPath);
+  } catch (error) {
+    return { ...emptySource(), problems: [{ file: lockPath, error: unreadableReason(error) }] };
+  }
+  const read = readGemfileLock(content);
+  const damage = gemfileLockDamage(content);
+  const problems: LockfileProblem[] = [];
+  // gems.rb's pair was read: a Gemfile.lock left beside it is not what Bundler installs, and is said.
+  const passedOver = path.join(cwd, "Gemfile.lock");
+  if (lockPath !== passedOver && fs.existsSync(passedOver)) {
+    problems.push({ file: passedOver, conflict: true, error: "gems.locked was read instead: with a gems.rb present Bundler uses gems.rb and gems.locked, so this file is not what gets installed" });
+  }
+  if (read.instances.size === 0) {
+    if (damage) problems.push({ file: lockPath, error: `${damage}; no gem could be read from it` });
+    return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
+  }
+  if (damage) problems.push(partialRead(lockPath, damage));
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
-  return found(read.versions, read.instances, lockPath, "lockfile", { direct: { deps: read.direct, devDeps: [] }, ...(privateIndex.length > 0 ? { privateIndex } : {}) });
+  return found(read.versions, read.instances, lockPath, "lockfile", {
+    direct: { deps: read.direct, devDeps: [] },
+    ...(privateIndex.length > 0 ? { privateIndex } : {}),
+    ...(problems.length > 0 ? { problems } : {}),
+  });
 }
 
 export function resolvePhp(cwd: string): VersionSource {
   const lockPath = path.join(cwd, "composer.lock");
   if (!fs.existsSync(lockPath)) return emptySource();
-  const read = readComposerLock(JSON.parse(readTextFile(lockPath)) as Record<string, unknown>, composerRepositories(composerManifest(cwd)));
+  // Unreadable or not JSON throws here: resolveVersionSource names the file with the reason.
+  const lock = JSON.parse(readTextFile(lockPath)) as unknown;
+  // Composer writes both lists, empty or not: JSON with neither is some other file.
+  const isLock = typeof lock === "object" && lock !== null && !Array.isArray(lock) && ("packages" in lock || "packages-dev" in lock);
+  if (!isLock) {
+    return { ...emptySource(), problems: [{ file: lockPath, error: "it is valid JSON but not a composer.lock: it has no `packages` or `packages-dev` list" }] };
+  }
+  const read = readComposerLock(lock as Record<string, unknown>, composerRepositories(composerManifest(cwd)));
   if (read.instances.size === 0) return emptySource();
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
   return found(read.versions, read.instances, lockPath, "lockfile", { direct: composerDirect(cwd), ...(privateIndex.length > 0 ? { privateIndex } : {}) });

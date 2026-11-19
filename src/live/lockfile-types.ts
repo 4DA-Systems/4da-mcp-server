@@ -122,6 +122,24 @@ export interface LockfileProblem {
   ecosystem?: string;
 }
 
+/**
+ * A lockfile read, but not all of what it should hold: what was read was checked, the rest was
+ * not. `missing` is a lower bound on the entries lost. `behindManifest` is for a file that is
+ * whole as far as it goes and only lacks what the manifest beside it declares (cut cleanly
+ * between two entries, or written before the manifest changed).
+ */
+export function partialRead(file: string, reason: string, missing = 0, behindManifest = false): LockfileProblem {
+  const consequence = behindManifest
+    ? "What it holds was checked; the dependencies it does not hold were not: regenerate the lockfile"
+    : "It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile";
+  return { file, partial: true, ...(missing > 0 ? { skipped: missing } : {}), error: `${reason}. ${consequence}` };
+}
+
+/** `could not be read (<the system's reason>)`: the wording for a file that exists and cannot be opened. */
+export function unreadableReason(error: unknown): string {
+  return `could not be read (${error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160)})`;
+}
+
 export type SourceKind = "lockfile" | "manifest" | "declared_ranges";
 
 export function emptySource(): VersionSource {

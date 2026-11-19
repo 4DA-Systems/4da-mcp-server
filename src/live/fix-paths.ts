@@ -38,6 +38,7 @@ import { yieldIfDue } from "./yield-point.js";
 import { lockfileFormatOf, prepareLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, parseGoMod, requirementOptions } from "./lockfile-parsers-pygo.js";
+import { requirementFiles } from "./lockfile-parsers-pygo.js";
 import { projectOverride } from "./overrides.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
@@ -1678,7 +1679,13 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
     case "PyPI": {
       // A pin in a file included with `-r` is declared too, and edited there (audit 7g).
       const files = ["requirements.txt", "requirements-dev.txt", "requirements/base.txt"];
-      for (let i = 0; i < files.length && i < 16; i++) {
+      // Every requirements file the scan reads declares its pins (requirements-test.txt,
+      // requirements/docs.txt): the edit is named in the file that holds the pin.
+      for (const file of requirementFiles(projectDir)) {
+        const rel = path.relative(projectDir, file).replace(/\\/g, "/");
+        if (!files.includes(rel)) files.push(rel);
+      }
+      for (let i = 0; i < files.length && i < 32; i++) {
         const body = read(files[i]);
         if (body === null) continue;
         const instruction = pypiDirectInstruction(body, files[i], name, installed, target);

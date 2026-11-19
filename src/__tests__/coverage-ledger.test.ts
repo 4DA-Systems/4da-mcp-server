@@ -369,12 +369,16 @@ describe("coverage ledger: what was not read is always said", () => {
       expect(result.coverage.note).toMatch(/NOT COVERED: 3 manifest\/lockfiles of ecosystems or formats this server does not read \(Conda, PyPI\): environment\.yml, setup\.py, tools\/pylock\.toml/);
     });
 
-    it("pyproject.toml with no lockfile: its dependencies are named as not checked, with no advice to run a tool the project does not use", async () => {
-      write("pyproject.toml", '[project]\nname = "fx"\nversion = "0.1.0"\ndependencies = ["Django==3.2.0", "requests==2.25.0"]\n');
+    it("pyproject.toml with no lockfile: its exact pins are checked as declared, the rest is named as not checked, with no advice to run a tool the project does not use", async () => {
+      write("pyproject.toml", '[project]\nname = "fx"\nversion = "0.1.0"\ndependencies = ["Django==3.2.0", "requests==2.25.0", "flask>=2"]\n');
       const result = await scan();
-      expect(result.total_vulnerable_packages).toBeNull();
-      expect(result.coverage.unpinned_requirements).toEqual([{ file: "pyproject.toml", count: 2, names: ["django", "requests"] }]);
-      expect(result.coverage.note).toMatch(/NOT CHECKED \(no pinned version\): 2 requirements in pyproject\.toml/);
+      // `Django==3.2.0` names an exact version: it is checked, as an exact pin in package.json or Cargo.toml is.
+      expect(asked.map((a) => `${a.name}@${a.version}`).sort()).toEqual(["django@3.2.0", "requests@2.25.0"]);
+      expect(result.total_vulnerable_packages).toBe(1);
+      expect(result.coverage.note).toMatch(/NO LOCKFILE: pyproject\.toml has no lockfile, so only the 2 exact pins declared there were checked/);
+      // `flask>=2` names no exact version: not checked, and said.
+      expect(result.coverage.unpinned_requirements).toEqual([{ file: "pyproject.toml", count: 1, names: ["flask"] }]);
+      expect(result.coverage.note).toMatch(/NOT CHECKED \(no pinned version\): 1 requirement in pyproject\.toml/);
       expect(JSON.stringify(result)).not.toMatch(/poetry install/);
     });
   });

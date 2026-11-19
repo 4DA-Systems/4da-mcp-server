@@ -69,6 +69,7 @@ const LOCK_MARKERS = [
   "Pipfile.lock",
   "go.mod",
   "Gemfile.lock",
+  "gems.locked",
   "composer.lock",
 ];
 
@@ -87,6 +88,7 @@ const LOCK_ECOSYSTEM: Record<string, string> = {
   "Pipfile.lock": "python",
   "go.mod": "go",
   "Gemfile.lock": "ruby",
+  "gems.locked": "ruby",
   "composer.lock": "php",
 };
 
@@ -162,6 +164,8 @@ export function unsupportedEcosystem(name: string, names: string[], dir?: string
   if (name === "conan.lock") return "ConanCenter";
   if (name === "renv.lock") return "CRAN";
   if (name === "Gemfile" && !names.includes("Gemfile.lock")) return "RubyGems (Gemfile with no Gemfile.lock)";
+  // Bundler's other pair: gems.rb locks to gems.locked (resolveRuby reads either lockfile).
+  if (name === "gems.rb" && !names.includes("gems.locked") && !names.includes("Gemfile.lock")) return "RubyGems (gems.rb with no gems.locked)";
   if (name === "composer.json" && !names.includes("composer.lock")) return "Packagist (composer.json with no composer.lock)";
   if (/^environment\.ya?ml$/i.test(name)) return "Conda (environment.yml is not read)";
   if (/^pylock(\.[^.]+)?\.toml$/.test(name)) return "PyPI (pylock.toml, PEP 751, is not read)";
@@ -832,7 +836,7 @@ const LOCKS_BY_LANGUAGE: Record<string, string[]> = {
   rust: ["Cargo.lock"],
   python: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   go: ["go.mod"],
-  ruby: ["Gemfile.lock"],
+  ruby: ["Gemfile.lock", "gems.locked"],
   php: ["composer.lock"],
 };
 
