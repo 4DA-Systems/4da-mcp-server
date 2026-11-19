@@ -50,11 +50,15 @@ export function npmAdvisory(id: string, name: string, fixed: string, severity = 
   } as OsvVulnerability;
 }
 
+/** An npm registry document, cut down: the versions it lists and its `latest` tag. */
+export type NpmDoc = { latest: string; versions: Record<string, { dependencies?: Record<string, string>; deprecated?: string }> };
+
 /**
- * OSV.dev answering from `records`; every registry answers 404 (nothing is
- * known about any release). Returns the names OSV.dev was asked about.
+ * OSV.dev answering from `records`; registry.npmjs.org from `npm` (abbreviated
+ * documents); every other registry answers 404 (nothing is known about any
+ * release). Returns the names OSV.dev was asked about.
  */
-export function stubOsv(records: OsvVulnerability[]): { asked: string[] } {
+export function stubOsv(records: OsvVulnerability[], npm: Record<string, NpmDoc> = {}): { asked: string[] } {
   const asked: string[] = [];
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const matching = (name: string, ecosystem: string, version?: string) =>
@@ -83,6 +87,12 @@ export function stubOsv(records: OsvVulnerability[]): { asked: string[] } {
     if (url === "https://api.osv.dev/v1/query") {
       const q = JSON.parse(String(init?.body)) as { package: { name: string; ecosystem: string }; version?: string };
       return json({ vulns: matching(q.package.name, q.package.ecosystem, q.version) });
+    }
+    const registry = /^https:\/\/registry\.npmjs\.org\/([^/]+)(?:\/(.+))?$/.exec(url);
+    const doc = registry ? npm[decodeURIComponent(registry[1])] : undefined;
+    if (registry && doc) {
+      if (registry[2]) return json(doc.versions[decodeURIComponent(registry[2])] ?? {});
+      return json({ name: decodeURIComponent(registry[1]), "dist-tags": { latest: doc.latest }, versions: doc.versions, time: {} });
     }
     return json({}, 404);
   });

@@ -271,10 +271,13 @@ export function resolveAuditVersionsFrom(
     const normalized = normalizePackageName(name, ecosystem);
     const key = copyKey(name, version, ecosystem);
     // Direct only for the copy a manifest dependency resolves to; another
-    // installed version of the same name is somebody else's transitive.
+    // installed version of the same name is somebody else's transitive. The
+    // copies the lockfile reader resolved from the manifests themselves
+    // (`declared`) are direct too: a workspace member's dependencies, and the
+    // root's optional and peer ones, which `deps`/`devDeps` do not list.
     const resolvesHere = versionMap.get(name) === version;
     const inRuntimeSection = resolvesHere && directNames.has(normalized);
-    const isDirect = inRuntimeSection || (resolvesHere && devNames.has(normalized));
+    const isDirect = inRuntimeSection || (resolvesHere && devNames.has(normalized)) || index.declaredRuntime.has(key);
     const graded = isDirect ? declaredScope(index, key, !inRuntimeSection) : { isDev: dev === true, devScopeKnown: dev !== undefined };
     const declaredTarget = targets[name] ?? null;
     const builtOnHost = hostCrates ? hostCrates.has(name) : true;
