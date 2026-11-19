@@ -20,7 +20,7 @@
  */
 
 import { callMemo } from "../call-budget.js";
-import { andList, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
+import { andList, clearsText, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { isRequirementEcosystem, requirementAdvisories, type RequirementEcosystem, type RequirementRelease, type RequirementSources } from "./release-requirements.js";
 import { compareVersions, inEcosystemForm, isComparable } from "./version-compare.js";
 import type { FixTargetResult } from "./fix-paths.js";
@@ -152,7 +152,7 @@ function requiredList(affected: HeldDependency[], ecosystem: string, target: str
   if (ecosystem !== "Go") return heldText(target, affected).replace(`${target} `, "");
   const shown = affected.slice(0, 4).map((d) => {
     const which = d.selected ? `${d.name} ${d.version} (your go.mod's selection over the ${d.spec} it requires)` : `${d.name} ${d.version}`;
-    const clears = d.fixedIn ? `${d.fixedIn} clears ${d.ids.length === 1 ? "it" : "them"}` : `no release that clears ${d.ids.length === 1 ? "it" : "them"} is known`;
+    const clears = clearsText(d);
     return `${which} (${advisories(d.ids.length)}; ${clears})`;
   });
   const rest = affected.length - shown.length;

@@ -18,7 +18,7 @@
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
 import { deprecationAvoids } from "../live/withdrawn-releases.js";
-import { andList, heldSeverity, heldText, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
+import { andList, clearsText, heldSeverity, heldText, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 
 export type Verdict = "proceed" | "wait" | "review" | "avoid" | "unknown";
@@ -278,7 +278,7 @@ function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[]
   const one = affected.length === 1;
   const named = affected.slice(0, MINIMUMS_NAMED).map((d) => {
     const which = d.selected ? `${d.name} ${d.version}, which your go.mod already selects over the ${d.spec} it requires` : `${d.name} ${d.version}`;
-    const clears = d.fixedIn ? `${d.fixedIn} clears ${d.ids.length === 1 ? "it" : "them"}` : `no release that clears ${d.ids.length === 1 ? "it" : "them"} is known`;
+    const clears = clearsText(d);
     return `${which} (${count(d.ids.length)}; ${clears})`;
   });
   const rest = affected.length - named.length;
@@ -303,6 +303,7 @@ function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[]
     advisories: d.ids.slice(0, 10),
     severity: d.severity,
     fixed_in: d.fixedIn ?? null,
+    ...(d.fixUnknown ? { fixed_in_not_looked_up: d.fixUnknown } : {}),
   }));
   return {
     id: "advisories",
