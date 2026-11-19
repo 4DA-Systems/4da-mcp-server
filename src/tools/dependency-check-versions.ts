@@ -28,7 +28,7 @@
 
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
 import { advisoriesAffecting, isPrereleaseVersion, oneIdPerAdvisory, type AdvisoryRanges } from "../live/osv-ranges.js";
-import { compareVersions, parsePep440 } from "../live/version-compare.js";
+import { comparePep440, compareVersions, parsePep440 } from "../live/version-compare.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
@@ -128,8 +128,22 @@ export function pep440SpecAdmits(spec: string, version: string): boolean | null 
       const series = { ...target, release: target.release.slice(0, -1), pre: null, post: null, dev: null };
       ok = cmp(v, target) >= 0 && matchesPrefix(v, series);
     } else {
+      // `d` orders the public versions (local labels dropped); `sameBase`: V's own release numbers, whatever pre/post/dev follows.
       const d = cmp(v, target);
-      ok = op === "==" ? d === 0 : op === "!=" ? d !== 0 : op === ">=" ? d >= 0 : op === "<=" ? d <= 0 : op === ">" ? d > 0 : d < 0;
+      const sameBase = cmp({ ...v, pre: null, post: null, dev: null }, { ...target, pre: null, post: null, dev: null }) === 0;
+      const prerelease = (x: Pep440) => x.pre !== null || x.dev !== null;
+      if (op === "==" || op === "!=") {
+        // A local label in the specifier is exact (`==1.0+abc` is not 1.0); without one the candidate's label is ignored.
+        ok = (target.local.length > 0 ? comparePep440(v, target) === 0 : d === 0) === (op === "==");
+      } else if (op === ">") {
+        // `>V` admits neither a post-release of V (unless V is one) nor a local version of V.
+        ok = d > 0 && !(sameBase && ((v.post !== null && target.post === null) || v.local.length > 0));
+      } else if (op === "<") {
+        // `<V` admits no pre-release of V, unless V is one.
+        ok = d < 0 && !(sameBase && prerelease(v) && !prerelease(target));
+      } else {
+        ok = op === ">=" ? d >= 0 : d <= 0;
+      }
     }
     if (!ok) return false;
   }
