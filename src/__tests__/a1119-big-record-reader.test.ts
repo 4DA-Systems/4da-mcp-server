@@ -96,7 +96,7 @@ describe("readRecords", () => {
     const late: string[] = [];
     const deadline = Date.now() + 500;
     const reading = readRecords(ids(10), c.fetchOne, opts({ stopStartingAt: deadline, stopWaitingAt: deadline }), (id) => late.push(id));
-    // Two answer before the deadline, two are still out at it.
+    // Two answer before the deadline; the other two and the two that took their slots are still out at it.
     c.out[0].answer("a");
     c.out[1].answer("b");
     await flush();
