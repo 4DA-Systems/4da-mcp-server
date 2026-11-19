@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pushAll } from "../array-utils.js";
 import { readTextFile } from "./text-file.js";
 
 export const DEPENDENCY_SECTIONS = ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"] as const;
@@ -130,7 +131,7 @@ export function expandBraces(pattern: string): string[] | null {
   for (let k = 0; k + 1 < cuts.length; k++) {
     const rest = expandBraces(pattern.slice(0, open) + pattern.slice(cuts[k] + 1, cuts[k + 1]) + pattern.slice(close + 1));
     if (rest === null) return null;
-    out.push(...rest);
+    pushAll(out, rest);
     if (out.length > MAX_BRACE_EXPANSIONS) return null;
   }
   return out;
