@@ -20,7 +20,8 @@ describe("README: which versions reach a registry", () => {
   it("holds the installed-version claim to dependency_check and names upgrade_planner's real exceptions", () => {
     expect(readme).not.toContain("a1119: verify installed-version claim");
     const line = readme.split("\n").find((l) => l.includes("**npm full packument**"))!;
-    expect(line).toMatch(/`dependency_check` never sends the version you have installed to a registry, except that the Go proxy's list has no dates/);
+    expect(line).toMatch(/`dependency_check` requests per-release documents of the releases it is judging/);
+    expect(line).toMatch(/The version you have installed \(`from`\) is named only to the Go proxy \(its `\.info`\) and, on PyPI, only when it is also `to`/);
     expect(line).not.toMatch(/the version you have installed is never sent to a registry/);
     expect(line).toMatch(/`upgrade_planner` names a version to a registry in two cases: on PyPI, a parent that uv\.lock or a compiled requirements file names without its requirement is asked for by its own release/);
     expect(line).toMatch(/on npm, PyPI and Go a fix version is asked for by name/);

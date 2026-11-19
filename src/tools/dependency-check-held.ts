@@ -283,11 +283,16 @@ const PYPI_CANDIDATES_EACH_END = 3;
 /**
  * The releases of a safe list judged before any is named: npm's own (heldRangeCandidates), the
  * same on crates.io (the sparse index lists every release's requirements in one read), fewer on
- * PyPI, and none on Go, where the named picks are judged afterwards and never left out.
+ * PyPI, and none on Go, where the named picks are judged afterwards and never left out. On PyPI
+ * each costs a request naming that release, so `installed` (the `from` version, when it is not the
+ * one being judged) is never among them: its version never reaches the registry.
  */
-export function judgedRangeCandidates(ecosystem: string, ownSafe: string[], above: (v: string) => boolean): string[] {
+export function judgedRangeCandidates(ecosystem: string, ownSafe: string[], above: (v: string) => boolean, installed?: string | null): string[] {
   if (ecosystem === "Go") return [];
-  if (ecosystem === "PyPI") return [...new Set([...ownSafe.filter(above).slice(0, PYPI_CANDIDATES_EACH_END), ...ownSafe.slice(-PYPI_CANDIDATES_EACH_END)])];
+  if (ecosystem === "PyPI") {
+    const pool = installed ? ownSafe.filter((v) => v !== installed) : ownSafe;
+    return [...new Set([...pool.filter(above).slice(0, PYPI_CANDIDATES_EACH_END), ...pool.slice(-PYPI_CANDIDATES_EACH_END)])];
+  }
   return heldRangeCandidates(ownSafe, above);
 }
 
@@ -440,6 +445,8 @@ async function offerJudgedOutside(
     now: Date;
     /** PyPI: false for a release that does not support the project's Python (never offered). */
     supported?: (version: string) => boolean;
+    /** PyPI: the installed version when it is not `to`: never judged here (judging it names it to the registry). */
+    installed?: string | null;
   },
   published: (v: string) => string | null,
   ecosystem: CheckEcosystem = "npm",
@@ -455,6 +462,7 @@ async function offerJudgedOutside(
     .filter(
       (v) =>
         !excluded.has(v) &&
+        v !== input.installed &&
         !isPrereleaseIn(ecosystem, v) &&
         rangeAdmits(ecosystem, rc.range, v) !== true &&
         settled(v) &&
@@ -490,6 +498,7 @@ export async function offerRequirementCleanOutside(input: {
   advisories: readonly AdvisoryRanges[] | null | undefined;
   now: Date;
   supported?: (version: string) => boolean;
+  installed?: string | null;
 }): Promise<void> {
   const { rc } = input;
   if (rc.smallest_safe_in_range !== null || rc.newest_safe_outside_range || !input.advisories) return;
