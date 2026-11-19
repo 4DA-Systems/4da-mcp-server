@@ -52,8 +52,10 @@ const MAX_BATCH_SIZE = 1000;
  * round trips. Now a pool of HYDRATE_CONCURRENCY workers keeps that many
  * requests in flight (osv-scanner itself hydrates in parallel), a failed or
  * throttled request is retried once, and every result is cached for 24 h.
+ * The pool was always full at 24 (2,025-dependency tree: 263 records in 4.3 s
+ * at a 356 ms median); at 48 the same records took 2.4 s with no throttling.
  */
-const HYDRATE_CONCURRENCY = 24;
+export const HYDRATE_CONCURRENCY = 48;
 /**
  * Advisory records one scan asks OSV.dev for (cached ones are not counted). An answer naming very
  * many ids started one request per id with nothing to stop it: 22,973 in 30 s, still going after
