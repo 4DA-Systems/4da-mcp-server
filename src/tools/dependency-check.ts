@@ -83,13 +83,11 @@ import {
   compareIn,
   isPrereleaseIn,
   lineOf,
-  ownSafeInRange,
   parseTarget,
   rangeAdmits,
   type RangeCheck,
 } from "./dependency-check-versions.js";
-import { adviseNoSafeRelease, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside } from "./dependency-check-held.js";
-import { lacksProjectPython, pythonRangeFilter, pythonSupportSignal } from "./dependency-check-python.js";
+import { pythonSupportSignal } from "./dependency-check-python.js";
 import { andList } from "../live/held-dependencies.js";
 import { closestPopularNpm, maliciousName, maliciousSignal, type MaliciousName } from "./dependency-check-malicious.js";
 import { nameCheckSignal, nearMissOf } from "./dependency-check-nearmiss.js";
@@ -103,16 +101,15 @@ import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, 
 import {
   ECOSYSTEMS,
   head,
-  installedNotJudged,
   lookupKey,
   provisional,
-  yieldToEventLoop,
   type ItemResult,
   type ListGap,
   type Requested,
   type Resolved,
 } from "./dependency-check-items.js";
 import { offlineResults, screenItems } from "./dependency-check-screen.js";
+import { adviseNpmNoSafeRelease, caveatGoPicks, checkSameLines, findAffectedExact, offerCleanOutsideRanges } from "./dependency-check-alternatives.js";
 import { advisoryFacts, dropIncompleteLists, findContradictions, hasRealAdvisory, markBatchUnread, queryBatch, readDeclaredNotices } from "./dependency-check-batch.js";
 import { isYoung, judgeReleaseContents, redateGoTargets, resolveItems } from "./dependency-check-resolve.js";
 import { adoptPublishedCrateNames, firstLookups, mapLimit, passContext, REGISTRY_CONCURRENCY, type AdvisoryListReader } from "./dependency-check-lookups.js";
@@ -414,7 +411,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   }
 
   const ctx = passContext(liveIntel, requested, now);
-  const { sources, fixSources, projectPython, pythonUnreadAt, supportsPython, packageAdvisoryLists, held, judgeOf, judgeAll, heldAt, heldAffected } = ctx;
+  const { sources, projectPython, pythonUnreadAt, packageAdvisoryLists, heldAt } = ctx;
   const lookups = await firstLookups(ctx);
   const { indexes, advisoryLists } = lookups;
   await adoptPublishedCrateNames(ctx, lookups);
@@ -428,104 +425,13 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   const contradictionOf = findContradictions(ctx, items, batch);
   const advisoriesFor = advisoryFacts(batch, contradictionOf, declaredFor);
 
-  /** PyPI: an exact `to` that does not support every Python the project declares. */
-  const lacksPython = (i: Resolved) => {
-    const lookup = indexes.get(lookupKey(i));
-    return lookup?.status === "ok" && lacksProjectPython(projectPython, i.ecosystem, lookup.data.releases[i.to]);
-  };
-  // An exact `to` an advisory affects (its own, or one it holds), or that does not support the
-  // project's Python: the safe releases on its own line.
-  const affectedExact = items.filter(
-    (i) =>
-      !i.unresolved &&
-      !i.rangeCheck &&
-      ((advisoriesFor(i).available && hasRealAdvisory(advisoriesFor(i))) || heldAffected(i) || lacksPython(i)),
-  );
-  const moreLists = await packageAdvisoryLists(affectedExact.filter((i) => !advisoryLists.has(lookupKey(i))));
-  for (const [k, v] of moreLists) advisoryLists.set(k, v);
+  const affectedExact = await findAffectedExact(ctx, lookups, items, advisoriesFor);
   dropIncompleteLists(lookups, items, batch);
   const batchRead = markBatchUnread(items, batch, contradictionOf);
-  const lines = affectedExact.flatMap((item) => {
-    if (!batchRead(item)) return [];
-    const lookup = indexes.get(lookupKey(item))!;
-    const advisories = advisoryLists.get(lookupKey(item));
-    const line = lineOf(item.ecosystem, item.to);
-    return lookup.status === "ok" && advisories && line ? [{ item, index: lookup.data, advisories, line }] : [];
-  });
-  await judgeAll(
-    lines
-      .filter((l) => judgeOf(l.item.ecosystem) !== null)
-      .map((l) => ({
-        ecosystem: l.item.ecosystem,
-        pkg: l.item.package,
-        versions: rangeCandidates(
-          l.item.ecosystem,
-          ownSafeInRange({ ecosystem: l.item.ecosystem, index: l.index, range: l.line, advisories: l.advisories, allowPrerelease: isPrereleaseIn(l.item.ecosystem, l.item.to) }).filter(supportsPython(l.item, l.index)),
-          (v) => !l.item.from || compareIn(l.item.ecosystem, v, l.item.from) > 0,
-          installedNotJudged(l.item),
-        ),
-      })),
-  );
-  for (const { item, index, advisories, line } of lines) {
-    await yieldToEventLoop();
-    const filter = judgeOf(item.ecosystem)?.rangeFilter(item.package) ?? undefined;
-    const python = pythonRangeFilter(projectPython, item.ecosystem, index);
-    // The safe releases on the line of a stable `to` are stable ones; of a prerelease `to`, prereleases too.
-    item.rangeCheck = checkRange({
-      ecosystem: item.ecosystem,
-      index,
-      range: line,
-      basis: "same_line",
-      advisories,
-      from: item.from,
-      allowPrerelease: isPrereleaseIn(item.ecosystem, item.to),
-      ...(filter ? { held: filter } : {}),
-      ...(python ? { python } : {}),
-      young: (v) => isYoung(index.releases[v]?.publishedAt, now),
-    });
-  }
-  // Go: a named pick whose own go.mod requires an affected minimum stays a pick, and says so. `to`
-  // itself is judged above, and its finding is in the verdict.
-  const goJudge = judgeOf("Go");
-  const goPicked = goJudge ? items.filter((i) => i.ecosystem === "Go" && i.rangeCheck) : [];
-  const picksOf = (item: Resolved) => namedPicks(item.rangeCheck!).filter((v) => v !== item.to);
-  if (goJudge && goPicked.length > 0) {
-    await goJudge.judge(goPicked.map((item) => ({ pkg: item.package, versions: picksOf(item) })));
-    for (const item of goPicked) {
-      const caveats = picksOf(item).flatMap((v) => {
-        const text = minimumsCaveat(v, goJudge.at(item.package, v));
-        return text ? [[v, text] as const] : [];
-      });
-      if (caveats.length > 0) item.rangeCheck!.requirement_caveats = Object.fromEntries(caveats);
-    }
-  }
-  // crates.io, PyPI: an alternative outside the range is named only once what it requires has been examined.
-  for (const item of items) {
-    const lookup = indexes.get(lookupKey(item));
-    const judge = item.ecosystem === "npm" || item.ecosystem === "Go" ? null : judgeOf(item.ecosystem);
-    if (!judge || !item.rangeCheck || lookup?.status !== "ok") continue;
-    await offerRequirementCleanOutside({
-      judge,
-      ecosystem: item.ecosystem,
-      pkg: item.package,
-      to: item.to,
-      rc: item.rangeCheck,
-      index: lookup.data,
-      advisories: advisoryLists.get(lookupKey(item)),
-      now,
-      supported: supportsPython(item, lookup.data),
-      installed: installedNotJudged(item),
-    });
-  }
-  // Nothing in range is safe: never point at a release years older when a low or moderate advisory on a
-  // held dependency is what stands in the way; say which, and how to clear it (Y3, nx -> 13.2.4).
-  const isNpm = (i: Resolved) => i.ecosystem === "npm" && !i.unresolved;
-  for (const item of items.filter(isNpm)) {
-    const lookup = indexes.get(lookupKey(item));
-    if (!item.rangeCheck || lookup?.status !== "ok") continue;
-    const advisories = advisoryLists.get(lookupKey(item));
-    await adviseNoSafeRelease({ judge: held, pkg: item.package, to: item.to, rc: item.rangeCheck, index: lookup.data, advisories, sources: fixSources, now });
-  }
+  await checkSameLines(ctx, lookups, affectedExact, batchRead);
+  await caveatGoPicks(ctx, items);
+  await offerCleanOutsideRanges(ctx, lookups, items);
+  await adviseNpmNoSafeRelease(ctx, lookups, items);
 
   const holdWaivers = await findHoldWaivers(items, indexes, advisoryLists, packageAdvisoryLists, sources.Go, advisoriesFor, now);
   // A name that is malware itself (a typo-squat npm took down): avoid, whatever the release says.
@@ -794,11 +700,6 @@ function requirementsNotCheckedText(pkg: string, where: string, rc: RangeCheck):
   const affected = (rc.held_excluded ?? 0) - n;
   const examined = affected > 0 ? `, and the ${affected} examined ${affected === 1 ? "requires" : "require"} a dependency whose newest admitted release (or exact pin) has a known advisory` : "";
   return `NOT CHECKED: no release of ${pkg} ${where} is named safe: what ${n} release${n === 1 ? "" : "s"} clear of ${pkg}'s own advisories ${n === 1 ? "requires" : "require"} was not examined (${rc.held_not_checked_reason})${examined}. This is not a clean result and names no version to write: check a specific release with dependency_check.`;
-}
-
-/** The releases a range check names (smallest, smallest above `from`, newest, newest outside the range). */
-function namedPicks(rc: RangeCheck): string[] {
-  return [...new Set([rc.smallest_safe_in_range, rc.smallest_safe_upgrade, rc.newest_safe_in_range, rc.newest_safe_outside_range].filter((v): v is string => typeof v === "string"))];
 }
 
 /** NOT CHECKED: the batch query gave no current answer (Resolved.batchUnread), so no release is named. */
