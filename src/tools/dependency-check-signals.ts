@@ -689,12 +689,20 @@ function proceedReason(signals: Signal[], ecosystem?: CheckEcosystem): string {
     ...(checked("new_dependencies") ? ["new-dependency"] : []),
     ...(checked("python_support") ? ["Python-version"] : []),
   ];
-  const list = concerns.length > 1 ? `${concerns.slice(0, -1).join(", ")} or ${concerns[concerns.length - 1]}` : (concerns[0] ?? "");
-  const found = `No ${list ? `${list} ` : ""}concern found`;
-  const noticed = "";
+  const join = (parts: string[]) => (parts.length > 1 ? `${parts.slice(0, -1).join(", ")} or ${parts[parts.length - 1]}` : (parts[0] ?? ""));
   const examined = value?.requirements_examined;
   const required = examined === undefined || examined === 0 ? "" : ` ${requirementsClean(ecosystem, examined, null)}`;
-  return `${found}${noticed}.${required}`;
+  // An unmaintained-package notice on `to` is named in the sentence itself: "no advisory" beside a
+  // listed RUSTSEC notice reads as if nothing was on record.
+  const notices = (advisories?.value as { maintenance_notices?: string[] } | null)?.maintenance_notices ?? [];
+  if (notices.length > 0) {
+    const others = concerns.filter((c) => c !== "advisory");
+    const n = notices.length;
+    const ids = `${notices.slice(0, 3).join(", ")}${n > 3 ? ` and ${n - 3} more` : ""}`;
+    return `No vulnerability advisory${others.length > 0 ? `, and no ${join(others)} concern found` : " found"}; ${n === 1 ? "one" : n} unmaintained-package notice${n === 1 ? "" : "s"}: ${ids} (no exploitable vulnerability; listed in maintenance_notices).${required}`;
+  }
+  const list = join(concerns);
+  return `No ${list ? `${list} ` : ""}concern found.${required}`;
 }
 
 /** The item verdict and its one-line reason, from the strongest signal effect. */
