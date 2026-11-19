@@ -50,7 +50,7 @@ import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn,
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
 import { requiresNote, withRequiredTargets } from "./required-targets.js";
-import type { RequirementEcosystem, RequirementSources } from "./release-requirements.js";
+import type { RequirementEcosystem, RequirementOptions, RequirementSources } from "./release-requirements.js";
 import { confirmTargets } from "./batch-confirm.js";
 import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
@@ -1133,7 +1133,7 @@ export async function verifyFixTargets(
   options: {
     heldQuery?: AdvisoryQuery;
     /** Go, crates.io, PyPI: the items (by key) whose target is judged by what it requires (required-targets.ts). */
-    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null; pythons?: readonly string[] | null };
+    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null; pythons?: RequirementOptions["pythons"] };
   } = {},
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
