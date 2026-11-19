@@ -52,17 +52,15 @@
 import type { FourDADatabase } from "../db.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import type { LiveIntelligence } from "../live/index.js";
-import type { FixPathSources } from "../live/fix-paths.js";
 import { unaccountedIds } from "../live/batch-confirm.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
 import { npmWeeklyDownloads } from "../live/npm-downloads.js";
 import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.js";
-import { pushAll } from "../array-utils.js";
 import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
 import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { findingReason } from "../late-answer.js";
-import { noteListFacts, noteRegistryFacts, noteScanFacts } from "./dependency-check-facts.js";
+import { noteRegistryFacts, noteScanFacts } from "./dependency-check-facts.js";
 import { unquotePackageName } from "./package-name.js";
 import { isConcreteVersion } from "../live/release-version.js";
 import { goPathMajor, goVersionMajor } from "../live/upgrade-go.js";
@@ -98,11 +96,9 @@ import {
   rangeNamesPrerelease,
   type RangeCheck,
 } from "./dependency-check-versions.js";
-import { adviseNoSafeRelease, HeldJudge, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside, RequirementJudge, type HeldRangeFilter, type ReleaseJudge } from "./dependency-check-held.js";
-import { requirementSources } from "../live/release-requirements.js";
-import { readProjectPython, readProjectPythonUnread, type ProjectPython } from "../live/project-python.js";
+import { adviseNoSafeRelease, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside, type HeldRangeFilter } from "./dependency-check-held.js";
+import type { ProjectPython } from "../live/project-python.js";
 import { lacksProjectPython, pythonRangeFilter, pythonSupportSignal } from "./dependency-check-python.js";
-import { GO_VERSION, goVersion } from "../live/go-releases.js";
 import { andList } from "../live/held-dependencies.js";
 import { closestPopularNpm, maliciousName, maliciousSignal, type MaliciousName } from "./dependency-check-malicious.js";
 import { nameCheckSignal, nearMissOf } from "./dependency-check-nearmiss.js";
@@ -113,7 +109,6 @@ import { lengthProblem } from "../tool-args.js";
 import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
 import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, npmPick, type NpmWhy } from "./dependency-check-resolution.js";
-import { samePackageName } from "../live/version-compare.js";
 import {
   ECOSYSTEMS,
   head,
@@ -128,6 +123,7 @@ import {
   type Resolved,
 } from "./dependency-check-items.js";
 import { offlineResults, screenItems } from "./dependency-check-screen.js";
+import { adoptPublishedCrateNames, fetchIndexes, firstLookups, mapLimit, passContext, REGISTRY_CONCURRENCY, type AdvisoryListReader } from "./dependency-check-lookups.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
@@ -137,10 +133,6 @@ export interface DependencyCheckParams {
 const MAX_ITEMS = 25;
 /** First-publish lookups for newly introduced dependencies, per call (each is a registry read). */
 const MAX_NEW_DEP_LOOKUPS = 40;
-/** Registry reads in flight per ecosystem (each registry has its own pool: crates.io's one-a-second pacing never holds up npm or PyPI). */
-const REGISTRY_CONCURRENCY = 6;
-/** OSV.dev package advisory lists (/v1/query) in flight at once. */
-const OSV_LIST_CONCURRENCY = 8;
 const DAY_MS = 86_400_000;
 
 const PRIVACY_NOTE =
@@ -427,73 +419,11 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     return pass(results, { offline: true, osvCached, ...privateMeta });
   }
 
-  const sources = liveIntel.getReleaseSources();
-  const fixSources = liveIntel.getFixPathSources();
-  // PyPI: the Python versions the project declares, read from its own files; null when it declares
-  // none, and then nothing is judged against a Python version.
-  const projectRoot = requested.some((r) => r.ecosystem === "PyPI") ? (liveIntel.getProjectRoot?.() ?? null) : null;
-  const projectPython = projectRoot ? readProjectPython(projectRoot) : null;
-  /** Where the project declares a Python that could not be read: the answer says so instead of judging nothing silently. */
-  const pythonUnreadAt = projectRoot && !projectPython ? readProjectPythonUnread(projectRoot) : null;
-  /** Whether a PyPI release supports the project's Python (true when nothing is judged). */
-  const supportsPython = (item: CheckItem, index: PackageReleaseIndex) => {
-    const filter = pythonRangeFilter(projectPython, item.ecosystem, index);
-    return (v: string) => !filter?.unsupported(v);
-  };
-  // Everything that depends only on the names starts at once: the registry reads, each package's
-  // OSV advisory list (nearly every item needs it later: a constraint's range check, the malware
-  // name check of a new dependency, the safe line of an affected exact version) and, for npm, what
-  // each release holds. Later phases await the same requests instead of starting them one phase at
-  // a time (a 25-item check took 32 s cold, most of it phases waiting on each other).
-  const packageAdvisoryLists = advisoryListReader(fixSources);
-  // The releases held dependencies were asked about, so a contradicted answer can be dropped from the cache (B7).
-  const heldAsked: ResolvedDependency[] = [];
-  const held = new HeldJudge(fixSources, (deps) => {
-    pushAll(heldAsked, deps);
-    return liveIntel.queryAdvisories(deps);
-  });
-  // crates.io, PyPI and Go: what a release requires comes with it too (live/release-requirements.ts).
-  // Go's minimal version selection keeps the project's own newer selection of a required module.
-  const reqs = new RequirementJudge(
-    fixSources ? requirementSources(sources, fixSources) : null,
-    (deps) => {
-      pushAll(heldAsked, deps);
-      return liveIntel.queryAdvisories(deps);
-    },
-    selectedGoVersions(liveIntel),
-    projectPython?.covers ?? null,
-  );
-  /** The judge of what an ecosystem's releases bring with them; null where nothing is read (a source without requirement lists). */
-  const judgeOf = (ecosystem: CheckEcosystem): ReleaseJudge | null => (ecosystem === "npm" ? held : reqs.of(ecosystem));
-  void packageAdvisoryLists(requested);
-  // r7: each concrete finding is kept for the call as soon as it is read, so a call that runs out
-  // of time still answers avoid for a release already known to be malware (dependency-check-facts.ts).
-  for (const r of requested) {
-    if (r.target.kind !== "exact") continue;
-    const to = r.target.version;
-    void packageAdvisoryLists([r]).then((lists) => noteListFacts(r, to, lists.get(lookupKey(r))), () => undefined);
-  }
-  held.prefetch(requested.filter((r) => r.ecosystem === "npm").map((r) => r.package));
-  const [indexes, advisoryLists] = await Promise.all([
-    fetchIndexes(requested.map(provisional), sources, new Set(requested.filter(needsFullList).map(lookupKey))),
-    // Constraints are judged against the package's whole advisory list.
-    packageAdvisoryLists(requested.filter((r) => r.target.kind === "range")),
-  ]);
-  // crates.io and Cargo read `-` and `_` (and case) in a crate name as one crate; the registry's
-  // answer names the published spelling (crates-versions.ts). Everything after this is asked under
-  // it, OSV.dev included, and the answer says so: `serde-json` was unknown while `serde_json` was
-  // proceed (pre-publish round 10, W2). A spelling the registry could not confirm stays unknown.
-  const renamed: Requested[] = [];
-  for (const r of requested) {
-    const lookup = indexes.get(lookupKey(r));
-    if (r.ecosystem !== "crates.io" || lookup?.status !== "ok") continue;
-    const published = lookup.data.name;
-    if (published === r.package || !samePackageName(published, r.package, "crates.io")) continue;
-    r.asked = r.package;
-    r.package = published;
-    renamed.push(r);
-  }
-  for (const [k, v] of await packageAdvisoryLists(renamed.filter((r) => r.target.kind === "range"))) advisoryLists.set(k, v);
+  const ctx = passContext(liveIntel, requested, now);
+  const { sources, fixSources, projectPython, pythonUnreadAt, supportsPython, packageAdvisoryLists, heldAsked, held, judgeOf, judgeAll, heldAt, heldAffected } = ctx;
+  const lookups = await firstLookups(ctx);
+  const { indexes, advisoryLists } = lookups;
+  await adoptPublishedCrateNames(ctx, lookups);
   // One package at a time, yielding between them: a package with hundreds of releases and advisories
   // is CPU work, and the event loop must stay free for the call budget's timer and other calls
   // (pre-publish audit 2026-11-12, S1: ping and lodash waited 22 s behind django).
@@ -535,9 +465,6 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     return lookup?.status === "ok" && Boolean(lookup.data.releases[i.to]);
   };
   const isJudged = (i: Resolved) => !i.unresolved && judgeOf(i.ecosystem) !== null && (i.ecosystem === "npm" || isListed(i));
-  /** One judge() per ecosystem, together. */
-  const judgeAll = (requests: Array<{ ecosystem: CheckEcosystem; pkg: string; versions: string[] }>) =>
-    Promise.all(ECOSYSTEMS.map((eco) => judgeOf(eco)?.judge(requests.filter((r) => r.ecosystem === eco))));
   await judgeAll(
     items.filter(isJudged).map((item) => {
       const eco = item.ecosystem;
@@ -558,9 +485,6 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   });
   // `to` is what the constraint installs (resolvedRelease, round 8): judge it too (normally a no-op).
   await judgeAll(items.filter(isJudged).map((item) => ({ ecosystem: item.ecosystem, pkg: item.package, versions: [item.to] })));
-  const heldAt = (item: CheckItem) => judgeOf(item.ecosystem)?.at(item.package, item.to);
-  /** `to` brings in an affected dependency that keeps it out of the safe releases (never a Go minimum: that is a caveat). */
-  const heldAffected = (item: CheckItem) => item.ecosystem !== "Go" && Boolean(judgeOf(item.ecosystem)?.affected(item.package, item.to));
 
   // Round 8 (B7): the batch answer is held against what each package's own advisory list (/v1/query)
   // says about the same releases. Where every judged release is clean by the list, one release the
@@ -1072,24 +996,6 @@ function namedPicks(rc: RangeCheck): string[] {
   return [...new Set([rc.smallest_safe_in_range, rc.smallest_safe_upgrade, rc.newest_safe_in_range, rc.newest_safe_outside_range].filter((v): v is string => typeof v === "string"))];
 }
 
-/**
- * Go: the version of each module the project's own go.mod / go.sum selects (the highest it holds).
- * Minimal version selection keeps it over a lower minimum a new requirement names.
- */
-function selectedGoVersions(liveIntel: LiveIntelligence): (ecosystem: string, name: string) => string | null {
-  const selected = new Map<string, string>();
-  if (liveIntel.isInitialized?.()) {
-    for (const d of [...liveIntel.getResolvedDeps(), ...liveIntel.getAuditDeps()]) {
-      if (d.ecosystem !== "Go" || !d.version) continue;
-      const v = goVersion(d.version);
-      if (!GO_VERSION.test(v)) continue;
-      const held = selected.get(d.name);
-      if (!held || compareIn("Go", v, held) > 0) selected.set(d.name, v);
-    }
-  }
-  return (ecosystem, name) => (ecosystem === "Go" ? (selected.get(name) ?? null) : null);
-}
-
 /** NOT CHECKED: the batch query gave no current answer (Resolved.batchUnread), so no release is named. */
 function batchUnreadText(pkg: string, why: string): string {
   return `NOT CHECKED: OSV.dev's batch query gave no current answer (${why}), so ${pkg}'s advisory list (/v1/query) could not be confirmed complete and no release of ${pkg} is named safe. This is not a clean result: check again later.`;
@@ -1168,10 +1074,6 @@ function everyRelease(list: readonly AdvisoryRanges[] | null | undefined): strin
 
 function hasRealAdvisory(facts: AdvisoryFacts): boolean {
   return facts.available && facts.to.some((a) => !a.maintenance);
-}
-
-function needsFullList(r: Requested): boolean {
-  return r.target.kind !== "exact";
 }
 
 /**
@@ -1388,49 +1290,6 @@ async function findMaliciousNames(
   return out;
 }
 
-/** Each package's OSV advisory list (verdict view), by lookupKey; null where it could not be read. */
-type AdvisoryListReader = (items: Array<{ ecosystem: CheckEcosystem; package: string }>) => Promise<Map<string, AdvisoryRanges[] | null>>;
-
-/**
- * One reader per call: each package's list is requested once, at most OSV_LIST_CONCURRENCY at a
- * time, and every later phase that asks for it awaits the same request (in flight or done).
- * Nothing (an empty map) without lookup sources.
- */
-function advisoryListReader(fixSources: FixPathSources | null): AdvisoryListReader {
-  const lists = new Map<string, Promise<AdvisoryRanges[] | null>>();
-  const slots = limiter(OSV_LIST_CONCURRENCY);
-  return async (items) => {
-    const out = new Map<string, AdvisoryRanges[] | null>();
-    if (!fixSources) return out;
-    // A crate is asked for under the spelling given: one renamed to its published spelling asks
-    // OSV.dev again under that one (round 10, W2). The answer is filed under the registry's identity.
-    const requestKey = (i: { ecosystem: CheckEcosystem; package: string }) => (i.ecosystem === "crates.io" ? `${lookupKey(i)}\0${i.package}` : lookupKey(i));
-    const unique = new Map(items.map((i) => [requestKey(i), i]));
-    for (const [key, i] of unique) {
-      if (!lists.has(key)) {
-        lists.set(
-          key,
-          slots(() => fixSources.packageAdvisories(i.ecosystem, i.package))
-            .then((list) => (list ? list.map(verdictView) : null))
-            .catch(() => null),
-        );
-      }
-    }
-    for (const [key, i] of unique) out.set(lookupKey(i), await lists.get(key)!);
-    return out;
-  };
-}
-
-/**
- * An advisory as dependency_check's verdict reads it: a maintenance notice only when the record
- * itself declares the class and names no fixed release (osv-ranges.ts `declaredNotice`). A notice
- * the shared predicate reads from the summary wording alone counts as an advisory here, in the
- * range checks and in the verdict alike.
- */
-function verdictView(a: AdvisoryRanges): AdvisoryRanges {
-  return a.maintenance && !a.declaredNotice ? { ...a, maintenance: false } : a;
-}
-
 /**
  * The name check for each new PyPI dependency (dependency-check-nearmiss-pypi.ts: no request) and
  * each new npm dependency (dependency-check-nearmiss.ts) whose name is a
@@ -1509,37 +1368,6 @@ function goMajorHint(item: CheckItem): string {
   const pathMajor = goPathMajor(item.package) ?? 1;
   if (major === null || major < 2 || major === pathMajor) return "";
   return ` Go major ${major} is a different module: ${item.package.replace(/\/v\d+$/, "")}/v${major}.`;
-}
-
-async function fetchIndexes(
-  items: CheckItem[],
-  sources: Record<CheckEcosystem, ReleaseMetadataSource>,
-  fullList: Set<string>,
-): Promise<Map<string, RegistryLookup<PackageReleaseIndex>>> {
-  const wanted = new Map<string, { item: CheckItem; versions: Set<string> }>();
-  for (const item of items) {
-    const key = lookupKey(item);
-    const entry = wanted.get(key) ?? { item, versions: new Set<string>() };
-    entry.versions.add(item.to);
-    if (item.from) entry.versions.add(item.from);
-    wanted.set(key, entry);
-  }
-  const out = new Map<string, RegistryLookup<PackageReleaseIndex>>();
-  // One pool per registry, all running at once.
-  await Promise.all(
-    ECOSYSTEMS.map((ecosystem) =>
-      mapLimit(
-        [...wanted.entries()].filter(([, { item }]) => item.ecosystem === ecosystem),
-        REGISTRY_CONCURRENCY,
-        async ([key, { item, versions }]) => {
-          // A reader that pages (crates.io) stops once it has the wanted versions; a constraint needs them all.
-          const list = item.ecosystem === "crates.io" && fullList.has(key) ? [] : [...versions];
-          out.set(key, await sources[item.ecosystem].getReleases(item.package, list));
-        },
-      ),
-    ),
-  );
-  return out;
 }
 
 function validateItems(raw: unknown): Requested[] {
@@ -1703,31 +1531,4 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       },
     },
   };
-}
-
-/** Run at most `limit` of the given tasks at once. */
-function limiter(limit: number): <T>(task: () => Promise<T>) => Promise<T> {
-  let running = 0;
-  const queue: Array<() => void> = [];
-  const release = () => {
-    running--;
-    queue.shift()?.();
-  };
-  return <T>(task: () => Promise<T>) =>
-    new Promise<T>((resolve, reject) => {
-      const start = () => {
-        running++;
-        task().then(resolve, reject).finally(release);
-      };
-      if (running < limit) start();
-      else queue.push(start);
-    });
-}
-
-async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) await fn(items[next++]);
-  });
-  await Promise.all(workers);
 }
