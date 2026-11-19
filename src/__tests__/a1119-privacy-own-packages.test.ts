@@ -199,7 +199,12 @@ describe("Go: a go.work module is the project's own, never a proxy release", () 
     setEnv("FOURDA_MAX_LOCKFILE_BYTES", "4096");
     project({ ...tree, "project/go.work": `go 1.22\n\nuse (\n\t./a\n\t./b\n)\n${"// padding\n".repeat(600)}`, "project/web/package.json": JSON.stringify({ name: "web", dependencies: { lodash: "4.17.20" } }), "project/web/package-lock.json": JSON.stringify({ name: "web", lockfileVersion: 3, packages: { "": { name: "web", dependencies: { lodash: "4.17.20" } }, "node_modules/lodash": { version: "4.17.20", resolved: "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz" } } }) });
     const scan = await call("vulnerability_scan", { force_refresh: true });
-    expect(String(scan.summary)).toMatch(/NOT CHECKED \(private\)/);
+    // Either way of saying it is not a clean answer: the Go reader names go.work as unread
+    // (coverage incomplete), or the private rules mark Go NOT CHECKED. Since the Go reader also
+    // reads go.work (its `replace` directives), the first is what an oversized one produces.
+    const coverage = scan.coverage as { complete?: boolean; unreadable_lockfiles?: Array<{ path: string }> } | undefined;
+    const namedUnread = coverage?.complete === false && (coverage.unreadable_lockfiles ?? []).some((l) => l.path === "go.work");
+    expect(namedUnread || /NOT CHECKED \(private\)/.test(String(scan.summary))).toBe(true);
     expect(String(JSON.stringify(scan))).toMatch(/go\.work/);
     expect(sentAbout(/zqown|golang\.org/)).toEqual([]);
     expect(sentAbout(/lodash/).length).toBeGreaterThan(0);

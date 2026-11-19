@@ -266,7 +266,8 @@ describe("no file in src/ calls the global fetch except the two HTTP helpers", (
   /** The only files that may call fetch, and what each guarantees before it does. */
   const HELPERS: Record<string, RegExp> = {
     // The choke point: the private-name check runs before any request.
-    "live/http-utils.ts": /refusePrivateRequest\(url, options\);/,
+    // Every hop of a request passes it (redirects are followed one hop at a time there).
+    "live/http-utils.ts": /refusePrivateRequest\(current, options\);/,
     // This machine only: any other address is refused before any request.
     "live/loopback-http.ts": /if \(!isLoopbackUrl\(url\)\) throw /,
   };
