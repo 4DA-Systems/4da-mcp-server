@@ -47,7 +47,7 @@ export interface Harness {
   CRATES: Record<string, Array<{ vers: string; yanked?: boolean; deps?: Array<{ name: string; req: string; kind?: string; target?: string }> }>>;
   PYPI: Record<string, Record<string, { requiresPython?: string; requiresDist?: string[]; yanked?: boolean }>>;
   GO: Record<string, string[]>;
-  /** "module@vX" -> the go directive of that version's go.mod. */
+  /** "module@vX" -> the go directive of that version's go.mod ("" for a go.mod that declares none; absent: not served). */
   GOMOD: Record<string, string>;
   /** Hosts that refuse every connection (the registry is unreachable). */
   down: Set<string>;
@@ -171,7 +171,9 @@ export function createHarness(): Harness {
     const goMod = /^https:\/\/proxy\.golang\.org\/(.+)\/@v\/(v[^/]+)\.mod$/.exec(url);
     if (goMod) {
       const directive = h.GOMOD[`${goMod[1]}@${goMod[2]}`];
-      return directive ? new Response(`module ${goMod[1]}\n\ngo ${directive}\n`, { status: 200 }) : new Response("not found", { status: 404 });
+      if (directive === undefined) return new Response("not found", { status: 404 });
+      // "" is a go.mod with no go directive, as old module versions have.
+      return new Response(`module ${goMod[1]}\n${directive ? `\ngo ${directive}\n` : ""}`, { status: 200 });
     }
     const go = /^https:\/\/proxy\.golang\.org\/(.+)\/@v\/(list|v[^/]+\.info)$/.exec(url);
     if (go) {

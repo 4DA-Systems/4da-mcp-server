@@ -48,7 +48,8 @@ async function intelWithInactiveNix(target: string | null, fixed = "0.20.2") {
   const li = new LiveIntelligence(new Database(":memory:"));
   const scanOf = async (deps: ResolvedDependency[], projectPath: string): Promise<VulnerabilityScanResult> => {
     const vulnerabilities = deps
-      .filter((d) => d.name === "nix")
+      // Per version, as OSV.dev answers: the installed 0.20.0 is affected, a release asked about as the target is not.
+      .filter((d) => d.name === "nix" && d.version === "0.20.0")
       .map((d) =>
         restampDepContext(
           {

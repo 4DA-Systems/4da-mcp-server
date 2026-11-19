@@ -576,20 +576,22 @@ export class FixPathSources {
   /**
    * The `go` directive of one module version's go.mod, from the proxy (`@v/<v>.mod`): the oldest Go
    * that builds it. x/text v0.41.0 says `go 1.25.0`, so `go get` on a Go 1.24 toolchain refuses it
-   * with GOTOOLCHAIN=local and raises the directive otherwise. Null when absent or unreadable.
+   * with GOTOOLCHAIN=local and raises the directive otherwise. "" when the go.mod was read and
+   * declares none (any Go builds it); null when it could not be read, which says nothing either way.
    */
   async goDirective(module: string, version: string): Promise<string | null> {
     const v = version.startsWith("v") ? version : `v${version}`;
     const key = `fixpath:v${CACHE_VERSION}:go-directive:${module}@${v}`;
     const hit = this.cached<{ go: string | null }>(key);
-    if (hit) return hit.go;
+    // Only a go.mod that was read is kept: a kept null is "declares none".
+    if (hit) return hit.go ?? "";
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
       const res = await fetchWithTimeout(`https://proxy.golang.org/${escapeModulePath(module)}/@v/${escapeModulePath(v)}.mod`, {}, TIMEOUT_MS);
       if (!res.ok) return null;
       const go = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(await res.text())?.[1] ?? null;
       this.store(key, { go }, "go", VERSION_DEPS_TTL);
-      return go;
+      return go ?? "";
     } catch {
       return null;
     }

@@ -449,6 +449,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
     if (step.scope === "transitive" && step.currentVersion) await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
     withUpgradeCommands(input, liveIntel);
+    await withGoDirective(input, sources);
     return heldUnclean ? "held" : "verified";
   }
   if (!clean) return "failed";
@@ -551,8 +552,33 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   }
   withLineWords(step, clean);
   withUpgradeCommands(input, liveIntel);
+  await withGoDirective(input, sources);
   // Held dependencies affected with no clean release found, or not checked: never "all_advisories".
   return heldUnclean ? "held" : "verified";
+}
+
+/**
+ * Go, a direct upgrade: when the fixed release's go.mod declares a newer Go than a go.mod it lands
+ * in, `go get` raises the go directive, and an older toolchain under GOTOOLCHAIN=local refuses it.
+ * The indirect step says the same from the same proxy read (upgrade-planner-pygo.ts goRaise). A
+ * go.mod that could not be read is said, not taken as "no newer Go needed".
+ */
+async function withGoDirective(input: FixPathInput, sources: FixPathSources): Promise<void> {
+  const { step } = input;
+  if (step.ecosystem !== "Go" || step.scope !== "direct" || step.action !== "upgrade_direct" || !step.targetVersion) return;
+  const stated = [...new Set(input.sourceDirs)]
+    .map((dir) => /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(readGoMod(dir) ?? "")?.[1])
+    .filter((go): go is string => go !== undefined)
+    .sort((a, b) => compareVersions(a, b, "PyPI"));
+  const oldest = stated[0];
+  if (!oldest) return;
+  const release = `${step.package} v${step.targetVersion.replace(/^v/, "")}`;
+  const needs = await sources.goDirective(step.package, step.targetVersion).catch(() => null);
+  if (needs === null) {
+    step.reasons.push(`whether ${release} needs a newer Go than go.mod's go ${oldest} was NOT CHECKED (its go.mod could not be read from the Go proxy): if it does, go get raises the go directive, and an older Go with GOTOOLCHAIN=local refuses it`);
+  } else if (needs !== "" && compareVersions(needs, oldest, "PyPI") > 0) {
+    step.reasons.push(`${release} requires go >= ${needs} and go.mod says go ${oldest}, so go get also raises the go directive to ${needs} (a Go older than ${needs} with GOTOOLCHAIN=local refuses it: install Go ${needs} or later first)`);
+  }
 }
 
 /**
