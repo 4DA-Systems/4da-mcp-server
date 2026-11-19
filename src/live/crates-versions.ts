@@ -27,6 +27,7 @@ import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
 import { cargoReqAdmits } from "./range-satisfies.js";
+import { UNREADABLE_NAME } from "../untrusted-text.js";
 import type {
   PackageReleaseIndex,
   RegistryLookup,
@@ -83,6 +84,11 @@ const CRATE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function isCrateName(name: unknown): name is string {
   return typeof name === "string" && CRATE_NAME.test(name);
+}
+
+/** A dependency name as a release declares it, or the placeholder when it is not a crate name. */
+export function readableCrateName(name: unknown): string {
+  return isCrateName(name) ? name : UNREADABLE_NAME;
 }
 
 /** A Cargo requirement fit to print: a short run of version numbers, operators, commas and spaces that Cargo's own grammar reads. */
@@ -292,7 +298,7 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
       const expected = body.crate?.num_versions ?? body.crate?.versions?.length ?? null;
       if (versions.length === 0 || expected === null || versions.length < expected) return null;
       if (body.crate?.created_at) this.cache.set(`crates-created:${name}`, { createdAt: body.crate.created_at }, "crates", CREATED_TTL);
-      return { versions, name: typeof body.crate?.name === "string" && body.crate.name ? body.crate.name : null };
+      return { versions, name: isCrateName(body.crate?.name) ? body.crate.name : null };
     } catch {
       return null;
     }
@@ -305,7 +311,7 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
       // An answer that names no crate renames nothing: the dependency lists stay unread, which the
       // new-dependency signal reports as unknown, never as none.
       const published = body.crate?.name;
-      return { status: "ok", data: typeof published === "string" && published ? published : name };
+      return { status: "ok", data: isCrateName(published) ? published : name };
     } catch (err) {
       return { status: "unreachable", detail: errorText(err) };
     }
@@ -336,8 +342,8 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
    * the index has no file under this spelling; null: it could not be read.
    */
   private async sparseDependencies(name: string): Promise<SparseRead | "not_found" | null> {
-    // v3: each version's requirements are kept beside its dependency names.
-    const key = `crates-sparse-deps:v3:${name}`;
+    // v3: each version's requirements are kept beside its dependency names; v4: those names are crate-shaped.
+    const key = `crates-sparse-deps:v4:${name}`;
     const cached = this.cache.get<SparseRead>(key);
     if (cached) return cached;
     try {
@@ -355,10 +361,12 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
         if (!line.trim()) continue;
         try {
           const entry = JSON.parse(line) as SparseLine;
-          if (published === null && typeof entry.name === "string" && entry.name) published = entry.name;
-          const names = (entry.deps ?? [])
-            .filter((d) => d.kind !== "dev")
-            .map((d) => d.package ?? d.name);
+          if (published === null && isCrateName(entry.name)) published = entry.name;
+          // A dependency name is a registry identifier only in crates.io's shape; anything else is
+          // the placeholder, which names no crate (it still counts as a dependency).
+          const names = (Array.isArray(entry.deps) ? entry.deps : [])
+            .filter((d) => d && typeof d === "object" && d.kind !== "dev")
+            .map((d) => readableCrateName(d.package ?? d.name));
           deps[entry.vers] = [...new Set(names)];
           reqs[entry.vers] = requirementsOf(entry);
         } catch {
