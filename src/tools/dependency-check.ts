@@ -103,7 +103,7 @@ import {
 } from "./dependency-check-versions.js";
 import { adviseNoSafeRelease, HeldJudge, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside, RequirementJudge, type HeldRangeFilter, type ReleaseJudge } from "./dependency-check-held.js";
 import { requirementSources } from "../live/release-requirements.js";
-import { readProjectPython, type ProjectPython } from "../live/project-python.js";
+import { readProjectPython, readProjectPythonUnread, type ProjectPython } from "../live/project-python.js";
 import { lacksProjectPython, pythonRangeFilter, pythonSupportSignal } from "./dependency-check-python.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
 import { andList } from "../live/held-dependencies.js";
@@ -536,6 +536,8 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   // none, and then nothing is judged against a Python version.
   const projectRoot = requested.some((r) => r.ecosystem === "PyPI") ? (liveIntel.getProjectRoot?.() ?? null) : null;
   const projectPython = projectRoot ? readProjectPython(projectRoot) : null;
+  /** Where the project declares a Python that could not be read: the answer says so instead of judging nothing silently. */
+  const pythonUnreadAt = projectRoot && !projectPython ? readProjectPythonUnread(projectRoot) : null;
   /** Whether a PyPI release supports the project's Python (true when nothing is judged). */
   const supportsPython = (item: CheckItem, index: PackageReleaseIndex) => {
     const filter = pythonRangeFilter(projectPython, item.ecosystem, index);
@@ -993,7 +995,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
       newDependenciesSignal(item, to, base, p.introduced, createdForItem),
       withdrawnSignal(item, to, index!),
-      ...[pythonSupportSignal(item, to, projectPython)].filter((s): s is Signal => s !== null),
+      ...[pythonSupportSignal(item, to, projectPython, pythonUnreadAt)].filter((s): s is Signal => s !== null),
       upgradeTypeSignal(item, releasesBack(item, index!)),
     ];
     const decided = decide(signals, item.ecosystem);

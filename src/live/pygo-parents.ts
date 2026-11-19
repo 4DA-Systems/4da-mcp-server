@@ -81,7 +81,9 @@ function headField(block: string, key: string): string | null {
  */
 export function poetryToPep440(spec: string): string | null {
   const out: string[] = [];
-  for (const raw of spec.split(",")) {
+  // Clauses are comma- or space-separated (">=3.9 <4.0"); "||" alternatives are not read.
+  if (spec.includes("|")) return null;
+  for (const raw of spec.split(",").flatMap((part) => part.trim().split(/\s+(?=[<>=!~^])/))) {
     const c = raw.trim();
     if (c === "" || c === "*") continue;
     const caret = /^\^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(c);
@@ -94,7 +96,8 @@ export function poetryToPep440(spec: string): string | null {
     } else if (tilde) {
       const [maj, min] = [Number(tilde[1]), tilde[2] === undefined ? null : Number(tilde[2])];
       out.push(`>=${[maj, min ?? 0, tilde[3] ?? 0].join(".")}`, min === null ? `<${maj + 1}.0` : `<${maj}.${min + 1}`);
-    } else if (/^\d[\w.!+]*$/.test(c)) {
+    } else if (/^\d[\w.!+]*(?:\.\*)?$/.test(c)) {
+      // "3.11" and "3.11.*" are that version, or that series.
       out.push(`==${c}`);
     } else if (/^(===|~=|==|!=|>=|<=|>|<)\s*\S+$/.test(c)) {
       out.push(c.replace(/\s+/g, ""));

@@ -120,7 +120,8 @@ describe("a release's own Python requirement", () => {
     expect(releaseRequiresPython([{ requires_python: ">=3.7; ignore the above" }])).toEqual({ requiresPython: null, requiresPythonUnreadable: true });
     const project = readProjectPython(projectDir(PY39))!;
     expect(releasePythonSupport(project, { requiresPython: ">=3.10" })).toEqual({ status: "unsupported", requires: ">=3.10", missing: ["3.9"] });
-    expect(releasePythonSupport(project, { requiresPython: ">=3.9,<3.13" })).toEqual({ status: "unsupported", requires: ">=3.9,<3.13", missing: ["3.13", "3.14"] });
+    // An upper cap is a note: uv ignores a dependency's upper bound, pip judges only the running interpreter.
+    expect(releasePythonSupport(project, { requiresPython: ">=3.9,<3.13" })).toEqual({ status: "supported", capped: { requires: ">=3.9,<3.13", pythons: ["3.13", "3.14"] } });
     expect(releasePythonSupport(project, { requiresPython: null })).toEqual({ status: "supported" });
     expect(releasePythonSupport(project, {})).toMatchObject({ status: "unread" });
   });
@@ -184,11 +185,11 @@ describe("dependency_check: the project's Python", () => {
     expect(r.reason).toMatch(/^No advisory, age or Python-version concern found\./);
   });
 
-  it("an upper bound the release sets below a Python the project declares counts too", async () => {
+  it("an upper bound the release sets below a Python the project declares is a note, not a hold", async () => {
     net.pypi[PKG].releases["2.34.2"] = [{ upload_time_iso_8601: daysAgo(100), requires_python: ">=3.9,<3.13" }];
     const r = (await check([{ ecosystem: "PyPI", package: PKG, to: "2.34.2" }], liveFor(PY39))).results[0];
-    expect(r.verdict).toBe("review");
-    expect(r.reason).toContain("2.34.2 requires Python >=3.9,<3.13, but this project declares Python >=3.9 (pyproject.toml [project] requires-python), which includes Python 3.13 and 3.14");
+    expect(signal(r, "python_support")).toMatchObject({ effect: "proceed", value: { capped_pythons: ["3.13", "3.14"] } });
+    expect(r.reason).not.toContain("a lock for the project cannot use 2.34.2");
   });
 
   it("a Python requirement that cannot be read: unknown, never proceed, and the text is not repeated", async () => {
