@@ -1081,13 +1081,14 @@ const REQUIREMENT_OPTION = /\s--?[A-Za-z][\w-]*(?:[=\s]\S+)?/g;
  * The version an `==` (or `===`) clause of a version specifier names, whatever clauses stand
  * beside it: `==6.0.4,!=6.0.5` and `>=2.5,==2.8` install that one version or nothing, so each is
  * an exact pin. Null when no clause is exact (`>=2,<3`, `~=1.4`, `!=8.0.0`). A specifier in
- * parentheses (`name (==1.2)`, PEP 508) reads the same.
+ * parentheses (`name (==1.2)`, PEP 508) reads the same. A prefix match (`==2.32.*`) names a
+ * series of releases, not one version, so it is no exact clause.
  */
 export function exactClause(specifier: string): string | null {
   const clauses = specifier.trim().replace(/^\(/, "").replace(/\)$/, "");
   for (const clause of clauses.split(",")) {
     const exact = /^\s*===?\s*([^\s,;()]+)\s*$/.exec(clause);
-    if (exact) return exact[1];
+    if (exact && !exact[1].includes("*")) return exact[1];
   }
   return null;
 }

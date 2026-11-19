@@ -77,12 +77,12 @@ describe("an `==` clause is an exact pin whatever other clauses accompany it", (
 
   it("the pin is read, with or without spaces, parentheses, markers and options", () => {
     const pins = Object.fromEntries(parseRequirements(REQUIREMENTS).map((p) => [p.name, p.version]));
-    expect(pins).toEqual({ numpy: "1.19.*", tornado: "6.0.4", idna: "2.8", requests: "2.19.1", urllib3: "1.26.5", six: "1.16.0" });
+    expect(pins).toEqual({ tornado: "6.0.4", idna: "2.8", requests: "2.19.1", urllib3: "1.26.5", six: "1.16.0" });
     expect(parseRequirements("tornado == 6.0.4 , != 6.0.5\n")).toEqual([{ name: "tornado", version: "6.0.4" }]);
   });
 
   it("what has no exact clause is still listed as unpinned, and nothing is in neither list", () => {
-    expect(unpinnedRequirements(REQUIREMENTS).names.sort()).toEqual(["click", "flask"]);
+    expect(unpinnedRequirements(REQUIREMENTS).names.sort()).toEqual(["click", "flask", "numpy"]);
   });
 
   it("the scan checks tornado 6.0.4 and idna 2.8", async () => {
