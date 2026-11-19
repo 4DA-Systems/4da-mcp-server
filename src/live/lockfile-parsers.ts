@@ -37,7 +37,7 @@ import {
   type LockDamage,
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
-import { requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
+import { goWorkCandidates, requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
@@ -52,13 +52,16 @@ const LOCKFILES: Partial<Record<OsvEcosystem, string[]>> = {
   "crates.io": ["Cargo.lock"],
   PyPI: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   Go: ["go.mod", "go.sum"],
-  RubyGems: ["Gemfile.lock"],
+  // gems.locked is the same file under Bundler's other name (beside gems.rb).
+  RubyGems: ["Gemfile.lock", "gems.locked"],
   Packagist: ["composer.lock"],
 };
 
 const MANIFESTS: Partial<Record<OsvEcosystem, string>> = {
   npm: "package.json",
   "crates.io": "Cargo.toml",
+  // Its exact `==` pins are read when no lockfile is (resolvePython).
+  PyPI: "pyproject.toml",
 };
 
 /**
@@ -69,6 +72,8 @@ export function lockfileCandidates(cwd: string, ecosystem: OsvEcosystem): string
   const fixed = (LOCKFILES[ecosystem] ?? []).map((name) => path.join(cwd, name));
   // bun.lockb cannot be read, but its arrival or removal changes what the answer must say.
   if (ecosystem === "npm") return [...fixed, path.join(cwd, BUN_BINARY_LOCK)];
+  // A go.work in the directory or above it decides what a module it uses is built with (goWorkFor).
+  if (ecosystem === "Go") return [...fixed, ...goWorkCandidates(cwd)];
   return ecosystem === "PyPI" ? [...fixed, ...requirementFiles(cwd)] : fixed;
 }
 
@@ -733,7 +738,9 @@ interface CargoDeclared {
  * itself; an entry inherited with `workspace = true` takes its rename from it.
  */
 export function cargoDeclaredPackages(content: string): string[] {
-  const declared: CargoDeclared[] = [];
+  /** One entry per dependency per table: the same key in another table is another dependency. */
+  const declared = new Map<string, CargoDeclared>();
+  let tableNumber = 0;
   const offered = new Map<string, string>();
   /** The table the current line is in: a dependency table, one entry's sub-table, or neither. */
   let table: { workspace: boolean; entry: CargoDeclared | null } | null = null;
@@ -744,6 +751,7 @@ export function cargoDeclaredPackages(content: string): string[] {
     if (line === "" || line.startsWith("#")) continue;
     if (line.startsWith("[")) {
       table = null;
+      tableNumber++;
       const header = /^\[([^[\]]+)\]/.exec(line)?.[1].trim();
       const at = header ? /(?:^|\.)(?:dev-|build-)?dependencies(?:\.(.+))?$/.exec(header) : null;
       if (!header || !at) continue;
@@ -752,7 +760,7 @@ export function cargoDeclaredPackages(content: string): string[] {
       // `[package.metadata.x.dependencies]` and the like are a tool's own data, not cargo's.
       if (!workspace && prefix !== "" && !prefix.startsWith("target.")) continue;
       const entry = at[1] ? { key: unquote(at[1]), renamed: null, inherited: false } : null;
-      if (entry && !workspace) declared.push(entry);
+      if (entry && !workspace) declared.set(`${tableNumber}`, entry);
       table = { workspace, entry };
       continue;
     }
@@ -782,16 +790,17 @@ export function cargoDeclaredPackages(content: string): string[] {
       if (renamed) offered.set(name, renamed);
       continue;
     }
-    const known = declared.find((d) => d.key === name);
+    // Dotted keys spread one entry over lines (`name.version = "1"`, `name.package = "real"`).
+    const known = declared.get(`${tableNumber} ${name}`);
     if (known) {
       known.renamed ??= renamed;
       known.inherited ||= inherited;
-    } else declared.push({ key: name, renamed, inherited });
+    } else declared.set(`${tableNumber} ${name}`, { key: name, renamed, inherited });
   }
   // A crate name is letters, digits, `-` and `_`: a rename that is anything else names no crate.
   const crate = (name: string | null | undefined) => (name && /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : null);
   const lockedAs = (d: CargoDeclared) => crate(d.renamed !== null ? d.renamed : d.inherited && offered.has(d.key) ? offered.get(d.key) : d.key);
-  return [...new Set(declared.map(lockedAs).filter((name): name is string => name !== null))];
+  return [...new Set([...declared.values()].map(lockedAs).filter((name): name is string => name !== null))];
 }
 
 /** crates.io reads `-` and `_` as one name; a manifest may spell either. */

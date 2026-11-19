@@ -22,7 +22,7 @@
 
 import * as path from "node:path";
 import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
-import { compiledRequiredBy, compiledRequirements, normalizePythonName, parseGoMod, parseRequirements, requirementFiles } from "./lockfile-parsers-pygo.js";
+import { compiledRequiredBy, compiledRequirements, goWorkFor, normalizePythonName, parseGoMod, parseRequirements, requirementFiles } from "./lockfile-parsers-pygo.js";
 import { isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
 import { callMemo } from "../call-budget.js";
 import { readTextFile } from "./text-file.js";
@@ -284,6 +284,8 @@ export function goIndirectRaise(goModPath: string, module: string, installed: st
   if (!isShellSafeName(module, "Go") || !isShellSafeVersion(target)) return null;
   const mod = parseGoMod(content);
   if (mod.replacement(module, installed) !== undefined) return null;
+  // A workspace that replaces the module builds the replacement whatever go.mod requires.
+  if (goWorkFor(path.dirname(goModPath))?.touches(module)) return null;
   if (goExcluded(content).has(module)) return null;
   const direct = mod.rawRequires.find((r) => r.module === module && !r.indirect);
   if (direct) return null;

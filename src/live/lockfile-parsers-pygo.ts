@@ -255,6 +255,25 @@ export function resolvePython(cwd: string): VersionSource {
     const files = [...(pinnedIn.get(`${name}\0${version}`) ?? [])];
     take(name, version, files.length > 0 && files.every(devOnly) ? true : undefined);
   }
+  // With no lockfile, an exact pin pyproject.toml declares is what gets installed, as a
+  // requirements pin is: checked. (A lockfile, when there is one, holds those versions itself.)
+  let manifestPins = 0;
+  if (pyproject !== null && !lockfile) {
+    const declared = pyprojectPins(pyproject);
+    manifestPins = declared.pins.length;
+    if (manifestPins > 0) {
+      for (const pin of declared.pins) take(pin.name, pin.version, pin.dev ? true : undefined);
+      sources.push(pyprojectPath);
+      indexUnrecorded = true;
+      // What it declares with no exact version has nothing to check, and is listed; a workspace
+      // member's ranges are pinned by the lockfile above it and are left alone.
+      if (!pythonLockAbove(cwd)) for (const name of declared.unpinned) extras.unpinned.push({ file: pyprojectPath, name });
+      for (const other of declared.direct) extras.uncheckable.push({ ...other, version: null, file: pyprojectPath });
+      for (const ref of declared.references) {
+        if (privateDirectReference(ref.location)) extras.directPrivate.push({ name: ref.name, version: null, registry: directLabel(ref.location), file: pyprojectPath });
+      }
+    }
+  }
   pushAll(uncheckable, extras.uncheckable);
   // A direct reference to a location that is not public (`name @ https://pkgs.acme.dev/...`, a private
   // git host, `file:`): installed from there, never from pypi.org, so the name is private (R7, 3).
@@ -280,7 +299,53 @@ export function resolvePython(cwd: string): VersionSource {
   };
 
   if (sources.length === 0) return { ...emptySource(), ...extra };
+  // Only the manifest's own pins: a manifest with no lockfile, as package.json and Cargo.toml are
+  // read. Its pins were checked as declared and what they install with them was resolved nowhere,
+  // which the answer says (no range is given a floor: a ranged name is listed as unpinned).
+  if (manifestPins > 0 && sources.length === 1) return found(versions, instances, pyprojectPath, "declared_ranges", { ranges: new Map(), ...extra });
   return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1), ...extra, ...(lockfile && !indexUnrecorded ? { indexRecorded: true } : {}) });
+}
+
+/** Parent directories searched for a Python lockfile that pins a workspace member (as resolution.ts's pyprojectUnpinned does). */
+const MAX_LOCK_PARENTS = 6;
+
+/** Whether a directory above `dir`, up to the repository root, holds a uv, Poetry or PDM lockfile: a workspace member is pinned there. */
+function pythonLockAbove(dir: string): boolean {
+  let parent = path.dirname(path.resolve(dir));
+  for (let level = 0; level < MAX_LOCK_PARENTS; level++) {
+    if (PYTHON_TOML_LOCKS.some((lock) => fs.existsSync(path.join(parent, lock)))) return true;
+    if (fs.existsSync(path.join(parent, ".git")) || path.dirname(parent) === parent) return false;
+    parent = path.dirname(parent);
+  }
+  return false;
+}
+
+/**
+ * What a pyproject.toml's `[project] dependencies`, `[project.optional-dependencies]` and
+ * `[dependency-groups]` declare, read as requirement lines are: exact pins (`requests==2.19.1`),
+ * the names with no exact version, and direct references (`name @ git+https://…`). A pin in a
+ * dependency group is a development one; an extra's or the project's own is not.
+ */
+function pyprojectPins(content: string): {
+  pins: Array<{ name: string; version: string; dev: boolean }>;
+  unpinned: string[];
+  direct: Array<{ name: string; kind: "git" | "url" }>;
+  references: Array<{ name: string; location: string }>;
+} {
+  const declared = pyprojectRequirements(content);
+  // One requirement per line, as a requirements file holds them; a string that spans lines is no requirement.
+  const lines = (dev: boolean) =>
+    declared
+      .filter((r) => (r.section === "dependency-groups") === dev && !/[\r\n]/.test(r.text))
+      .map((r) => r.text)
+      .join("\n");
+  const pins = [
+    ...parseRequirements(lines(false)).map((pin) => ({ ...pin, dev: false })),
+    ...parseRequirements(lines(true)).map((pin) => ({ ...pin, dev: true })),
+  ];
+  const rest = unpinnedRequirements(`${lines(false)}\n${lines(true)}`);
+  const pinned = new Set(pins.map((p) => p.name));
+  return { pins, unpinned: rest.names.filter((name) => !pinned.has(name)), direct: rest.direct, references: rest.references };
 }
 
 function dedupeUncheckable(list: UncheckableDependency[]): UncheckableDependency[] {
@@ -862,8 +927,8 @@ export function unpinnedRequirements(content: string): {
       references.push({ name: normalizePythonName(m[1]), location: reference[1] });
       continue;
     }
-    // `vendor/pkg.whl`: a local path, not a name.
-    if (/===?/.test(m[2]) || /^[\\/]/.test(m[2])) continue;
+    // An exact pin is parseRequirements' to return; `vendor/pkg.whl` is a local path, not a name.
+    if (exactClause(m[2].replace(REQUIREMENT_OPTION, "")) !== null || /^[\\/]/.test(m[2])) continue;
     names.push(normalizePythonName(m[1]));
   }
   return { names: [...new Set(names)], direct, references };
@@ -1009,9 +1074,28 @@ export function tomlLockDamage(content: string): { reason: string; missing: numb
   return parts.length > 0 ? { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: nameless } : null;
 }
 
+/** A per-requirement option after the specifier (`--hash=sha256:...`, `--config-settings x`): not part of it. */
+const REQUIREMENT_OPTION = /\s--?[A-Za-z][\w-]*(?:[=\s]\S+)?/g;
+
+/**
+ * The version an `==` (or `===`) clause of a version specifier names, whatever clauses stand
+ * beside it: `==6.0.4,!=6.0.5` and `>=2.5,==2.8` install that one version or nothing, so each is
+ * an exact pin. Null when no clause is exact (`>=2,<3`, `~=1.4`, `!=8.0.0`). A specifier in
+ * parentheses (`name (==1.2)`, PEP 508) reads the same.
+ */
+export function exactClause(specifier: string): string | null {
+  const clauses = specifier.trim().replace(/^\(/, "").replace(/\)$/, "");
+  for (const clause of clauses.split(",")) {
+    const exact = /^\s*===?\s*([^\s,;()]+)\s*$/.exec(clause);
+    if (exact) return exact[1];
+  }
+  return null;
+}
+
 /**
  * Exact pins from a requirements file: `name==1.2`, `name===1.2`,
- * `name[extra1,extra2]==1.2`, with environment markers and inline comments.
+ * `name[extra1,extra2]==1.2`, with environment markers and inline comments,
+ * and an `==` clause among others (`name==1.2,!=1.3`: exactClause).
  * Ranges (`>=`, `~=`) do not name an installed version and are skipped, as are
  * options (`-r`, `-e`, `--hash`) and URL requirements.
  */
@@ -1027,10 +1111,11 @@ export function parseRequirements(content: string): Array<{ name: string; versio
     if (!line || line.startsWith("-")) continue;
     // Per-requirement options (pip-compile writes `--hash=sha256:...` on
     // continuation lines) follow the specifier; they are not part of it.
-    const spec = line.split(";")[0].replace(/\s--?[A-Za-z][\w-]*(?:[=\s]\S+)?/g, "").trim();
-    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?\s*([^\s,;]+)\s*$/.exec(spec);
-    if (!match) continue;
-    out.push({ name: normalizePythonName(match[1]), version: match[2] });
+    const spec = line.split(";")[0].replace(REQUIREMENT_OPTION, "").trim();
+    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(spec);
+    const version = match ? exactClause(match[2]) : null;
+    if (!match || version === null) continue;
+    out.push({ name: normalizePythonName(match[1]), version });
   }
   return out;
 }
@@ -1085,11 +1170,17 @@ export function resolveGo(cwd: string): VersionSource {
   // release, so never sent: `replace github.com/acme/core => ../core` sent the module path from
   // dependency_check, upgrade_impact and the briefing (R8).
   const privateIndex: PrivateIndexEntry[] = [];
-  const local = (module: string, why: string) => privateIndex.push({ name: module, version: null, registry: why, file: goModPath, local: true });
+  const local = (module: string, why: string, file = goModPath) => privateIndex.push({ name: module, version: null, registry: why, file, local: true });
   if (mod.module) local(mod.module, "local code (this go.mod's own module)");
   for (const module of mod.localReplaced) local(module, "local code (replaced by a directory in go.mod)");
+  // A workspace that uses this module builds it with go.work's `replace` directives, which win over go.mod's.
+  const work = goWorkFor(cwd, (file, error) => {
+    problems.push({ file, error: `${unreadableReason(error)}, so any \`replace\` it holds for this module was not applied` });
+  });
+  for (const module of work?.localReplaced ?? []) local(module, "local code (replaced by a directory in go.work)", work?.file);
   for (const [module, version] of selected) {
-    const target = mod.replacement(module, version);
+    const inWorkspace = work?.replacement(module, version);
+    const target = inWorkspace !== undefined ? inWorkspace : mod.replacement(module, version);
     if (target === null) continue; // replaced by a local directory: local code, not a registry module
     if (target) versions.set(target.module, target.version);
     else if (!versions.has(module)) versions.set(module, version);
@@ -1097,9 +1188,82 @@ export function resolveGo(cwd: string): VersionSource {
   const instances = new InstanceSet();
   for (const [module, version] of versions) instances.add(module, version);
   return found(versions, instances, goModPath, "lockfile", {
+    ...(work ? { extraSources: [work.file] } : {}),
     ...(privateIndex.length > 0 ? { privateIndex } : {}),
     ...(problems.length > 0 ? { problems } : {}),
   });
+}
+
+/** Directories above a module searched for the go.work that uses it. */
+const MAX_WORK_PARENTS = 6;
+/** `use` entries read from one go.work; a workspace with more is not a hand-written one. */
+const MAX_WORKSPACE_MODULES = 2000;
+
+/**
+ * The go.work files that can apply to the module in `moduleDir`: the directory's own and its
+ * parents', nearest first, up to the repository root. The go command takes the nearest one.
+ */
+export function goWorkCandidates(moduleDir: string): string[] {
+  const out: string[] = [];
+  let dir = path.resolve(moduleDir);
+  for (let level = 0; level <= MAX_WORK_PARENTS; level++) {
+    out.push(path.join(dir, "go.work"));
+    if (fs.existsSync(path.join(dir, ".git")) || path.dirname(dir) === dir) break;
+    dir = path.dirname(dir);
+  }
+  return out;
+}
+
+/** The workspace file that applies to a module, with what its `replace` directives say. */
+export interface GoWork {
+  /** Absolute path of the go.work. */
+  file: string;
+  /** What `replace` maps a module version to: undefined for nothing, null for a local directory. */
+  replacement: (module: string, version: string) => GoReplacement | undefined;
+  /** Modules a `replace` points at a local directory. */
+  localReplaced: string[];
+  /** Whether any `replace` names the module, as what is replaced or as what replaces it. */
+  touches: (module: string) => boolean;
+}
+
+/**
+ * The go.work that the module in `moduleDir` is built with: the nearest one (goWorkCandidates),
+ * and only when one of its `use` directives names the module's directory. In a workspace the
+ * go.work `replace` directives decide what is built, over go.mod's own; a workspace file that
+ * does not use the module says nothing about it. Null when there is none, or it cannot be read
+ * (`unreadable` is then told which file and why: its directives are unknown, not absent).
+ */
+export function goWorkFor(moduleDir: string, unreadable?: (file: string, error: unknown) => void): GoWork | null {
+  const file = goWorkCandidates(moduleDir).find((candidate) => fs.existsSync(candidate));
+  if (!file) return null;
+  let content: string;
+  try {
+    content = readTextFile(file);
+  } catch (error) {
+    unreadable?.(file, error);
+    return null;
+  }
+  const used: string[] = [];
+  let inUse = false;
+  for (const raw of content.split(/\r?\n/)) {
+    if (raw.length > MAX_REQUIREMENT_LINE || used.length >= MAX_WORKSPACE_MODULES) continue;
+    const line = raw.replace(/\/\/.*$/, "").trim();
+    if (!line) continue;
+    if (inUse && line === ")") inUse = false;
+    else if (/^use\s*\($/.test(line)) inUse = true;
+    else if (inUse) used.push(line);
+    else if (line.startsWith("use ") || line.startsWith("use\t")) used.push(line.slice(4).trim());
+  }
+  const here = path.resolve(moduleDir);
+  const uses = used.some((entry) => path.relative(path.resolve(path.dirname(file), entry.replace(/^["`]|["`]$/g, "")), here) === "");
+  if (!uses) return null;
+  const parsed = parseGoMod(content);
+  const touched = new Set<string>();
+  for (const [key, target] of parsed.replaces) {
+    touched.add(key.split(" ")[0]);
+    if (target) touched.add(target.module);
+  }
+  return { file, replacement: parsed.replacement, localReplaced: parsed.localReplaced, touches: (module) => touched.has(module) };
 }
 
 /** A `replace` target: another module version, or null for a local directory. */
@@ -1124,6 +1288,8 @@ export function parseGoMod(content: string): {
   localReplaced: string[];
   /** The directive whose `(` block is still open where the file ends (a truncated file), or null. */
   unclosed: string | null;
+  /** Every `replace`, keyed by the module (or `module version`) it replaces. */
+  replaces: ReadonlyMap<string, GoReplacement>;
 } {
   const requires = new Map<string, { module: string; version: string; indirect: boolean }>();
   const replaces = new Map<string, GoReplacement>();
@@ -1179,7 +1345,7 @@ export function parseGoMod(content: string): {
   const goVersionAtLeast117 = go ? Number(go[1]) > 1 || Number(go[2]) >= 17 : false;
   const module = /^module\s+"?([^\s"/]+(?:\/[^\s"]+)*)"?\s*(?:\/\/.*)?$/m.exec(content)?.[1] ?? null;
   const localReplaced = [...new Set([...replaces].filter(([, target]) => target === null).map(([key]) => key.split(" ")[0]))];
-  return { requires: result, rawRequires, replacement, goVersionAtLeast117, module, localReplaced, unclosed: open };
+  return { requires: result, rawRequires, replacement, goVersionAtLeast117, module, localReplaced, unclosed: open, replaces };
 }
 
 /**

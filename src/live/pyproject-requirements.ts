@@ -22,6 +22,9 @@ export interface PyprojectRequirement {
   group: string | null;
 }
 
+/** A string longer than this is no requirement (the requirements reader's line cap). */
+const MAX_REQUIREMENT_STRING = 4096;
+
 /** A table or array-of-tables header on a line of its own. */
 const HEADER = /^[ \t]*\[\[?([^[\]\r\n]+)\]\]?[ \t]*(?:#[^\r\n]*)?\r?$/gm;
 /** `key = [` at the start of a line: the opening of an array value. */
@@ -40,46 +43,59 @@ function tableBodies(content: string, name: string): string[] {
 }
 
 /**
- * The strings directly inside the array that opens just before `from`. Strings nested in an
- * inline table or an inner array are someone else's values. Stops at the array's closing
- * bracket, or at the end of the text when the array is never closed.
+ * The strings directly inside the array that opens just before `from`, and where the array ends.
+ * Strings nested in an inline table or an inner array are someone else's values. Stops at the
+ * array's closing bracket, or at the end of the text when the array is never closed.
  */
-function arrayStrings(text: string, from: number): string[] {
-  const out: string[] = [];
+function arrayStrings(text: string, from: number): { strings: string[]; end: number } {
+  const strings: string[] = [];
   let depth = 1;
   let braces = 0;
-  for (let i = from; i < text.length && depth > 0; i++) {
+  let i = from;
+  for (; i < text.length && depth > 0; i++) {
     const ch = text[i];
     if (ch === "#") {
       const newline = text.indexOf("\n", i);
-      if (newline < 0) break;
+      if (newline < 0) return { strings, end: text.length };
       i = newline;
     } else if (ch === '"' || ch === "'") {
       let value = "";
-      let j = i + 1;
+      let from = i + 1;
+      let j = from;
       // A requirement is one line: a quote still open at the line's end closes there.
       while (j < text.length && text[j] !== ch && text[j] !== "\n") {
-        if (ch === '"' && text[j] === "\\" && j + 1 < text.length) j++;
-        value += text[j++];
+        if (ch === '"' && text[j] === "\\" && j + 1 < text.length) {
+          // A basic string's escape: the character after the backslash stands for itself.
+          value += text.slice(from, j);
+          from = j + 1;
+          j++;
+        }
+        j++;
       }
-      if (depth === 1 && braces === 0) out.push(value);
+      // Longer than any requirement is not one, and is not kept.
+      if (depth === 1 && braces === 0 && j - i <= MAX_REQUIREMENT_STRING) strings.push(value + text.slice(from, j));
       i = j;
     } else if (ch === "[") depth++;
     else if (ch === "]") depth--;
     else if (ch === "{") braces++;
     else if (ch === "}") braces = Math.max(0, braces - 1);
   }
-  return out;
+  return { strings, end: i };
 }
 
 export function pyprojectRequirements(content: string): PyprojectRequirement[] {
   const out: PyprojectRequirement[] = [];
   const collect = (table: string, section: PyprojectRequirement["section"], only: string | null) => {
     for (const body of tableBodies(content, table)) {
-      for (const key of body.matchAll(ARRAY_KEY)) {
+      // The search for the next key resumes where the last array ended, so every character is
+      // read once however many arrays the table opens and never closes.
+      const nextKey = new RegExp(ARRAY_KEY.source, ARRAY_KEY.flags);
+      for (let key = nextKey.exec(body); key !== null; key = nextKey.exec(body)) {
         const name = key[1] ?? key[2] ?? key[3];
+        const { strings, end } = arrayStrings(body, key.index + key[0].length);
+        nextKey.lastIndex = Math.max(end, nextKey.lastIndex);
         if (only !== null && name !== only) continue;
-        for (const text of arrayStrings(body, (key.index ?? 0) + key[0].length)) {
+        for (const text of strings) {
           if (text.trim() !== "") out.push({ text: text.trim(), section, group: only === null ? name : null });
         }
       }
