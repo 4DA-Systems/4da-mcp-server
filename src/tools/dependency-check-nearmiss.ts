@@ -34,7 +34,7 @@
  *
  * Data: the packument dependency_check already read (first publish, install scripts) and one
  * request to api.npmjs.org for the two names' weekly downloads, made only for a near-miss.
- * Other ecosystems have no bundled popular list, so the rule is npm's alone.
+ * PyPI's rule, from its own bundled list, is dependency-check-nearmiss-pypi.ts.
  */
 
 import type { WeeklyDownloads } from "../live/npm-downloads.js";

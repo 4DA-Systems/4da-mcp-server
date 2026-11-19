@@ -72,6 +72,13 @@ function route(url: string, init?: RequestInit): Response {
     return doc ? json(doc) : json({ error: "Not found" }, 404);
   }
   if (u.hostname === "pypi.org") {
+    // One release's own document (its requires_dist): served for a release the project document lists.
+    const one = /^\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(u.pathname);
+    if (one) {
+      const project = router.pypi[decodeURIComponent(one[1])] as { releases?: Record<string, unknown[]> } | undefined;
+      const version = decodeURIComponent(one[2]);
+      return project?.releases?.[version]?.length ? json({ info: { version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const m = /^\/pypi\/([^/]+)\/json$/.exec(u.pathname);
     const doc = m ? router.pypi[decodeURIComponent(m[1])] : null;
     return doc ? json(doc) : json({ message: "Not Found" }, 404);
@@ -462,15 +469,20 @@ describe("Go", () => {
 });
 
 describe("privacy and honesty", () => {
-  it("npm and PyPI registry requests never carry a version; Go reads .info only for the versions judged", async () => {
+  it("npm registry requests never carry a version; PyPI is asked only for a judged release's own metadata, never the installed version; Go reads .info only for the versions judged", async () => {
     await check([
       { ecosystem: "npm", package: "ws", to: "7.x" },
-      { ecosystem: "PyPI", package: "jinja2", to: "3.1.4" },
+      { ecosystem: "PyPI", package: "jinja2", from: "3.1.2", to: "3.1.6" },
       { ecosystem: "Go", package: "golang.org/x/net", to: "v0.23.0" },
     ]);
-    const registry = router.requests.filter((u) => /registry\.npmjs\.org|pypi\.org/.test(u));
-    expect(registry.length).toBeGreaterThan(0);
-    for (const u of registry) expect(u).not.toMatch(/\d+\.\d+\.\d+/);
+    const npm = router.requests.filter((u) => /registry\.npmjs\.org/.test(u));
+    expect(npm.length).toBeGreaterThan(0);
+    for (const u of npm) expect(u).not.toMatch(/\d+\.\d+\.\d+/);
+    // PyPI serves a release's requirements only in that release's own document: the target is
+    // asked about by version (as pip does to install it); the installed version never is.
+    const pypi = router.requests.filter((u) => /pypi\.org/.test(u));
+    expect(pypi.filter((u) => /\d+\.\d+\.\d+/.test(u))).toEqual(["https://pypi.org/pypi/jinja2/3.1.6/json"]);
+    expect(pypi.filter((u) => u.includes("3.1.2"))).toEqual([]);
     const goInfo = router.requests.filter((u) => u.endsWith(".info")).map((u) => /@v\/(.+)\.info$/.exec(u)![1]);
     expect(goInfo).toEqual(["v0.23.0"]);
   });

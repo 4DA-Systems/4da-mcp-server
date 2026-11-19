@@ -1253,6 +1253,7 @@ export class LiveIntelligence {
     const scoped = (reader: ReleaseMetadataSource): ReleaseMetadataSource => ({
       getReleases: (name, wanted) => this.runInContext(() => reader.getReleases(name, wanted)),
       getCreatedAt: (name) => this.runInContext(() => reader.getCreatedAt(name)),
+      ...(reader.getRequirements ? { getRequirements: (name: string, version: string) => this.runInContext(() => reader.getRequirements!(name, version)) } : {}),
     });
     return { npm: scoped(this.npmPackuments), "crates.io": scoped(this.cratesVersions), PyPI: scoped(this.pypiReleases), Go: scoped(this.goReleases) };
   }

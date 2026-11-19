@@ -69,10 +69,28 @@ export interface HeldDependency {
   severity: VulnerabilityEntry["severity"];
   /** An advisory here was matched but its record could not be read: its severity is not known, and counts as high. */
   unread?: true;
+  /**
+   * Go (release-requirements.ts): `spec` is a minimum, not a hold. Minimal version selection gives
+   * the project at least `version`, and the project can raise it in its own go.mod.
+   */
+  minimum?: true;
+  /** Go: `version` is what the project's own go.mod already selects, above the release's minimum. */
+  selected?: true;
+  /** Go: the line is `// indirect` in the release's go.mod. */
+  indirect?: true;
+  /** Go: the smallest release that clears `ids`, confirmed with OSV.dev; null when none is known. */
+  fixedIn?: string | null;
 }
 
 export type HeldCheck =
-  | { status: "checked"; affected: HeldDependency[] }
+  | {
+      status: "checked";
+      affected: HeldDependency[];
+      /** How many requirements were judged (release-requirements.ts); absent for npm's held specs. */
+      examined?: number;
+      /** Declared requirements that are not a registry package with a readable requirement: never judged. */
+      unreadable?: number;
+    }
   | { status: "unchecked"; reason: string };
 
 /** How many releases a fix-target search judges at most (the advisories' target and the next on its line). */
@@ -139,7 +157,7 @@ function lookupDep(name: string, version: string): ResolvedDependency {
 }
 
 /** Resolves to `late` once `deadline` passes. */
-async function byDeadline<T>(work: Promise<T>, deadline: number, late: T): Promise<T> {
+export async function byDeadline<T>(work: Promise<T>, deadline: number, late: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((resolve) => {
     timer = setTimeout(() => resolve(late), Math.max(0, deadline - Date.now()));
@@ -150,6 +168,40 @@ async function byDeadline<T>(work: Promise<T>, deadline: number, late: T): Promi
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/** Why an advisory answer is not a current one for every release asked about; null when it is. */
+export function answerFailure(answer: VulnerabilityScanResult | null): string | null {
+  if (!answer) return "the OSV.dev lookup did not finish in time";
+  if (answer.offline) return answer.uncheckedReason ?? "OSV.dev could not be queried";
+  if ((answer.staleAnswers ?? 0) > 0) return `OSV.dev gave only expired cached answers (${answer.staleReason ?? "the fresh query failed"})`;
+  return null;
+}
+
+export interface AdvisoryHit {
+  /** One id per alias group, sorted. */
+  ids: string[];
+  severity: VulnerabilityEntry["severity"];
+  /** An advisory matched whose record could not be read: its severity is not known. */
+  unread: boolean;
+}
+
+/** Per `name@version` asked about: the advisories that affect it (maintenance notices left out) and their worst grade. */
+export function advisoryHits(vulnerabilities: readonly VulnerabilityEntry[]): Map<string, AdvisoryHit> {
+  const byCopy = new Map<string, VulnerabilityEntry[]>();
+  for (const v of vulnerabilities) {
+    if (isMaintenanceNotice(v)) continue;
+    const k = `${v.package}@${v.currentVersion}`;
+    byCopy.set(k, [...(byCopy.get(k) ?? []), v]);
+  }
+  const hits = new Map<string, AdvisoryHit>();
+  for (const [k, entries] of byCopy) {
+    const groups = groupAdvisories(entries);
+    const worst = groups.map((g) => g.best.severity).reduce((a, b) => ((SEVERITY_RANK[b as keyof typeof SEVERITY_RANK] ?? 0) > (SEVERITY_RANK[a as keyof typeof SEVERITY_RANK] ?? 0) ? b : a), "unknown" as VulnerabilityEntry["severity"]);
+    const unread = groups.some((g) => g.best.severity === "unknown" && g.members.some((m) => m.detailUnavailable));
+    hits.set(k, { ids: groups.map((g) => g.best.vulnId).sort(), severity: worst, unread });
+  }
+  return hits;
 }
 
 /**
@@ -187,23 +239,9 @@ export async function heldAdvisories(
   let failure: string | null = null;
   if (wanted.size > 0) {
     answer = await byDeadline(query([...wanted.values()]), deadline, null);
-    if (!answer) failure = "the OSV.dev lookup did not finish in time";
-    else if (answer.offline) failure = answer.uncheckedReason ?? "OSV.dev could not be queried";
-    else if ((answer.staleAnswers ?? 0) > 0) failure = `OSV.dev gave only expired cached answers (${answer.staleReason ?? "the fresh query failed"})`;
+    failure = answerFailure(answer);
   }
-  const byCopy = new Map<string, VulnerabilityEntry[]>();
-  for (const v of failure ? [] : (answer?.vulnerabilities ?? [])) {
-    if (isMaintenanceNotice(v)) continue;
-    const k = `${v.package}@${v.currentVersion}`;
-    byCopy.set(k, [...(byCopy.get(k) ?? []), v]);
-  }
-  const hits = new Map<string, { ids: string[]; severity: VulnerabilityEntry["severity"]; unread: boolean }>();
-  for (const [k, entries] of byCopy) {
-    const groups = groupAdvisories(entries);
-    const worst = groups.map((g) => g.best.severity).reduce((a, b) => ((SEVERITY_RANK[b as keyof typeof SEVERITY_RANK] ?? 0) > (SEVERITY_RANK[a as keyof typeof SEVERITY_RANK] ?? 0) ? b : a), "unknown" as VulnerabilityEntry["severity"]);
-    const unread = groups.some((g) => g.best.severity === "unknown" && g.members.some((m) => m.detailUnavailable));
-    hits.set(k, { ids: groups.map((g) => g.best.vulnId).sort(), severity: worst, unread });
-  }
+  const hits = advisoryHits(failure ? [] : (answer?.vulnerabilities ?? []));
   for (const r of resolved) {
     const affected: HeldDependency[] = r.deps.flatMap((d) => {
       const hit = d.version ? hits.get(`${d.name}@${d.version}`) : undefined;
@@ -247,7 +285,8 @@ export function heldText(release: string, affected: HeldDependency[]): string {
   const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})`);
   const ranged = shown
     .filter((d) => !d.exact)
-    .map((d) => `${d.name} "${d.spec}", whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})`);
+    // PyPI: a requirement with no specifier admits every release.
+    .map((d) => `${d.name} ${d.spec === "" ? "(any release)" : `"${d.spec}"`}, whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})`);
   const clauses = [...(exact.length > 0 ? [`exact-pins ${and(exact)}`] : []), ...(ranged.length > 0 ? [`requires ${and(ranged)}`] : [])];
   const rest = affected.length - shown.length;
   const more = rest > 0 ? `, and ${rest} more affected dependenc${rest === 1 ? "y" : "ies"}` : "";

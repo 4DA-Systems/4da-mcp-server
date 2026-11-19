@@ -59,6 +59,12 @@ beforeEach(() => {
   vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    // One release's own document (its requires_dist), for a release the project lists.
+    const pypiRelease = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (pypiRelease) {
+      const version = decodeURIComponent(pypiRelease[2]);
+      return PYPI[decodeURIComponent(pypiRelease[1]).toLowerCase()]?.includes(version) ? json({ info: { version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       stub.asked.push(url);
