@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.4.0 — unreleased
+## 6.4.0 — 2026-11-19
 
 ### Behaviour changes
 
