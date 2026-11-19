@@ -178,7 +178,7 @@ export const mutations = [
     replace: "return { id: \"yanked_or_deprecated\", value: { [to.withdrawn]: true }, effect: \"review\",",
     intent: "a yanked/unpublished/retracted release is `review`, not `avoid`",
     tests: ["src/__tests__/dependency-check-ecosystems.test.ts", "src/__tests__/dependency-check.test.ts"] },
-  { id: "D10", area: "verdict", file: "src/tools/dependency-check.ts",
+  { id: "D10", area: "verdict", file: "src/tools/dependency-check-batch.ts",
     find: "  const batchAnswered = !scan.offline && (scan.staleAnswers ?? 0) === 0;",
     replace: "  const batchAnswered = !scan.offline;",
     intent: "an answer served from an expired cache is treated as a fresh batch answer when naming safe releases" },
