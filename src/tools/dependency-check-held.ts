@@ -410,7 +410,17 @@ const SETTLED_DAYS = 3;
  * own advisories leave clean, and offer the first that holds nothing affected.
  */
 async function offerJudgedOutside(
-  input: { judge: ReleaseJudge; pkg: string; to: string; rc: RangeCheck; index: PackageReleaseIndex; advisories: readonly AdvisoryRanges[] | null | undefined; now: Date },
+  input: {
+    judge: ReleaseJudge;
+    pkg: string;
+    to: string;
+    rc: RangeCheck;
+    index: PackageReleaseIndex;
+    advisories: readonly AdvisoryRanges[] | null | undefined;
+    now: Date;
+    /** PyPI: false for a release that does not support the project's Python (never offered). */
+    supported?: (version: string) => boolean;
+  },
   published: (v: string) => string | null,
   ecosystem: CheckEcosystem = "npm",
 ): Promise<void> {
@@ -428,6 +438,7 @@ async function offerJudgedOutside(
         !isPrereleaseIn(ecosystem, v) &&
         rangeAdmits(ecosystem, rc.range, v) !== true &&
         settled(v) &&
+        (input.supported?.(v) ?? true) &&
         advisoriesAffecting(input.advisories!, v, ecosystem).length === 0,
     )
     .sort((a, b) => compareVersions(b, a, ecosystem))
@@ -458,6 +469,7 @@ export async function offerRequirementCleanOutside(input: {
   index: PackageReleaseIndex;
   advisories: readonly AdvisoryRanges[] | null | undefined;
   now: Date;
+  supported?: (version: string) => boolean;
 }): Promise<void> {
   const { rc } = input;
   if (rc.smallest_safe_in_range !== null || rc.newest_safe_outside_range || !input.advisories) return;

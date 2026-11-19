@@ -10,6 +10,7 @@
  *   skips it unless pinned with `==`.
  * - A release with no files cannot be installed and is left out.
  * - Versions are PEP 440 and are kept as the registry spells them.
+ * - The Python versions a release supports are its files' `requires_python`.
  *
  * - What a judged release requires is its own document's `requires_dist`
  *   (`pypi.org/pypi/<name>/<version>/json`, getRequirements); the latest
@@ -33,6 +34,7 @@ import { parsePep440 } from "./version-compare.js";
 import { normalizePypiName, PYPI_NAME } from "./upgrade-pypi.js";
 import type { PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource, ReleaseRecord, ReleaseRequirement, ReleaseRequirements } from "./release-metadata.js";
 import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
+import { readsAsPythonSpec, type ReleasePythonFacts } from "./project-python.js";
 
 const PYPI_URL = "https://pypi.org/pypi";
 const TIMEOUT_MS = 30_000;
@@ -45,6 +47,20 @@ interface PyPIFile {
   upload_time_iso_8601?: string;
   yanked?: boolean;
   yanked_reason?: string | null;
+  requires_python?: string | null;
+}
+
+/**
+ * The Python versions a release supports: the `requires_python` of its files as one PEP 440
+ * specifier set (every file's, when they differ), null when no file declares one. One that is not
+ * a short specifier of version characters and operators is kept as unreadable, never printed.
+ */
+export function releaseRequiresPython(files: PyPIFile[]): ReleasePythonFacts {
+  const declared = [...new Set(files.map((f) => (typeof f.requires_python === "string" ? f.requires_python.replace(/\s+/g, "") : "")).filter((s) => s !== ""))];
+  if (declared.length === 0) return { requiresPython: null };
+  const spec = declared.join(",");
+  if (spec.length > 200 || !/^[0-9A-Za-z.,*!<>=~]+$/.test(spec) || !readsAsPythonSpec(spec)) return { requiresPython: null, requiresPythonUnreadable: true };
+  return { requiresPython: spec };
 }
 
 interface PyPIProject {
@@ -114,6 +130,7 @@ export function projectPypiProject(name: string, doc: PyPIProject): PackageRelea
       deprecated: reason ? `yanked: ${sanitizeThirdParty(reason)}` : null,
       withdrawn: yanked ? "yanked" : null,
       dependencies: null,
+      ...releaseRequiresPython(files),
     };
   }
   return { ecosystem: "PyPI", name: doc.info?.name ?? name, createdAt, releases };
@@ -127,7 +144,8 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
 
   async getReleases(name: string): Promise<RegistryLookup<PackageReleaseIndex>> {
     const normalized = normalizePypiName(name);
-    const key = `pypi-releases:${normalized}`;
+    // v2: each release carries its Python requirement; an index cached without it is not read.
+    const key = `pypi-releases:v2:${normalized}`;
     const hit = this.cache.get<PackageReleaseIndex>(key);
     if (hit) return { status: "ok", data: hit };
     if (!this.rateLimiter.consume("pypi")) {

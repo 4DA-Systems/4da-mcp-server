@@ -45,6 +45,13 @@ export interface ReleaseRecord {
   withdrawn: "yanked" | "unpublished" | "retracted" | null;
   /** Runtime dependency NAMES (npm dependencies + optionalDependencies; crates normal + build). Null when unknown or not read (PyPI, Go). */
   dependencies: string[] | null;
+  /**
+   * PyPI: the Python versions the release supports (its files' `requires_python`, PEP 440); null
+   * when it declares none. Absent elsewhere, and where it was not read.
+   */
+  requiresPython?: string | null;
+  /** PyPI: the release declares a Python requirement that does not read as a specifier. */
+  requiresPythonUnreadable?: true;
 }
 
 /** The registries dependency_check reads. */

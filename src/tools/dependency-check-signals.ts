@@ -41,7 +41,9 @@ export interface Signal {
     | "yanked_or_deprecated"
     | "upgrade_type"
     /** npm, a new dependency whose name is a near-miss of a popular package (dependency-check-nearmiss.ts). */
-    | "name_check";
+    | "name_check"
+    /** PyPI, a project that declares its Python: whether `to` supports all of it (dependency-check-python.ts). */
+    | "python_support";
   value: unknown;
   /** This server's sentence about the fact. It quotes no third-party text. */
   evidence: string;
@@ -685,6 +687,7 @@ function proceedReason(signals: Signal[], ecosystem?: CheckEcosystem): string {
     ...(checked("publish_trust") ? ["trust"] : []),
     ...(checked("install_script_added") ? ["script"] : []),
     ...(checked("new_dependencies") ? ["new-dependency"] : []),
+    ...(checked("python_support") ? ["Python-version"] : []),
   ];
   const list = concerns.length > 1 ? `${concerns.slice(0, -1).join(", ")} or ${concerns[concerns.length - 1]}` : (concerns[0] ?? "");
   const found = `No ${list ? `${list} ` : ""}concern found`;
