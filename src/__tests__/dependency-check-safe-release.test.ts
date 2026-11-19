@@ -62,6 +62,13 @@ function stub() {
       const q = JSON.parse(String(init?.body)) as { package: { name: string; ecosystem: string } };
       return json({ vulns: recordsFor(q.package.name, q.package.ecosystem) });
     }
+    // One release's own document (its requires_dist), for a release the project lists.
+    const pypiRelease = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (pypiRelease) {
+      const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypiRelease[1]).toLowerCase());
+      const version = decodeURIComponent(pypiRelease[2]);
+      return name && version in PYPI[name] ? json({ info: { name, version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypi[1]).toLowerCase());

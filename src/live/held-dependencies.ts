@@ -285,7 +285,8 @@ export function heldText(release: string, affected: HeldDependency[]): string {
   const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})`);
   const ranged = shown
     .filter((d) => !d.exact)
-    .map((d) => `${d.name} "${d.spec}", whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})`);
+    // PyPI: a requirement with no specifier admits every release.
+    .map((d) => `${d.name} ${d.spec === "" ? "(any release)" : `"${d.spec}"`}, whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})`);
   const clauses = [...(exact.length > 0 ? [`exact-pins ${and(exact)}`] : []), ...(ranged.length > 0 ? [`requires ${and(ranged)}`] : [])];
   const rest = affected.length - shown.length;
   const more = rest > 0 ? `, and ${rest} more affected dependenc${rest === 1 ? "y" : "ies"}` : "";

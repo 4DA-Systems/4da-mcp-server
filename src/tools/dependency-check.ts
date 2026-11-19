@@ -20,7 +20,7 @@
  * the answer to "is 7.5.10 safe?" names 7.5.11.
  *
  * Signals (see dependency-check-signals.ts): known advisories on the target
- * (OSV) and on what it brings with it (npm and crates.io: the dependencies it holds; Go: the
+ * (OSV) and on what it brings with it (npm, crates.io and PyPI: the dependencies it holds; Go: the
  * minimum versions its go.mod requires), release age (hold releases < 3 days unless they fix an advisory on
  * the installed version), publish-trust drop and newly added install scripts
  * (npm; trust also crates.io), newly introduced runtime dependencies that are
@@ -39,10 +39,14 @@
  *
  * Privacy: npm, crates.io and PyPI requests carry the package name only — the
  * installed and target versions are picked out of the full release list
- * locally. The Go proxy lists versions without dates, so the judged versions'
- * `.info` is read from it. OSV receives name + version, as vulnerability_scan
- * already does, and the package name for its advisory list. For a near-miss
- * name, api.npmjs.org receives it and the popular name (weekly downloads).
+ * locally. Two exceptions, both for the versions judged, never the installed
+ * one: the Go proxy lists versions without dates, so their `.info` and `.mod`
+ * are read from it, and PyPI serves a release's requirements only in that
+ * release's own document, which is read unless it is the latest release. The
+ * packages a judged release requires are looked up by name. OSV receives name +
+ * version, as vulnerability_scan already does, and the package name for its
+ * advisory list. For a near-miss name, api.npmjs.org receives it and the
+ * popular name (weekly downloads).
  */
 
 import type { FourDADatabase } from "../db.js";
@@ -127,8 +131,10 @@ const DAY_MS = 86_400_000;
 
 const PRIVACY_NOTE =
   "Registry requests carried package names only (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list); " +
-  "installed and target versions were never sent to a registry, except the Go proxy's per-version .info and .mod for the versions judged (the list has no dates). " +
-  "OSV.dev received package names and versions, as vulnerability_scan does, and those of what a judged release requires (a Go release's go.mod, a crate's dependencies); crates.io's index was read by name for each required crate. " +
+  "installed and target versions were never sent to a registry, except the Go proxy's per-version .info and .mod for the versions judged (the list has no dates) " +
+  "and PyPI's own document of a judged release that is not the latest (pypi.org/pypi/<name>/<version>/json, the only place its requirements are served); the installed version was sent to no registry but the Go proxy. " +
+  "OSV.dev received package names and versions, as vulnerability_scan does, and those of what a judged release requires (a Go release's go.mod, a crate's dependencies, a PyPI release's requires_dist); " +
+  "the release list of each required crate or PyPI project was read by name. " +
   "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads). " +
   "A private package name (see the README, Privacy) was sent nowhere.";
 
@@ -143,7 +149,7 @@ export const dependencyCheckTool = {
     "",
     "Per item (concise, the default): `verdict` (proceed | wait | review | avoid | unknown), a one-line `reason` carrying the evidence of every avoid/review/unknown/wait finding, `safe` (the safe releases to write), `advisories` (ids affecting `to`) and any registry text in `quoted_from_registry`. With `response_format: \"detailed\"`: also `to_read_as` (how `to` was read), `signals` (each with `id`, `value`, `evidence`, `effect`), and `range_check` when `to` is a constraint or an exact `to` has an advisory: `smallest_safe_in_range`, `newest_safe_in_range`, `safe_versions`, `smallest_safe_upgrade` (above `from`). For a constraint the verdict is for the version it picks: the smallest safe upgrade above `from`, else the newest safe release. A prerelease is never named as safe unless you asked for one.",
     "`to` is read as its ecosystem reads it: a full version is that release everywhere; a bare PyPI \"3.1\" is the ONE release 3.1.0 (as pip reads ==3.1), so ask \"3.1.*\" or \"~=3.1.0\" for the series; a bare npm \"7\" / \"7.5\", Cargo \"1\" / \"0.17\" and Go \"v1\" are ranges, as package.json, Cargo.toml and go get read them.",
-    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm and crates.io: a dependency `to` exact-pins, or ranges (narrow or wide) with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones. crates.io reads normal and build dependencies, optional ones only where the default feature enables them.",
+    "- advisories: OSV advisories affecting `to` (high/critical -> avoid, other -> review) and those this change fixes on `from`. npm, crates.io and PyPI: a dependency `to` exact-pins, or ranges (narrow or wide) with no clean release in reach, is installed with it, so its advisories count the same (`held_dependencies_affected`), and such releases are never among the safe ones. crates.io reads normal and build dependencies, optional ones only where the default feature enables them; PyPI reads the release's `requires_dist`, leaving out entries behind an extra.",
     "  Go: the modules `to`'s own go.mod requires are minimums your project gets (where your go.mod already selects a newer version, that one is judged). One with a known advisory makes `to` review (`required_minimums_affected`: each module, the version, the advisory count and the release that clears them): after upgrading, raise them in your own go.mod. A safe release named for a constraint carries the same caveat. A requirement list that cannot be read makes `to` unknown.",
     "  A package name that is malware itself (npm took it down and holds it with a `0.0.N-security` placeholder, or a malicious-package record covers every release) -> avoid, with `malicious_package` and the popular package it likely imitates. When no release in range is safe only because of an advisory on a held dependency, `range_check.held_advice` names it and the override that clears it (the verdict is review for a low or moderate one, avoid for high or critical); a release more than one major or about 18 months older is not offered instead.",
     "  An advisory is passed over as an unmaintained-package notice only when its record declares that class (RustSec `informational`) and carries no grade, exploit category or fixed release; one that merely says \"unmaintained\" counts.",
@@ -155,7 +161,7 @@ export const dependencyCheckTool = {
     "",
     "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed.",
     "",
-    "Privacy: registries get the package name only (Go: also the judged versions' .info and .mod, as `go get` does); OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
+    "Privacy: registries get the package name only (Go: also the judged versions' .info and .mod, as `go get` does; PyPI: also the judged release's own metadata document when it is not the latest release, never the installed version), and the names of the packages a judged release requires; OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
   ].join("\n"),
   inputSchema: {
     type: "object" as const,

@@ -11,12 +11,18 @@
  * - A release with no files cannot be installed and is left out.
  * - Versions are PEP 440 and are kept as the registry spells them.
  *
+ * - What a judged release requires is its own document's `requires_dist`
+ *   (`pypi.org/pypi/<name>/<version>/json`, getRequirements); the latest
+ *   release's comes with the project document.
+ *
  * Not read, and reported as not applicable by the signals: publisher identity
  * (the JSON API carries none), install-time hooks (PyPI exposes none in its
- * index; an sdist-only release runs its build backend at install), and
- * per-release dependency lists (one request per release).
+ * index; an sdist-only release runs its build backend at install), and which
+ * dependencies a release adds.
  *
- * Privacy: the request names the package and nothing else.
+ * Privacy: the release list request names the package and nothing else. The
+ * requirements of a release that is not the latest are read from that
+ * release's own document, so that request carries the judged version too.
  */
 
 import { sanitizeThirdParty } from "../untrusted-text.js";
@@ -24,12 +30,16 @@ import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
 import { parsePep440 } from "./version-compare.js";
-import { normalizePypiName } from "./upgrade-pypi.js";
-import type { PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource, ReleaseRecord } from "./release-metadata.js";
+import { normalizePypiName, PYPI_NAME } from "./upgrade-pypi.js";
+import type { PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource, ReleaseRecord, ReleaseRequirement, ReleaseRequirements } from "./release-metadata.js";
+import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
 
 const PYPI_URL = "https://pypi.org/pypi";
 const TIMEOUT_MS = 30_000;
 const TTL_SECONDS = 3600;
+/** A published release's requirements never change. */
+const REQUIREMENTS_TTL = 30 * 86_400;
+const requirementsKey = (normalized: string, version: string) => `pypi-requirements:v1:${normalized}@${version}`;
 
 interface PyPIFile {
   upload_time_iso_8601?: string;
@@ -38,8 +48,46 @@ interface PyPIFile {
 }
 
 interface PyPIProject {
-  info?: { name?: string };
+  /** `version` and `requires_dist` are those of the project's latest release. */
+  info?: { name?: string; version?: unknown; requires_dist?: unknown };
   releases?: Record<string, PyPIFile[] | null>;
+}
+
+/** A PEP 440 specifier set fit to print: short, of version characters and operators only, and one the specifier grammar reads. */
+function isReadableSpecifier(spec: string): boolean {
+  return spec === "" || (spec.length <= 200 && /^[0-9A-Za-z.,*!+<>=~_-]+$/.test(spec) && pep440SpecAdmits(spec, "1.0") !== null);
+}
+
+/**
+ * What a release's `requires_dist` (PEP 508 strings) says an install of it brings: each entry's
+ * project and version specifier. An entry gated by an extra (`; extra == "socks"`) is installed
+ * only when that extra is asked for, and is left out. One with another environment marker
+ * (Python version, platform) may be installed, so it is kept, flagged `conditional`. A direct URL
+ * reference, or a name or specifier that is not one, is counted `unreadable` and never passed on.
+ */
+export function parseRequiresDist(requiresDist: unknown): ReleaseRequirements {
+  const out = new Map<string, ReleaseRequirement>();
+  let unreadable = 0;
+  for (const entry of Array.isArray(requiresDist) ? requiresDist : []) {
+    if (typeof entry !== "string" || entry.length > 2_000) {
+      unreadable++;
+      continue;
+    }
+    const at = entry.indexOf(";");
+    const head = at < 0 ? entry : entry.slice(0, at);
+    const marker = at < 0 ? "" : entry.slice(at + 1).trim();
+    if (/\bextra\b/.test(marker)) continue;
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(head);
+    const rest = m ? m[2].trim() : "";
+    const spec = rest.replace(/^\(\s*/, "").replace(/\s*\)$/, "").replace(/\s+/g, "");
+    if (!m || !PYPI_NAME.test(m[1]) || m[1].length > 100 || rest.startsWith("@") || !isReadableSpecifier(spec)) {
+      unreadable++;
+      continue;
+    }
+    const name = normalizePypiName(m[1]);
+    out.set(`${name}\0${spec}`, { name, spec, ...(marker ? { conditional: true as const } : {}) });
+  }
+  return { requirements: [...out.values()], unreadable };
 }
 
 export const PYPI_NOT_APPLICABLE =
@@ -108,7 +156,46 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     }
     const index = projectPypiProject(name, doc);
     this.cache.set(key, index, "pypi", TTL_SECONDS);
+    // The project document carries its latest release's `requires_dist`: kept, so judging that
+    // release needs no request of its own.
+    const latest = doc.info?.version;
+    if (typeof latest === "string" && index.releases[latest] && doc.info && "requires_dist" in doc.info) {
+      this.cache.set(requirementsKey(normalized, latest), parseRequiresDist(doc.info.requires_dist), "pypi", REQUIREMENTS_TTL);
+    }
     return { status: "ok", data: index };
+  }
+
+  /**
+   * What one release requires: `info.requires_dist` of its own document
+   * (`pypi.org/pypi/<name>/<version>/json`), the only place PyPI serves it for a release that is
+   * not the latest. A published release's metadata never changes, so it is kept for a month.
+   */
+  async getRequirements(name: string, version: string): Promise<RegistryLookup<ReleaseRequirements>> {
+    const normalized = normalizePypiName(name);
+    const key = requirementsKey(normalized, version);
+    const hit = this.cache.get<ReleaseRequirements>(key);
+    if (hit) return { status: "ok", data: hit };
+    if (!parsePep440(version)) return { status: "not_found", detail: "not a PEP 440 version" };
+    // The registry-CDN bucket (as fix-path lookups): a requirement read never starves the release lists.
+    if (!this.rateLimiter.consume("fixpath-registry")) return { status: "unreachable", detail: "PyPI rate limit reached for this minute" };
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(`${PYPI_URL}/${encodeURIComponent(normalized)}/${encodeURIComponent(version)}/json`, { headers: { Accept: "application/json" } }, TIMEOUT_MS);
+    } catch (err) {
+      return { status: "unreachable", detail: `PyPI: ${errorText(err)}` };
+    }
+    if (response.status === 404) return { status: "not_found", detail: "PyPI does not serve this release" };
+    if (!response.ok) return { status: "unreachable", detail: `PyPI answered HTTP ${response.status}` };
+    let doc: PyPIProject;
+    try {
+      doc = (await response.json()) as PyPIProject;
+    } catch (err) {
+      return { status: "unreachable", detail: `PyPI: unreadable release document (${errorText(err)})` };
+    }
+    if (!doc.info || typeof doc.info !== "object") return { status: "unreachable", detail: "PyPI returned no metadata for this release" };
+    const data = parseRequiresDist(doc.info.requires_dist);
+    this.cache.set(key, data, "pypi", REQUIREMENTS_TTL);
+    return { status: "ok", data };
   }
 
   async getCreatedAt(name: string): Promise<RegistryLookup<string | null>> {

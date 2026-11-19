@@ -230,7 +230,12 @@ function requirementsCleanText(item: CheckItem, examined: number, unreadable: nu
     unreadable > 0
       ? ` ${unreadable} requirement${unreadable === 1 ? "" : "s"} it declares ${unreadable === 1 ? "is" : "are"} not a ${item.ecosystem} package with a readable version requirement and ${unreadable === 1 ? "was" : "were"} not examined.`
       : "";
-  const what = examined === 0 ? (item.ecosystem === "Go" ? `${item.to}'s go.mod requires no other module.` : `${item.to} requires no other package.`) : requirementsClean(item.ecosystem, examined, item.to);
+  const none: Record<string, string> = {
+    Go: `${item.to}'s go.mod requires no other module.`,
+    "crates.io": `${item.to} requires no other crate.`,
+    PyPI: `PyPI lists no requirement for ${item.to}.`,
+  };
+  const what = examined === 0 ? (none[item.ecosystem] ?? `${item.to} requires no other package.`) : requirementsClean(item.ecosystem, examined, item.to);
   return `${what}${skipped}`;
 }
 

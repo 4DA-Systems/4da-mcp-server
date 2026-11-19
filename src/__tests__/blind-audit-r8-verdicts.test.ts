@@ -94,6 +94,13 @@ function stub() {
       const versions = CRATES[name];
       return versions ? new Response(versions.map((vers) => JSON.stringify({ name, vers, deps: [], yanked: false })).join("\n")) : new Response("", { status: 404 });
     }
+    // One release's own document (its requires_dist), for a release the project lists.
+    const pypiRelease = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (pypiRelease) {
+      const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypiRelease[1]).toLowerCase());
+      const version = decodeURIComponent(pypiRelease[2]);
+      return name && PYPI[name].includes(version) ? json({ info: { name, version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypi[1]).toLowerCase());
