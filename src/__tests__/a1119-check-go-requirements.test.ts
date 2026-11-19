@@ -131,7 +131,10 @@ describe("dependency_check: what a Go release's go.mod requires", () => {
     expect(r.reason).toContain("No advisory of example.com/web itself affects v1.9.1, but v1.9.1's go.mod requires 2 modules at versions with known advisories");
     expect(r.reason).toContain("example.com/xnet v0.10.0 (1 advisory; v0.38.0 clears it)");
     expect(r.reason).toContain("example.com/xcrypto v0.9.0 (2 advisories; v0.45.0 clears them)");
-    expect(r.reason).toMatch(/raise them in your own go\.mod \(go get example\.com\/xnet@v0\.38\.0 example\.com\/xcrypto@v0\.45\.0\)/);
+    // A go.mod also lists modules only the release's own tests or tools use: the sentence claims the
+    // minimum for the ones the project builds, and names the raise for each one its go.mod lists.
+    expect(r.reason).toContain("at least those versions of the ones its build uses");
+    expect(r.reason).toMatch(/run go mod tidy and raise each one your go\.mod lists \(go get example\.com\/xnet@v0\.38\.0 example\.com\/xcrypto@v0\.45\.0\)/);
     expect(r.reason).not.toMatch(/concern found/);
     // One batch query carried every requirement.
     const batches = net.requests.filter((q) => q.includes("/v1/querybatch ") && q.includes("example.com/xnet") && q.includes("v0.10.0"));
@@ -201,7 +204,7 @@ describe("dependency_check: what a Go release's go.mod requires", () => {
     expect(r).toMatchObject({ to: "v1.12.0", verdict: "proceed" });
     expect(r.range_check).toMatchObject({ smallest_safe_in_range: "v1.9.1", newest_safe_in_range: "v1.12.0" });
     expect(r.range_check!.requirement_caveats).toEqual({
-      "v1.9.1": expect.stringMatching(/^v1\.9\.1 requires 2 modules at versions with known advisories \(example\.com\/xnet v0\.10\.0, example\.com\/xcrypto v0\.9\.0\): raise them in your own go\.mod/),
+      "v1.9.1": expect.stringMatching(/^v1\.9\.1 requires 2 modules at versions with known advisories \(example\.com\/xnet v0\.10\.0, example\.com\/xcrypto v0\.9\.0\): after writing it and running go mod tidy, raise each one your go\.mod lists/),
     });
     expect(r.reason).toMatch(/Safe in v1: smallest v1\.9\.1, newest v1\.12\.0\. v1\.9\.1 requires 2 modules at versions with known advisories/);
     const concise = (await runDependencyCheck(noDb, { items: [{ ecosystem: "Go", package: WEB, to: "v1" }] }, new LiveIntelligence(new Database(":memory:")))) as { results: Array<{ safe: Record<string, unknown> }> };

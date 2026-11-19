@@ -281,7 +281,7 @@ export function minimumsCaveat(version: string, check: HeldCheck | undefined): s
   if (check.affected.length === 0) return null;
   const n = check.affected.length;
   const named = check.affected.slice(0, 3).map((d) => `${d.name} ${d.version}`);
-  return `${version} requires ${n === 1 ? "a module at a version" : `${n} modules at versions`} with known advisories (${named.join(", ")}${n > 3 ? ` and ${n - 3} more` : ""}): raise ${n === 1 ? "it" : "them"} in your own go.mod when you write it (dependency_check on ${version} names the versions to raise ${n === 1 ? "it" : "them"} to)`;
+  return `${version} requires ${n === 1 ? "a module at a version" : `${n} modules at versions`} with known advisories (${named.join(", ")}${n > 3 ? ` and ${n - 3} more` : ""}): after writing it and running go mod tidy, raise ${n === 1 ? "it if your go.mod lists it" : "each one your go.mod lists"} (dependency_check on ${version} names the versions to raise ${n === 1 ? "it" : "them"} to)`;
 }
 
 /** checkRange's held filter (dependency-check-versions.ts RangeCheck.held_not_checked). */

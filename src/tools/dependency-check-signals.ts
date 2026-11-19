@@ -258,8 +258,9 @@ const MINIMUMS_NAMED = 4;
 
 /**
  * Go: the release's go.mod names minimum versions that have known advisories. Never worse than
- * review on its own: minimal version selection gives the project at least these versions, and the
- * project raises them in its own go.mod, so the sentence says which, to what, and how.
+ * review on its own: minimal version selection gives the project at least these versions of the
+ * modules its build uses, and the project raises them in its own go.mod, so the sentence says
+ * which, to what, and how.
  */
 function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[], examined: number): Signal {
   const count = (n: number) => `${n} advisor${n === 1 ? "y" : "ies"}`;
@@ -273,11 +274,14 @@ function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[]
   const fixable = affected.filter((d) => d.fixedIn);
   const raise = fixable.length > 0 ? ` (go get ${fixable.slice(0, 6).map((d) => `${d.name}@${d.fixedIn}`).join(" ")}${fixable.length > 6 ? " ..." : ""})` : "";
   const requires = `${item.to}'s go.mod requires ${one ? "a module at a version" : `${affected.length} modules at versions`} with known advisories: ${andList(named)}${rest > 0 ? `, and ${rest} more` : ""}.`;
-  const selection = `Go's minimal version selection gives a project that takes ${item.to} at least ${one ? "that version" : "those versions"}, so after upgrading raise ${one ? "it" : "them"} in your own go.mod${raise}.`;
-  const lead =
+  // A go.mod also lists what only the module's own tests and tools need: which of these a project
+  // builds is not in the go.mod, so the sentence claims the minimum, not that each one is used.
+  const selection = `Go's minimal version selection gives a project that takes ${item.to} at least ${one ? "that version of it if its build uses it" : "those versions of the ones its build uses"}: after upgrading, run go mod tidy and raise ${one ? "it if your go.mod lists it" : "each one your go.mod lists"}${raise}.`;
+  const found = `${requires} ${selection}`;
+  const evidence =
     own.effect === "proceed"
-      ? own.evidence.replace(`No known vulnerability affects ${item.to}.`, `No advisory of ${item.package} itself affects ${item.to}, but ${requires}`)
-      : `${own.evidence} Also, ${requires}`;
+      ? own.evidence.replace(`No known vulnerability affects ${item.to}.`, `No advisory of ${item.package} itself affects ${item.to}, but ${found}`)
+      : `${own.evidence} Also, ${found}`;
   const minimums = affected.map((d) => ({
     module: d.name,
     requires: d.spec,
@@ -293,7 +297,7 @@ function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[]
     id: "advisories",
     value: own.value === null ? { required_minimums_affected: minimums, requirements_examined: examined } : { ...(own.value as object), required_minimums_affected: minimums, requirements_examined: examined },
     effect: own.effect === "avoid" ? "avoid" : "review",
-    evidence: `${lead} ${selection}`,
+    evidence,
   };
 }
 
