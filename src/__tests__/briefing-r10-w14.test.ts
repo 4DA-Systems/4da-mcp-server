@@ -181,7 +181,9 @@ describe("1. the command and the specifier fix the ecosystem, for every reader",
 
   it("the requests reader and the new-package reader agree when a name is checked in two ecosystems", async () => {
     const r = await brief("add flask<2.2.5");
-    for (const v of r.requested_versions ?? []) expect(v.ecosystem).toBe("PyPI");
+    // Both readers answered, once each: an empty list would agree with anything.
+    expect(r.requested_versions).toMatchObject([{ name: "flask", ecosystem: "PyPI", to: "<2.2.5", verdict: "avoid" }]);
+    expect(r.new_packages).toMatchObject([{ name: "flask", ecosystem: "PyPI", version: "<2.2.5", verdict: "avoid" }]);
   });
 });
 
