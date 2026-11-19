@@ -160,6 +160,8 @@ export function unsupportedEcosystem(name: string, names: string[], dir?: string
   if (name === "Package.resolved") return "SwiftPM";
   if (name === "Podfile.lock") return "CocoaPods";
   if (name === "conan.lock") return "ConanCenter";
+  // Its npm: and jsr: packages are resolved nowhere else: a Deno project's whole tree goes unchecked.
+  if (name === "deno.lock") return "Deno (deno.lock is not read)";
   if (name === "renv.lock") return "CRAN";
   if (name === "Gemfile" && !names.includes("Gemfile.lock")) return "RubyGems (Gemfile with no Gemfile.lock)";
   if (name === "composer.json" && !names.includes("composer.lock")) return "Packagist (composer.json with no composer.lock)";
