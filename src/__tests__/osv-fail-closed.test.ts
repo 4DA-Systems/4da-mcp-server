@@ -21,7 +21,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveCache } from "../live/cache.js";
 import { LiveIntelligence } from "../live/index.js";
-import { OsvHttpSource, OsvScanner } from "../live/osv-scanner.js";
+import { batchSize, OsvHttpSource, OsvScanner } from "../live/osv-scanner.js";
 import { DEFAULT_RATE_LIMITS, RateLimiter } from "../live/rate-limiter.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
@@ -101,20 +101,37 @@ describe("OSV scanner: no answer is never an empty answer", () => {
   it("past the query budget, batches wait for tokens; what never gets one is unchecked, not clean", async () => {
     stubOsv(() => "answer");
     const deps = Array.from({ length: 2_500 }, (_, i) => dep(`pkg-${i}`));
-    // One token a minute and a 50 ms wait: the first batch goes, the other two cannot.
+    const chunk = batchSize(2_500);
+    expect(chunk).toBeLessThan(2_500);
+    // One token a minute and a 50 ms wait: the first batch goes, the others cannot.
     const result = await scannerWith({ ...DEFAULT_RATE_LIMITS, osv: { maxPerMinute: 1 } }, 50).scan(deps, "/proj");
-    expect(result.unchecked).toBe(1_500);
-    expect(result.cleanCount).toBe(1_000);
+    expect(result.unchecked).toBe(2_500 - chunk);
+    expect(result.cleanCount).toBe(chunk);
     expect(result.uncheckedReason).toMatch(/query budget/);
   });
 
   it("a batch that fails is retried once; a second failure leaves only its dependencies unchecked", async () => {
-    // Batch 0 answers; batch 1 fails twice; later ones are not sent after the outage.
+    // Batch 0 answers; every other batch fails twice. The batches sent together (BATCH_CONCURRENCY)
+    // were all out before the outage was known, so each is retried once.
     const stats = stubOsv((n) => (n === 0 ? "answer" : "503"));
     const deps = Array.from({ length: 1_200 }, (_, i) => dep(`pkg-${i}`));
+    const chunk = batchSize(1_200);
+    const chunks = Math.ceil(1_200 / chunk);
     const result = await scannerWith().scan(deps, "/proj");
-    expect(stats.batches).toBe(3);
-    expect(result.unchecked).toBe(200);
+    expect(stats.batches).toBe(1 + (chunks - 1) * 2);
+    expect(result.unchecked).toBe(1_200 - chunk);
+    expect(result.cleanCount).toBe(chunk);
+  });
+
+  it("after an outage, batches not yet sent are not sent at all", async () => {
+    // 11 batches of 1,000, 8 at a time: batch 0 answers and its slot takes batch 8 before any
+    // failure is known; batches 1 to 8 fail twice; 9 and 10 never go out.
+    const stats = stubOsv((n) => (n === 0 ? "answer" : "503"));
+    const deps = Array.from({ length: 10_568 }, (_, i) => dep(`pkg-${i}`));
+    expect(batchSize(10_568)).toBe(1_000);
+    const result = await scannerWith().scan(deps, "/proj");
+    expect(stats.batches).toBeLessThanOrEqual(1 + 8 * 2);
+    expect(result.unchecked).toBe(10_568 - 1_000);
     expect(result.cleanCount).toBe(1_000);
   });
 

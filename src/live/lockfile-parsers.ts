@@ -26,7 +26,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readBunLock } from "./bun-lockfile.js";
+import { pushAll } from "../array-utils.js";
+import { readBunLock, stripTrailingCommas } from "./bun-lockfile.js";
 import {
   emptyReadReport,
   MAX_LOCKFILE_LINE,
@@ -37,9 +38,11 @@ import {
   type LockDamage,
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
-import { requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
+import { inspectYarnLock, type YarnInspection } from "./js-dev-scope.js";
+import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, MAX_MEMBER_MANIFESTS, memberListGapText, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec, type MemberListGap } from "./js-manifests.js";
+import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
-import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
@@ -48,17 +51,21 @@ import type { OsvEcosystem } from "./types.js";
 export type { PackageInstance, VersionSource } from "./lockfile-types.js";
 
 const LOCKFILES: Partial<Record<OsvEcosystem, string[]>> = {
-  npm: ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"],
+  // npm installs from npm-shrinkwrap.json and ignores package-lock.json when both are present.
+  npm: ["npm-shrinkwrap.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"],
   "crates.io": ["Cargo.lock"],
   PyPI: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   Go: ["go.mod", "go.sum"],
-  RubyGems: ["Gemfile.lock"],
+  // gems.locked is the same file under Bundler's other name (beside gems.rb).
+  RubyGems: ["Gemfile.lock", "gems.locked"],
   Packagist: ["composer.lock"],
 };
 
 const MANIFESTS: Partial<Record<OsvEcosystem, string>> = {
   npm: "package.json",
   "crates.io": "Cargo.toml",
+  // Its exact `==` pins are read when no lockfile is (resolvePython).
+  PyPI: "pyproject.toml",
 };
 
 /**
@@ -69,6 +76,8 @@ export function lockfileCandidates(cwd: string, ecosystem: OsvEcosystem): string
   const fixed = (LOCKFILES[ecosystem] ?? []).map((name) => path.join(cwd, name));
   // bun.lockb cannot be read, but its arrival or removal changes what the answer must say.
   if (ecosystem === "npm") return [...fixed, path.join(cwd, BUN_BINARY_LOCK)];
+  // A go.work in the directory or above it decides what a module it uses is built with (goWorkFor).
+  if (ecosystem === "Go") return [...fixed, ...goWorkCandidates(cwd)];
   return ecosystem === "PyPI" ? [...fixed, ...requirementFiles(cwd)] : fixed;
 }
 
@@ -154,12 +163,138 @@ function yarnSkips(file: string): number {
  * that is can only be bounded from below (`missing`).
  */
 function damagedProblem(file: string, damage: LockDamage): LockfileProblem {
+  return partialRead(file, damage.reason, damage.missing);
+}
+
+type EntryCheckOptions = { skipLocal?: boolean; members?: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional?: string[] };
+
+/**
+ * The dependencies the project's package.json declares that the lockfile
+ * beside it has no entry for (`has`), each name once, in the order declared.
+ * A text lockfile has no closing bracket to lose, so one cut between two
+ * entries parses whole; but every lockfile a package manager writes holds an
+ * entry for each declared dependency, so a declared name with none says the
+ * file stops early or was written before the dependency was added.
+ *
+ * peerDependencies are not owed an entry (not every package manager installs
+ * the project's own). `skipLocal` leaves out `link:`/`portal:`/`workspace:`
+ * declarations and `members` the project's own packages, for lockfiles that
+ * write no entry for local code. When the member list is not known whole
+ * (`members.complete` false), any declared name may be a member, so none is
+ * reported (notCrossCheckedProblem says so). `ignoredOptional` names optional
+ * dependencies the package manager was told to leave out.
+ */
+function declaredWithoutEntry(cwd: string, has: (name: string) => boolean, options: EntryCheckOptions = {}): DeclaredSpec[] {
+  const manifest = readManifestDeclarations(path.join(cwd, "package.json"));
+  if (!manifest || options.members?.complete === false) return [];
+  const seen = new Set<string>();
+  return manifest.declared.filter((spec) => {
+    if (spec.section === "peerDependencies" || seen.has(spec.name)) return false;
+    seen.add(spec.name);
+    if (options.skipLocal && isLocalSpec(spec.spec)) return false;
+    if (spec.section === "optionalDependencies" && options.ignoredOptional && nameMatchesAny(options.ignoredOptional, spec.name)) return false;
+    return !options.members?.names.has(spec.name) && !has(spec.name);
+  });
+}
+
+/**
+ * The cross-check declaredWithoutEntry does not make when the member list is not whole: the
+ * declared names with no entry that are not known members may be members (which need none) or
+ * missing from the lockfile. Said, never silent, and never as damage: the file itself was read
+ * whole. Null when the member list is whole or every declared name has an entry.
+ */
+function notCrossCheckedProblem(file: string, cwd: string, has: (name: string) => boolean, options: EntryCheckOptions, gap: MemberListGap): LockfileProblem | null {
+  if (!options.members || options.members.complete) return null;
+  const unsure = declaredWithoutEntry(cwd, has, { ...options, members: { names: options.members.names, complete: true } });
+  if (unsure.length === 0) return null;
+  const one = unsure.length === 1;
+  return {
+    file,
+    notCrossChecked: true,
+    error: `${declaredText(unsure)} ${one ? "has" : "have"} no entry in it and may be ${one ? "a workspace member, which needs" : "workspace members, which need"} no entry, but the member list could not be read whole (${memberListGapText(gap)}), so whether ${one ? "it is" : "they are"} missing from this lockfile was not checked`,
+  };
+}
+
+/**
+ * A pnpm lockfile that records no importer for the project (none of `importers:`, v5's top-level
+ * `dependencies:`): what it holds for package.json cannot be told, so the two were not compared.
+ */
+function noImporterProblem(file: string, cwd: string, options: EntryCheckOptions): LockfileProblem | null {
+  const declared = declaredWithoutEntry(cwd, () => false, { ...options, members: options.members ? { names: options.members.names, complete: true } : undefined });
+  if (declared.length === 0) return null;
+  return { file, notCrossChecked: true, error: `it records no importer for the project itself, so what it holds for ${declaredText(declared)}, declared in package.json, was not checked against it` };
+}
+
+/**
+ * What pnpm leaves out of a root importer on purpose: the workspace members (a link to one is
+ * omitted under `excludeLinksFromLockfile`), from pnpm-workspace.yaml `packages`, and the
+ * optional dependencies `ignoredOptionalDependencies` names (in package.json's `pnpm` field,
+ * pnpm-workspace.yaml, or as the lockfile records it).
+ */
+function pnpmOmissions(cwd: string, lockContent: string): { members: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional: string[]; gap: MemberListGap } {
+  let workspaceYaml = "";
+  try {
+    workspaceYaml = readTextFile(path.join(cwd, "pnpm-workspace.yaml"));
+  } catch {
+    // no pnpm-workspace.yaml: no members, no settings there
+  }
+  const ignoredOptional = [...pnpmYamlList(workspaceYaml, "ignoredOptionalDependencies"), ...pnpmYamlList(lockContent, "ignoredOptionalDependencies")];
+  try {
+    const field = (JSON.parse(readTextFile(path.join(cwd, "package.json"))) as { pnpm?: { ignoredOptionalDependencies?: unknown } }).pnpm?.ignoredOptionalDependencies;
+    if (Array.isArray(field)) for (const name of field) if (typeof name === "string") ignoredOptional.push(name);
+  } catch {
+    // unreadable package.json: declaredWithoutEntry reads nothing from it either
+  }
+  const expanded = expandWorkspaces(cwd, pnpmYamlList(workspaceYaml, "packages"));
+  const members = memberNamesOf(cwd, expanded.dirs);
+  const gap = { unreadable: members.unreadable, unlisted: !expanded.complete, tooMany: expanded.dirs.length > MAX_MEMBER_MANIFESTS };
+  return { members: { names: members.names, complete: members.complete && expanded.complete }, ignoredOptional, gap };
+}
+
+/** "a (dependencies) and 2 more", for a note. */
+function declaredText(specs: DeclaredSpec[]): string {
+  return `${specs[0].name} (${specs[0].section})${specs.length > 1 ? ` and ${specs.length - 1} more` : ""}`;
+}
+
+/**
+ * One problem for a lockfile that was read but is not whole: its own damage
+ * (`damage`), the declared dependencies it has no entry for (`undeclared`),
+ * or both. Null when neither.
+ */
+function incompleteProblem(file: string, damage: LockDamage | null, undeclared: DeclaredSpec[]): LockfileProblem | null {
+  if (undeclared.length === 0) return damage ? damagedProblem(file, damage) : null;
+  const them = undeclared.length === 1 ? "it" : "them";
+  const missing = undeclared.length + (damage?.missing ?? 0);
   return {
     file,
     partial: true,
-    ...(damage.missing > 0 ? { skipped: damage.missing } : {}),
-    error: `${damage.reason}. It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile`,
+    skipped: missing,
+    error: `package.json declares ${declaredText(undeclared)}, but this lockfile has no entry for ${them}: it is truncated, or older than package.json${damage ? `; also, ${damage.reason}` : ""}. What it would install for ${them}, and anything past a cut, was not checked: reinstall to regenerate the lockfile`,
   };
+}
+
+/**
+ * A lockfile that holds no package at all beside a package.json that
+ * declares dependencies: not a project with nothing installed. Null when
+ * package.json declares nothing that is owed an entry.
+ */
+function emptyLockProblem(file: string, undeclared: DeclaredSpec[]): LockfileProblem | null {
+  if (undeclared.length === 0) return null;
+  return {
+    file,
+    error: `it holds no package, but package.json declares ${declaredText(undeclared)}: it is truncated, or older than package.json, so nothing it would install was checked: reinstall to regenerate the lockfile`,
+  };
+}
+
+/** "it is truncated or damaged: ..." for a yarn.lock, from what its reader and its graph found, or null. */
+function yarnLockDamage(incomplete: number, dangling: string[]): LockDamage | null {
+  const parts: string[] = [];
+  if (incomplete > 0) parts.push(incomplete === 1 ? "1 entry names a package but no version" : `${incomplete} entries name a package but no version`);
+  if (dangling.length > 0) {
+    const list = `${dangling.slice(0, 3).join(", ")}${dangling.length > 3 ? ", ..." : ""}`;
+    parts.push(`${dangling.length} package${dangling.length === 1 ? " named as a dependency has" : "s named as dependencies have"} no entry (${list})`);
+  }
+  return parts.length > 0 ? { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: incomplete + dangling.length } : null;
 }
 
 /** Lines git writes into a file it could not merge. */
@@ -172,6 +307,8 @@ const CONFLICT_MARKER = /^(?:<{7}|>{7})(?: |$)|^={7}$/m;
  */
 function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSource): LockfileProblem[] {
   const readFiles = new Set([read.source, ...(read.extraSources ?? [])].filter((f): f is string => Boolean(f)).map((f) => path.resolve(f)));
+  // A file its reader already named, with the reason, is said once.
+  const named = new Set((read.problems ?? []).map((p) => path.resolve(p.file)));
   const problems: LockfileProblem[] = [];
   for (const name of LOCKFILES[ecosystem] ?? []) {
     if (name === "go.sum") continue; // read with go.mod, never on its own
@@ -181,7 +318,7 @@ function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSour
       if (ecosystem === "PyPI") continue;
       break; // everything after it ranks lower (resolveNpm compares those itself)
     }
-    if (!fs.existsSync(file)) continue;
+    if (!fs.existsSync(file) || named.has(path.resolve(file))) continue;
     // A yarn.lock whose entries were all skipped for length: named with the count, even when the file is short (L5).
     const skipped = name === "yarn.lock" ? yarnSkips(file) : 0;
     if (skipped > 0) {
@@ -192,6 +329,14 @@ function unreadLockfiles(cwd: string, ecosystem: OsvEcosystem, read: VersionSour
     if (error) problems.push({ file, error });
   }
   return problems;
+}
+
+/** Lockfiles written as JSON under a name that does not end in `.json`. */
+const JSON_LOCKFILE_NAMES = new Set(["pipfile.lock", "composer.lock"]);
+
+/** Whether a lockfile's format is JSON: it is then valid JSON or damaged, whatever its name or length. */
+function isJsonLockfile(file: string): boolean {
+  return /\.json$/i.test(file) || JSON_LOCKFILE_NAMES.has(path.basename(file).toLowerCase());
 }
 
 /**
@@ -206,15 +351,18 @@ function describeParseError(file: string, error: unknown): string | null {
     return `could not be read (${readError instanceof Error ? readError.message : String(readError)})`;
   }
   if (CONFLICT_MARKER.test(content)) return "it contains git merge-conflict markers (<<<<<<< / >>>>>>>): resolve the conflict and reinstall to regenerate it";
-  if (/\.json$/i.test(file)) {
+  // Every JSON-format lockfile is validated as JSON whatever its name. bun.lock is JSON with
+  // trailing commas: a cut one is unparseable JSON, not a text lockfile that read short.
+  const json = isJsonLockfile(file) || path.basename(file) === "bun.lock";
+  if (json) {
     try {
-      JSON.parse(content);
+      JSON.parse(path.basename(file) === "bun.lock" ? stripTrailingCommas(content) : content);
     } catch (parseError) {
       return `invalid JSON (${parseError instanceof Error ? parseError.message.slice(0, 120) : String(parseError)})`;
     }
   }
   if (error) return `could not be parsed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
-  if (/\.json$/i.test(file)) return null;
+  if (json) return null;
   // A text lockfile of some size that gave no package at all is damaged or in a format this reader does not know.
   const lines = content.split(/\r?\n/).filter((l) => l.trim() !== "").length;
   return lines > 20 ? "no package versions could be read from it (unsupported format or damaged)" : null;
@@ -249,7 +397,7 @@ function declaredRanges(declared: Map<string, string>, exact: (spec: string) => 
 }
 
 // =============================================================================
-// npm: package-lock.json > npm-shrinkwrap.json > pnpm-lock.yaml > yarn.lock > bun.lock > package.json ranges
+// npm: npm-shrinkwrap.json > package-lock.json > pnpm-lock.yaml > yarn.lock > bun.lock > package.json ranges
 // =============================================================================
 
 /** What one npm-family lockfile holds, as its reader reports it. */
@@ -259,63 +407,111 @@ interface NpmLockRead {
   uncheckable: NonRegistryEntry[];
   aliases?: Map<string, string>;
   problems: LockfileProblem[];
+  /** Copies the project's own manifests declare, workspace members included (VersionSource.declared). */
+  declared?: DeclaredDependency[];
+  /** True when the reader graded the scope of every copy itself (VersionSource.scopeGraded). */
+  scopeGraded?: boolean;
+  /** The file holds no package although package.json declares dependencies: `problems` says so, and it is not read. */
+  empty?: true;
+}
+
+/** The read of a lockfile with no package in it: null, or `empty` when package.json says it should hold some. */
+function emptyRead(problem: LockfileProblem | null): NpmLockRead | null {
+  return problem ? { versions: new Map(), instances: new InstanceSet(), uncheckable: [], problems: [problem], empty: true } : null;
 }
 
 /**
  * The npm-family lockfiles in the order they are preferred, each with its
- * reader. A reader returns null for a file that holds no package at all and
+ * reader. A reader returns null for a file that holds no package at all (or
+ * an `empty` read when package.json declares dependencies it should hold) and
  * throws for one it cannot parse.
  */
 const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) => NpmLockRead | null | Steps<NpmLockRead | null> }> = [
-  { name: "package-lock.json", read: readNpmLockFile },
+  // npm's own order: with both present it installs from the shrinkwrap and never opens package-lock.json.
   { name: "npm-shrinkwrap.json", read: readNpmLockFile },
+  { name: "package-lock.json", read: readNpmLockFile },
   {
     // v5.x, v6 and v9, read by column; see js-lockfile-readers.ts
     name: "pnpm-lock.yaml",
     // A generator: the read that can take seconds pauses where it may (resolveNpmSteps, W11).
-    *read(file) {
+    *read(file, cwd) {
       const content = readTextFile(file);
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const report = emptyReadReport();
       const installs = yield* readPnpmLockSteps(content, versions, instances, report);
-      if (versions.size === 0) return null;
+      // pnpm writes every dependency of the project into its root importer; a link can be left out (excludeLinksFromLockfile).
+      const listed = report.rootEntries;
+      const { gap, ...omitted } = pnpmOmissions(cwd, content);
+      if (versions.size === 0) return emptyRead(emptyLockProblem(file, declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true, ...omitted })));
       const damage = yield* pnpmLockDamageSteps(content, report.missingDirect, installs);
-      return { versions, instances, uncheckable: report.uncheckable, problems: damage ? [damagedProblem(file, damage)] : [] };
+      const undeclared = listed ? declaredWithoutEntry(cwd, (name) => listed.has(name), { skipLocal: true, ...omitted }) : [];
+      const problem = incompleteProblem(file, damage, undeclared);
+      const uncrossed = listed ? notCrossCheckedProblem(file, cwd, (name) => listed.has(name), { skipLocal: true, ...omitted }, gap) : noImporterProblem(file, cwd, { skipLocal: true, ...omitted });
+      return {
+        versions,
+        instances,
+        uncheckable: report.uncheckable,
+        problems: [problem, uncrossed].filter((p): p is LockfileProblem => p !== null),
+        declared: report.declared,
+        scopeGraded: report.scopeGraded,
+      };
     },
   },
   {
     // v1 and berry
     name: "yarn.lock",
     read(file, cwd) {
+      const content = readTextFile(file);
       const versions = new Map<string, string>();
-      const instances = new InstanceSet();
+      const copies = new InstanceSet();
       const specs = new Map<string, string>();
       const report = emptyReadReport();
-      const skipped = readYarnLock(readTextFile(file), versions, instances, specs, report);
+      const skipped = readYarnLock(content, versions, copies, specs, report);
       // The copy a direct dependency resolves to is the one its package.json range names.
       for (const [name, range] of manifestRanges(cwd)) {
         const version = specs.get(`${name}@${range}`);
         if (version) versions.set(name, version);
       }
-      if (versions.size === 0) return null;
-      const problems: LockfileProblem[] = skipped > 0 ? [yarnSkippedProblem(file, skipped)] : [];
-      if (report.incomplete > 0) {
-        const entries = report.incomplete === 1 ? "1 entry names a package but no version" : `${report.incomplete} entries name a package but no version`;
-        problems.push(damagedProblem(file, { reason: `it is truncated or damaged: ${entries}`, missing: report.incomplete }));
+      // yarn.lock states no scope: it is derived from the lockfile's graph and the package.json files.
+      const read = copies.toArray();
+      const keys = new Set(read.map((copy) => `${copy.name}\0${copy.version}`));
+      let inspection: YarnInspection | null;
+      try {
+        inspection = inspectYarnLock(content, cwd, (key) => keys.has(key));
+      } catch {
+        inspection = null;
       }
-      return { versions, instances, uncheckable: report.uncheckable, problems };
+      // Each declared dependency has an entry in a whole yarn.lock (a git or local one too), except a
+      // workspace member (classic writes none) and a link.
+      const entryCheck: EntryCheckOptions = { skipLocal: true, members: inspection ? { names: inspection.memberNames, complete: inspection.membersComplete } : undefined };
+      const undeclared = declaredWithoutEntry(cwd, (name) => inspection?.hasEntry(name) === true, entryCheck);
+      if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
+      const problems: LockfileProblem[] = skipped > 0 ? [yarnSkippedProblem(file, skipped)] : [];
+      const incomplete = incompleteProblem(file, yarnLockDamage(report.incomplete, inspection?.dangling ?? []), undeclared);
+      if (incomplete) problems.push(incomplete);
+      const uncrossed = inspection ? notCrossCheckedProblem(file, cwd, (name) => inspection.hasEntry(name), entryCheck, inspection.membersGap) : null;
+      if (uncrossed) problems.push(uncrossed);
+      const grade = inspection?.grade ?? { scopes: new Map<string, boolean>(), declared: [], graded: false };
+      const instances = new InstanceSet();
+      for (const copy of read) instances.add(copy.name, copy.version, grade.scopes.get(`${copy.name}\0${copy.version}`));
+      return { versions, instances, uncheckable: report.uncheckable, problems, declared: grade.declared, scopeGraded: grade.graded };
     },
   },
   {
     // Bun 1.2+ text lockfile; the binary bun.lockb is not readable (binaryBunLock)
     name: "bun.lock",
-    read(file) {
+    read(file, cwd) {
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const report = emptyReadReport();
       readBunLock(readTextFile(file), versions, instances, report);
-      return versions.size > 0 ? { versions, instances, uncheckable: report.uncheckable, problems: [] } : null;
+      // Bun keys the copy each dependency of the project resolves to by its name.
+      const listed = report.rootEntries;
+      const undeclared = declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true });
+      if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
+      const problem = incompleteProblem(file, null, undeclared);
+      return { versions, instances, uncheckable: report.uncheckable, problems: problem ? [problem] : [], declared: report.declared, scopeGraded: report.scopeGraded };
     },
   },
 ];
@@ -323,12 +519,15 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
 function readNpmLockFile(file: string): NpmLockRead | null {
   const read = readPackageLock(JSON.parse(readTextFile(file)));
   if (read.instances.size === 0 && read.uncheckable.length === 0) return null;
-  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [] };
+  // npm writes `dev` on every entry only devDependencies reach: the lockfile's own grading.
+  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [], declared: read.declared, scopeGraded: true };
 }
 
 function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
   let chosen: { name: string; file: string; read: NpmLockRead } | null = null;
   const others: string[] = [];
+  // Lockfiles ranked above the one read that hold no package although package.json declares some.
+  const emptied: LockfileProblem[] = [];
   for (const reader of NPM_LOCK_READERS) {
     const file = path.join(cwd, reader.name);
     if (!fs.existsSync(file)) continue;
@@ -339,31 +538,32 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     try {
       const out = reader.read(file, cwd);
       const read = out && isSteps(out) ? yield* out : out;
-      if (read) chosen = { name: reader.name, file, read };
+      if (read?.empty) pushAll(emptied, read.problems);
+      else if (read) chosen = { name: reader.name, file, read };
     } catch { /* unreadable: the next lockfile; unreadLockfiles names this one and why */ }
   }
 
   if (chosen) {
     const { file, read } = chosen;
-    const problems = [...read.problems, ...lockfileConflicts(cwd, chosen, others)];
+    const problems = [...emptied, ...read.problems, ...lockfileConflicts(cwd, chosen, others)];
     return found(read.versions, read.instances, file, "lockfile", {
       ...(read.uncheckable.length > 0 ? { uncheckable: read.uncheckable.map((u) => ({ ...u, file })) } : {}),
       ...(read.aliases && read.aliases.size > 0 ? { aliases: read.aliases } : {}),
       ...(problems.length > 0 ? { problems } : {}),
+      ...(read.declared && read.declared.length > 0 ? { declared: read.declared } : {}),
+      ...(read.scopeGraded ? { scopeGraded: true as const } : {}),
     });
   }
 
   // No readable lockfile. A binary bun.lockb pins everything, but not in a form this server reads.
   const bunBinary = path.join(cwd, BUN_BINARY_LOCK);
-  const problems: LockfileProblem[] = fs.existsSync(bunBinary)
-    ? [
-        {
-          file: bunBinary,
-          error:
-            "bun.lockb is Bun's binary lockfile, which this server cannot read: run `bun install --save-text-lockfile` (Bun 1.2 or later) to write bun.lock, then scan again",
-        },
-      ]
-    : [];
+  const problems: LockfileProblem[] = [...emptied];
+  if (fs.existsSync(bunBinary)) {
+    problems.push({
+      file: bunBinary,
+      error: "bun.lockb is Bun's binary lockfile, which this server cannot read: run `bun install --save-text-lockfile` (Bun 1.2 or later) to write bun.lock, then scan again",
+    });
+  }
 
   // No lockfile: package.json declares ranges, not installed versions.
   const pkgPath = path.join(cwd, "package.json");
@@ -371,9 +571,19 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     const declared = new Map<string, string>();
     const uncheckable: NonRegistryEntry[] = [];
     const aliases = new Map<string, string>();
+    let pkg: Record<string, unknown>;
     try {
-      const pkg = JSON.parse(readTextFile(pkgPath));
-      for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
+      const parsed: unknown = JSON.parse(readTextFile(pkgPath));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("it is not a JSON object");
+      pkg = parsed as Record<string, unknown>;
+    } catch (error) {
+      // What it declares is unknown, which is not "nothing declared": said, never a clean result.
+      problems.push({ file: pkgPath, error: manifestParseError(error) });
+      return { ...emptySource(), problems };
+    }
+    try {
+      const sections = (field: string) => (pkg[field] && typeof pkg[field] === "object" && !Array.isArray(pkg[field]) ? (pkg[field] as Record<string, unknown>) : {});
+      for (const [name, spec] of Object.entries({ ...sections("dependencies"), ...sections("devDependencies") })) {
         if (typeof spec !== "string") continue;
         // `"x": "github:user/repo"` or a tarball URL is not a version of the registry's x.
         const other = nonRegistrySource(spec, spec);
@@ -398,6 +608,12 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
   }
 
   return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
+}
+
+/** Why a package.json with no lockfile beside it could not be read, and what that leaves unchecked. */
+function manifestParseError(error: unknown): string {
+  const why = error instanceof SyntaxError ? `it is not valid JSON (${error.message.slice(0, 120)})` : `it could not be read (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+  return `${why}, so no dependency it declares was read or checked: fix the file, then scan again`;
 }
 
 /** A reader that returned its work as steps (a generator) rather than its result. */
@@ -437,6 +653,11 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     } catch (error) {
       failure = describeParseError(file, error) ?? "could not be parsed";
     }
+    // A lockfile with no package in it hides nothing, whatever package.json says it should hold.
+    if (other?.empty) {
+      other = null;
+      failure = describeParseError(file, null);
+    }
     if (!other) {
       if (failure) problems.push({ file, conflict: true, error: `${chosen.name} was read instead, and this lockfile could not be compared with it: ${failure}` });
       continue;
@@ -450,10 +671,15 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     }
     if (differing.length === 0) continue;
     differing.sort();
+    const differ = `${differing.length} package${differing.length === 1 ? "" : "s"} differ (${differing.slice(0, CONFLICT_EXAMPLES).join("; ")}${differing.length > CONFLICT_EXAMPLES ? "; ..." : ""})`;
+    // Between npm's two lockfiles the stale one is known: npm never reads package-lock.json beside a shrinkwrap.
+    const npmPair = chosen.name === "npm-shrinkwrap.json" && name === "package-lock.json";
     problems.push({
       file,
       conflict: true,
-      error: `${chosen.name} was read instead (it ranks first), and this lockfile pins a different set: ${differing.length} package${differing.length === 1 ? "" : "s"} differ (${differing.slice(0, CONFLICT_EXAMPLES).join("; ")}${differing.length > CONFLICT_EXAMPLES ? "; ..." : ""}). One of the two is stale and the scan cannot tell which: delete the one your package manager does not write`,
+      error: npmPair
+        ? `${chosen.name} was read instead: npm installs from ${chosen.name} and ignores ${name} when both are present. This ignored lockfile pins a different set: ${differ}. It is the stale one: delete it, or delete ${chosen.name} if ${name} is the one you mean to install from`
+        : `${chosen.name} was read instead (it ranks first), and this lockfile pins a different set: ${differ}. One of the two is stale and the scan cannot tell which: delete the one your package manager does not write`,
     });
   }
   const bunBinary = path.join(cwd, BUN_BINARY_LOCK);
@@ -465,6 +691,22 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     });
   }
   return problems;
+}
+
+/**
+ * Node's lookup of `name` from the package-lock key `from` (an install path,
+ * a workspace directory, or "" for the project): its own node_modules, then
+ * each enclosing package's, then the root's. Null when no entry answers.
+ */
+export function resolveInstallPath(packages: Record<string, unknown>, from: string, name: string): string | null {
+  let dir = from;
+  for (;;) {
+    const candidate = `${dir ? `${dir}/` : ""}node_modules/${name}`;
+    if (Object.hasOwn(packages, candidate)) return candidate;
+    if (dir === "") return null;
+    const cut = dir.lastIndexOf("/node_modules/");
+    dir = cut >= 0 ? dir.slice(0, cut) : "";
+  }
 }
 
 /** The package name a package-lock `packages` key installs: the segment after its LAST `node_modules/`. */
@@ -514,11 +756,12 @@ const V1_ALIAS = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(\d\S*)$/;
 export function readPackageLock(lock: {
   packages?: Record<string, LockEntry>;
   dependencies?: Record<string, LockEntry>;
-}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string> } {
+}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[] } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: NonRegistryEntry[] = [];
   const aliases = new Map<string, string>();
+  const declared = new Map<string, DeclaredDependency>();
 
   if (lock.packages) {
     // What asked for each name, to tell a URL dependency from a registry with tarball paths of its own.
@@ -569,8 +812,30 @@ export function readPackageLock(lock: {
       if (!versions.has(name)) versions.set(name, version);
     }
     // A workspace package's own nested copy (packages/x/node_modules/a) when nothing is hoisted.
+    const copies = new Set<string>();
     for (const instance of instances.toArray()) {
+      copies.add(`${instance.name}\0${instance.version}`);
       if (!versions.has(instance.name)) versions.set(instance.name, instance.version);
+    }
+    // What the project and each workspace member declare: the entries keyed by a directory, not an
+    // install path, each dependency resolved from that directory as Node resolves it.
+    for (const [key, value] of Object.entries(lock.packages)) {
+      if (!value || value.link || packageNameFromNodeModulesPath(key) !== "") continue;
+      for (const section of DEPENDENCY_SECTIONS) {
+        const specs = value[section];
+        if (!specs || typeof specs !== "object") continue;
+        for (const dep of Object.keys(specs)) {
+          const at = resolveInstallPath(lock.packages, key, dep);
+          const target = at ? lock.packages[at] : undefined;
+          if (!target || target.link || typeof target.version !== "string") continue;
+          const name = typeof target.name === "string" && NPM_NAME.test(target.name) ? target.name : dep;
+          const id = `${name}\0${target.version}`;
+          if (!copies.has(id)) continue;
+          const prior = declared.get(id);
+          if (prior) prior.runtime ||= isRuntimeSection(section);
+          else declared.set(id, { name, version: target.version, runtime: isRuntimeSection(section) });
+        }
+      }
     }
   }
 
@@ -604,7 +869,7 @@ export function readPackageLock(lock: {
     }
   }
 
-  return { versions, instances, uncheckable, aliases };
+  return { versions, instances, uncheckable, aliases, declared: [...declared.values()] };
 }
 
 // =============================================================================
@@ -659,9 +924,15 @@ const CARGO_LOCK_LINES = [
  * lockfile syntax (an unterminated string, a half-written table header), a
  * `[[package]]` table with no name or version, and a package named in some
  * `dependencies` list that has no table of its own. The last one catches a
- * file cut cleanly between two tables.
+ * file cut cleanly between two tables, unless the cut also took every table
+ * that names the missing ones: `undeclared`, the dependencies the manifest
+ * beside it declares that have no table (cargoLockMissingDeclared), catches that.
  */
-export function cargoLockDamage(content: string, packages: CargoPackage[] = parseCargoLockPackages(content)): LockDamage | null {
+export function cargoLockDamage(
+  content: string,
+  packages: CargoPackage[] = parseCargoLockPackages(content),
+  undeclared: string[] = [],
+): (LockDamage & { behindManifest?: true }) | null {
   const malformed: number[] = [];
   let arrayOpen = false;
   content.split(/\r?\n/).forEach((raw, index) => {
@@ -692,8 +963,119 @@ export function cargoLockDamage(content: string, packages: CargoPackage[] = pars
     const list = [...dangling].sort();
     parts.push(`${dangling.size} package${dangling.size === 1 ? "" : "s"} named as ${dangling.size === 1 ? "a dependency has" : "dependencies have"} no [[package]] table (${list.slice(0, 3).join(", ")}${list.length > 3 ? ", ..." : ""})`);
   }
+  // A crate both a `dependencies` list and the manifest name is one missing table, counted once.
+  const danglingFolded = new Set([...dangling].map(foldCrateName));
+  const unlisted = undeclared.filter((name) => !danglingFolded.has(foldCrateName(name)));
+  if (undeclared.length > 0) {
+    parts.push(`Cargo.toml declares ${undeclared.length === 1 ? "a dependency" : `${undeclared.length} dependencies`} it holds no [[package]] table for (${undeclared.slice(0, 3).join(", ")}${undeclared.length > 3 ? ", ..." : ""})`);
+  }
   if (parts.length === 0) return null;
-  return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: dangling.size + Math.max(0, nameless) };
+  const missing = dangling.size + Math.max(0, nameless) + unlisted.length;
+  // Only the manifest disagrees: cut between two tables, or written before the manifest changed.
+  if (parts.length === 1 && undeclared.length > 0) return { reason: `it is truncated or out of date: ${parts[0]}`, missing, behindManifest: true };
+  return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing };
+}
+
+/** One dependency entry of a Cargo.toml, as cargoDeclaredPackages reads it. */
+interface CargoDeclared {
+  key: string;
+  /** `package = "real-name"`: the crate the lockfile records under this key. */
+  renamed: string | null;
+  /** `workspace = true`: the entry, and any rename, come from `[workspace.dependencies]`. */
+  inherited: boolean;
+}
+
+/**
+ * The crates a Cargo.toml's own dependency tables declare, under the name the lockfile records
+ * them by: `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, their
+ * `[target.<spec>.…]` forms and `[dependencies.<name>]` sub-tables, with `package = "…"` renames
+ * applied. `[workspace.dependencies]` only offers entries to members, so it declares nothing by
+ * itself; an entry inherited with `workspace = true` takes its rename from it.
+ */
+export function cargoDeclaredPackages(content: string): string[] {
+  /** One entry per dependency per table: the same key in another table is another dependency. */
+  const declared = new Map<string, CargoDeclared>();
+  let tableNumber = 0;
+  const offered = new Map<string, string>();
+  /** The table the current line is in: a dependency table, one entry's sub-table, or neither. */
+  let table: { workspace: boolean; entry: CargoDeclared | null } | null = null;
+  const unquote = (key: string) => key.trim().replace(/^["']|["']$/g, "");
+  for (const raw of content.split(/\r?\n/)) {
+    if (raw.length > MAX_LOCKFILE_LINE) continue;
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    if (line.startsWith("[")) {
+      table = null;
+      tableNumber++;
+      const header = /^\[([^[\]]+)\]/.exec(line)?.[1].trim();
+      const at = header ? /(?:^|\.)(?:dev-|build-)?dependencies(?:\.(.+))?$/.exec(header) : null;
+      if (!header || !at) continue;
+      const prefix = header.slice(0, at.index);
+      const workspace = prefix === "workspace";
+      // `[package.metadata.x.dependencies]` and the like are a tool's own data, not cargo's.
+      if (!workspace && prefix !== "" && !prefix.startsWith("target.")) continue;
+      const entry = at[1] ? { key: unquote(at[1]), renamed: null, inherited: false } : null;
+      if (entry && !workspace) declared.set(`${tableNumber}`, entry);
+      table = { workspace, entry };
+      continue;
+    }
+    if (!table) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1);
+    const renamedTo = (text: string) => /(?:^|[\s{,])package\s*=\s*"([^"]+)"/.exec(text)?.[1] ?? null;
+    if (table.entry) {
+      // Inside `[dependencies.name]`: one key per line.
+      if (key === "package") table.entry.renamed = /^\s*"([^"]+)"/.exec(value)?.[1] ?? null;
+      else if (key === "workspace" && /^\s*true\b/.test(value)) table.entry.inherited = true;
+      if (table.workspace && key === "package" && table.entry.renamed) offered.set(table.entry.key, table.entry.renamed);
+      continue;
+    }
+    // `name = "1"`, `name = { version = "1", package = "real" }`, `name.workspace = true`. Anything
+    // else before the `=` is the inside of a value that spans lines, not an entry.
+    const entry = /^("[^"]+"|'[^']+'|[A-Za-z0-9_-]+)(?:\s*\.\s*([A-Za-z0-9_-]+))?$/.exec(key);
+    if (!entry) continue;
+    const name = unquote(entry[1]);
+    const field = entry[2] ?? null;
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) continue;
+    const renamed = field === null ? renamedTo(value) : field === "package" ? (/^\s*"([^"]+)"/.exec(value)?.[1] ?? null) : null;
+    const inherited = field === null ? /(?:^|[\s{,])workspace\s*=\s*true\b/.test(value) : field === "workspace" && /^\s*true\b/.test(value);
+    if (table.workspace) {
+      if (renamed) offered.set(name, renamed);
+      continue;
+    }
+    // Dotted keys spread one entry over lines (`name.version = "1"`, `name.package = "real"`).
+    const known = declared.get(`${tableNumber} ${name}`);
+    if (known) {
+      known.renamed ??= renamed;
+      known.inherited ||= inherited;
+    } else declared.set(`${tableNumber} ${name}`, { key: name, renamed, inherited });
+  }
+  // A crate name is letters, digits, `-` and `_`: a rename that is anything else names no crate.
+  const crate = (name: string | null | undefined) => (name && /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : null);
+  const lockedAs = (d: CargoDeclared) => crate(d.renamed !== null ? d.renamed : d.inherited && offered.has(d.key) ? offered.get(d.key) : d.key);
+  return [...new Set([...declared.values()].map(lockedAs).filter((name): name is string => name !== null))];
+}
+
+/** crates.io reads `-` and `_` as one name; a manifest may spell either. */
+const foldCrateName = (name: string) => name.toLowerCase().replace(/_/g, "-");
+
+/**
+ * The dependencies the Cargo.toml beside a Cargo.lock declares that the lockfile holds no
+ * `[[package]]` table for. Cargo locks every declared dependency (optional, dev, build and
+ * other-platform ones included), so a missing one means the lockfile was cut short between two
+ * tables or was written for an older manifest. Empty when the manifest cannot be read.
+ */
+function cargoLockMissingDeclared(cwd: string, packages: CargoPackage[]): string[] {
+  let manifest: string;
+  try {
+    manifest = readTextFile(path.join(cwd, "Cargo.toml"));
+  } catch {
+    return [];
+  }
+  const locked = new Set(packages.map((pkg) => foldCrateName(pkg.name)));
+  return cargoDeclaredPackages(manifest).filter((name) => !locked.has(foldCrateName(name))).sort();
 }
 
 function resolveRust(cwd: string): VersionSource {
@@ -709,8 +1091,13 @@ function resolveRust(cwd: string): VersionSource {
   try {
     const content = readTextFile(lockPath);
     const packages = parseCargoLockPackages(content);
-    const damage = cargoLockDamage(content, packages);
-    if (damage) problems.push(damagedProblem(lockPath, damage));
+    if (packages.length === 0) {
+      // Cargo writes at least the project's own package: a lockfile with none was not read at all.
+      const error = describeParseError(lockPath, null) ?? "it holds no [[package]] table, and cargo always writes at least the project's own: it is truncated or not a Cargo.lock";
+      return { ...emptySource(), problems: [{ file: lockPath, error }] };
+    }
+    const damage = cargoLockDamage(content, packages, cargoLockMissingDeclared(cwd, packages));
+    if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing, damage.behindManifest === true));
     const versionsByName = new Map<string, string[]>();
     // Cargo writes `source` on every registry or git package. In a file it
     // wrote, a package with none is a workspace member or path dependency:
@@ -745,7 +1132,10 @@ function resolveRust(cwd: string): VersionSource {
     for (const [name, list] of versionsByName) {
       if (!versions.has(name)) versions.set(name, list[0]);
     }
-  } catch { /* skip */ }
+  } catch (error) {
+    // Present and not read: it is the source of nothing, and the answer says why.
+    return { ...emptySource(), problems: [{ file: lockPath, error: describeParseError(lockPath, error) ?? "could not be parsed" }] };
+  }
 
   return found(versions, instances, lockPath, "lockfile", {
     ...(problems.length > 0 ? { problems } : {}),
@@ -758,23 +1148,28 @@ function resolveRustFromManifest(cwd: string): VersionSource {
   const cargoPath = path.join(cwd, "Cargo.toml");
   if (!fs.existsSync(cargoPath)) return emptySource();
 
+  let manifest: string;
   try {
-    // name = "1.0" or name = { version = "1.0", ... }, inside dependency tables
-    // only: [package]'s own `version = "0.1.0"` and `edition = "2021"` were read
-    // as crates named "version" and "edition".
-    let inDeps = false;
-    for (const line of readTextFile(cargoPath).split(/\r?\n/)) {
-      const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
-      if (header) {
-        inDeps = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(header[1].trim());
-        continue;
-      }
-      if (!inDeps) continue;
-      const match = /^\s*([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]+)"|.*?\bversion\s*=\s*"([^"]+)")/.exec(line);
-      const spec = match?.[2] ?? match?.[3];
-      if (match && spec && /^[=^~]?\s*\d/.test(spec)) declared.set(match[1], spec);
+    manifest = readTextFile(cargoPath);
+  } catch (error) {
+    // Present and not readable: what it declares is not known, which is not "declares nothing".
+    return { ...emptySource(), problems: [{ file: cargoPath, error: unreadableReason(error) }] };
+  }
+  // name = "1.0" or name = { version = "1.0", ... }, inside dependency tables
+  // only: [package]'s own `version = "0.1.0"` and `edition = "2021"` were read
+  // as crates named "version" and "edition".
+  let inDeps = false;
+  for (const line of manifest.split(/\r?\n/)) {
+    const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (header) {
+      inDeps = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(header[1].trim());
+      continue;
     }
-  } catch { /* skip */ }
+    if (!inDeps) continue;
+    const match = /^\s*([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]+)"|.*?\bversion\s*=\s*"([^"]+)")/.exec(line);
+    const spec = match?.[2] ?? match?.[3];
+    if (match && spec && /^[=^~]?\s*\d/.test(spec)) declared.set(match[1], spec);
+  }
 
   // Cargo reads "1.0" as "^1.0": only "=1.2.3" names one version.
   return declaredRanges(declared, (spec) => /^=\s*\d+\.\d+\.\d+/.test(spec.trim()), cargoPath);

@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * dependency_check, the first stage of a pass (dependency-check.ts checkPass): the items no lookup
+ * may be made for (a private package name, a Go module path the go command does not accept as
+ * written) are answered in place, never looked up; and with live lookups off, every item is
+ * answered without a lookup.
+ */
+
+import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
+import type { LiveIntelligence } from "../live/index.js";
+import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
+import { head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
+
+/** A pass's items after screening: the ones to look up, and how to put every answer back in the order asked. */
+export interface Screened {
+  /** The items that may be looked up, in the order asked. */
+  requested: Requested[];
+  /** The count of private items and npm's registry notice, for the pass's `_meta`. */
+  privateMeta: { private?: number; registryNotice?: string };
+  /** The results in the order asked, private items in their places. */
+  inOrder: (checked: ItemResult[]) => ItemResult[];
+  /** Per-item extras in the order asked, null at the private items. */
+  inOrderOf: <T>(checked: T[]) => Array<T | null>;
+}
+
+/** Which items of a pass may be looked up; the others are answered here, in their places. */
+export async function screenItems(all: Requested[], liveIntel: LiveIntelligence | null): Promise<Screened> {
+  // A private package name is never sent anywhere (live/private-packages.ts): such an item is
+  // "not checked (private)", never clean, and nothing below sees it.
+  // The item names its ecosystem, so a registry or proxy for it that is not public makes any name private (R8).
+  const privateWhy = all.map((r) => (liveIntel?.lookupPrivateReason ?? liveIntel?.privateReason)?.call(liveIntel, r.ecosystem, r.package) ?? null);
+  // A Go module path the go command would not accept as written (`..`, `//`, a trailing `/`, `@`,
+  // or a case the module does not declare) matches no advisory at OSV.dev: it is NOT CHECKED, with
+  // the canonical path named, never `proceed` (pre-publish audit 2026-11-12, B1).
+  const live = Boolean(liveIntel?.isEnabled());
+  const goPath = await Promise.all(
+    all.map((r, i) => (r.ecosystem === "Go" && !privateWhy[i] ? checkGoModulePath(r.package, live && r.target.kind === "exact" ? r.target.version : null, live ? undefined : offlineFetch) : null)),
+  );
+  const requested = all.filter((_, i) => !privateWhy[i] && !(goPath[i] && !goPath[i]!.ok));
+  const privateItems = all.flatMap((r, i) => {
+    const why = privateWhy[i];
+    if (why) return [{ at: i, result: privateResult(r, why) }];
+    const g = goPath[i];
+    return g && !g.ok ? [{ at: i, result: goPathResult(r, g) }] : [];
+  });
+  /** The results in the order asked, private items in their places. */
+  const inOrder = (checked: ItemResult[]): ItemResult[] => {
+    const out: ItemResult[] = [];
+    let next = 0;
+    for (let i = 0; i < all.length; i++) {
+      const p = privateItems.find((x) => x.at === i);
+      out.push(p ? p.result : checked[next++]);
+    }
+    return out;
+  };
+  const notice = all.some((r) => r.ecosystem === "npm") ? (liveIntel?.getRegistryNotice?.() ?? null) : null;
+  const privateCount = privateWhy.filter(Boolean).length;
+  const privateMeta = { ...(privateCount > 0 ? { private: privateCount } : {}), ...(notice ? { registryNotice: notice } : {}) };
+  /** Per-item extras in the order asked, null at the private items. */
+  const inOrderOf = <T>(checked: T[]): Array<T | null> => {
+    const out: Array<T | null> = [];
+    let next = 0;
+    for (let i = 0; i < all.length; i++) out.push(privateItems.some((x) => x.at === i) ? null : (checked[next++] ?? null));
+    return out;
+  };
+  return { requested, privateMeta, inOrder, inOrderOf };
+}
+
+/** Live lookups off (FOURDA_OFFLINE): every item `unknown`, with a cached answer named where one exists. */
+export async function offlineResults(liveIntel: LiveIntelligence | null, requested: Requested[]): Promise<{ results: ItemResult[]; osvCached: boolean }> {
+  const reason = "Live lookups are disabled (FOURDA_OFFLINE=true); nothing about these versions could be checked.";
+  // An exact version OSV.dev answered for before is named with that cached answer and its age.
+  // The verdict stays `unknown`: a cached answer is not a current one (pre-publish round 10, W5).
+  const cached = liveIntel?.answersFromCache?.() ? await cachedAdvisoryNotes(liveIntel, requested) : new Map<Requested, string>();
+  return {
+    results: requested.map((r) => ({ ...head(provisional(r)), verdict: "unknown" as const, reason: cached.has(r) ? `Live lookups are disabled (FOURDA_OFFLINE=true), so this version was not checked now. ${cached.get(r)}` : reason, signals: [] })),
+    osvCached: cached.size > 0,
+  };
+}
+
+/** A fetch that never reaches the network (offline): the Go path check then reads nothing. */
+const offlineFetch = (async () => {
+  throw new Error("offline");
+}) as unknown as typeof import("../live/http-utils.js").fetchWithTimeout;
+
+function goPathResult(r: Requested, verdict: Extract<GoPathVerdict, { ok: false }>): ItemResult {
+  return {
+    ...head(provisional(r)),
+    verdict: "unknown",
+    reason: goPathNotCheckedText(r.package, verdict),
+    signals: [],
+    not_checked: "module_path",
+    ...(verdict.canonical ? { canonical_module_path: verdict.canonical } : {}),
+  };
+}
+
+/**
+ * An item whose package is private: unknown, with why, and nothing about it looked up. The
+ * agent is told how to check it instead (the private registry's own tooling).
+ */
+function privateResult(r: Requested, why: string): ItemResult {
+  return {
+    ...head(provisional(r)),
+    verdict: "unknown",
+    reason: `NOT CHECKED (private): ${r.package} is a private package (${why}), so nothing about it was sent to OSV.dev or a public registry, and nothing about ${provisional(r).to} is known. This is not a clean result: check it with your private registry's own tooling.`,
+    signals: [],
+    not_checked: "private",
+  };
+}

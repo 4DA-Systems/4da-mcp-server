@@ -151,7 +151,7 @@ export async function getRelevantWisdomHybrid(
   task: string,
   files: string[],
   config: EmbeddingConfig,
-): Promise<{ wisdom: WisdomEntry[]; recall_mode: WisdomRecallMode }> {
+): Promise<{ wisdom: WisdomEntry[]; recall_mode: WisdomRecallMode; recall_note?: string }> {
   const rawDb = db.getRawDb();
   // The lexical ranking runs here and may use the file paths; the embedding provider gets the
   // task text only. README says "no file paths" leave the machine, and a configured OpenAI
@@ -188,6 +188,9 @@ export async function getRelevantWisdomHybrid(
       )
     : null;
 
+  // Said when text that names a private package was kept from the embedding provider (embeddings.ts).
+  const withheld = decSem?.privateWithheld ?? memSem?.privateWithheld;
+  const note = withheld ? { recall_note: withheld.note } : {};
   const anySemantic = (decSem?.embeddedCount ?? 0) > 0 || (memSem?.embeddedCount ?? 0) > 0;
   if (!anySemantic) {
     // Provider unreachable / nothing embedded -> behave exactly like lexical.
@@ -198,6 +201,7 @@ export async function getRelevantWisdomHybrid(
     return {
       wisdom: entries.sort((a, b) => b.score - a.score).slice(0, WISDOM_LIMIT).map(toWisdomEntry),
       recall_mode: "ranked_lexical",
+      ...note,
     };
   }
 
@@ -223,5 +227,6 @@ export async function getRelevantWisdomHybrid(
   return {
     wisdom: scored.sort((a, b) => b.score - a.score).slice(0, WISDOM_LIMIT).map(toWisdomEntry),
     recall_mode: "hybrid",
+    ...note,
   };
 }

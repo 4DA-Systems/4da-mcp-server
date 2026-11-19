@@ -247,12 +247,15 @@ const RELEASE_SOURCES: Record<string, { source: string; prefix: string }> = {
 /**
  * Registry release rows the desktop app's feed holds for one package, newer
  * than the installed version. Matched on the registry's own title format
- * (`crates.io: fastembed v7.1.0`), never on a free-text mention. Empty in
- * standalone mode (no feed) or for ecosystems the feed does not watch.
+ * (`crates.io: fastembed v7.1.0`), never on a free-text mention. Null when the
+ * feed holds no release of this package at all (standalone mode, an ecosystem
+ * the feed does not watch, a package it does not follow): that is no answer,
+ * and [] would read as "nothing newer". [] only when it follows the package and
+ * recorded nothing above the installed version.
  */
-export function releasesFor(db: FourDADatabase, pkg: TaskPackage): Array<{ version: string; seen: string; url: string | null }> {
+export function releasesFor(db: FourDADatabase, pkg: TaskPackage): Array<{ version: string; seen: string; url: string | null }> | null {
   const spec = RELEASE_SOURCES[pkg.ecosystem];
-  if (!spec) return [];
+  if (!spec) return null;
   let rows: Array<{ title: string; url: string | null; created_at: string }>;
   try {
     rows = db
@@ -263,7 +266,7 @@ export function releasesFor(db: FourDADatabase, pkg: TaskPackage): Array<{ versi
       )
       .all(spec.source, `${spec.prefix}${pkg.name} v%`) as typeof rows;
   } catch {
-    return [];
+    return null;
   }
   const newest = pkg.installed.reduce<string | null>(
     (max, v) => (max === null || compareVersions(v, max, pkg.ecosystem) > 0 ? v : max),
@@ -271,13 +274,16 @@ export function releasesFor(db: FourDADatabase, pkg: TaskPackage): Array<{ versi
   );
   const seen = new Set<string>();
   const out: Array<{ version: string; seen: string; url: string | null }> = [];
+  let follows = false;
   for (const row of rows) {
     const version = row.title.slice(`${spec.prefix}${pkg.name} v`.length).trim();
     if (!version || seen.has(version) || (row.title !== `${spec.prefix}${pkg.name} v${version}`)) continue;
+    follows = true;
     if (newest && compareVersions(version, newest, pkg.ecosystem) <= 0) continue;
     seen.add(version);
     out.push({ version, seen: row.created_at, url: row.url });
   }
+  if (!follows) return null;
   return out.sort((a, b) => compareVersions(b.version, a.version, pkg.ecosystem)).slice(0, 5);
 }
 

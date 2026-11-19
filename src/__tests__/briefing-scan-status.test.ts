@@ -76,7 +76,6 @@ function createTestDatabase(): FourDADatabase {
   rawDb.prepare("INSERT INTO user_identity (id, role) VALUES (1, 'Senior Developer')").run();
   rawDb.prepare("INSERT INTO tech_stack (technology) VALUES ('rust')").run();
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = rawDb;
   return instance;
 }

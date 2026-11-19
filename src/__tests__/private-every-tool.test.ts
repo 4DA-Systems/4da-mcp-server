@@ -210,7 +210,9 @@ describe.each(FIXTURES)("a private $ecosystem parent ($privateName) of a vulnera
         const u = new URL(url);
         if (u.hostname === "api.osv.dev" && u.pathname === "/v1/querybatch") {
           const { queries } = JSON.parse(body) as { queries: Array<{ package: { name: string }; version: string }> };
-          return json({ results: queries.map((q) => ({ vulns: q.package.name === f.publicName ? [{ id: advisory.id, modified: advisory.modified }] : [] })) });
+          // Per version, as OSV.dev answers: the advisory affects the installed release, not the fixed one.
+          const installed = (v: string) => v.replace(/^v/, "") === f.publicVersion.replace(/^v/, "");
+          return json({ results: queries.map((q) => ({ vulns: q.package.name === f.publicName && installed(q.version) ? [{ id: advisory.id, modified: advisory.modified }] : [] })) });
         }
         if (u.hostname === "api.osv.dev" && u.pathname.startsWith("/v1/vulns/")) return json(advisory);
         if (u.hostname === "api.osv.dev" && u.pathname === "/v1/query") {

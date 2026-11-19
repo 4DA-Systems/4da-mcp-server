@@ -141,7 +141,7 @@ it('answers a non-integer or unsafe-integer id, and a "method" that is not a str
 describe.skipIf(!fs.existsSync(serverEntry))("the built server over stdio", () => {
   it("answers a malformed line with -32700 and a call before initialize with -32600", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "4da-gate-"));
-    const env = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
+    const env: NodeJS.ProcessEnv = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
     delete env.FOURDA_DB_PATH;
     const child = spawn(process.execPath, [serverEntry], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
@@ -158,7 +158,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("the built server over stdio", () =
 
   it('answers "params": null and an object id on stdout (blind audit round 4)', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "4da-gate-"));
-    const env = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
+    const env: NodeJS.ProcessEnv = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
     delete env.FOURDA_DB_PATH;
     const child = spawn(process.execPath, [serverEntry], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
@@ -176,7 +176,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("the built server over stdio", () =
   }, 60_000);
   it("answers every request line exactly once: fractional, unsafe-integer ids and a non-string method (blind audit round 5)", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "4da-gate-"));
-    const env = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
+    const env: NodeJS.ProcessEnv = { ...process.env, FOURDA_OFFLINE: "true", FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "no-app") };
     delete env.FOURDA_DB_PATH;
     const child = spawn(process.execPath, [serverEntry], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";

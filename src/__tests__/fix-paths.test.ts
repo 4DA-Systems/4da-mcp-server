@@ -347,7 +347,7 @@ function entriesFor(vulns: OsvVulnerability[], name: string, eco: "npm" | "crate
 const sparse = (versions: string[], reqs: Record<string, Record<string, string>> = {}) =>
   versions.map((vers) => JSON.stringify({ name: "x", vers, yanked: false, deps: Object.entries(reqs[vers] ?? {}).map(([name, req]) => ({ name, req, kind: "normal" })) })).join("\n");
 
-/** `parentManifests`: per "name/version", the npm manifest dependencies to serve instead, or null for an unreachable registry (503). */
+/** `parentManifests`: per "name/version", the dependencies that release has in the package's npm document, or null for an unreachable registry (503). */
 function stubNetwork(parentManifests: Record<string, Record<string, string> | null> = {}): string[] {
   const calls: string[] = [];
   const advisories: Record<string, OsvVulnerability[]> = { openssl: OPENSSL, mio: MIO, minimist: MINIMIST, braces: BRACES, "left-pad": [] };
@@ -386,10 +386,11 @@ function stubNetwork(parentManifests: Record<string, Record<string, string> | nu
     const npm = /^https:\/\/registry\.npmjs\.org\/([^/]+)(?:\/(.+))?$/.exec(url);
     if (npm) {
       const name = decodeURIComponent(npm[1]);
-      if (npm[2]) {
-        const deps = npmDeps[`${name}/${decodeURIComponent(npm[2])}`];
-        return deps === null ? new Response("", { status: 503 }) : json({ dependencies: deps ?? {} });
-      }
+      // Only whole-package documents are served: a parent's requirements are read from its document, never from <name>/<version>.
+      if (npm[2]) return new Response("", { status: 404 });
+      const releases = Object.entries(npmDeps).filter(([key]) => key.startsWith(`${name}/`));
+      if (releases.some(([, deps]) => deps === null)) return new Response("", { status: 503 });
+      if (releases.length > 0) return json({ versions: Object.fromEntries(releases.map(([key, deps]) => [key.slice(name.length + 1), { dependencies: deps }])) });
       return npmVersions[name] ? json({ versions: Object.fromEntries(npmVersions[name].map((v) => [v, {}])) }) : new Response("", { status: 404 });
     }
     const crate = /^https:\/\/index\.crates\.io\/(.+)$/.exec(url);
@@ -522,8 +523,10 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const step = plan.recommendations.find((s: { package: string }) => s.package === "braces");
     expect(step).toMatchObject({ targetVersion: "3.0.3", action: "lockfile_refresh", refreshCommands: [{ command: "pnpm update braces --depth Infinity" }] });
     expect(step.reasons.join(" ")).toMatch(/GHSA-vfj7-8cjw-p6xm also affects 3\.0\.3 and every newer release/);
-    expect(calls).toContain("https://registry.npmjs.org/chokidar/3.5.3");
-    expect(calls).toContain("https://registry.npmjs.org/micromatch/4.0.5");
+    // Read from each parent's whole-package document: the installed version is never in the URL.
+    expect(calls).toContain("https://registry.npmjs.org/chokidar");
+    expect(calls).toContain("https://registry.npmjs.org/micromatch");
+    expect(calls.filter((u) => /^https:\/\/registry\.npmjs\.org\/[^/]+\/./.test(u))).toEqual([]);
   });
 
   it("Cargo: openssl 0.10.38 targets 0.10.80 (not the affected 0.10.79) and mio 0.8.0 is a precise cargo update", async () => {
@@ -544,12 +547,14 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     expect(mio).toMatchObject({ targetVersion: "0.8.11", action: "lockfile_refresh", refreshCommands: [{ command: "cargo update -p mio@0.8.0 --precise 0.8.11" }] });
   });
 
-  it("a parent that pins the vulnerable version keeps waiting on upstream, and says which requirement blocks", async () => {
+  it("a parent that pins the vulnerable version blocks a refresh, and says which requirement blocks", async () => {
     stubNetwork();
     const li = intel(pinnedDir, "javascript", ["left-pad"], entriesFor(MINIMIST, "minimist", "npm", "1.2.5", pinnedDir));
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const step = plan.recommendations.find((s: { package: string }) => s.package === "minimist");
-    expect(step.action).toBe("waiting_on_upstream");
+    // left-pad's releases are not served here, so whether one admits the fix is unread: not determined, never "waiting on upstream".
+    expect(step.action).toBe("not_determined");
+    expect(plan.waitingOnUpstream).toBe(0);
     expect(step.reasons.join(" ")).toMatch(/left-pad 1\.0\.0 requires "1\.2\.5"/);
   });
 
@@ -585,13 +590,19 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
   });
 
   it("pnpm: a parent whose requirement excludes the target blocks it even when another parent's cannot be read (AD-055 ¶1)", async () => {
-    stubNetwork({ "chokidar/3.5.3": null, "micromatch/4.0.5": { braces: "3.0.2" } });
+    const calls = stubNetwork({ "chokidar/3.5.3": null, "micromatch/4.0.5": { braces: "3.0.2" } });
     const li = intel(pnpmDir, "javascript", ["chokidar"], entriesFor(BRACES, "braces", "npm", "3.0.2", pnpmDir));
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const step = plan.recommendations.find((s: { package: string }) => s.package === "braces");
-    expect(step.action).toBe("waiting_on_upstream");
+    // Never a refresh on that. micromatch's requirement comes from its document, which lists 4.0.5 as its
+    // only release: no micromatch release admits the fix, so the copy is forced, never "waiting on upstream".
+    expect(step.action).toBe("override_or_replace");
+    expect(step.refreshCommands).toBeUndefined();
     expect(step.refreshInferred).toBeUndefined();
-    expect(step.reasons.join(" ")).toMatch(/micromatch 4\.0\.5 requires "3\.0\.2"/);
+    expect(step.reasons.join(" ")).toMatch(/micromatch 4\.0\.5 requires "3\.0\.2", and micromatch 4\.0\.5 is already its latest release/);
+    expect(plan.waitingOnUpstream).toBe(0);
+    expect(calls).toContain("https://registry.npmjs.org/micromatch");
+    expect(calls.filter((u) => /^https:\/\/registry\.npmjs\.org\/[^/]+\/./.test(u))).toEqual([]);
   });
 
   it("when OSV cannot be read, the target is labelled unverified instead of being trusted silently", async () => {
@@ -600,7 +611,8 @@ describe("upgrade_planner — fix paths are verified against every advisory and 
     const plan = (await executeUpgradePlanner(noDb, { include_dev: true }, li)) as Record<string, any>;
     const openssl = plan.recommendations.find((s: { package: string }) => s.package === "openssl");
     // Not confirmed: no targetVersion, the release named in a NOT CHECKED reason (pre-publish audit 2026-11-14).
-    expect(openssl).toMatchObject({ targetVersion: null, action: "waiting_on_upstream", fixPathChecked: "installed_advisories_only" });
+    // Nothing about its parents was read either: the fix path is not determined, never "waiting on upstream".
+    expect(openssl).toMatchObject({ targetVersion: null, action: "not_determined", fixPathChecked: "installed_advisories_only" });
     expect(openssl.reasons[0]).toMatch(/^NOT CHECKED: 0\.10\.79 was not confirmed free of openssl's known advisories/);
     expect(plan.summary).toMatch(/checked only against the installed version's advisories/);
   });

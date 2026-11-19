@@ -24,12 +24,17 @@ import type {
   AliasSeverityReport,
   ResolvedDependency,
   OsvVulnerability,
+  SecurityPlaceholder,
   VulnerabilityEntry,
   VulnerabilityScanResult,
 } from "./types.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pushAll } from "../array-utils.js";
 import { isOfflineMode } from "../env-flags.js";
+import { shutdownSignal } from "../shutdown.js";
 import { LOOKUPS_DISABLED } from "./scan-coverage.js";
+import { readRecords } from "./record-reader.js";
+import { RecordQueue } from "./record-queue.js";
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns/";
@@ -50,14 +55,56 @@ const MAX_BATCH_SIZE = 1000;
  * round trips. Now a pool of HYDRATE_CONCURRENCY workers keeps that many
  * requests in flight (osv-scanner itself hydrates in parallel), a failed or
  * throttled request is retried once, and every result is cached for 24 h.
+ * The pool was always full at 24 (2,025-dependency tree: 263 records in 4.3 s
+ * at a 356 ms median); at 48 the same records took 2.4 s with no throttling.
  */
-const HYDRATE_CONCURRENCY = 24;
-/** querybatch chunks (1,000 dependencies each) sent at once. */
-const BATCH_CONCURRENCY = 4;
+export const HYDRATE_CONCURRENCY = 48;
+/**
+ * Advisory records one scan asks OSV.dev for (cached ones are not counted). An answer naming very
+ * many ids started one request per id with nothing to stop it: 22,973 in 30 s, still going after
+ * the answer was returned. Past the limit the records are not asked for; their advisories are
+ * listed by id, NOT CHECKED, and the next scan reads on from the cache.
+ */
+export const MAX_DETAIL_FETCHES = 2_000;
+/** How long one scan keeps starting record requests; after it the rest are unread, and said to be. */
+const DETAIL_WINDOW_MS = 60_000;
+/** A record request still out after this long, once every record has been asked for, is sent once more (record-reader.ts). */
+const HEDGE_AFTER_MS = 1_000;
+/** Duplicate record requests one scan may send. */
+const MAX_HEDGES = 8;
+/**
+ * How long OSV.dev's "no such record" (404) is kept: as long as a dependency's own answer, so it
+ * never outlives the answer that named the id. Every warm scan of a tree with Go advisories asked
+ * again for 16 GHSA aliases OSV.dev does not hold, up to three times a call (2026-11-19).
+ */
+const OSV_ABSENT_TTL = OSV_CACHE_TTL;
+/**
+ * More advisory ids for one release than this is not an answer about a release (the most OSV.dev
+ * holds for one is in the hundreds): the dependency is unanswered, so nothing is built per id.
+ */
+export const MAX_ADVISORIES_PER_DEPENDENCY = 5_000;
+/** querybatch chunks sent at once. */
+const BATCH_CONCURRENCY = 8;
+/** The smallest chunk a large query is split into. */
+const MIN_BATCH_SIZE = 200;
+
+/**
+ * Dependencies per querybatch request. OSV.dev answers in time proportional to the queries in a
+ * request (about 0.4 s plus 2 ms a query, measured 2026-11-19), so a tree is split into up to
+ * BATCH_CONCURRENCY chunks sent together, never more than MAX_BATCH_SIZE each.
+ */
+export function batchSize(total: number): number {
+  return Math.min(MAX_BATCH_SIZE, Math.max(MIN_BATCH_SIZE, Math.ceil(total / BATCH_CONCURRENCY)));
+}
 /** A query of at most this many dependencies waits COALESCE_MS for others to share its request (OsvHttpSource.query). */
 const COALESCE_MAX_DEPS = 50;
 const COALESCE_MS = 20;
 const DETAIL_RETRY_DELAY_MS = 750;
+/**
+ * With a deadline, record requests stop this long before it: the alias grades, the second route
+ * for a failed record and building the answer come after them (0.7 s on a 2,084-dependency tree).
+ */
+const POST_RECORDS_MS = 1_500;
 /** GHSA alias records read per scan to rate records that carry no severity (rateFromAliases). */
 export const MAX_ALIAS_LOOKUPS = 50;
 /** The whole alias lookup's time budget per scan; past it the records stay unknown, said so. */
@@ -69,7 +116,44 @@ export const ALIAS_BUDGET_MS = 5_000;
  * side and fetch the same advisories twice, both before either could cache
  * them; a concurrent scan now waits on the request already made.
  */
-const detailsInFlight = new Map<string, Promise<OsvVulnerability | null>>();
+const detailsInFlight = new Map<string, Promise<RecordAnswer | null>>();
+
+/** OSV.dev's answer for one advisory id: its record, or that it holds none (404). Null where a request has no answer. */
+type RecordAnswer = { record: OsvVulnerability } | { absent: true };
+
+/**
+ * Where records a call ran out of time for are read on (record-queue.ts). A read there starts only
+ * while fewer than HYDRATE_CONCURRENCY record requests are out in the process: a call's own come first.
+ */
+const backgroundRecords = new RecordQueue({ canStart: () => detailsInFlight.size < HYDRATE_CONCURRENCY });
+
+/** Settles when the server's background queue has nothing waiting or running (tests). */
+export function backgroundReadsDrained(): Promise<void> {
+  return backgroundRecords.drained();
+}
+
+/**
+ * Requests to OSV.dev made for the scan running in this async context: its own, and any a
+ * concurrent scan made that carried its dependencies or advisory ids (a shared batch, a record
+ * already being fetched). A scan reports the count (`osvRequests`), so an answer can say whether
+ * anything was sent in its call; zero means every answer came from the cache.
+ */
+const osvRequests = new AsyncLocalStorage<{ made: number }>();
+
+function noteOsvRequest(): void {
+  const scan = osvRequests.getStore();
+  if (scan) scan.made++;
+}
+
+/** `budgetMs`, or less when `deadline` (epoch ms) comes sooner; never below zero. */
+function withinDeadline(budgetMs: number, deadline?: number): number {
+  return deadline === undefined ? budgetMs : Math.max(0, Math.min(budgetMs, deadline - Date.now()));
+}
+
+/** "5 s", "0.4 s", "0 s". */
+function secondsOf(ms: number): string {
+  return `${Math.round(ms / 100) / 10} s`;
+}
 
 /** Run `work` over `items` with at most `limit` in flight; results in input order. */
 async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
@@ -150,14 +234,27 @@ export interface AdvisorySource {
    * "checked, nothing found". `failure` says why when any entry is null.
    */
   query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer>;
-  /** The full record of each id it can find; a missing id is left out, never fatal. */
-  details(ids: string[]): Promise<Map<string, OsvVulnerability>>;
+  /**
+   * The full record of each id it can find; a missing id is left out, never fatal. Ids the source
+   * did not read (its per-scan limit, the time it has, `deadline`) are added to `unread`, with why.
+   */
+  details(ids: string[], unread?: DetailsUnread, options?: { refresh?: boolean; deadline?: number }): Promise<Map<string, OsvVulnerability>>;
   /**
    * The full records affecting one exact dependency (OSV.dev's `/v1/query` with a version), or
    * null when they cannot be had. Asked only for a dependency whose record fetch failed: the
    * same records carry the severity, the summary and the fix (pre-publish audit 2026-11-14).
    */
   recordsFor?(dep: ResolvedDependency): Promise<OsvVulnerability[] | null>;
+}
+
+/** The ids `details` did not read, and why, in words. */
+export interface DetailsUnread {
+  ids: Set<string>;
+  reason: string | null;
+  /** Of `ids`, those being read after the call (asked for and still out, or queued: record-queue.ts). */
+  background?: Set<string>;
+  /** Of `ids`, how many the call ran out of time for and could not hand on (the queue was full). */
+  refused?: number;
 }
 
 /** OSV.dev over HTTP: querybatch for membership, per-id hydration for records. */
@@ -169,6 +266,8 @@ export class OsvHttpSource implements AdvisorySource {
     private readonly rateLimiter: RateLimiter,
     /** Total wait for query budget per scan (tests shorten it). */
     private readonly tokenWaitMs: number = MAX_TOKEN_WAIT_MS,
+    /** The bounds on record fetches per scan (tests lower them), and the queue that reads on after a call (tests pass their own). */
+    private readonly limits: { maxDetailFetches?: number; detailWindowMs?: number; background?: RecordQueue } = {},
   ) {}
 
   /** Small queries waiting to go out together (coalesce). */
@@ -184,6 +283,8 @@ export class OsvHttpSource implements AdvisorySource {
    */
   async query(deps: ResolvedDependency[]): Promise<AdvisoryAnswer> {
     if (deps.length === 0 || deps.length > COALESCE_MAX_DEPS) return this.queryNow(deps);
+    // The shared request is made in the first caller's context: every caller's dependencies are in it.
+    noteOsvRequest();
     return new Promise<AdvisoryAnswer>((resolve) => {
       this.waiting.push({ deps, resolve });
       this.flushTimer ??= setTimeout(() => void this.flush(), COALESCE_MS);
@@ -215,7 +316,8 @@ export class OsvHttpSource implements AdvisorySource {
     // querybatch returns only `{ id, modified }`; the rich fields (severity,
     // fixed version, summary, references) come from per-advisory hydration.
     const chunks: ResolvedDependency[][] = [];
-    for (let offset = 0; offset < deps.length; offset += MAX_BATCH_SIZE) chunks.push(deps.slice(offset, offset + MAX_BATCH_SIZE));
+    const size = batchSize(deps.length);
+    for (let offset = 0; offset < deps.length; offset += size) chunks.push(deps.slice(offset, offset + size));
     // Batches go out as query budget allows, waiting for it to refill (bounded),
     // instead of the whole scan failing when a tree needs more batches than the
     // bucket holds. A batch that gets no budget, or fails twice, is unanswered:
@@ -233,6 +335,13 @@ export class OsvHttpSource implements AdvisorySource {
       }
       try {
         const sent = await this.sendBatch(chunk, deadline);
+        // A chunk contributes exactly one entry per dependency it holds, or none of its answers
+        // are used: the chunks are laid end to end below, so a list of any other length would
+        // put its answers, and every later chunk's, on the wrong dependencies.
+        if (sent.ids.length !== chunk.length) {
+          failure ??= `OSV.dev's answer could not be matched to the dependencies asked about (${sent.ids.length} answers for ${chunk.length})`;
+          return chunk.map(() => null);
+        }
         if (sent.incomplete) failure ??= sent.incomplete;
         return sent.ids;
       } catch (error) {
@@ -282,6 +391,11 @@ export class OsvHttpSource implements AdvisorySource {
         abandon(`${describeFailure(error)} while reading page ${page} of the answer`);
         break;
       }
+      // One result per query still open, or the page is not attributed to any of them.
+      if (more.length !== open.length) {
+        abandon(`OSV.dev answered ${more.length} results for ${open.length} queries on page ${page} of the answer`);
+        break;
+      }
       const next: typeof open = [];
       more.forEach((r, k) => {
         const { index } = open[k];
@@ -301,6 +415,7 @@ export class OsvHttpSource implements AdvisorySource {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, BATCH_RETRY_DELAY_MS).unref());
       try {
+        noteOsvRequest();
         const response = await fetchWithTimeout(OSV_BATCH_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -343,33 +458,127 @@ export class OsvHttpSource implements AdvisorySource {
    * misses from `/v1/vulns/{id}` with bounded concurrency. A failed fetch is
    * skipped (not fatal) — the caller falls back to the index-only shape so a
    * real advisory is never silently dropped just because its detail 404'd.
+   *
+   * Bounded: at most MAX_DETAIL_FETCHES misses are asked for, HYDRATE_CONCURRENCY at a time, and
+   * no request starts after DETAIL_WINDOW_MS. Past the limit or the window the rest is reported in
+   * `unread` and never fetched later by this scan.
+   *
+   * `deadline` (epoch ms) is when the calling tool must answer: no request starts after it, and
+   * the read stops waiting then. Requests still out finish and are cached when they arrive; ids
+   * not yet asked for go to the background queue (record-queue.ts), within the per-scan limit, so
+   * the next call answers from the cache. Both are reported in `unread` with how many are being
+   * read on (`background`).
+   *
+   * OSV.dev's 404 for an id is an answer and is cached as such (OSV_ABSENT_TTL).
+   *
+   * `refresh` asks for every record again, cached or not. A cached record is replaced when the
+   * new one arrives and stands when it does not: nothing is dropped ahead of its replacement.
    */
-  async details(ids: string[]): Promise<Map<string, OsvVulnerability>> {
+  async details(ids: string[], unread?: DetailsUnread, options: { refresh?: boolean; deadline?: number } = {}): Promise<Map<string, OsvVulnerability>> {
     const out = new Map<string, OsvVulnerability>();
     const toFetch: string[] = [];
 
     for (const id of ids) {
-      const cached = this.cache.get<OsvVulnerability>(`osv:detail:${id}`);
-      if (cached) out.set(id, cached);
-      else toFetch.push(id);
+      if (!options.refresh) {
+        const cached = this.cache.get<OsvVulnerability>(`osv:detail:${id}`);
+        if (cached) {
+          out.set(id, cached);
+          continue;
+        }
+        // OSV.dev answered that it holds no record for this id: left out, as a 404 always was.
+        if (this.cache.get<true>(`osv:absent:${id}`)) continue;
+      }
+      toFetch.push(id);
     }
 
-    const fetched: Array<[string, OsvVulnerability]> = [];
-    await pool(toFetch, HYDRATE_CONCURRENCY, async (id) => {
-      let pending = detailsInFlight.get(id);
-      if (!pending) {
-        pending = this.fetchDetail(id).finally(() => detailsInFlight.delete(id));
-        detailsInFlight.set(id, pending);
-      }
-      const detail = await pending;
-      if (detail) {
-        out.set(id, detail);
-        fetched.push([`osv:detail:${id}`, detail]);
-      }
-    });
-    this.cache.setMany(fetched, "osv", OSV_DETAIL_TTL);
+    const limit = this.limits.maxDetailFetches ?? MAX_DETAIL_FETCHES;
+    const windowMs = this.limits.detailWindowMs ?? DETAIL_WINDOW_MS;
+    const windowEnd = Date.now() + windowMs;
+    const deadline = options.deadline ?? Number.POSITIVE_INFINITY;
+    const asked = toFetch.slice(0, limit);
+    const overLimit = toFetch.slice(limit);
+    const read = await readRecords(
+      asked,
+      (id, duplicate) => this.recordAnswer(id, duplicate),
+      { concurrency: HYDRATE_CONCURRENCY, stopStartingAt: Math.min(windowEnd, deadline), stopWaitingAt: deadline, hedgeAfterMs: HEDGE_AFTER_MS, maxHedges: MAX_HEDGES },
+      // An answer that arrives after the read stopped waiting is kept for the next call.
+      (id, answer) => this.storeAnswers([[id, answer]]),
+    );
+    this.storeAnswers([...read.got]);
+    for (const [id, answer] of read.got) if ("record" in answer) out.set(id, answer.record);
 
+    if (options.refresh) {
+      // The record that did not arrive (or was not asked for) keeps its cached copy.
+      for (const id of toFetch) {
+        if (out.has(id)) continue;
+        const kept = this.cache.get<OsvVulnerability>(`osv:detail:${id}`);
+        if (kept) out.set(id, kept);
+      }
+    }
+    // The deadline, not the scan's own window, is what stopped the read.
+    const cutShort = deadline <= windowEnd;
+    const notStarted = read.notStarted.filter((id) => !out.has(id));
+    const pending = read.pending.filter((id) => !out.has(id));
+    const background: string[] = [];
+    let refused = 0;
+    if (cutShort) {
+      // Asked for and still out: cached when they arrive (onLate above).
+      pushAll(background, pending);
+      if (notStarted.length > 0) {
+        const handed = (this.limits.background ?? backgroundRecords).enqueue(notStarted, (id) => this.readOn(id));
+        pushAll(background, handed.taken);
+        refused = handed.refused.length;
+      }
+    }
+    const left = [...overLimit.filter((id) => !out.has(id)), ...notStarted, ...pending];
+    if (unread && left.length > 0) {
+      for (const id of left) unread.ids.add(id);
+      const why = [
+        overLimit.some((id) => !out.has(id)) ? `a scan asks for at most ${limit.toLocaleString("en-US")} advisory records it does not already hold` : null,
+        !cutShort && notStarted.length > 0 ? `reading advisory records stopped after ${Math.round(windowMs / 1000)} s` : null,
+        cutShort && notStarted.length + pending.length > 0 ? "this call's time ran out first" : null,
+      ].filter((w): w is string => w !== null);
+      unread.reason = why.join("; ");
+      if (background.length > 0) unread.background = new Set([...(unread.background ?? []), ...background]);
+      if (refused > 0) unread.refused = (unread.refused ?? 0) + refused;
+    }
     return out;
+  }
+
+  /** Cache OSV.dev's answers: a record for OSV_DETAIL_TTL, "no such record" for OSV_ABSENT_TTL. Nothing once shutting down. */
+  private storeAnswers(answers: Array<[string, RecordAnswer]>): void {
+    if (answers.length === 0 || shutdownSignal.aborted) return;
+    const records: Array<[string, OsvVulnerability]> = [];
+    const absent: Array<[string, true]> = [];
+    for (const [id, answer] of answers) {
+      if ("record" in answer) records.push([`osv:detail:${id}`, answer.record]);
+      else absent.push([`osv:absent:${id}`, true]);
+    }
+    if (records.length > 0) this.cache.setMany(records, "osv", OSV_DETAIL_TTL);
+    if (absent.length > 0) this.cache.setMany(absent, "osv", OSV_ABSENT_TTL);
+  }
+
+  /** A background read (record-queue.ts): skipped when another scan cached it meanwhile; joins a request already out. */
+  private async readOn(id: string): Promise<void> {
+    if (this.cache.get(`osv:detail:${id}`) || this.cache.get(`osv:absent:${id}`)) return;
+    const answer = await this.recordAnswer(id, false);
+    if (answer) this.storeAnswers([[id, answer]]);
+  }
+
+  /**
+   * One advisory's answer, sharing a request already out for it in this process (another scan, the
+   * background queue). `duplicate` makes a new request regardless: a hedge for a slow one.
+   */
+  private recordAnswer(id: string, duplicate: boolean): Promise<RecordAnswer | null> {
+    if (duplicate) return this.fetchDetail(id);
+    const running = detailsInFlight.get(id);
+    if (running) {
+      noteOsvRequest();
+      return running;
+    }
+    const request = this.fetchDetail(id).finally(() => detailsInFlight.delete(id));
+    detailsInFlight.set(id, request);
+    return request;
   }
 
   /**
@@ -382,6 +591,7 @@ export class OsvHttpSource implements AdvisorySource {
     let token: string | undefined;
     try {
       for (let page = 0; page < MAX_RESULT_PAGES; page++) {
+        noteOsvRequest();
         const res = await fetchWithTimeout(
           OSV_QUERY_URL,
           {
@@ -409,19 +619,28 @@ export class OsvHttpSource implements AdvisorySource {
     }
   }
 
-  /** One advisory's record; retried once after a throttle, a server error or a network failure. Null when it cannot be had. */
-  private async fetchDetail(id: string): Promise<OsvVulnerability | null> {
+  /**
+   * One advisory's record, or that OSV.dev holds none (404); retried once after a throttle, a server
+   * error or a network failure. Null when there is no answer.
+   */
+  private async fetchDetail(id: string): Promise<RecordAnswer | null> {
+    if (shutdownSignal.aborted) return null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
+        noteOsvRequest();
         const response = await fetchWithTimeout(`${OSV_VULN_URL}${encodeURIComponent(id)}`, {}, OSV_DETAIL_TIMEOUT_MS);
         if (response.ok) {
           // Only the record asked for is an answer: a 200 `{}` (or any other record) crashed the
           // scan downstream and was cached for 24 h (audit 6.2.5 B-8). Anything else is retried.
           const record = (await response.json()) as OsvVulnerability | null;
-          if (record && typeof record === "object" && record.id === id) return record;
+          if (record && typeof record === "object" && record.id === id) return { record };
           throw new Error(`OSV.dev answered a malformed record for ${id}`);
         }
-        // 404 and other client errors are answers, not failures to retry.
+        if (response.status === 404) {
+          void response.body?.cancel().catch(() => undefined);
+          return { absent: true };
+        }
+        // Other client errors are not retried either; they are not a statement about the record.
         if (response.status !== 429 && response.status < 500) return null;
       } catch {
         // network failure or timeout: retry once
@@ -481,7 +700,19 @@ export class OsvScanner {
     if (keys.length > 0) this.cache.deleteMany(keys);
   }
 
-  async scan(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean } = {}): Promise<VulnerabilityScanResult> {
+  /**
+   * `refresh`: ask OSV.dev again about every dependency given and re-read every matched record,
+   * whatever the cache holds. Nothing is removed from the cache first: an answer is replaced when
+   * its replacement arrives, and when it does not the cached one stands in, counted as stale.
+   */
+  async scan(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean; refresh?: boolean; deadline?: number } = {}): Promise<VulnerabilityScanResult> {
+    const requests = { made: 0 };
+    const result = await osvRequests.run(requests, () => this.scanCounted(deps, projectPath, options));
+    // Only a network source sends anything: a pinned source answers from its own records.
+    return this.source.network ? { ...result, osvRequests: requests.made } : result;
+  }
+
+  private async scanCounted(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean; refresh?: boolean; deadline?: number }): Promise<VulnerabilityScanResult> {
     const start = Date.now();
     const scannable = deps.filter((d) => d.version !== null);
     const ecosystems = [...new Set(scannable.map((d) => d.ecosystem))];
@@ -492,6 +723,8 @@ export class OsvScanner {
     // with its fetched_at so the result states its age, fresh or past its TTL. Offline scans
     // used to ignore the cache and call every dependency NOT CHECKED (pre-publish round 10, W5).
     const cacheOnly = network && options.cacheOnly === true;
+    // Offline nothing can be fetched, so a refresh keeps to the cache like any offline scan.
+    const refresh = network && !cacheOnly && options.refresh === true;
 
     // Check cache for each dep individually
     const uncached: ResolvedDependency[] = [];
@@ -499,7 +732,7 @@ export class OsvScanner {
 
     // Read in batches, yielding to the event loop between them: one statement per dependency kept a
     // 250,000-entry lockfile's scan from answering `ping` for 7.4 s (blind audit round 4).
-    const cachedFor = network && !cacheOnly ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
+    const cachedFor = network && !cacheOnly && !refresh ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
     for (const dep of scannable) {
       const cached = cachedFor.get(osvCacheKey(dep)) ?? null;
       if (cached !== null) {
@@ -532,11 +765,12 @@ export class OsvScanner {
       uncached.length = 0;
       pushAll(uncached, releases);
     }
-    const theirs = network && !cacheOnly ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
+    // A refreshing scan asks for itself: another scan's lookup may be answering from the cache.
+    const theirs = network && !cacheOnly && !refresh ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
     const mine = theirs.length > 0 ? uncached.filter((d) => !this.inFlight.has(osvCacheKey(d))) : uncached;
     const ask = async (batch: ResolvedDependency[]) => {
       try {
-        return await this.batchQuery(batch);
+        return await this.batchQuery(batch, refresh, options.deadline);
       } catch (error) {
         // The source layer turns network failures into `outcome.failure`; an
         // exception here is a fault in this server, not an OSV outage, and
@@ -559,6 +793,7 @@ export class OsvScanner {
             : ask(mine);
     const waited = (async () => {
       if (theirs.length === 0) return [] as ResolvedDependency[];
+      noteOsvRequest();
       await Promise.all([...new Set(theirs.map((d) => this.inFlight.get(osvCacheKey(d))))].map((p) => p?.catch(() => undefined)));
       const filled = this.cache.getMany<VulnerabilityEntry[]>([...new Set(theirs.map(osvCacheKey))]);
       const still: ResolvedDependency[] = [];
@@ -571,11 +806,15 @@ export class OsvScanner {
     })();
     const [first, still] = await Promise.all([own, waited]);
     const again = still.length > 0 ? await ask(still) : null;
+    let detailsNotAsked: string | null = null;
+    let detailsRefused = 0;
     for (const outcome of [first, again]) {
       if (!outcome) continue;
       pushAll(fetchedVulns, outcome.vulns);
       pushAll(unanswered, outcome.unanswered);
       failure = failure ?? outcome.failure;
+      detailsNotAsked = detailsNotAsked ?? ("detailsNotAsked" in outcome ? (outcome.detailsNotAsked ?? null) : null);
+      detailsRefused += "detailsRefused" in outcome ? (outcome.detailsRefused ?? 0) : 0;
     }
 
     let staleAnswers = 0;
@@ -601,13 +840,18 @@ export class OsvScanner {
     // A cache-only answer is never a current one: offline even when every dependency had a cached answer.
     const offline = unchecked.length > 0 || cacheOnly;
 
-    // npm's security holding packages (`fs@0.0.1-security`) are empty
-    // placeholders npm publishes after taking a malicious package down; the
-    // malware advisory covering every version does not apply to them (the
-    // desktop app's osv::matching::is_npm_security_holding; audit A5).
-    const rated = await this.rateFromAliases([...cachedVulns, ...fetchedVulns].filter((v) => !isNpmSecurityHolding(v)));
+    // npm's security holding packages (`fs@0.0.1-security`) are the empty placeholders npm
+    // publishes after taking a malicious package down: the malware record covering every version
+    // is not a finding against the placeholder (the desktop app's
+    // osv::matching::is_npm_security_holding), and the copy is not a clean dependency either. It
+    // is listed apart (securityPlaceholders), with its records. Only a malicious-package record is
+    // set aside: any other advisory on such a version is a finding like any other.
+    const found = [...cachedVulns, ...fetchedVulns];
+    const securityPlaceholders = securityPlaceholdersOf(found);
+    const rated = await this.rateFromAliases(found.filter((v) => !isPlaceholderMalware(v)), options.deadline);
     // One severity per advisory: every record of an alias group carries the group's most severe grade.
     const allVulns = gradeAliasGroups(rated.vulns);
+    const notClean = new Set([...allVulns.map(copyKey), ...securityPlaceholders.map((p) => `${p.ecosystem}\0${p.package}\0${p.version}`)]);
     const vulnerablePackages = new Set(allVulns.map((v) => v.package));
     const platformInactiveVulnerable = new Set(
       allVulns.filter((v) => !v.platformActive).map((v) => v.package),
@@ -619,6 +863,10 @@ export class OsvScanner {
     }
     // Advisories matched whose record OSV did not return: known by id only (unhydratedEntry).
     const detailsUnchecked = [...new Set(allVulns.filter((v) => v.detailUnavailable).map((v) => v.vulnId))].sort();
+    // Of those, the ones this scan did not ask for at all (its limit on record requests, the time for them).
+    const notAskedIds = [...new Set(allVulns.filter((v) => v.detailNotAsked).map((v) => v.vulnId))];
+    // Of those, the ones being read after this call (its time ran out: record-queue.ts).
+    const readingOn = new Set(allVulns.filter((v) => v.detailReadingOn).map((v) => v.vulnId)).size;
 
     return {
       scannedAt: new Date().toISOString(),
@@ -629,8 +877,8 @@ export class OsvScanner {
       platformInactiveVulnerable,
       bySeverity,
       vulnerabilities: allVulns,
-      // Answered dependencies with no advisory; an unchecked one is never clean.
-      cleanCount: Math.max(0, scannable.length - unchecked.length - vulnerableDependencyCount(allVulns)),
+      // Answered dependencies with no advisory; an unchecked one is never clean, nor is a security placeholder.
+      cleanCount: Math.max(0, scannable.length - unchecked.length - notClean.size),
       scanDurationMs: Date.now() - start,
       cached: cacheOnly || uncached.length === 0,
       offline,
@@ -641,8 +889,15 @@ export class OsvScanner {
       // An expired answer is not a current one: every consumer says so (audit 6.2.5 B-2).
       ...(staleAnswers > 0 ? { staleReason: failure ?? "OSV.dev could not be queried", staleOldestFetchedAt: staleOldest } : {}),
       ...(cacheOnly ? { cacheOnly: true as const, staleExpired } : {}),
+      // A refresh that got no new answer for some dependencies: the cached ones stand in, and are said to.
+      ...(refresh && staleAnswers > 0 ? { refreshFailed: true as const } : {}),
       ...(detailsUnchecked.length > 0 ? { detailsUnchecked } : {}),
+      ...(notAskedIds.length > 0 && detailsNotAsked ? { detailsNotAsked: notAskedIds.length, detailsUncheckedReason: detailsNotAsked } : {}),
+      // Records this call ran out of time for that are being read on after it (record-queue.ts), and those it could not hand on.
+      ...(readingOn > 0 ? { detailsInBackground: readingOn } : {}),
+      ...(notAskedIds.length > 0 && detailsRefused > 0 ? { detailsNotQueued: detailsRefused } : {}),
       ...(rated.report ? { aliasSeverity: rated.report } : {}),
+      ...(securityPlaceholders.length > 0 ? { securityPlaceholders } : {}),
     };
   }
 
@@ -659,11 +914,11 @@ export class OsvScanner {
    *
    * Through this scanner's own source: a pinned source answers from its
    * records, never the network; with live lookups off nothing is fetched.
-   * At most MAX_ALIAS_LOOKUPS aliases, within ALIAS_BUDGET_MS in total.
+   * At most MAX_ALIAS_LOOKUPS aliases, within ALIAS_BUDGET_MS in total and before `deadline`.
    * Anything not rated stays unknown and is listed as unresolved, with why;
    * unknown is never clean.
    */
-  private async rateFromAliases(entries: VulnerabilityEntry[]): Promise<{ vulns: VulnerabilityEntry[]; report: AliasSeverityReport | null }> {
+  private async rateFromAliases(entries: VulnerabilityEntry[], deadline?: number): Promise<{ vulns: VulnerabilityEntry[]; report: AliasSeverityReport | null }> {
     // A GHSA alias that is itself one of this scan's records is graded already: no fetch.
     const known = new Map<string, VulnerabilityEntry["severity"]>();
     for (const e of entries) if (/^GHSA-/i.test(e.vulnId) && e.severity !== "unknown") known.set(e.vulnId, e.severity);
@@ -683,15 +938,17 @@ export class OsvScanner {
     if (asked.length > 0 && this.source.network && isOfflineMode()) {
       reasons.push("live lookups are disabled (FOURDA_OFFLINE=true)");
     } else if (asked.length > 0) {
+      const budgetMs = withinDeadline(this.aliasBudgetMs, deadline);
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), this.aliasBudgetMs);
+      const expired = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), budgetMs);
         timer.unref?.();
       });
       try {
         // Fetches past the deadline keep running and fill the detail cache for the next call.
-        const answer = await Promise.race([this.source.details(asked).catch(() => new Map<string, OsvVulnerability>()), deadline]);
-        if (answer === null) reasons.push(`the alias records did not arrive within ${this.aliasBudgetMs / 1000} s`);
+        const reading = (deadline === undefined ? this.source.details(asked) : this.source.details(asked, undefined, { deadline: Date.now() + budgetMs })).catch(() => new Map<string, OsvVulnerability>());
+        const answer = await Promise.race([reading, expired]);
+        if (answer === null) reasons.push(`the alias records did not arrive within ${budgetMs === this.aliasBudgetMs ? `${budgetMs / 1000} s` : `${secondsOf(budgetMs)}, the time left in this call`}`);
         else records = answer;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
@@ -732,15 +989,18 @@ export class OsvScanner {
   private async recordsForUnread(
     matches: Array<{ dep: ResolvedDependency; ids: string[] }>,
     detailById: ReadonlyMap<string, OsvVulnerability>,
+    /** Ids not read by choice or for time (the per-scan limit, the deadline): not failures, so not asked again here. */
+    notRead: ReadonlySet<string>,
+    deadline?: number,
   ): Promise<Map<ResolvedDependency, OsvVulnerability[]>> {
     const out = new Map<ResolvedDependency, OsvVulnerability[]>();
     const source = this.source;
     if (!source.recordsFor) return out;
-    const unread = matches.filter((m) => m.ids.some((id) => isOsvAdvisoryId(id) && !detailById.has(id))).map((m) => m.dep);
+    const unread = matches.filter((m) => m.ids.some((id) => isOsvAdvisoryId(id) && !detailById.has(id) && !notRead.has(id))).map((m) => m.dep);
     if (unread.length === 0 || (source.network && isOfflineMode())) return out;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, this.aliasBudgetMs);
+    const expired = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, withinDeadline(this.aliasBudgetMs, deadline));
       timer.unref?.();
     });
     try {
@@ -749,7 +1009,7 @@ export class OsvScanner {
           const records = await source.recordsFor!(dep).catch(() => null);
           if (records) out.set(dep, records);
         }),
-        deadline,
+        expired,
       ]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -771,21 +1031,29 @@ export class OsvScanner {
 
   private async batchQuery(
     deps: ResolvedDependency[],
-  ): Promise<{ vulns: VulnerabilityEntry[]; unanswered: ResolvedDependency[]; failure: string | null }> {
+    refresh = false,
+    /** When the scan must answer (epoch ms); records stop POST_RECORDS_MS before it, to leave time for the rest. */
+    deadline?: number,
+  ): Promise<{ vulns: VulnerabilityEntry[]; unanswered: ResolvedDependency[]; failure: string | null; detailsNotAsked?: string | null; detailsRefused?: number }> {
     // Phase 1 — enumerate advisory IDs per dep (OSV: the lightweight batch index).
     const answer = await this.source.query(deps);
-    const unanswered = deps.filter((_, i) => !Array.isArray(answer.ids[i]));
+    // An answer naming more advisories for one release than any release has is not read as one:
+    // the dependency is unanswered (NOT CHECKED), and nothing is fetched or built per id.
+    const flooded = (ids: string[] | null | undefined) => Array.isArray(ids) && ids.length > MAX_ADVISORIES_PER_DEPENDENCY;
+    const floodedCount = deps.filter((_, i) => flooded(answer.ids[i])).length;
+    const unanswered = deps.filter((_, i) => !Array.isArray(answer.ids[i]) || flooded(answer.ids[i]));
     const matches = deps.flatMap((dep, i) => {
       const ids = answer.ids[i];
-      return Array.isArray(ids) ? [{ dep, ids }] : [];
+      return Array.isArray(ids) && !flooded(ids) ? [{ dep, ids }] : [];
     });
 
     // Phase 2 — the record behind each unique advisory, once.
     const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
     // An id that is not one is never looked up: it stays an advisory known by nothing but that.
-    const detailById = await this.source.details(uniqueIds.filter(isOsvAdvisoryId));
+    const unread: DetailsUnread = { ids: new Set(), reason: null };
+    const detailById = await this.source.details(uniqueIds.filter(isOsvAdvisoryId), unread, { refresh, ...(deadline !== undefined ? { deadline: deadline - POST_RECORDS_MS } : {}) });
     // Phase 2b — a record whose fetch failed, from the dependency's own advisory list.
-    const recordsByDep = await this.recordsForUnread(matches, detailById);
+    const recordsByDep = await this.recordsForUnread(matches, detailById, unread.ids, deadline);
 
     // Phase 3 — map to entries and cache per-dep (empty results cached too, so
     // clean deps are not re-queried; network answers only).
@@ -801,7 +1069,7 @@ export class OsvScanner {
       const mapped = liveIds.map((id) => {
         const detail = recordOf(id);
         // A record found under an alias describes the same advisory: the id OSV matched is kept.
-        return detail ? { ...mapVulnerability(detail, dep), vulnId: id } : unhydratedEntry(id, dep);
+        return detail ? { ...mapVulnerability(detail, dep), vulnId: id } : unhydratedEntry(id, dep, unread.ids.has(id) ? unread.reason : null, unread.background?.has(id) === true);
       });
       // An id whose record is missing but which a record that WAS read names as its alias is the
       // same advisory, already described: the stub adds nothing.
@@ -816,13 +1084,51 @@ export class OsvScanner {
     }
     if (this.source.network) this.cache.setMany(rows, "osv", OSV_CACHE_TTL);
 
-    return { vulns: results, unanswered, failure: unanswered.length > 0 ? (answer.failure ?? "OSV.dev gave no answer") : null };
+    const floodedWhy =
+      floodedCount > 0
+        ? `OSV.dev's answer names more advisories for one release than any release has (over ${MAX_ADVISORIES_PER_DEPENDENCY.toLocaleString("en-US")}, for ${floodedCount.toLocaleString("en-US")} dependenc${floodedCount === 1 ? "y" : "ies"}), so it was not read`
+        : null;
+    return {
+      vulns: results,
+      unanswered,
+      failure: unanswered.length > 0 ? (answer.failure ?? floodedWhy ?? "OSV.dev gave no answer") : null,
+      // Set when a listed advisory's record was not asked for at all (the per-scan limit, the time for it).
+      detailsNotAsked: results.some((v) => v.detailNotAsked) ? unread.reason : null,
+      detailsRefused: unread.refused ?? 0,
+    };
   }
 }
 
-/** Distinct (ecosystem, name, version) instances with at least one advisory row. */
-function vulnerableDependencyCount(vulns: VulnerabilityEntry[]): number {
-  return new Set(vulns.map((v) => `${v.ecosystem}\0${v.package}\0${v.currentVersion}`)).size;
+/** One installed copy: (ecosystem, name, version). */
+function copyKey(v: Pick<VulnerabilityEntry, "ecosystem" | "package" | "currentVersion">): string {
+  return `${v.ecosystem}\0${v.package}\0${v.currentVersion}`;
+}
+
+/** A malicious-package record matched to a copy at npm's placeholder version: the name was taken down, the copy is not the malware. */
+function isPlaceholderMalware(v: VulnerabilityEntry): boolean {
+  return v.malware === true && isNpmSecurityHolding(v);
+}
+
+/** The placeholder copies among `found`, one per installed copy, each with every malicious-package record naming it. */
+function securityPlaceholdersOf(found: readonly VulnerabilityEntry[]): SecurityPlaceholder[] {
+  const byCopy = new Map<string, SecurityPlaceholder>();
+  for (const v of found) {
+    if (!isPlaceholderMalware(v)) continue;
+    const key = copyKey(v);
+    const row = byCopy.get(key) ?? {
+      ecosystem: v.ecosystem,
+      package: v.package,
+      version: v.currentVersion,
+      ids: [],
+      isDirect: v.isDirect !== false,
+      isDev: v.isDev === true,
+      devScopeKnown: v.devScopeKnown === true,
+      sourceDirs: [...(v.sourceDirs ?? [])],
+    };
+    if (!row.ids.includes(v.vulnId)) row.ids.push(v.vulnId);
+    byCopy.set(key, row);
+  }
+  return [...byCopy.values()].map((row) => ({ ...row, ids: [...row.ids].sort() }));
 }
 
 /**
@@ -912,11 +1218,19 @@ function mapVulnerability(
  * missing fix as "no fix published". A malicious-package id (MAL-) is still
  * critical on the id alone.
  */
-function unhydratedEntry(id: string, dep: ResolvedDependency): VulnerabilityEntry {
+function unhydratedEntry(id: string, dep: ResolvedDependency, notAsked: string | null = null, readingOn = false): VulnerabilityEntry {
   return {
     ...mapVulnerability({ id }, dep),
     detailUnavailable: true,
-    summary: `${id}: advisory details NOT CHECKED (OSV.dev did not return the record), so its severity and fix version are unknown`,
+    // Not asked for (the scan's limit on record requests) is not "OSV.dev did not return it": said apart.
+    ...(notAsked ? { detailNotAsked: true as const } : {}),
+    // Not read because the call's time ran out, and being read after it: the next call has it.
+    ...(notAsked && readingOn ? { detailReadingOn: true as const } : {}),
+    summary: notAsked && readingOn
+      ? `${id}: advisory details NOT CHECKED (its record was not read in this call: ${notAsked}; it is being read now, so the next call has it), so its severity and fix version are unknown`
+      : notAsked
+      ? `${id}: advisory details NOT CHECKED (its record was not asked for in this scan: ${notAsked}), so its severity and fix version are unknown`
+      : `${id}: advisory details NOT CHECKED (OSV.dev did not return the record), so its severity and fix version are unknown`,
   };
 }
 
@@ -945,10 +1259,10 @@ export function gradeFromAliases(
 }
 
 /**
- * Derive a severity bucket honestly: a CVSS base score (numeric or computed
- * from a vector) wins; otherwise the GitHub-advisory label; otherwise unknown.
- * Never fabricates a default bucket — an advisory with no severity signal is
- * reported as `unknown`, not silently labeled "medium".
+ * Derive a severity bucket honestly: the curated label wins; otherwise the band
+ * of the highest valid CVSS score; otherwise unknown. Never fabricates a default
+ * bucket — an advisory with no severity signal is reported as `unknown`, not
+ * silently labeled "medium".
  */
 export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   severity: VulnerabilityEntry["severity"];
@@ -957,7 +1271,7 @@ export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   // The curated label first, the CVSS band second (the rule shared with the 4DA app, 2026-10-18,
   // severity vectors sv-015..sv-017): on the pinned corpus 123 of 3,923 records disagree, all GHSA,
   // 113 beside a CVSS v4 vector, where the label follows. A CVSS 0.0 goes by its label. A record with no
-  // label is graded by its v3.x vector, else its v4.0 one (cvss4.ts).
+  // label is graded by the highest score among its v3.x and v4.0 vectors (extractCvssScore, cvss4.ts).
   const cvssScore = extractCvssScore(vuln.severity);
   const label = labelToSeverity(vuln.database_specific?.severity);
   if (label !== "unknown") return { severity: label, cvssScore };
@@ -981,34 +1295,30 @@ function labelToSeverity(label: string | undefined): VulnerabilityEntry["severit
   }
 }
 
+/**
+ * The highest valid score among every severity entry a record carries: an explicit number, a v3.x
+ * vector's base score, a v4.0 vector's. An entry that scores 0.0, cannot be read or has no score
+ * never hides one that scores: PYSEC-2026-1943 carries a v3.1 vector with no impact (0.0) beside a
+ * v4.0 one that scores 8.7. Null when no entry can be read.
+ */
 export function extractCvssScore(severity: Array<{ type: string; score: string }> | undefined): number | null {
-  if (!severity || severity.length === 0) return null;
-
-  // Prefer an explicit numeric base score when present.
-  for (const s of severity) {
-    const raw = s.score.trim();
+  if (!Array.isArray(severity)) return null;
+  let best: number | null = null;
+  for (const entry of severity) {
+    const raw = typeof entry?.score === "string" ? entry.score.trim() : "";
+    if (raw === "") continue;
+    let score: number | null = null;
     if (/^\d+(?:\.\d+)?$/.test(raw)) {
       const num = Number(raw);
-      if (!isNaN(num) && num >= 0 && num <= 10) return num;
+      score = num >= 0 && num <= 10 ? num : null;
+    } else if (/^CVSS:4\.0\//i.test(raw)) {
+      score = cvss4Score(raw);
+    } else if (raw.includes("AV:")) {
+      score = cvssBaseScore(raw);
     }
+    if (score !== null && (best === null || score > best)) best = score;
   }
-
-  // OSV most often gives a CVSS *vector* string — compute its base score.
-  for (const s of severity) {
-    if (s.score.includes("AV:")) {
-      const score = cvssBaseScore(s.score);
-      if (score !== null) return score;
-    }
-  }
-  // A v4.0 vector only when no v3.x one scored: RustSec records now often carry v4.0 alone
-  // (RUSTSEC-2026-0459 was graded unknown), and v3 keeps its place where both are given.
-  for (const s of severity) {
-    if (/^\s*CVSS:4\.0\//i.test(s.score)) {
-      const score = cvss4Score(s.score);
-      if (score !== null) return score;
-    }
-  }
-  return null;
+  return best;
 }
 
 function cvssToSeverity(score: number): "critical" | "high" | "medium" | "low" | "unknown" {
@@ -1083,13 +1393,16 @@ export function extractFixedVersion(
 /**
  * npm's security holding placeholder: after a malicious package is taken down,
  * npm republishes the name as an empty `0.0.<n>-security` release ("security
- * holding package"). It has no code, so NO advisory applies to it, whichever
- * database's id flags the name: crossenv 0.0.2-security under
- * GHSA-c2m4-w5hm-vqjw read as installed malware when only MAL- ids were held
- * (4DA audit L4, 2026-10-16). Only npm's own shape counts: a publisher's
- * `1.0.0-security` prerelease is real code and stays affected. The same rule
- * as the app's `fourda_depengine::matching::is_npm_security_holding`
- * (shared vectors `holding.jsonl`).
+ * holding package"). It is not the malware, whichever database's id flags the
+ * name (crossenv 0.0.2-security under GHSA-c2m4-w5hm-vqjw as much as fs under
+ * a MAL- id). Only npm's own shape counts: a publisher's `1.0.0-security`
+ * prerelease is real code and stays affected. The same predicate as the
+ * app's `fourda_depengine::matching::is_npm_security_holding` (shared vectors
+ * `holding.jsonl`).
+ *
+ * The version string is all this says: the copy's contents are not read. So
+ * the scan sets aside only a malicious-package record on such a copy, lists
+ * the copy as a security placeholder to remove, and never counts it clean.
  */
 export function isSecurityHoldingRelease(ecosystem: string, version: string): boolean {
   return ecosystem.trim().toLowerCase() === "npm" && /^0\.0\.\d+-security$/.test(version.trim());

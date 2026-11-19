@@ -47,6 +47,11 @@ function oldSide(text: string): string {
 const MAX_FILES = 300;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_HITS_PER_ENTRY = 5;
+/** Entries and literals compared per call: the comparison is entries x literals, and the report shows a few hundred entries at most. */
+const MAX_CANDIDATE_ENTRIES = 400;
+const MAX_LITERALS = 20_000;
+/** Comparisons between hand-backs to the event loop, so a large project never holds it. */
+const YIELD_EVERY = 20_000;
 
 export interface LiteralHit {
   file: string;
@@ -91,9 +96,14 @@ const STRING_LITERAL = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*
 /** String literals of one source file, with their line numbers. */
 export function stringLiterals(source: string): Array<{ text: string; line: number }> {
   const out: Array<{ text: string; line: number }> = [];
+  // Line numbers are counted forward from the previous literal: one pass over the file, not one per literal.
+  let line = 1;
+  let counted = 0;
   for (const m of source.matchAll(STRING_LITERAL)) {
     const start = m.index ?? 0;
-    out.push({ text: m[0].slice(1, -1), line: source.slice(0, start).split("\n").length });
+    for (let i = source.indexOf("\n", counted); i !== -1 && i < start; i = source.indexOf("\n", i + 1)) line++;
+    counted = start;
+    out.push({ text: m[0].slice(1, -1), line });
   }
   return out;
 }
@@ -113,11 +123,13 @@ export async function flagOldSyntax(
     .flatMap((s) => s.entries)
     .filter((e) => e.kind === "breaking" || e.kind === "deprecation")
     .map((entry) => ({ entry, shapes: [entry.text, ...(entry.details ?? [])].flatMap(oldSyntaxShapes) }))
-    .filter((c) => c.shapes.length > 0);
+    .filter((c) => c.shapes.length > 0)
+    .slice(0, MAX_CANDIDATE_ENTRIES);
   if (!root || candidates.length === 0 || files.length === 0) return { newlyTouching: 0, examples: [] };
 
   const literals: Array<{ file: string; text: string; line: number }> = [];
   for (const file of files.slice(0, MAX_FILES)) {
+    if (literals.length >= MAX_LITERALS) break;
     const abs = path.resolve(root, file.path);
     try {
       const stat = await fs.stat(abs);
@@ -134,10 +146,12 @@ export async function flagOldSyntax(
 
   let newlyTouching = 0;
   const examples = new Set<string>();
+  let compared = 0;
   for (const { entry, shapes } of candidates) {
     const hits: LiteralHit[] = [];
     for (const lit of literals) {
       if (hits.length >= MAX_HITS_PER_ENTRY) break;
+      if (++compared % YIELD_EVERY === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       if (shapes.some((s) => s.test(lit.text))) hits.push({ file: lit.file, line: lit.line, literal: lit.text.slice(0, 80) });
     }
     if (hits.length === 0) continue;

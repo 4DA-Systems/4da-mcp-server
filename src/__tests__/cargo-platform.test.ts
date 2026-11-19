@@ -15,7 +15,6 @@
  * encode targets, so nothing could see it.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -150,7 +149,10 @@ describe("activeCratesForHost", () => {
     expect(activeCratesForHost(path.join(process.cwd(), "no-such-dir-xyz"))).toBeNull();
   });
 
-  const runnable = cargoAvailable() && hostTriple() !== null;
+  // FOURDA_REQUIRE_CARGO=1 (CI, after `cargo fetch`): these run whether or not
+  // cargo is found, so a runner without cargo fails them instead of skipping.
+  const required = process.env.FOURDA_REQUIRE_CARGO === "1";
+  const runnable = required || (cargoAvailable() && hostTriple() !== null);
 
   // These shell out to real cargo. `cargo tree` normally answers in ~1s, but it
   // takes the same lock a concurrent `cargo build`/`cargo test` holds. The
@@ -159,28 +161,28 @@ describe("activeCratesForHost", () => {
   const CARGO_TEST_TIMEOUT_MS = 90_000;
 
   /**
-   * `null` means cargo declined to answer — `--offline` needs the fixture's
-   * crates in the local registry cache (`cargo fetch`). That is a HANDLED
-   * outcome (callers keep every crate active), not a defect. CI fetches first
-   * and sets FOURDA_REQUIRE_CARGO=1, so there a `null` fails instead of hiding
-   * the assertions.
+   * The fixture's active crates, or no test: `null` means cargo declined to
+   * answer (`--offline` needs the fixture's crates in the local registry cache,
+   * `cargo fetch`). The server handles that (callers keep every crate active),
+   * but it leaves nothing to assert, so the test is then reported as skipped,
+   * never as passed; with FOURDA_REQUIRE_CARGO=1 it fails.
    */
-  function resolvedOrSkip(): Set<string> | null {
+  function resolvedOrSkip(skip: (note?: string) => never): Set<string> {
     const crates = activeCratesForHost(FIXTURE_DIR);
     if (crates === null) {
-      if (process.env.FOURDA_REQUIRE_CARGO === "1") {
+      if (required) {
         throw new Error(
-          "cargo tree --offline returned nothing for the fixture: run `cargo fetch --manifest-path test-fixtures/cargo-platform/Cargo.toml` first",
+          "FOURDA_REQUIRE_CARGO=1 but cargo tree --offline returned nothing for the fixture: run `cargo fetch --manifest-path test-fixtures/cargo-platform/Cargo.toml` first",
         );
       }
-      console.warn("cargo tree --offline unavailable here — assertions skipped");
+      skip("cargo tree --offline unavailable here");
     }
     return crates;
   }
 
   it.runIf(runnable)(
     "excludes a crate no enabled feature ever compiles",
-    () => {
+    ({ skip }) => {
       // 2026-09-08 divergence: `cargo metadata --filter-platform` resolves the
       // TARGET axis only, so it kept the `reqwest -> quinn` edge even though
       // `reqwest`'s enabled features contain no `http3`. `quinn-proto` — never
@@ -188,8 +190,7 @@ describe("activeCratesForHost", () => {
       // Preemption's #1 HIGH on the founder instance. `cargo tree` resolves
       // features too, which is what the build does. The fixture locks `itoa`
       // behind a feature nothing enables.
-      const crates = resolvedOrSkip();
-      if (crates === null) return;
+      const crates = resolvedOrSkip(skip);
       expect(crates.has("ryu"), "a crate the build DOES compile").toBe(true);
       expect(crates.has("itoa"), "an optional dep of a disabled feature is not built here").toBe(false);
     },
@@ -198,11 +199,10 @@ describe("activeCratesForHost", () => {
 
   it.runIf(runnable)(
     "excludes locked crates that never build on this host",
-    () => {
+    ({ skip }) => {
       // The live incident: nine Linux-only GTK3 crates reported on a Windows
       // host. The fixture locks one crate per OS family.
-      const crates = resolvedOrSkip();
-      if (crates === null) return;
+      const crates = resolvedOrSkip(skip);
       if (process.platform === "win32") {
         expect(crates.has("windows-sys"), "windows-sys must be active on Windows").toBe(true);
         expect(crates.has("libc"), "libc is unix-only here and must not be active on Windows").toBe(false);
@@ -216,12 +216,12 @@ describe("activeCratesForHost", () => {
 
   it.runIf(runnable)(
     "memoizes per directory",
-    () => {
-      const first = activeCratesForHost(FIXTURE_DIR);
-      const second = activeCratesForHost(FIXTURE_DIR);
-      // Identity holds for a real answer; `null === null` also holds when cargo
-      // declines, so this asserts the memo either way.
-      expect(second).toBe(first);
+    ({ skip }) => {
+      // A real answer first: the same Set twice is the memo, where `null === null`
+      // would hold with no memo at all.
+      const first = resolvedOrSkip(skip);
+      expect(first.size).toBeGreaterThan(0);
+      expect(activeCratesForHost(FIXTURE_DIR)).toBe(first);
     },
     CARGO_TEST_TIMEOUT_MS,
   );

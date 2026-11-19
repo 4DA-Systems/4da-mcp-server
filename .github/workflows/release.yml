@@ -25,12 +25,21 @@ jobs:
   verify:
     name: Verify the tagged commit
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The tests take about five minutes; the rest is the wait for CI's run of
+    # the tagged commit to finish when the tag was pushed right after the merge.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # Read-only: the CI run of the tagged commit is looked up below.
+      actions: read
     outputs:
       tarball: ${{ steps.pack.outputs.tarball }}
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # This job installs dependencies and runs the suite; nothing in it pushes.
+          persist-credentials: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
 
@@ -44,7 +53,26 @@ jobs:
 
       - run: pnpm run build
 
-      - run: pnpm test
+      # What CI's test and conformance jobs have and a bare checkout lacks: the
+      # cargo fixture's crates and the pinned conformance corpus. Without them
+      # the cargo-platform and conformance suites skip, and `pnpm test` is green
+      # without the strongest engine checks.
+      - name: Fetch the cargo fixture's crates
+        run: cargo fetch --manifest-path test-fixtures/cargo-platform/Cargo.toml
+
+      - name: Fetch the pinned conformance corpus
+        run: node scripts/fetch-conformance.mjs
+
+      # The whole suite. A missing corpus or cargo result fails instead of
+      # skipping, and the report is checked: every corpus-gated file ran, with
+      # no test skipped (a suite that skips itself still exits 0).
+      - name: Test (the conformance suites must run, not skip)
+        run: |
+          pnpm exec vitest run --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/test-report.json"
+          node scripts/ci-gates.mjs tests-ran "$RUNNER_TEMP/test-report.json"
+        env:
+          FOURDA_REQUIRE_CARGO: "1"
+          FOURDA_REQUIRE_CONFORMANCE: "1"
 
       - run: pnpm run check
 
@@ -62,14 +90,64 @@ jobs:
           fi
           # manifest-versions.test.ts (run above) holds the other manifests to package.json.
 
+      # Asked of the API, not of a local fetch: the checkout keeps no credentials,
+      # and the answer does not depend on how deep a fetch went. Comparing main
+      # with the commit says "identical" or "behind" exactly when main contains it.
       - name: The tagged commit is on main
         if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch --no-tags --depth=200 origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
-            echo "::error::$GITHUB_SHA is not on main. Release from a merged commit."
+          set -euo pipefail
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq '.status') || {
+            echo "::error::Could not compare $GITHUB_SHA with main (the API call failed), so it is not known to be on main."
             exit 1
           }
+          case "$status" in
+            identical|behind) echo "$GITHUB_SHA is on main ($status)" ;;
+            *) echo "::error::$GITHUB_SHA is not on main (compare says '$status'). Release from a merged commit."; exit 1 ;;
+          esac
+
+      # A release is of a commit CI passed: the CI workflow's push run on main
+      # for exactly this commit (every OS, the checks, install smoke, bundle and
+      # conformance) must have completed with success. A tag pushed while that
+      # run is still going waits for it; a failed, cancelled or missing run
+      # fails the release before anything is packed.
+      - name: CI passed on the tagged commit
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          runs="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=main&event=push&per_page=1"
+          for attempt in $(seq 1 90); do
+            # The newest push run for the commit: "<status> <conclusion> <url>", or nothing when there is none.
+            # An API call that fails is asked again, never read as an answer.
+            run=$(gh api "$runs" --jq '.workflow_runs[0] // empty | "\(.status) \(.conclusion) \(.html_url)"') || run="unreadable unreadable (the API call failed)"
+            read -r status conclusion url <<<"${run:-none none none}"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "CI passed on $GITHUB_SHA: $url"
+                exit 0
+              fi
+              case "$conclusion" in
+                cancelled)
+                  # ci.yml's concurrency cancels a pending main run when a newer push arrives: nothing failed.
+                  echo "::error::CI on $GITHUB_SHA was cancelled (a newer push to main can cancel a pending run), so it never finished: $url. Re-run CI on $GITHUB_SHA (re-run that workflow run), then re-run this job." ;;
+                *)
+                  echo "::error::CI did not pass on $GITHUB_SHA (conclusion: $conclusion): $url. Fix main, then release the commit that is green." ;;
+              esac
+              exit 1
+            fi
+            if [ "$status" = "none" ] && [ "$attempt" -ge 6 ]; then
+              echo "::error::No CI run on main for $GITHUB_SHA. The tag must be on a commit that was pushed to main as its tip (the merge commit), so that CI ran on exactly it."
+              exit 1
+            fi
+            echo "attempt $attempt: CI for $GITHUB_SHA is '$status'; waiting"
+            sleep 20
+          done
+          echo "::error::CI for $GITHUB_SHA did not complete within 30 minutes: $url. Re-run this job when it has."
+          exit 1
 
       # The release artifact, packed from the build tested above, in this job
       # (no id-token). `publish` publishes this file and nothing else.
@@ -170,6 +248,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # This job installs dependencies and builds; nothing in it pushes.
+          persist-credentials: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
 

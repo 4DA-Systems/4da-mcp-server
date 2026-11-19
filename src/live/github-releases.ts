@@ -18,7 +18,16 @@
  * not retried: the answer says when the limit resets and how to raise it.
  */
 
-import { CHANGELOG_PARSER_VERSION, isChangelogName, parseChangelog, type ChangelogSection, type VersionOrder } from "./changelog.js";
+import {
+  CHANGELOG_INCOMPLETE_NOTE,
+  CHANGELOG_PARSER_VERSION,
+  isChangelogName,
+  PARSE_BUDGET_MS,
+  parseChangelogWithin,
+  type ChangelogSection,
+  type ParsedChangelog,
+  type VersionOrder,
+} from "./changelog.js";
 import { ArchiveError, MAX_FILE_BYTES } from "./package-archive.js";
 import type { ChangelogResult, UpgradeNet } from "./upgrade-sources.js";
 import { pushAll } from "../array-utils.js";
@@ -128,22 +137,35 @@ const NOISE = /made their first contribution|^\W*full changelog\W|^\W*(?:new )?c
 
 /** One section per release that names a version of this package, entries parsed from its notes. */
 export function releasesToSections(releases: GithubRelease[], pkg: string, tagPrefix: string | null): ChangelogSection[] {
+  return releasesToSectionsWithin(releases, pkg, tagPrefix).sections;
+}
+
+/**
+ * releasesToSections under one changelog's parse time allowance (PARSE_BUDGET_MS) for all the
+ * release notes together. When it runs out, the release being read and those after it are left
+ * out and `complete` is false.
+ */
+export function releasesToSectionsWithin(releases: GithubRelease[], pkg: string, tagPrefix: string | null): ParsedChangelog {
   const sections: ChangelogSection[] = [];
+  const deadline = Date.now() + PARSE_BUDGET_MS;
   for (const r of releases) {
     if (r.draft || typeof r.tag_name !== "string") continue;
     const version = versionFromTag(r.tag_name, pkg, tagPrefix);
     if (!version) continue;
     const date = (r.published_at ?? r.created_at ?? "").slice(0, 10) || null;
+    const left = deadline - Date.now();
+    if (left <= 0) return { sections, complete: false };
     // A synthetic heading makes the body one release; a body that repeats its own
     // version heading opens the same version again, and those entries are kept too.
-    const parsed = parseChangelog(`# ${version}\n\n${(r.body ?? "").slice(0, MAX_FILE_BYTES)}`);
-    const entries = parsed
+    const parsed = parseChangelogWithin(`# ${version}\n\n${(r.body ?? "").slice(0, MAX_FILE_BYTES)}`, left);
+    if (!parsed.complete) return { sections, complete: false };
+    const entries = parsed.sections
       .filter((s, i) => i === 0 || s.version.replace(/^v/, "") === version.replace(/^v/, ""))
       .flatMap((s) => s.entries)
       .filter((e) => !NOISE.test(e.text) && !(e.under && /^\W*new contributors\W*$/i.test(e.under)));
     sections.push({ version, date, entries });
   }
-  return sections;
+  return { sections, complete: true };
 }
 
 /**
@@ -203,7 +225,7 @@ export function rawChangelogUrl(link: string): string | null {
   return isChangelogName(base) ? rawUrl : null;
 }
 
-async function fetchChangelogFile(net: UpgradeNet, url: string): Promise<ChangelogSection[]> {
+async function fetchChangelogFile(net: UpgradeNet, url: string): Promise<ParsedChangelog> {
   const res = await net.fetch(url, { headers: { "User-Agent": USER_AGENT } }, GITHUB_TIMEOUT_MS);
   const limited = rateLimitMessage(res);
   if (limited) throw new GithubRateLimitError(limited);
@@ -212,7 +234,7 @@ async function fetchChangelogFile(net: UpgradeNet, url: string): Promise<Changel
   if (Number.isFinite(declared) && declared > MAX_FILE_BYTES) throw new ArchiveError(`${url} is over ${MAX_FILE_BYTES} bytes`);
   const text = await res.text();
   if (text.length > MAX_FILE_BYTES) throw new ArchiveError(`${url} is over ${MAX_FILE_BYTES} bytes`);
-  return parseChangelog(text);
+  return parseChangelogWithin(text);
 }
 
 function inRangeCount(sections: ChangelogSection[], from: string, to: string, order: VersionOrder): number {
@@ -238,13 +260,25 @@ export async function getGithubChangelog(net: UpgradeNet, input: GithubFallbackI
     const hit = net.cache?.get<ChangelogResult>(key);
     if (hit) return hit;
     try {
-      const sections = await fetchChangelogFile(net, raw);
+      const { sections, complete } = await fetchChangelogFile(net, raw);
       if (inRangeCount(sections, input.from, input.to, input.order) > 0) {
-        const result: ChangelogResult = { found: true, file: raw.split("/").pop(), sections, source: "github-file", url: link };
-        net.cache?.set(key, result, CACHE_SOURCE, FOUND_TTL);
+        const result: ChangelogResult = {
+          found: true,
+          file: raw.split("/").pop(),
+          sections,
+          source: "github-file",
+          url: link,
+          ...(complete ? {} : { incomplete: CHANGELOG_INCOMPLETE_NOTE }),
+        };
+        // A cut-off parse depends on how busy the machine was, so it is kept only briefly.
+        net.cache?.set(key, result, CACHE_SOURCE, complete ? FOUND_TTL : MISS_TTL);
         return result;
       }
-      reasons.push(`the changelog the project links (${link}) has no section for these releases`);
+      reasons.push(
+        complete
+          ? `the changelog the project links (${link}) has no section for these releases`
+          : `the changelog the project links (${link}) could not be read within the time allowed for one changelog`,
+      );
     } catch (err) {
       if (err instanceof GithubRateLimitError) return { found: false, reason: err.message };
       reasons.push(`the changelog the project links could not be read: ${(err as Error).message}`);
@@ -263,18 +297,18 @@ export async function getGithubChangelog(net: UpgradeNet, input: GithubFallbackI
   const releasesUrl = `https://github.com/${where}/releases`;
   try {
     const releases = await fetchReleases(net, repo, (v) => (input.order(v, input.from) ?? 1) <= 0, input.pkg, input.tagPrefix ?? null);
-    const sections = releasesToSections(releases, input.pkg, input.tagPrefix ?? null);
+    const { sections, complete } = releasesToSectionsWithin(releases, input.pkg, input.tagPrefix ?? null);
     const hits = inRangeCount(sections, input.from, input.to, input.order);
+    const missed = complete
+      ? `${where} has no GitHub release for ${input.pkg} between ${input.from} and ${input.to}`
+      : `the release notes of ${where} could not be read within the time allowed for one changelog`;
     const result: ChangelogResult =
       hits > 0
-        ? { found: true, file: "GitHub releases", sections, source: "github-releases", url: releasesUrl }
-        : {
-            found: false,
-            url: releasesUrl,
-            reason: [...reasons, `${where} has no GitHub release for ${input.pkg} between ${input.from} and ${input.to}`].join("; "),
-          };
+        ? { found: true, file: "GitHub releases", sections, source: "github-releases", url: releasesUrl, ...(complete ? {} : { incomplete: CHANGELOG_INCOMPLETE_NOTE }) }
+        : { found: false, url: releasesUrl, reason: [...reasons, missed].join("; ") };
     const targetFound = sections.some((s) => input.order(s.version, input.to) === 0);
-    net.cache?.set(key, result, CACHE_SOURCE, targetFound ? FOUND_TTL : MISS_TTL);
+    // A cut-off parse depends on how busy the machine was, so it is kept only briefly.
+    net.cache?.set(key, result, CACHE_SOURCE, complete && targetFound ? FOUND_TTL : MISS_TTL);
     return result;
   } catch (err) {
     // A rate limit or network failure is not remembered: the next call may succeed.

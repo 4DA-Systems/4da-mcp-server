@@ -16,9 +16,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   cargoWorkspaceDeps,
+  declaredRequirements,
   parseGoModDirectDeps,
   parsePyprojectDependencies,
-  requirementNamesWithIncludes,
 } from "./project-manifests.js";
 import { readTextFile } from "./live/text-file.js";
 import { pushAll } from "./array-utils.js";
@@ -209,7 +209,10 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
         result.depsByEcosystem["npm"] = { deps: npmDeps, devDeps: npmDevDeps };
       }
     } catch {
-      // Malformed package.json — skip
+      // Unparseable: what it declares is unknown, not empty. The npm group stays, so the
+      // resolver reads the directory and reports the manifest as unreadable.
+      langSet.add("javascript");
+      result.depsByEcosystem["npm"] = { deps: [], devDeps: [] };
     }
   }
 
@@ -256,7 +259,9 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
         result.depsByEcosystem["rust"] = { deps: rustDeps, devDeps: rustDevDeps };
       }
     } catch {
-      // Malformed Cargo.toml — skip
+      // Present and not readable: the ecosystem is here all the same, and its reader says why
+      // nothing was read (resolveRust). With no group, the file went unmentioned.
+      result.depsByEcosystem["rust"] ??= { deps: [], devDeps: [] };
     }
   }
 
@@ -271,6 +276,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   // together: a project often has both, and the old else-if dropped the second.
   const pyDeps = new Set<string>();
   const pyDevDeps = new Set<string>();
+  /** A manifest that is present and could not be read: the Python reader names it (resolvePython). */
+  let pyUnread = false;
   if (fs.existsSync(pyprojectPath)) {
     langSet.add("python");
     try {
@@ -278,17 +285,20 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       parsed.deps.forEach((d) => pyDeps.add(d));
       parsed.devDeps.forEach((d) => pyDevDeps.add(d));
     } catch {
-      // Skip
+      pyUnread = true;
     }
   }
-  if (fs.existsSync(requirementsPath)) {
-    langSet.add("python");
-    try {
-      // Included files (`-r sub/inner.txt`) declare their pins too (audit 7g).
-      requirementNamesWithIncludes(requirementsPath, cwd).forEach((d) => pyDeps.add(d));
-    } catch {
-      // Skip
-    }
+  if (fs.existsSync(requirementsPath)) langSet.add("python");
+  try {
+    // Every requirements file declares what it lists, and so do the files it includes
+    // (`-r sub/inner.txt`): requirements-dev.txt and requirements/*.txt as much as
+    // requirements.txt. A name only dev files bring in is a dev dependency.
+    const declared = declaredRequirements(cwd);
+    if (declared.deps.length > 0 || declared.devDeps.length > 0) langSet.add("python");
+    declared.deps.forEach((d) => pyDeps.add(d));
+    declared.devDeps.forEach((d) => pyDevDeps.add(d));
+  } catch {
+    // Skip
   }
   if (fs.existsSync(setupPyPath)) {
     langSet.add("python");
@@ -299,7 +309,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
     detectPythonFramework(name, fwSet);
   }
   pushAll(result.devDependencies, pyDevDeps);
-  if (pyDeps.size > 0 || pyDevDeps.size > 0) {
+  if (pyDeps.size > 0 || pyDevDeps.size > 0 || pyUnread) {
     result.depsByEcosystem["python"] = { deps: [...pyDeps], devDeps: [...pyDevDeps] };
   }
 

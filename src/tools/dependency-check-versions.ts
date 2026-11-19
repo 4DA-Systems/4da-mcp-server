@@ -28,7 +28,7 @@
 
 import { cargoReqAdmits, npmRangeAdmits } from "../live/range-satisfies.js";
 import { advisoriesAffecting, isPrereleaseVersion, oneIdPerAdvisory, type AdvisoryRanges } from "../live/osv-ranges.js";
-import { compareVersions, parsePep440 } from "../live/version-compare.js";
+import { comparePep440, compareVersions, parsePep440 } from "../live/version-compare.js";
 import { parseSemverPrecedence } from "../live/semver-precedence.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
@@ -128,8 +128,22 @@ export function pep440SpecAdmits(spec: string, version: string): boolean | null 
       const series = { ...target, release: target.release.slice(0, -1), pre: null, post: null, dev: null };
       ok = cmp(v, target) >= 0 && matchesPrefix(v, series);
     } else {
+      // `d` orders the public versions (local labels dropped); `sameBase`: V's own release numbers, whatever pre/post/dev follows.
       const d = cmp(v, target);
-      ok = op === "==" ? d === 0 : op === "!=" ? d !== 0 : op === ">=" ? d >= 0 : op === "<=" ? d <= 0 : op === ">" ? d > 0 : d < 0;
+      const sameBase = cmp({ ...v, pre: null, post: null, dev: null }, { ...target, pre: null, post: null, dev: null }) === 0;
+      const prerelease = (x: Pep440) => x.pre !== null || x.dev !== null;
+      if (op === "==" || op === "!=") {
+        // A local label in the specifier is exact (`==1.0+abc` is not 1.0); without one the candidate's label is ignored.
+        ok = (target.local.length > 0 ? comparePep440(v, target) === 0 : d === 0) === (op === "==");
+      } else if (op === ">") {
+        // `>V` admits neither a post-release of V (unless V is one) nor a local version of V.
+        ok = d > 0 && !(sameBase && ((v.post !== null && target.post === null) || v.local.length > 0));
+      } else if (op === "<") {
+        // `<V` admits no pre-release of V, unless V is one.
+        ok = d < 0 && !(sameBase && prerelease(v) && !prerelease(target));
+      } else {
+        ok = op === ">=" ? d >= 0 : d <= 0;
+      }
     }
     if (!ok) return false;
   }
@@ -251,6 +265,18 @@ export interface RangeCheck {
    * and the far older release outside the range that is therefore not offered.
    */
   held_advice?: HeldAdvice;
+  /**
+   * Go: the named picks whose own go.mod requires modules at versions with known advisories, or
+   * whose requirements could not be examined (version -> this server's sentence). Such a release
+   * stays a pick: the project raises those minimums in its own go.mod.
+   */
+  requirement_caveats?: Record<string, string>;
+  /**
+   * PyPI, a project that declares its Python: releases clear of advisories left out because they
+   * do not support every Python version it declares, and which Python they require, in words.
+   */
+  python_excluded?: number;
+  python_note?: string;
 }
 
 export interface HeldAdvice {
@@ -416,6 +442,11 @@ export function checkRange(input: {
    * settled one can be (applyHold).
    */
   young?: (version: string) => boolean;
+  /**
+   * PyPI (dependency-check-python.ts): a release that does not support every Python the project
+   * declares is no safe pick, in range or outside it; `python_note` says which were left out.
+   */
+  python?: { unsupported: (version: string) => boolean; note: (left: string[]) => string };
 }): RangeCheck {
   const { ecosystem, index, range, basis } = input;
   // Withdrawn releases and those the deprecation signal judges avoid are never a safe pick (round 10, W13).
@@ -433,13 +464,17 @@ export function checkRange(input: {
   };
   // The release-age hold, except above an affected `from`: a security fix is not held back (releaseAgeSignal).
   const holdOf = () => (input.young && !(input.from && affecting(input.from).length > 0) ? input.young : undefined);
-  const ownSafe = candidates.filter((v) => affecting(v).length === 0);
+  // Not supporting the project's Python leaves a release out before what it requires is asked
+  // about (such a release is not judged for that), and does not make it vulnerable.
+  const allOwnSafe = candidates.filter((v) => affecting(v).length === 0);
+  const pythonLeft = input.python ? allOwnSafe.filter((v) => input.python!.unsupported(v)) : [];
+  const ownSafe = pythonLeft.length > 0 ? allOwnSafe.filter((v) => !input.python!.unsupported(v)) : allOwnSafe;
   const safe = input.held ? ownSafe.filter((v) => !input.held!.unsafe(v)) : ownSafe;
   const out: RangeCheck = {
     range,
     basis,
     releases_in_range: candidates.length,
-    vulnerable_in_range: candidates.length - safe.length,
+    vulnerable_in_range: candidates.length - pythonLeft.length - safe.length,
     smallest_safe_in_range: safe[0] ?? null,
     newest_safe_in_range: safe[safe.length - 1] ?? null,
     safe_versions: safe.slice(-8),
@@ -452,7 +487,7 @@ export function checkRange(input: {
     out.affecting_all = all.slice(0, 10);
     out.affecting_all_total = all.length;
     const outside = installable
-      .filter((v) => !isPrereleaseIn(ecosystem, v) && affecting(v).length === 0 && !input.held?.unsafe(v))
+      .filter((v) => !isPrereleaseIn(ecosystem, v) && affecting(v).length === 0 && !input.held?.unsafe(v) && !input.python?.unsupported(v))
       .sort((a, b) => compareIn(ecosystem, a, b));
     // The newest settled one, as for the picks in range (applyHold); a young one only when none is settled.
     const hold = holdOf();
@@ -472,6 +507,10 @@ export function checkRange(input: {
       // is no answer to the question asked (a healthy run names one in range), so none is offered (r7).
       if (safe.length === 0 && (out.affecting_all_total ?? 0) === 0) out.newest_safe_outside_range = null;
     }
+  }
+  if (pythonLeft.length > 0) {
+    out.python_excluded = pythonLeft.length;
+    out.python_note = input.python!.note(pythonLeft);
   }
   const hold = holdOf();
   if (hold) applyHold(out, safe, hold, ecosystem, input.from);

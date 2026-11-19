@@ -187,7 +187,7 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
           }${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`
         : notes.length > 0
           ? `Nothing was checked, so there is no health score; this is not a healthy result. ${notes.join(" ")}`
-          : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, composer.lock), and none of an unsupported one either; no health score.`,
+          : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, gems.locked, composer.lock), and none of an unsupported one either; no health score.`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };
@@ -260,7 +260,7 @@ export async function executeDependencyHealth(
   // (scoreCoverage), so a refusal that is permanent by design does not
   // withhold the score forever. ecosystem_filter narrows these too.
   const problems = liveIntel.getLockfileProblems().filter((p) => !params.ecosystem_filter || !p.ecosystem || p.ecosystem === params.ecosystem_filter);
-  const { unreadable, partial: partialReads, refused, conflicts } = splitLockfileProblems(problems);
+  const { unreadable, partial: partialReads, refused, conflicts, uncrossed } = splitLockfileProblems(problems);
   const readGap = unreadable.length > 0 ? `NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")} This is not a complete result.` : null;
   const withheld = coverage !== null || readGap !== null;
   // Direct dependencies whose registry did not answer: their outdated and deprecated state is
@@ -273,7 +273,7 @@ export async function executeDependencyHealth(
           `PARTIAL: ${registryFailed.length} of ${registryData.length} direct dependenc${registryData.length === 1 ? "y" : "ies"} could not be checked against ${registryFailed.length === 1 ? "its registry" : "their registries"} (${String(registryFailed[0].fetchError).slice(0, 120)}); whether ${registryFailed.length === 1 ? "it is" : "they are"} outdated or deprecated is unknown, not current.`,
         ]
       : [];
-  const partialNotes = [...lockfileProblemNotes([...partialReads, ...refused, ...conflicts]), ...registryNote];
+  const partialNotes = [...lockfileProblemNotes([...partialReads, ...refused, ...conflicts, ...uncrossed]), ...registryNote];
   const scorePartial = !withheld && partialNotes.length > 0;
   // One population for every count: the stored scan can be vulnerability_scan's,
   // which includes direct devDependencies by default, while the registry rows

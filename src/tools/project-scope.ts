@@ -11,6 +11,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { FourDADatabase } from "../db.js";
 import { getServerCacheDb } from "../live/cache.js";
@@ -108,7 +109,29 @@ const POSIX_SYSTEM_TREES = ["/proc", "/sys", "/dev", "/boot", "/run", "/System"]
  * everything below it; the roots of Program Files, ProgramData and Users; on POSIX the system's
  * own directories by exact path and the kernel/system trees whole.
  */
+/** UNC "hosts" that are this machine: loopback, the long-path and device prefixes, and WSL's own file server. */
+const LOCAL_UNC_HOST = /^(?:localhost|127\.0\.0\.1|::1|\[::1\]|\?|\.|wsl\$|wsl\.localhost)$/i;
+
+/**
+ * Why `dir` is not opened, when it is a Windows network path to another machine (two leading
+ * separators, then a host name and a share); null otherwise. Judged from the text alone, before
+ * the filesystem is touched: opening such a path makes Windows sign in to that host with the
+ * user's credentials, and `project_path` is an argument an agent can be talked into passing.
+ */
+export function networkPathProblem(dir: string, options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): string | null {
+  if ((options.platform ?? process.platform) !== "win32") return null;
+  const text = dir.trim().replace(/^[\\/]{2}\?[\\/]UNC[\\/]/i, "//");
+  const unc = /^[\\/]{2}([^\\/]+)(?:[\\/]|$)/.exec(text);
+  if (!unc) return null;
+  const host = unc[1];
+  const own = (options.env ?? process.env).COMPUTERNAME;
+  if (LOCAL_UNC_HOST.test(host) || (own && host.toLowerCase() === own.toLowerCase())) return null;
+  return `"${dir}" is a network path on another machine, not a local project, so it is not opened: reading it would sign in to that machine with your Windows credentials. Map the share to a drive letter (or copy the project to this machine) and pass that path as project_path.`;
+}
+
 export function systemDirectoryProblem(dir: string, options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): string | null {
+  const network = networkPathProblem(dir, options);
+  if (network) return network;
   // Judged in every spelling that names the same directory: the check was lexical, and
   // `\\127.0.0.1\C$\Windows\System32` (2,119 dependencies scanned), `\\?\C:\Windows`,
   // `\\localhost\C$\Windows` and `C:\PROGRA~1` all passed it (blind audit round 3, should-fix 3).
@@ -219,6 +242,13 @@ function lexicalSystemDirectoryProblem(dir: string, options: { platform?: NodeJS
   else if (POSIX_SYSTEM_DIRS.some((d) => at === norm(d))) what = "an operating-system directory";
   // WSL mounts each Windows drive at /mnt/<letter>.
   else if (/^\/mnt\/[a-z]$/.test(at)) what = "a drive root";
+  if (!what) {
+    // The user's home directory holds every project they have: scanned as one "project" it is the
+    // same walk as a drive root. With `options.env` given, only that environment is read.
+    const home = platform === "win32" ? env.USERPROFILE : env.HOME;
+    const homeDir = home || (options.env === undefined ? os.homedir() : "");
+    if (homeDir && p.isAbsolute(homeDir) && at === norm(homeDir)) what = "your home directory";
+  }
   if (!what) return null;
   return `"${dir}" is ${what}, not a project, so it is not scanned: a scan there would read every lockfile below it and send each package name and version to OSV.dev and the registries. Pass project_path with the absolute path of your project's root (or set FOURDA_PROJECT_DIR for the server).`;
 }
@@ -238,6 +268,9 @@ export function resolveProjectScope(projectPath: string | undefined): ProjectSco
   const given = projectPath?.trim();
   if (given === ALL_PROJECTS) return { kind: "all", reason: 'project_path "*" asks for every project' };
   if (given) {
+    // Before anything is opened: a path on another machine is refused from its text alone.
+    const network = networkPathProblem(given);
+    if (network) return { kind: "error", error: `project_path ${network}` };
     const abs = path.resolve(given);
     let isDir = false;
     try {

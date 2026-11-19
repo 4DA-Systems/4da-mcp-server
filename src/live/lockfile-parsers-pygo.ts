@@ -18,7 +18,9 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { emptySource, found, InstanceSet, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
+import { pyprojectRequirements, uvOverrideRequirements } from "./pyproject-requirements.js";
+import { poetryRequirements } from "./poetry-requirements.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
@@ -89,10 +91,48 @@ function includesRequirements(file: string): boolean {
  * dev-requirements.txt, requirements/testing.txt, _test_minimum_requirements.txt,
  * docs-requirements.txt. The convention is near universal, but it is a name:
  * a package any other file also lists keeps an unknown scope, never "dev".
+ * The name of the file alone does not make its pins dev-only: see devOnlyRequirements.
  */
 export function devRequirementsFile(file: string): boolean {
   const name = path.basename(file).replace(/\.txt$/i, "");
   return /(?:^|[-_.])(?:dev|devel|develop|development|test|tests|testing|lint|linting|docs?|ci|typing|mypy|bench|benchmarks?)(?:[-_.]|$)/i.test(name);
+}
+
+/**
+ * Whether what a requirements file lists is installed for development only: the file is a dev
+ * file by name, and so is every file that includes it with `-r`, however far up. `includes`
+ * holds every include read (absolute paths).
+ *
+ * Both directions matter. `requirements-dev.txt` that says `-r prod.txt` installs prod.txt's
+ * pins, but prod.txt is a production file: its pins are production, whoever includes it. And a
+ * dev-named file a production file includes is installed in production with it.
+ */
+export function devOnlyRequirements(includes: ReadonlyArray<{ from: string; to: string }>): (file: string) => boolean {
+  const key = (file: string) => path.resolve(file).toLowerCase();
+  const includedBy = new Map<string, Set<string>>();
+  for (const { from, to } of includes) includedBy.set(key(to), (includedBy.get(key(to)) ?? new Set<string>()).add(key(from)));
+  const known = new Map<string, boolean>();
+  return (file) => {
+    const start = key(file);
+    const cached = known.get(start);
+    if (cached !== undefined) return cached;
+    // The file and everything above it; `seen` ends an include loop.
+    const seen = new Set<string>([start]);
+    const queue = [start];
+    let devOnly = true;
+    while (devOnly && queue.length > 0) {
+      const at = queue.pop() as string;
+      if (!devRequirementsFile(at)) devOnly = false;
+      for (const parent of includedBy.get(at) ?? []) {
+        if (!seen.has(parent)) {
+          seen.add(parent);
+          queue.push(parent);
+        }
+      }
+    }
+    known.set(start, devOnly);
+    return devOnly;
+  };
 }
 
 /**
@@ -117,6 +157,18 @@ export function resolvePython(cwd: string): VersionSource {
     if (!versions.has(name)) versions.set(name, version);
   };
 
+  // pyproject.toml is what a uv.lock is checked against (pythonLockDamage). Unreadable is not absent.
+  const pyprojectPath = path.join(cwd, "pyproject.toml");
+  let pyproject: string | null = null;
+  let pyprojectUnread: LockfileProblem | null = null;
+  if (fs.existsSync(pyprojectPath)) {
+    try {
+      pyproject = readTextFile(pyprojectPath);
+    } catch (error) {
+      pyprojectUnread = { file: pyprojectPath, error: unreadableReason(error) };
+    }
+  }
+
   for (const file of PYTHON_TOML_LOCKS) {
     const lockPath = path.join(cwd, file);
     if (!fs.existsSync(lockPath)) continue;
@@ -127,72 +179,49 @@ export function resolvePython(cwd: string): VersionSource {
       for (const p of read.privateIndex) privateIndex.push({ ...p, file: lockPath });
       // pdm.lock records no index per package: what its configured sources serve is not visible in it.
       if (file === "pdm.lock") indexUnrecorded = true;
-      if (read.instances.size === 0) continue;
+      const damage = pythonLockDamage(file, content, pyproject);
+      if (read.instances.size === 0) {
+        // Nothing was read and the file says why: named here, never taken for a project with no dependencies.
+        if (damage) damaged.push({ file: lockPath, error: `${damage.reason}; no package version could be read from it` });
+        continue;
+      }
       for (const i of read.instances.toArray()) take(i.name, i.version, i.dev);
       sources.push(lockPath);
       lockfile = true;
-      const damage = tomlLockDamage(content);
-      if (damage) {
-        damaged.push({
-          file: lockPath,
-          partial: true,
-          ...(damage.missing > 0 ? { skipped: damage.missing } : {}),
-          error: `${damage.reason}. It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile`,
-        });
-      }
-    } catch { /* unreadable: the next source */ }
+      if (damage) damaged.push(partialRead(lockPath, damage.reason, damage.missing, damage.behindManifest === true));
+    } catch { /* unreadable: the next source (resolveVersionSource names this one and why) */ }
   }
 
   const pipfileLock = path.join(cwd, "Pipfile.lock");
   if (fs.existsSync(pipfileLock)) {
     try {
-      const lock = JSON.parse(readTextFile(pipfileLock));
-      let any = false;
-      // `"index": "<source name>"` names the Pipfile source a package comes from.
-      const indexes = new Map<string, string>(
-        (Array.isArray(lock._meta?.sources) ? lock._meta.sources : [])
-          .filter((s: { name?: unknown; url?: unknown }) => typeof s?.name === "string" && typeof s?.url === "string")
-          .map((s: { name: string; url: string }) => [s.name, s.url]),
-      );
-      const defaultSource = [...indexes.values()][0];
-      for (const [section, dev] of [["default", false], ["develop", true]] as const) {
-        for (const [name, info] of Object.entries(lock[section] ?? {})) {
-          const entry = info as { version?: string; git?: string; file?: string; path?: string; index?: string };
-          const version = entry.version?.replace(/^===?/, "");
-          if (!version) {
-            // `{"git": "https://…", "ref": "…"}` or `{"file": "https://…/x.whl"}`: installed, but not an index release.
-            if (typeof entry.git === "string") uncheckable.push({ name: normalizePythonName(name), version: null, kind: "git", file: pipfileLock });
-            else if (typeof entry.file === "string" && /^https?:/i.test(entry.file)) uncheckable.push({ name: normalizePythonName(name), version: null, kind: "url", file: pipfileLock });
-            // From a host that is not public, or local code: the name is private (R8, B4).
-            const location = typeof entry.git === "string" ? entry.git : typeof entry.file === "string" ? entry.file : typeof entry.path === "string" ? `file:${entry.path}` : null;
-            if (location && privateDirectReference(location)) privateIndex.push({ name: normalizePythonName(name), version: null, registry: directLabel(location), file: pipfileLock, ...(/^file:/i.test(location) ? { local: true as const } : {}) });
-            continue;
-          }
-          // An entry that names no index came from the default source, the first one (pipenv): a
-          // Pipfile whose only source is private wrote no `index` at all, and every name was sent (R8, B4).
-          const index = typeof entry.index === "string" ? indexes.get(entry.index) : defaultSource;
-          if (index && !isPublicPypiIndex(index)) privateIndex.push({ name: normalizePythonName(name), version, registry: sourceLabel(index), file: pipfileLock });
-          take(normalizePythonName(name), version, dev);
-          any = true;
-        }
-      }
-      if (any) {
+      const read = readPipfileLock(JSON.parse(readTextFile(pipfileLock)), pipfileLock);
+      pushAll(uncheckable, read.uncheckable);
+      pushAll(privateIndex, read.privateIndex);
+      for (const pin of read.pins) take(pin.name, pin.version, pin.dev);
+      if (read.pins.length > 0) {
         sources.push(pipfileLock);
         lockfile = true;
       }
-    } catch { /* unreadable */ }
+      // Entries skipped inside a file that was otherwise read (`skipped`), or a file that gave nothing.
+      if (read.problem) damaged.push({ file: pipfileLock, error: read.problem, ...(read.pins.length > 0 && read.malformed > 0 ? { skipped: read.malformed } : {}) });
+    } catch { /* unreadable or not JSON: resolveVersionSource names it and why */ }
   }
 
   const collected: LockfileProblem[] = [];
-  const extras: RequirementExtras = { unpinned: [], uncheckable: [], directPrivate: [] };
+  const origins: NonNullable<RequirementExtras["origins"]> = [];
+  const includes: NonNullable<RequirementExtras["includes"]> = [];
+  const extras: RequirementExtras = { unpinned: [], uncheckable: [], directPrivate: [], origins, includes };
   const extraIndexes: Array<{ file: string; index: string }> = [];
   const registryWide: NonNullable<VersionSource["registryWide"]> = [];
+  /** Every pin the requirement files install, in the order read; its scope is decided once every include is known. */
+  const requirementPins: Array<{ name: string; version: string }> = [];
   for (const file of requirementFiles(cwd)) {
-    const dev = devRequirementsFile(file) ? true : undefined;
     const pins = readRequirementsFile(file, new Set(), cwd, collected, extras);
+    // Unreadable: readRequirementsFile named it in `collected`.
     if (pins === null) continue;
     indexUnrecorded = true;
-    for (const { name, version } of pins) take(name, version, dev);
+    pushAll(requirementPins, pins);
     sources.push(file);
     // `--index-url` / `-i` replaces pypi.org for every pin of the file: private when it is not a
     // public index (pre-publish audit 2026-11-13, S4). `--extra-index-url` adds one beside pypi.org,
@@ -214,10 +243,44 @@ export function resolvePython(cwd: string): VersionSource {
     }
     for (const index of options.extra) if (!isPublicPypiIndex(index)) extraIndexes.push({ file, index: sourceLabel(index) });
   }
+  // A pin is dev-only when every file that pins it is installed for development only
+  // (devOnlyRequirements); any other pin keeps an unknown scope, which is never discounted.
+  const devOnly = devOnlyRequirements(includes);
+  const pinnedIn = new Map<string, Set<string>>();
+  for (const { file, name, version } of origins) {
+    const files = pinnedIn.get(`${name}\0${version}`);
+    if (files) files.add(file);
+    else pinnedIn.set(`${name}\0${version}`, new Set([file]));
+  }
+  for (const { name, version } of requirementPins) {
+    const files = [...(pinnedIn.get(`${name}\0${version}`) ?? [])];
+    take(name, version, files.length > 0 && files.every(devOnly) ? true : undefined);
+  }
+  // With no lockfile, an exact pin pyproject.toml declares is what gets installed, as a
+  // requirements pin is: checked. (A lockfile, when there is one, holds those versions itself.)
+  let manifestPins = 0;
+  if (pyproject !== null && !lockfile) {
+    const declared = pyprojectPins(pyproject);
+    manifestPins = declared.pins.length;
+    if (manifestPins > 0) {
+      for (const pin of declared.pins) take(pin.name, pin.version, pin.dev ? true : undefined);
+      sources.push(pyprojectPath);
+      indexUnrecorded = true;
+      // What it declares with no exact version has nothing to check, and is listed; a workspace
+      // member's ranges are pinned by the lockfile above it and are left alone.
+      if (!pythonLockAbove(cwd)) for (const name of declared.unpinned) extras.unpinned.push({ file: pyprojectPath, name });
+      for (const other of declared.direct) extras.uncheckable.push({ ...other, version: null, file: pyprojectPath });
+      for (const ref of declared.references) {
+        if (privateDirectReference(ref.location)) extras.directPrivate.push({ name: ref.name, version: null, registry: directLabel(ref.location), file: pyprojectPath });
+      }
+    }
+  }
   pushAll(uncheckable, extras.uncheckable);
   // A direct reference to a location that is not public (`name @ https://pkgs.acme.dev/...`, a private
   // git host, `file:`): installed from there, never from pypi.org, so the name is private (R7, 3).
   pushAll(privateIndex, extras.directPrivate);
+  // With no lockfile read, what an unreadable pyproject.toml declares was checked nowhere.
+  if (pyprojectUnread && !lockfile) damaged.push(pyprojectUnread);
   // One problem per file, however many requirement files name it.
   const problems = [...new Map([...damaged, ...collected].map((p) => [p.file.toLowerCase(), p])).values()];
   // A name some other file here pins exactly has a version to check: only what nothing pins is unpinned.
@@ -237,11 +300,200 @@ export function resolvePython(cwd: string): VersionSource {
   };
 
   if (sources.length === 0) return { ...emptySource(), ...extra };
+  // Only the manifest's own pins: a manifest with no lockfile, as package.json and Cargo.toml are
+  // read. Its pins were checked as declared and what they install with them was resolved nowhere,
+  // which the answer says (no range is given a floor: a ranged name is listed as unpinned).
+  if (manifestPins > 0 && sources.length === 1) return found(versions, instances, pyprojectPath, "declared_ranges", { ranges: new Map(), ...extra });
   return found(versions, instances, sources[0], lockfile ? "lockfile" : "manifest", { extraSources: sources.slice(1), ...extra, ...(lockfile && !indexUnrecorded ? { indexRecorded: true } : {}) });
+}
+
+/** Parent directories searched for a Python lockfile that pins a workspace member (as resolution.ts's pyprojectUnpinned does). */
+const MAX_LOCK_PARENTS = 6;
+
+/** Whether a directory above `dir`, up to the repository root, holds a uv, Poetry or PDM lockfile: a workspace member is pinned there. */
+function pythonLockAbove(dir: string): boolean {
+  let parent = path.dirname(path.resolve(dir));
+  for (let level = 0; level < MAX_LOCK_PARENTS; level++) {
+    if (PYTHON_TOML_LOCKS.some((lock) => fs.existsSync(path.join(parent, lock)))) return true;
+    if (fs.existsSync(path.join(parent, ".git")) || path.dirname(parent) === parent) return false;
+    parent = path.dirname(parent);
+  }
+  return false;
+}
+
+/**
+ * What a pyproject.toml's `[project] dependencies`, `[project.optional-dependencies]`,
+ * `[dependency-groups]` and Poetry dependency tables (poetry-requirements.ts) declare, read as
+ * requirement lines are: exact pins (`requests==2.19.1`, Poetry `requests = "2.19.1"`), the names
+ * with no exact version, and direct references (`name @ git+https://…`). A pin in a dependency
+ * group (or a Poetry dev table or group) is a development one; an extra's or the project's own is not.
+ */
+function pyprojectPins(content: string): {
+  pins: Array<{ name: string; version: string; dev: boolean }>;
+  unpinned: string[];
+  direct: Array<{ name: string; kind: "git" | "url" }>;
+  references: Array<{ name: string; location: string }>;
+} {
+  const declared = pyprojectRequirements(content);
+  // Poetry's tables, written as the same requirement strings (poetry-requirements.ts).
+  const poetry = poetryRequirements(content);
+  // One requirement per line, as a requirements file holds them; a string that spans lines is no requirement.
+  const lines = (dev: boolean) =>
+    [...declared.filter((r) => (r.section === "dependency-groups") === dev).map((r) => r.text), ...poetry.filter((r) => r.dev === dev).map((r) => r.text)]
+      .filter((text) => !/[\r\n]/.test(text))
+      .join("\n");
+  const pins = [
+    ...parseRequirements(lines(false)).map((pin) => ({ ...pin, dev: false })),
+    ...parseRequirements(lines(true)).map((pin) => ({ ...pin, dev: true })),
+  ];
+  const rest = unpinnedRequirements(`${lines(false)}\n${lines(true)}`);
+  const pinned = new Set(pins.map((p) => p.name));
+  return { pins, unpinned: rest.names.filter((name) => !pinned.has(name)), direct: rest.direct, references: rest.references };
 }
 
 function dedupeUncheckable(list: UncheckableDependency[]): UncheckableDependency[] {
   return [...new Map(list.map((u) => [`${u.file.toLowerCase()}|${u.name}|${u.version ?? ""}|${u.kind}`, u])).values()];
+}
+
+/** What a Pipfile.lock holds: its index releases, what it installs from elsewhere, and what could not be read in it. */
+interface PipfileLockRead {
+  pins: Array<{ name: string; version: string; dev: boolean }>;
+  uncheckable: UncheckableDependency[];
+  privateIndex: PrivateIndexEntry[];
+  /** Why the file is not a whole Pipfile.lock, or null. */
+  problem: string | null;
+  /** Entries that could not be read (counted in `problem`). */
+  malformed: number;
+}
+
+/**
+ * A parsed Pipfile.lock: `default` (runtime) and `develop` (dev) entries. Every value is checked
+ * before it is used, so one entry that is not what pipenv writes (a `version` that is no string)
+ * costs that entry and is said, never the entries around it and never the whole file.
+ */
+function readPipfileLock(lock: unknown, file: string): PipfileLockRead {
+  const out: PipfileLockRead = { pins: [], uncheckable: [], privateIndex: [], problem: null, malformed: 0 };
+  const isTable = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+  if (!isTable(lock) || !["_meta", "default", "develop"].some((key) => key in lock)) {
+    out.problem = "it is valid JSON but not a Pipfile.lock: it has no `default` or `develop` section";
+    return out;
+  }
+  // `"index": "<source name>"` names the Pipfile source a package comes from.
+  const meta = isTable(lock._meta) ? lock._meta : {};
+  const indexes = new Map<string, string>(
+    (Array.isArray(meta.sources) ? meta.sources : [])
+      .filter((s: { name?: unknown; url?: unknown }) => typeof s?.name === "string" && typeof s?.url === "string")
+      .map((s: { name: string; url: string }) => [s.name, s.url]),
+  );
+  const defaultSource = [...indexes.values()][0];
+  const unread: string[] = [];
+  for (const [section, dev] of [["default", false], ["develop", true]] as const) {
+    const entries = lock[section];
+    if (entries === undefined) continue;
+    if (!isTable(entries)) {
+      unread.push(`the \`${section}\` section`);
+      continue;
+    }
+    for (const [name, info] of Object.entries(entries)) {
+      if (!isTable(info) || (info.version !== undefined && typeof info.version !== "string")) {
+        unread.push(name.replace(/[^\w.@/-]+/g, "?").slice(0, 80));
+        continue;
+      }
+      const entry = info as { version?: string; git?: unknown; file?: unknown; path?: unknown; index?: unknown };
+      const version = entry.version?.replace(/^===?/, "");
+      if (!version) {
+        // `{"git": "https://…", "ref": "…"}` or `{"file": "https://…/x.whl"}`: installed, but not an index release.
+        if (typeof entry.git === "string") out.uncheckable.push({ name: normalizePythonName(name), version: null, kind: "git", file });
+        else if (typeof entry.file === "string" && /^https?:/i.test(entry.file)) out.uncheckable.push({ name: normalizePythonName(name), version: null, kind: "url", file });
+        // From a host that is not public, or local code: the name is private (R8, B4).
+        const location = typeof entry.git === "string" ? entry.git : typeof entry.file === "string" ? entry.file : typeof entry.path === "string" ? `file:${entry.path}` : null;
+        if (location && privateDirectReference(location)) out.privateIndex.push({ name: normalizePythonName(name), version: null, registry: directLabel(location), file, ...(/^file:/i.test(location) ? { local: true as const } : {}) });
+        continue;
+      }
+      // An entry that names no index came from the default source, the first one (pipenv): a
+      // Pipfile whose only source is private wrote no `index` at all, and every name was sent (R8, B4).
+      const index = typeof entry.index === "string" ? indexes.get(entry.index) : defaultSource;
+      if (index && !isPublicPypiIndex(index)) out.privateIndex.push({ name: normalizePythonName(name), version, registry: sourceLabel(index), file });
+      out.pins.push({ name: normalizePythonName(name), version, dev });
+    }
+  }
+  if (unread.length > 0) {
+    out.malformed = unread.length;
+    out.problem = `${unread.length === 1 ? "1 entry is" : `${unread.length} entries are`} not what pipenv writes (${unread.slice(0, 3).join(", ")}${unread.length > 3 ? ", ..." : ""}) and ${unread.length === 1 ? "was" : "were"} skipped, so ${unread.length === 1 ? "its version was" : "their versions were"} not checked`;
+  }
+  return out;
+}
+
+/**
+ * Why a poetry.lock, uv.lock or pdm.lock is not the whole file its tool wrote for this project,
+ * or null when nothing says so. Beyond the signs every TOML lockfile shares (tomlLockDamage), a
+ * file cut cleanly between two `[[package]]` tables still parses, so each format is held to what
+ * its tool always writes:
+ * - poetry.lock ends with a `[metadata]` table;
+ * - uv.lock holds a table for the project itself and for every package another table depends
+ *   on, and for every requirement `pyproject.toml` declares for all environments that no
+ *   `[tool.uv]` override or constraint covers.
+ * pdm.lock carries nothing of the kind (its `[metadata]` comes first).
+ */
+function pythonLockDamage(name: string, content: string, pyproject: string | null): { reason: string; missing: number; behindManifest?: true } | null {
+  const shared = tomlLockDamage(content);
+  const parts: string[] = [];
+  let missing = 0;
+  let outOfDate = false;
+  if (name === "poetry.lock" && !/^\[metadata\]\s*$/m.test(content)) parts.push("it has no [metadata] table, which Poetry writes last");
+  if (name === "uv.lock") {
+    const { tables, dangling } = uvLockTables(content);
+    const some = (list: string[]) => `${list.slice(0, 3).join(", ")}${list.length > 3 ? ", ..." : ""}`;
+    if (tables.size === 0) parts.push("it holds no [[package]] table, and uv always writes at least the project's own");
+    if (dangling.length > 0) {
+      parts.push(`${dangling.length} package${dangling.length === 1 ? "" : "s"} named as ${dangling.length === 1 ? "a dependency has" : "dependencies have"} no [[package]] table (${some(dangling)})`);
+    }
+    // A requirement behind an environment marker need not be locked; one for every environment is.
+    // One an override or constraint names may legitimately not be locked (its marker can rule it out everywhere).
+    const declared = pyproject === null ? [] : pyprojectRequirements(pyproject).filter((r) => r.section === "dependencies" && !r.text.includes(";"));
+    const covered = new Set(pyproject === null ? [] : uvOverrideRequirements(pyproject).map(requirementName));
+    const undeclared = [...new Set(declared.map((r) => requirementName(r.text)).filter((n): n is string => n !== null && !tables.has(n) && !covered.has(n)))].sort();
+    if (undeclared.length > 0 && tables.size > 0) {
+      outOfDate = dangling.length === 0;
+      parts.push(`pyproject.toml declares ${undeclared.length === 1 ? "a dependency" : `${undeclared.length} dependencies`} it holds no [[package]] table for (${some(undeclared)})`);
+    }
+    missing = new Set([...dangling, ...undeclared]).size;
+  }
+  if (parts.length === 0) return shared;
+  if (shared) return { reason: `${shared.reason}; ${parts.join("; ")}`, missing: shared.missing + missing };
+  // Only the manifest disagrees: cut between two tables, or written before the manifest changed.
+  if (outOfDate && parts.length === 1) return { reason: `it is truncated or out of date: ${parts[0]}`, missing, behindManifest: true };
+  return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing };
+}
+
+/** The name a PEP 508 requirement string starts with, PEP 503 normalised; null when it starts with none. */
+function requirementName(requirement: string): string | null {
+  const name = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(requirement)?.[1];
+  return name ? normalizePythonName(name) : null;
+}
+
+/**
+ * The packages a uv.lock holds a `[[package]]` table for, and those its tables depend on that
+ * have none (`dependencies`, `[package.optional-dependencies]`, `[package.dev-dependencies]`).
+ * `[package.metadata]` repeats the manifest's requirements, markers and all, and a requirement
+ * no supported environment needs has no table: it is not read for this.
+ */
+function uvLockTables(content: string): { tables: Set<string>; dangling: string[] } {
+  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1);
+  const tables = new Set<string>();
+  for (const block of blocks) {
+    const name = /^name\s*=\s*"([^"]*)"/m.exec(block.split(/^\[/m)[0])?.[1];
+    if (name) tables.add(normalizePythonName(name));
+  }
+  const dangling = new Set<string>();
+  for (const block of blocks) {
+    const edges = block.split(/^\[package\.metadata/m)[0];
+    for (const edge of edges.matchAll(/\{\s*name\s*=\s*"([A-Za-z0-9][A-Za-z0-9._-]*)"/g)) {
+      const name = normalizePythonName(edge[1]);
+      if (!tables.has(name)) dangling.add(name);
+    }
+  }
+  return { tables, dangling: [...dangling].sort() };
 }
 
 /**
@@ -257,7 +509,9 @@ function dedupeUncheckable(list: UncheckableDependency[]): UncheckableDependency
  * and every `NAME==VALUE` line in it went to OSV.dev and back to the agent.
  * Such an include is skipped; absolute and UNC ones before any fs call.
  * Skipped is not silent: each one goes to `problems` (audit M4), which the
- * scan reports as a file whose pins were not checked.
+ * scan reports as a file whose pins were not checked. So does a file that
+ * cannot be read, the file itself or one it includes with `-r` (`includedBy`
+ * says which line named it): its pins are unknown, which is not "no pins".
  */
 export function readRequirementsFile(
   file: string,
@@ -265,6 +519,7 @@ export function readRequirementsFile(
   root: string = path.dirname(path.resolve(file)),
   problems: LockfileProblem[] = [],
   extras?: RequirementExtras,
+  includedBy?: string,
 ): Array<{ name: string; version: string }> | null {
   const key = path.resolve(file).toLowerCase();
   if (visited.has(key)) return [];
@@ -272,11 +527,15 @@ export function readRequirementsFile(
   let content: string;
   try {
     content = readTextFile(file);
-  } catch {
+  } catch (error) {
+    const absent = (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+    const why = absent ? "was not found" : unreadableReason(error);
+    problems.push({ file: path.resolve(file), error: includedBy ? `${includedBy} ${why}, so the pins in it were not checked` : why });
     return null;
   }
   const dir = path.dirname(file);
   const out = parseRequirements(content);
+  if (extras?.origins) for (const pin of out) extras.origins.push({ file: path.resolve(file), ...pin });
   if (extras) {
     // What this file lists but does not pin: a name with a range or no version, a git or URL requirement.
     const listed = unpinnedRequirements(content);
@@ -301,14 +560,20 @@ export function readRequirementsFile(
       problems.push(refusedInclude(file, option, target));
       continue;
     }
-    if (option === "r") pushAll(out, readRequirementsFile(included, visited, root, problems, extras) ?? []);
-    else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
+    if (option === "r") {
+      // Recorded for a file read before, too: who includes a file decides what its pins are for.
+      extras?.includes?.push({ from: path.resolve(file), to: path.resolve(included) });
+      pushAll(out, readRequirementsFile(included, visited, root, problems, extras, `\`-r ${target.slice(0, 200)}\` in ${path.basename(file)}`) ?? []);
+    } else for (const pin of parseRequirements(safeRead(included))) constraints.set(pin.name, pin.version);
   }
   if (constraints.size > 0) {
     const pinned = new Set(out.map((p) => p.name));
     for (const name of unpinnedRequirements(content).names) {
       const version = constraints.get(name);
-      if (version && !pinned.has(name)) out.push({ name, version });
+      if (!version || pinned.has(name)) continue;
+      out.push({ name, version });
+      // The constraint gives the version; the file that lists the name is what installs it.
+      extras?.origins?.push({ file: path.resolve(file), name, version });
     }
   }
   return out;
@@ -347,7 +612,7 @@ export function confinedInclude(dir: string, target: string, root: string): stri
   try {
     real = fs.realpathSync(included);
   } catch {
-    return included; // missing: nothing to escape through, and the read fails quietly
+    return included; // missing: nothing to escape through; what a failed read means is the caller's to say
   }
   try {
     return within(fs.realpathSync(rootDir), real) ? included : null;
@@ -611,6 +876,10 @@ export interface RequirementExtras {
   uncheckable: UncheckableDependency[];
   /** A direct reference whose location is not public: the name is private. */
   directPrivate: PrivateIndexEntry[];
+  /** When set: every pin read, with the file it is written in (absolute). */
+  origins?: Array<{ file: string; name: string; version: string }>;
+  /** When set: every `-r` include followed, as the including and the included file (absolute). */
+  includes?: Array<{ from: string; to: string }>;
 }
 
 /**
@@ -664,8 +933,8 @@ export function unpinnedRequirements(content: string): {
       references.push({ name: normalizePythonName(m[1]), location: reference[1] });
       continue;
     }
-    // `vendor/pkg.whl`: a local path, not a name.
-    if (/===?/.test(m[2]) || /^[\\/]/.test(m[2])) continue;
+    // An exact pin is parseRequirements' to return; `vendor/pkg.whl` is a local path, not a name.
+    if (exactClause(m[2].replace(REQUIREMENT_OPTION, "")) !== null || /^[\\/]/.test(m[2])) continue;
     names.push(normalizePythonName(m[1]));
   }
   return { names: [...new Set(names)], direct, references };
@@ -811,9 +1080,29 @@ export function tomlLockDamage(content: string): { reason: string; missing: numb
   return parts.length > 0 ? { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: nameless } : null;
 }
 
+/** A per-requirement option after the specifier (`--hash=sha256:...`, `--config-settings x`): not part of it. */
+const REQUIREMENT_OPTION = /\s--?[A-Za-z][\w-]*(?:[=\s]\S+)?/g;
+
+/**
+ * The version an `==` (or `===`) clause of a version specifier names, whatever clauses stand
+ * beside it: `==6.0.4,!=6.0.5` and `>=2.5,==2.8` install that one version or nothing, so each is
+ * an exact pin. Null when no clause is exact (`>=2,<3`, `~=1.4`, `!=8.0.0`). A specifier in
+ * parentheses (`name (==1.2)`, PEP 508) reads the same. A prefix match (`==2.32.*`) names a
+ * series of releases, not one version, so it is no exact clause.
+ */
+export function exactClause(specifier: string): string | null {
+  const clauses = specifier.trim().replace(/^\(/, "").replace(/\)$/, "");
+  for (const clause of clauses.split(",")) {
+    const exact = /^\s*===?\s*([^\s,;()]+)\s*$/.exec(clause);
+    if (exact && !exact[1].includes("*")) return exact[1];
+  }
+  return null;
+}
+
 /**
  * Exact pins from a requirements file: `name==1.2`, `name===1.2`,
- * `name[extra1,extra2]==1.2`, with environment markers and inline comments.
+ * `name[extra1,extra2]==1.2`, with environment markers and inline comments,
+ * and an `==` clause among others (`name==1.2,!=1.3`: exactClause).
  * Ranges (`>=`, `~=`) do not name an installed version and are skipped, as are
  * options (`-r`, `-e`, `--hash`) and URL requirements.
  */
@@ -829,10 +1118,11 @@ export function parseRequirements(content: string): Array<{ name: string; versio
     if (!line || line.startsWith("-")) continue;
     // Per-requirement options (pip-compile writes `--hash=sha256:...` on
     // continuation lines) follow the specifier; they are not part of it.
-    const spec = line.split(";")[0].replace(/\s--?[A-Za-z][\w-]*(?:[=\s]\S+)?/g, "").trim();
-    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?\s*([^\s,;]+)\s*$/.exec(spec);
-    if (!match) continue;
-    out.push({ name: normalizePythonName(match[1]), version: match[2] });
+    const spec = line.split(";")[0].replace(REQUIREMENT_OPTION, "").trim();
+    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(spec);
+    const version = match ? exactClause(match[2]) : null;
+    if (!match || version === null) continue;
+    out.push({ name: normalizePythonName(match[1]), version });
   }
   return out;
 }
@@ -852,8 +1142,15 @@ export function resolveGo(cwd: string): VersionSource {
   try {
     mod = parseGoMod(readTextFile(goModPath));
   } catch {
-    return emptySource();
+    return emptySource(); // present and unreadable: resolveVersionSource names it and why
   }
+  const problems: LockfileProblem[] = [];
+  // Every go.mod names its module; one that does not, and requires nothing, is not a go.mod.
+  if (mod.module === null && mod.rawRequires.length === 0) {
+    return { ...emptySource(), problems: [{ file: goModPath, error: "it has no `module` directive and no requirement could be read from it: it is damaged or not a go.mod" }] };
+  }
+  // A directive block still open where the file ends: the lines after the cut are gone.
+  if (mod.unclosed) problems.push(partialRead(goModPath, `it is truncated: its last \`${mod.unclosed} (\` block is not closed`));
   // The build list: go.mod's requirements and, before go 1.17, the modules
   // go.sum says the build selected; `replace` applies to both.
   const selected = new Map(mod.rawRequires.map((r) => [r.module, r.version] as const));
@@ -869,7 +1166,10 @@ export function resolveGo(cwd: string): VersionSource {
         for (const [module, version] of selectedFromGoSum(readTextFile(goSumPath))) {
           if (!selected.has(module)) selected.set(module, version);
         }
-      } catch { /* skip */ }
+      } catch (error) {
+        // Before go 1.17 the modules go.mod does not list are recorded in go.sum only.
+        problems.push({ file: goSumPath, error: `${unreadableReason(error)}, and before go 1.17 the modules go.mod does not list are recorded there only, so they were not checked` });
+      }
     }
   }
   const versions = new Map<string, string>();
@@ -877,18 +1177,100 @@ export function resolveGo(cwd: string): VersionSource {
   // release, so never sent: `replace github.com/acme/core => ../core` sent the module path from
   // dependency_check, upgrade_impact and the briefing (R8).
   const privateIndex: PrivateIndexEntry[] = [];
-  const local = (module: string, why: string) => privateIndex.push({ name: module, version: null, registry: why, file: goModPath, local: true });
+  const local = (module: string, why: string, file = goModPath) => privateIndex.push({ name: module, version: null, registry: why, file, local: true });
   if (mod.module) local(mod.module, "local code (this go.mod's own module)");
   for (const module of mod.localReplaced) local(module, "local code (replaced by a directory in go.mod)");
+  // A workspace that uses this module builds it with go.work's `replace` directives, which win over go.mod's.
+  const work = goWorkFor(cwd, (file, error) => {
+    problems.push({ file, error: `${unreadableReason(error)}, so any \`replace\` it holds for this module was not applied` });
+  });
+  for (const module of work?.localReplaced ?? []) local(module, "local code (replaced by a directory in go.work)", work?.file);
   for (const [module, version] of selected) {
-    const target = mod.replacement(module, version);
+    const inWorkspace = work?.replacement(module, version);
+    const target = inWorkspace !== undefined ? inWorkspace : mod.replacement(module, version);
     if (target === null) continue; // replaced by a local directory: local code, not a registry module
     if (target) versions.set(target.module, target.version);
     else if (!versions.has(module)) versions.set(module, version);
   }
   const instances = new InstanceSet();
   for (const [module, version] of versions) instances.add(module, version);
-  return found(versions, instances, goModPath, "lockfile", privateIndex.length > 0 ? { privateIndex } : {});
+  return found(versions, instances, goModPath, "lockfile", {
+    ...(work ? { extraSources: [work.file] } : {}),
+    ...(privateIndex.length > 0 ? { privateIndex } : {}),
+    ...(problems.length > 0 ? { problems } : {}),
+  });
+}
+
+/** Directories above a module searched for the go.work that uses it. */
+const MAX_WORK_PARENTS = 6;
+/** `use` entries read from one go.work; a workspace with more is not a hand-written one. */
+const MAX_WORKSPACE_MODULES = 2000;
+
+/**
+ * The go.work files that can apply to the module in `moduleDir`: the directory's own and its
+ * parents', nearest first, up to the repository root. The go command takes the nearest one.
+ */
+export function goWorkCandidates(moduleDir: string): string[] {
+  const out: string[] = [];
+  let dir = path.resolve(moduleDir);
+  for (let level = 0; level <= MAX_WORK_PARENTS; level++) {
+    out.push(path.join(dir, "go.work"));
+    if (fs.existsSync(path.join(dir, ".git")) || path.dirname(dir) === dir) break;
+    dir = path.dirname(dir);
+  }
+  return out;
+}
+
+/** The workspace file that applies to a module, with what its `replace` directives say. */
+export interface GoWork {
+  /** Absolute path of the go.work. */
+  file: string;
+  /** What `replace` maps a module version to: undefined for nothing, null for a local directory. */
+  replacement: (module: string, version: string) => GoReplacement | undefined;
+  /** Modules a `replace` points at a local directory. */
+  localReplaced: string[];
+  /** Whether any `replace` names the module, as what is replaced or as what replaces it. */
+  touches: (module: string) => boolean;
+}
+
+/**
+ * The go.work that the module in `moduleDir` is built with: the nearest one (goWorkCandidates),
+ * and only when one of its `use` directives names the module's directory. In a workspace the
+ * go.work `replace` directives decide what is built, over go.mod's own; a workspace file that
+ * does not use the module says nothing about it. Null when there is none, or it cannot be read
+ * (`unreadable` is then told which file and why: its directives are unknown, not absent).
+ */
+export function goWorkFor(moduleDir: string, unreadable?: (file: string, error: unknown) => void): GoWork | null {
+  const file = goWorkCandidates(moduleDir).find((candidate) => fs.existsSync(candidate));
+  if (!file) return null;
+  let content: string;
+  try {
+    content = readTextFile(file);
+  } catch (error) {
+    unreadable?.(file, error);
+    return null;
+  }
+  const used: string[] = [];
+  let inUse = false;
+  for (const raw of content.split(/\r?\n/)) {
+    if (raw.length > MAX_REQUIREMENT_LINE || used.length >= MAX_WORKSPACE_MODULES) continue;
+    const line = raw.replace(/\/\/.*$/, "").trim();
+    if (!line) continue;
+    if (inUse && line === ")") inUse = false;
+    else if (/^use\s*\($/.test(line)) inUse = true;
+    else if (inUse) used.push(line);
+    else if (line.startsWith("use ") || line.startsWith("use\t")) used.push(line.slice(4).trim());
+  }
+  const here = path.resolve(moduleDir);
+  const uses = used.some((entry) => path.relative(path.resolve(path.dirname(file), entry.replace(/^["`]|["`]$/g, "")), here) === "");
+  if (!uses) return null;
+  const parsed = parseGoMod(content);
+  const touched = new Set<string>();
+  for (const [key, target] of parsed.replaces) {
+    touched.add(key.split(" ")[0]);
+    if (target) touched.add(target.module);
+  }
+  return { file, replacement: parsed.replacement, localReplaced: parsed.localReplaced, touches: (module) => touched.has(module) };
 }
 
 /** A `replace` target: another module version, or null for a local directory. */
@@ -911,19 +1293,28 @@ export function parseGoMod(content: string): {
   module: string | null;
   /** Modules a `replace` points at a local directory. */
   localReplaced: string[];
+  /** The directive whose `(` block is still open where the file ends (a truncated file), or null. */
+  unclosed: string | null;
+  /** Every `replace`, keyed by the module (or `module version`) it replaces. */
+  replaces: ReadonlyMap<string, GoReplacement>;
 } {
   const requires = new Map<string, { module: string; version: string; indirect: boolean }>();
   const replaces = new Map<string, GoReplacement>();
   let block: "require" | "replace" | null = null;
+  /** Any directive's open block (`exclude (`, `retract (`, ...), read or not. */
+  let open: string | null = null;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const indirect = /\/\/\s*indirect\b/.test(rawLine);
     const line = rawLine.replace(/\/\/.*$/, "").trim();
     if (!line) continue;
-    if (block && line === ")") {
+    if (line === ")") {
       block = null;
+      open = null;
       continue;
     }
+    const anyOpener = /^([a-z]+)\s*\($/.exec(line);
+    if (anyOpener) open = anyOpener[1];
     const opener = /^(require|replace)\s*\($/.exec(line);
     if (opener) {
       block = opener[1] as "require" | "replace";
@@ -961,7 +1352,7 @@ export function parseGoMod(content: string): {
   const goVersionAtLeast117 = go ? Number(go[1]) > 1 || Number(go[2]) >= 17 : false;
   const module = /^module\s+"?([^\s"/]+(?:\/[^\s"]+)*)"?\s*(?:\/\/.*)?$/m.exec(content)?.[1] ?? null;
   const localReplaced = [...new Set([...replaces].filter(([, target]) => target === null).map(([key]) => key.split(" ")[0]))];
-  return { requires: result, rawRequires, replacement, goVersionAtLeast117, module, localReplaced };
+  return { requires: result, rawRequires, replacement, goVersionAtLeast117, module, localReplaced, unclosed: open, replaces };
 }
 
 /**

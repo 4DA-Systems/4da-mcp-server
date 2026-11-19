@@ -15,6 +15,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { wildcardMatch } from "../live/glob-match.js";
+
 /** Manifests read per call: the root, the pinning directories and workspace members. */
 const MAX_MANIFESTS = 64;
 const MAX_MANIFEST_BYTES = 512 * 1024;
@@ -88,27 +90,32 @@ function arrayIn(body: string, key: string): string[] {
   return m ? stringsOf(m[1].replace(/#[^\n]*/g, "")) : [];
 }
 
-/** One path segment glob (`*`, `?`) as a regex. */
-function segmentRegex(glob: string): RegExp {
-  return new RegExp(`^${glob.split("").map((c) => (c === "*" ? "[^/\\\\]*" : c === "?" ? "[^/\\\\]" : escapeRegex(c))).join("")}$`);
-}
+/** Directories one member pattern may name: more than any real workspace, few enough to stay cheap. */
+const MAX_MEMBER_DIRS = 2000;
 
-/** Directories a member pattern names under `wsRoot`: plain paths and `*` / `?` globs per segment (Cargo's glob members). */
-function expandMember(wsRoot: string, pattern: string): string[] {
+/**
+ * Directories a member pattern names under `wsRoot`: plain paths and `*` / `?` globs per segment
+ * (Cargo's glob members). A directory name holds no separator, so `*` and `?` never cross one.
+ * The pattern is a manifest's text: it is matched without building a RegExp (glob-match.ts) and
+ * the result is capped, so no pattern can stall the call.
+ */
+export function expandMember(wsRoot: string, pattern: string): string[] {
   let dirs = [wsRoot];
   for (const segment of pattern.split(/[\\/]+/).filter((s) => s && s !== ".")) {
+    if (dirs.length === 0) break;
     if (!/[*?]/.test(segment)) {
       dirs = dirs.map((d) => path.join(d, segment));
       continue;
     }
-    const re = segmentRegex(segment);
-    dirs = dirs.flatMap((d) => {
-      try {
-        return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && re.test(e.name)).map((e) => path.join(d, e.name));
-      } catch {
-        return [];
-      }
-    });
+    dirs = dirs
+      .flatMap((d) => {
+        try {
+          return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && wildcardMatch(segment, e.name)).map((e) => path.join(d, e.name));
+        } catch {
+          return [];
+        }
+      })
+      .slice(0, MAX_MEMBER_DIRS);
   }
   return dirs;
 }

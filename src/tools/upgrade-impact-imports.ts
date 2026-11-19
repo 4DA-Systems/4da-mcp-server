@@ -188,7 +188,7 @@ export function scanPythonSource(source: string, names: string[], symbols: Set<s
   const text = source.replace(/\\\r?\n/g, " ");
   const bindings: string[] = [];
   // `from x import (a, b,\n c)` and `from x import a, b as c`
-  const fromRe = /^[ \t]*from[ \t]+([\w.]+)[ \t]+import[ \t]+(\([^)]*\)|[^\n#]+)/gm;
+  const fromRe = /^[ \t]*from[ \t]+([\w.]+)[ \t]+import[ \t]+(\([^)]{0,4000}\)|[^\n#]+)/gm;
   for (const m of text.matchAll(fromRe)) {
     if (!names.some((n) => underModule(m[1], n))) continue;
     matches++;
@@ -239,13 +239,15 @@ export function goPackageName(imp: string): string {
 export function scanGoSource(source: string, mod: string, symbols: Set<string>): number {
   const specs: Array<{ alias: string | null; path: string }> = [];
   const spec = /^\s*(?:([A-Za-z_]\w*|\.|_)\s+)?"([^"]+)"/;
-  for (const m of source.matchAll(/^\s*import\s*\(([\s\S]*?)\)/gm)) {
+  // Line-leading blanks only (never `\s`, which restarts the match on every blank line) and a
+  // bounded block (an unbounded one runs to the end of a file that has no closing parenthesis).
+  for (const m of source.matchAll(/^[ \t]*import[ \t]*\(([\s\S]{0,20000}?)\)/gm)) {
     for (const line of m[1].split("\n")) {
       const s = spec.exec(line.replace(/\/\/.*$/, ""));
       if (s) specs.push({ alias: s[1] ?? null, path: s[2] });
     }
   }
-  for (const m of source.matchAll(/^\s*import\s+(?:([A-Za-z_]\w*|\.|_)\s+)?"([^"]+)"/gm)) {
+  for (const m of source.matchAll(/^[ \t]*import[ \t]+(?:([A-Za-z_]\w*|\.|_)[ \t]+)?"([^"\n]+)"/gm)) {
     specs.push({ alias: m[1] ?? null, path: m[2] });
   }
   let matches = 0;

@@ -1,0 +1,14 @@
+{
+  "name": "fx-bun-peer-vuln",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "ajv-keywords": "3.5.2"
+  },
+  "devDependencies": {
+    "table": "5.4.6"
+  },
+  "overrides": {
+    "ajv": "6.12.2"
+  }
+}

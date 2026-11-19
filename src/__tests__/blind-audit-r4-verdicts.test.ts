@@ -74,6 +74,13 @@ function stub() {
       const q = JSON.parse(String(init?.body)) as { package: { name: string; ecosystem: string } };
       return json({ vulns: recordsFor(q.package.name, q.package.ecosystem) });
     }
+    // One release's own document (its requires_dist), for a release the project lists.
+    const pypiRelease = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (pypiRelease) {
+      const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypiRelease[1]).toLowerCase());
+      const version = decodeURIComponent(pypiRelease[2]);
+      return name && version in PYPI[name] ? json({ info: { name, version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypi[1]).toLowerCase());
@@ -175,7 +182,7 @@ describe("defect 1: an incomplete OSV advisory list never names a safe release",
 
   it("fix targets (vulnerability_scan, briefings, upgrade_planner): an incomplete list is read as unread, never as checked against every advisory", async () => {
     QUERY_EMPTY = true;
-    const sources = new LiveIntelligence(new Database(":memory:")).getFixPathSources();
+    const sources = new LiveIntelligence(new Database(":memory:")).getFixPathSources()!;
     const clean = await cleanFixTarget(sources, "npm", "lodash", ["4.17.21"], "4.17.20", ["GHSA-35jh-r3h4-6jhm"]);
     // Without the ids, the empty list would count as a complete one (OSV's normal answer for a clean package).
     const blind = await cleanFixTarget(sources, "npm", "lodash", ["4.17.21"], "4.17.20");
@@ -349,7 +356,6 @@ function dep(name: string, version: string, ecosystem: ResolvedDependency["ecosy
 
 function briefingDb(): FourDADatabase {
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = new Database(":memory:");
   return instance;
 }

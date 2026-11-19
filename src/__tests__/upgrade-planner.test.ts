@@ -4,7 +4,7 @@
  *
  * Guards the three dishonesties fixed in the MCP hardening pass:
  * 1. Transitive CVEs were counted in scan totals but never recommended —
- *    now surfaced as `waiting_on_upstream` steps with honest labels.
+ *    now surfaced as planned steps with honest labels (`not_determined` until their fix path is read).
  * 2. `projectPath` reported `process.cwd()` regardless of where dependencies
  *    were actually resolved from — now reports the real resolution root.
  * 3. A missing vulnerability scan silently produced a CVE-blind ranking —
@@ -18,6 +18,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
+import { standalonePlan } from "./helpers/standalone-plan.js";
 import type { FourDADatabase } from "../db.js";
 import type { VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 
@@ -46,6 +47,7 @@ function makeEntry(overrides: Partial<VulnerabilityEntry>): VulnerabilityEntry {
     references: [],
     target: null,
     platformActive: true,
+    sourceDirs: [],
     ...overrides,
   };
 }
@@ -110,7 +112,7 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps", () => {
+describe("upgrade_planner — transitive CVEs become planned steps, not determined until their fix path is read", () => {
   it("recommends a transitive vulnerable package with honest labels", async () => {
     const scan = makeScan(
       [
@@ -126,12 +128,13 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
       ],
       webDir,
     );
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const result = await standalonePlan(noDb, {}, makeIntel(scan));
 
     const transitive = result.recommendations.find((r) => r.package === "zustand");
     expect(transitive).toBeDefined();
     expect(transitive!.scope).toBe("transitive");
-    expect(transitive!.action).toBe("waiting_on_upstream");
+    // No fix-path check runs here: how it is fixed is not determined, which is not "waiting on upstream".
+    expect(transitive!.action).toBe("not_determined");
     // No fix-path check runs here, so 5.0.15 is NOT CHECKED against every advisory: named in the
     // first reason, never as targetVersion (pre-publish audit 2026-11-14), and no distance is claimed.
     expect(transitive!.targetVersion).toBeNull();
@@ -139,7 +142,10 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
     expect(transitive!.upgradeType).toBe("unknown");
     expect(transitive!.breaking).toBe(false);
     expect(transitive!.reasons.some((r) => r.includes("Transitive dependency"))).toBe(true);
-    expect(result.waitingOnUpstream).toBe(1);
+    expect(transitive!.reasons.some((r) => r.includes("NOT DETERMINED"))).toBe(true);
+    expect(result.waitingOnUpstream).toBe(0);
+    expect((result as { fixPathNotDetermined: number }).fixPathNotDetermined).toBe(1);
+    expect(result.summary).not.toContain("waiting on upstream");
   });
 
   it("ranks fixable-now (direct) above waiting-on-upstream at equal risk", async () => {
@@ -150,7 +156,7 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
       ],
       webDir,
     );
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const result = await standalonePlan(noDb, {}, makeIntel(scan));
 
     const directIdx = result.recommendations.findIndex((r) => r.package === "react");
     const transitiveIdx = result.recommendations.findIndex((r) => r.package === "zustand");
@@ -164,7 +170,7 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
   });
 
   it("says no_fix_available, never upgrade_direct with no target, when no fixed release exists", async () => {
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(makeScan([makeEntry({ fixedVersion: null })], webDir)));
+    const result = await standalonePlan(noDb, {}, makeIntel(makeScan([makeEntry({ fixedVersion: null })], webDir)));
     const react = result.recommendations.find((r) => r.package === "react")!;
     expect(react.action).toBe("no_fix_available");
     expect(result.summary).toMatch(/no fixed release/);
@@ -175,7 +181,7 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
       [makeEntry({ package: "paste", currentVersion: "1.0.15", isDirect: false, vulnId: "RUSTSEC-2024-0436", summary: "paste - no longer maintained" })],
       webDir,
     );
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const result = await standalonePlan(noDb, {}, makeIntel(scan));
     expect(result.recommendations.find((r) => r.package === "paste")).toBeUndefined();
     expect(result.summary).toMatch(/1 unmaintained-package notice/);
   });
@@ -189,11 +195,11 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
       ],
       webDir,
     );
-    const byDefault = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const byDefault = await standalonePlan(noDb, {}, makeIntel(scan));
     expect(byDefault.recommendations.find((r) => r.package === "dev-only-pkg")).toMatchObject({ isDev: true });
     expect(byDefault.recommendations.find((r) => r.package === "unknown-scope-pkg")).toBeDefined();
 
-    const runtimeOnly = await executeUpgradePlanner(noDb, { include_dev: false }, makeIntel(scan));
+    const runtimeOnly = await standalonePlan(noDb, { include_dev: false }, makeIntel(scan));
     expect(runtimeOnly.recommendations.find((r) => r.package === "dev-only-pkg")).toBeUndefined();
     expect(runtimeOnly.recommendations.find((r) => r.package === "unknown-scope-pkg")).toBeDefined();
     expect(runtimeOnly.summary).toMatch(/include_dev: false left out 1 dev-only vulnerable transitive copy/);
@@ -204,7 +210,7 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
       [makeEntry({ package: "win-only", isDirect: false, vulnId: "GHSA-plat-1", platformActive: false, target: "cfg(unix)" })],
       webDir,
     );
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const result = await standalonePlan(noDb, {}, makeIntel(scan));
 
     const rec = result.recommendations.find((r) => r.package === "win-only");
     expect(rec).toBeDefined();
@@ -215,7 +221,7 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
 
 describe("upgrade_planner — projectPath honesty", () => {
   it("reports the dependency resolution root, not process.cwd()", async () => {
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(makeScan([makeEntry({})], webDir)));
+    const result = await standalonePlan(noDb, {}, makeIntel(makeScan([makeEntry({})], webDir)));
     const normalized = result.projectPath.replace(/\\/g, "/");
     expect(normalized).toBe(root.replace(/\\/g, "/"));
     expect(result.projectPath).not.toBe(process.cwd());
@@ -230,7 +236,7 @@ describe("upgrade_planner — projectPath honesty", () => {
 
 describe("upgrade_planner — CVE-blind disclosure and provenance", () => {
   it("discloses a CVE-blind plan when no scan can run (offline)", async () => {
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(null));
+    const result = await standalonePlan(noDb, {}, makeIntel(null));
     expect(result.vulnerabilityDataAvailable).toBe(false);
     expect(result.summary).toMatch(/^NOT CHECKED: live lookups are disabled \(FOURDA_OFFLINE=true\)/);
     expect((result as { vulnerabilityCoverage?: { unchecked_dependencies: number } }).vulnerabilityCoverage?.unchecked_dependencies).toBeGreaterThan(0);
@@ -263,7 +269,7 @@ describe("upgrade_planner — CVE-blind disclosure and provenance", () => {
       };
       expect(calls).toEqual([{ includeDev: true }]);
       expect(result.vulnerabilityDataAvailable).toBe(true);
-      expect(result.recommendations).toMatchObject([{ package: "zustand", targetVersion: null, scope: "transitive", action: "waiting_on_upstream" }]);
+      expect(result.recommendations).toMatchObject([{ package: "zustand", targetVersion: null, scope: "transitive", action: "not_determined" }]);
       expect(result.summary).not.toContain("not a dependency");
     });
 

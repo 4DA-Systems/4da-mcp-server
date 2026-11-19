@@ -69,6 +69,7 @@ const LOCK_MARKERS = [
   "Pipfile.lock",
   "go.mod",
   "Gemfile.lock",
+  "gems.locked",
   "composer.lock",
 ];
 
@@ -87,6 +88,7 @@ const LOCK_ECOSYSTEM: Record<string, string> = {
   "Pipfile.lock": "python",
   "go.mod": "go",
   "Gemfile.lock": "ruby",
+  "gems.locked": "ruby",
   "composer.lock": "php",
 };
 
@@ -160,8 +162,12 @@ export function unsupportedEcosystem(name: string, names: string[], dir?: string
   if (name === "Package.resolved") return "SwiftPM";
   if (name === "Podfile.lock") return "CocoaPods";
   if (name === "conan.lock") return "ConanCenter";
+  // Its npm: and jsr: packages are resolved nowhere else: a Deno project's whole tree goes unchecked.
+  if (name === "deno.lock") return "Deno (deno.lock is not read)";
   if (name === "renv.lock") return "CRAN";
   if (name === "Gemfile" && !names.includes("Gemfile.lock")) return "RubyGems (Gemfile with no Gemfile.lock)";
+  // Bundler's other pair: gems.rb locks to gems.locked (resolveRuby reads either lockfile).
+  if (name === "gems.rb" && !names.includes("gems.locked") && !names.includes("Gemfile.lock")) return "RubyGems (gems.rb with no gems.locked)";
   if (name === "composer.json" && !names.includes("composer.lock")) return "Packagist (composer.json with no composer.lock)";
   if (/^environment\.ya?ml$/i.test(name)) return "Conda (environment.yml is not read)";
   if (/^pylock(\.[^.]+)?\.toml$/.test(name)) return "PyPI (pylock.toml, PEP 751, is not read)";
@@ -713,23 +719,32 @@ export function discoveryFor(root: string): TreeDiscovery {
 }
 
 /** A lockfile problem as the notes read it (lockfile-types.ts LockfileProblem). */
-export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true };
+export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true };
 
 /**
  * The kinds, kept apart: a file that could not be read (UNREADABLE), one read
  * but not all of it (PARTIAL: entries skipped, `skipped`, audit L5; or
  * truncated or damaged, `partial`), a requirements include refused because it
- * points outside the project (`refused`, B-11), and a second lockfile that
- * disagrees with the one that was read (`conflict`).
+ * points outside the project (`refused`, B-11), a second lockfile that
+ * disagrees with the one that was read (`conflict`), and one read whole but not
+ * compared with the manifests that declare its dependencies (`notCrossChecked`).
  */
-export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[] } {
+export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[]; uncrossed: P[] } {
   const isPartial = (p: P) => Boolean(p.skipped) || p.partial === true;
+  const other = (p: P) => p.refused === true || p.conflict === true || p.notCrossChecked === true;
   return {
-    unreadable: problems.filter((p) => !isPartial(p) && !p.refused && !p.conflict),
-    partial: problems.filter((p) => isPartial(p) && !p.refused && !p.conflict),
+    unreadable: problems.filter((p) => !isPartial(p) && !other(p)),
+    partial: problems.filter((p) => isPartial(p) && !other(p)),
     refused: problems.filter((p) => p.refused === true),
     conflicts: problems.filter((p) => p.conflict === true),
+    uncrossed: problems.filter((p) => p.notCrossChecked === true && !p.refused && !p.conflict),
   };
+}
+
+/** Whether `file` has a lockfile's name (not a manifest's, such as package.json or pyproject.toml). */
+function isLockfileName(file: string): boolean {
+  const base = file.split(/[\\/]/).pop() ?? file;
+  return /^(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|poetry\.lock|uv\.lock|pdm\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|gems\.locked|composer\.lock)$/.test(base);
 }
 
 /**
@@ -738,11 +753,13 @@ export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P
  */
 export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (file: string) => string = (f) => f): string[] {
   const listed = (ps: LockfileProblemLike[]) => `${ps.slice(0, 3).map((p) => `${show(p.file)} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
-  const { unreadable, partial, refused, conflicts } = splitLockfileProblems(problems);
+  const { unreadable, partial, refused, conflicts, uncrossed } = splitLockfileProblems(problems);
   const notes: string[] = [];
   if (unreadable.length > 0) {
+    // A manifest (package.json, pyproject.toml, ...) can be the file that could not be read: "lockfile" only when each one is.
+    const kind = unreadable.every((p) => isLockfileName(p.file)) ? "lockfile" : "file";
     notes.push(
-      `UNREADABLE: ${unreadable.length} lockfile${unreadable.length === 1 ? "" : "s"} could not be read, so ${unreadable.length === 1 ? "its" : "their"} dependencies were not checked: ${listed(unreadable)}.`,
+      `UNREADABLE: ${unreadable.length} ${kind}${unreadable.length === 1 ? "" : "s"} could not be read, so ${unreadable.length === 1 ? "its" : "their"} dependencies were not checked: ${listed(unreadable)}.`,
     );
   }
   const skippedEntries = partial.filter((p) => !p.partial);
@@ -760,6 +777,9 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
     notes.push(
       `CONFLICT: ${conflicts.length} lockfile${conflicts.length === 1 ? "" : "s"} beside the one that was read ${conflicts.length === 1 ? "was" : "were"} not used: ${listed(conflicts)}.`,
     );
+  }
+  if (uncrossed.length > 0) {
+    notes.push(`NOT CROSS-CHECKED: ${uncrossed.length} lockfile${uncrossed.length === 1 ? " was" : "s were"} not cross-checked against the package.json files: ${listed(uncrossed)}.`);
   }
   return notes;
 }
@@ -832,7 +852,7 @@ const LOCKS_BY_LANGUAGE: Record<string, string[]> = {
   rust: ["Cargo.lock"],
   python: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   go: ["go.mod"],
-  ruby: ["Gemfile.lock"],
+  ruby: ["Gemfile.lock", "gems.locked"],
   php: ["composer.lock"],
 };
 

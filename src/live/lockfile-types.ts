@@ -70,11 +70,31 @@ export interface VersionSource {
    */
   aliases?: Map<string, string>;
   /**
+   * npm family: every copy a manifest of this lockfile declares, the project's own or a workspace
+   * member's, as the lockfile resolves it. Such a copy is a direct dependency wherever it is declared.
+   */
+  declared?: DeclaredDependency[];
+  /**
+   * Set when the reader graded the scope of every copy itself (an npm-family lockfile whose runtime
+   * roots it could read). A copy it left ungraded is then of unknown scope even when a manifest
+   * lists the name under devDependencies: a runtime path to it could not be ruled out.
+   */
+  scopeGraded?: true;
+  /**
    * PyPI: requirement names with no exact version anywhere in this directory
    * (`pydantic>=2.0.0`, a bare `requests`), by the file that lists them.
    * There is no installed version to ask about, so they are not checked.
    */
   unpinned?: UnpinnedRequirements[];
+}
+
+/** A copy the project's own manifests declare (see VersionSource.declared). */
+export interface DeclaredDependency {
+  /** The registry package (an alias is named by the package behind it). */
+  name: string;
+  version: string;
+  /** True when a `dependencies`, `optionalDependencies` or `peerDependencies` section declares it anywhere; false when only `devDependencies` do. */
+  runtime: boolean;
 }
 
 /** A dependency that is not a registry release (see VersionSource.uncheckable). */
@@ -118,8 +138,32 @@ export interface LockfileProblem {
   conflict?: true;
   /** Set for a requirements include refused because it points outside the project (B-11): a policy, not damage. */
   refused?: true;
+  /**
+   * Set when the file was read whole but not compared with the package.json files that declare
+   * its dependencies (a declared name with no entry may be a workspace member, and the member list
+   * could not be read whole): not damage, and nothing in the file was left unread.
+   */
+  notCrossChecked?: true;
   /** The ecosystem whose resolution reported it (stamped by resolveVersionSource), for ecosystem_filter. */
   ecosystem?: string;
+}
+
+/**
+ * A lockfile read, but not all of what it should hold: what was read was checked, the rest was
+ * not. `missing` is a lower bound on the entries lost. `behindManifest` is for a file that is
+ * whole as far as it goes and only lacks what the manifest beside it declares (cut cleanly
+ * between two entries, or written before the manifest changed).
+ */
+export function partialRead(file: string, reason: string, missing = 0, behindManifest = false): LockfileProblem {
+  const consequence = behindManifest
+    ? "What it holds was checked; the dependencies it does not hold were not: regenerate the lockfile"
+    : "It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile";
+  return { file, partial: true, ...(missing > 0 ? { skipped: missing } : {}), error: `${reason}. ${consequence}` };
+}
+
+/** `could not be read (<the system's reason>)`: the wording for a file that exists and cannot be opened. */
+export function unreadableReason(error: unknown): string {
+  return `could not be read (${error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160)})`;
 }
 
 export type SourceKind = "lockfile" | "manifest" | "declared_ranges";
@@ -161,7 +205,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "registryWide" | "indexRecorded"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "registryWide" | "indexRecorded" | "declared" | "scopeGraded"> = {},
 ): VersionSource {
   return {
     versions,

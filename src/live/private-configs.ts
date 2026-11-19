@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { pushAll } from "../array-utils.js";
+import { wildcardMatch } from "./glob-match.js";
 import {
   CODE_HOSTS,
   hostOf,
@@ -39,17 +40,6 @@ import {
 export interface PrivateSetting {
   url: string;
   from: string;
-}
-
-/** A file read whole, or "" (missing, not a file, larger than `cap`). */
-export function readSmall(file: string, cap = 1024 * 1024): string {
-  try {
-    const stat = fs.statSync(file);
-    if (!stat.isFile() || stat.size > cap) return "";
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
 }
 
 /** FOURDA_PUBLIC_MIRRORS: hosts (or URLs) the user declares mirror only the public registries. */
@@ -140,9 +130,14 @@ export function yarnRcFilename(env: NodeJS.ProcessEnv): string {
 
 /** A `.yarnrc.yml`'s top-level `npmRegistryServer` (yarn's default registry), or null. */
 export function yarnrcRegistry(content: string): string | null {
+  // By position: the key, a colon, then the value up to a `#` comment.
   for (const raw of content.split(/\r?\n/)) {
-    const m = /^npmRegistryServer\s*:\s*(.+?)\s*(?:#.*)?$/.exec(raw);
-    if (m) return m[1].replace(/^["']|["']$/g, "");
+    if (!raw.startsWith("npmRegistryServer")) continue;
+    const rest = raw.slice("npmRegistryServer".length).trimStart();
+    if (!rest.startsWith(":")) continue;
+    const comment = rest.indexOf("#");
+    const value = (comment >= 0 ? rest.slice(1, comment) : rest.slice(1)).trim();
+    if (value) return value.replace(/^["']|["']$/g, "");
   }
   return null;
 }
@@ -491,29 +486,46 @@ export function goProxyPrivate(value: string | undefined, mirrors: ReadonlySet<s
 // Cargo
 // ---------------------------------------------------------------------------------------------
 
-/** A Cargo glob element (`*`, `?`) against a directory name. */
-const globElement = (pattern: string, name: string) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(name);
+/** A Cargo glob element (`*`, `?`) against a directory name. Matched without building a RegExp (glob-match.ts). */
+const globElement = (pattern: string, name: string) => wildcardMatch(pattern, name);
 
-/** Directories under `root` a workspace `members` glob names (`crates/*`, `tools/cli`, `**` at most 4 deep). */
-function expandMemberGlob(root: string, pattern: string): string[] {
+/** Directory listings one `members` pattern may cost, and the directories it may name. */
+const MEMBER_GLOB_LISTINGS = 4000;
+const MEMBER_GLOB_RESULTS = 2000;
+
+/**
+ * Directories under `root` a workspace `members` glob names (`crates/*`, `tools/cli`, `**` at most 4 deep).
+ * The pattern is a manifest's text, so its cost is bounded whatever it holds: a run of `**` is
+ * one `**`, and the whole expansion reads at most MEMBER_GLOB_LISTINGS directories.
+ */
+export function expandMemberGlob(root: string, pattern: string): string[] {
   let current = [root];
-  const parts = pattern.replace(/\\/g, "/").split("/").filter((p) => p && p !== ".");
+  const parts = pattern
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((p) => p && p !== ".")
+    .filter((p, i, all) => !(p === "**" && all[i - 1] === "**"));
+  let listings = 0;
+  const list = (dir: string): string[] => (listings++ < MEMBER_GLOB_LISTINGS ? listDirs(dir) : []);
   for (const part of parts) {
+    if (current.length === 0) break;
     const next: string[] = [];
     for (const dir of current) {
+      if (next.length >= MEMBER_GLOB_RESULTS) break;
       if (part === "..") continue;
       if (part === "**") {
         const walk = (d: string, depth: number) => {
+          if (next.length >= MEMBER_GLOB_RESULTS) return;
           next.push(d);
           if (depth >= 4) return;
-          for (const e of listDirs(d)) walk(path.join(d, e), depth + 1);
+          for (const e of list(d)) walk(path.join(d, e), depth + 1);
         };
         walk(dir, 0);
       } else if (/[*?]/.test(part)) {
-        for (const e of listDirs(dir)) if (globElement(part, e)) next.push(path.join(dir, e));
+        for (const e of list(dir)) if (globElement(part, e)) next.push(path.join(dir, e));
       } else next.push(path.join(dir, part));
     }
-    current = next.slice(0, 2000);
+    current = next.slice(0, MEMBER_GLOB_RESULTS);
   }
   return current;
 }

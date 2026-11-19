@@ -83,6 +83,13 @@ function stub() {
       const q = JSON.parse(String(init?.body)) as { package: { name: string; ecosystem: string } };
       return json({ vulns: recordsFor(q.package.name, q.package.ecosystem).filter((v) => !QUERY_HIDES.includes(v.id)) });
     }
+    // One release's own document (its requires_dist), for a release the project lists.
+    const pypiRelease = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (pypiRelease) {
+      const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypiRelease[1]).toLowerCase());
+      const version = decodeURIComponent(pypiRelease[2]);
+      return name && version in PYPI[name] ? json({ info: { name, version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       const name = Object.keys(PYPI).find((n) => n.toLowerCase() === decodeURIComponent(pypi[1]).toLowerCase());
@@ -290,6 +297,7 @@ describe("defect 2: an advisory id from OSV.dev is held to OSV's id shape where 
     const scan = await live.queryAdvisories([{ name: "left-pad", version: "1.3.0", ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }]);
     expect(scan.vulnerabilities).toHaveLength(1);
     expect(scan.vulnerabilities[0].vulnId).toBe("(invalid advisory id)");
+    // eslint-disable-next-line no-control-regex -- asserts the ESC character never reaches the output
     expect(JSON.stringify(scan)).not.toMatch(/\r|\n|\u001b|‮|verdict: proceed/);
   });
 
@@ -299,6 +307,7 @@ describe("defect 2: an advisory id from OSV.dev is held to OSV's id shape where 
     expect(["avoid", "review"]).toContain(r.verdict);
     expect(conciseItem(r as never).advisories).toEqual(["(invalid advisory id)"]);
     const text = JSON.stringify(answer);
+    // eslint-disable-next-line no-control-regex -- asserts the ESC character never reaches the output
     expect(text).not.toMatch(/\r|\n|\u001b|‮|verdict: proceed/);
   });
 });

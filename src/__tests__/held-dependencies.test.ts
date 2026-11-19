@@ -19,7 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
-import { exactPinVersion, heldSpecsOf, npmAliasTarget } from "../live/held-dependencies.js";
+import { exactPinVersion, heldSpecsOf } from "../live/held-dependencies.js";
 import type { OsvVulnerability } from "../live/types.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
@@ -151,7 +151,7 @@ async function liveFor(): Promise<LiveIntelligence> {
 const scan = async (params: Record<string, unknown> = {}) => (await executeVulnerabilityScan(null, params, await liveFor())) as Record<string, any>;
 const check = async (items: unknown[]) =>
   (await executeDependencyCheck(noDb, { items } as never, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
-const advisoriesOf = (r: { signals: Array<{ id: string }> }) => r.signals.find((s) => s.id === "advisories") as { value: any; effect: string; evidence: string };
+const advisoriesOf = (r: { signals: Array<{ id: string; value: any; effect: string; evidence: string }> }) => r.signals.find((s) => s.id === "advisories") as { value: any; effect: string; evidence: string };
 
 describe("held dependencies: what an npm spec installs whatever the lockfile holds", () => {
   it("an exact pin is a bare version or =version; every registry range is held, wide ones too (round 10, W13)", () => {

@@ -30,17 +30,21 @@ import { commonPathRoot, dedupeDependencies, dedupeDependenciesSteps, emptyVulnR
 import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
 import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
+import { normalizePythonName } from "./lockfile-parsers-pygo.js";
 import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import {
+  goWorkModules,
+  insideDir,
   lockEntryReason,
   lockfileRegistryWide,
   manifestPrivateSources,
   normName,
   npmLockPrivateSourcesSteps,
   PrivatePackageRules,
+  pythonLocalPackages,
   requirementsWideReason,
   type PrivateDependency,
   type PrivateIndexEntry,
@@ -135,6 +139,10 @@ export class LiveIntelligence {
   private npmLockPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
   /** Groups whose manifest takes packages from a private registry or index (manifestPrivateSources). */
   private manifestPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
+  /** Local code a group's go.work, uv.lock or poetry.lock names with its directory (PrivateIndexEntry.at). */
+  private localPackages = new Map<GroupResolution, PrivateIndexEntry[]>();
+  /** The project's own packages recognised in the dependency set, by `${ecosystem}\0${normalised name}`. */
+  private ownPackages = new Set<string>();
   /**
    * Every name a group declares, resolves or lists, by `${ecosystem}\0${normalised name}`, when its
    * ecosystem's registry, index or proxy is not public (PrivatePackageRules.ecosystemWide), with why.
@@ -327,10 +335,15 @@ export class LiveIntelligence {
     return [...byFile].map(([file, names]) => ({ file, names: [...names] }));
   }
 
-  /** Lockfiles present in a resolved directory that could not be read, each with the reason. */
+  /**
+   * Lockfiles present in a resolved directory that could not be read, each with the reason: one
+   * problem per file, and beside it the note that it was not cross-checked against its manifests,
+   * which is no read problem and never stands in for one.
+   */
   getLockfileProblems(): LockfileProblem[] {
     const seen = new Set<string>();
-    return this.groupResults.flatMap((r) => r.problems ?? []).filter((p) => !seen.has(p.file) && (seen.add(p.file), true));
+    const key = (p: LockfileProblem) => `${p.file}\0${p.notCrossChecked ? "uncrossed" : "read"}`;
+    return this.groupResults.flatMap((r) => r.problems ?? []).filter((p) => !seen.has(key(p)) && (seen.add(key(p)), true));
   }
 
   /** What the project-tree walk left out (lockfiles past its bounds); null when the set did not come from a walk. */
@@ -373,8 +386,9 @@ export class LiveIntelligence {
       yield;
     }
     this.groupResults = results;
-    yield* this.rebuildDependencySetSteps();
+    // Before the set is built: which packages are the project's own is judged against its root.
     this.projectRoot = projectRoot;
+    yield* this.rebuildDependencySetSteps();
     this.initialized = true;
     return true;
   }
@@ -403,6 +417,17 @@ export class LiveIntelligence {
     // Poetry `source =`): private with no lockfile too (blind audit round 4).
     this.manifestPrivate = new Map(
       this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
+    );
+    // go.work modules (never sent: the workspace's copy is built) and Python local packages, with
+    // where each is, read inside the project only.
+    this.localPackages = new Map(
+      this.groupResults
+        .map((r) => {
+          const ecosystem = mapEcosystem(r.group.language);
+          const list = ecosystem === "Go" ? goWorkModules(r.group.dir, this.projectRoot ?? r.group.dir) : ecosystem === "PyPI" ? pythonLocalPackages(r.group.dir) : [];
+          return [r, list] as const;
+        })
+        .filter(([, list]) => list.length > 0),
     );
     yield;
     // A registry, index or proxy that is not public and is consulted for any name: every name the
@@ -448,11 +473,17 @@ export class LiveIntelligence {
     // pause every STEP_MASK + 1 copies (pre-publish round 10, W11).
     const auditOpen: ResolvedDependency[] = [];
     const auditPrivate: ResolvedDependency[] = [];
+    // The project's own packages are not dependencies: neither checked nor unchecked, never sent.
+    this.ownPackages = new Set();
     let step = 0;
     for (const r of this.groupResults) {
+      for (const entry of this.lockPrivateOf(r)) {
+        if (entry.local && entry.at !== undefined && this.insideProject(r, entry.at)) this.ownPackages.add(`${mapEcosystem(r.group.language)}\0${normName(mapEcosystem(r.group.language), entry.name)}`);
+      }
       for (const dep of r.audit) {
         if ((++step & STEP_MASK) === 0) yield;
-        (isPublic(r, dep) ? auditOpen : auditPrivate).push(dep);
+        if (isPublic(r, dep)) auditOpen.push(dep);
+        else if (!this.ownPackageIn(r, dep)) auditPrivate.push(dep);
       }
     }
     this.auditDeps = yield* dedupeDependenciesSteps(auditOpen);
@@ -496,6 +527,26 @@ export class LiveIntelligence {
     this.privateShorts = null;
   }
 
+  /** Whether `dir` is inside the scanned project (the group's own directory when no project is set). */
+  private insideProject(r: GroupResolution, dir: string): boolean {
+    return insideDir(this.projectRoot ?? r.group.dir, dir);
+  }
+
+  /**
+   * Whether a dependency of this group is the project's own package: every entry for its name is
+   * local code and one of them is inside the project (a Cargo workspace crate or `path =` crate, a
+   * go.work module, a uv workspace member or local package). The copy must be that local one: a
+   * versioned copy (a registry release of the same name) is a dependency, except for a go.work
+   * module, which the go command builds from the workspace whatever version is required. Local code
+   * outside the project, git and private-registry packages stay private dependencies.
+   */
+  private ownPackageIn(r: GroupResolution, dep: ResolvedDependency): boolean {
+    const entries = this.lockPrivateIndex(r, dep.ecosystem).get(normName(dep.ecosystem, dep.name)) ?? [];
+    if (entries.length === 0 || !entries.every((p) => p.local)) return false;
+    if (dep.version !== null && !entries.some((p) => p.workspace)) return false;
+    return entries.some((p) => p.at !== undefined && this.insideProject(r, p.at));
+  }
+
   /**
    * Why a dependency of this group is private, and the kind of reason, or null: its lockfile's
    * source, then a source that serves any name, then the name rules.
@@ -503,8 +554,9 @@ export class LiveIntelligence {
   private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): { why: string; kind: PrivateKind } | null {
     const fromLock = this.lockPrivateIndex(r, ecosystem)
       .get(normName(ecosystem, name))
-      // A local entry a manifest names (no version) says nothing about a registry copy a lockfile installs.
-      ?.find((p) => (p.version === null || version === null || p.version === version) && !(p.local && p.version === null && r.source?.kind === "lockfile"));
+      // A local entry a manifest names (no version) says nothing about a registry copy a lockfile
+      // installs; a go.work module does: the workspace's copy is built whatever version is required.
+      ?.find((p) => (p.version === null || version === null || p.version === version) && !(p.local && p.version === null && !p.workspace && r.source?.kind === "lockfile"));
     // A registry, index or proxy that is not public and serves any name: pip's configured index or
     // an extra one (for what a requirements file installs), uv's, Poetry's, npm's default registry,
     // GOPROXY, a Cargo source replacement (PrivatePackageRules.ecosystemWide), a requirements option,
@@ -532,7 +584,11 @@ export class LiveIntelligence {
     const mirrors = this.privateRules.publicMirrors;
     const option = (r.registryWide ?? []).find((w) => !declaredMirror(w.registry.replace(/^[a-z]+\+/i, ""), mirrors));
     if (option) return requirementsWideReason(option.file, option.setting, option.registry);
-    const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? [])].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
+    // A manifest that could not be read matters when no lockfile records where each package comes from.
+    const unreadManifest = r.source?.kind === "lockfile" ? [] : (this.manifestPrivate.get(r) ?? []).filter((p) => p.unread !== undefined);
+    // A go.work that could not be read: which modules the workspace builds is not known.
+    const unreadLocal = (this.localPackages.get(r) ?? []).filter((p) => p.unread !== undefined);
+    const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? []), ...unreadManifest, ...unreadLocal].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
     if (fromLockfile.length === 0) return null;
     const pinned = new Set((this.manifestPrivate.get(r) ?? []).map((p) => normName(ecosystem, p.name)));
     return lockfileRegistryWide(
@@ -550,6 +606,11 @@ export class LiveIntelligence {
    */
   privateReason(ecosystem: string, name: string): string | null {
     return this.privateMatch(ecosystem, name)?.why ?? null;
+  }
+
+  /** privateReason with no ecosystem said: privateMatch tries every ecosystem whichever it is asked first (PrivateNameSource.privateAnywhere). */
+  privateAnywhere(name: string): string | null {
+    return this.privateMatch("npm", name)?.why ?? null;
   }
 
   /**
@@ -739,7 +800,7 @@ export class LiveIntelligence {
   /** What a group's lockfiles install from a private source: the readers' entries, and npm's `resolved` hosts. */
   private lockPrivateOf(r: GroupResolution): PrivateIndexEntry[] {
     const npm = this.npmLockPrivate.get(r) ?? [];
-    const manifest = this.manifestPrivate.get(r) ?? [];
+    const manifest = [...(this.manifestPrivate.get(r) ?? []), ...(this.localPackages.get(r) ?? [])];
     const all = npm.length > 0 || manifest.length > 0 ? [...(r.privateIndex ?? []), ...npm, ...manifest] : (r.privateIndex ?? []);
     // A host FOURDA_PUBLIC_MIRRORS declares a mirror of the public registry serves public packages,
     // whether a lockfile, a requirements file or the configuration names it (R7: one policy).
@@ -801,10 +862,16 @@ export class LiveIntelligence {
     return this.privateAudit;
   }
 
+  /** How many of the project's own packages (workspace members, local packages inside it) were recognised and left out of the dependencies. */
+  getOwnPackageCount(): number {
+    return this.ownPackages.size;
+  }
+
   /** The private part of a scan in this scope, attached to its result so every answer reports it. */
   private withPrivate(scan: VulnerabilityScanResult, includeDev: boolean): VulnerabilityScanResult {
     const notice = this.getRegistryNotice();
-    const result = notice ? { ...scan, registryNotice: notice } : scan;
+    const own = this.ownPackages.size;
+    const result = notice || own > 0 ? { ...scan, ...(notice ? { registryNotice: notice } : {}), ...(own > 0 ? { ownPackages: own } : {}) } : scan;
     if (this.privateAudit.length === 0) return result;
     const scoped = applyInstanceDevScope(this.db, this.privateAudit);
     const inScope = includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));
@@ -883,6 +950,22 @@ export class LiveIntelligence {
   }
 
   /**
+   * The Python projects the project-tree walk resolved, one per directory, with the names their
+   * manifests declare (PEP 503 normalised): where dependency_check finds the Python a package's
+   * project declares. Empty before init or when no group is a Python one.
+   */
+  getPythonProjects(): Array<{ dir: string; names: ReadonlySet<string> }> {
+    const byDir = new Map<string, Set<string>>();
+    for (const r of this.groupResults) {
+      if (mapEcosystem(r.group.language) !== "PyPI") continue;
+      const names = byDir.get(r.group.dir) ?? new Set<string>();
+      for (const name of [...r.group.deps, ...r.group.devDeps]) names.add(normalizePythonName(name));
+      byDir.set(r.group.dir, names);
+    }
+    return [...byDir].map(([dir, names]) => ({ dir, names }));
+  }
+
+  /**
    * Run vulnerability scan (returns cached if fresh, fetches otherwise).
    *
    * Without `includeDev`, every dev-only copy is left out (severity-scope.ts
@@ -903,16 +986,21 @@ export class LiveIntelligence {
     unregisterPrivateNames(this);
   }
 
+  /**
+   * `deadline` (epoch ms): when the calling tool must answer. Advisory records not read by then are
+   * NOT CHECKED in this result and are read on after it (osv-scanner.ts details); such a result is
+   * not kept as the project's current scan.
+   */
   async scanVulnerabilities(
     projectPath: string,
-    options?: { includeDev?: boolean; forceRefresh?: boolean },
+    options?: { includeDev?: boolean; forceRefresh?: boolean; deadline?: number },
   ): Promise<VulnerabilityScanResult> {
     return this.runInContext(() => this.scanVulnerabilitiesIn(projectPath, options));
   }
 
   private async scanVulnerabilitiesIn(
     projectPath: string,
-    options?: { includeDev?: boolean; forceRefresh?: boolean },
+    options?: { includeDev?: boolean; forceRefresh?: boolean; deadline?: number },
   ): Promise<VulnerabilityScanResult> {
     // Offline (FOURDA_OFFLINE) the scan still runs, from the cache alone: OsvScanner's cacheOnly
     // mode asks nothing, states every cached answer's age, and leaves a dependency without one
@@ -929,10 +1017,10 @@ export class LiveIntelligence {
       return this.withPrivate(emptyVulnResult(projectPath, false), options?.includeDev ?? false);
     }
 
-    // Offline the cache is the only answer there is: a forced refresh cannot fetch, so it keeps it.
-    if (options?.forceRefresh && this.enabled) {
-      this.cache.invalidateSource("osv");
-    }
+    // A forced refresh asks OSV.dev again about this scan's dependencies only, and replaces a
+    // cached answer when the new one arrives (OsvScanner.scan `refresh`): no other cached answer
+    // is touched, and none is dropped first. Offline it cannot fetch, so it keeps to the cache.
+    const refresh = Boolean(options?.forceRefresh && this.enabled);
 
     // The same scan already running (the startup warm-up, or a second call
     // while the first is out) is awaited, not repeated. A forced refresh
@@ -940,7 +1028,7 @@ export class LiveIntelligence {
     const shareKey = `${this.generation}\u0000${options?.includeDev ? "dev" : "runtime"}\u0000${projectPath}`;
     const running = options?.forceRefresh ? undefined : this.scansInFlight.get(shareKey);
     if (running) return running;
-    const scan = this.runScan(deps, projectPath, options?.includeDev ?? false);
+    const scan = this.runScan(deps, projectPath, options?.includeDev ?? false, refresh, options?.deadline);
     if (!options?.forceRefresh) {
       this.scansInFlight.set(shareKey, scan);
       void scan.finally(() => this.scansInFlight.delete(shareKey));
@@ -948,12 +1036,14 @@ export class LiveIntelligence {
     return scan;
   }
 
-  private async runScan(deps: ResolvedDependency[], projectPath: string, includeDev: boolean): Promise<VulnerabilityScanResult> {
+  private async runScan(deps: ResolvedDependency[], projectPath: string, includeDev: boolean, refresh = false, deadline?: number): Promise<VulnerabilityScanResult> {
     const generation = this.generation;
     const request = ++this.scanRequests;
     try {
-      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled }), includeDev);
-      if (generation === this.generation && request > this.storedScanRequest) {
+      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled, refresh, ...(deadline !== undefined ? { deadline } : {}) }), includeDev);
+      // A scan cut short by its call's deadline is that call's answer only: the records it did not
+      // read are being read on, and the next scan has them.
+      if (generation === this.generation && request > this.storedScanRequest && !result.detailsInBackground) {
         this.lastVulnScan = result;
         this.lastVulnScanIncludesDev = includeDev;
         this.storedScanRequest = request;
@@ -1192,6 +1282,7 @@ export class LiveIntelligence {
     const scoped = (reader: ReleaseMetadataSource): ReleaseMetadataSource => ({
       getReleases: (name, wanted) => this.runInContext(() => reader.getReleases(name, wanted)),
       getCreatedAt: (name) => this.runInContext(() => reader.getCreatedAt(name)),
+      ...(reader.getRequirements ? { getRequirements: (name: string, version: string) => this.runInContext(() => reader.getRequirements!(name, version)) } : {}),
     });
     return { npm: scoped(this.npmPackuments), "crates.io": scoped(this.cratesVersions), PyPI: scoped(this.pypiReleases), Go: scoped(this.goReleases) };
   }
@@ -1203,8 +1294,8 @@ export class LiveIntelligence {
    * scanner, cache and rate limit as vulnerability_scan; never touches the
    * stored project scan. Disabled or failed yields an `offline` result.
    */
-  async queryAdvisories(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
-    return this.runInContext(() => this.queryAdvisoriesIn(deps));
+  async queryAdvisories(deps: ResolvedDependency[], options: { refresh?: boolean } = {}): Promise<VulnerabilityScanResult> {
+    return this.runInContext(() => this.queryAdvisoriesIn(deps, options.refresh === true));
   }
 
   /**
@@ -1215,7 +1306,7 @@ export class LiveIntelligence {
     this.osvScanner.forget(deps);
   }
 
-  private async queryAdvisoriesIn(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
+  private async queryAdvisoriesIn(deps: ResolvedDependency[], refresh = false): Promise<VulnerabilityScanResult> {
     // Offline: answered from the cache alone, each answer's age stated (OsvScanner cacheOnly; W5).
     // A private name is never asked about (a held dependency of a private parent): it has no
     // answer, so the result is not checked for it, never clean.
@@ -1223,7 +1314,7 @@ export class LiveIntelligence {
     const open = priv.length > 0 ? deps.filter((d) => !priv.includes(d)) : deps;
     let result: VulnerabilityScanResult;
     try {
-      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check", { cacheOnly: !this.enabled }) : emptyVulnResult("dependency_check", false);
+      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check", { cacheOnly: !this.enabled, refresh: refresh && this.enabled }) : emptyVulnResult("dependency_check", false);
     } catch (error) {
       return emptyVulnResult("dependency_check", true, { count: deps.length, reason: `the scan failed (${String(error).slice(0, 120)})` });
     }

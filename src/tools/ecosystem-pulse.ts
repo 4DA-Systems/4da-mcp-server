@@ -15,6 +15,7 @@ import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { isWithin, normalizeProjectPath, systemDirectoryProblem } from "./project-scope.js";
 import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
+import { isOfflineMode } from "../env-flags.js";
 
 export interface EcosystemPulseParams {
   min_points?: number;
@@ -271,7 +272,10 @@ export async function executeEcosystemPulse(
     total: filtered.length,
     source: "hacker_news",
     // Nothing to search for is not "no relevant headlines": nothing was searched (blind audit round 4).
-    note: filtered.length === 0 && liveIntel.getHeadlineError?.()
+    // Offline, nothing is searched either.
+    note: filtered.length === 0 && headlines.length === 0 && isOfflineMode()
+      ? "NOT CHECKED: live lookups are off (FOURDA_OFFLINE), so Hacker News was not searched. This says nothing about news for your stack: unset FOURDA_OFFLINE to search."
+      : filtered.length === 0 && liveIntel.getHeadlineError?.()
       ? `NOT CHECKED: ${liveIntel.getHeadlineError?.()}, so no headlines were read. This says nothing about your stack: call again later.`
       : filtered.length === 0 && noStack
       ? `NOT CHECKED: no stack was detected for ${liveIntel.getProjectRoot?.() ?? "this project"} (no dependency or framework this server can search for, or every one is private), so Hacker News was not searched. This says nothing about news for your stack.`

@@ -29,7 +29,7 @@ import { classifyEntry, classifyHeading, sanitizeEntry, type EntryContext, type 
  * for a week unless this changes: bump it with every change to parseChangelog
  * or changelog-classify.ts that can alter a section or an entry's kind.
  */
-export const CHANGELOG_PARSER_VERSION = 4;
+export const CHANGELOG_PARSER_VERSION = 5;
 
 export interface ChangelogEntry {
   kind: EntryKind;
@@ -93,6 +93,9 @@ const HEADING = new RegExp(
   String.raw`^\[?(?:(version|release)\s+|([A-Za-z@][\w@/.-]*)(?:\s+|@))?\[?v?(${VERSION})\]?(.*)$`,
   "i",
 );
+
+/** `6.0.3 (2025-09-25)`: a version, then only a parenthesised date. */
+const DATED_TITLE = new RegExp(String.raw`^v?(${VERSION})\s+\(([^()]{6,30})\)$`);
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
@@ -182,6 +185,9 @@ const BOLD_LABEL = /^\s*\*\*([^*]+)\*\*:?\s*$/;
 const PLAIN_LABEL = /^\s{0,3}([A-Za-z⚠][\w /&,'()⚠️-]{1,58}?)\s*:\s*$/;
 /** A line that opens or closes layout markup rather than describing a change. */
 const HTML_LAYOUT = /^<\/?(?:details|summary|div|p|br|hr|img|picture|source|table|tr|td|th|thead|tbody|center|sup|sub)\b/i;
+/** The longest bullet read as a label, and the most of a bullet that is classified when it opens a list. */
+const MAX_LABEL = 120;
+const MAX_CLASSIFIED = 600;
 /** A bullet that is only a label: "remove:", "**Breaking**:", "deps:". */
 const LABEL_BULLET = /^\W*([A-Za-z][\w -]{0,30}?)\W*:\W*$/;
 
@@ -245,7 +251,7 @@ function flush(state: ParseState): void {
  * categories), as opposed to a new document part ("Migration guide", "Older releases").
  */
 const CATEGORY_HEADING =
-  /^\W*(added|changed|changes|deprecated|deprecations|removed|removals|fixed|fixes|bug ?fixes|security|features?|new features|enhancements?|improvements?|performance( improvements)?|breaking( changes?)?|⚠️?\s*breaking( changes?)?|dependencies|dependency updates|documentation|docs|internal|misc(ellaneous)?|other( changes)?|chores?|refactor(ing)?|reverts?|build|tests?)\W*$/i;
+  /^\W*(added|changed|changes|deprecated|deprecations|removed|removals|fixed|fixes|bug ?fixes|security|features?|new features|enhancements?|improvements?|performance( improvements)?|breaking( changes?)?|break(ing)? changes?|⚠️?\s*breaking( changes?)?|dependencies|dependency updates|documentation|docs|internal|misc(ellaneous)?|other( changes)?|chores?|refactor(ing)?|reverts?|build|tests?)\W*$/i;
 
 function isCategoryHeading(raw: string): boolean {
   return CATEGORY_HEADING.test(raw.trim());
@@ -281,7 +287,8 @@ function addLine(state: ParseState, line: string): void {
     if (outer) {
       state.parentIndent = indent;
       // A label-only bullet ("* remove:", "- Breaking:") is a heading for its children, not an entry.
-      const label = LABEL_BULLET.exec(text);
+      // A label is short; the pattern is not run on a long line (it is quadratic on a run of colons).
+      const label = text.length <= MAX_LABEL ? LABEL_BULLET.exec(text) : null;
       if (label) {
         state.parentKind = classifyHeading(label[1]) ?? state.headingKind;
         state.parentText = contextText(label[1]);
@@ -292,7 +299,8 @@ function addLine(state: ParseState, line: string): void {
       // A breaking bullet lends "breaking" to its sub-points (date-fns 3.0: "**BREAKING**: Functions
       // that accept Interval arguments ..." with one nested bullet per affected function); one
       // ending in ":" lends any signalling kind.
-      const own = classifyEntry(text, state.headingKind);
+      // Classified on what an entry can show (it is capped on output), not on a 4,096-character line.
+      const own = classifyEntry(text.slice(0, MAX_CLASSIFIED), state.headingKind);
       state.parentKind = own === "breaking" || (/:\s*$/.test(text) && own !== "change") ? own : null;
       state.parentText = contextText(text);
     }
@@ -363,8 +371,33 @@ function adornmentLevel(ch: string): number {
   return i === -1 ? 3 : i + 1;
 }
 
+/**
+ * Time one changelog may take to parse. Real ones take milliseconds; this is the backstop for a
+ * file built to be slow, because the parse runs on the event loop and nothing else answers
+ * while it does.
+ */
+export const PARSE_BUDGET_MS = 1500;
+/** What an answer says when a changelog parse stopped at PARSE_BUDGET_MS. */
+export const CHANGELOG_INCOMPLETE_NOTE = "reading this changelog stopped at the time allowed for one file; sections after the last one listed were not read";
+
+export interface ParsedChangelog {
+  sections: ChangelogSection[];
+  /** False when parsing stopped at the time allowance: sections after the last one returned were not read. */
+  complete: boolean;
+}
+
 /** Parse a changelog into version sections, in document order (usually newest first). */
 export function parseChangelog(text: string): ChangelogSection[] {
+  return parseChangelogWithin(text).sections;
+}
+
+/**
+ * parseChangelog under a time allowance. When it runs out, the sections read so far are returned
+ * without the one being read (it may be cut mid-list), and `complete` is false. `now` is the
+ * clock, injectable so the cut-off can be tested without waiting.
+ */
+export function parseChangelogWithin(text: string, budgetMs: number = PARSE_BUDGET_MS, now: () => number = Date.now): ParsedChangelog {
+  const deadline = now() + budgetMs;
   const lines = text
     .replace(/\r\n?/g, "\n")
     .split("\n")
@@ -385,6 +418,10 @@ export function parseChangelog(text: string): ChangelogSection[] {
   let inComment = false;
 
   for (let i = 0; i < lines.length; i++) {
+    if ((i & 0x7f) === 0x7f && now() > deadline) {
+      state.pending = null;
+      return { sections: state.sections.slice(0, -1), complete: false };
+    }
     const line = lines[i];
     if (FENCE.test(line)) {
       flush(state);
@@ -439,6 +476,14 @@ export function parseChangelog(text: string): ChangelogSection[] {
       openSection(state, { version: history[1], date: extractDate(history[2]) }, 2);
       continue;
     }
+    // A version and its date in parentheses, alone on a line after a blank one: a release title
+    // with no underline at all. PyYAML's CHANGES has been written that way since 5.3, so 6.0's
+    // "always require `Loader` arg to `yaml.load()`" was never read.
+    const dated = (i === 0 || lines[i - 1].trim() === "") && line.length <= 80 ? DATED_TITLE.exec(line.trim()) : null;
+    if (dated && extractDate(dated[2])) {
+      openSection(state, { version: dated[1], date: extractDate(dated[2]) }, 2);
+      continue;
+    }
     if (RULE.test(line)) {
       flush(state);
       continue;
@@ -471,7 +516,7 @@ export function parseChangelog(text: string): ChangelogSection[] {
     if (state.current) addLine(state, line);
   }
   flush(state);
-  return state.sections;
+  return { sections: state.sections, complete: true };
 }
 
 /** Version order: 1, -1, 0, or null when either side is unreadable. Semver precedence by default. */

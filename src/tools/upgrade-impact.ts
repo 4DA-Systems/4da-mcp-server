@@ -60,9 +60,10 @@ import { resolveChangelog } from "./upgrade-impact-changelog.js";
 import { pythonImportNames, type PythonImportNames } from "./upgrade-impact-imports.js";
 import { projectCargoFeatures } from "./upgrade-impact-features.js";
 import { flagOldSyntax } from "./upgrade-impact-literals.js";
-import { nearestVersions, shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
+import { shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
 import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { isOfflineMode } from "../env-flags.js";
+import { recordedCallHosts } from "../call-budget.js";
 import { heldAffectedRows, heldImpactText, judgeTargetHeld, type HeldContext, type HeldImpact } from "./upgrade-impact-held.js";
 
 export interface UpgradeImpactParams {
@@ -120,6 +121,19 @@ export interface UpgradeImpactContext {
 
 const MAX_LISTED_VERSIONS = 200;
 const UNTRUSTED = UNTRUSTED_TEXT_FIELDS.upgrade_impact;
+const PRIVACY_NOTHING_SENT = "Nothing was sent in this call: every answer was read from the local cache; a private package's name is never sent; nothing about your code left the machine";
+
+/**
+ * `_meta.sources` and `privacy`: inside a tool call, the hosts this call's requests went to,
+ * redirect hops included (call-budget.ts recordedCallHosts); outside one, the first hop of each
+ * request made through `net`. No host: nothing was sent, and the privacy line says so.
+ */
+export function impactSources(contacted: Set<string>): { sources: string[]; privacy: string } {
+  const sources = recordedCallHosts() ?? [...contacted].sort();
+  if (sources.length === 0) return { sources, privacy: PRIVACY_NOTHING_SENT };
+  return { sources, privacy: sources.some((h) => /github/i.test(h)) ? PRIVACY_GITHUB : PRIVACY };
+}
+
 const PRIVACY = "Only the package's own registry and OSV.dev were contacted; a private package's name is never sent (it is refused); nothing about your code left the machine";
 const PRIVACY_GITHUB =
   "The package's own registry and OSV.dev were contacted, and GitHub for release notes because FOURDA_GITHUB_CHANGELOG is on (repository name and versions only); a private package's name is never sent; nothing about your code left the machine";
@@ -135,7 +149,7 @@ const PRIVACY_GITHUB =
  * answer so an agent never reads the flags as exhaustive.
  */
 const CLASSIFICATION =
-  "Entries are flagged from the changelog's headings and wording, not by reading code. On 20 upgrades across npm, crates.io, PyPI and Go held out from rule-making (three blind raters, 2026-10-11), 95% of entries flagged breaking were breaking and about 72% of breaking entries were flagged; behaviour changes filed under fixes and release notes written as prose are the usual misses. Read every entry of a major upgrade, using `under` for each entry's heading."
+  "Entries are flagged from the changelog's headings and wording, not by reading code. On 20 upgrades across npm, crates.io, PyPI and Go held out from rule-making (three blind raters, each a model instance, 2026-10-11), 95% of entries flagged breaking were breaking and about 72% of breaking entries were flagged; behaviour changes filed under fixes and release notes written as prose are the usual misses. Read every entry of a major upgrade, using `under` for each entry's heading."
 
 export const upgradeImpactTool = {
   name: "upgrade_impact",
@@ -482,6 +496,7 @@ export async function analyzeUpgradeImpact(
           file: changelog.file,
           ...(changelog.source && changelog.source !== "archive" ? { source: changelog.source, url: changelog.url } : {}),
           covers_range: range.coversRange,
+          ...(changelog.incomplete ? { incomplete: changelog.incomplete } : {}),
           sections: shaped.sections,
           ...(shaped.truncated ? { truncated: shaped.truncated } : {}),
           ...(shaped.duplicates ? { duplicates_omitted: shaped.duplicates } : {}),
@@ -509,10 +524,9 @@ export async function analyzeUpgradeImpact(
     ...heldFields,
     release_notes_url: thirdPartyUrl(releaseNotesUrl(repository)) ?? thirdPartyUrl(index.changelogLinks?.[0]) ?? null,
     _meta: {
-      sources: [...ctx.net.contacted].sort(),
+      ...impactSources(ctx.net.contacted),
       untrusted_text: UNTRUSTED,
       ...(counted ? { classification: CLASSIFICATION } : {}),
-      privacy: [...ctx.net.contacted].some((h) => /github/i.test(h)) ? PRIVACY_GITHUB : PRIVACY,
     },
     summary: summarize({
       pkg: index.name,

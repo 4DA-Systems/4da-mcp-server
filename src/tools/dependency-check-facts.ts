@@ -12,7 +12,7 @@
  */
 
 import { callFindingKey, noteCallFinding } from "../call-budget.js";
-import { advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.js";
 import type { ReleaseRecord } from "../live/release-metadata.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
 import type { VulnerabilityEntry } from "../live/types.js";
@@ -35,7 +35,7 @@ export function noteRegistryFacts(r: Asked, to: string, release: ReleaseRecord |
 /** Advisories of the package's list (OSV.dev /v1/query) that affect `to`: avoid (an unread grade counts as high). */
 export function noteListFacts(r: Asked, to: string, list: readonly AdvisoryRanges[] | null | undefined): void {
   if (!list) return;
-  const hits = list.filter((a) => !a.maintenance && advisoryAffects(a, to, r.ecosystem));
+  const hits = list.filter((a) => !a.maintenance && advisoryKnownToAffect(a, to, r.ecosystem));
   const malware = hits.filter((a) => a.malware).map((a) => a.id);
   if (malware.length > 0) noteCallFinding(key(r), "avoid", `MALWARE: ${r.package} ${to} is a malicious release (${ids(malware)})`);
   const other = hits.filter((a) => !a.malware).map((a) => a.id);

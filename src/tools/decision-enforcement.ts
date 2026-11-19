@@ -80,6 +80,8 @@ interface AlignmentResult {
   confidence: number;
   recommendation: string;
   recall_mode: "hybrid" | "ranked_lexical";
+  /** Said when text that names a private package was kept from the embedding provider. */
+  semantic_note?: string;
 }
 
 // ============================================================================
@@ -329,7 +331,9 @@ export function executeCheckDecisionAlignment(
 
   // Provider configured -> hybrid retrieval (returns a Promise; dispatch awaits).
   return hybridDecisionRecall(db, query, candidates, 50, config).then(
-    ({ ranked, semanticById, recall_mode }) =>
-      assembleAlignment(params, ranked, semanticById, recall_mode),
+    ({ ranked, semanticById, recall_mode, semantic_note }) => ({
+      ...assembleAlignment(params, ranked, semanticById, recall_mode),
+      ...(semantic_note ? { semantic_note } : {}),
+    }),
   );
 }

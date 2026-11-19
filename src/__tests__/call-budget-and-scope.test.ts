@@ -176,7 +176,13 @@ describe("one time budget per tool call", () => {
     const result = await dispatchTool("vulnerability_scan", null, { response_format: "detailed" }, { startedAt: started });
     expect(Date.now() - started).toBeLessThan(3_000);
     const answer = parse(result);
-    expect(answer.summary).toMatch(/^NOT CHECKED: the OSV\.dev scan did not finish within 0\.4 s, the time this call had for it \(it keeps running and its answers are cached: call again\)/);
+    // How much of that 0.4 s is left when the scan's wait begins depends on the machine, and the
+    // answer states what was left (or, with under 0.1 s left, that the budget was used up). The
+    // outcome is the same on a slow machine: NOT CHECKED, for the time, with the way forward.
+    expect(answer.summary).toMatch(
+      /^NOT CHECKED: (the OSV\.dev scan did not finish within 0\.[1-4] s, the time this call had for it|this call's time budget \(6\.4 s, from FOURDA_CALL_BUDGET_MS\) was used up before the OSV\.dev scan could finish)/,
+    );
+    expect(answer.summary).toContain("it keeps running and its answers are cached: call again");
     expect(answer.coverage).toMatchObject({ complete: false, unchecked_dependencies: 2 });
     expect(answer.total_vulnerable_packages).toBeNull();
     expect(answer.clean_dependencies).toBeNull();
@@ -232,10 +238,10 @@ describe("an operating-system directory is never scanned", () => {
   it("Windows: drive roots, the Windows directory and everything below it, the roots of Program Files, ProgramData and Users", () => {
     const env = { SystemDrive: "C:", SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)", ProgramData: "C:\\ProgramData" };
     const refused = (d: string) => systemDirectoryProblem(d, { platform: "win32", env });
-    for (const d of ["C:\\", "D:\\", "c:\\", "C:\\Windows", "C:\\Windows\\System32", "c:\\windows\\system32\\drivers\\etc", "C:\\WINDOWS\\", "C:\\Program Files", "C:\\Program Files (x86)\\", "C:\\ProgramData", "C:\\Users", "\\\\server\\share\\"]) {
+    for (const d of ["C:\\", "D:\\", "c:\\", "C:\\Windows", "C:\\Windows\\System32", "c:\\windows\\system32\\drivers\\etc", "C:\\WINDOWS\\", "C:\\Program Files", "C:\\Program Files (x86)\\", "C:\\ProgramData", "C:\\Users"]) {
       expect(refused(d), d).toMatch(/is (a drive root|the Windows directory|an operating-system directory[^,]*), not a project, so it is not scanned/);
     }
-    for (const d of ["C:\\Users\\dev\\code\\app", "D:\\4DA", "C:\\Program Files\\MyApp\\src", "C:\\WindowsApps-project", "C:\\Users\\dev", "relative\\path", "\\\\server\\share\\repo"]) {
+    for (const d of ["C:\\Users\\dev\\code\\app", "D:\\4DA", "C:\\Program Files\\MyApp\\src", "C:\\WindowsApps-project", "C:\\Users\\dev", "relative\\path"]) {
       expect(refused(d), d).toBeNull();
     }
     expect(refused("C:\\Windows\\System32")).toBe(
@@ -251,8 +257,7 @@ describe("an operating-system directory is never scanned", () => {
       expect(refused(d), d).not.toBeNull();
     }
     expect(refused("\\\\localhost\\C$\\Windows")).toContain('"\\\\localhost\\C$\\Windows" (C:\\Windows) is the Windows directory');
-    // A share that is not an administrative one, and a project on one, are ordinary paths.
-    expect(refused("\\\\server\\share\\repo")).toBeNull();
+    // A share on another machine is refused for its own reason (a1119-impact-scan-targets.test.ts).
     expect(refused("\\\\?\\D:\\4DA")).toBeNull();
   });
 
@@ -432,13 +437,14 @@ describe("platform activity is tracked per lockfile", () => {
     }
   })();
 
-  it("with cargo: a lockfile cargo cannot resolve no longer makes the project's unbuilt crates count as the project's", () => {
+  it("with cargo: a lockfile cargo cannot resolve no longer makes the project's unbuilt crates count as the project's", ({ skip }) => {
     _resetCargoPlatformCache();
     const resolved = cargo ? activeCratesForHost(FIXTURE_DIR) : null;
     if (resolved === null) {
       // No cargo, or the fixture's crates are not in the local registry cache (CI fetches them first).
       if (process.env.FOURDA_REQUIRE_CARGO === "1") throw new Error("FOURDA_REQUIRE_CARGO=1 but `cargo tree` could not resolve test-fixtures/cargo-platform");
-      return;
+      // Nothing can be asserted without cargo's answer: reported as skipped, never as passed.
+      return skip("cargo tree could not resolve test-fixtures/cargo-platform here");
     }
     // The project's real lockfile locks itoa and never builds it (an optional dependency no feature enables).
     expect(resolved.has("itoa")).toBe(false);
@@ -521,10 +527,17 @@ describe("nothing checked is never a good score, an online claim, or a silent pr
     const concise = (await executeVulnerabilityScan(null, {}, li)) as Record<string, any>;
     expect(concise._meta.offline).toBe(false);
     expect(concise._meta.osv_contacted).toBe(false);
-    // Asked again with the network still dead, it says so.
+    // Asked to refresh with the network still dead, it says so: the cached answers are kept and
+    // stand in as stale ones, never as the refresh, and the totals are withheld.
     const forced = (await executeVulnerabilityScan(null, { force_refresh: true, response_format: "detailed" }, li)) as Record<string, any>;
-    expect(forced.summary).toMatch(/^NOT CHECKED/);
-    expect(forced._meta.offline).toBe(true);
+    expect(forced.summary).toMatch(/^STALE: OSV\.dev unreachable .* answered only from the cached answer, which could not be refreshed/);
+    expect(forced.total_vulnerable_packages).toBeNull();
+    expect(forced._meta.stale_osv_answers).toBeGreaterThan(0);
+    expect(forced._meta).not.toHaveProperty("osv_contacted");
+    // The failed refresh discarded nothing: the next plain call is still answered from the cache.
+    const after = (await executeVulnerabilityScan(null, { response_format: "detailed" }, li)) as Record<string, any>;
+    expect(after.summary).toBeUndefined();
+    expect(after._meta.osv_cached).toBe(true);
   });
 
   it("proxy variables: every lookup goes through them (proxy-lookups.test.ts), and the startup line says so", () => {

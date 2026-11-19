@@ -47,8 +47,6 @@ import type {
   Interest,
   DetectedTech,
   ActiveTopic,
-  TopicAffinity,
-  AntiTopic,
   UserContext,
   FeedbackAction,
   FeedbackResult,

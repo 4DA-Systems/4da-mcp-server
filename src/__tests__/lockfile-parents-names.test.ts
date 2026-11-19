@@ -72,7 +72,14 @@ const PNPM5 = [
 ].join("\n");
 
 // A local (importer) edge also names the importer's directory (final audit, finding 3).
-const edge = (parent: string, parentVersion: string | null, range: string | null, local = false) => ({ parent, parentVersion, range, local, ...(local ? { dir: parent } : {}) });
+const edge = (parent: string, parentVersion: string | null, range: string | null, local = false, section?: string) => ({
+  parent,
+  parentVersion,
+  range,
+  local,
+  ...(local ? { dir: parent } : {}),
+  ...(section ? { section } : {}),
+});
 
 describe("yarn berry: npm aliases in parent edges", () => {
   it("an aliased dependency edge names the parent, with the real package's range", () => {
@@ -111,14 +118,15 @@ describe("yarn v1: npm aliases in parent edges", () => {
 
 describe("pnpm 5: entries keyed by a tarball URL", () => {
   it("a tarball-keyed entry is a parent, named by its name:/version: fields", () => {
+    // The importer's edge names the section that declares it: prisma is its devDependency.
     expect(pnpmParents(PNPM5, "prisma", "4.7.1")).toEqual([
-      edge("examples/.interop/next-prisma-starter", null, null, true),
+      edge("examples/.interop/next-prisma-starter", null, null, true, "devDependencies"),
       edge("@prisma/client", "4.7.1", null),
     ]);
   });
 
   it("a dependency that points at a tarball-keyed entry is an edge to that package", () => {
-    expect(pnpmParents(PNPM5, "@prisma/client", "4.7.1")).toEqual([edge("examples/.interop/next-prisma-starter", null, null, true)]);
+    expect(pnpmParents(PNPM5, "@prisma/client", "4.7.1")).toEqual([edge("examples/.interop/next-prisma-starter", null, null, true, "dependencies")]);
   });
 
   it("ordinary pnpm 5 edges are unchanged", () => {

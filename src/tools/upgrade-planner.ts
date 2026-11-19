@@ -35,10 +35,11 @@ import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { appTracksProject, liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
-import { reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
+import { FIX_PATH_UNDETERMINED, judgeDirectRequirements, reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
+import { MAX_REQUIRED_TARGETS, REQUIRES_AFFECTED_REASON, REQUIRES_CAP_REASON, REQUIRES_UNEXAMINED_REASON } from "../live/required-targets.js";
 import { unconfirmedTargetNote, withholdUnconfirmedTargets } from "./unconfirmed-targets.js";
 import { dedupeParentCommands } from "./upgrade-planner-dedupe.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
@@ -103,7 +104,9 @@ interface UpgradeRecommendation {
    * latest release, or no release up to the latest admits one): force the version (npm `overrides`, pnpm
    * `pnpm.overrides`, yarn `resolutions`, Cargo `[patch]`) or replace the parent;
    * `no_fix_available` = vulnerable with no fixed release to move to;
-   * `not_built_on_this_host` = every advisory is against code this host never compiles;
+   * `not_built_on_this_host` = every advisory is against code this host never compiles: kept apart
+   * from this host's steps and never counted with them, with the fix for where it IS built on the
+   * row (`whenBuilt`, `appliesWhenBuiltFor` and the usual commands);
    * `upgrade_parent_unverified` = transitive, a parent release that admits a clean version exists,
    * but no release of the declared dependency that brings it in was verified (every lever's `to`
    * is null): `parentUpgrades` says what to check; nothing is counted as fixed;
@@ -114,7 +117,11 @@ interface UpgradeRecommendation {
    * `hold_current` = no advisory affects the installed version, and every newer release is
    * known-affected or withdrawn: stay on it (the reasons say why);
    * `not_checked` = OSV.dev gave no answer for the installed copy (risk "unknown") and no newer
-   * release is offered: its advisories are not known, so it is neither vulnerable nor clean.
+   * release is offered: its advisories are not known, so it is neither vulnerable nor clean;
+   * `not_determined` = transitive and vulnerable, but how it is fixed was not established in this
+   * call: the registry or the lockfile could not be read, live lookups are off, the time budget ran
+   * out, or it arrives through a private parent that is never looked up. Never counted as waiting
+   * on upstream, which is said only once the paths to the fix were read and found blocked.
    * Every release a row offers, the newest one included, is checked against the package's
    * advisories and the registry's withdrawals, as dependency_check checks one.
    */
@@ -130,7 +137,8 @@ interface UpgradeRecommendation {
     | "not_built_on_this_host"
     | "remove_dependency"
     | "hold_current"
-    | "not_checked";
+    | "not_checked"
+    | "not_determined";
   /** upgrade_parent / override_or_replace: the parent release that admits a clean version, per blocking parent that can move. */
   parentUpgrades?: ParentUpgrade[];
   /**
@@ -171,6 +179,18 @@ interface UpgradeRecommendation {
   refreshInferred?: boolean;
   /** False when the dependency is gated behind a target spec not active on this host (label, never suppressed). */
   platformActive: boolean;
+  /**
+   * not_built_on_this_host: where the copy is built, so where its fix applies: the target spec
+   * that gates it (`cfg(unix)`), or "a target other than <this host's triple>" when cargo builds it
+   * for no target here.
+   */
+  appliesWhenBuiltFor?: string[];
+  /**
+   * not_built_on_this_host: the action that fixes the copy where it is built (upgrade_direct,
+   * lockfile_refresh, upgrade_parent, override_or_replace, ...), whose commands this row carries;
+   * "not_determined" when that could not be read.
+   */
+  whenBuilt?: string;
   /** npm: the version node_modules holds, when it differs from `currentVersion` (the lockfile's). */
   installedVersion?: string;
   /** npm: the command that reinstalls from the lockfile, when `installedVersion` is set. */
@@ -190,6 +210,8 @@ export interface UpgradePlanResult {
   quickWins: number;
   breakingChanges: number;
   waitingOnUpstream: number;
+  /** Transitive steps whose fix path was not established (action `not_determined`): unread, not blocked. */
+  fixPathNotDetermined: number;
   /** Transitive steps a lockfile refresh fixes (every parent already admits a clean version). */
   lockfileRefreshes: number;
   /** Transitive steps fixed by upgrading the parent that pins them (`parentUpgrades` names the release). */
@@ -233,7 +255,7 @@ const PROVENANCE_NOTE =
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev), the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update = route undecided or mixed, mixed, no_fix) and `next_step` in words; a blocked_upstream step names no upgrade: its `blocked_upstream` holds say what keeps each copy and list the options; flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream when nothing could be read; direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev), the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update = route undecided or mixed, mixed, no_fix) and `next_step` in words; a blocked_upstream step names no upgrade: its `blocked_upstream` holds say what keeps each copy and list the options; flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -360,6 +382,7 @@ async function executeStandalonePlanner(
       quickWins: 0,
       breakingChanges: 0,
       waitingOnUpstream: 0,
+      fixPathNotDetermined: 0,
       lockfileRefreshes: 0,
       parentUpgradeSteps: 0,
       vulnerabilityDataAvailable: false,
@@ -431,8 +454,10 @@ async function executeStandalonePlanner(
     expectedTotal: scopeTotal,
     notLoaded: `${scanUnfinishedText(scanWaitMs)}, or OSV.dev was unreachable`,
   });
-  // A project whose only manifests are ones this server does not read (pom.xml) has no data at all (audit 6.2.5 A-6).
-  const nothingReadable = (vulnResult?.totalScanned ?? 0) === 0 && (liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0;
+  // A project whose only manifests are ones this server does not read (pom.xml), or could not read
+  // (an unparseable package.json, a damaged lockfile), has no data at all (audit 6.2.5 A-6).
+  const nothingReadable =
+    (vulnResult?.totalScanned ?? 0) === 0 && ((liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0 || liveIntel.getLockfileProblems().length > 0);
   const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
@@ -648,6 +673,7 @@ async function executeStandalonePlanner(
       scope: "direct",
       action,
       platformActive,
+      ...(action === "not_built_on_this_host" && vulns ? { appliesWhenBuiltFor: builtFor(vulns) } : {}),
       ...(installedVersion ? { installedVersion, installFix } : {}),
       ...(dep.declaredRange ? { declaredRange: dep.declaredRange } : {}),
     };
@@ -674,17 +700,21 @@ async function executeStandalonePlanner(
   // than a same-named direct dep is its own finding (anyhow 1.0.102 transitive
   // beside anyhow 1.0.104 direct), not a duplicate of the direct row.
   let devTransitiveLeftOut = 0;
+  // A copy a workspace member (or a root optional or peer section) declares is direct, but not one
+  // of the root's resolved rows above: it is planned below, as a direct row.
+  const rootDirect = new Set(liveIntel.getResolvedDeps().filter((d) => d.isDirect).map((d) => instanceKey(d.ecosystem, d.name, d.version)));
+  const devDeclaredSkipped = new Set<string>();
   if (vulnResult) {
     const transitive = new Map<string, typeof vulnResult.vulnerabilities>();
     const devSkipped = new Set<string>();
     for (const v of vulnResult.vulnerabilities) {
-      if (v.isDirect) continue;
+      if (v.isDirect && (v.installDriftOf || rootDirect.has(instanceKey(v.ecosystem, v.package, v.currentVersion)))) continue;
       if (!named(v.package, v.ecosystem)) continue;
       if (isMaintenanceNotice(v)) continue;
       if (directPackages.has(instanceKey(v.ecosystem, v.package, v.currentVersion))) continue;
       const key = instanceKey(v.ecosystem, v.package, v.currentVersion);
       if (!includeDev && isDevOnlyCopy(v)) {
-        devSkipped.add(key);
+        (v.isDirect ? devDeclaredSkipped : devSkipped).add(key);
         continue;
       }
       if (!transitive.has(key)) transitive.set(key, []);
@@ -692,12 +722,15 @@ async function executeStandalonePlanner(
     }
 
     devTransitiveLeftOut = [...devSkipped].filter((k) => !transitive.has(k)).length;
+    for (const k of devDeclaredSkipped) if (transitive.has(k)) devDeclaredSkipped.delete(k);
     for (const entries of transitive.values()) {
       const first = entries[0];
       const fixedVersions = entries.map((e) => e.fixedVersion).filter((f): f is string => Boolean(f));
       const platformActive = !entries.every((e) => !e.platformActive);
       const groups = groupAdvisories(entries);
-      const reasons = [vulnerabilitiesReason(groups), TRANSITIVE_PENDING];
+      // Declared by a manifest of the project, as vulnerability_scan builds the same step (fix-verdicts.ts stepOf).
+      const declared = entries.some((e) => e.isDirect === true);
+      const reasons = declared ? [vulnerabilitiesReason(groups)] : [vulnerabilitiesReason(groups), TRANSITIVE_PENDING];
       if (!platformActive) {
         reasons.push("Affected code is gated behind a target not active on this platform");
       }
@@ -713,16 +746,17 @@ async function executeStandalonePlanner(
         upgradeType: upgradeTypeBetween(first.currentVersion, target),
         risk: platformActive ? riskOf(entries.filter((e) => e.platformActive)) : "low",
         reasons,
-        breaking: false,
+        breaking: declared && upgradeTypeBetween(first.currentVersion, target) === "major",
         isDev: entries.every((e) => e.isDev),
-        scope: "transitive",
-        action: !platformActive ? "not_built_on_this_host" : target ? "waiting_on_upstream" : "no_fix_available",
+        scope: declared ? "direct" : "transitive",
+        action: !platformActive ? "not_built_on_this_host" : target ? (declared ? "upgrade_direct" : "waiting_on_upstream") : "no_fix_available",
         platformActive,
+        ...(!platformActive ? { appliesWhenBuiltFor: builtFor(entries) } : {}),
       };
       recommendations.push(rec);
       // The same input vulnerability_scan verifies for this copy (fix-verdicts.ts): one answer per finding.
       // A copy not built on this host is checked too, for its target only (never a yanked release).
-      if (rec.action === "waiting_on_upstream" || rec.action === "no_fix_available" || (rec.action === "not_built_on_this_host" && target)) {
+      if (rec.action === "waiting_on_upstream" || rec.action === "upgrade_direct" || rec.action === "no_fix_available" || (rec.action === "not_built_on_this_host" && target)) {
         fixPathInputs.set(rec, fixInputOf(entries));
       }
     }
@@ -757,6 +791,8 @@ async function executeStandalonePlanner(
   // A direct bump must not stop at a release that still pins a vulnerable transitive a slightly
   // newer release clears (express 4.20.0 still pins path-to-regexp 0.1.10; audit H1).
   await reconcileDirectTargets(limited, verifiedInputs, liveIntel);
+  // Go, crates.io, PyPI: a direct target is judged by what the release itself requires (required-targets.ts).
+  await judgeDirectRequirements(limited, liveIntel);
   // A transitive fix that needs a major upgrade of what the project declares is breaking.
   settleTransitiveBreaking(limited);
   // One command per move: two parents reached through one direct dependency name its upgrade once (r7).
@@ -771,6 +807,10 @@ async function executeStandalonePlanner(
   }
   // A target OSV.dev did not confirm clean is named only in a NOT CHECKED reason, never in targetVersion.
   withholdUnconfirmedTargets(limited);
+  // A fix path that was not read is not determined; "waiting on upstream" is kept for the paths read and found blocked.
+  markUndetermined(limited);
+  // A copy this host does not build: its fix is on the row, labelled with where it applies.
+  labelOtherTargets(limited);
   // Targets that pin (or narrowly range) an affected dependency, or whose held dependencies could not be
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
@@ -783,6 +823,7 @@ async function executeStandalonePlanner(
   const quickWins = upgrades.filter((r) => !r.breaking).length;
   const breakingChanges = upgrades.filter((r) => r.breaking).length;
   const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length;
+  const fixPathNotDetermined = limited.filter((r) => r.action === "not_determined").length;
   const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r)).length;
   const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent" && !heldUnclean(r)).length;
   const devOnly = limited.filter((r) => r.isDev).length;
@@ -813,6 +854,11 @@ async function executeStandalonePlanner(
     );
   }
   if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream`);
+  if (fixPathNotDetermined > 0) {
+    parts.push(
+      `${fixPathNotDetermined} transitive, fix path not determined (the registry or the lockfile could not be read, live lookups are off, or time ran out): unread, not blocked, so ask again before deciding`,
+    );
+  }
   // "later": only releases above the installed copy were judged; an earlier one is not denied (W6).
   if (removals > 0) parts.push(`${removals} to remove or replace: no later release is clean of the malware or advisories affecting the installed copy`);
   if (holds > 0) parts.push(`${holds} to keep where ${holds === 1 ? "it is" : "they are"}: every newer release is known-affected or withdrawn`);
@@ -822,19 +868,36 @@ async function executeStandalonePlanner(
       `${heldRows.length} fix target${heldRows.length !== 1 ? "s" : ""} NOT a clean fix: the release exact-pins, narrowly ranges or holds a range whose newest release is affected, or what it holds could not be checked (see reasons; confirm with dependency_check)`,
     );
   }
+  // Go, crates.io, PyPI: which of those the target's own requirements decided, and how many were not examined (required-targets.ts).
+  const requiresAffected = heldRows.filter((r) => r.reasons.some((x) => REQUIRES_AFFECTED_REASON.test(x))).length;
+  const requiresUnexamined = heldRows.filter((r) => r.reasons.some((x) => REQUIRES_UNEXAMINED_REASON.test(x)));
+  if (requiresAffected > 0) {
+    parts.push(`${requiresAffected} of them because the target's own requirements (a Go go.mod, a crate's or PyPI release's requirements) carry advisories: the reasons name which, how many, and what to raise afterwards`);
+  }
+  if (requiresUnexamined.length > 0) {
+    const capped = requiresUnexamined.filter((r) => r.reasons.some((x) => REQUIRES_CAP_REASON.test(x))).length;
+    parts.push(
+      `${requiresUnexamined.length} target${requiresUnexamined.length !== 1 ? "s" : ""} whose own requirements were not examined${capped > 0 ? ` (${capped} past the ${MAX_REQUIRED_TARGETS} a call examines)` : ""}: not a clean fix until dependency_check examines ${requiresUnexamined.length === 1 ? "it" : "them"}`,
+    );
+  }
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
   if (unknownRisk > 0) parts.push(`${unknownRisk} NOT CHECKED: OSV.dev gave no answer for ${unknownRisk === 1 ? "it" : "them"}, so ${unknownRisk === 1 ? "its" : "their"} advisories are not known (risk "unknown", not low)`);
   if (unconfirmedNewer > 0) parts.push(`${unconfirmedNewer} newer release${unconfirmedNewer !== 1 ? "s" : ""} NOT CHECKED against advisories, so no targetVersion is given (run dependency_check before writing one)`);
   if (noFix > 0) parts.push(`${noFix} vulnerable with no fixed release yet`);
-  if (inactive > 0) parts.push(`${inactive} vulnerable only in code not built on this host`);
+  if (inactive > 0) {
+    const targets = [...new Set(limited.filter((r) => r.action === "not_built_on_this_host").flatMap((r) => r.appliesWhenBuiltFor ?? []))];
+    parts.push(`${inactive} vulnerable only in code not built on this host (the fix on each row applies when you build for its target: ${targets.join("; ")})`);
+  }
   const criticalCount = limited.filter((r) => r.risk === "critical").length;
   if (criticalCount > 0) parts.push(`${criticalCount} critical`);
   if (devOnly > 0) parts.push(`${devOnly} dev-only (isDev)`);
   // The population, worded as dependency_health and vulnerability_scan word it (finding 6).
   if (vulnResult) parts.push(populationNote(vulnResult.vulnerabilities, liveIntel.getAuditDeps(), includeDev, named));
-  if (devDirectLeftOut + devTransitiveLeftOut + devDirectUnchecked > 0) {
+  // A workspace member's vulnerable devDependency is one too.
+  const devDeclaredLeftOut = devDirectLeftOut + devDeclaredSkipped.size;
+  if (devDeclaredLeftOut + devTransitiveLeftOut + devDirectUnchecked > 0) {
     const left: string[] = [];
-    if (devDirectLeftOut > 0) left.push(`${devDirectLeftOut} vulnerable devDependenc${devDirectLeftOut !== 1 ? "ies" : "y"}`);
+    if (devDeclaredLeftOut > 0) left.push(`${devDeclaredLeftOut} vulnerable devDependenc${devDeclaredLeftOut !== 1 ? "ies" : "y"}`);
     if (devDirectUnchecked > 0) left.push(`${devDirectUnchecked} devDependenc${devDirectUnchecked !== 1 ? "ies" : "y"} not checked for vulnerabilities`);
     if (devTransitiveLeftOut > 0) left.push(`${devTransitiveLeftOut} dev-only vulnerable transitive cop${devTransitiveLeftOut !== 1 ? "ies" : "y"}`);
     parts.push(`include_dev: false left out ${left.join(" and ")} (the default, true, plans them)`);
@@ -863,12 +926,79 @@ async function executeStandalonePlanner(
     quickWins,
     breakingChanges,
     waitingOnUpstream,
+    fixPathNotDetermined,
     lockfileRefreshes,
     parentUpgradeSteps,
     vulnerabilityDataAvailable,
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
   };
+}
+
+/** Where a copy this host does not build IS built, in words: its declared target spec, or any target but this host's. */
+function builtFor(entries: VulnerabilityEntry[]): string[] {
+  const specs = [...new Set(entries.filter((e) => !e.platformActive).map((e) => e.target).filter((t): t is string => Boolean(t)))];
+  const words = specs.map((spec) => {
+    const triple = /^not built for (\S+)$/.exec(spec)?.[1];
+    return triple ? `a target other than ${triple}` : spec;
+  });
+  return words.length > 0 ? [...new Set(words)] : ["another target"];
+}
+
+/**
+ * The reason that carries a not-built-here row's fix: what to do where the copy is built, with the
+ * commands the row holds. The row keeps its own action and count; nothing here is this host's step.
+ */
+function labelOtherTargets(rows: UpgradeRecommendation[]): void {
+  for (const r of rows) {
+    if (r.action !== "not_built_on_this_host" || !r.appliesWhenBuiltFor) continue;
+    const pending = r.reasons.indexOf(TRANSITIVE_PENDING);
+    if (pending >= 0) r.reasons[pending] = "Transitive dependency — not declared in your manifest";
+    const named = [...(r.upgradeCommands ?? []), ...(r.refreshCommands ?? [])].map((c) => "`" + c.command + "` in " + c.dir);
+    const edits = (r.upgradeInstructions ?? []).map((i) => i.instruction);
+    const run = named.length + edits.length > 0 ? ` (${[...named, ...edits].join("; ")})` : "";
+    const copy = `${r.package} ${r.currentVersion ?? ""}`.trimEnd();
+    const how = !r.targetVersion
+      ? "no release is named for it (the reasons above say why)"
+      : r.whenBuilt === "upgrade_direct"
+        ? `upgrade ${copy} to ${r.targetVersion}${run}`
+        : r.whenBuilt === "lockfile_refresh"
+          ? `a lockfile refresh moves ${copy} to ${r.targetVersion}${run}`
+          : r.whenBuilt === "upgrade_parent"
+            ? `upgrade the parent that pins ${copy} (the reasons above and parentUpgrades name the release)`
+            : r.whenBuilt === "upgrade_parent_unverified"
+              ? `a parent of ${copy} has to move, and no release of it was verified (parentUpgrades says what to check)`
+              : r.whenBuilt === "override_or_replace"
+                ? `force ${copy} to ${r.targetVersion} with an override, or replace the parent that pins it (the reasons above say how)`
+                : r.whenBuilt === "waiting_on_upstream"
+                  ? `${copy} waits on a parent release (the reasons above say which)`
+                  : `${r.targetVersion} is the release to move ${copy} to; how it is reached there was NOT DETERMINED in this call (the registry or the lockfile could not be read, or time ran out): ask again`;
+    r.reasons.push(`Applies when you build for ${r.appliesWhenBuiltFor.join(", ")}: this host does not compile ${r.package}, so this is not one of its steps; where that target is built or deployed, ${how}`);
+  }
+}
+
+/** What a transitive row says in place of its pending reason once its fix path is known to be undetermined. */
+const NOT_DETERMINED_REASON =
+  "Transitive dependency — not declared in your manifest. How it is fixed (a lockfile refresh, a parent upgrade or an override) was NOT DETERMINED in this call";
+const NOT_DETERMINED_WHY =
+  ": the registry or the lockfile could not be read, live lookups are off, or the time budget ran out. Unread is not blocked: call upgrade_planner again (answers are cached); never bump it directly";
+
+/**
+ * "Waiting on upstream" says the paths to the fix were read and a parent the project cannot move
+ * blocks them. A transitive row still carrying its pending reason was never decided (nothing
+ * could be read, or only part), and one that arrives through a private parent was never looked
+ * up: both are `not_determined`.
+ */
+function markUndetermined(rows: UpgradeRecommendation[]): void {
+  for (const r of rows) {
+    if (r.scope !== "transitive" || r.action !== "waiting_on_upstream") continue;
+    const at = r.reasons.indexOf(TRANSITIVE_PENDING);
+    if (at < 0 && !r.privateParents) continue;
+    r.action = "not_determined";
+    // The lookups that did run say what they read (FIX_PATH_UNDETERMINED); otherwise the general causes.
+    const said = r.privateParents !== undefined || r.reasons.some((x) => x.startsWith(FIX_PATH_UNDETERMINED));
+    if (at >= 0) r.reasons[at] = `${NOT_DETERMINED_REASON}${said ? "" : NOT_DETERMINED_WHY}`;
+  }
 }
 
 /**

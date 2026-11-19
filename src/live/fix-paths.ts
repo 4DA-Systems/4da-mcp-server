@@ -24,6 +24,7 @@
  * cached, and any failure degrades to the old answer, never to a guess.
  */
 
+import { withinCallBudget } from "../call-budget.js";
 import { isShellSafeCargoTarget, isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -38,7 +39,9 @@ import { yieldIfDue } from "./yield-point.js";
 import { lockfileFormatOf, prepareLockfileParents, type LockfileFormat, type ParentEdge } from "./lockfile-parents.js";
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, parseGoMod, requirementOptions } from "./lockfile-parsers-pygo.js";
+import { requirementFiles } from "./lockfile-parsers-pygo.js";
 import { projectOverride } from "./overrides.js";
+import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
@@ -46,6 +49,8 @@ import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
+import { requiresNote, withRequiredTargets } from "./required-targets.js";
+import type { RequirementEcosystem, RequirementOptions, RequirementSources } from "./release-requirements.js";
 import { confirmTargets } from "./batch-confirm.js";
 import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
@@ -191,14 +196,26 @@ export class FixPathSources {
     while (this.memo.size > MEMO_KEPT) this.memo.delete(this.memo.keys().next().value!);
   }
 
+  /** Advisory lists to ask OSV.dev for again at their next read (a forced refresh). */
+  private refreshDue = new Set<string>();
+
+  /** Local state only, no lookup: the list is asked for again by the next `packageAdvisories` for it. */
+  readonly refreshAdvisoriesOnNextRead = (ecosystem: OsvEcosystem, name: string): void => {
+    this.refreshDue.add(`fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`);
+  };
+
   /** Every non-withdrawn OSV advisory for a package, as ranges; null when OSV could not be read. */
   async packageAdvisories(ecosystem: OsvEcosystem, name: string): Promise<AdvisoryRanges[] | null> {
     const key = `fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`;
+    const due = this.refreshDue.delete(key);
     const hit = this.cached<AdvisoryRanges[]>(key);
-    if (hit) return hit;
+    if (hit && !due) return hit;
     const running = this.advisoriesInFlight.get(key);
     if (running) return running;
-    const lookup = this.fetchPackageAdvisories(key, ecosystem, name).finally(() => this.advisoriesInFlight.delete(key));
+    // A list due for a refresh is replaced when the new one arrives; when it does not, the cached list stands.
+    const lookup = this.fetchPackageAdvisories(key, ecosystem, name)
+      .then((fresh) => fresh ?? (due ? hit : null))
+      .finally(() => this.advisoriesInFlight.delete(key));
     this.advisoriesInFlight.set(key, lookup);
     return lookup;
   }
@@ -258,6 +275,10 @@ export class FixPathSources {
    * The requirements `parent@parentVersion` declares on `dep`, from the
    * registry: npm (pnpm lockfiles record none) and crates.io (Cargo.lock
    * records none). Null when unknown; [] when the parent declares none.
+   *
+   * Both are read from the parent's whole-package document (npm's abbreviated document, the
+   * crates.io sparse index entry), never from a URL that names `parentVersion`: the registry
+   * learns which package is asked about, not which version is installed.
    */
   async parentRequirements(ecosystem: OsvEcosystem, parent: string, parentVersion: string, dep: string): Promise<string[] | null> {
     if (ecosystem === "crates.io") {
@@ -269,22 +290,13 @@ export class FixPathSources {
     const key = `fixpath:v${CACHE_VERSION}:npm-version-deps:${parent}@${parentVersion}`;
     let deps = this.cached<Record<string, string>>(key);
     if (!deps) {
-      if (!this.rateLimiter.consume("fixpath-registry")) return null;
-      try {
-        const res = await fetchWithTimeout(
-          `https://registry.npmjs.org/${encodeURIComponent(parent)}/${encodeURIComponent(parentVersion)}`,
-          { headers: { Accept: "application/json" } },
-          TIMEOUT_MS,
-        );
-        if (!res.ok) return null;
-        const doc = (await res.json()) as Record<string, Record<string, string> | undefined>;
-        // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
-        // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
-        deps = { ...doc.optionalDependencies, ...doc.dependencies };
-        this.store(key, deps, "npm", VERSION_DEPS_TTL);
-      } catch {
-        return null;
-      }
+      const release = (await this.npmDocument(parent))?.versions?.[parentVersion];
+      // Unread, or a version the registry does not list: unknown, never "requires nothing".
+      if (!release) return null;
+      // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
+      // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
+      deps = { ...release.optionalDependencies, ...release.dependencies };
+      this.store(key, deps, "npm", VERSION_DEPS_TTL);
     }
     return typeof deps[dep] === "string" ? [deps[dep]] : [];
   }
@@ -576,20 +588,22 @@ export class FixPathSources {
   /**
    * The `go` directive of one module version's go.mod, from the proxy (`@v/<v>.mod`): the oldest Go
    * that builds it. x/text v0.41.0 says `go 1.25.0`, so `go get` on a Go 1.24 toolchain refuses it
-   * with GOTOOLCHAIN=local and raises the directive otherwise. Null when absent or unreadable.
+   * with GOTOOLCHAIN=local and raises the directive otherwise. "" when the go.mod was read and
+   * declares none (any Go builds it); null when it could not be read, which says nothing either way.
    */
   async goDirective(module: string, version: string): Promise<string | null> {
     const v = version.startsWith("v") ? version : `v${version}`;
     const key = `fixpath:v${CACHE_VERSION}:go-directive:${module}@${v}`;
     const hit = this.cached<{ go: string | null }>(key);
-    if (hit) return hit.go;
+    // Only a go.mod that was read is kept: a kept null is "declares none".
+    if (hit) return hit.go ?? "";
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
       const res = await fetchWithTimeout(`https://proxy.golang.org/${escapeModulePath(module)}/@v/${escapeModulePath(v)}.mod`, {}, TIMEOUT_MS);
       if (!res.ok) return null;
       const go = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(await res.text())?.[1] ?? null;
       this.store(key, { go }, "go", VERSION_DEPS_TTL);
-      return go;
+      return go ?? "";
     } catch {
       return null;
     }
@@ -693,6 +707,21 @@ export type FixTargetResult = CleanTarget & {
   heldBlocked?: { affected: HeldDependency[]; searched: string[]; unchecked?: string[] };
   /** Whether the target's held dependencies are affected could not be checked, and why: not a clean fix either. */
   heldUnchecked?: string;
+  /**
+   * crates.io, PyPI (required-targets.ts): the target's own requirements carry advisories (a
+   * requirement whose newest admitted release, or pin, is affected): not a clean fix. `examined`:
+   * how many requirements were judged.
+   */
+  requiresAffected?: { affected: HeldDependency[]; examined: number };
+  /** crates.io, PyPI: what the target requires was not examined, and why: not a clean fix either. */
+  requiresUnchecked?: string;
+  /**
+   * Go: the target's go.mod sets minimum versions that carry advisories. Minimums are raised in the
+   * project's own go.mod after upgrading, so the target stays a fix and carries this as a caveat.
+   */
+  requiresMinimums?: { affected: HeldDependency[]; examined: number };
+  /** Go: what the target's go.mod requires was not examined, and why: the target stays, with that said. */
+  requiresMinimumsUnchecked?: string;
   /** The newest stable release no advisory leaves unclean, when it is above `target` (withLineFacts). */
   newestSafe?: string;
   /** No release on the installed version's line above it clears every advisory: `target` is on the nearest later line that has one (withLineFacts). */
@@ -720,7 +749,12 @@ export type FixTargetResult = CleanTarget & {
  * version was judged clean (audit 6.2.5 D-4).
  */
 export function targetCheckedAll(clean: FixTargetResult): boolean {
-  return !clean.advisoriesUnread && !clean.heldBlocked && clean.heldUnchecked === undefined;
+  return !clean.advisoriesUnread && !clean.heldBlocked && clean.heldUnchecked === undefined && !clean.requiresAffected && clean.requiresUnchecked === undefined;
+}
+
+/** Whether what the target holds or requires makes it not a clean fix, or was not judged (held and required checks). */
+export function targetUnclean(clean: FixTargetResult): boolean {
+  return Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined || Boolean(clean.requiresAffected) || clean.requiresUnchecked !== undefined;
 }
 
 /** A target above every release the registry listed (CleanTarget.aboveListed), in plain words. */
@@ -729,10 +763,14 @@ export function aboveListedText(target: string): string {
 }
 
 /** A reason heldNote writes for a target that is not a clean fix (heldBlocked / heldUnchecked): the plan summary counts those rows apart. */
-export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|(?:exact-pins or narrowly ranges|holds) are affected was NOT CHECKED \(/;
+export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|(?:exact-pins or narrowly ranges|holds) are affected was NOT CHECKED \(|itself requires was not examined \(/;
 
-/** The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked), or null when there is nothing to say. */
-export function heldNote(clean: FixTargetResult): string | null {
+/**
+ * The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked)
+ * or, on Go, crates.io and PyPI, its requirements (requiresAffected / requiresUnchecked), or null
+ * when there is nothing to say.
+ */
+export function heldNote(clean: FixTargetResult, ecosystem = ""): string | null {
   if (clean.heldFrom && clean.heldPast && clean.heldPast.length > 0 && clean.target) {
     const [first, ...rest] = clean.heldPast;
     const names = [...new Set(rest.flatMap((p) => p.affected.map((d) => d.name)))];
@@ -752,7 +790,7 @@ export function heldNote(clean: FixTargetResult): string | null {
   if (clean.heldUnchecked !== undefined && clean.target) {
     return `whether the dependencies ${clean.target} holds are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
   }
-  return null;
+  return requiresNote(clean, ecosystem);
 }
 
 /**
@@ -808,7 +846,10 @@ export async function cleanFixTarget(
     if (malware.length > 0) Object.assign(clean, { malware });
     if (clean.target === null && clean.maliciousLanding) Object.assign(clean, { landingNote: malwareText(name, clean.maliciousLanding) });
     const result: FixTargetResult = { ...clean, ...(facts?.withdrawn.includes(clean.floor) ? { floorWithdrawn: true } : {}), ...(absent.length > 0 ? { absent } : {}) };
-    return withLineFacts(withRegistryFacts(name, result, ecosystem, perAdvisoryFixes, advisories, facts, await absentReasons(sources, ecosystem, name, absent)), ecosystem, advisories, facts, installed);
+    const absentWhy = await absentReasons(sources, ecosystem, name, absent);
+    // The answer that waits on OSV.dev's word for its target (CleanTarget.ifConfirmed) carries the same registry facts.
+    if (clean.ifConfirmed) result.ifConfirmed = withRegistryFacts(name, { ...result, ...clean.ifConfirmed, unreadable: undefined, ifConfirmed: undefined }, ecosystem, perAdvisoryFixes, advisories, facts, absentWhy);
+    return withLineFacts(withRegistryFacts(name, result, ecosystem, perAdvisoryFixes, advisories, facts, absentWhy), ecosystem, advisories, facts, installed);
   }
   // Only a registry list can show a release past a last_affected bound.
   if (!published || published.length === 0) return null;
@@ -1089,7 +1130,11 @@ export async function verifyFixTargets(
   items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string; ids?: string[] }>,
   budgetMs: number,
   concurrency = 12,
-  options: { heldQuery?: AdvisoryQuery } = {},
+  options: {
+    heldQuery?: AdvisoryQuery;
+    /** Go, crates.io, PyPI: the items (by key) whose target is judged by what it requires (required-targets.ts). */
+    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null; pythons?: RequirementOptions["pythons"] };
+  } = {},
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
   const todo = items.filter((i) => i.fixes.length > 0 || i.installed);
@@ -1123,7 +1168,7 @@ export async function verifyFixTargets(
     sources,
     options.heldQuery ?? (async () => { throw new Error("no batch query"); }),
     listed,
-    Math.max(deadline, Date.now() + HELD_FLOOR_MS),
+    Math.max(deadline, Date.now() + withinCallBudget(HELD_FLOOR_MS, FLOOR_RESERVE_MS)),
   );
   for (const [key, clean] of confirmed) out.set(key, clean);
   if (options.heldQuery) {
@@ -1131,14 +1176,24 @@ export async function verifyFixTargets(
     // (audit 6.2.5 D-4). It gets at least HELD_FLOOR_MS even when the targets used the budget up:
     // without it a cold scan would downgrade every npm target that holds a dependency.
     const npm = todo.filter((i) => i.ecosystem === "npm" && out.has(i.key)).map((i) => ({ key: i.key, name: i.name, installed: i.installed, clean: out.get(i.key)! }));
-    const held = await withHeldTargets(sources, options.heldQuery, npm, Math.max(deadline, Date.now() + HELD_FLOOR_MS));
+    const held = await withHeldTargets(sources, options.heldQuery, npm, Math.max(deadline, Date.now() + withinCallBudget(HELD_FLOOR_MS, FLOOR_RESERVE_MS)));
     for (const [key, clean] of held) out.set(key, clean);
+  }
+  const req = options.requirements;
+  if (options.heldQuery && req) {
+    // Go, crates.io, PyPI: what each direct target itself requires, in one advisory lookup, with the
+    // same floor as npm's held check and never past the call's own budget.
+    const items = todo.filter((i) => req.keys.has(i.key) && out.has(i.key)).map((i) => ({ key: i.key, ecosystem: i.ecosystem, name: i.name, clean: out.get(i.key)! }));
+    const until = Date.now() + withinCallBudget(Math.max(deadline - Date.now(), HELD_FLOOR_MS), FLOOR_RESERVE_MS);
+    for (const [key, clean] of await withRequiredTargets(req.sources, options.heldQuery, items, until, req.selected, req.pythons)) out.set(key, clean);
   }
   return out;
 }
 
-/** The least time the held-dependency check of a scan's npm targets gets (verifyFixTargets). */
+/** The least time the held-dependency check of a scan's npm targets gets (verifyFixTargets), within what is left of the call. */
 const HELD_FLOOR_MS = 3_000;
+/** What a floor leaves of the call's budget for the answer to be built: the call answers within its budget. */
+const FLOOR_RESERVE_MS = 1_000;
 
 /** Said whenever the registry could not be read: withdrawn releases are then not ruled out, never silently. */
 export const REGISTRY_UNREAD_NOTE = "the registry could not be read, so whether it yanked or deprecated this release was not checked";
@@ -1152,11 +1207,11 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
     // The advisory-side reasoning is about the release the advisories pointed at; the held step follows it.
     const { heldFrom, heldPast: _past, targetNotice, ...rest } = clean;
     const base = targetNote({ ...rest, target: heldFrom }, ecosystem);
-    return [base, heldNote(clean), targetNotice ?? null].filter((p): p is string => Boolean(p)).join("; ") || null;
+    return [base, heldNote(clean, ecosystem), targetNotice ?? null].filter((p): p is string => Boolean(p)).join("; ") || null;
   }
-  const held = heldNote(clean);
+  const held = heldNote(clean, ecosystem);
   if (held) {
-    const { heldBlocked: _b, heldUnchecked: _u, ...rest } = clean;
+    const { heldBlocked: _b, heldUnchecked: _u, requiresAffected: _ra, requiresUnchecked: _ru, requiresMinimums: _rm, requiresMinimumsUnchecked: _rmu, ...rest } = clean;
     return [targetNote(rest, ecosystem), held].filter((p): p is string => Boolean(p)).join("; ");
   }
   const withheld = withheldText(clean, ecosystem);
@@ -1301,7 +1356,7 @@ export function overrideReaches(blocking: Array<{ bundled?: boolean }>): boolean
  * Null, and the plan keeps its plain "bump it where it is declared", for anything this cannot
  * read with certainty: a dependency declared in two sections; a declared spec that does not
  * admit the installed copy; `>=`, `||`, x-range, tag, git, `workspace:` or alias specs; a git,
- * path or alternate-registry crate; a yarn workspace member (`yarn up` is project-wide); a Go
+ * path or alternate-registry crate; a yarn workspace member with no name (yarnMemberFix); a Go
  * `replace`; hashed or compiled (pip-compile, uv) requirements; bun or an unknown tool.
  */
 export type DirectFix =
@@ -1632,8 +1687,8 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
     case "npm": {
       const manager = npmManager(projectDir);
       if (!manager) return null;
-      // yarn's up / upgrade act on the whole workspace: from a member they rewrite siblings too.
-      if ((manager === "yarn1" || manager === "yarn-berry") && !fs.existsSync(path.join(projectDir, "yarn.lock"))) return null;
+      // A yarn workspace member: yarnMemberFix (yarn's up / upgrade do not act on one member alone).
+      if ((manager === "yarn1" || manager === "yarn-berry") && !fs.existsSync(path.join(projectDir, "yarn.lock"))) return yarnMemberFix(projectDir, manager, name, installed, target);
       const json = read("package.json");
       const declared = json === null ? null : npmDeclared(json, name);
       if (declared === null || npmRangeAdmits(declared, installed) !== true) return null;
@@ -1648,7 +1703,8 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       const bounded = op === "^" || op === "~";
       if (bounded && npmRangeAdmits(declared, target) === true) return isShellSafeName(name, "npm") ? { command: npmDirectRefresh(manager, name), refresh: true } : null;
       const command = npmDirectCommand(manager, declared, name, target);
-      return command ? { command } : null;
+      // berry's `yarn up` is a project command: at a workspace root it rewrites the members' declarations too (hasWorkspaces).
+      return command ? { command: manager === "yarn-berry" && hasWorkspaces(json!) ? command.replace(/^yarn up /, "yarn add ") : command } : null;
     }
     case "crates.io": {
       const manifest = read("Cargo.toml");
@@ -1675,7 +1731,13 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
     case "PyPI": {
       // A pin in a file included with `-r` is declared too, and edited there (audit 7g).
       const files = ["requirements.txt", "requirements-dev.txt", "requirements/base.txt"];
-      for (let i = 0; i < files.length && i < 16; i++) {
+      // Every requirements file the scan reads declares its pins (requirements-test.txt,
+      // requirements/docs.txt): the edit is named in the file that holds the pin.
+      for (const file of requirementFiles(projectDir)) {
+        const rel = path.relative(projectDir, file).replace(/\\/g, "/");
+        if (!files.includes(rel)) files.push(rel);
+      }
+      for (let i = 0; i < files.length && i < 32; i++) {
         const body = read(files[i]);
         if (body === null) continue;
         const instruction = pypiDirectInstruction(body, files[i], name, installed, target);
@@ -1690,6 +1752,42 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
     }
     default:
       return null;
+  }
+}
+
+/**
+ * A dependency a Yarn workspace member declares: `yarn workspace <member> add <spec>`, which moved
+ * only that member's declaration, keeping its operator and section (yarn 1.22.22 and 4.9.1, a
+ * two-member workspace, 2026-11-19). yarn 4's `up` rewrote the sibling's declaration too, and yarn
+ * 1's `upgrade` in a member wrote a devDependency into `dependencies`; yarn 1's `add` keeps a dev
+ * or optional dependency in its section only with `--dev` / `--optional`. Null when `projectDir` is
+ * no member of the workspace above it, the member's name cannot be carried in a command, or the
+ * declaration is not one npmDirectCommand reads (the plan then names the member, with no command).
+ */
+function yarnMemberFix(projectDir: string, manager: "yarn1" | "yarn-berry", name: string, installed: string, target: string): DirectFix | null {
+  const member = yarnWorkspaceMember(projectDir);
+  if (!member?.name || !isShellSafeName(member.name, "npm") || !isShellSafeName(name, "npm") || !isShellSafeVersion(target)) return null;
+  const declared = member.declared.filter((d) => d.name === name && d.section !== "peerDependencies");
+  if (declared.length !== 1 || npmRangeAdmits(declared[0].spec, installed) !== true) return null;
+  const op = npmOperator(declared[0].spec);
+  if (op === null) return null;
+  const spec = op === "" ? `${name}@${target}` : `"${name}@${op}${target}"`;
+  const section = declared[0].section;
+  const flag = manager === "yarn1" && section === "devDependencies" ? " --dev" : manager === "yarn1" && section === "optionalDependencies" ? " --optional" : "";
+  return { command: `yarn workspace ${member.name} add ${spec}${flag}` };
+}
+
+/**
+ * Whether a package.json declares workspaces. At a yarn berry workspace root, `yarn up "x@v"` rewrote
+ * a member's `~0.0.8` as well as the root's own declaration (yarn 4.9.1, 2026-11-19); `yarn add <spec>`
+ * there moved only the root's, keeping its section and operator, so the root's step names `yarn add`.
+ */
+function hasWorkspaces(packageJson: string): boolean {
+  try {
+    const w = (JSON.parse(packageJson) as { workspaces?: unknown }).workspaces;
+    return Array.isArray(w) ? w.length > 0 : Array.isArray((w as { packages?: unknown } | null)?.packages);
+  } catch {
+    return false;
   }
 }
 

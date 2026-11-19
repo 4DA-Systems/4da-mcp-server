@@ -65,7 +65,8 @@ async function scan(params: Record<string, unknown>, fixSources: FixPathSources 
   if (prior !== undefined) process.env.FOURDA_OFFLINE = prior;
   const scanOf = async (deps: ResolvedDependency[], projectPath: string): Promise<VulnerabilityScanResult> => {
     const vulnerabilities = deps.flatMap((d) =>
-      d.name === "openssl" ? [entry(d, "GHSA-xp3w-r5p5-63rr", "0.10.79"), entry(d, "GHSA-xcf7-rvmh-g6q4", "0.10.55")] : [],
+      // OSV.dev answers per version: these two affect the installed 0.10.38, not the releases asked about as targets.
+      d.name === "openssl" && d.version === "0.10.38" ? [entry(d, "GHSA-xp3w-r5p5-63rr", "0.10.79"), entry(d, "GHSA-xcf7-rvmh-g6q4", "0.10.55")] : [],
     );
     return {
       scannedAt: new Date().toISOString(), projectPath, ecosystemsScanned: ["crates.io"], totalScanned: deps.length, totalVulnerable: 1,

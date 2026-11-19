@@ -265,7 +265,7 @@ describe("round 8: a cold PyPI dependency_check does not hold the event loop in 
     for (let a = 1; a <= 3; a++) for (let b = 0; b < 10; b++) rel.push(`${a}.${b}.0`, `${a}.${b}`, `${a}.${b}.1`, `${a}.${b}rc1`);
     const advisories = Array.from({ length: 10 }, (_, i) => ({ id: `A-${i}`, spans: [{ introduced: "0", fixed: `${1 + (i % 3)}.${i}.1`, lastAffected: null }], versions: rel.filter((_, k) => k % (i + 2) === 0), maintenance: false }));
     for (const v of rel) {
-      const got = advisoriesAffecting(advisories as never, v, "PyPI").map((a: { id: string }) => a.id).sort();
+      const got = advisoriesAffecting(advisories as never, v, "PyPI").sort();
       const listedEqual = (a: (typeof advisories)[number]) => a.versions.some((x) => releaseKey(x) === releaseKey(v) && x.replace(/(\.0)+$/, "") === v.replace(/(\.0)+$/, ""));
       expect(got.length).toBeGreaterThanOrEqual(advisories.filter(listedEqual).length);
     }

@@ -22,6 +22,8 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod"]);
+/** The largest hook payload read (characters). */
+const MAX_INPUT_CHARS = 8 * 1024 * 1024;
 
 /**
  * Only dependency sections declare dependencies. `"version": "1.2.0"` and engines'
@@ -107,8 +109,19 @@ function lastBefore(events, index) {
 
 /** For a TOML text, the table each position sits under, from its headers read once: `at(index)`, or null before any header. */
 function tomlTables(text) {
-  const headers = [...text.matchAll(/^[ \t]*\[{1,2}[ \t]*([^\]\n]+?)[ \t]*\]{1,2}[ \t]*$/gm)].map((m) => ({ index: m.index, name: m[1].replace(/\s+/g, "") }));
-  return (index) => lastBefore(headers, index)?.name ?? null;
+  // Read line by line, by hand: one pattern for the whole header line is cubic on a line of `[`
+  // followed by blanks, and this runs on a file the edit did not write.
+  const headers = [];
+  let index = 0;
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (t.startsWith("[") && t.endsWith("]")) {
+      const inner = t.replace(/^\[{1,2}/, "").replace(/\]{1,2}$/, "");
+      if (inner.trim() && !inner.includes("]") && !inner.includes("[")) headers.push({ index, name: inner.replace(/\s+/g, "") });
+    }
+    index += line.length + 1;
+  }
+  return (at) => lastBefore(headers, at)?.name ?? null;
 }
 
 /**
@@ -193,12 +206,18 @@ function dependencyIn(table, key) {
  * line too (r8: the file's first `version =`, the package's own, decided it, and the edit was
  * ignored although the CHANGELOG said it was fixed).
  */
+/** Whole-file lookups one hook run may make, and the longest line looked up. */
+const MAX_LINE_LOOKUPS = 200;
+const MAX_LOOKUP_LINE = 2000;
+let lookups = 0;
+
 function tomlDependency(table, place, line, key, disk) {
   if (table === null) {
     const file = disk();
     if (file && place >= 0) table = file.toml()(place);
-    if (table === null && file) {
+    if (table === null && file && line.length <= MAX_LOOKUP_LINE && lookups++ < MAX_LINE_LOOKUPS) {
       // Every place this exact line stands in the file: a dependency in any of them is one.
+      // Each lookup reads the whole file, so an edit gets a bounded number of them.
       const at = new RegExp(`^[ \\t]*${escapeRegex(line.trim())}`, "gm");
       const tables = [...file.text.matchAll(at)].map((m) => file.toml()(m.index) ?? "");
       if (tables.length > 0) {
@@ -239,7 +258,9 @@ function declaredVersions(file, text, disk = () => null, place = -1) {
     }
   } else if (file === "pyproject.toml" || file === "requirements.txt") {
     // A requirement string ("requests>=2.31") is a dependency wherever it is written.
-    for (const m of text.matchAll(/["']?([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(===?|~=|>=)\s*([0-9][^"',;\s]*)/g)) out.set(m[1].toLowerCase(), `${m[2]}${m[3]}`);
+    // A name starts where no name character precedes it and is at most 100 characters (PyPI's own
+    // limit is far lower): without both, one unbroken token of 100,000 characters costs its square.
+    for (const m of text.matchAll(/(?<![A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]\n]{0,200}\])?[ \t]*(===?|~=|>=)[ \t]*([0-9][^"',;\s]{0,80})/g)) out.set(m[1].toLowerCase(), `${m[2]}${m[3]}`);
     if (file === "pyproject.toml") {
       const tables = tomlTables(text);
       for (const m of text.matchAll(/^[ \t]*([A-Za-z0-9][A-Za-z0-9._-]*)[ \t]*=[ \t]*"([~^<>=]*\s*\d[^"]*)"/gm)) {
@@ -286,6 +307,61 @@ const exactFor = (ecosystem, spec) => {
   return exact(spec);
 };
 
+/**
+ * What the hook says is read by the agent, and the names and versions in it come from the edit's
+ * own text (which may quote a third party's manifest). So each is held to its shape before it is
+ * repeated: a name is a package name, and of a version only its leading run of version-spec
+ * characters is kept. Text after that run (a comment, a sentence) is not a version and is dropped.
+ */
+const NAME_TEXT = /^[@A-Za-z0-9][\w.\-/~@]{0,213}$/;
+/**
+ * A version specifier is a sequence of comparator clauses: an optional operator (`^ ~ > < = !`
+ * and their combinations), an optional `v`, then a version that starts with a digit and is made
+ * of `[0-9A-Za-z.+_-]` and `*`/`x` wildcards; or a bare `*`. Clauses are joined by `||`, `,`,
+ * ` - ` or a space. Reading stops at the first token that is not a clause, so a word or sentence
+ * after a version ("4.17.21 IMPORTANT ...") is never repeated, and an operator or joiner left
+ * dangling before it ("4.17.21 <", "1.2 ||") goes with it. At most SPEC_MAX characters are kept,
+ * in whole clauses.
+ */
+const SPEC_CLAUSE = /(?:[~^<>=!]{1,3}\s*)?(?:v?\d[0-9A-Za-z.+_*-]*|\*)/y;
+const SPEC_JOINER = /\s*\|\|\s*|\s*,\s*|\s+-\s+|\s+/y;
+const SPEC_MAX = 80;
+const specText = (spec) => {
+  if (typeof spec !== "string") return "";
+  const s = spec.trim().slice(0, SPEC_MAX * 2);
+  let kept = "";
+  let at = 0;
+  for (let first = true; ; first = false) {
+    let joiner = "";
+    if (!first) {
+      SPEC_JOINER.lastIndex = at;
+      const j = SPEC_JOINER.exec(s);
+      if (!j) break;
+      joiner = j[0];
+      at = SPEC_JOINER.lastIndex;
+    }
+    SPEC_CLAUSE.lastIndex = at;
+    const c = SPEC_CLAUSE.exec(s);
+    if (!c || kept.length + joiner.length + c[0].length > SPEC_MAX) break;
+    kept += joiner + c[0];
+    at = SPEC_CLAUSE.lastIndex;
+  }
+  return kept;
+};
+
+/** The changes fit to repeat: shaped names, cleaned versions, nothing else. */
+function repeatable(changes) {
+  const out = [];
+  for (const c of changes) {
+    if (typeof c?.name !== "string" || !NAME_TEXT.test(c.name)) continue;
+    const to = specText(c.to);
+    if (!to) continue;
+    const from = c.from == null ? null : specText(c.from) || null;
+    out.push({ name: c.name, from, to });
+  }
+  return out;
+}
+
 function adviceFor(file, changes) {
   const ecosystem = ECOSYSTEM[file] ?? null;
   // dependency_check and upgrade_impact both read all four ecosystems.
@@ -318,7 +394,11 @@ function adviceFor(file, changes) {
 
 async function main() {
   let raw = "";
-  for await (const chunk of process.stdin) raw += chunk;
+  for await (const chunk of process.stdin) {
+    raw += chunk;
+    // An edit to a manifest is kilobytes. A payload far beyond that is not one this hook advises on.
+    if (raw.length > MAX_INPUT_CHARS) return;
+  }
   let input;
   try {
     input = JSON.parse(raw);
@@ -344,6 +424,7 @@ async function main() {
       }
     }
   }
+  changes = repeatable(changes);
   // Write replaces the whole file and its payload carries no "before": stay quiet
   // rather than report every dependency as changed.
   if (changes.length === 0) return;

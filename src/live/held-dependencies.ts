@@ -69,10 +69,37 @@ export interface HeldDependency {
   severity: VulnerabilityEntry["severity"];
   /** An advisory here was matched but its record could not be read: its severity is not known, and counts as high. */
   unread?: true;
+  /**
+   * Go (release-requirements.ts): `spec` is a minimum, not a hold. Minimal version selection gives
+   * the project at least `version`, and the project can raise it in its own go.mod.
+   */
+  minimum?: true;
+  /** Go: `version` is what the project's own go.mod already selects, above the release's minimum. */
+  selected?: true;
+  /** Go: the line is `// indirect` in the release's go.mod. */
+  indirect?: true;
+  /** Go: the smallest release that clears `ids`, confirmed with OSV.dev; null when none was found. */
+  fixedIn?: string | null;
+  /** Go, with `fixedIn` null: why the clearing release was not established (not looked up in this call, a lookup that failed); absent when it was looked up and none clears them. */
+  fixUnknown?: string;
+  /**
+   * PyPI: an environment marker gates the requirement (release-requirements.ts). `marker` is its
+   * canonical text (null when it did not parse); `on` the declared Pythons it is installed on, when
+   * only some; `uncertain` when whether it is installed for this project was not established (no
+   * declared Python, or a platform variable): then it is a caveat, never by itself an avoid.
+   */
+  condition?: { marker: string | null; on?: string[]; uncertain?: true };
 }
 
 export type HeldCheck =
-  | { status: "checked"; affected: HeldDependency[] }
+  | {
+      status: "checked";
+      affected: HeldDependency[];
+      /** How many requirements were judged (release-requirements.ts); absent for npm's held specs. */
+      examined?: number;
+      /** Declared requirements that are not a registry package with a readable requirement: never judged. */
+      unreadable?: number;
+    }
   | { status: "unchecked"; reason: string };
 
 /** How many releases a fix-target search judges at most (the advisories' target and the next on its line). */
@@ -139,7 +166,7 @@ function lookupDep(name: string, version: string): ResolvedDependency {
 }
 
 /** Resolves to `late` once `deadline` passes. */
-async function byDeadline<T>(work: Promise<T>, deadline: number, late: T): Promise<T> {
+export async function byDeadline<T>(work: Promise<T>, deadline: number, late: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((resolve) => {
     timer = setTimeout(() => resolve(late), Math.max(0, deadline - Date.now()));
@@ -150,6 +177,40 @@ async function byDeadline<T>(work: Promise<T>, deadline: number, late: T): Promi
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/** Why an advisory answer is not a current one for every release asked about; null when it is. */
+export function answerFailure(answer: VulnerabilityScanResult | null): string | null {
+  if (!answer) return "the OSV.dev lookup did not finish in time";
+  if (answer.offline) return answer.uncheckedReason ?? "OSV.dev could not be queried";
+  if ((answer.staleAnswers ?? 0) > 0) return `OSV.dev gave only expired cached answers (${answer.staleReason ?? "the fresh query failed"})`;
+  return null;
+}
+
+export interface AdvisoryHit {
+  /** One id per alias group, sorted. */
+  ids: string[];
+  severity: VulnerabilityEntry["severity"];
+  /** An advisory matched whose record could not be read: its severity is not known. */
+  unread: boolean;
+}
+
+/** Per `name@version` asked about: the advisories that affect it (maintenance notices left out) and their worst grade. */
+export function advisoryHits(vulnerabilities: readonly VulnerabilityEntry[]): Map<string, AdvisoryHit> {
+  const byCopy = new Map<string, VulnerabilityEntry[]>();
+  for (const v of vulnerabilities) {
+    if (isMaintenanceNotice(v)) continue;
+    const k = `${v.package}@${v.currentVersion}`;
+    byCopy.set(k, [...(byCopy.get(k) ?? []), v]);
+  }
+  const hits = new Map<string, AdvisoryHit>();
+  for (const [k, entries] of byCopy) {
+    const groups = groupAdvisories(entries);
+    const worst = groups.map((g) => g.best.severity).reduce((a, b) => ((SEVERITY_RANK[b as keyof typeof SEVERITY_RANK] ?? 0) > (SEVERITY_RANK[a as keyof typeof SEVERITY_RANK] ?? 0) ? b : a), "unknown" as VulnerabilityEntry["severity"]);
+    const unread = groups.some((g) => g.best.severity === "unknown" && g.members.some((m) => m.detailUnavailable));
+    hits.set(k, { ids: groups.map((g) => g.best.vulnId).sort(), severity: worst, unread });
+  }
+  return hits;
 }
 
 /**
@@ -187,23 +248,9 @@ export async function heldAdvisories(
   let failure: string | null = null;
   if (wanted.size > 0) {
     answer = await byDeadline(query([...wanted.values()]), deadline, null);
-    if (!answer) failure = "the OSV.dev lookup did not finish in time";
-    else if (answer.offline) failure = answer.uncheckedReason ?? "OSV.dev could not be queried";
-    else if ((answer.staleAnswers ?? 0) > 0) failure = `OSV.dev gave only expired cached answers (${answer.staleReason ?? "the fresh query failed"})`;
+    failure = answerFailure(answer);
   }
-  const byCopy = new Map<string, VulnerabilityEntry[]>();
-  for (const v of failure ? [] : (answer?.vulnerabilities ?? [])) {
-    if (isMaintenanceNotice(v)) continue;
-    const k = `${v.package}@${v.currentVersion}`;
-    byCopy.set(k, [...(byCopy.get(k) ?? []), v]);
-  }
-  const hits = new Map<string, { ids: string[]; severity: VulnerabilityEntry["severity"]; unread: boolean }>();
-  for (const [k, entries] of byCopy) {
-    const groups = groupAdvisories(entries);
-    const worst = groups.map((g) => g.best.severity).reduce((a, b) => ((SEVERITY_RANK[b as keyof typeof SEVERITY_RANK] ?? 0) > (SEVERITY_RANK[a as keyof typeof SEVERITY_RANK] ?? 0) ? b : a), "unknown" as VulnerabilityEntry["severity"]);
-    const unread = groups.some((g) => g.best.severity === "unknown" && g.members.some((m) => m.detailUnavailable));
-    hits.set(k, { ids: groups.map((g) => g.best.vulnId).sort(), severity: worst, unread });
-  }
+  const hits = advisoryHits(failure ? [] : (answer?.vulnerabilities ?? []));
   for (const r of resolved) {
     const affected: HeldDependency[] = r.deps.flatMap((d) => {
       const hit = d.version ? hits.get(`${d.name}@${d.version}`) : undefined;
@@ -244,14 +291,38 @@ export function heldVerb(affected: HeldDependency[]): string {
 export function heldText(release: string, affected: HeldDependency[]): string {
   const shown = affected.slice(0, 3);
   const and = andList;
-  const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})`);
+  const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})${conditionText(d)}`);
   const ranged = shown
     .filter((d) => !d.exact)
-    .map((d) => `${d.name} "${d.spec}", whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})`);
+    // PyPI: a requirement with no specifier admits every release.
+    .map((d) => `${d.name} ${d.spec === "" ? "(any release)" : `"${d.spec}"`}, whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})${conditionText(d)}`);
   const clauses = [...(exact.length > 0 ? [`exact-pins ${and(exact)}`] : []), ...(ranged.length > 0 ? [`requires ${and(ranged)}`] : [])];
   const rest = affected.length - shown.length;
   const more = rest > 0 ? `, and ${rest} more affected dependenc${rest === 1 ? "y" : "ies"}` : "";
   return `${release} ${clauses.join("; it also ")}${more}`;
+}
+
+/**
+ * Go: what clears an affected minimum: the release, that no later release does (looked up and
+ * established), or that it was not looked up in this call and why. Never "none is known" for a
+ * lookup that did not run.
+ */
+export function clearsText(d: HeldDependency): string {
+  const it = d.ids.length === 1 ? "it" : "them";
+  if (d.fixedIn) return `${d.fixedIn} clears ${it}`;
+  if (d.fixUnknown) return `the release that clears ${it} was not looked up (${d.fixUnknown}): dependency_check on ${d.name} ${d.version} names it`;
+  return `no later release clears ${it}`;
+}
+
+/** PyPI: when a marker gates the requirement, on which Pythons it applies or that this was not established. */
+export function conditionText(d: HeldDependency): string {
+  const c = d.condition;
+  if (!c) return "";
+  const where = c.marker ? `only where ${c.marker}` : "only where an environment marker that could not be read holds";
+  if (!c.uncertain) return ` [installed ${where}: on Python ${andList(c.on ?? [])} of the versions this project declares]`;
+  if (c.on) return ` [installed ${where}: it may apply on Python ${andList(c.on)} of the versions this project declares, depending on the platform, which was not established]`;
+  const python = c.marker !== null && /\bpython_(?:full_)?version\b/.test(c.marker);
+  return ` [installed ${where}: ${python ? "this project declares no Python version this check read" : "it depends on the platform or interpreter"}, so whether it applies was not established]`;
 }
 
 /** The worst severity among held dependencies' advisories. */

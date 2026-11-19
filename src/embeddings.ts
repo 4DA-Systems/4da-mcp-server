@@ -10,7 +10,16 @@
  *
  * When no provider is configured, the provider is unreachable, the embed model is
  * missing, or FOURDA_OFFLINE is set, every caller falls back to ranked lexical
- * recall and the response says so via `recall_mode`. Critically, the server embeds
+ * recall and the response says so via `recall_mode`.
+ *
+ * Private package names never leave the machine here either. A provider on a
+ * loopback address (the default Ollama) is this machine and is sent everything,
+ * directly. Any other provider (OpenAI, an Ollama URL on another host) is sent
+ * text only after the private-name rules have read it (privateNameInText): text
+ * that names a private package is withheld, the caller ranks lexically, and the
+ * answer says so. Its requests go through fetchWithTimeout, so the proxy applies.
+ *
+ * Critically, the server embeds
  * BOTH the query and the stored rows with the SAME provider/model, so the vector
  * space is always self-consistent — we never mix our vectors with the desktop
  * app's fastembed vectors.
@@ -23,6 +32,9 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { desktopAppDbPaths, type AppWritableTable, type FourDADatabase } from "./db.js";
 import { isOfflineMode as offlineFlag } from "./env-flags.js";
+import { fetchWithTimeout } from "./live/http-utils.js";
+import { fetchLoopbackJson, isLoopbackUrl } from "./live/loopback-http.js";
+import { privateNameInText } from "./live/private-guard.js";
 
 // =============================================================================
 // Config
@@ -171,58 +183,106 @@ export function modelTag(config: EmbeddingConfig): string {
 
 /** Cap on the text length sent to the embedder, to bound payload size. */
 const MAX_EMBED_CHARS = 8000;
+/** How long one embedding request may take, a model's first load included. */
+const EMBED_TIMEOUT_MS = 30_000;
+/** How far past the cap a word that the cap cuts is followed, to judge it whole. */
+const MAX_CUT_WORD = 512;
+
+/** Where a provider's embedding requests go. */
+export function embeddingEndpoint(config: EmbeddingConfig): string {
+  return config.provider === "ollama" ? `${config.url || DEFAULT_OLLAMA_URL}/api/embeddings` : "https://api.openai.com/v1/embeddings";
+}
+
+/** Whether the provider is on this machine (an Ollama on a loopback address): what it is sent does not leave. */
+export function isLocalProvider(config: EmbeddingConfig): boolean {
+  return config.provider === "ollama" && isLoopbackUrl(embeddingEndpoint(config));
+}
+
+/** The host a provider's requests go to, for an answer that names it. */
+function providerHost(config: EmbeddingConfig): string {
+  try {
+    return new URL(embeddingEndpoint(config)).host;
+  } catch {
+    return config.provider;
+  }
+}
+
+/** One text's embedding, or why there is none: `withheld` names the private package the text names. */
+interface EmbedOutcome {
+  vector: Float32Array | null;
+  withheld?: string;
+}
+
+/** `pending`, or a rejection as soon as `signal` aborts. */
+function unlessAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return pending;
+  if (signal.aborted) return Promise.reject(new Error("cancelled"));
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(new Error("cancelled"));
+    signal.addEventListener("abort", stop, { once: true });
+    pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+  });
+}
+
+/**
+ * Embed one text. The vector is null on ANY failure (provider down, model missing, bad response,
+ * empty input) so callers degrade to lexical. For a provider that is not on this machine the text
+ * is read by the private-name rules first, to the end of the word the length cap cuts: text that
+ * names a private package is not sent, and `withheld` says which name.
+ */
+async function embed(text: string, config: EmbeddingConfig, signal?: AbortSignal): Promise<EmbedOutcome> {
+  const whole = text || "";
+  const input = whole.slice(0, MAX_EMBED_CHARS).trim();
+  if (!input) return { vector: null };
+  const url = embeddingEndpoint(config);
+  const local = isLocalProvider(config);
+  if (!local) {
+    let end = Math.min(whole.length, MAX_EMBED_CHARS);
+    while (end < whole.length && end < MAX_EMBED_CHARS + MAX_CUT_WORD && !/\s/.test(whole[end])) end++;
+    const hit = privateNameInText(whole.slice(0, end));
+    if (hit) return { vector: null, withheld: hit.name };
+  }
+
+  try {
+    const init: RequestInit =
+      config.provider === "ollama"
+        ? {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // The embedder runs on the CPU, as the 4DA app's does: on the GPU,
+            // Ollama evicts and reloads the local judge model around each call.
+            body: JSON.stringify({ model: config.model, prompt: input, options: { num_gpu: 0 } }),
+          }
+        : {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+            body: JSON.stringify({ model: config.model, input }),
+          };
+    let data: unknown;
+    if (local) data = await fetchLoopbackJson(url, { ...init, signal }, EMBED_TIMEOUT_MS);
+    else {
+      const res = await unlessAborted(fetchWithTimeout(url, init, EMBED_TIMEOUT_MS), signal);
+      data = res.ok ? await unlessAborted(res.json() as Promise<unknown>, signal) : null;
+    }
+    const body = (data ?? {}) as { embedding?: number[]; data?: Array<{ embedding?: number[] }> };
+    const values = config.provider === "ollama" ? body.embedding : body.data?.[0]?.embedding;
+    return { vector: values && values.length ? Float32Array.from(values) : null };
+  } catch {
+    return { vector: null };
+  }
+}
 
 /**
  * Embed a single text. Returns null on ANY failure (provider down, model
- * missing, bad response, empty input) so callers degrade to lexical silently.
+ * missing, bad response, empty input) so callers degrade to lexical silently,
+ * and for text a provider off this machine must not be sent (see embed).
  */
 export async function embedText(
   text: string,
   config: EmbeddingConfig,
   signal?: AbortSignal,
 ): Promise<Float32Array | null> {
-  const input = (text || "").slice(0, MAX_EMBED_CHARS).trim();
-  if (!input) return null;
-
-  try {
-    if (config.provider === "ollama") {
-      const base = config.url || DEFAULT_OLLAMA_URL;
-      const res = await fetch(`${base}/api/embeddings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // The embedder runs on the CPU, as the 4DA app's does: on the GPU,
-        // Ollama evicts and reloads the local judge model around each call.
-        body: JSON.stringify({
-          model: config.model,
-          prompt: input,
-          options: { num_gpu: 0 },
-        }),
-        signal,
-      });
-      if (!res.ok) return null;
-      const data = (await res.json()) as { embedding?: number[] };
-      return data.embedding && data.embedding.length
-        ? Float32Array.from(data.embedding)
-        : null;
-    }
-
-    // openai
-    const res = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({ model: config.model, input }),
-      signal,
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { data?: Array<{ embedding: number[] }> };
-    const emb = data.data?.[0]?.embedding;
-    return emb && emb.length ? Float32Array.from(emb) : null;
-  } catch {
-    return null;
-  }
+  return (await embed(text, config, signal)).vector;
 }
 
 // =============================================================================
@@ -278,6 +338,22 @@ export interface SemanticScoreResult {
   newlyEmbedded: number;
   /** The provider:model tag the scores were produced with. */
   model: string;
+  /**
+   * Set when text was kept from a provider that is not on this machine because it names a private
+   * package: the query (semantic recall was then skipped for the call) or stored rows (ranked
+   * lexically only). `note` is the sentence the answer carries.
+   */
+  privateWithheld?: { query: boolean; rows: number; note: string };
+}
+
+/** The sentence for a query that names a private package. */
+function queryWithheldNote(name: string, config: EmbeddingConfig): string {
+  return `Semantic recall was skipped for this call: the query names a private package (${name}), and text that names one is never sent to an embedding provider that is not on this machine (${providerHost(config)}). Lexical recall was used.`;
+}
+
+/** The sentence for stored rows that name a private package. */
+function rowsWithheldNote(rows: number, config: EmbeddingConfig): string {
+  return `${rows.toLocaleString("en-US")} stored entr${rows === 1 ? "y names" : "ies name"} a private package and ${rows === 1 ? "was" : "were"} not sent to the embedding provider (${providerHost(config)}): ${rows === 1 ? "it was" : "they were"} ranked lexically only.`;
 }
 
 /**
@@ -300,9 +376,11 @@ export async function semanticScores(
   opts: { maxNewEmbeds?: number } = {},
 ): Promise<SemanticScoreResult> {
   const tag = modelTag(config);
-  const queryVec = await embedText(query, config);
+  const asked = await embed(query, config);
+  const queryVec = asked.vector;
   if (!queryVec) {
-    return { semanticById: new Map(), queryEmbedded: false, embeddedCount: 0, newlyEmbedded: 0, model: tag };
+    const privateWithheld = asked.withheld ? { privateWithheld: { query: true, rows: 0, note: queryWithheldNote(asked.withheld, config) } } : {};
+    return { semanticById: new Map(), queryEmbedded: false, embeddedCount: 0, newlyEmbedded: 0, model: tag, ...privateWithheld };
   }
 
   // Cache columns are optional. This server's own database gets them lazily;
@@ -330,11 +408,14 @@ export async function semanticScores(
   const semanticById = new Map<number, number>();
   let embeddedCount = 0;
   let newlyEmbedded = 0;
+  let withheldRows = 0;
 
   for (const item of items) {
     let vec = stored.get(item.id) ?? null;
     if (!vec && newlyEmbedded < maxNew) {
-      vec = await embedText(item.text, config);
+      const row = await embed(item.text, config);
+      if (row.withheld) withheldRows++;
+      vec = row.vector;
       if (vec) {
         try {
           updateStmt?.run(vectorToBlob(vec), tag, item.id);
@@ -350,7 +431,8 @@ export async function semanticScores(
     }
   }
 
-  return { semanticById, queryEmbedded: true, embeddedCount, newlyEmbedded, model: tag };
+  const privateWithheld = withheldRows > 0 ? { privateWithheld: { query: false, rows: withheldRows, note: rowsWithheldNote(withheldRows, config) } } : {};
+  return { semanticById, queryEmbedded: true, embeddedCount, newlyEmbedded, model: tag, ...privateWithheld };
 }
 
 /**

@@ -10,7 +10,8 @@ import type { CratesRegistry } from "./crates-registry.js";
 import type { PyPIRegistry } from "./pypi-registry.js";
 import type { GoRegistry } from "./go-registry.js";
 import type { RegistryPackageInfo, ResolvedDependency } from "./types.js";
-import { quoteThirdParty } from "../untrusted-text.js";
+import { quoteThirdParty, thirdPartyTimestamp } from "../untrusted-text.js";
+import { registryLicenseText, registryVersionText } from "./registry-fields.js";
 
 export interface Registries {
   npm: NpmRegistry;
@@ -91,9 +92,17 @@ function restampRegistryContext(
   info: RegistryPackageInfo,
   dep: ResolvedDependency,
 ): RegistryPackageInfo {
-  const latest = info.latestStableVersion || info.latestVersion;
+  // The registry's structural strings are held to their shapes here, where every answer and every
+  // cached row passes: a "version" with spaces or a 1,000-character licence is dropped, not shown.
+  const latestVersion = registryVersionText(info.latestVersion);
+  const latestStableVersion = registryVersionText(info.latestStableVersion);
+  const latest = latestStableVersion || latestVersion;
   return {
     ...info,
+    latestVersion,
+    latestStableVersion,
+    lastPublished: thirdPartyTimestamp(info.lastPublished) || null,
+    license: registryLicenseText(info.license),
     // A registry's deprecation message is third-party text: quoted and capped wherever it is shown
     // (blind audit round 5: dependency_health carried 5,194 characters of it, cached rows included).
     deprecationMessage: info.deprecationMessage ? quoteThirdParty(info.deprecationMessage) || null : null,
