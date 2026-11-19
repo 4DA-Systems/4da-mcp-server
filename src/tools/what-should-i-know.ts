@@ -126,8 +126,12 @@ interface TaskDependency {
     note?: string;
   };
   vulnerabilities: ReturnType<typeof advisoriesFor>;
-  /** Registry releases newer than the installed version that the 4DA feed recorded (desktop app only). */
-  newer_releases: ReturnType<typeof releasesFor>;
+  /**
+   * Registry releases newer than the installed version that the desktop app's feed recorded (it
+   * watches npm and crates.io). Absent when the feed holds no release of the package (standalone,
+   * PyPI, Go, a package it does not follow): no answer, never "nothing newer".
+   */
+  newer_releases?: NonNullable<ReturnType<typeof releasesFor>>;
   next_step: string;
 }
 
@@ -258,7 +262,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and newer releases the 4DA feed saw. For a package the task ADDS (\"add the X package\", \"npm install X\"), new_packages gives dependency_check's verdict for each name, every item of a list (\"add a, b and c\"), at the version the task writes for it or else latest (checked in every ecosystem the project uses when the task does not say which; the worst answer stands): a name that is malware is human_only, a near-miss of a popular package or a name the registry does not have is review_needed. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, a finding on a package the task adds, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
+    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and the newer releases the desktop app's feed recorded (newer_releases: npm and crates.io, only for a package the feed follows; absent otherwise, never an empty list standing in for no answer). For a package the task ADDS (\"add the X package\", \"npm install X\"), new_packages gives dependency_check's verdict for each name, every item of a list (\"add a, b and c\"), at the version the task writes for it or else latest (checked in every ecosystem the project uses when the task does not say which; the worst answer stands): a name that is malware is human_only, a near-miss of a popular package or a name the registry does not have is review_needed. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, a finding on a package the task adds, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -727,6 +731,7 @@ function describePackage(
   }
   const target = pkg.requested_to && /^v?\d+\.\d+\.\d+/.test(pkg.requested_to) ? pkg.requested_to.replace(/^v/, "") : null;
   const impactArgs = JSON.stringify({ package: pkg.name, ...(target ? { to_version: target } : {}), ecosystem: pkg.ecosystem });
+  const newerReleases = releasesFor(db, pkg);
   return {
     package: pkg.name,
     ecosystem: pkg.ecosystem,
@@ -738,7 +743,7 @@ function describePackage(
     ...(pkg.family ? { family: pkg.family } : {}),
     ...(latest ? { latest } : {}),
     vulnerabilities: advisoriesFor(pkg, vulns),
-    newer_releases: releasesFor(db, pkg),
+    ...(newerReleases ? { newer_releases: newerReleases } : {}),
     next_step:
       pkg.ecosystem === "npm" || pkg.ecosystem === "crates.io" || pkg.ecosystem === "PyPI" || pkg.ecosystem === "Go"
         ? `Call upgrade_impact ${impactArgs} for the changelog, breaking changes and the files that import it.`

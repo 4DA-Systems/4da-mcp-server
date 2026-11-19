@@ -4,7 +4,7 @@
  *
  * Guards the three dishonesties fixed in the MCP hardening pass:
  * 1. Transitive CVEs were counted in scan totals but never recommended —
- *    now surfaced as `waiting_on_upstream` steps with honest labels.
+ *    now surfaced as planned steps with honest labels (`not_determined` until their fix path is read).
  * 2. `projectPath` reported `process.cwd()` regardless of where dependencies
  *    were actually resolved from — now reports the real resolution root.
  * 3. A missing vulnerability scan silently produced a CVE-blind ranking —
@@ -110,7 +110,7 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps", () => {
+describe("upgrade_planner — transitive CVEs become planned steps, not determined until their fix path is read", () => {
   it("recommends a transitive vulnerable package with honest labels", async () => {
     const scan = makeScan(
       [
@@ -131,7 +131,8 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
     const transitive = result.recommendations.find((r) => r.package === "zustand");
     expect(transitive).toBeDefined();
     expect(transitive!.scope).toBe("transitive");
-    expect(transitive!.action).toBe("waiting_on_upstream");
+    // No fix-path check runs here: how it is fixed is not determined, which is not "waiting on upstream".
+    expect(transitive!.action).toBe("not_determined");
     // No fix-path check runs here, so 5.0.15 is NOT CHECKED against every advisory: named in the
     // first reason, never as targetVersion (pre-publish audit 2026-11-14), and no distance is claimed.
     expect(transitive!.targetVersion).toBeNull();
@@ -139,7 +140,10 @@ describe("upgrade_planner — transitive CVEs become waiting_on_upstream steps",
     expect(transitive!.upgradeType).toBe("unknown");
     expect(transitive!.breaking).toBe(false);
     expect(transitive!.reasons.some((r) => r.includes("Transitive dependency"))).toBe(true);
-    expect(result.waitingOnUpstream).toBe(1);
+    expect(transitive!.reasons.some((r) => r.includes("NOT DETERMINED"))).toBe(true);
+    expect(result.waitingOnUpstream).toBe(0);
+    expect((result as { fixPathNotDetermined: number }).fixPathNotDetermined).toBe(1);
+    expect(result.summary).not.toContain("waiting on upstream");
   });
 
   it("ranks fixable-now (direct) above waiting-on-upstream at equal risk", async () => {
@@ -263,7 +267,7 @@ describe("upgrade_planner — CVE-blind disclosure and provenance", () => {
       };
       expect(calls).toEqual([{ includeDev: true }]);
       expect(result.vulnerabilityDataAvailable).toBe(true);
-      expect(result.recommendations).toMatchObject([{ package: "zustand", targetVersion: null, scope: "transitive", action: "waiting_on_upstream" }]);
+      expect(result.recommendations).toMatchObject([{ package: "zustand", targetVersion: null, scope: "transitive", action: "not_determined" }]);
       expect(result.summary).not.toContain("not a dependency");
     });
 

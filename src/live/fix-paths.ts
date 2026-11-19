@@ -259,6 +259,10 @@ export class FixPathSources {
    * The requirements `parent@parentVersion` declares on `dep`, from the
    * registry: npm (pnpm lockfiles record none) and crates.io (Cargo.lock
    * records none). Null when unknown; [] when the parent declares none.
+   *
+   * Both are read from the parent's whole-package document (npm's abbreviated document, the
+   * crates.io sparse index entry), never from a URL that names `parentVersion`: the registry
+   * learns which package is asked about, not which version is installed.
    */
   async parentRequirements(ecosystem: OsvEcosystem, parent: string, parentVersion: string, dep: string): Promise<string[] | null> {
     if (ecosystem === "crates.io") {
@@ -270,22 +274,13 @@ export class FixPathSources {
     const key = `fixpath:v${CACHE_VERSION}:npm-version-deps:${parent}@${parentVersion}`;
     let deps = this.cached<Record<string, string>>(key);
     if (!deps) {
-      if (!this.rateLimiter.consume("fixpath-registry")) return null;
-      try {
-        const res = await fetchWithTimeout(
-          `https://registry.npmjs.org/${encodeURIComponent(parent)}/${encodeURIComponent(parentVersion)}`,
-          { headers: { Accept: "application/json" } },
-          TIMEOUT_MS,
-        );
-        if (!res.ok) return null;
-        const doc = (await res.json()) as Record<string, Record<string, string> | undefined>;
-        // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
-        // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
-        deps = { ...doc.optionalDependencies, ...doc.dependencies };
-        this.store(key, deps, "npm", VERSION_DEPS_TTL);
-      } catch {
-        return null;
-      }
+      const release = (await this.npmDocument(parent))?.versions?.[parentVersion];
+      // Unread, or a version the registry does not list: unknown, never "requires nothing".
+      if (!release) return null;
+      // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
+      // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
+      deps = { ...release.optionalDependencies, ...release.dependencies };
+      this.store(key, deps, "npm", VERSION_DEPS_TTL);
     }
     return typeof deps[dep] === "string" ? [deps[dep]] : [];
   }
@@ -577,20 +572,22 @@ export class FixPathSources {
   /**
    * The `go` directive of one module version's go.mod, from the proxy (`@v/<v>.mod`): the oldest Go
    * that builds it. x/text v0.41.0 says `go 1.25.0`, so `go get` on a Go 1.24 toolchain refuses it
-   * with GOTOOLCHAIN=local and raises the directive otherwise. Null when absent or unreadable.
+   * with GOTOOLCHAIN=local and raises the directive otherwise. "" when the go.mod was read and
+   * declares none (any Go builds it); null when it could not be read, which says nothing either way.
    */
   async goDirective(module: string, version: string): Promise<string | null> {
     const v = version.startsWith("v") ? version : `v${version}`;
     const key = `fixpath:v${CACHE_VERSION}:go-directive:${module}@${v}`;
     const hit = this.cached<{ go: string | null }>(key);
-    if (hit) return hit.go;
+    // Only a go.mod that was read is kept: a kept null is "declares none".
+    if (hit) return hit.go ?? "";
     if (!this.rateLimiter.consume("fixpath-registry")) return null;
     try {
       const res = await fetchWithTimeout(`https://proxy.golang.org/${escapeModulePath(module)}/@v/${escapeModulePath(v)}.mod`, {}, TIMEOUT_MS);
       if (!res.ok) return null;
       const go = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(await res.text())?.[1] ?? null;
       this.store(key, { go }, "go", VERSION_DEPS_TTL);
-      return go;
+      return go ?? "";
     } catch {
       return null;
     }

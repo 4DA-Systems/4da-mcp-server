@@ -43,6 +43,21 @@ type Intel = Pick<LiveIntelligence, "lockfileFor" | "getProjectRoot">;
 
 const TRANSITIVE_REASON = /^Transitive dependency — /;
 
+/** One parent of the package, with the requirement(s) it puts on it. */
+export interface PyEdge {
+  parent: string;
+  parentVersion: string | null;
+  specs: string[];
+  gated: boolean;
+}
+
+/** What was read when a parent's every requirement excludes the fix. */
+export interface PyBlocked {
+  read: Array<{ dir: string; parents: PythonParents }>;
+  edges: PyEdge[];
+  blocking: PyEdge[];
+}
+
 function replaceReason(step: PyGoStep, text: string): void {
   const at = step.reasons.findIndex((r) => TRANSITIVE_REASON.test(r));
   if (at >= 0) step.reasons[at] = text;
@@ -60,6 +75,8 @@ export async function pygoRefreshOrUpstream(
   liveIntel: Intel,
   target: string,
   advisories: AdvisoryRanges[] | null,
+  /** Called when a parent blocks the fix; true when the caller decided the step itself (a parent the project declares is the project's to move). */
+  blocked?: (found: PyBlocked) => Promise<boolean>,
 ): Promise<boolean> {
   const installed = step.currentVersion;
   if (!installed) return false;
@@ -78,7 +95,7 @@ export async function pygoRefreshOrUpstream(
   }
 
   const facts = await sources.releaseFacts("PyPI", step.package).catch(() => null);
-  const edges: Array<{ parent: string; parentVersion: string | null; specs: string[]; gated: boolean }> = [];
+  const edges: PyEdge[] = [];
   for (const { parents } of read) {
     for (const e of parents.edges) {
       let specs = e.specs;
@@ -107,6 +124,7 @@ export async function pygoRefreshOrUpstream(
   // A parent whose every requirement excludes the fix: blocked upstream, named.
   const blocking = edges.filter((e) => admits(e.specs, target).every((ok) => ok === false));
   if (blocking.length > 0) {
+    if (blocked && (await blocked({ read, edges, blocking }))) return true;
     const newer = await Promise.all(blocking.map((b) => newestAdmits(sources, b.parent, b.parentVersion, step.package, target)));
     const moves = blocking.map((b, i) => newer[i]).filter((t): t is string => t !== null);
     step.action = "waiting_on_upstream";

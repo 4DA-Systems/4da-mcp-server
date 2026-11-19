@@ -452,7 +452,7 @@ describe("deadLineText: a downgrade is named only once checked (pre-publish roun
 // 5: Python and Go transitive copies
 // ---------------------------------------------------------------------------
 
-describe("5. Python transitive copies: refresh when every parent admits, blocked upstream naming the parent when one does not", () => {
+describe("5. Python transitive copies: refresh when every parent admits; when one does not, the parent upgrade if the project declares that parent", () => {
   function pythonRegistry() {
     ADVISORIES = {
       certifi: [adv("PYSEC-2023-135", "certifi", fixedIn("2023.7.22"), "PyPI")],
@@ -471,7 +471,7 @@ describe("5. Python transitive copies: refresh when every parent admits, blocked
     };
   }
 
-  it("poetry.lock: `poetry update certifi`; idna blocked by requests 2.25.0 (whose 2.34.2 admits it); sqlparse held by the project's Python", async () => {
+  it("poetry.lock: `poetry update certifi`; idna moves with the project's own requests (2.34.2 admits it); sqlparse held by the project's Python", async () => {
     pythonRegistry();
     write("pyproject.toml", '[tool.poetry]\nname = "x"\nversion = "0.1.0"\n\n[tool.poetry.dependencies]\npython = "^3.8"\nrequests = "2.25.0"\nDjango = "3.2"\n');
     write("poetry.lock", [
@@ -485,17 +485,20 @@ describe("5. Python transitive copies: refresh when every parent admits, blocked
     const { step } = await plan();
     expect(step("certifi")).toMatchObject({ action: "lockfile_refresh", scope: "transitive", refreshCommands: [{ dir: ".", command: "poetry update certifi" }] });
     expect(step("certifi").reasons.join(" ")).toMatch(/every parent's declared requirement already admits 2023\.7\.22 \(requests 2\.25\.0 requires certifi ">=2017\.4\.17"\) \(a refresh resolves it to 2026\.10\.23\)/);
-    expect(step("idna")).toMatchObject({ action: "waiting_on_upstream" });
+    // requests is declared by this project, so the block is the project's to lift: an upgrade of requests, then the refresh.
+    expect(step("idna")).toMatchObject({ action: "upgrade_parent" });
     expect(step("idna").refreshCommands).toBeUndefined();
+    expect(step("idna").parentUpgrades).toMatchObject([{ parent: "requests", from: "2.25.0", to: "2.34.2", refreshCommands: [{ dir: ".", command: "poetry update idna" }] }]);
     expect(step("idna").reasons.join(" ")).toMatch(
-      /blocked upstream: requests 2\.25\.0 requires idna ">=2\.5,<3", which excludes idna 3\.7, so a lockfile refresh cannot reach it: requests has to move first \(requests 2\.34\.2, its newest release, requires idna "<4,>=2\.5", which admits 3\.7\)/,
+      /requests 2\.25\.0 requires idna ">=2\.5,<3", which excludes idna 3\.7; requests is this project's own dependency, and requests 2\.34\.2 is the smallest requests release clear of requests's own advisories whose requirement "<4,>=2\.5" admits idna 3\.7: upgrade requests to 2\.34\.2/,
     );
+    expect(step("idna").reasons.join(" ")).not.toMatch(/blocked upstream|has to move first/);
     expect(step("sqlparse").reasons.join(" ")).toMatch(/held back by the project's Python support: every parent admits sqlparse 0\.6\.0 \(django 3\.2 requires sqlparse ">=0\.2\.2"\), but 0\.6\.0 requires Python ">=3\.10"/);
     expect(step("sqlparse").refreshCommands).toBeUndefined();
     // The scan says each one the same way.
     const concise = await scan();
     expect(lineFor(concise, "certifi", "2020.12.5")).toMatch(/^Refresh certifi 2020\.12\.5 → 2023\.7\.22 in \. with a lockfile refresh — .*`poetry update certifi` in \./);
-    expect(lineFor(concise, "idna", "2.10")).toMatch(/^Waiting on upstream: idna 2\.10 .*requests has to move first/);
+    expect(lineFor(concise, "idna", "2.10")).toMatch(/^Upgrade the parent that pins idna 2\.10 .*upgrade requests to 2\.34\.2/);
   });
 
   it("uv.lock: the parents' requirements come from PyPI; `uv lock --upgrade-package certifi`", async () => {
@@ -510,10 +513,11 @@ describe("5. Python transitive copies: refresh when every parent admits, blocked
     ].join("\n"));
     const { step } = await plan();
     expect(step("certifi")).toMatchObject({ action: "lockfile_refresh", refreshCommands: [{ dir: ".", command: "uv lock --upgrade-package certifi" }] });
-    expect(step("idna").reasons.join(" ")).toMatch(/blocked upstream: requests 2\.25\.0 requires idna "<3,>=2\.5"/);
+    expect(step("idna")).toMatchObject({ action: "upgrade_parent" });
+    expect(step("idna").reasons.join(" ")).toMatch(/requests 2\.25\.0 requires idna "<3,>=2\.5", which excludes idna 3\.7; .*upgrade requests to 2\.34\.2.*then run `uv lock --upgrade-package idna`/);
   });
 
-  it("a requirement that cannot be read leaves the conservative label (no refresh on a guess)", async () => {
+  it("a requirement that cannot be read leaves the step undetermined (no refresh on a guess, and no 'waiting on upstream')", async () => {
     pythonRegistry();
     delete PYPI.requests["2.25.0"];
     write("pyproject.toml", '[project]\nname = "x"\nversion = "0.1.0"\nrequires-python = ">=3.8"\ndependencies = ["requests==2.25.0"]\n');
@@ -523,7 +527,7 @@ describe("5. Python transitive copies: refresh when every parent admits, blocked
       '[[package]]\nname = "requests"\nversion = "2.25.0"\nsource = { registry = "https://pypi.org/simple" }\ndependencies = [\n    { name = "certifi" },\n]\n',
     ].join("\n"));
     const { step } = await plan();
-    expect(step("certifi")).toMatchObject({ action: "waiting_on_upstream" });
+    expect(step("certifi")).toMatchObject({ action: "not_determined" });
     expect(step("certifi").refreshCommands).toBeUndefined();
   });
 

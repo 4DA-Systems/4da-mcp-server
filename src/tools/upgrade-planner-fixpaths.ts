@@ -69,6 +69,7 @@ import { heldAdvisories, heldText, heldVerb, HELD_CANDIDATES, type AdvisoryQuery
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
+import { pythonParentMove } from "./upgrade-planner-pyparent.js";
 import { yieldIfDue } from "../live/yield-point.js";
 
 /** One dependency the project declares that moves a blocking parent. */
@@ -141,6 +142,13 @@ export interface ParentUpgrade {
   moreLevers?: number;
   leverUnknown?: string;
   /**
+   * Set when the project declares `parent` itself and other installed packages hold the same copy
+   * with a requirement that excludes `to`: they keep the old parent, and the vulnerable copy with
+   * it. `total` counts every holder (the project's declaration is one); `named` those the levers'
+   * releases move. The step is a fix only when the two are equal.
+   */
+  paths?: { total: number; named: number };
+  /**
    * The refresh to run after the lever's install: the new requirement still admits the
    * installed copy, which an install keeps (npm 10.9.2), so the install alone does not fix it.
    * With `refreshOnly`: the whole move, first the parent's own refresh.
@@ -183,6 +191,12 @@ export interface FixPathStep {
    */
   withheld?: string[];
   isDev?: boolean;
+  /**
+   * On a `not_built_on_this_host` step: the action that fixes the copy where it is built
+   * (upgrade_direct, lockfile_refresh, upgrade_parent, ...), whose commands the step carries;
+   * "not_determined" when that could not be read.
+   */
+  whenBuilt?: string;
 }
 
 export interface FixPathInput {
@@ -388,8 +402,13 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   const heldUnclean = clean ? Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined : false;
   // Code this host never builds still names a release, and it is checked like any other: the plan
   // named crypto-bigint 0.7.6, which crates.io yanked, for a crate not built on Windows (audit
-  // 2026-11-11). Only the target is settled; no command or parent move is worked out for this host.
-  if (step.action === "not_built_on_this_host") return inactiveTarget(step, clean, ecosystem);
+  // 2026-11-11). The target is settled first; then how it is reached where the copy IS built, kept
+  // apart from this host's steps under `whenBuilt`.
+  if (step.action === "not_built_on_this_host") {
+    const outcome = inactiveTarget(step, clean, ecosystem);
+    if (outcome === "verified" && clean?.target && !heldUnclean) await fixWhereBuilt(input, sources, liveIntel, clean.target, clean.unfixable);
+    return outcome;
+  }
   if (malicious.length > 0) {
     step.reasons.push(malwareText(step.package, malicious));
     // A malware record with a fixed release (MAL-2023-462: fsevents 1.2.9-1.2.10, clean from
@@ -430,6 +449,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
     if (step.scope === "transitive" && step.currentVersion) await refreshOrUpstream(input, sources, liveIntel, clean.target, clean.unfixable);
     withUpgradeCommands(input, liveIntel);
+    await withGoDirective(input, sources);
     return heldUnclean ? "held" : "verified";
   }
   if (!clean) return "failed";
@@ -532,8 +552,33 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   }
   withLineWords(step, clean);
   withUpgradeCommands(input, liveIntel);
+  await withGoDirective(input, sources);
   // Held dependencies affected with no clean release found, or not checked: never "all_advisories".
   return heldUnclean ? "held" : "verified";
+}
+
+/**
+ * Go, a direct upgrade: when the fixed release's go.mod declares a newer Go than a go.mod it lands
+ * in, `go get` raises the go directive, and an older toolchain under GOTOOLCHAIN=local refuses it.
+ * The indirect step says the same from the same proxy read (upgrade-planner-pygo.ts goRaise). A
+ * go.mod that could not be read is said, not taken as "no newer Go needed".
+ */
+async function withGoDirective(input: FixPathInput, sources: FixPathSources): Promise<void> {
+  const { step } = input;
+  if (step.ecosystem !== "Go" || step.scope !== "direct" || step.action !== "upgrade_direct" || !step.targetVersion) return;
+  const stated = [...new Set(input.sourceDirs)]
+    .map((dir) => /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m.exec(readGoMod(dir) ?? "")?.[1])
+    .filter((go): go is string => go !== undefined)
+    .sort((a, b) => compareVersions(a, b, "PyPI"));
+  const oldest = stated[0];
+  if (!oldest) return;
+  const release = `${step.package} v${step.targetVersion.replace(/^v/, "")}`;
+  const needs = await sources.goDirective(step.package, step.targetVersion).catch(() => null);
+  if (needs === null) {
+    step.reasons.push(`whether ${release} needs a newer Go than go.mod's go ${oldest} was NOT CHECKED (its go.mod could not be read from the Go proxy): if it does, go get raises the go directive, and an older Go with GOTOOLCHAIN=local refuses it`);
+  } else if (needs !== "" && compareVersions(needs, oldest, "PyPI") > 0) {
+    step.reasons.push(`${release} requires go >= ${needs} and go.mod says go ${oldest}, so go get also raises the go directive to ${needs} (a Go older than ${needs} with GOTOOLCHAIN=local refuses it: install Go ${needs} or later first)`);
+  }
 }
 
 /**
@@ -551,7 +596,25 @@ function withLineWords(step: FixPathStep, clean: FixTargetResult): void {
   if (clean.newestSafe && clean.newestSafe !== step.targetVersion && step.latestVersion === undefined) step.latestVersion = clean.newestSafe;
 }
 
-/** A row for code this host does not build: its target checked against every advisory and the registry's withdrawals, nothing else. */
+/**
+ * A copy this host does not build is still built somewhere (another target, a deployment), and is
+ * fixed there the way a built copy is: the declared dependency's command, the refresh, or the
+ * parent's move. Worked out as for a built copy and left on the row with `whenBuilt` naming the
+ * step; the row keeps its own action, so it is never counted among this host's fixes.
+ */
+async function fixWhereBuilt(input: FixPathInput, sources: FixPathSources, liveIntel: Intel, target: string, unfixable: string[]): Promise<void> {
+  const { step } = input;
+  if (!step.currentVersion) return;
+  step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
+  if (step.scope === "transitive") await refreshOrUpstream(input, sources, liveIntel, target, unfixable);
+  withUpgradeCommands(input, liveIntel);
+  // Still pending: nothing was decided for it (its parents or the registry could not be read).
+  const pending = step.scope === "transitive" && step.action === "waiting_on_upstream" && step.reasons.some((r) => TRANSITIVE_REASON.test(r));
+  step.whenBuilt = pending ? "not_determined" : step.action;
+  step.action = "not_built_on_this_host";
+}
+
+/** A row for code this host does not build: its target checked against every advisory and the registry's withdrawals. */
 function inactiveTarget(step: FixPathStep, clean: FixTargetResult | null, ecosystem: OsvEcosystem): Outcome {
   if (!clean) return "failed";
   if (clean.withheld.length > 0) step.withheld = clean.withheld;
@@ -712,7 +775,33 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   if (ecosystem === "PyPI" || ecosystem === "Go") {
     // Their lockfiles record parents differently (or not at all): upgrade-planner-pygo.ts.
     const all = await sources.packageAdvisories(ecosystem, step.package).catch(() => null);
-    await pygoRefreshOrUpstream(step, input.sourceDirs, sources, liveIntel, target, all?.filter((a) => !unfixable.includes(a.id)) ?? null);
+    const fixable = all?.filter((a) => !unfixable.includes(a.id)) ?? null;
+    await pygoRefreshOrUpstream(step, input.sourceDirs, sources, liveIntel, target, fixable, async (found) => {
+      // A blocking parent the project declares is the project's to move, not something to wait for.
+      const move = await pythonParentMove({
+        pkg: step.package,
+        installed,
+        target,
+        found,
+        sources,
+        intel: liveIntel,
+        advisories: fixable,
+        declaredFixes: (name, from, to, dirs) => declaredFixes(liveIntel, ecosystem, name, from, to, dirs),
+      });
+      if (!move) return false;
+      if (move.kind === "undetermined") {
+        step.reasons.push(`${FIX_PATH_UNDETERMINED}${move.text}`);
+        return true;
+      }
+      step.action = "upgrade_parent";
+      step.parentUpgrades = move.upgrades;
+      delete step.refreshCommands;
+      const at = step.reasons.findIndex((r) => TRANSITIVE_REASON.test(r));
+      const text = `Transitive dependency: ${move.text}`;
+      if (at >= 0) step.reasons[at] = text;
+      else step.reasons.push(text);
+      return true;
+    });
     return;
   }
   const lockfiles = [...new Set(input.sourceDirs)]
@@ -897,12 +986,17 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     // Fixed by upgrading the parent only when every move names the release of what the project
     // declares; a lever with no release (to: null) is a check, not a fix (final audit 7c: victauri
     // rand through tauri, NodeGoat braces and nconf through forever).
-    const verified = moves.every((m) => m.refresh || (m.upgrade.levers.length > 0 && m.upgrade.levers.every((l) => l.to !== null)));
+    // And only when the levers cover every holder of the parent: one path moved is not the copy fixed.
+    const everyPath = (m: (typeof moves)[number]) => !m.upgrade.paths || m.upgrade.paths.named === m.upgrade.paths.total;
+    const verified = moves.every((m) => m.refresh || (m.upgrade.levers.length > 0 && m.upgrade.levers.every((l) => l.to !== null) && everyPath(m)));
     step.action = verified ? "upgrade_parent" : "upgrade_parent_unverified";
+    const partial = moves.some((m) => m.upgrade.paths !== undefined);
     replaceReason(
       verified
         ? `Transitive dependency: ${moves.map((m) => m.text).join("; ")}`
-        : `Transitive dependency, not verified: ${moves.map((m) => m.text).join("; ")}. No release of what this project declares was verified to bring the fixed parent in, so this is not counted as fixed: check the releases named above before upgrading`,
+        : partial
+          ? `Transitive dependency, not verified: ${moves.map((m) => m.text).join("; ")}. Not every path to ${step.package} ${installed} has a release that moves it, so this is not counted as fixed: check what is named above before upgrading`
+          : `Transitive dependency, not verified: ${moves.map((m) => m.text).join("; ")}. No release of what this project declares was verified to bring the fixed parent in, so this is not counted as fixed: check the releases named above before upgrading`,
     );
     return;
   }
@@ -912,16 +1006,31 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   // for mocha 10.8.2's serialize-javascript row (pre-publish round 10, W16).
   const unknowns = standings.filter((s) => s.kind === "unknown");
   const judged = unknowns.length > 0 && unknowns.every((s) => s.kind === "unknown" && s.checked);
+  if (standings.length === blocking.length && judged) {
+    replaceReason(
+      `Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version, and each parent release checked that admits a clean version brings in an affected dependency${known}`,
+    );
+    return;
+  }
+  // Not read is not blocked: the pending reason stays (the step is undecided, and every tool says
+  // so), with what was read and what was not beside it.
+  const unread = considered.filter((_, i) => standings[i].kind === "unknown" && (standings[i] as { unread?: true }).unread).map((b) => b.parent);
   const why =
-    standings.length < blocking.length
-      ? "the releases of some parents were not checked"
-      : judged
-        ? "each parent release checked that admits a clean version brings in an affected dependency"
-        : unknowns.some((s) => s.kind === "unknown" && s.checked)
-          ? "a parent's releases could not be read, or each one admitting a clean version brings in an affected dependency"
-          : "the releases of a parent could not be read";
-  replaceReason(`Transitive dependency, waiting on upstream: ${named}${more}, so a refresh cannot reach a clean version, and ${why}${known}`);
+    unread.length > 0
+      ? `the registry gave no answer for the releases of ${[...new Set(unread)].join(", ")}`
+      : standings.length < blocking.length
+        ? "the releases of some parents were not checked"
+        : "what a parent's releases hold could not be judged";
+  step.reasons.push(
+    `${FIX_PATH_UNDETERMINED}${named}${more}, so a lockfile refresh cannot reach a clean version; whether a parent release admits one was not established (${why})${known}`,
+  );
 }
+
+/**
+ * How a reason starts when a transitive step's fix path was read in part and not decided. The
+ * step keeps its pending reason beside it, so no tool reads it as waiting on upstream.
+ */
+export const FIX_PATH_UNDETERMINED = "Fix path NOT DETERMINED: ";
 
 /** "request 2.88.2 requires "^3.3.2"", or the bundled form. */
 function blockingText(b: Blocking): string {
@@ -955,7 +1064,8 @@ function forcedAcrossMajor(step: FixPathStep, installed: string, target: string,
  */
 export function settleTransitiveBreaking(steps: FixPathStep[]): void {
   for (const s of steps) {
-    if (s.scope !== "transitive" || (s.action !== "upgrade_parent" && s.action !== "upgrade_parent_unverified")) continue;
+    const how = s.action === "not_built_on_this_host" ? s.whenBuilt : s.action;
+    if (s.scope !== "transitive" || (how !== "upgrade_parent" && how !== "upgrade_parent_unverified")) continue;
     const ups = s.parentUpgrades ?? [];
     if (ups.some((u) => !u.refreshOnly && (u.levers.length > 0 ? u.levers.some((l) => l.breaking) : u.breaking))) s.breaking = true;
   }
@@ -1049,8 +1159,11 @@ type Standing =
   | { kind: "stuck"; text: string; outcome?: StuckOutcome }
   /** `refresh`: the parent moves by a lockfile refresh alone (parentRefresh); no declared dependency is upgraded. */
   | { kind: "move"; upgrade: ParentUpgrade; text: string; refresh?: true }
-  /** `checked`: the parent's releases were read and each one judged holds something affected (W16). */
-  | { kind: "unknown"; text?: string; undecided?: boolean; checked?: boolean }
+  /**
+   * `checked`: the parent's releases were read and each one judged holds something affected (W16).
+   * `unread`: the registry gave no answer for the parent's releases, so nothing about them is known.
+   */
+  | { kind: "unknown"; text?: string; undecided?: boolean; checked?: boolean; unread?: true }
   /** The installed parent or lever is flagged malicious: the row names no release (#981 round 3). */
   | { kind: "malicious"; text: string };
 
@@ -1165,6 +1278,172 @@ async function othersAdmitTarget(ctx: MoveContext, b: Blocking, parent: string, 
   return { any: true, all: true };
 }
 
+/** Another installed package that holds the same copy of a parent the project also declares. */
+interface OtherHolder {
+  name: string;
+  version: string;
+  /** Its requirements on the parent; null when they could not be read, or the copy ships inside its package. */
+  reqs: string[] | null;
+  bundled: boolean;
+  /** The declared dependencies that move it, each with the release found for it (none: the caller names what to check). */
+  via: Array<{ l: { name: string; version: string; dirs: string[] }; hop: Extract<ThroughHop, { kind: "found" }> | null; held?: Exclude<ThroughHop, { kind: "found" }> }>;
+  /** Why no release, or not every one, is named for it. */
+  why?: string;
+}
+
+/** Other holders of one parent copy whose requirements are read (the rest are counted, and named as not examined). */
+const MAX_OTHER_HOLDERS = 12;
+
+/** Whether a holder's every requirement on the parent admits parent release `v`: it then shares the project's upgraded copy. */
+function holderAdmits(h: OtherHolder, dialect: RequirementDialect, v: string): boolean {
+  return h.reqs !== null && h.reqs.every((text) => requirementAdmits({ parent: h.name, text, dialect }, v) === true);
+}
+
+/**
+ * The installed packages, other than the project and its workspace members, that hold
+ * `parent@from`. For each one whose requirement excludes parent release `release`: the declared
+ * dependency that moves it and the release of that dependency that brings a fixed parent in, found
+ * as for a transitive parent (throughRelease). mkdirp 0.5.1 is declared by the project and pinned
+ * by mocha 7.1.0; mocha 7.1.2 brings in mkdirp 0.5.5.
+ */
+async function otherHolders(
+  ctx: MoveContext,
+  b: Blocking,
+  parent: string,
+  from: string,
+  facts: PackageReleaseFacts,
+  history: RequirementHistory,
+  dialect: RequirementDialect,
+  parentClean: (version: string) => boolean,
+  release: string,
+): Promise<OtherHolder[]> {
+  const out: OtherHolder[] = [];
+  const seen = new Set<string>();
+  let lookups = 0;
+  for (const e of parentsReader(ctx, b.lockfile)?.(parent, from) ?? []) {
+    if (e.local || e.parentVersion === null || seen.has(`${e.parent}@${e.parentVersion}`)) continue;
+    seen.add(`${e.parent}@${e.parentVersion}`);
+    const examined = out.length < MAX_OTHER_HOLDERS;
+    const reqs =
+      !examined || e.bundled ? null : e.range !== null ? [e.range] : await ctx.sources.parentRequirements(ctx.ecosystem, e.parent, e.parentVersion, parent).catch(() => null);
+    const holder: OtherHolder = { name: e.parent, version: e.parentVersion, reqs: reqs && reqs.length > 0 ? reqs : null, bundled: e.bundled === true, via: [] };
+    out.push(holder);
+    if (holderAdmits(holder, dialect, release)) continue;
+    if (!examined) {
+      holder.why = "it was not examined";
+      continue;
+    }
+    if (holder.bundled) {
+      holder.why = `only a ${e.parent} release that ships a fixed copy moves it`;
+      continue;
+    }
+    const route = findRoute(ctx, b.lockfile, e.parent, e.parentVersion);
+    if (route.kind === "unknown") {
+      holder.why = route.why;
+      continue;
+    }
+    if (route.kind === "through") {
+      // Declared dependencies further up: what each must bring in is said, not which release of it does.
+      holder.via = route.levers.map((l) => ({ l, hop: null }));
+      if (route.more > 0) holder.why = `${route.more} more declared ${route.more === 1 ? "dependency brings" : "dependencies bring"} it in`;
+      continue;
+    }
+    const l = { name: e.parent, version: e.parentVersion, dirs: route.dirs };
+    if (lookups++ >= MAX_LEVERS) {
+      holder.via = [{ l, hop: null }];
+      continue;
+    }
+    const hop = await throughRelease(ctx, l, parent, from, facts, history, dialect, parentClean);
+    if (hop?.kind === "found") holder.via = [{ l, hop }];
+    else if (hop?.kind === "malicious") holder.via = [{ l, hop: null, held: hop }];
+    else if (hop?.kind === "stuck") {
+      // It cannot bring a fixed parent in; it may still drop the parent from its own requirements.
+      const drop = await dropRelease(ctx, l, parent, dialect);
+      holder.via = [
+        drop
+          ? { l, hop: { kind: "found", version: drop.version, brings: null, keepsParent: false, admitsAt: (v) => (drop.drops(v) ? { brings: null, keepsParent: false } : null) } }
+          : { l, hop: null, held: hop },
+      ];
+    } else holder.via = [{ l, hop: null }];
+  }
+  return out;
+}
+
+/**
+ * The words, levers and refreshes for the holders a parent upgrade leaves behind (`kept`), at the
+ * lever releases in `lifts`. `named` counts the holders every one of whose declared dependencies
+ * has a release named: only then is the path covered. Null when a lifted release no longer brings
+ * the fix in.
+ */
+function alsoThrough(
+  ctx: MoveContext,
+  b: Blocking,
+  kept: OtherHolder[],
+  parent: string,
+  from: string,
+  floor: string,
+  lifts: ReadonlyMap<string, string>,
+): { texts: string[]; levers: ParentLever[]; refreshes: Array<{ dir: string; command: string }>; paths: number; named: number } | null {
+  const texts: string[] = [];
+  const levers: ParentLever[] = [];
+  const refreshes: Array<{ dir: string; command: string }> = [];
+  let named = 0;
+  for (const h of kept) {
+    const holds = h.bundled ? `which ships its own copy of ${parent}` : h.reqs ? `which requires ${parent} "${h.reqs.join('", "')}"` : `whose requirement on ${parent} could not be read`;
+    const ways: string[] = [];
+    let covered = h.via.length > 0 && !h.why;
+    for (const { l, hop, held } of h.via) {
+      const shared = levers.find((x) => x.name === l.name && x.version === l.version);
+      if (held || !hop) {
+        covered = false;
+        if (!shared) levers.push({ name: l.name, version: l.version, to: null, breaking: false, ...(held ? { outcome: held.kind === "malicious" ? ("malicious" as const) : held.outcome } : {}) });
+        ways.push(
+          !held
+            ? `upgrade ${l.name} to a release that brings in ${parent} >= ${floor} (check that it does)`
+            : held.kind === "malicious"
+              ? `${held.text}; no ${l.name} upgrade is named`
+              : held.outcome === "introduces"
+                ? held.text
+                : `${held.text}: replace ${l.name}`,
+        );
+        continue;
+      }
+      const v = lifts.get(l.name) ?? hop.version;
+      const at = v === hop.version ? { brings: hop.brings, keepsParent: hop.keepsParent } : (hop.admitsAt(v) as { brings: string | null; keepsParent: boolean } | null);
+      if (!at) return null;
+      const lever: ParentLever = shared ?? {
+        name: l.name,
+        version: l.version,
+        to: v,
+        breaking: isMajor(l.version, v),
+        ...(v !== hop.version ? { smallest: hop.version } : {}),
+        ...(at.brings !== null ? { floor, brings: at.brings } : {}),
+        ...declaredFixes(ctx.intel, ctx.ecosystem, l.name, l.version, v, l.dirs),
+      };
+      if (!shared) {
+        LEVER_ADMITS.set(lever, hop.admitsAt as (version: string) => { requirement?: string | null; resolvesTo?: string | null } | null);
+        levers.push(lever);
+      }
+      let after = "";
+      if (at.keepsParent && at.brings) {
+        // Its new requirement still admits the old parent, which an install keeps: the parent's refresh follows.
+        const r = refreshFor(ctx, b, parent, from, at.brings);
+        if (!refreshes.some((x) => x.dir === r.dir && x.command === r.command)) refreshes.push(r);
+        after = `; its requirement still admits ${parent} ${from}, which an install keeps, so then run \`${r.command}\``;
+      }
+      ways.push(
+        at.brings === null
+          ? `${l.name} ${v} no longer brings in ${parent}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}`
+          : `${l.name} ${v} ${v === hop.version ? `is the smallest ${l.name} release that brings in` : `(the smallest that does is ${hop.version}) brings in`} ${parent} ${at.brings}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}${after}`,
+      );
+    }
+    if (h.why) ways.push(h.via.length > 0 ? h.why : `no command is named for it (${h.why})`);
+    if (covered) named++;
+    texts.push(`${h.name} ${h.version}, ${holds} and keeps ${parent} ${from} after that upgrade: ${ways.join("; ")}`);
+  }
+  return { texts, levers, refreshes, paths: kept.length, named };
+}
+
 /**
  * A lever release that takes the blocking parent out of the path altogether: the smallest
  * release of `lever` (clear of its own advisories) whose requirements name neither `parent` nor
@@ -1240,7 +1519,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   const parent = b.parent;
   const from = b.parentVersion!;
   const facts = await sources.releaseFacts(ecosystem, parent).catch(() => null);
-  if (!facts) return { kind: "unknown" };
+  if (!facts) return { kind: "unknown", unread: true };
   // 8a/8b (the 4DA H1 review): candidates follow the fix-target withdrawal rule (facts.versions:
   // an npm deprecated release only when a later clean one is on its line, nothing when `latest` is
   // deprecated), and "newest" is the highest stable non-withdrawn release, not the `latest` tag.
@@ -1298,7 +1577,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   // `npm install express@4.22.0` (and 4.20.0, which pins an affected qs) where a healthy run names
   // 4.22.3. One whose held dependencies could not be judged, before any clean one: NOT CHECKED,
   // no release and no command.
-  const heldPick = smallestOwn ? await heldCleanAdmitting(ctx, parent, facts, admittingReleases(ctx, facts, from, history, dialect, own.clean, true)) : null;
+  const heldPick = smallestOwn ? await heldCleanAdmitting(ctx, parent, facts, admittingReleases(ctx, facts, from, history, dialect, own.clean, true), from) : null;
   if (heldPick && heldPick.kind !== "clean") {
     // "affected" was checked: no NOT CHECKED on it (pre-publish round 10, W16).
     const checked = heldPick.kind === "affected";
@@ -1322,6 +1601,13 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       ? `${parent} ${found.version} is the smallest ${parent} release that no longer depends on ${pkg}`
       : `${parent} ${found.version} is the smallest ${parent} release whose ${found.peer ? "peer " : ""}requirement "${found.requirement}" ${admitsWords(ctx, found.requirement, dialect, found.resolvesTo, found.peer)}`;
   const requirementClause = clauseOf(found);
+  // A release taken although it holds affected dependencies: the ones the installed release holds
+  // too. Named, so the move is never read as clean of them.
+  const carried = heldPick?.kind === "clean" ? (heldPick.carried ?? []) : [];
+  const carriedClause =
+    carried.length > 0
+      ? `; ${parent} ${heldText(found.version, carried)}, as ${parent} ${from} does, so this upgrade brings in no advisory the project does not already have and does not fix ${carried.length === 1 ? "that one" : "those"} (${carried.length === 1 ? "its own row says" : "their own rows say"} how)`
+      : "";
   const ownClause =
     (!own.read
       ? `; not checked against ${parent}'s own advisories (OSV.dev did not answer)`
@@ -1331,7 +1617,8 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
           ? `, and no advisory of ${parent} affects it`
           : "") +
     // A package retired as a whole keeps its releases installable (8a); the move says it is deprecated.
-    (facts.deprecatedLatest ? ` (${parent} is deprecated${registryQuote(parent, facts.deprecatedLatest)})` : "");
+    (facts.deprecatedLatest ? ` (${parent} is deprecated${registryQuote(parent, facts.deprecatedLatest)})` : "") +
+    carriedClause;
   const upgrade: ParentUpgrade = {
     parent,
     from,
@@ -1416,12 +1703,23 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
   }
 
   if (route.kind === "direct") {
+    // The project's own declaration is one holder of this parent copy. Another installed package
+    // whose requirement excludes the release the project moves to keeps the old parent, and the
+    // vulnerable copy with it: each such path is named with what moves it. Cargo holds one copy per
+    // compatibility line, so there the resolver refuses the upgrade instead and nothing is kept.
+    const co = dialect === "cargo" ? [] : await otherHolders(ctx, b, parent, from, facts, history, dialect, own.clean, found.version);
+    const coveredAt = (v: string) => co.filter((h) => holderAdmits(h, dialect, v));
     const render = (lifts: ReadonlyMap<string, string>): string | null => {
       const v = lifts.get(parent) ?? found.version;
       if (!pkgAt(v)) return null;
       const lever: ParentLever = { name: parent, version: from, to: v, breaking: isMajor(from, v), ...declaredFixes(ctx.intel, ecosystem, parent, from, v, route.dirs) };
-      LEVER_ADMITS.set(lever, (x) => pkgAt(x));
-      upgrade.levers = [lever];
+      // Another release of the parent serves this row only when it leaves no further holder behind.
+      LEVER_ADMITS.set(lever, (x) => (coveredAt(found.version).every((h) => holderAdmits(h, dialect, x)) ? pkgAt(x) : null));
+      const also = alsoThrough(ctx, b, co.filter((h) => !holderAdmits(h, dialect, v)), parent, from, found.version, lifts);
+      if (!also) return null;
+      upgrade.levers = [lever, ...also.levers];
+      if (also.paths > 0) upgrade.paths = { total: 1 + co.length, named: 1 + co.length - also.paths + also.named };
+      else delete upgrade.paths;
       setParentAt(v);
       // `smallest` is the smallest release that admits a clean copy (the shared parent_release
       // vectors), even when what it holds lifts the move past it (round 8, B6).
@@ -1429,13 +1727,15 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       if (v !== smallestNamed) upgrade.smallest = smallestNamed;
       else delete upgrade.smallest;
       const refreshes = refreshAt(v);
-      if (refreshes.length > 0) upgrade.refreshCommands = refreshes;
+      const allRefreshes = [...also.refreshes.filter((r) => !refreshes.some((x) => x.dir === r.dir && x.command === r.command)), ...refreshes];
+      if (allRefreshes.length > 0) upgrade.refreshCommands = allRefreshes;
       else delete upgrade.refreshCommands;
       const heldLift =
         smallestOwn && smallestOwn.version !== found.version && v === found.version
-          ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} brings in a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), and ${found.version} is the smallest release past it whose held dependencies are clean`
+          ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} brings in a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), and ${found.version} is the smallest release past it whose held dependencies ${carried.length > 0 ? "bring in none the installed release lacks" : "are clean"}`
           : "";
-      return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}`;
+      const paths = also.paths > 0 ? `. That upgrade alone covers ${1 + co.length - also.paths} of ${1 + co.length} paths to ${pkg} ${ctx.installed}: it is also installed through ${also.texts.join("; and through ")}` : "";
+      return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}${paths}`;
     };
     const text = render(new Map())!;
     MOVES.set(upgrade, { text, render });
@@ -1654,18 +1954,29 @@ function admitsClean(ctx: MoveContext, reqs: string[], dialect: RequirementDiale
 
 type Admitting = ReturnType<typeof admittingReleases>[number];
 
+/** Whether the installed release already holds the very copy `d` names (same package, same version): a move to a release that holds `d` brings in nothing new. */
+function alreadyHeld(installed: HeldDependency[], d: HeldDependency): boolean {
+  return installed.some((i) => i.name === d.name && i.version === d.version);
+}
+
 /**
  * npm: the first of `admitting` (smallest first, at most HELD_CANDIDATES) whose held dependencies
  * (exact pins, narrow ranges: held-dependencies.ts) were judged clean; "unchecked" when one that
  * could not be judged comes first, "affected" when every one judged holds something affected.
  * Null (no gate) outside npm or without a batch lookup.
+ *
+ * When none is clean, the smallest one whose every affected dependency is a copy the installed
+ * release `from` holds too (same package, same version) is taken, with what it carries over
+ * (`carried`): it fixes this copy and brings in no advisory the project lacks. mocha 7.1.1 pins
+ * the same diff, debug and js-yaml as the installed 7.1.0 and moves yargs-parser to its fix.
  */
 async function heldCleanAdmitting(
   ctx: MoveContext,
   parent: string,
   facts: PackageReleaseFacts,
   admitting: Admitting[],
-): Promise<{ kind: "clean"; release: Admitting } | { kind: "unchecked" | "affected"; text: string } | null> {
+  from: string,
+): Promise<{ kind: "clean"; release: Admitting; carried?: HeldDependency[] } | { kind: "unchecked" | "affected"; text: string } | null> {
   const query = ctx.intel.queryAdvisories?.bind(ctx.intel);
   if (ctx.ecosystem !== "npm" || !query || admitting.length === 0) return null;
   const candidates = admitting.slice(0, HELD_CANDIDATES);
@@ -1685,11 +1996,34 @@ async function heldCleanAdmitting(
   // Every one was read and judged: the words say what each holds (a pin, a range whose newest
   // release is affected), never "could not be read" (pre-publish round 10, W16).
   const affectedOf = (v: string) => (checks?.get(v) as { affected: HeldDependency[] } | undefined)?.affected ?? [];
+  // What the installed release holds is judged the same way: an affected dependency it already
+  // holds is carried over by a move, not brought in by it.
+  const installedSpecs = facts.heldSpecs?.[from];
+  const installed = installedSpecs
+    ? (await heldAdvisories(ctx.sources, query, [{ key: from, specs: installedSpecs }], Date.now() + HELD_BUDGET_MS).catch(() => null))?.get(from)
+    : undefined;
+  if (installed?.status === "checked" && installed.affected.length > 0) {
+    for (const c of candidates) {
+      const affected = affectedOf(c.version);
+      if (affected.some((d) => !alreadyHeld(installed.affected, d))) continue;
+      // The rest of what it holds must be judged clean on its own: an affected dependency
+      // answers a check before an unread one does (heldAdvisories).
+      const rest = Object.fromEntries(Object.entries(facts.heldSpecs![c.version]).filter(([name]) => !affected.some((d) => d.name === name)));
+      const others =
+        Object.keys(rest).length === 0
+          ? ({ status: "checked", affected: [] } as HeldCheck)
+          : (await heldAdvisories(ctx.sources, query, [{ key: c.version, specs: rest }], Date.now() + HELD_BUDGET_MS).catch(() => null))?.get(c.version);
+      if (others?.status === "checked" && others.affected.length === 0) return { kind: "clean", release: c, carried: affected };
+    }
+  }
+  // Named first in the example: what a release brings in that the installed one does not hold.
+  const broughtBy = (v: string) => (installed?.status === "checked" ? affectedOf(v).filter((d) => !alreadyHeld(installed.affected, d)) : []);
+  const exampleOf = (v: string) => (broughtBy(v).length > 0 ? [...broughtBy(v), ...affectedOf(v).filter((d) => !broughtBy(v).includes(d))] : affectedOf(v));
   const all = candidates.flatMap((c) => affectedOf(c.version));
   // Only the first HELD_CANDIDATES admitting releases are judged: the words never claim more (final check).
   const cut = admitting.length > candidates.length ? ` (the first ${candidates.length} of ${admitting.length}; later ones were not checked)` : "";
   const span = candidates.length === 1 ? `the ${parent} release ${last}${cut}` : `every ${parent} release from ${candidates[0].version} to ${last}${cut}`;
-  return { kind: "affected", text: `${span} that admits a clean ${ctx.pkg} ${heldVerb(all)} (${heldText(candidates[0].version, affectedOf(candidates[0].version))})` };
+  return { kind: "affected", text: `${span} that admits a clean ${ctx.pkg} ${heldVerb(all)} (${heldText(candidates[0].version, exampleOf(candidates[0].version))})` };
 }
 
 /** The smallest installable release of a parent above `from`, clear of its own advisories, whose requirement admits a clean version. */
