@@ -198,6 +198,7 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
   if (report) {
     report.declared = [...declared.values()];
     report.scopeGraded = true;
+    report.rootEntries = new Set(Object.keys(packages));
   }
 
   for (const key of Object.keys(packages)) {

@@ -209,7 +209,10 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
         result.depsByEcosystem["npm"] = { deps: npmDeps, devDeps: npmDevDeps };
       }
     } catch {
-      // Malformed package.json — skip
+      // Unparseable: what it declares is unknown, not empty. The npm group stays, so the
+      // resolver reads the directory and reports the manifest as unreadable.
+      langSet.add("javascript");
+      result.depsByEcosystem["npm"] = { deps: [], devDeps: [] };
     }
   }
 

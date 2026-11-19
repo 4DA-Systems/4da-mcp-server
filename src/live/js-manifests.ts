@@ -28,6 +28,14 @@ export function isRuntimeSection(section: DependencySection): boolean {
   return section !== "devDependencies";
 }
 
+/**
+ * A dependency spec that installs local code (`link:`, `portal:`,
+ * `workspace:`): not every lockfile writes an entry for one.
+ */
+export function isLocalSpec(spec: string): boolean {
+  return /^(?:link|portal|workspace):/i.test(spec.trim());
+}
+
 /** A package.json's own name and what each of its dependency sections declares. */
 export interface ManifestDeclarations {
   name: string | null;

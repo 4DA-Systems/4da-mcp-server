@@ -431,8 +431,10 @@ async function executeStandalonePlanner(
     expectedTotal: scopeTotal,
     notLoaded: `${scanUnfinishedText(scanWaitMs)}, or OSV.dev was unreachable`,
   });
-  // A project whose only manifests are ones this server does not read (pom.xml) has no data at all (audit 6.2.5 A-6).
-  const nothingReadable = (vulnResult?.totalScanned ?? 0) === 0 && (liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0;
+  // A project whose only manifests are ones this server does not read (pom.xml), or could not read
+  // (an unparseable package.json, a damaged lockfile), has no data at all (audit 6.2.5 A-6).
+  const nothingReadable =
+    (vulnResult?.totalScanned ?? 0) === 0 && ((liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0 || liveIntel.getLockfileProblems().length > 0);
   const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was

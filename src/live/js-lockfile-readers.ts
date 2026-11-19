@@ -44,6 +44,11 @@ export interface LockReadReport {
   declared?: DeclaredDependency[];
   /** pnpm: true when the scope of each copy is the lockfile's own, or was derived from its importers. */
   scopeGraded?: boolean;
+  /**
+   * The dependency names the lockfile holds for the project's own package.json: what pnpm's root
+   * importer lists, bun's package keys. Not set when the lockfile does not say (no importers).
+   */
+  rootEntries?: ReadonlySet<string>;
 }
 
 export function emptyReadReport(): LockReadReport {
@@ -359,6 +364,9 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
   const aliasPins: Array<[string, string, boolean]> = [];
   let lockMajor = 0;
   let sawImporter = false;
+  // The dependency names the project's own importer lists (`.`, or the top-level blocks of a single-project lockfile).
+  let rootImporter = false;
+  const rootNames = new Set<string>();
   // Lockfile 9: the dependency graph over entry keys (pnpmNodeKey).
   const graph = new ScopeGraph();
   const isEntry: boolean[] = [];
@@ -431,6 +439,7 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
       blockIndent = DEPENDENCY_BLOCKS.has(text) ? 0 : -1;
       blockRuntime = text !== "devDependencies:";
       if (blockIndent === 0) sawImporter = true;
+      rootImporter = false;
       pending = null;
       entryNode = -1;
       openNode = -1;
@@ -468,6 +477,8 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
     }
     if (section === "importers" && indent <= 4) {
       sawImporter = true;
+      // `.:` (or `.: {}`) is the project itself; every other importer is a workspace member.
+      if (indent === 2) rootImporter = /^(?:\.|'\.'|"\."):/.test(text);
       blockIndent = indent === 4 && DEPENDENCY_BLOCKS.has(text) ? 4 : -1;
       blockRuntime = text !== "devDependencies:";
       pending = null;
@@ -480,6 +491,7 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
       const entry = /^(?:'([^']+)'|"([^"]+)"|([^\s:'"]+)):(?:\s+(.*))?$/.exec(text);
       if (!entry) continue;
       const name = entry[1] ?? entry[2] ?? entry[3];
+      if (blockIndent === 0 || rootImporter) rootNames.add(name);
       const value = entry[4];
       if (value === undefined || value === "") {
         pending = name;
@@ -540,6 +552,7 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
     report.declared = [...declared.values()];
     // Lockfile 5/6 grades every entry itself; lockfile 9 is graded from its importers when it has them.
     report.scopeGraded = lockMajor >= 9 ? sawImporter : lockMajor >= 5;
+    if (sawImporter) report.rootEntries = rootNames;
   }
 
   if (!instances) return seen;

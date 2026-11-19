@@ -16,7 +16,7 @@
 
 import * as path from "node:path";
 import { exactVersion, MAX_LOCKFILE_LINE, yarnHeaderSpecs, yarnPackageName } from "./js-lockfile-readers.js";
-import { expandWorkspaces, isRuntimeSection, readManifestDeclarations, type DeclaredSpec, type ManifestDeclarations } from "./js-manifests.js";
+import { expandWorkspaces, isLocalSpec, isRuntimeSection, readManifestDeclarations, type ManifestDeclarations } from "./js-manifests.js";
 import type { DeclaredDependency } from "./lockfile-types.js";
 import { ScopeGraph } from "./scope-graph.js";
 
@@ -127,10 +127,25 @@ function insideProject(dir: string): string | null {
 /** Workspace manifests read for one lockfile; a project with more is graded as incomplete. */
 const MAX_MEMBER_MANIFESTS = 2_000;
 
+/** What reading a yarn.lock against the project's package.json files establishes. */
+export interface YarnInspection {
+  grade: LockGrade;
+  /**
+   * Packages some entry names as a dependency that no entry installs, sorted.
+   * Every yarn.lock yarn writes holds an entry for each dependency of each
+   * entry, so one without is past where the file stops.
+   */
+  dangling: string[];
+  /** Whether some entry answers a descriptor of this name (registry release or not). */
+  hasEntry(name: string): boolean;
+  /** The names of the project's own packages: the root's and each workspace member's. */
+  memberNames: ReadonlySet<string>;
+}
+
 /**
- * Grades a yarn.lock (classic or berry) from its graph and the project's
- * package.json files. `isInstance` says which `name\0version` copies the
- * lockfile reader took as registry releases.
+ * Reads a yarn.lock (classic or berry) as a graph and grades it from the
+ * project's package.json files. `isInstance` says which `name\0version`
+ * copies the lockfile reader took as registry releases.
  *
  * Roots are the project's package.json and each workspace member's: berry
  * names the members in its `workspace:` entries; classic does not, so the
@@ -139,10 +154,7 @@ const MAX_MEMBER_MANIFESTS = 2_000;
  * `resolutions`, a patched or peer dependency) it reaches EVERY entry of that
  * name, which can only make more copies runtime, never fewer.
  */
-export function gradeYarnLock(content: string, cwd: string, isInstance: (key: string) => boolean): LockGrade {
-  const ungraded: LockGrade = { scopes: new Map(), declared: [], graded: false };
-  const root = readManifestDeclarations(path.join(cwd, "package.json"));
-  if (!root) return ungraded;
+export function inspectYarnLock(content: string, cwd: string, isInstance: (key: string) => boolean): YarnInspection {
   const entries = readYarnEntries(content);
   const bySpec = new Map<string, number>();
   const byName = new Map<string, number[]>();
@@ -158,6 +170,33 @@ export function gradeYarnLock(content: string, cwd: string, isInstance: (key: st
       else byName.set(name, [index]);
     }
   });
+  // The entries one declared or required dependency can install.
+  const targets = (name: string, range: string): number[] => {
+    const exact = bySpec.get(`${name}@${range}`) ?? bySpec.get(`${name}@npm:${range}`);
+    return exact !== undefined ? [exact] : (byName.get(name) ?? []);
+  };
+  const graph = new ScopeGraph();
+  const dangling = new Set<string>();
+  entries.forEach((_, index) => graph.node(String(index)));
+  entries.forEach((entry, index) => {
+    for (const [name, range] of entry.deps) {
+      const found = targets(name, range);
+      if (found.length === 0 && !isLocalSpec(range)) dangling.add(name);
+      // A workspace entry lists its devDependencies with the rest: its own package.json is the root that says which is which.
+      if (entry.workspaceDir === null) for (const target of found) graph.edge(index, target);
+    }
+    if (entry.workspaceDir === null) for (const name of entry.peers) for (const target of byName.get(name) ?? []) graph.edge(index, target);
+  });
+  // A dependency on a workspace member has no entry in classic, which links the member instead.
+  const inspection = (grade: LockGrade, memberNames: ReadonlySet<string>): YarnInspection => ({
+    grade,
+    dangling: [...dangling].filter((name) => !memberNames.has(name)).sort(),
+    hasEntry: (name) => byName.has(name),
+    memberNames,
+  });
+
+  const root = readManifestDeclarations(path.join(cwd, "package.json"));
+  if (!root) return inspection({ scopes: new Map(), declared: [], graded: false }, new Set());
 
   // The members: the entries berry writes for them, else the patterns package.json states.
   let complete = true;
@@ -184,20 +223,6 @@ export function gradeYarnLock(content: string, cwd: string, isInstance: (key: st
   if (memberDirs.length > MAX_MEMBER_MANIFESTS) complete = false;
   const memberNames = new Set(manifests.map((m) => m.name).filter((n): n is string => n !== null));
 
-  // The entries one declared or required dependency can install.
-  const targets = (name: string, range: string): number[] => {
-    const exact = bySpec.get(`${name}@${range}`) ?? bySpec.get(`${name}@npm:${range}`);
-    return exact !== undefined ? [exact] : (byName.get(name) ?? []);
-  };
-  const graph = new ScopeGraph();
-  entries.forEach((_, index) => graph.node(String(index)));
-  entries.forEach((entry, index) => {
-    // A workspace entry lists its devDependencies with the rest: its own package.json is the root that says which is which.
-    if (entry.workspaceDir !== null) return;
-    for (const [name, range] of entry.deps) for (const target of targets(name, range)) graph.edge(index, target);
-    for (const name of entry.peers) for (const target of byName.get(name) ?? []) graph.edge(index, target);
-  });
-
   const runtimeRoots: number[] = [];
   const devRoots: number[] = [];
   const declaredRuntime = new Map<string, boolean>();
@@ -206,7 +231,7 @@ export function gradeYarnLock(content: string, cwd: string, isInstance: (key: st
       const found = targets(spec.name, spec.spec);
       // Nothing in the lockfile answers it: a sibling workspace member (classic writes no entry for one) or a link.
       // A peer the project names but does not install has no entry either, and nothing to grade.
-      if (found.length === 0 && spec.section !== "peerDependencies" && !memberNames.has(spec.name) && !localSpec(spec)) complete = false;
+      if (found.length === 0 && spec.section !== "peerDependencies" && !memberNames.has(spec.name) && !isLocalSpec(spec.spec)) complete = false;
       for (const target of found) (isRuntimeSection(spec.section) ? runtimeRoots : devRoots).push(target);
       // Direct where it is declared: the one entry the declaration resolves to.
       const identity = found.length === 1 ? entries[found[0]].identity : null;
@@ -226,10 +251,5 @@ export function gradeYarnLock(content: string, cwd: string, isInstance: (key: st
     const cut = key.indexOf("\0");
     return { name: key.slice(0, cut), version: key.slice(cut + 1), runtime: isRuntime };
   });
-  return { scopes, declared, graded: true };
-}
-
-/** A declaration that installs local code (`link:`, `portal:`, `workspace:`, a `file:` directory): no lockfile entry is owed for some of these. */
-function localSpec(spec: DeclaredSpec): boolean {
-  return /^(?:link|portal|workspace|file):/i.test(spec.spec.trim());
+  return inspection({ scopes, declared, graded: true }, memberNames);
 }

@@ -127,7 +127,9 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   const readFiles = read.source ? [read.source, ...(read.extraSources ?? [])] : [];
   // The manifest only matters when the resolver fell back to it; editing a
   // script in package.json must not throw away a scan of an unchanged lockfile.
-  if (manifest && !readFiles.includes(manifest)) signatures.delete(manifest);
+  // One reported unreadable is watched, so fixing it re-resolves the group.
+  const manifestProblem = manifest !== null && (read.problems ?? []).some((p) => p.file === manifest);
+  if (manifest && !readFiles.includes(manifest) && !manifestProblem) signatures.delete(manifest);
 
   // Ruby and PHP: the lockfile (and composer.json) name the direct dependencies; the project scanner does not.
   const fromLock = group.deps.length === 0 && group.devDeps.length === 0 && read.direct;
