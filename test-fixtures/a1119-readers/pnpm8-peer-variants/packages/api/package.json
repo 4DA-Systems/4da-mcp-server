@@ -1,1 +1,1 @@
-{ "name": "fx-api", "version": "1.0.0", "private": true, "dependencies": { "ws": "7.4.5", "utf-8-validate": "5.0.10" } }
+{ "name": "fx-api", "version": "1.0.0", "private": true, "dependencies": { "ws": "7.5.11", "utf-8-validate": "5.0.10" } }

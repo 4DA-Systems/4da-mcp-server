@@ -14,8 +14,8 @@ importers:
         specifier: 5.0.10
         version: 5.0.10
       ws:
-        specifier: 7.4.5
-        version: 7.4.5(utf-8-validate@5.0.10)
+        specifier: 7.5.11
+        version: 7.5.11(utf-8-validate@5.0.10)
 
   packages/tools:
     devDependencies:
@@ -23,8 +23,8 @@ importers:
         specifier: 5.0.9
         version: 5.0.9
       ws:
-        specifier: 7.4.5
-        version: 7.4.5(utf-8-validate@5.0.9)
+        specifier: 7.5.11
+        version: 7.5.11(utf-8-validate@5.0.9)
 
 packages:
 
@@ -48,8 +48,8 @@ packages:
       node-gyp-build: 4.8.4
     dev: true
 
-  /ws@7.4.5(utf-8-validate@5.0.10):
-    resolution: {integrity: sha512-xzyu3hFvomRfXKH8vOFMU3OguG6oOvhXMo3xsGy3xWExqaM2dxBbVxuD99O7m3ZUFMvvscsZDqxfgMaRr/Nr1g==}
+  /ws@7.5.11(utf-8-validate@5.0.10):
+    resolution: {integrity: sha512-zS54Oen9bITtp7kp2XM3AydrCIq1D+HwJOuH+c+e4LfpL/lotP5osijd+UoMnxwAam1GN8R4KtLAyIrIcBNpiA==}
     engines: {node: '>=8.3.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -63,8 +63,8 @@ packages:
       utf-8-validate: 5.0.10
     dev: false
 
-  /ws@7.4.5(utf-8-validate@5.0.9):
-    resolution: {integrity: sha512-xzyu3hFvomRfXKH8vOFMU3OguG6oOvhXMo3xsGy3xWExqaM2dxBbVxuD99O7m3ZUFMvvscsZDqxfgMaRr/Nr1g==}
+  /ws@7.5.11(utf-8-validate@5.0.9):
+    resolution: {integrity: sha512-zS54Oen9bITtp7kp2XM3AydrCIq1D+HwJOuH+c+e4LfpL/lotP5osijd+UoMnxwAam1GN8R4KtLAyIrIcBNpiA==}
     engines: {node: '>=8.3.0'}
     peerDependencies:
       bufferutil: ^4.0.1

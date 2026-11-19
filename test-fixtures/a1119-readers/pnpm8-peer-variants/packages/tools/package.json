@@ -1,1 +1,1 @@
-{ "name": "fx-tools", "version": "1.0.0", "private": true, "devDependencies": { "ws": "7.4.5", "utf-8-validate": "5.0.9" } }
+{ "name": "fx-tools", "version": "1.0.0", "private": true, "devDependencies": { "ws": "7.5.11", "utf-8-validate": "5.0.9" } }
