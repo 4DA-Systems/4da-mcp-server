@@ -24,8 +24,13 @@ const report = (file: string, statuses: string[]) => ({
 });
 
 describe("corpus-gated test files", () => {
-  it("are the three that read the conformance corpus", () => {
-    expect(gated).toEqual(["src/__tests__/conformance.test.ts", "src/__tests__/lockfile-parents-names.test.ts", "src/__tests__/rule-vectors.test.ts"]);
+  it("are the four that read the conformance corpus", () => {
+    expect(gated).toEqual([
+      "src/__tests__/a1119-tooling-readme-claims.test.ts",
+      "src/__tests__/conformance.test.ts",
+      "src/__tests__/lockfile-parents-names.test.ts",
+      "src/__tests__/rule-vectors.test.ts",
+    ]);
   });
 });
 

@@ -273,13 +273,14 @@ jobs:
       # that has it, so one left off this list runs nowhere (`pnpm run check`
       # fails on that). A suite that skips itself still exits 0, so the report
       # is checked too: each of those files ran, with no test skipped.
-      - name: Conformance ratchet, shared rule vectors and corpus parent edges
+      - name: Conformance ratchet, shared rule vectors, corpus parent edges and the README's corpus figures
         run: |
           pnpm exec vitest run --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/conformance-report.json" \
             src/__tests__/conformance.test.ts \
             src/__tests__/conformance-drift.test.ts \
             src/__tests__/rule-vectors.test.ts \
-            src/__tests__/lockfile-parents-names.test.ts
+            src/__tests__/lockfile-parents-names.test.ts \
+            src/__tests__/a1119-tooling-readme-claims.test.ts
           node scripts/ci-gates.mjs tests-ran "$RUNNER_TEMP/conformance-report.json"
         env:
           FOURDA_REQUIRE_CONFORMANCE: "1"
