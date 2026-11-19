@@ -91,7 +91,6 @@ import {
 import {
   checkRange,
   compareIn,
-  describeReading,
   isPrereleaseIn,
   lineOf,
   ownSafeInRange,
@@ -99,7 +98,6 @@ import {
   rangeAdmits,
   rangeNamesPrerelease,
   type RangeCheck,
-  type Target,
 } from "./dependency-check-versions.js";
 import { adviseNoSafeRelease, HeldJudge, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside, RequirementJudge, type HeldRangeFilter, type ReleaseJudge } from "./dependency-check-held.js";
 import { requirementSources } from "../live/release-requirements.js";
@@ -115,9 +113,22 @@ import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { lengthProblem } from "../tool-args.js";
 import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
-import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, npmPick, type NpmWhy, type Resolution } from "./dependency-check-resolution.js";
+import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, npmPick, type NpmWhy } from "./dependency-check-resolution.js";
 import { samePackageName } from "../live/version-compare.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
+import {
+  ECOSYSTEMS,
+  head,
+  installedNotJudged,
+  instanceKey,
+  lookupKey,
+  provisional,
+  yieldToEventLoop,
+  type ItemResult,
+  type ListGap,
+  type Requested,
+  type Resolved,
+} from "./dependency-check-items.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
@@ -131,13 +142,7 @@ const MAX_NEW_DEP_LOOKUPS = 40;
 const REGISTRY_CONCURRENCY = 6;
 /** OSV.dev package advisory lists (/v1/query) in flight at once. */
 const OSV_LIST_CONCURRENCY = 8;
-const ECOSYSTEMS: readonly CheckEcosystem[] = ["npm", "crates.io", "PyPI", "Go"];
 const DAY_MS = 86_400_000;
-
-/** The installed version, when it is not the version being judged: never named to a registry (PyPI per-release documents). */
-function installedNotJudged(item: { from?: string | null; to: string }): string | null {
-  return item.from && item.from !== item.to ? item.from : null;
-}
 
 const PRIVACY_NOTE =
   "Registry requests carried package names (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list), " +
@@ -212,74 +217,6 @@ export const dependencyCheckTool = {
     required: ["items"],
   },
 };
-
-interface ItemResult {
-  ecosystem: string;
-  package: string;
-  /** crates.io: the spelling asked, when the crate is published under another (`serde-json` is serde_json). */
-  package_requested?: string;
-  /** Every release what was asked can install, each judged, when that is more than one (dependency-check-resolution.ts). */
-  resolution?: Resolution;
-  from: string | null;
-  to: string;
-  /** "latest" or the constraint, when the caller asked for one and `to` is what it resolved to. */
-  to_requested?: string;
-  /** How `to` was read: an exact version, a range (in the ecosystem's own syntax), or "latest". */
-  to_read_as?: string;
-  verdict: Verdict;
-  reason: string;
-  signals: Signal[];
-  range_check?: RangeCheck;
-  /** Unmaintained-package notices on `to`: reported, never part of the verdict (audit L3). */
-  maintenance_notices?: string[];
-  /**
-   * "private": the package name is private and was never looked up (live/private-packages.ts).
-   * "module_path": a Go module path the go command does not accept as written (live/go-path.ts).
-   */
-  not_checked?: "private" | "module_path" | "time_budget";
-  /** not_checked "module_path": the path the module declares, or the one the spelling most likely means. */
-  canonical_module_path?: string;
-}
-
-/** A validated request item. */
-interface Requested {
-  ecosystem: CheckEcosystem;
-  package: string;
-  /** crates.io: the spelling asked, once `package` is the crate's published spelling (round 10, W2). */
-  asked?: string;
-  /** What the caller passed as `to`, trimmed. */
-  raw: string;
-  target: Target;
-  from?: string;
-}
-
-/** A request item with its `to` resolved to one version (or left unresolved with the reason). */
-interface Resolved extends CheckItem {
-  requested?: string;
-  /** How `to` was read (describeReading). */
-  readAs?: string;
-  rangeCheck?: RangeCheck;
-  /** Set when no single version could be chosen; the item is then blocked with this text. */
-  unresolved?: string;
-  /**
-   * Advisories OSV.dev's batch query named for `to` or `from` that the package's advisory list
-   * (/v1/query) did not hold: the list is incomplete, so no release is named safe from it.
-   * `misread`: advisories the list holds whose ranges do not show a release affected that the
-   * batch query names them for; the list's ranges cannot name a safe release either.
-   */
-  listGap?: ListGap;
-  /**
-   * OSV.dev's batch query gave no current answer, so the package's advisory list (/v1/query) could
-   * not be held against it: no release is named safe from the list (blind audit round 5).
-   */
-  batchUnread?: string;
-  /** `to` is the release the constraint resolves to (resolvedRelease), not a pick among its safe releases. */
-  resolvesRange?: boolean;
-  /** crates.io: the spelling asked, when `package` is the published one. */
-  asked?: string;
-  /** npm: `to` is npm's pick (npmPick) and Yarn or pnpm can install `highest`, which is judged too (round 10, W2). */
-  npmAlso?: { highest: string; why: NpmWhy };
-}
 
 /** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
 export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
@@ -1053,11 +990,6 @@ function goPathResult(r: Requested, verdict: Extract<GoPathVerdict, { ok: false 
   };
 }
 
-/** Let timers and other calls run between CPU-bound steps. */
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 function privateResult(r: Requested, why: string): ItemResult {
   return {
     ...head(provisional(r)),
@@ -1170,12 +1102,6 @@ function rangePicks(item: Resolved): string[] {
   return [rc.smallest_safe_in_range, rc.smallest_safe_upgrade, rc.newest_safe_in_range, rc.newest_safe_outside_range].filter(
     (v): v is string => typeof v === "string" && (Boolean(item.unresolved) || v !== item.to),
   );
-}
-
-interface ListGap {
-  ids: string[];
-  versions: string[];
-  misread?: string[];
 }
 
 /** The batch query names advisories for releases that the list's own ranges do not show as affected. */
@@ -1318,12 +1244,6 @@ function everyRelease(list: readonly AdvisoryRanges[] | null | undefined): strin
 
 function hasRealAdvisory(facts: AdvisoryFacts): boolean {
   return facts.available && facts.to.some((a) => !a.maintenance);
-}
-
-/** Before resolution: an exact `to` as is, anything else shown as the caller wrote it. */
-function provisional(r: Requested): Resolved {
-  const to = r.target.kind === "exact" ? r.target.version : r.raw;
-  return { ecosystem: r.ecosystem, package: r.package, to, readAs: describeReading(r.ecosystem, r.raw, r.target), ...(r.from ? { from: r.from } : {}), ...(r.asked ? { asked: r.asked } : {}) };
 }
 
 function needsFullList(r: Requested): boolean {
@@ -1793,21 +1713,6 @@ export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices:
     };
   });
 }
-
-/** A package name as its registry compares it: PEP 503 for PyPI; `-`/`_` and case folded for crates.io (round 10, W2). */
-const keyName = (eco: string, name: string) =>
-  eco === "PyPI" ? name.toLowerCase().replace(/[-_.]+/g, "-") : eco === "crates.io" ? name.toLowerCase().replace(/_/g, "-") : name;
-const instanceKey = (eco: string, name: string, version: string) => `${eco}\0${keyName(eco, name)}\0${version}`;
-const lookupKey = (item: { ecosystem: string; package: string }) => `${item.ecosystem}\0${keyName(item.ecosystem, item.package)}`;
-const head = (item: Resolved) => ({
-  ecosystem: item.ecosystem,
-  package: item.package,
-  ...(item.asked ? { package_requested: item.asked } : {}),
-  from: item.from ?? null,
-  to: item.to,
-  ...(item.requested ? { to_requested: item.requested } : {}),
-  ...(item.readAs ? { to_read_as: item.readAs } : {}),
-});
 
 /** "N checked: ..." over the items looked up; private items are counted as not checked, never as checked. */
 function summaryLine(results: ItemResult[], parts: string[]): string {
