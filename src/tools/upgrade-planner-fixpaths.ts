@@ -45,6 +45,7 @@ import {
   REGISTRY_UNREAD_NOTE,
   targetNote,
   targetUnclean,
+  targetCheckedAll,
   introducesText,
   malwareText,
   unreadableText,
@@ -2274,7 +2275,8 @@ export async function judgeDirectRequirements(steps: FixPathStep[], liveIntel: I
     const words = requiresNote(clean, step.ecosystem);
     if (!words) continue;
     step.reasons.push(words);
-    step.fixPathChecked = "installed_advisories_only";
+    // Go minimums are a caveat on a kept target; a crates.io or PyPI requirement that is affected or not examined withholds it.
+    if (!targetCheckedAll(clean)) step.fixPathChecked = "installed_advisories_only";
   }
 }
 

@@ -5,8 +5,9 @@
  * The scan and the planner said "Upgrade github.com/gin-gonic/gin v1.6.3 -> v1.9.1, resolves 3
  * CVEs"; doing it took the project from 11 advisories to 52, because v1.9.1's own go.mod requires
  * old x/crypto, x/net and protobuf. Now such a step says which requirements carry advisories, how
- * many, and what to raise afterwards, and is never called a clean fix; one whose requirements could
- * not be read says they were not examined; the work is capped per call and the cap is said.
+ * many, and what to raise afterwards; on Go the target is kept (minimums are raised afterwards), on
+ * crates.io and PyPI it is never called a clean fix; one whose requirements could not be read says
+ * they were not examined; the work is capped per call and the cap is said.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -42,20 +43,15 @@ function ginProject(requires: string[] | null) {
 const reasonsOf = (row: Record<string, any>) => (row.reasons as string[]).join(" | ");
 
 describe("upgrade_planner: a Go direct upgrade whose target's go.mod requires affected modules", () => {
-  it("says which, how many advisories, what to raise, and does not call the target clean", async () => {
+  it("says which, how many advisories and what to raise, and keeps the target (minimums are raised afterwards)", async () => {
     ginProject(["golang.org/x/crypto v0.5.0", "golang.org/x/net v0.7.0", "golang.org/x/sys v0.5.0"]);
-    const { result, step } = await h.plan();
+    const { step } = await h.plan();
     const row = step(GIN);
-    // Not a clean fix: like any target not checked against everything it brings in, it is named only
-    // in the reasons, never in the field an agent pins from (unconfirmed-targets.ts).
-    expect(row).toMatchObject({ scope: "direct", action: "upgrade_direct", targetVersion: null });
+    expect(row).toMatchObject({ scope: "direct", action: "upgrade_direct", targetVersion: "v1.9.1", fixPathChecked: "all_advisories" });
     const reasons = reasonsOf(row);
-    expect(reasons).toMatch(/v1\.9\.1's own go\.mod requires 2 dependencies with 3 advisories in all: golang\.org\/x\/crypto v0\.5\.0 \(2 advisories; v0\.31\.0 clears them\) and golang\.org\/x\/net v0\.7\.0 \(1 advisory; v0\.33\.0 clears it\)/);
+    expect(reasons).toMatch(/its go\.mod sets 2 minimum versions with 3 advisories in all: golang\.org\/x\/crypto v0\.5\.0 \(2 advisories; v0\.31\.0 clears them\) and golang\.org\/x\/net v0\.7\.0 \(1 advisory; v0\.33\.0 clears it\)/);
     expect(reasons).toMatch(/go get golang\.org\/x\/crypto@v0\.31\.0 golang\.org\/x\/net@v0\.33\.0/);
-    expect(reasons).toMatch(/so v1\.9\.1 is NOT a clean fix/);
-    expect(row.fixPathChecked).not.toBe("all_advisories");
-    expect(result.summary).toMatch(/1 of them because the target's own requirements/);
-    expect(result.summary).not.toMatch(/1 upgradable directly/);
+    expect(reasons).not.toMatch(/NOT a clean fix/);
   });
 
   it("a target whose requirements carry no advisory stays a clean, checked fix", async () => {
@@ -70,29 +66,27 @@ describe("upgrade_planner: a Go direct upgrade whose target's go.mod requires af
     ginProject(null);
     const { result, step } = await h.plan();
     const row = step(GIN);
-    expect(reasonsOf(row)).toMatch(/what v1\.9\.1 itself requires was not examined \(its requirement list could not be read from the Go module proxy/);
-    expect(row.fixPathChecked).not.toBe("all_advisories");
-    expect(result.summary).toMatch(/1 target whose own requirements were not examined/);
+    expect(reasonsOf(row)).toMatch(/what its go\.mod requires was not examined \(its requirement list could not be read from the Go module proxy/);
+    expect(row).toMatchObject({ targetVersion: "v1.9.1", fixPathChecked: "all_advisories" });
+    expect(result.summary).not.toMatch(/1 target whose own requirements were not examined/);
   });
 });
 
 describe("vulnerability_scan: the same direct upgrade", () => {
-  it("the recommendation names the requirements and never claims a clean fix", async () => {
+  it("the recommendation names the minimums and keeps the target", async () => {
     ginProject(["golang.org/x/crypto v0.5.0", "golang.org/x/net v0.7.0"]);
     const out = await h.scan({ response_format: "detailed" });
     const text = JSON.stringify(out);
-    expect(text).toMatch(/v1\.9\.1's own go\.mod requires 2 dependencies with 3 advisories in all/);
-    expect(text).toMatch(/so v1\.9\.1 is NOT a clean fix/);
-    expect(out.requirements_note).toMatch(/1 upgrade target whose own requirements carry advisories/);
-    // The fix target is not given as checked against every advisory.
-    expect(text).not.toMatch(/"target":"v1\.9\.1","checked":"all_advisories"/);
+    expect(text).toMatch(/its go\.mod sets 2 minimum versions with 3 advisories in all/);
+    expect(text).not.toMatch(/NOT a clean fix/);
+    expect(out.requirements_note).toMatch(/1 Go upgrade target whose go\.mod sets minimum versions with advisories/);
   });
 
   it("requirements that could not be read: not examined, said in the answer", async () => {
     ginProject(null);
     const out = await h.scan({ response_format: "detailed" });
-    expect(JSON.stringify(out)).toMatch(/what v1\.9\.1 itself requires was not examined/);
-    expect(out.requirements_note).toMatch(/1 upgrade target whose own requirements were not examined/);
+    expect(JSON.stringify(out)).toMatch(/what its go\.mod requires was not examined/);
+    expect(out.requirements_note).toMatch(/1 Go upgrade target whose go\.mod was not examined \(the target is kept/);
   });
 
   it("clean requirements: no note, the target checked against every advisory", async () => {
@@ -145,7 +139,8 @@ describe("the work is bounded per call", () => {
     ]);
     expect(asked).toHaveLength(MAX_REQUIRED_TARGETS);
     expect(first.size).toBe(0);
-    const capped = [...second.values()].filter((c) => c.requiresUnchecked === notExaminedCapText());
+    // Go: past the cap the target is kept, with "not examined" (requiresMinimumsUnchecked).
+    const capped = [...second.values()].filter((c) => c.requiresMinimumsUnchecked === notExaminedCapText());
     expect(capped).toHaveLength(2);
   });
 
