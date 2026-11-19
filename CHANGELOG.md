@@ -36,6 +36,9 @@
 - A semantic-recall query that names a private package is not sent to a remote embedding provider: recall is skipped for that call and the answer says so.
 - `_meta.privacy` and `_meta.sources` of `vulnerability_scan`, `dependency_check` and `upgrade_impact` name the hosts the call actually sent requests to, redirect hops included, and say when nothing was sent.
 - `dependency_check` asks PyPI for a judged release's own document by version when it is not the latest release (the only place its requirements are served); never for the installed (`from`) version unless it is also `to`.
+- A Python prefix-match pin such as `requests==2.32.*` is listed as unpinned. It was checked as the version "2.32.*", which matched every advisory OSV.dev holds for the package.
+- `severity_filter` never hides an advisory whose severity is unknown, and maintenance notices and advisories on packages not built on this host are always listed in full.
+- A yarn.lock entry whose header line is longer than the reader accepts makes that lockfile's npm names private (not sent, NOT CHECKED), as an overlong line inside an entry already did.
 
 ### Fixed
 
@@ -65,6 +68,12 @@
 - A release blocked because CI on the tagged commit was cancelled says to re-run CI on that commit, not "Fix main".
 - The README, SECURITY.md, the Gemini extension and the .mcpb description state what the code does (the .mcpb text no longer says only package names and versions leave the machine, and carries no tool count; `dependency_check`'s privacy note and README say which per-release documents are requested): pinned versions, which tools send which versions to a registry, that ecosystem pulse sends dependency names to Hacker News search, model-instance raters, `gems.locked`, and the concise scan's size (about 10k tokens for about 290 advisories).
 - An unreadable manifest is called a file, not a lockfile.
+- A yarn.lock or bun.lock in which a package's dependency has no entry (a truncated or damaged file) marks no package dev-only: scope is unknown, so advisories keep their full severity.
+- pnpm lockfiles are not reported partial for optional dependencies named in `ignoredOptionalDependencies`, or for workspace members left out under `excludeLinksFromLockfile`.
+- Yarn workspaces written with braces (`packages/{a,b}`) are recognised; when the member list cannot be read in full, a dependency missing from the lockfile is not reported as damage.
+- A uv.lock is not called damaged for a dependency that a `[tool.uv]` override or constraint removes.
+- Cargo: `1.0.0-alpha.x` is a prerelease, not a wildcard requirement.
+- When an archive holds more changelog-named files than are read, the answer says so instead of blaming the file it read.
 
 ### Hardening
 
@@ -76,6 +85,10 @@
 - Files that decide private names go through one decoding reader under one size cap; private patterns are matched by a bounded matcher.
 - The pyproject.toml array reader and the Cargo.toml dependency reader run in linear time.
 - The plugin hook bounds what it reads and repeats only shaped names and version specifiers.
+- The plugin hook repeats only a dependency's version specifier, read clause by clause; words placed after a version are not repeated.
+- GitHub release pages and raw changelog files up to 64 MB are read, and are parsed under the same time allowance as archive changelogs.
+- An oversized answer is never written to the cache, batch writes included.
+- Requests to a local Ollama never go through a configured proxy.
 
 ### Tooling and tests
 
