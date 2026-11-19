@@ -345,6 +345,15 @@ interface Pass {
   npmAlso: Array<{ highest: string; why: NpmWhy } | null>;
 }
 
+/**
+ * One pass, stage by stage, each awaited before the next starts: screen the items
+ * (dependency-check-screen.ts); build the pass's context and make the first lookups (-lookups.ts:
+ * the advisory lists and npm holdings it starts run on in the background, and later stages await
+ * the same requests); resolve each `to` and judge what releases bring with them (-resolve.ts); ask
+ * OSV.dev's batch query and hold its answer against each package's own list (-batch.ts); name the
+ * safe alternatives (-alternatives.ts); gather hold waivers, malware names and near-miss names
+ * (-findings.ts); build each item's answer (-verdict.ts).
+ */
 async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, opts: { now?: Date }): Promise<Pass> {
   const now = opts.now ?? new Date();
   const checkedAt = now.toISOString();
