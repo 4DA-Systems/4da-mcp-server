@@ -532,7 +532,9 @@ export class LiveIntelligence {
     const mirrors = this.privateRules.publicMirrors;
     const option = (r.registryWide ?? []).find((w) => !declaredMirror(w.registry.replace(/^[a-z]+\+/i, ""), mirrors));
     if (option) return requirementsWideReason(option.file, option.setting, option.registry);
-    const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? [])].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
+    // A manifest that could not be read matters when no lockfile records where each package comes from.
+    const unreadManifest = r.source?.kind === "lockfile" ? [] : (this.manifestPrivate.get(r) ?? []).filter((p) => p.unread !== undefined);
+    const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? []), ...unreadManifest].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
     if (fromLockfile.length === 0) return null;
     const pinned = new Set((this.manifestPrivate.get(r) ?? []).map((p) => normName(ecosystem, p.name)));
     return lockfileRegistryWide(

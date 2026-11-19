@@ -12,7 +12,7 @@
  */
 
 import * as fs from "node:fs";
-import { oversize, tooLargeText } from "./bounded-read.js";
+import { maxLockfileBytes, oversize, tooLargeText } from "./bounded-read.js";
 
 /** Bytes sampled to recognise UTF-16 that carries no byte-order mark. */
 const SNIFF_BYTES = 512;
@@ -68,4 +68,47 @@ export function readTextFile(file: string): string {
   const size = oversize(file);
   if (size !== null) throw new Error(`${file} ${tooLargeText(size)}`);
   return decodeText(fs.readFileSync(file));
+}
+
+/**
+ * What reading one file that decides which package names are private gave: a lockfile, a registry
+ * or index configuration, a manifest. `unreadable` is a file that is there and whose text is not
+ * known; `reason` completes the sentence "<file> <reason>".
+ */
+export type RuleFileRead = { state: "absent" } | { state: "read"; text: string } | { state: "unreadable"; reason: string };
+
+/** Error codes that say no file is at the path (a path that cannot name one included). */
+const NO_FILE = new Set(["ENOENT", "ENOTDIR", "ENAMETOOLONG", "EINVAL", "ERR_INVALID_ARG_VALUE"]);
+
+const errorCode = (error: unknown): string => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code ? code : error instanceof Error ? error.name : "unknown error";
+};
+
+/**
+ * The one reader for every file the private-name rules are read from, decoded as the lockfile
+ * readers decode it (decodeText) under the same size cap. It never answers "empty" for a file it
+ * could not read: over the cap, an I/O error, or bytes that decode to no text (NUL characters) is
+ * `unreadable`, and the caller treats the names that file could have made private as private.
+ * Absent means nothing is at the path (or something that is not a file).
+ */
+export function readRuleFile(file: string): RuleFileRead {
+  let size: number;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) return { state: "absent" };
+    size = stat.size;
+  } catch (error) {
+    return NO_FILE.has(errorCode(error)) ? { state: "absent" } : { state: "unreadable", reason: `could not be read (${errorCode(error)})` };
+  }
+  if (size > maxLockfileBytes()) return { state: "unreadable", reason: tooLargeText(size) };
+  let text: string;
+  try {
+    text = decodeText(fs.readFileSync(file));
+  } catch (error) {
+    // Gone between the stat and the read: absent now, and its signature says so at the next call.
+    return errorCode(error) === "ENOENT" ? { state: "absent" } : { state: "unreadable", reason: `could not be read (${errorCode(error)})` };
+  }
+  if (text.includes("\0")) return { state: "unreadable", reason: "is not text this server can decode (it holds NUL characters)" };
+  return { state: "read", text };
 }
