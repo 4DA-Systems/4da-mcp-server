@@ -45,6 +45,7 @@ import {
   REGISTRY_UNREAD_NOTE,
   targetNote,
   targetUnclean,
+  targetCheckedAll,
   introducesText,
   malwareText,
   unreadableText,
@@ -75,6 +76,7 @@ import { aimAtDeclaringMembers } from "./declaring-members.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
 import { pythonParentMove } from "./upgrade-planner-pyparent.js";
 import { yieldIfDue } from "../live/yield-point.js";
+import { readProjectPython } from "../live/project-python.js";
 
 /** One dependency the project declares that moves a blocking parent. */
 export interface ParentLever {
@@ -563,6 +565,9 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   return heldUnclean ? "held" : "verified";
 }
 
+/** A reason withGoDirective wrote. */
+const GO_DIRECTIVE_REASON = /needs a newer Go than go\.mod's go|requires go >= \S+ and go\.mod says go/;
+
 /**
  * Go, a direct upgrade: when the fixed release's go.mod declares a newer Go than a go.mod it lands
  * in, `go get` raises the go directive, and an older toolchain under GOTOOLCHAIN=local refuses it.
@@ -570,6 +575,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
  * go.mod that could not be read is said, not taken as "no newer Go needed".
  */
 async function withGoDirective(input: FixPathInput, sources: FixPathSources): Promise<void> {
+  // Written once per target: a second call for the same target adds nothing.
   const { step } = input;
   if (step.ecosystem !== "Go" || step.scope !== "direct" || step.action !== "upgrade_direct" || !step.targetVersion) return;
   const stated = [...new Set(input.sourceDirs)]
@@ -580,6 +586,7 @@ async function withGoDirective(input: FixPathInput, sources: FixPathSources): Pr
   if (!oldest) return;
   const release = `${step.package} v${step.targetVersion.replace(/^v/, "")}`;
   const needs = await sources.goDirective(step.package, step.targetVersion).catch(() => null);
+  if (step.reasons.some((r) => r.includes(release) && GO_DIRECTIVE_REASON.test(r))) return;
   if (needs === null) {
     step.reasons.push(`whether ${release} needs a newer Go than go.mod's go ${oldest} was NOT CHECKED (its go.mod could not be read from the Go proxy): if it does, go get raises the go directive, and an older Go with GOTOOLCHAIN=local refuses it`);
   } else if (needs !== "" && compareVersions(needs, oldest, "PyPI") > 0) {
@@ -2266,13 +2273,15 @@ export async function judgeDirectRequirements(steps: FixPathStep[], liveIntel: I
     items,
     Date.now() + budgetMs,
     selectedGoModules([...liveIntel.getResolvedDeps(), ...(liveIntel.getAuditDeps?.() ?? [])]),
+    rows.some((s) => s.ecosystem === "PyPI") ? (readProjectPython(liveIntel.getProjectRoot() ?? process.cwd())?.covers ?? null) : null,
   );
   for (const [key, clean] of judged) {
     const step = rows[Number(key)];
     const words = requiresNote(clean, step.ecosystem);
     if (!words) continue;
     step.reasons.push(words);
-    step.fixPathChecked = "installed_advisories_only";
+    // Go minimums are a caveat on a kept target; a crates.io or PyPI requirement that is affected or not examined withholds it.
+    if (!targetCheckedAll(clean)) step.fixPathChecked = "installed_advisories_only";
   }
 }
 
@@ -2390,6 +2399,12 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
       if (eco === "npm") raised.push({ own, release });
       const input = inputs.find((i) => i.step === own) ?? { step: own, fixes: [], sourceDirs: declaredDirs(liveIntel, eco, own.package, own.currentVersion!) };
       withUpgradeCommands(input, liveIntel);
+      // Go: the go-directive note is about the final target; one written for the target it replaced is dropped.
+      if (eco === "Go" && sources) {
+        const was = `${own.package} v${old.replace(/^v/, "")}`;
+        own.reasons = own.reasons.filter((r) => !(r.includes(was) && GO_DIRECTIVE_REASON.test(r)));
+        await withGoDirective(input, sources);
+      }
     }
     // Every lever that names it.
     for (const u of d.uses) {

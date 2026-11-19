@@ -707,13 +707,20 @@ export type FixTargetResult = CleanTarget & {
   /** Whether the target's held dependencies are affected could not be checked, and why: not a clean fix either. */
   heldUnchecked?: string;
   /**
-   * Go, crates.io, PyPI (required-targets.ts): the target's own requirements carry advisories (a Go
-   * go.mod minimum, a crates.io or PyPI requirement whose newest admitted release is affected): not a
-   * clean fix. `examined`: how many requirements were judged.
+   * crates.io, PyPI (required-targets.ts): the target's own requirements carry advisories (a
+   * requirement whose newest admitted release, or pin, is affected): not a clean fix. `examined`:
+   * how many requirements were judged.
    */
   requiresAffected?: { affected: HeldDependency[]; examined: number };
-  /** Go, crates.io, PyPI: what the target requires was not examined, and why: not a clean fix either. */
+  /** crates.io, PyPI: what the target requires was not examined, and why: not a clean fix either. */
   requiresUnchecked?: string;
+  /**
+   * Go: the target's go.mod sets minimum versions that carry advisories. Minimums are raised in the
+   * project's own go.mod after upgrading, so the target stays a fix and carries this as a caveat.
+   */
+  requiresMinimums?: { affected: HeldDependency[]; examined: number };
+  /** Go: what the target's go.mod requires was not examined, and why: the target stays, with that said. */
+  requiresMinimumsUnchecked?: string;
   /** The newest stable release no advisory leaves unclean, when it is above `target` (withLineFacts). */
   newestSafe?: string;
   /** No release on the installed version's line above it clears every advisory: `target` is on the nearest later line that has one (withLineFacts). */
@@ -1125,7 +1132,7 @@ export async function verifyFixTargets(
   options: {
     heldQuery?: AdvisoryQuery;
     /** Go, crates.io, PyPI: the items (by key) whose target is judged by what it requires (required-targets.ts). */
-    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null };
+    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null; pythons?: readonly string[] | null };
   } = {},
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
@@ -1177,7 +1184,7 @@ export async function verifyFixTargets(
     // same floor as npm's held check and never past the call's own budget.
     const items = todo.filter((i) => req.keys.has(i.key) && out.has(i.key)).map((i) => ({ key: i.key, ecosystem: i.ecosystem, name: i.name, clean: out.get(i.key)! }));
     const until = Date.now() + withinCallBudget(Math.max(deadline - Date.now(), HELD_FLOOR_MS), 500);
-    for (const [key, clean] of await withRequiredTargets(req.sources, options.heldQuery, items, until, req.selected)) out.set(key, clean);
+    for (const [key, clean] of await withRequiredTargets(req.sources, options.heldQuery, items, until, req.selected, req.pythons)) out.set(key, clean);
   }
   return out;
 }
@@ -1201,7 +1208,7 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
   }
   const held = heldNote(clean, ecosystem);
   if (held) {
-    const { heldBlocked: _b, heldUnchecked: _u, requiresAffected: _ra, requiresUnchecked: _ru, ...rest } = clean;
+    const { heldBlocked: _b, heldUnchecked: _u, requiresAffected: _ra, requiresUnchecked: _ru, requiresMinimums: _rm, requiresMinimumsUnchecked: _rmu, ...rest } = clean;
     return [targetNote(rest, ecosystem), held].filter((p): p is string => Boolean(p)).join("; ");
   }
   const withheld = withheldText(clean, ecosystem);

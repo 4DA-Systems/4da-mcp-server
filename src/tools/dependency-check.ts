@@ -103,7 +103,7 @@ import {
 } from "./dependency-check-versions.js";
 import { adviseNoSafeRelease, HeldJudge, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside, RequirementJudge, type HeldRangeFilter, type ReleaseJudge } from "./dependency-check-held.js";
 import { requirementSources } from "../live/release-requirements.js";
-import { readProjectPython, type ProjectPython } from "../live/project-python.js";
+import { readProjectPython, readProjectPythonUnread, type ProjectPython } from "../live/project-python.js";
 import { lacksProjectPython, pythonRangeFilter, pythonSupportSignal } from "./dependency-check-python.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
 import { andList } from "../live/held-dependencies.js";
@@ -134,10 +134,16 @@ const OSV_LIST_CONCURRENCY = 8;
 const ECOSYSTEMS: readonly CheckEcosystem[] = ["npm", "crates.io", "PyPI", "Go"];
 const DAY_MS = 86_400_000;
 
+/** The installed version, when it is not the version being judged: never named to a registry (PyPI per-release documents). */
+function installedNotJudged(item: { from?: string | null; to: string }): string | null {
+  return item.from && item.from !== item.to ? item.from : null;
+}
+
 const PRIVACY_NOTE =
-  "Registry requests carried package names only (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list); " +
-  "installed and target versions were never sent to a registry, except the Go proxy's per-version .info and .mod for the versions judged (the list has no dates) " +
-  "and PyPI's own document of a judged release that is not the latest (pypi.org/pypi/<name>/<version>/json, the only place its requirements are served); the installed version was sent to no registry but the Go proxy. " +
+  "Registry requests carried package names (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list), " +
+  "plus per-release documents of the releases being judged: the Go proxy's .info and .mod (the list has no dates) and PyPI's own document of a judged release that is not the latest " +
+  "(pypi.org/pypi/<name>/<version>/json, the only place its requirements are served). Releases judged are `to`, a constraint's candidates and the safe releases named. " +
+  "The installed (`from`) version is named to the Go proxy (its .info) and, on PyPI, only when it is also `to`; to no other registry. " +
   "OSV.dev received package names and versions, as vulnerability_scan does, and those of what a judged release requires (a Go release's go.mod, a crate's dependencies, a PyPI release's requires_dist); " +
   "the release list of each required crate or PyPI project was read by name. " +
   "For a new npm dependency whose name is a near-miss of a popular package, api.npmjs.org received that name and the popular one (weekly downloads). " +
@@ -536,6 +542,8 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   // none, and then nothing is judged against a Python version.
   const projectRoot = requested.some((r) => r.ecosystem === "PyPI") ? (liveIntel.getProjectRoot?.() ?? null) : null;
   const projectPython = projectRoot ? readProjectPython(projectRoot) : null;
+  /** Where the project declares a Python that could not be read: the answer says so instead of judging nothing silently. */
+  const pythonUnreadAt = projectRoot && !projectPython ? readProjectPythonUnread(projectRoot) : null;
   /** Whether a PyPI release supports the project's Python (true when nothing is judged). */
   const supportsPython = (item: CheckItem, index: PackageReleaseIndex) => {
     const filter = pythonRangeFilter(projectPython, item.ecosystem, index);
@@ -562,6 +570,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       return liveIntel.queryAdvisories(deps);
     },
     selectedGoVersions(liveIntel),
+    projectPython?.covers ?? null,
   );
   /** The judge of what an ecosystem's releases bring with them; null where nothing is read (a source without requirement lists). */
   const judgeOf = (ecosystem: CheckEcosystem): ReleaseJudge | null => (ecosystem === "npm" ? held : reqs.of(ecosystem));
@@ -647,7 +656,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       const ownSafe = item.rangeCheck && lookup?.status === "ok" && advisories
         ? ownSafeInRange({ ecosystem: eco, index: lookup.data, range: item.rangeCheck.range, advisories, allowPrerelease: rangeNamesPrerelease(eco, item.rangeCheck.range) }).filter(supportsPython(item, lookup.data))
         : [];
-      return { ecosystem: eco, pkg: item.package, versions: [item.to, ...rangeCandidates(eco, ownSafe, (v) => !item.from || compareIn(eco, v, item.from) > 0)] };
+      return { ecosystem: eco, pkg: item.package, versions: [item.to, ...rangeCandidates(eco, ownSafe, (v) => !item.from || compareIn(eco, v, item.from) > 0, installedNotJudged(item))] };
     }),
   );
   items = items.map((item, i) => {
@@ -821,6 +830,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
           l.item.ecosystem,
           ownSafeInRange({ ecosystem: l.item.ecosystem, index: l.index, range: l.line, advisories: l.advisories, allowPrerelease: isPrereleaseIn(l.item.ecosystem, l.item.to) }).filter(supportsPython(l.item, l.index)),
           (v) => !l.item.from || compareIn(l.item.ecosystem, v, l.item.from) > 0,
+          installedNotJudged(l.item),
         ),
       })),
   );
@@ -872,6 +882,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       advisories: advisoryLists.get(lookupKey(item)),
       now,
       supported: supportsPython(item, lookup.data),
+      installed: installedNotJudged(item),
     });
   }
   // Nothing in range is safe: never point at a release years older when a low or moderate advisory on a
@@ -992,7 +1003,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
       newDependenciesSignal(item, to, base, p.introduced, createdForItem),
       withdrawnSignal(item, to, index!),
-      ...[pythonSupportSignal(item, to, projectPython)].filter((s): s is Signal => s !== null),
+      ...[pythonSupportSignal(item, to, projectPython, pythonUnreadAt)].filter((s): s is Signal => s !== null),
       upgradeTypeSignal(item, releasesBack(item, index!)),
     ];
     const decided = decide(signals, item.ecosystem);

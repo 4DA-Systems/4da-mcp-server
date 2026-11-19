@@ -18,7 +18,7 @@
 import type { CheckEcosystem, PackageReleaseIndex, ReleaseRecord } from "../live/release-metadata.js";
 import { compareIn, isPrereleaseIn, versionParts } from "./dependency-check-versions.js";
 import { deprecationAvoids } from "../live/withdrawn-releases.js";
-import { andList, heldSeverity, heldText, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
+import { andList, clearsText, heldSeverity, heldText, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 
 export type Verdict = "proceed" | "wait" | "review" | "avoid" | "unknown";
@@ -208,11 +208,20 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: H
     };
   }
   if (held.affected.every((d) => d.minimum)) return minimumsSignal(item, own, held.affected, held.examined ?? held.affected.length);
-  const severity = heldSeverity(held.affected);
+  // PyPI: a requirement whose marker was not established to apply is a caveat, never by itself an avoid.
+  const certain = held.affected.filter((d) => !d.condition?.uncertain);
+  const severity = heldSeverity(certain);
   // A held advisory whose record could not be read counts as high, as one on `to` does.
-  const heldEffect: SignalEffect = severity === "critical" || severity === "high" || held.affected.some((d) => d.unread) ? "avoid" : "review";
+  const heldEffect: SignalEffect = severity === "critical" || severity === "high" || certain.some((d) => d.unread) ? "avoid" : "review";
   const effect = own.effect === "avoid" || heldEffect === "avoid" ? "avoid" : "review";
-  const affected = held.affected.map((d) => ({ package: d.name, spec: d.spec, installs: d.version, advisories: d.ids, severity: d.severity }));
+  const affected = held.affected.map((d) => ({
+    package: d.name,
+    spec: d.spec,
+    installs: d.version,
+    advisories: d.ids,
+    severity: d.severity,
+    ...(d.condition ? { installed_only_where: d.condition.marker, ...(d.condition.on ? { on_pythons: d.condition.on } : {}), ...(d.condition.uncertain ? { applies: "not established" } : {}) } : {}),
+  }));
   const heldNote = `${heldText(item.to, held.affected)}: installing ${item.to} installs ${held.affected.length === 1 ? "it" : "them"}.`;
   return {
     id: "advisories",
@@ -269,7 +278,7 @@ function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[]
   const one = affected.length === 1;
   const named = affected.slice(0, MINIMUMS_NAMED).map((d) => {
     const which = d.selected ? `${d.name} ${d.version}, which your go.mod already selects over the ${d.spec} it requires` : `${d.name} ${d.version}`;
-    const clears = d.fixedIn ? `${d.fixedIn} clears ${d.ids.length === 1 ? "it" : "them"}` : `no release that clears ${d.ids.length === 1 ? "it" : "them"} is known`;
+    const clears = clearsText(d);
     return `${which} (${count(d.ids.length)}; ${clears})`;
   });
   const rest = affected.length - named.length;
@@ -294,6 +303,7 @@ function minimumsSignal(item: CheckItem, own: Signal, affected: HeldDependency[]
     advisories: d.ids.slice(0, 10),
     severity: d.severity,
     fixed_in: d.fixedIn ?? null,
+    ...(d.fixUnknown ? { fixed_in_not_looked_up: d.fixUnknown } : {}),
   }));
   return {
     id: "advisories",

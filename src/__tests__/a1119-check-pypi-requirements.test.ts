@@ -77,7 +77,7 @@ describe("parseRequiresDist", () => {
       requirements: [
         { name: "urllib3", spec: "<1.27,>=1.21.1" },
         { name: "idna", spec: "<3,>=2.5" },
-        { name: "charset-normalizer", spec: "~=2.0.0", conditional: true },
+        { name: "charset-normalizer", spec: "~=2.0.0", conditional: true, marker: 'python_version >= "3"' },
         { name: "certifi", spec: "" },
       ],
       unreadable: 4,

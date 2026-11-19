@@ -27,6 +27,18 @@ import { compareVersions, isComparable, parsePep440 } from "./version-compare.js
 import type { OsvEcosystem, ResolvedDependency } from "./types.js";
 import { pep440SpecAdmits, rangeNamesPrerelease } from "../tools/dependency-check-versions.js";
 import { quoteThirdParty } from "../untrusted-text.js";
+import { markerApplies } from "./pep508-marker.js";
+
+/** PyPI: whether a marker-gated requirement is installed for the project, as HeldDependency.condition; "drop" when on none of its Pythons. */
+function requirementCondition(requirement: ReleaseRequirement, pythons: readonly string[] | null | undefined): HeldDependency["condition"] | "drop" | undefined {
+  if (!requirement.conditional) return undefined;
+  if (requirement.marker === undefined) return { marker: null, uncertain: true };
+  const applies = markerApplies(requirement.marker, pythons);
+  if (applies.kind === "none") return "drop";
+  if (applies.kind === "all") return undefined;
+  if (applies.kind === "some") return { marker: requirement.marker, on: applies.on };
+  return { marker: requirement.marker, uncertain: true, ...(applies.on ? { on: applies.on } : {}) };
+}
 
 /** The registries whose releases' requirements are read here (npm: held-dependencies.ts). */
 export type RequirementEcosystem = "crates.io" | "PyPI" | "Go";
@@ -73,6 +85,13 @@ export interface RequirementOptions {
   deadline: number;
   /** Go: the version of a module the project's own go.mod / go.sum already selects, or null. */
   selected?: (ecosystem: RequirementEcosystem, name: string) => string | null;
+  /**
+   * PyPI: the Python versions the project declares (project-python.ts `covers`), or null when it
+   * declares none. A requirement whose environment marker no declared Python satisfies is dropped;
+   * one that applies on some is judged and says on which; one whose marker cannot be settled
+   * (no declared Python, a platform variable) is judged as a caveat (`condition.uncertain`).
+   */
+  pythons?: readonly string[] | null;
 }
 
 export interface RequirementRelease {
@@ -128,6 +147,7 @@ async function pooled<T>(items: T[], limit: number, deadline: number, work: (ite
 
 interface Judged {
   requirement: ReleaseRequirement;
+  condition?: HeldDependency["condition"];
   /** The version an install gets; null when it could not be resolved. */
   version: string | null;
   exact: boolean;
@@ -158,8 +178,10 @@ export async function requirementAdvisories(
     if (lookup.status !== "ok") out.set(release.key, { status: "unchecked", reason: `its requirement list could not be read from ${REGISTRY_NAME[release.ecosystem]} (${quoteThirdParty(lookup.detail, 120)})` });
     else {
       const cap = MAX_REQUIREMENTS_EXAMINED[release.ecosystem];
-      if (lookup.data.requirements.length > cap) cut.set(release.key, lookup.data.requirements.length);
-      lists.set(release.key, { ...lookup.data, requirements: lookup.data.requirements.slice(0, cap) });
+      // A requirement no declared Python installs is not one of this project's (PyPI markers).
+      const applying = lookup.data.requirements.filter((r) => requirementCondition(r, options.pythons) !== "drop");
+      if (applying.length > cap) cut.set(release.key, applying.length);
+      lists.set(release.key, { ...lookup.data, requirements: applying.slice(0, cap) });
       readable.push(release);
     }
   });
@@ -192,7 +214,8 @@ export async function requirementAdvisories(
         return { requirement, version: raised ? own : requirement.spec, exact: false, selected: raised };
       }
       const resolved = resolveRequirement(eco, requirement.spec, facts.get(`${eco}\0${requirement.name}`));
-      return { requirement, version: resolved?.version ?? null, exact: resolved?.exact ?? false, selected: false };
+      const condition = requirementCondition(requirement, options.pythons);
+      return { requirement, version: resolved?.version ?? null, exact: resolved?.exact ?? false, selected: false, ...(condition && condition !== "drop" ? { condition } : {}) };
     });
     judged.set(release.key, rows);
     for (const row of rows) if (row.version) wanted.set(`${eco}\0${row.requirement.name}@${row.version}`, lookupDep(eco, row.requirement.name, row.version));
@@ -227,6 +250,7 @@ export async function requirementAdvisories(
           ...(release.ecosystem === "Go" ? { minimum: true as const, fixedIn: null } : {}),
           ...(row.selected ? { selected: true as const } : {}),
           ...(row.requirement.indirect ? { indirect: true as const } : {}),
+          ...(row.condition ? { condition: row.condition } : {}),
         },
       ];
     });
@@ -236,7 +260,11 @@ export async function requirementAdvisories(
   const goAffected = [...affectedOf.values()].flat().filter((d) => d.minimum);
   if (goAffected.length > 0) {
     const fixes = await clearingReleases(sources, query, goAffected, deadline);
-    for (const d of goAffected) d.fixedIn = fixes.get(`${d.name}@${d.version}`) ?? null;
+    for (const d of goAffected) {
+      const fix = fixes.get(`${d.name}@${d.version}`) ?? { unknown: "it was not looked up in time" };
+      d.fixedIn = "version" in fix ? fix.version : null;
+      if ("unknown" in fix) d.fixUnknown = fix.unknown;
+    }
   }
 
   for (const release of readable) {
@@ -258,33 +286,48 @@ export async function requirementAdvisories(
   return out;
 }
 
+/** A clearing-release lookup: the release, none (established: no later release clears them), or not established, and why. */
+type ClearingRelease = { version: string } | { none: true } | { unknown: string };
+
 /**
  * Go: per affected `module@version`, the smallest stable release above it that the module's
- * advisory list leaves clean and OSV.dev's batch query confirms clean. Absent (read as none known)
- * when the list or the proxy could not be read, when nothing clears them, or when the batch query
- * does not confirm it: a release is never named clean on the list alone.
+ * advisory list leaves clean and OSV.dev's batch query confirms clean. `none` only when the lists
+ * were read and no later release clears them; a lookup past the per-call cap, past the deadline,
+ * or one whose list, proxy or confirmation failed is `unknown` with why, never read as "none
+ * exists". A release is never named clean on the list alone.
  */
-async function clearingReleases(sources: RequirementSources, query: AdvisoryQuery, affected: HeldDependency[], deadline: number): Promise<Map<string, string>> {
-  const unique = [...new Map(affected.map((d) => [`${d.name}@${d.version}`, d])).values()].slice(0, MAX_FIX_LOOKUPS);
+async function clearingReleases(sources: RequirementSources, query: AdvisoryQuery, affected: HeldDependency[], deadline: number): Promise<Map<string, ClearingRelease>> {
+  const all = [...new Map(affected.map((d) => [`${d.name}@${d.version}`, d])).values()];
+  const unique = all.slice(0, MAX_FIX_LOOKUPS);
+  const out = new Map<string, ClearingRelease>();
+  for (const d of all.slice(MAX_FIX_LOOKUPS)) out.set(`${d.name}@${d.version}`, { unknown: `this call looks up the clearing release of at most ${MAX_FIX_LOOKUPS} modules` });
   const candidates = new Map<string, { name: string; version: string }>();
   await pooled(unique, FACTS_CONCURRENCY, deadline, async (d) => {
+    const key = `${d.name}@${d.version}`;
     const [advisories, versions] = await Promise.all([
       byDeadline(sources.packageAdvisories("Go", d.name), deadline, null),
       byDeadline(sources.publishedVersions("Go", d.name), deadline, null),
     ]);
-    if (!advisories || !versions) return;
+    if (!advisories || !versions) {
+      out.set(key, { unknown: "its advisory list or release list could not be read in time" });
+      return;
+    }
     const clean = versions
       .map((v) => (v.startsWith("v") ? v : `v${v}`))
       .filter((v) => isComparable(v, "Go") && !isPrereleaseVersion(v, "Go") && compareVersions(v, d.version, "Go") > 0 && advisoriesAffecting(advisories, v, "Go").length === 0)
       .sort((a, b) => compareVersions(a, b, "Go"))[0];
-    if (clean) candidates.set(`${d.name}@${d.version}`, { name: d.name, version: clean });
+    if (clean) candidates.set(key, { name: d.name, version: clean });
+    else out.set(key, { none: true });
   });
-  const out = new Map<string, string>();
   if (candidates.size === 0) return out;
   const answer = await byDeadline(query([...candidates.values()].map((c) => lookupDep("Go", c.name, c.version))), deadline, null);
-  if (answerFailure(answer) || !answer) return out;
-  const hits = advisoryHits(answer.vulnerabilities.filter((v) => v.ecosystem === "Go"));
-  for (const [key, c] of candidates) if (!hits.has(`${c.name}@${c.version}`)) out.set(key, c.version);
+  const failure = answerFailure(answer);
+  const hits = !failure && answer ? advisoryHits(answer.vulnerabilities.filter((v) => v.ecosystem === "Go")) : null;
+  for (const [key, c] of candidates) {
+    if (!hits) out.set(key, { unknown: `${c.version} was not confirmed clean (${failure ?? "OSV.dev did not answer"})` });
+    else if (hits.has(`${c.name}@${c.version}`)) out.set(key, { unknown: `OSV.dev reports an advisory on ${c.version}, the first release its advisory list leaves clean` });
+    else out.set(key, { version: c.version });
+  }
   return out;
 }
 

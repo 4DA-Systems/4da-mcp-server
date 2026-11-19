@@ -21,11 +21,26 @@ import { cleanFixTarget, type FixPathSources } from "../live/fix-paths.js";
 import { advisoriesAffecting, advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import { compareVersions } from "../live/version-compare.js";
+import { remainingCallBudgetMs } from "../call-budget.js";
 import { unofferedReleases } from "../live/withdrawn-releases.js";
 import { isPrereleaseIn, rangeAdmits, versionParts, type HeldAdvice, type RangeCheck } from "./dependency-check-versions.js";
 
-/** Time a dependency_check call may spend judging held dependencies, in all. */
+/** Outside a tool call (no call budget): time a check may spend judging held dependencies, in all. */
 const HELD_CHECK_BUDGET_MS = 10_000;
+/** Inside a tool call: kept back from the call's remaining budget for writing the answer. */
+const JUDGE_RESERVE_MS = 2_500;
+
+/**
+ * When a judge stops waiting. Inside a tool call it follows the call's remaining budget, less the
+ * reserve, at each judge() (a fixed bound from the first item dropped safe picks a call had time
+ * for); outside one it is HELD_CHECK_BUDGET_MS from the first judge(), kept in `first`.
+ */
+function judgeDeadline(first: { at: number | null }): number {
+  const remaining = remainingCallBudgetMs();
+  if (Number.isFinite(remaining)) return Date.now() + Math.max(0, remaining - JUDGE_RESERVE_MS);
+  first.at ??= Date.now() + HELD_CHECK_BUDGET_MS;
+  return first.at;
+}
 /** The newest safe releases a range check lists (RangeCheck.safe_versions), judged as well. */
 const NEWEST_LISTED = 8;
 
@@ -39,12 +54,15 @@ export class HeldJudge {
   /** Per package: every release's held specs, or null when the registry could not be read. */
   private readonly specs = new Map<string, Record<string, Record<string, string>> | null>();
   /**
-   * When the judging budget runs out: set by the first judge(), not by construction, so the
-   * registry reads the call makes first (prefetch() runs beside them) never spend it.
+   * When the judging budget runs out (judgeDeadline): outside a call it starts at the first judge(),
+   * not at construction, so the registry reads the call makes first (prefetch() runs beside them)
+   * never spend it.
    */
-  private deadlineAt: number | null = null;
+  private readonly first: { at: number | null } = { at: null };
   private get deadline(): number {
-    return this.deadlineAt ?? Date.now() + HELD_CHECK_BUDGET_MS;
+    const remaining = remainingCallBudgetMs();
+    if (Number.isFinite(remaining)) return Date.now() + Math.max(0, remaining - JUDGE_RESERVE_MS);
+    return this.first.at ?? Date.now() + HELD_CHECK_BUDGET_MS;
   }
 
   constructor(
@@ -80,7 +98,7 @@ export class HeldJudge {
   async judge(requests: Array<{ pkg: string; versions: string[] }>): Promise<void> {
     if (!this.sources) return;
     const sources = this.sources;
-    this.deadlineAt ??= Date.now() + HELD_CHECK_BUDGET_MS;
+    const deadline = judgeDeadline(this.first);
     await Promise.all([...new Set(requests.map((r) => r.pkg))].map((pkg) => this.readSpecs(pkg)));
     const releases: Array<{ key: string; specs: Record<string, string> }> = [];
     for (const { pkg, versions } of requests) {
@@ -94,7 +112,7 @@ export class HeldJudge {
       }
     }
     if (releases.length === 0) return;
-    for (const [key, check] of await heldAdvisories(sources, this.query, releases, this.deadline)) {
+    for (const [key, check] of await heldAdvisories(sources, this.query, releases, deadline)) {
       this.checks.set(key, check);
       this.fromBatch.add(key);
     }
@@ -185,12 +203,14 @@ export const REQUIREMENT_RANGE_NOTE =
  */
 export class RequirementJudge {
   private readonly checks = new Map<string, HeldCheck>();
-  private deadlineAt: number | null = null;
+  private readonly first: { at: number | null } = { at: null };
 
   constructor(
     private readonly sources: RequirementSources | null,
     private readonly query: AdvisoryQuery,
     private readonly selected?: (ecosystem: RequirementEcosystem, name: string) => string | null,
+    /** PyPI: the Python versions the project declares (RequirementOptions.pythons). */
+    private readonly pythons?: readonly string[] | null,
   ) {}
 
   private key(ecosystem: string, pkg: string, version: string): string {
@@ -205,7 +225,7 @@ export class RequirementJudge {
   /** Judge these releases (those not judged yet): one advisory lookup for all their requirements. */
   async judge(requests: Array<{ ecosystem: string; pkg: string; versions: string[] }>): Promise<void> {
     if (!this.sources) return;
-    this.deadlineAt ??= Date.now() + HELD_CHECK_BUDGET_MS;
+    const deadline = judgeDeadline(this.first);
     const releases = new Map<string, { key: string; ecosystem: RequirementEcosystem; name: string; version: string }>();
     for (const { ecosystem, pkg, versions } of requests) {
       if (!this.reads(ecosystem)) continue;
@@ -215,7 +235,7 @@ export class RequirementJudge {
       }
     }
     if (releases.size === 0) return;
-    const answer = await requirementAdvisories(this.sources, this.query, [...releases.values()], { deadline: this.deadlineAt, ...(this.selected ? { selected: this.selected } : {}) });
+    const answer = await requirementAdvisories(this.sources, this.query, [...releases.values()], { deadline, ...(this.selected ? { selected: this.selected } : {}), pythons: this.pythons ?? null });
     for (const [key, check] of answer) this.checks.set(key, check);
   }
 
@@ -249,7 +269,7 @@ export class RequirementJudge {
         return {
           unsafe: (v) => unchecked(v) || affected(pkg, v),
           notChecked: unchecked,
-          reason: reasons[0] ?? "what they require was not examined",
+          reason: reasons[0] ?? "a call examines only the smallest and newest candidates in a range",
           note: REQUIREMENT_RANGE_NOTE,
         };
       },
@@ -263,11 +283,16 @@ const PYPI_CANDIDATES_EACH_END = 3;
 /**
  * The releases of a safe list judged before any is named: npm's own (heldRangeCandidates), the
  * same on crates.io (the sparse index lists every release's requirements in one read), fewer on
- * PyPI, and none on Go, where the named picks are judged afterwards and never left out.
+ * PyPI, and none on Go, where the named picks are judged afterwards and never left out. On PyPI
+ * each costs a request naming that release, so `installed` (the `from` version, when it is not the
+ * one being judged) is never among them: its version never reaches the registry.
  */
-export function judgedRangeCandidates(ecosystem: string, ownSafe: string[], above: (v: string) => boolean): string[] {
+export function judgedRangeCandidates(ecosystem: string, ownSafe: string[], above: (v: string) => boolean, installed?: string | null): string[] {
   if (ecosystem === "Go") return [];
-  if (ecosystem === "PyPI") return [...new Set([...ownSafe.filter(above).slice(0, PYPI_CANDIDATES_EACH_END), ...ownSafe.slice(-PYPI_CANDIDATES_EACH_END)])];
+  if (ecosystem === "PyPI") {
+    const pool = installed ? ownSafe.filter((v) => v !== installed) : ownSafe;
+    return [...new Set([...pool.filter(above).slice(0, PYPI_CANDIDATES_EACH_END), ...pool.slice(-PYPI_CANDIDATES_EACH_END)])];
+  }
   return heldRangeCandidates(ownSafe, above);
 }
 
@@ -420,6 +445,8 @@ async function offerJudgedOutside(
     now: Date;
     /** PyPI: false for a release that does not support the project's Python (never offered). */
     supported?: (version: string) => boolean;
+    /** PyPI: the installed version when it is not `to`: never judged here (judging it names it to the registry). */
+    installed?: string | null;
   },
   published: (v: string) => string | null,
   ecosystem: CheckEcosystem = "npm",
@@ -435,6 +462,7 @@ async function offerJudgedOutside(
     .filter(
       (v) =>
         !excluded.has(v) &&
+        v !== input.installed &&
         !isPrereleaseIn(ecosystem, v) &&
         rangeAdmits(ecosystem, rc.range, v) !== true &&
         settled(v) &&
@@ -470,6 +498,7 @@ export async function offerRequirementCleanOutside(input: {
   advisories: readonly AdvisoryRanges[] | null | undefined;
   now: Date;
   supported?: (version: string) => boolean;
+  installed?: string | null;
 }): Promise<void> {
   const { rc } = input;
   if (rc.smallest_safe_in_range !== null || rc.newest_safe_outside_range || !input.advisories) return;

@@ -35,13 +35,15 @@ import { normalizePypiName, PYPI_NAME } from "./upgrade-pypi.js";
 import type { PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource, ReleaseRecord, ReleaseRequirement, ReleaseRequirements } from "./release-metadata.js";
 import { pep440SpecAdmits } from "../tools/dependency-check-versions.js";
 import { readsAsPythonSpec, type ReleasePythonFacts } from "./project-python.js";
+import { evaluateMarker, markerText, parseMarker } from "./pep508-marker.js";
 
 const PYPI_URL = "https://pypi.org/pypi";
 const TIMEOUT_MS = 30_000;
 const TTL_SECONDS = 3600;
 /** A published release's requirements never change. */
 const REQUIREMENTS_TTL = 30 * 86_400;
-const requirementsKey = (normalized: string, version: string) => `pypi-requirements:v1:${normalized}@${version}`;
+// v2: a requirement keeps its environment marker; one cached without it is not read.
+const requirementsKey = (normalized: string, version: string) => `pypi-requirements:v2:${normalized}@${version}`;
 
 interface PyPIFile {
   upload_time_iso_8601?: string;
@@ -76,9 +78,13 @@ function isReadableSpecifier(spec: string): boolean {
 
 /**
  * What a release's `requires_dist` (PEP 508 strings) says an install of it brings: each entry's
- * project and version specifier. An entry gated by an extra (`; extra == "socks"`) is installed
- * only when that extra is asked for, and is left out. One with another environment marker
- * (Python version, platform) may be installed, so it is kept, flagged `conditional`. A direct URL
+ * project and version specifier. An entry whose marker is false when no extra is asked for
+ * (`; extra == "socks"`, `; sys_platform == "win32" and extra == "y"`) is left out; one whose marker
+ * holds then (`; extra != "y"`) is unconditional. One whose marker depends on the Python version or
+ * the platform may be installed, so it is kept, flagged `conditional`, with the marker in canonical
+ * form (release-requirements.ts judges it against the project's Pythons). A marker that does not
+ * parse leaves the entry out when it names `extra` (as before), else keeps it conditional with no
+ * marker text. A direct URL
  * reference, or a name or specifier that is not one, is counted `unreadable` and never passed on.
  */
 export function parseRequiresDist(requiresDist: unknown): ReleaseRequirements {
@@ -92,7 +98,13 @@ export function parseRequiresDist(requiresDist: unknown): ReleaseRequirements {
     const at = entry.indexOf(";");
     const head = at < 0 ? entry : entry.slice(0, at);
     const marker = at < 0 ? "" : entry.slice(at + 1).trim();
-    if (/\bextra\b/.test(marker)) continue;
+    let gate: { marker?: string } | null = null;
+    if (marker) {
+      const node = parseMarker(marker);
+      const value = node ? evaluateMarker(node) : null;
+      if (value === false || (!node && /\bextra\b/.test(marker))) continue;
+      if (value === null) gate = node ? { marker: markerText(node) } : {};
+    }
     const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(head);
     const rest = m ? m[2].trim() : "";
     const spec = rest.replace(/^\(\s*/, "").replace(/\s*\)$/, "").replace(/\s+/g, "");
@@ -101,7 +113,7 @@ export function parseRequiresDist(requiresDist: unknown): ReleaseRequirements {
       continue;
     }
     const name = normalizePypiName(m[1]);
-    out.set(`${name}\0${spec}`, { name, spec, ...(marker ? { conditional: true as const } : {}) });
+    out.set(`${name}\0${spec}`, { name, spec, ...(gate ? { conditional: true as const, ...gate } : {}) });
   }
   return { requirements: [...out.values()], unreadable };
 }

@@ -15,9 +15,13 @@
 - A copy is dev-only only when no runtime root reaches it; where that cannot be read whole, the scope is unknown (treated as runtime).
 - A project's own packages (Cargo workspace and `path =` crates, go.work modules, uv and Poetry local packages) are not dependencies and no longer make a scan NOT CHECKED (private); the scan counts them in `own_packages`.
 - npm security placeholders (`0.0.N-security`) are listed under `security_placeholders` with `remove_dependency`, never counted clean.
-- `dependency_check` gives `review` when a Go, crates.io or PyPI release's own requirements carry advisories, or when a PyPI release does not support the Python the project declares; `unknown` when those cannot be read.
+- `dependency_check` gives `review` when a Go, crates.io or PyPI release's own requirements carry advisories, or when a PyPI release's `requires_python` lower bound excludes a Python the project declares; `unknown` when those cannot be read. An upper cap on `requires_python` (scipy 1.11.3, `<3.13,>=3.9`) is a note in `python_support` and the release stays a pick (uv ignores it; pip judges only the running interpreter).
+- PyPI requirements are judged by their environment markers against the Python versions the project declares: one no declared Python installs is dropped (botocore 1.40.0's `urllib3<1.27; python_version < "3.10"` in a `>=3.10` project), one that applies on some says on which, and one that depends on the platform, or on a project that declares no Python, is a caveat (review at most, never by itself avoid). `x; sys_platform == "win32" and extra != "y"` is no longer read as extras-only.
+- The project's Python is read from more declarations: `>3.9` keeps the 3.9 series, Poetry `python = "3.11.*"` and space-separated clauses (`">=3.9 <4.0"`); a declaration that cannot be read gives an info `python_support` signal saying so.
+- `dependency_check` judges held dependencies and requirements until the call's remaining budget (less a reserve for writing the answer), not a fixed 10 s, so a cold batch no longer leaves a release NOT CHECKED it had time to judge.
+- A Go minimum whose clearing release was not looked up in the call (the per-call cap, the deadline, a failed lookup) says so (`fixed_in_not_looked_up`), apart from "no later release clears it".
 - `dependency_check` flags a PyPI name one or two edits from a popular project: `review` ("did you mean"), `avoid` when under 30 days old with at most 3 releases.
-- `vulnerability_scan` and `upgrade_planner` judge a Go, crates.io or PyPI direct upgrade by what the target release itself requires: when that carries advisories or could not be read, the step says so and the target is not a clean fix (the planner withholds it from `targetVersion`); at most 10 targets are examined per call, and `requirements_note` and the plan summary count the rest.
+- `vulnerability_scan` and `upgrade_planner` judge a Go, crates.io or PyPI direct upgrade by what the target release itself requires. On crates.io and PyPI, a target whose requirements carry advisories or could not be read is not a clean fix (withheld from `targetVersion` and `fixed_version`). On Go, whose requirements are minimums the project raises afterwards, the target is kept and the step and the recommendation carry the minimums, the advisories they carry and the `go get` that raises them (or that the go.mod was not examined). At most 10 targets are examined per call, and `requirements_note` and the plan summary count the rest.
 - A transitive fix path that could not be read is `not_determined` (NOT DETERMINED), not "waiting on upstream"; a PyPI copy blocked by a parent the project declares is an upgrade of that parent.
 - A parent upgrade is a fix only when every holder of that parent moves; `parentUpgrades[].paths` counts them.
 - An npm parent release that fixes a copy and carries over only affected dependencies the installed parent already holds is named, with what it carries over.
@@ -31,7 +35,7 @@
 - pnpm tarball locations and yarn aliases mark the package they belong to, so a neighbouring package is no longer made private.
 - A semantic-recall query that names a private package is not sent to a remote embedding provider: recall is skipped for that call and the answer says so.
 - `_meta.privacy` and `_meta.sources` of `vulnerability_scan`, `dependency_check` and `upgrade_impact` name the hosts the call actually sent requests to, redirect hops included, and say when nothing was sent.
-- `dependency_check` asks PyPI for a judged release's own document by version when it is not the latest release (the only place its requirements are served).
+- `dependency_check` asks PyPI for a judged release's own document by version when it is not the latest release (the only place its requirements are served); never for the installed (`from`) version unless it is also `to`.
 
 ### Fixed
 
@@ -45,7 +49,7 @@
 - A merge-conflicted npm or bun lockfile whose blocks are all closed is judged by the locations it holds.
 - Damaged or truncated lockfiles and manifests (JavaScript, Python, Go, Cargo, Ruby, PHP) and an unparseable package.json are reported UNREADABLE or PARTIAL, never read as complete or absent.
 - gems.locked, go.work `replace` directives and pyproject.toml exact pins are read.
-- A direct Go upgrade says when the fixed release needs a newer Go than go.mod states.
+- A direct Go upgrade says when the fixed release needs a newer Go than go.mod states, for the final target when the plan raises it.
 - The Go requirement caveat claims the minimum only for modules the project's build uses.
 - PyPI answers say what holds a release back: no release that supports the project's Python, or none clear of the advisories on it.
 - A proceed beside an unmaintained-package notice names the notice.
@@ -57,7 +61,9 @@
 - `developer_dna` reads only the rows it uses.
 - `--setup` accepts a config with a UTF-8 BOM, refuses one that is not UTF-8 or has duplicate or second 4da entries, keeps file permissions, and removes its backup after a failed write.
 - A cold scan reads advisory records 48 at a time instead of 24.
-- The README, SECURITY.md, the Gemini extension and the .mcpb description state what the code does: pinned versions, which tools send which versions to a registry, that ecosystem pulse sends dependency names to Hacker News search, model-instance raters, `gems.locked`, and the concise scan's size (about 10k tokens for about 290 advisories).
+- A range check's "not examined" reason no longer repeats itself.
+- A release blocked because CI on the tagged commit was cancelled says to re-run CI on that commit, not "Fix main".
+- The README, SECURITY.md, the Gemini extension and the .mcpb description state what the code does (the .mcpb text no longer says only package names and versions leave the machine, and carries no tool count; `dependency_check`'s privacy note and README say which per-release documents are requested): pinned versions, which tools send which versions to a registry, that ecosystem pulse sends dependency names to Hacker News search, model-instance raters, `gems.locked`, and the concise scan's size (about 10k tokens for about 290 advisories).
 - An unreadable manifest is called a file, not a lockfile.
 
 ### Hardening

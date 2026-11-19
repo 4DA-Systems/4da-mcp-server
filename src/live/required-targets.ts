@@ -5,10 +5,13 @@
  *
  * A target clean of its own package's advisories can still bring advisories in: gin v1.9.1's own
  * go.mod requires old golang.org/x/crypto, x/net and protobuf, so taking it raised a project from
- * 11 advisories to 52. A target whose requirements carry advisories is not a clean fix
- * (`requiresAffected`); one whose requirements could not be read was not examined
- * (`requiresUnchecked`). Neither is ever reported as checked against every advisory
- * (fix-paths.ts targetCheckedAll).
+ * 11 advisories to 52.
+ * - crates.io, PyPI: a requirement installs with the target, so one that is affected makes it no
+ *   clean fix (`requiresAffected`), and one not examined leaves it unconfirmed (`requiresUnchecked`);
+ *   neither is reported as checked against every advisory (fix-paths.ts targetCheckedAll).
+ * - Go: requirements are minimums the project raises in its own go.mod afterwards, so the target is
+ *   kept, with the minimums that carry advisories and the `go get` raises (`requiresMinimums`), or
+ *   with "not examined" (`requiresMinimumsUnchecked`).
  *
  * Bounded: at most MAX_REQUIRED_TARGETS distinct releases per tool call (shared by every tool the
  * call runs, the scan's planner verdicts included), within the call's budget, through the cached
@@ -17,7 +20,7 @@
  */
 
 import { callMemo } from "../call-budget.js";
-import { andList, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
+import { andList, clearsText, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { isRequirementEcosystem, requirementAdvisories, type RequirementEcosystem, type RequirementRelease, type RequirementSources } from "./release-requirements.js";
 import { compareVersions, inEcosystemForm, isComparable } from "./version-compare.js";
 import type { FixTargetResult } from "./fix-paths.js";
@@ -67,6 +70,8 @@ export async function withRequiredTargets(
   items: RequiredTargetItem[],
   deadline: number,
   selected?: (ecosystem: RequirementEcosystem, name: string) => string | null,
+  /** PyPI: the Python versions the project declares (RequirementOptions.pythons). */
+  pythons?: readonly string[] | null,
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
   const examined = examinedThisCall();
@@ -75,7 +80,7 @@ export async function withRequiredTargets(
     if (!item.clean.target || !isRequirementEcosystem(item.ecosystem) || !sources.reads(item.ecosystem)) continue;
     const release = `${item.ecosystem}\0${item.name}@${item.clean.target}`;
     if (!examined.keys.has(release) && examined.keys.size >= MAX_REQUIRED_TARGETS) {
-      out.set(item.key, { ...item.clean, requiresUnchecked: notExaminedCapText() });
+      out.set(item.key, unexamined(item.ecosystem, item.clean, notExaminedCapText()));
       continue;
     }
     examined.keys.add(release);
@@ -84,19 +89,27 @@ export async function withRequiredTargets(
   if (releases.length === 0) return out;
   let answer: Awaited<ReturnType<typeof requirementAdvisories>>;
   try {
-    answer = await requirementAdvisories(sources, query, releases, { deadline, ...(selected ? { selected } : {}) });
+    answer = await requirementAdvisories(sources, query, releases, { deadline, ...(selected ? { selected } : {}), pythons: pythons ?? null });
   } catch (err) {
     const why = `the check failed: ${err instanceof Error ? err.message.slice(0, 120) : "unknown error"}`;
-    for (const r of releases) out.set(r.key, { ...items.find((i) => i.key === r.key)!.clean, requiresUnchecked: why });
+    for (const r of releases) out.set(r.key, unexamined(r.ecosystem, items.find((i) => i.key === r.key)!.clean, why));
     return out;
   }
   for (const item of items) {
     const check = answer.get(item.key);
     if (!check || !releases.some((r) => r.key === item.key)) continue;
-    if (check.status === "unchecked") out.set(item.key, { ...item.clean, requiresUnchecked: check.reason });
-    else if (check.affected.length > 0) out.set(item.key, { ...item.clean, requiresAffected: { affected: check.affected, examined: check.examined ?? check.affected.length } });
+    if (check.status === "unchecked") out.set(item.key, unexamined(item.ecosystem, item.clean, check.reason));
+    else if (check.affected.length > 0) {
+      const found = { affected: check.affected, examined: check.examined ?? check.affected.length };
+      out.set(item.key, item.ecosystem === "Go" ? { ...item.clean, requiresMinimums: found } : { ...item.clean, requiresAffected: found });
+    }
   }
   return out;
+}
+
+/** A target whose requirements were not examined: withheld on crates.io and PyPI (they install with it), kept on Go (minimums the project raises). */
+function unexamined(ecosystem: string, clean: FixTargetResult, why: string): FixTargetResult {
+  return ecosystem === "Go" ? { ...clean, requiresMinimumsUnchecked: why } : { ...clean, requiresUnchecked: why };
 }
 
 /** A step reason requiresNote wrote for a target whose own requirements carry advisories. */
@@ -115,6 +128,14 @@ const advisories = (n: number) => `${n} advisor${n === 1 ? "y" : "ies"}`;
 export function requiresNote(clean: FixTargetResult, ecosystem: string): string | null {
   if (!clean.target) return null;
   const target = inEcosystemForm(ecosystem, clean.target);
+  if (clean.requiresMinimums) {
+    const affected = clean.requiresMinimums.affected;
+    const total = affected.reduce((n, d) => n + d.ids.length, 0);
+    return `${target} clears this package's own advisories, but its go.mod sets ${affected.length === 1 ? "a minimum version" : `${affected.length} minimum versions`} with ${advisories(total)} in all: ${requiredList(affected, ecosystem, target)}; ${raiseText(affected, ecosystem)}`;
+  }
+  if (clean.requiresMinimumsUnchecked !== undefined) {
+    return `${target} clears this package's own advisories; what its go.mod requires was not examined (${clean.requiresMinimumsUnchecked}): after upgrading, run go mod tidy and dependency_check on ${target}, which names any minimum to raise`;
+  }
   if (clean.requiresAffected) {
     const affected = clean.requiresAffected.affected;
     const total = affected.reduce((n, d) => n + d.ids.length, 0);
@@ -131,7 +152,7 @@ function requiredList(affected: HeldDependency[], ecosystem: string, target: str
   if (ecosystem !== "Go") return heldText(target, affected).replace(`${target} `, "");
   const shown = affected.slice(0, 4).map((d) => {
     const which = d.selected ? `${d.name} ${d.version} (your go.mod's selection over the ${d.spec} it requires)` : `${d.name} ${d.version}`;
-    const clears = d.fixedIn ? `${d.fixedIn} clears ${d.ids.length === 1 ? "it" : "them"}` : `no release that clears ${d.ids.length === 1 ? "it" : "them"} is known`;
+    const clears = clearsText(d);
     return `${which} (${advisories(d.ids.length)}; ${clears})`;
   });
   const rest = affected.length - shown.length;

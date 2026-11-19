@@ -9,10 +9,16 @@
  * declares none, or one that does not read as a version specifier, gets null and nothing is judged
  * against it: a Python version is never assumed.
  *
- * A release supports the project when its `requires_python` admits every Python the declaration
- * covers: the lowest version declared, and each later 3.x minor up to the declared upper bound (or
- * up to NEWEST_PYTHON_MINOR when there is none). A lock for the whole project (uv, poetry) holds a
- * release to that: `uv lock` for `requires-python >=3.9` refuses requests 2.33.0 (Python>=3.10).
+ * A declaration that is there but cannot be read is reported as such (readProjectPythonUnread), so
+ * an answer says it was not read instead of silently judging nothing.
+ *
+ * A release is unsupported only when its `requires_python` lower bound excludes a Python the
+ * declaration covers (the lowest version declared, and each later 3.x minor up to the declared
+ * upper bound, or NEWEST_PYTHON_MINOR when there is none): `uv lock` for `requires-python >=3.9`
+ * refuses requests 2.33.0 (Python>=3.10). An upper cap or an excluded series on the release
+ * (scipy 1.11.3, `<3.13,>=3.9`) does not make it unsupported: uv ignores upper bounds on a
+ * dependency's requires-python and pip judges only the running interpreter, so it is a note
+ * (`capped`), and the release stays a pick.
  */
 
 import * as path from "node:path";
@@ -42,23 +48,35 @@ export interface ReleasePythonFacts {
 }
 
 export type PythonSupport =
-  | { status: "supported" }
+  | { status: "supported"; capped?: { requires: string; pythons: string[] } }
   | { status: "unsupported"; requires: string; missing: string[] }
   | { status: "unread"; why: string };
 
 /** Characters a declaration may hold to be read (and printed) at all. */
 const DECLARATION = /^[0-9A-Za-z.,*!<>=~^ _-]{1,120}$/;
 
-/** The project's declared Python, or null when it declares none that can be read. */
-export function readProjectPython(root: string): ProjectPython | null {
+/** What the project's files declare: a readable Python, one that is there but cannot be read (where), or nothing. */
+function readDeclaration(root: string): { python: ProjectPython } | { unread: string } | null {
   for (const read of [fromPyproject, fromUvLock, fromPipfile, fromPythonVersion, fromRuntimeTxt]) {
     const found = read(root);
     if (found === undefined) continue;
-    if (found === null) return null;
+    if ("unread" in found) return found;
     const covers = coveredPythons(found.spec);
-    return covers ? { ...found, covers } : null;
+    return covers ? { python: { ...found, covers } } : { unread: found.source };
   }
   return null;
+}
+
+/** The project's declared Python, or null when it declares none that can be read. */
+export function readProjectPython(root: string): ProjectPython | null {
+  const found = readDeclaration(root);
+  return found && "python" in found ? found.python : null;
+}
+
+/** Where the project declares a Python that could not be read (e.g. "pyproject.toml [project] requires-python"); null when it declares a readable one or none. */
+export function readProjectPythonUnread(root: string): string | null {
+  const found = readDeclaration(root);
+  return found && "unread" in found ? found.unread : null;
 }
 
 /** Whether `release` supports every Python the project declares. */
@@ -69,7 +87,22 @@ export function releasePythonSupport(project: ProjectPython, release: ReleasePyt
   const answers = project.covers.map((p) => [p, pythonSpecAdmits(release.requiresPython!, p)] as const);
   if (answers.some(([, a]) => a === null)) return { status: "unread", why: "the Python requirement PyPI lists for it does not read as a version specifier" };
   const missing = answers.filter(([, a]) => a === false).map(([p]) => p);
-  return missing.length === 0 ? { status: "supported" } : { status: "unsupported", requires: release.requiresPython, missing };
+  if (missing.length === 0) return { status: "supported" };
+  // Only the lower bound decides: a Python above it that an upper cap or exclusion leaves out is a note.
+  const floor = lowerBoundSpec(release.requiresPython);
+  const below = missing.filter((p) => floor !== "" && pythonSpecAdmits(floor, p) === false);
+  if (below.length > 0) return { status: "unsupported", requires: release.requiresPython, missing: below };
+  return { status: "supported", capped: { requires: release.requiresPython, pythons: missing } };
+}
+
+/** The lower-bound clauses of a specifier set (`>=`, `>`, and `~=` as its floor), joined; "" when it has none. */
+function lowerBoundSpec(spec: string): string {
+  return spec
+    .split(",")
+    .map((c) => c.trim())
+    .map((c) => (c.startsWith("~=") ? `>=${c.slice(2)}` : c))
+    .filter((c) => /^(>=|>)(?!=)/.test(c))
+    .join(",");
 }
 
 /** Each clause of a PEP 440 specifier set reads (pep440SpecAdmits stops at the first false clause). */
@@ -78,12 +111,12 @@ export function readsAsPythonSpec(spec: string): boolean {
   return clauses.length > 0 && clauses.every((c) => pythonSpecAdmits(c, "3.0") !== null);
 }
 
-type Found = { declared: string; spec: string; source: string } | null | undefined;
+type Found = { declared: string; spec: string; source: string } | { unread: string } | undefined;
 
-/** A declaration read from `source`: null when it is there but cannot be read (nothing is judged then). */
+/** A declaration read from `source`: `unread` when it is there but cannot be read (nothing is judged then, and the answer says so). */
 function declaration(raw: string, spec: string | null, source: string): Found {
   const declared = raw.trim();
-  if (!DECLARATION.test(declared) || spec === null || !readsAsPythonSpec(spec)) return null;
+  if (!DECLARATION.test(declared) || spec === null || !readsAsPythonSpec(spec)) return { unread: source };
   return { declared, spec, source };
 }
 
@@ -157,14 +190,14 @@ function fromPythonVersion(root: string): Found {
   if (line === undefined) return undefined;
   // "3.12", "3.12.1", "cpython-3.12.1", "3.13t"; a PyPy or "system" line names no CPython version.
   const m = /^(?:cpython-?|python-?)?(\d+\.\d+(?:\.\d+)?)(?![\d.])/i.exec(line);
-  return m ? declaration(m[1], bareVersion(m[1]), ".python-version") : null;
+  return m ? declaration(m[1], bareVersion(m[1]), ".python-version") : { unread: ".python-version" };
 }
 
 function fromRuntimeTxt(root: string): Found {
   const content = read(root, "runtime.txt");
   if (content === null) return undefined;
   const m = /^\s*python-(\d+\.\d+(?:\.\d+)?)\s*$/.exec(content.split("\n")[0] ?? "");
-  return m ? declaration(m[1], bareVersion(m[1]), "runtime.txt") : null;
+  return m ? declaration(m[1], bareVersion(m[1]), "runtime.txt") : { unread: "runtime.txt" };
 }
 
 /**
@@ -172,8 +205,10 @@ function fromRuntimeTxt(root: string): Found {
  * bound (NEWEST_PYTHON_MINOR when it has none), as far as it admits them. Null without a lower bound.
  */
 export function coveredPythons(spec: string): string[] | null {
-  const low = lowestPython(spec);
+  let low = lowestPython(spec);
   if (!low) return null;
+  // `>3.9` admits 3.9.1 and later 3.9 patch releases: the series stays in, from its first admitted patch.
+  if (pythonSpecAdmits(spec, low) === false && /^\d+\.\d+$/.test(low) && pythonSpecAdmits(spec, `${low}.1`) === true) low = `${low}.1`;
   const [major, minor] = low.split(".").map(Number);
   if (!Number.isInteger(major)) return null;
   const top = upperMinor(spec);
