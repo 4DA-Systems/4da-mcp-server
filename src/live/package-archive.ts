@@ -33,6 +33,15 @@ export const MAX_FILE_BYTES = 2 * 1024 * 1024;
  */
 export const MAX_ARCHIVE_TEXT_FILES = 32;
 export const MAX_ARCHIVE_TEXT_BYTES = 8 * 1024 * 1024;
+/**
+ * The text files an archive reader kept. `stoppedAtLimit` is true when MAX_ARCHIVE_TEXT_FILES or
+ * MAX_ARCHIVE_TEXT_BYTES ended the read: more accepted files were there than are held here.
+ */
+export class ArchiveTextFiles extends Map<string, string> {
+  stoppedAtLimit = false;
+}
+/** Whether an archive reader's files stopped at its limit (see ArchiveTextFiles). */
+export const stoppedAtLimit = (files: ReadonlyMap<string, string>): boolean => files instanceof ArchiveTextFiles && files.stoppedAtLimit;
 /** An entry path longer than this is not a file anyone ships; it is skipped unread. */
 export const MAX_ENTRY_PATH = 512;
 
@@ -160,7 +169,7 @@ function segments(path: string): string[] {
  * Keys are the archive paths as stored. Oversized or binary (NUL-containing)
  * files are skipped.
  */
-export function readRootTextFiles(gz: Buffer, accept: (basename: string) => boolean): Map<string, string> {
+export function readRootTextFiles(gz: Buffer, accept: (basename: string) => boolean): ArchiveTextFiles {
   if (gz.length > MAX_COMPRESSED_BYTES) {
     throw new ArchiveError(`archive is ${gz.length} bytes compressed (cap ${MAX_COMPRESSED_BYTES})`);
   }
@@ -174,7 +183,7 @@ export function readRootTextFiles(gz: Buffer, accept: (basename: string) => bool
     throw new ArchiveError(`archive is not valid gzip: ${(err as Error).message}`);
   }
 
-  const files = new Map<string, string>();
+  const files = new ArchiveTextFiles();
   let kept = 0;
   for (const entry of iterateTar(tar)) {
     if (entry.type !== "0" && entry.type !== "7") continue;
@@ -183,7 +192,10 @@ export function readRootTextFiles(gz: Buffer, accept: (basename: string) => bool
     if (parts.length === 0 || parts.length > 2) continue;
     if (!accept(parts[parts.length - 1])) continue;
     if (entry.data.length > MAX_FILE_BYTES || entry.data.includes(0)) continue;
-    if (files.size >= MAX_ARCHIVE_TEXT_FILES || kept + entry.data.length > MAX_ARCHIVE_TEXT_BYTES) break;
+    if (files.size >= MAX_ARCHIVE_TEXT_FILES || kept + entry.data.length > MAX_ARCHIVE_TEXT_BYTES) {
+      files.stoppedAtLimit = true;
+      break;
+    }
     kept += entry.data.length;
     files.set(entry.path, entry.data.toString("utf8"));
   }

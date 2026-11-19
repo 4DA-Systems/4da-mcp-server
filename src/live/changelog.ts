@@ -377,6 +377,8 @@ function adornmentLevel(ch: string): number {
  * while it does.
  */
 export const PARSE_BUDGET_MS = 1500;
+/** What an answer says when a changelog parse stopped at PARSE_BUDGET_MS. */
+export const CHANGELOG_INCOMPLETE_NOTE = "reading this changelog stopped at the time allowed for one file; sections after the last one listed were not read";
 
 export interface ParsedChangelog {
   sections: ChangelogSection[];

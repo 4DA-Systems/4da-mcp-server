@@ -104,8 +104,9 @@ const MB = 1024 * 1024;
  * The most a response body may hold, by host. A body is read into memory whole (JSON, text or an
  * archive that has its own, smaller cap), so without a limit one oversized answer cost gigabytes
  * of memory, tens of seconds of a blocked event loop and a cache row of the same size. Each
- * limit is several times the largest real answer measured for that host (the full npm document
- * of a package with thousands of releases is tens of megabytes).
+ * limit sits above the largest real answer measured for that host: npm documents of packages
+ * with thousands of releases run up to 75 MB (cap 128 MB), and a first page of 100 GitHub
+ * releases up to 13.3 MB (electron/electron; cap 64 MB).
  */
 const RESPONSE_CAPS: Readonly<Record<string, number>> = {
   "registry.npmjs.org": 128 * MB,
@@ -119,8 +120,8 @@ const RESPONSE_CAPS: Readonly<Record<string, number>> = {
   "proxy.golang.org": 32 * MB,
   "storage.googleapis.com": 32 * MB,
   "hn.algolia.com": 4 * MB,
-  "api.github.com": 16 * MB,
-  "raw.githubusercontent.com": 16 * MB,
+  "api.github.com": 64 * MB,
+  "raw.githubusercontent.com": 64 * MB,
 };
 const DEFAULT_RESPONSE_CAP = 32 * MB;
 
