@@ -481,7 +481,8 @@ async function enhanceRecallWithSemantics(
   if (!sem.queryEmbedded) {
     return {
       ...lexicalRecallResult(lexical.slice(0, limit), rows.length),
-      semantic_note: "embedding provider unreachable — used lexical recall",
+      // Withheld because the query names a private package (embeddings.ts), else the provider did not answer.
+      semantic_note: sem.privateWithheld?.note ?? "embedding provider unreachable — used lexical recall",
     };
   }
 
@@ -511,5 +512,6 @@ async function enhanceRecallWithSemantics(
     newly_embedded: sem.newlyEmbedded,
     embedding_model: sem.model,
     recall_mode: sem.embeddedCount > 0 ? "hybrid" : "ranked_lexical",
+    ...(sem.privateWithheld ? { semantic_note: sem.privateWithheld.note } : {}),
   };
 }

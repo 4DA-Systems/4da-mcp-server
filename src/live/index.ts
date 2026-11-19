@@ -554,6 +554,11 @@ export class LiveIntelligence {
     return this.privateMatch(ecosystem, name)?.why ?? null;
   }
 
+  /** privateReason with no ecosystem said: privateMatch tries every ecosystem whichever it is asked first (PrivateNameSource.privateAnywhere). */
+  privateAnywhere(name: string): string | null {
+    return this.privateMatch("npm", name)?.why ?? null;
+  }
+
   /**
    * privateReason, with the ecosystem whose rule or lockfile makes the name private (the briefing
    * reported a PyPI-private name as `npm`: blind audit round 5, 5).
