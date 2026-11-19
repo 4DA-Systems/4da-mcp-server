@@ -110,6 +110,12 @@ describe("PyPI names compare PEP 503-normalised", () => {
           const q = JSON.parse(String(init?.body)) as { package: { name: string } };
           return json({ vulns: ours(q.package.name) ? [TYPING] : [] });
         }
+        // One release's own document (its requires_dist): served for a release the project lists.
+        const release = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+        if (release) {
+          const version = decodeURIComponent(release[2]);
+          return ours(decodeURIComponent(release[1])) && RELEASES.includes(version) ? json({ info: { version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+        }
         const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
         if (pypi && ours(decodeURIComponent(pypi[1]))) {
           const releases = Object.fromEntries(RELEASES.map((v) => [v, [{ upload_time_iso_8601: "2025-06-01T00:00:00Z", yanked: false, requires_python: null }]]));

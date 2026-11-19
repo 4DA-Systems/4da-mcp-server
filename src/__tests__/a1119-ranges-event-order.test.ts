@@ -217,6 +217,12 @@ beforeEach(() => {
       return json({ vulns: OSV.filter((v) => v.affected?.some((a) => a.package?.name === q.package.name)) });
     }
     if (url.startsWith("https://api.npmjs.org/downloads/")) return json({ downloads: 50_000_000, package: "x" });
+    // One release's own document (its requires_dist): served for a release the project lists.
+    const release = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (release) {
+      const version = decodeURIComponent(release[2]);
+      return PYPI[decodeURIComponent(release[1])]?.includes(version) ? json({ info: { version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       const versions = PYPI[decodeURIComponent(pypi[1])];

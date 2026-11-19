@@ -266,6 +266,12 @@ function stub() {
       const q = JSON.parse(String(init?.body)) as { package: { name: string } };
       return json({ vulns: OSV[norm(q.package.name)] ?? [] });
     }
+    // One release's own document (its requires_dist): served for a release the project lists.
+    const release = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (release) {
+      const version = decodeURIComponent(release[2]);
+      return PYPI[norm(decodeURIComponent(release[1]))]?.includes(version) ? json({ info: { version, requires_dist: null } }) : json({ message: "Not Found" }, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       const name = norm(decodeURIComponent(pypi[1]));
