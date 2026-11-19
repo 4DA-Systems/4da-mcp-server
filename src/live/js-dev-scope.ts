@@ -73,12 +73,18 @@ interface YarnEntry {
   peers: string[];
 }
 
-function readYarnEntries(content: string): YarnEntry[] {
+/** The entries of a yarn.lock; `whole` is false when an entry or one of its lines was too long to read. */
+function readYarnEntries(content: string): { entries: YarnEntry[]; whole: boolean } {
   const entries: YarnEntry[] = [];
+  let whole = true;
   for (const block of content.split(/\r?\n(?=\S)/)) {
     const lines = block.split(/\r?\n/);
     const firstLine = lines[0];
-    if (firstLine.length > MAX_LOCKFILE_LINE || firstLine.startsWith("#")) continue;
+    if (firstLine.length > MAX_LOCKFILE_LINE) {
+      whole = false;
+      continue;
+    }
+    if (firstLine.startsWith("#")) continue;
     const header = /^"?(@?[^@\s"]+)@/.exec(firstLine);
     if (!header || header[1].startsWith("__")) continue;
     const entry: YarnEntry = { specs: yarnHeaderSpecs(firstLine), identity: null, workspaceDir: null, deps: [], peers: [] };
@@ -86,7 +92,10 @@ function readYarnEntries(content: string): YarnEntry[] {
     let section = "";
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
-      if (line.length > MAX_LOCKFILE_LINE) continue;
+      if (line.length > MAX_LOCKFILE_LINE) {
+        whole = false;
+        continue;
+      }
       const text = line.trim();
       if (text === "") continue;
       const indent = line.length - line.trimStart().length;
@@ -113,7 +122,7 @@ function readYarnEntries(content: string): YarnEntry[] {
     if (version) entry.identity = `${yarnPackageName(block, firstLine, header[1])}\0${version}`;
     entries.push(entry);
   }
-  return entries;
+  return { entries, whole };
 }
 
 /** A workspace directory a lockfile names, when it stays inside the project. */
@@ -155,7 +164,7 @@ export interface YarnInspection {
  * name, which can only make more copies runtime, never fewer.
  */
 export function inspectYarnLock(content: string, cwd: string, isInstance: (key: string) => boolean): YarnInspection {
-  const entries = readYarnEntries(content);
+  const { entries, whole } = readYarnEntries(content);
   const bySpec = new Map<string, number>();
   const byName = new Map<string, number[]>();
   entries.forEach((entry, index) => {
@@ -199,7 +208,8 @@ export function inspectYarnLock(content: string, cwd: string, isInstance: (key: 
   if (!root) return inspection({ scopes: new Map(), declared: [], graded: false }, new Set());
 
   // The members: the entries berry writes for them, else the patterns package.json states.
-  let complete = true;
+  // An unreadable entry or line is part of the graph that cannot be followed.
+  let complete = whole;
   const berryDirs = entries.map((e) => e.workspaceDir).filter((d): d is string => d !== null);
   let memberDirs: string[];
   if (berryDirs.length > 0) {
@@ -222,6 +232,8 @@ export function inspectYarnLock(content: string, cwd: string, isInstance: (key: 
   }
   if (memberDirs.length > MAX_MEMBER_MANIFESTS) complete = false;
   const memberNames = new Set(manifests.map((m) => m.name).filter((n): n is string => n !== null));
+  // An edge to a package no entry installs (and no member provides) is where a damaged file stops.
+  for (const name of dangling) if (!memberNames.has(name)) complete = false;
 
   const runtimeRoots: number[] = [];
   const devRoots: number[] = [];
