@@ -45,6 +45,11 @@ export interface PrivateNameSource {
    * for it is not public), or null. Asked only for a request that names its ecosystem.
    */
   ecosystemPrivate?(ecosystem: string, name: string): string | null;
+  /**
+   * privateReason for a name with no ecosystem said, in one pass over every ecosystem. A source
+   * without it is asked once per ecosystem (privateNameInText reads every word of a text).
+   */
+  privateAnywhere?(name: string): string | null;
 }
 
 /** True when the source's project directory no longer exists. */
@@ -392,6 +397,50 @@ function privateWhy(ecosystem: string | null, name: string): string | null {
     }
   }
   // Found private anywhere in this process (a source may be gone, or not read the memory itself).
+  return rememberedPrivate(name, own?.installsPublicly?.bind(own))?.why ?? null;
+}
+
+/** What can be a package name in free text: a scoped npm name, a module or repository path, a scope or plain name of three characters or more. */
+const TEXT_NAME = /@[a-z0-9][\w.-]*\/[a-z0-9][\w.-]*|[a-z0-9][\w.-]*(?:\/[\w.-]+)+|@?[a-z0-9][\w.-]{2,}/gi;
+
+/**
+ * The first private package free text names, with why, or null. For text that would leave the
+ * machine with no ecosystem said (what an embedding provider is sent): every word that can be a
+ * package name is judged as a request's name is, by the asking project's rules, else every
+ * registered project's, and by every name a scan in this process found private, in any ecosystem.
+ * The text is read as readableText reads a task: escapes decoded, look-alike characters folded.
+ */
+export function privateNameInText(text: string): { name: string; why: string } | null {
+  if (sources.size === 0 && byKey.size === 0 && remembered.size === 0 && !context.getStore()) return null;
+  const seen = new Set<string>();
+  for (const match of readableText(text).matchAll(TEXT_NAME)) {
+    // Without the full stop or dash a sentence leaves after it.
+    let end = match[0].length;
+    while (end > 0 && (match[0][end - 1] === "." || match[0][end - 1] === "-")) end--;
+    const name = match[0].slice(0, end);
+    const key = name.toLowerCase();
+    if (name.length < 3 || seen.has(key)) continue;
+    seen.add(key);
+    const why = privateAnywhereWhy(name);
+    if (why) return { name, why };
+  }
+  return null;
+}
+
+/** Why `name` is private in any ecosystem, or null: privateWhy with no ecosystem, each source asked once where it can answer for all. */
+function privateAnywhereWhy(name: string): string | null {
+  const own = context.getStore();
+  for (const source of own ? [own] : liveSources()) {
+    if (source.privateAnywhere) {
+      const why = source.privateAnywhere(name);
+      if (why) return why;
+      continue;
+    }
+    for (const eco of ALL_ECOSYSTEMS) {
+      const why = source.privateReason(eco, name);
+      if (why) return why;
+    }
+  }
   return rememberedPrivate(name, own?.installsPublicly?.bind(own))?.why ?? null;
 }
 

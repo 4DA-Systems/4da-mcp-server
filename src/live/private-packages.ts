@@ -28,14 +28,14 @@
  * A private name is never sent and is reported as "not checked (private)", never as clean.
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import { stripTrailingCommas } from "./bun-lockfile.js";
 import { anySignatureChanged, signatureMap, type FileSignature } from "./file-signature.js";
 import { pushAll } from "../array-utils.js";
-import { textLines } from "./js-lockfile-readers.js";
+import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, textLines } from "./js-lockfile-readers.js";
+import { readRuleFile } from "./text-file.js";
 import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 import {
   CODE_HOSTS,
@@ -121,12 +121,30 @@ export interface PrivateIndexEntry {
    */
   local?: true;
   /**
+   * The directory a local entry's code is in, when the file says (a Cargo `path =`, the crate's own
+   * manifest, a uv `editable` / `directory` / `path` source, a `go.work` `use`): code inside the
+   * project is the project's own package, not a dependency (LiveIntelligence.getOwnPackageCount).
+   */
+  at?: string;
+  /** A `go.work` workspace module: the workspace's copy is built whatever version a go.mod requires. */
+  workspace?: true;
+  /**
    * The requirements option that makes every name of the file private (`--index-url`,
    * `--extra-index-url`, `--find-links`): a registry-kind reason, which the answer names with the
    * FOURDA_PUBLIC_MIRRORS escape (pre-publish round 10, W4).
    */
   wide?: string;
+  /**
+   * Set on an entry that stands for a whole file (`file`) that is there and could not be read, with
+   * why: the entry names no package (`name` is empty). What the folder installs from is then not
+   * known, so every name of the group is private (lockfileRegistryWide), never only the names a
+   * readable file happened to list.
+   */
+  unread?: string;
 }
+
+/** The entry that stands for a lockfile or manifest that could not be read (PrivateIndexEntry.unread). */
+const unreadEntry = (file: string, reason: string): PrivateIndexEntry => ({ name: "", version: null, registry: "a file that could not be read", file, unread: reason });
 
 /** Scopes one `.npmrc` maps to a non-public registry (`@acme:registry=...`). */
 export function npmrcPrivateScopes(content: string): string[] {
@@ -229,6 +247,43 @@ function parseFlow(text: string, start = 0): { value: YamlValue; end: number } {
   return { value: v, end: i };
 }
 
+/** Where the quoted scalar that opens `text` ends (the index after its closing quote), or -1. A double-quoted one may escape with a backslash. */
+function quotedEnd(text: string): number {
+  const quote = text[0];
+  if (quote !== '"' && quote !== "'") return -1;
+  for (let i = 1; i < text.length; i++) {
+    if (quote === '"' && text[i] === "\\") i++;
+    else if (text[i] === quote) return i + 1;
+  }
+  return -1;
+}
+
+const isSpaceChar = (c: string | undefined): boolean => c !== undefined && /\s/.test(c);
+
+/**
+ * `key: value` or `key:` on one YAML line: the key quoted, or plain up to its first `:`, which the
+ * line's end or whitespace must follow. Null for any other line. Read by position, so a long run of
+ * blanks in a line is walked once.
+ */
+function yamlMapEntry(line: string): { key: string; rest: string } | null {
+  const text = line.trim();
+  const after = (colon: number): string | null => {
+    const rest = text.slice(colon + 1);
+    return rest === "" || isSpaceChar(rest[0]) ? rest.trim() : null;
+  };
+  const closed = quotedEnd(text);
+  if (closed > 0) {
+    let i = closed;
+    while (isSpaceChar(text[i])) i++;
+    const rest = text[i] === ":" ? after(i) : null;
+    if (rest !== null) return { key: text.slice(0, closed), rest };
+  }
+  const colon = text.indexOf(":");
+  if (colon <= 0) return null;
+  const rest = after(colon);
+  return rest === null ? null : { key: text.slice(0, colon), rest };
+}
+
 /** The mappings of a YAML document (the subset above). */
 export function parseYamlSubset(content: string): YamlMap {
   const root: YamlMap = {};
@@ -238,12 +293,12 @@ export function parseYamlSubset(content: string): YamlMap {
     const line = stripComment(lines[n]);
     if (!line.trim() || line.trim().startsWith("-")) continue;
     const indent = line.length - line.trimStart().length;
-    const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^:]+?)\s*:(?:\s+(.*)|\s*)$/.exec(line);
-    if (!m) continue;
+    const entry = yamlMapEntry(line);
+    if (!entry) continue;
     while (stack.length > 1 && stack[stack.length - 1].indent >= indent) stack.pop();
     const parent = stack[stack.length - 1].map;
-    const key = unquote(m[1]);
-    let rest = (m[2] ?? "").trim();
+    const key = unquote(entry.key);
+    let rest = entry.rest;
     if (!rest) {
       const child: YamlMap = {};
       parent[key] = child;
@@ -343,8 +398,14 @@ export interface PnpmWorkspaceRegistries {
 
 /** `key: value`, the key quoted or plain; a plain key ends at the first `:` followed by a space or the line's end, so a URL key (`https://npm.acme.dev/:`) is read whole. */
 function yamlKeyValue(l: string): { key: string; value: string } | null {
-  const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|.+?):(?=\s|$)\s*(.*)$/.exec(l);
-  return m ? { key: unquote(m[1]), value: m[2].trim() } : null;
+  const text = l.trim();
+  const ends = (colon: number) => colon + 1 === text.length || isSpaceChar(text[colon + 1]);
+  const closed = quotedEnd(text);
+  if (closed > 0 && text[closed] === ":" && ends(closed)) return { key: unquote(text.slice(0, closed)), value: text.slice(closed + 1).trim() };
+  for (let colon = text.indexOf(":", 1); colon > 0; colon = text.indexOf(":", colon + 1)) {
+    if (ends(colon)) return { key: unquote(text.slice(0, colon)), value: text.slice(colon + 1).trim() };
+  }
+  return null;
 }
 
 /** Whether a flow collection's brackets (outside quotes) balance. */
@@ -464,7 +525,7 @@ export function pnpmWorkspaceRegistries(content: string): PnpmWorkspaceRegistrie
   let registry: string | null = null;
   let unread = false;
   const raw: string[] = [];
-  const lines = content.split(/\r?\n/).map((l) => stripComment(l).replace(/\s+$/, ""));
+  const lines = content.split(/\r?\n/).map((l) => stripComment(l).trimEnd());
   const note = (scope: string, url: string) => {
     const s = scope.trim();
     if (s === "default" || s === "@") registry = url;
@@ -514,11 +575,10 @@ function goEnvPath(env: NodeJS.ProcessEnv): string | null {
   return env.GOENV || defaultGoEnvFile(env);
 }
 
-/** KEY=VALUE pairs of a `go env -w` file. */
-function goEnvFile(file: string | null): Record<string, string> {
-  if (!file) return {};
+/** KEY=VALUE pairs of a `go env -w` file's text. */
+function goEnvPairs(text: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const line of safeRead(file).split(/\r?\n/)) {
+  for (const line of text.split(/\r?\n/)) {
     const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
     if (m) out[m[1]] = m[2].trim();
   }
@@ -533,14 +593,104 @@ function defaultGoEnvFile(env: NodeJS.ProcessEnv): string | null {
   return config ? path.join(config, "go", "env") : null;
 }
 
-/** Go's path.Match for one path element: `*` and `?` never cross `/`, `[...]` classes. */
-function elementMatch(pattern: string, value: string): boolean {
-  const re = pattern.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]");
-  try {
-    return new RegExp(`^${re}$`).test(value);
-  } catch {
-    return false;
+/**
+ * A pattern from the environment or a configuration file longer than this is cut there and ends in
+ * `*`: whatever the whole pattern could match, the cut one matches too, so a name is only ever
+ * more private for it.
+ */
+const MAX_PATTERN = 1024;
+
+type GlobToken = { kind: "star" } | { kind: "any" } | { kind: "literal"; char: string } | { kind: "class"; negated: boolean; ranges: Array<[string, string]> };
+
+/**
+ * One path element of a Go path.Match pattern as tokens: `*` (any run), `?` (any one character),
+ * `[a-z]` and `[^a-z]` classes, a backslash before a character (that character). Null for a
+ * malformed pattern (a class left open or empty), which path.Match rejects; `open` (a pattern cut
+ * at MAX_PATTERN) reads what is left of an unfinished class or escape as `*`.
+ */
+function elementTokens(pattern: string, open: boolean): GlobToken[] | null {
+  const chars = Array.from(pattern);
+  const tokens: GlobToken[] = [];
+  const star = () => {
+    if (tokens[tokens.length - 1]?.kind !== "star") tokens.push({ kind: "star" });
+  };
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    if (c === "*") star();
+    else if (c === "?") tokens.push({ kind: "any" });
+    else if (c === "\\") {
+      if (i + 1 >= chars.length) {
+        if (!open) return null;
+        star();
+      } else tokens.push({ kind: "literal", char: chars[++i] });
+    } else if (c === "[") {
+      let j = i + 1;
+      const negated = chars[j] === "^";
+      if (negated) j++;
+      const ranges: Array<[string, string]> = [];
+      let closed = false;
+      while (j < chars.length) {
+        if (chars[j] === "]" && ranges.length > 0) {
+          closed = true;
+          break;
+        }
+        let lo = chars[j++];
+        if (lo === "\\" && j < chars.length) lo = chars[j++];
+        let hi = lo;
+        if (chars[j] === "-" && j + 1 < chars.length && chars[j + 1] !== "]") {
+          hi = chars[j + 1];
+          j += 2;
+          if (hi === "\\" && j < chars.length) hi = chars[j++];
+        }
+        ranges.push([lo, hi]);
+      }
+      if (!closed) {
+        if (!open) return null;
+        star();
+        break;
+      }
+      tokens.push({ kind: "class", negated, ranges });
+      i = j;
+    } else tokens.push({ kind: "literal", char: c });
   }
+  if (open) star();
+  return tokens;
+}
+
+const tokenTakes = (token: GlobToken, char: string): boolean =>
+  token.kind === "any" || (token.kind === "literal" ? token.char === char : token.kind === "class" && token.ranges.some(([lo, hi]) => lo <= char && char <= hi) !== token.negated);
+
+/**
+ * Whether the tokens match the whole of `chars`: one position in each, and the last `*` to return
+ * to. At most pattern x text steps, whatever the pattern (a regular expression built from the same
+ * pattern took time exponential in its number of `*` against a name that does not match).
+ */
+function tokensMatch(tokens: readonly GlobToken[], chars: readonly string[]): boolean {
+  let p = 0;
+  let t = 0;
+  let starAt = -1;
+  let starText = 0;
+  while (t < chars.length) {
+    const token = tokens[p];
+    if (token?.kind === "star") {
+      starAt = p++;
+      starText = t;
+    } else if (token && tokenTakes(token, chars[t])) {
+      p++;
+      t++;
+    } else if (starAt >= 0) {
+      p = starAt + 1;
+      t = ++starText;
+    } else return false;
+  }
+  while (tokens[p]?.kind === "star") p++;
+  return p === tokens.length;
+}
+
+/** Go's path.Match for one path element: `*` and `?` never cross `/` (an element holds none), `[...]` classes. */
+function elementMatch(pattern: string, value: string, open = false): boolean {
+  const tokens = elementTokens(pattern, open);
+  return tokens !== null && tokensMatch(tokens, Array.from(value));
 }
 
 /**
@@ -553,13 +703,21 @@ function elementMatch(pattern: string, value: string): boolean {
 export function goPrivateMatch(patterns: string, modulePath: string): string | null {
   const parts = modulePath.toLowerCase().split("/");
   for (const raw of patterns.split(",")) {
-    const pattern = raw.trim().replace(/\/+$/, "");
+    const pattern = trimSlashes(raw.trim());
     if (!pattern) continue;
-    const elements = pattern.toLowerCase().split("/");
+    const cut = pattern.length > MAX_PATTERN;
+    const elements = (cut ? pattern.slice(0, MAX_PATTERN) : pattern).toLowerCase().split("/");
     if (elements.length > parts.length) continue;
-    if (elements.every((e, i) => elementMatch(e, parts[i]))) return pattern;
+    if (elements.every((e, i) => elementMatch(e, parts[i], cut && i === elements.length - 1))) return cut ? `${pattern.slice(0, 80)}... (cut at ${MAX_PATTERN.toLocaleString("en-US")} characters)` : pattern;
   }
   return null;
+}
+
+/** `text` without the `/` characters it ends with. */
+function trimSlashes(text: string): string {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "/") end--;
+  return end === text.length ? text : text.slice(0, end);
 }
 
 /** PEP 503: lowercase, runs of `-`, `_` and `.` are one `-`. */
@@ -582,17 +740,41 @@ export function normName(ecosystem: string, name: string): string {
  * A FOURDA_PRIVATE_PACKAGES entry: `*` matches anything, `/` included; a bare npm scope (`@acme`)
  * is the whole scope (`@acme/*`). PyPI names are compared PEP 503-normalised on both sides.
  */
-function listGlob(pattern: string, normalise: (s: string) => string = (s) => s): RegExp | null {
-  const scope = /^@[^/*]+$/.test(pattern);
-  const body = normalise(pattern)
-    .split("*")
-    .map((part) => part.replace(/[.+^${}()|[\]\\?]/g, "\\$&"))
-    .join(".*");
-  try {
-    return new RegExp(`^${body}${scope ? "(?:/.*)?" : ""}$`, "i");
-  } catch {
-    return null;
+function listGlob(pattern: string, normalise: (s: string) => string = (s) => s): NameMatcher {
+  const scope = pattern.length > 1 && pattern.startsWith("@") && !pattern.includes("/") && !pattern.includes("*");
+  const body = normalise(pattern.length > MAX_PATTERN ? `${pattern.slice(0, MAX_PATTERN)}*` : pattern).toLowerCase();
+  const parts = body.split("*");
+  return {
+    test: (name: string): boolean => {
+      const n = name.toLowerCase();
+      return wildcardMatch(parts, n) || (scope && n.startsWith(`${body}/`));
+    },
+  };
+}
+
+/** Something a name is tested against (a FOURDA_PRIVATE_PACKAGES entry). */
+interface NameMatcher {
+  test(name: string): boolean;
+}
+
+/**
+ * Whether `text` is the literal `parts` in order with anything (nothing included) between them:
+ * the first part at its start, the last at its end, each one between at the earliest place after
+ * the one before. A pattern whose only wildcard is `*` never needs an earlier choice retried.
+ */
+function wildcardMatch(parts: readonly string[], text: string): boolean {
+  if (parts.length === 1) return text === parts[0];
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if (text.length < first.length + last.length || !text.startsWith(first) || !text.endsWith(last)) return false;
+  const end = text.length - last.length;
+  let at = first.length;
+  for (let i = 1; i < parts.length - 1; i++) {
+    const found = text.indexOf(parts[i], at);
+    if (found < 0 || found + parts[i].length > end) return false;
+    at = found + parts[i].length;
   }
+  return true;
 }
 
 const ECOSYSTEM_PREFIXES: Record<string, string> = { npm: "npm", "crates.io": "crates.io", cargo: "crates.io", pypi: "PyPI", go: "Go" };
@@ -737,7 +919,7 @@ export function ancestorsOf(dir: string): string[] {
 export class PrivatePackageRules {
   private readonly npmScopes = new Map<string, string>();
   private readonly goPatterns: Array<{ key: string; value: string; from: string }> = [];
-  private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: RegExp; rePypi: RegExp | null; reCrates: RegExp | null }> = [];
+  private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: NameMatcher; rePypi: NameMatcher; reCrates: NameMatcher }> = [];
   /** FOURDA_PUBLIC_MIRRORS: hosts the user declares mirror only the public registries; their packages are checked. */
   readonly publicMirrors: ReadonlySet<string>;
   /**
@@ -778,6 +960,12 @@ export class PrivatePackageRules {
   private readonly cargoPatched = new Map<string, string>();
   /** Packages a Pipfile with a source that is not public declares, PEP 503-normalised, with why. */
   private readonly pipfileNames = new Map<string, string>();
+  /**
+   * Rule files that are there and could not be read (readRuleFile), each with the ecosystem whose
+   * rules it holds and the directory it applies under. Such a file may map any name of that
+   * ecosystem to a private registry, so none under it is shown public (ecosystemWide).
+   */
+  private readonly unreadable: Array<{ ecosystem: string; file: string; reason: string; scope: string | null }> = [];
   /** Every file the rules were read from (present or not), with its signature then. */
   private readonly inputs: Map<string, FileSignature>;
   private readonly envKey: string;
@@ -831,6 +1019,13 @@ export class PrivatePackageRules {
     // Signatures first: a write that lands while a file is read still reads as a change.
     this.inputs = signatureMap([...[...npmrcs, ...yarnrcs, ...bunfigs, ...pnpmWorkspaces, ...uvFiles, ...pyprojects, ...pipfiles, ...cargoFiles].map((f) => f.file), ...(goFile ? [goFile] : []), ...pipFiles]);
     this.envKey = envKeyOf(env);
+    // A file's text, "" when nothing is there. One that is there and could not be read is recorded:
+    // its ecosystem fails closed under `scope`, it is never an empty file.
+    const read = (file: string, ecosystem: string, scope: string | null): string => {
+      const got = readRuleFile(file);
+      if (got.state === "unreadable" && !this.unreadable.some((u) => u.file === file && u.ecosystem === ecosystem)) this.unreadable.push({ ecosystem, file, reason: got.reason, scope });
+      return got.state === "read" ? got.text : "";
+    };
 
     // pip. Later files win in pip, but which one wins can depend on a file this server cannot see
     // the same way pip does: any index-url that is not public makes the requirements private.
@@ -840,9 +1035,9 @@ export class PrivatePackageRules {
       if (!pipIndex || !isPublicPypiIndex(url)) pipIndex = { url, from };
     };
     for (const file of pipFiles) {
-      const read = pipConfigIndexes(safeRead(file));
-      if (read.index) noteIndex(read.index, file);
-      pushAll(extra, read.extra.map((url) => ({ url, from: file })));
+      const conf = pipConfigIndexes(read(file, "PyPI", null));
+      if (conf.index) noteIndex(conf.index, file);
+      pushAll(extra, conf.extra.map((url) => ({ url, from: file })));
     }
     // PIP_INDEX_URL, PIP_EXTRA_INDEX_URL, PIP_FIND_LINKS, and the prefixes pip's options accept (R8, B4).
     const pipEnv = pipEnvIndexes(env);
@@ -857,23 +1052,23 @@ export class PrivatePackageRules {
     // uv, Poetry, PDM, pipenv.
     const python: ScopedSetting[] = uvEnvIndexes(env).map((s) => ({ ...s, scope: null }));
     for (const { file, scope } of uvFiles) {
-      const text = safeRead(file);
+      const text = read(file, "PyPI", scope);
       pushAll(python, pythonIndexConfig(text, "uv.toml").map((url) => ({ url, from: file, scope })));
       // find-links and no-index, under pip's find-links policy, the setting named in the reason (pre-publish round 10, W12).
       pushAll(python, uvFindLinksConfig(text, "uv.toml").map(({ url, setting }) => ({ url, from: `${setting}, ${file}`, scope })));
     }
     for (const { file, scope } of pyprojects) {
-      const text = safeRead(file);
+      const text = read(file, "PyPI", scope);
       pushAll(python, pythonIndexConfig(text, "pyproject").map((url) => ({ url, from: file, scope })));
       pushAll(python, uvFindLinksConfig(text, "pyproject").map(({ url, setting }) => ({ url, from: `${setting}, ${file}`, scope })));
     }
     for (const { file, scope } of pipfiles) {
-      const read = pipfilePrivate(safeRead(file));
-      const index = read.indexes.find((url) => !isMirror(url));
+      const pipfile = pipfilePrivate(read(file, "PyPI", scope));
+      const index = pipfile.indexes.find((url) => !isMirror(url));
       if (!index) continue;
       python.push({ url: index, from: file, scope });
       // Its packages are private wherever they are named: no lockfile or tree group may list them.
-      for (const name of read.names) if (!this.pipfileNames.has(pep503(name))) this.pipfileNames.set(pep503(name), `${file} installs it from ${sourceLabel(index)} (a Pipfile [[source]]), not pypi.org; ${PUBLIC_MIRRORS_HINT}`);
+      for (const name of pipfile.names) if (!this.pipfileNames.has(pep503(name))) this.pipfileNames.set(pep503(name), `${file} installs it from ${sourceLabel(index)} (a Pipfile [[source]]), not pypi.org; ${PUBLIC_MIRRORS_HINT}`);
     }
     // The no-index label is not a URL: kept as it is, and no mirror can declare it public.
     pushAll(this.pythonIndexes, python.filter((p) => !isMirror(p.url)).map((p) => ({ ...p, url: p.url === UV_NO_INDEX_LABEL ? p.url : sourceLabel(p.url) })));
@@ -886,14 +1081,14 @@ export class PrivatePackageRules {
     for (const { file, scope } of npmrcs) {
       if (seen.has(file)) continue;
       seen.add(file);
-      const read = npmrcRead(safeRead(file));
-      for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
-      if (read.defaultRegistry && !isPublicNpmRegistry(read.defaultRegistry)) npmDefaults.push({ url: read.defaultRegistry, from: file, scope });
+      const rc = npmrcRead(read(file, "npm", scope));
+      for (const s of rc.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      if (rc.defaultRegistry && !isPublicNpmRegistry(rc.defaultRegistry)) npmDefaults.push({ url: rc.defaultRegistry, from: file, scope });
     }
     for (const { file, scope } of yarnrcs) {
       if (seen.has(file)) continue;
       seen.add(file);
-      const text = safeRead(file);
+      const text = read(file, "npm", scope);
       for (const s of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
       const server = yarnrcRegistry(text);
       if (server && !isPublicNpmRegistry(server)) npmDefaults.push({ url: server, from: file, scope });
@@ -904,24 +1099,24 @@ export class PrivatePackageRules {
     for (const { file, scope } of bunfigs) {
       if (seen.has(file)) continue;
       seen.add(file);
-      const read = bunfigRegistries(safeRead(file));
-      for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
-      if (read.registry && !isPublicNpmRegistry(read.registry)) npmDefaults.push({ url: read.registry, from: file, scope });
+      const bunfig = bunfigRegistries(read(file, "npm", scope));
+      for (const s of bunfig.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      if (bunfig.registry && !isPublicNpmRegistry(bunfig.registry)) npmDefaults.push({ url: bunfig.registry, from: file, scope });
     }
     for (const { file, scope } of pnpmWorkspaces) {
       if (seen.has(file)) continue;
       seen.add(file);
-      const read = pnpmWorkspaceRegistries(safeRead(file));
-      for (const s of read.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
-      if (read.registry && !isPublicNpmRegistry(read.registry)) npmDefaults.push({ url: read.registry, from: file, scope });
+      const workspace = pnpmWorkspaceRegistries(read(file, "npm", scope));
+      for (const s of workspace.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      if (workspace.registry && !isPublicNpmRegistry(workspace.registry)) npmDefaults.push({ url: workspace.registry, from: file, scope });
       // A registry setting this reader cannot follow fails closed: pnpm may fetch any name from a
       // registry it names, so npm under this folder is registry-private (pre-publish round 10, W10).
-      if (read.unread) npmDefaults.push({ url: read.unread.url ?? UNREAD_REGISTRY, from: `${file}, a registry setting this server cannot read; write it as plain registry/registries URLs`, scope });
+      if (workspace.unread) npmDefaults.push({ url: workspace.unread.url ?? UNREAD_REGISTRY, from: `${file}, a registry setting this server cannot read; write it as plain registry/registries URLs`, scope });
     }
     pushAll(this.npmDefaults, npmDefaults.filter((d) => (d.url === UNREAD_REGISTRY || hostOf(d.url) !== null) && !isMirror(d.url)).map((d) => ({ ...d, url: d.url === UNREAD_REGISTRY ? d.url : sourceLabel(d.url) })));
 
     // Go.
-    const fromFile = goEnvFile(goFile);
+    const fromFile = goEnvPairs(goFile ? read(goFile, "Go", null) : "");
     for (const key of ["GOPRIVATE", "GONOPROXY", "GONOSUMDB"]) {
       // As go does: an empty variable is unset, and the `go env -w` value applies.
       const fromEnv = env[key]?.trim() ? env[key] : undefined;
@@ -933,7 +1128,7 @@ export class PrivatePackageRules {
     this.goProxy = proxy ? { url: sourceLabel(proxy), from: proxyFromEnv !== undefined ? "GOPROXY" : `GOPROXY in ${goFile}` } : null;
 
     // Cargo.
-    pushAll(this.cargoConfigs, cargoFiles.map(({ file, scope }) => ({ file, scope, content: safeRead(file) })));
+    pushAll(this.cargoConfigs, cargoFiles.map(({ file, scope }) => ({ file, scope, content: read(file, "crates.io", scope) })));
     // `[patch]` names one crate: private wherever it is named. The source replacement is per directory (cargoMirrorFor).
     const cargo = cargoConfigPrivate(this.cargoConfigs);
     for (const p of cargo.patched) {
@@ -947,8 +1142,7 @@ export class PrivatePackageRules {
       const m = /^(npm|crates\.io|cargo|pypi|go):(.+)$/i.exec(entry);
       const ecosystem = m ? ECOSYSTEM_PREFIXES[m[1].toLowerCase()] : null;
       const pattern = m ? m[2] : entry;
-      const re = listGlob(pattern);
-      if (re) this.listed.push({ ecosystem, pattern, re, rePypi: listGlob(pattern, pep503), reCrates: listGlob(pattern, (s) => normName("crates.io", s)) });
+      this.listed.push({ ecosystem, pattern, re: listGlob(pattern), rePypi: listGlob(pattern, pep503), reCrates: listGlob(pattern, (s) => normName("crates.io", s)) });
     }
   }
 
@@ -976,6 +1170,7 @@ export class PrivatePackageRules {
       this.cargoConfigs.filter((c) => c.content).map((c) => `${c.scope ?? "*"}|${c.content}`),
       [...this.cargoPatched.keys()].sort(),
       [...this.pipfileNames.keys()].sort(),
+      this.unreadable.map((u) => `${u.ecosystem}|${u.scope ?? "*"}|${u.file}|${u.reason}`),
     ]);
   }
 
@@ -989,11 +1184,7 @@ export class PrivatePackageRules {
     for (const l of this.listed) {
       if (l.ecosystem !== null && l.ecosystem !== ecosystem) continue;
       const hit =
-        ecosystem === "PyPI"
-          ? Boolean(l.rePypi?.test(pep503(name)))
-          : ecosystem === "crates.io"
-            ? Boolean(l.reCrates?.test(normName("crates.io", name)))
-            : l.re.test(name);
+        ecosystem === "PyPI" ? l.rePypi.test(pep503(name)) : ecosystem === "crates.io" ? l.reCrates.test(normName("crates.io", name)) : l.re.test(name);
       if (hit) return `FOURDA_PRIVATE_PACKAGES lists ${l.ecosystem ? `${l.ecosystem}:` : ""}${l.pattern}`;
     }
     if (ecosystem === "npm" && name.startsWith("@")) {
@@ -1062,6 +1253,13 @@ export class PrivatePackageRules {
       const python = this.pythonIndexFor(dir);
       if (python) return `uv, Poetry, PDM or pipenv may install it from ${python.url} (${python.from}), not pypi.org; ${hint}`;
     }
+    // A rule file that is there and could not be read may make any name of its ecosystem private.
+    // Not for PyPI when every package's index is recorded: the lockfile itself shows where each comes from.
+    if (ecosystem !== "PyPI" || !indexRecorded) {
+      const key = dir === null ? null : path.resolve(dir);
+      const unread = this.unreadable.find((u) => u.ecosystem === ecosystem && (key === null ? u.scope === null : within(key, u.scope)));
+      if (unread) return unreadRuleReason(unread.file, unread.reason, ecosystem);
+    }
     return null;
   }
 
@@ -1109,20 +1307,40 @@ export function npmLockPrivateSources(dir: string, mirrorHosts: ReadonlySet<stri
   return runSteps(npmLockPrivateSourcesSteps(dir, mirrorHosts));
 }
 
-/** npmLockPrivateSources, pausing every STEP_MASK + 1 pnpm-lock.yaml lines (runStepsYielding; pre-publish round 10, W11). */
+/** npmLockPrivateSources, pausing every STEP_MASK + 1 yarn.lock or pnpm-lock.yaml lines (runStepsYielding; pre-publish round 10, W11). */
 export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySet<string>): Steps<PrivateIndexEntry[]> {
   const out: PrivateIndexEntry[] = [];
-  let step = 0;
-  const take = (file: string, name: string, version: string | null, location: string) => {
-    if (!/^https?:\/\//i.test(location)) return;
+  const privateLocation = (location: string): boolean => {
+    if (!/^https?:\/\//i.test(location)) return false;
     const host = hostOf(location);
-    if (!host || isPublicNpmHost(host) || mirrorHosts.has(host) || CODE_HOSTS.test(host)) return;
-    out.push({ name, version, registry: sourceLabel(location), file });
+    return !!host && !isPublicNpmHost(host) && !mirrorHosts.has(host) && !CODE_HOSTS.test(host);
+  };
+  const take = (file: string, name: string, version: string | null, location: string) => {
+    if (privateLocation(location)) out.push({ name, version, registry: sourceLabel(location), file });
+  };
+  // A lockfile that is not valid JSON makes every name of the ecosystem here unknown (unreadEntry),
+  // with one exception: a merge conflict whose every block is closed holds both sides whole, so the
+  // locations in its text are all of them. Then only a location that is not public (or a value that
+  // cannot be read) makes the names unknown; none means the file names no private source.
+  const notJson = (file: string, text: string, values: RegExp, keys: RegExp | null) => {
+    if (wholeMergeConflict(text)) {
+      const found = [...text.matchAll(values)].map((m) => jsonString(m[1]));
+      const complete = keys === null || [...text.matchAll(keys)].length === found.length;
+      if (complete && !found.some((value) => value === null || privateLocation(value))) return;
+    }
+    out.push(unreadEntry(file, NOT_JSON));
+  };
+  // A lockfile's text, null when nothing is there. One that is there and could not be read is said
+  // (unreadEntry): what it installs from is not known, and that is never "nothing private".
+  const textOf = (file: string): string | null => {
+    const got = readRuleFile(file);
+    if (got.state === "unreadable") out.push(unreadEntry(file, got.reason));
+    return got.state === "read" && got.text.trim() !== "" ? got.text : null;
   };
   for (const lock of ["package-lock.json", "npm-shrinkwrap.json"]) {
     const file = path.join(dir, lock);
-    const text = safeRead(file, LOCK_READ_CAP);
-    if (!text) continue;
+    const text = textOf(file);
+    if (text === null) continue;
     try {
       const doc = JSON.parse(text) as { packages?: Record<string, { name?: string; version?: string; resolved?: string }>; dependencies?: Record<string, { version?: string; resolved?: string }> };
       for (const [key, entry] of Object.entries(doc.packages ?? {})) {
@@ -1138,40 +1356,17 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
       };
       if (!doc.packages) walk(doc.dependencies);
     } catch {
-      // unreadable: the readers report it
+      notJson(file, text, RESOLVED_VALUE, RESOLVED_KEY);
     }
   }
   const yarn = path.join(dir, "yarn.lock");
-  const yarnText = safeRead(yarn, LOCK_READ_CAP);
-  for (const block of yarnText.split(/\r?\n(?=\S)/)) {
-    const head = /^"?((?:@[^@/"\s]+\/)?[^@"\s,]+)@/.exec(block);
-    if (!head) continue;
-    // yarn v1: `resolved "https://..."`; berry: `version: 1.0.0`.
-    const version = /^\s+version:?\s+"?([^"\s]+)"?/m.exec(block)?.[1] ?? null;
-    const resolved = /^\s+resolved\s+"([^"]+)"/m.exec(block)?.[1];
-    if (resolved) take(yarn, head[1], version, resolved);
-    // yarn berry: `resolution: "name@https://host/x.tgz"`, or a registry entry whose tarball came from
-    // elsewhere (`name@npm:1.0.0::__archiveUrl=https%3A%2F%2Fhost%2F...`).
-    const resolution = /^\s+resolution:\s+"?([^"\r\n]+?)"?\s*$/m.exec(block)?.[1];
-    if (resolution) {
-      const at = resolution.indexOf("@", resolution.startsWith("@") ? 1 : 0);
-      const target = at > 0 ? resolution.slice(at + 1) : "";
-      if (/^https?:\/\//i.test(target)) take(yarn, head[1], version, target);
-      const archive = /__archiveUrl=([^&#\s]+)/.exec(target)?.[1];
-      if (archive) {
-        try {
-          take(yarn, head[1], version, decodeURIComponent(archive));
-        } catch {
-          // a malformed escape names no host
-        }
-      }
-    }
-  }
+  const yarnText = textOf(yarn);
+  if (yarnText !== null && !(yield* yarnLockSources(yarnText, (name, version, location) => take(yarn, name, version, location)))) out.push(unreadEntry(yarn, LINE_TOO_LONG));
   // bun.lock (JSONC): `packages` values are `["name@version", "<registry or tarball URL>", {...}, "sha"]`;
   // the URL is "" for the default registry (blind audit round 4: `@acme/ui` from a private one was sent).
   const bunFile = path.join(dir, "bun.lock");
-  const bunText = safeRead(bunFile, LOCK_READ_CAP);
-  if (bunText) {
+  const bunText = textOf(bunFile);
+  if (bunText !== null) {
     try {
       const doc = JSON.parse(stripTrailingCommas(bunText)) as { packages?: Record<string, unknown> };
       for (const value of Object.values(doc.packages ?? {})) {
@@ -1182,26 +1377,259 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
         take(bunFile, spec.slice(0, at), spec.slice(at + 1) || null, value[1]);
       }
     } catch {
-      // unreadable: the readers report it
+      notJson(bunFile, bunText, QUOTED_STRING, null);
     }
   }
   const pnpm = path.join(dir, "pnpm-lock.yaml");
-  const pnpmText = safeRead(pnpm, LOCK_READ_CAP);
-  let current: { name: string; version: string | null } | null = null;
-  // Line by line (textLines: the lines `split(/\r?\n/)` gives, in order), not an array of all of
-  // them: about two million strings for a 150,000-entry lockfile, held at once, and a 0.3 s stretch
-  // with no pause in the first call's init (pre-publish round 10, W11).
-  for (const line of textLines(pnpmText)) {
+  const pnpmText = textOf(pnpm);
+  if (pnpmText !== null && !(yield* pnpmLockSources(pnpmText, (name, version, location) => take(pnpm, name, version, location)))) out.push(unreadEntry(pnpm, LINE_TOO_LONG));
+  return out;
+}
+
+const NOT_JSON = "is not valid JSON";
+/** A `"resolved": "<location>"` value in package-lock.json text (the only field the JSON read takes a location from). */
+const RESOLVED_VALUE = /"resolved"\s*:\s*"((?:[^"\\\r\n]|\\.)*)"/g;
+/** Every `"resolved"` key: one whose value RESOLVED_VALUE cannot read leaves the locations incomplete. */
+const RESOLVED_KEY = /"resolved"/g;
+/** Every quoted string on one line, in bun.lock text (its `packages` values carry the registry or tarball URL). */
+const QUOTED_STRING = /"((?:[^"\\\r\n]|\\.)*)"/g;
+
+/** A JSON string's body (`https:\/\/x`) as the string it stands for, or null when it is not one. */
+function jsonString(body: string): string | null {
+  try {
+    return JSON.parse(`"${body}"`) as string;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether `text` is a merge conflict whose every block is closed: each side is there, whole. */
+function wholeMergeConflict(text: string): boolean {
+  const count = (marker: RegExp) => [...text.matchAll(marker)].length;
+  const open = count(/^<{7}(?=[ \t\r\n]|$)/gm);
+  return open > 0 && count(/^={7}\r?$/gm) === open && count(/^>{7}(?=[ \t\r\n]|$)/gm) === open;
+}
+const LINE_TOO_LONG = `has a line longer than ${MAX_LOCKFILE_LINE.toLocaleString("en-US")} characters inside an entry, which was not read`;
+
+const isBlank = (code: number) => code === 32 || code === 9;
+
+/** How many spaces and tabs `line` starts with. */
+function leadingBlanks(line: string): number {
+  let i = 0;
+  while (i < line.length && isBlank(line.charCodeAt(i))) i++;
+  return i;
+}
+
+/** A bare npm package name, scoped or not (at most 214 characters, as the registry allows). */
+const isPackageName = (name: string): boolean => name.length > 0 && name.length <= 214 && /^(?:@[^\s/@]+\/)?[^\s/@]+$/.test(name);
+
+/** The package a yarn.lock block header names: `"@scope/name@^1.0.0", ...:` is `@scope/name`. Null for a comment or anything else. */
+function yarnHeaderName(line: string): string | null {
+  const start = line.charCodeAt(0) === 34 ? 1 : 0;
+  const stop = (c: string) => c === "@" || c === '"' || c === "," || c === " " || c === "\t";
+  let i = start;
+  if (line[i] === "@") {
+    i++;
+    while (i < line.length && line[i] !== "/" && !stop(line[i])) i++;
+    if (line[i] !== "/" || i === start + 1) return null;
+    i++;
+  }
+  const from = i;
+  while (i < line.length && !stop(line[i])) i++;
+  return i > from && line[i] === "@" ? line.slice(start, i) : null;
+}
+
+/** The package an npm alias header installs (`"alias@npm:real@^1.0.0":` is `real`), or null. */
+function yarnAliasTarget(line: string, name: string): string | null {
+  const from = (line.charCodeAt(0) === 34 ? 1 : 0) + name.length;
+  if (!line.startsWith("@npm:", from)) return null;
+  const rest = line.slice(from + "@npm:".length, from + "@npm:".length + 216);
+  const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
+  return at > 0 && isPackageName(rest.slice(0, at)) ? rest.slice(0, at) : null;
+}
+
+/** The value of `key value` or `key: value` on a trimmed yarn.lock line, unquoted; null when the line is another key. */
+function yarnField(text: string, key: string): string | null {
+  if (!text.startsWith(key)) return null;
+  let i = key.length;
+  if (text[i] === ":") i++;
+  if (i >= text.length || !isBlank(text.charCodeAt(i))) return null;
+  const value = text.slice(i).trim();
+  return value.length >= 2 && value[0] === '"' && value.indexOf('"', 1) > 0 ? value.slice(1, value.indexOf('"', 1)) : value;
+}
+
+/**
+ * yarn.lock (v1 and berry), line by line: each block's package with every location it installs from
+ * (v1 `resolved "<url>"`; berry `resolution: "name@<url>"`, or a registry entry whose tarball came
+ * from elsewhere, `name@npm:1.0.0::__archiveUrl=https%3A%2F%2Fhost%2F...`). Nothing here matches
+ * across a line break, and a line over MAX_LOCKFILE_LINE is not examined, so blank lines and long
+ * lines cost their length once. False when a line inside a block that was being read is too long:
+ * that block's location is then not known. A block whose header is too long is skipped, as the
+ * lockfile reader skips it.
+ */
+function* yarnLockSources(text: string, onSource: (name: string, version: string | null, location: string) => void): Steps<boolean> {
+  let complete = true;
+  let step = 0;
+  // The block's package, and the package behind an npm alias (v1: in the header's own spec; berry:
+  // in `resolution:`), which is the name the lockfile reader installs it under.
+  let name: string | null = null;
+  let names = new Set<string>();
+  let version: string | null = null;
+  let locations: string[] = [];
+  const flush = () => {
+    for (const n of names) for (const location of locations) onSource(n, version, location);
+    name = null;
+    names = new Set();
+    version = null;
+    locations = [];
+  };
+  for (const line of textLines(text)) {
     if ((++step & STEP_MASK) === 0) yield;
-    const key = /^ {2}['"]?\/?((?:@[^@/'"\s]+\/)?[^@/'"\s(]+)[@/]([^:('"\s]+)[^:]*['"]?:\s*$/.exec(line);
-    if (key) {
-      current = { name: key[1], version: key[2] };
+    const indent = leadingBlanks(line);
+    if (indent === line.length) continue;
+    if (line.length > MAX_LOCKFILE_LINE) {
+      if (indent === 0) flush();
+      else if (name) complete = false;
       continue;
     }
-    const tarball = /tarball:\s*['"]?([^'",}\s]+)/.exec(line)?.[1];
-    if (tarball && current) take(pnpm, current.name, current.version, tarball);
+    if (indent === 0) {
+      flush();
+      name = yarnHeaderName(line);
+      if (name) {
+        names.add(name);
+        const alias = yarnAliasTarget(line, name);
+        if (alias) names.add(alias);
+      }
+      continue;
+    }
+    if (!name) continue;
+    const field = line.slice(indent);
+    if (version === null) {
+      const v = yarnField(field, "version");
+      if (v !== null) {
+        version = v.split(/\s/)[0] || null;
+        continue;
+      }
+    }
+    const resolved = yarnField(field, "resolved");
+    if (resolved !== null) {
+      locations.push(resolved);
+      continue;
+    }
+    const resolution = yarnField(field, "resolution");
+    if (resolution === null) continue;
+    const at = resolution.indexOf("@", resolution.startsWith("@") ? 1 : 0);
+    const target = at > 0 ? resolution.slice(at + 1) : "";
+    if (at > 0 && isPackageName(resolution.slice(0, at))) names.add(resolution.slice(0, at));
+    if (/^https?:\/\//i.test(target)) locations.push(target);
+    const archiveAt = target.indexOf("__archiveUrl=");
+    if (archiveAt >= 0) {
+      const raw = target.slice(archiveAt + "__archiveUrl=".length).split(/[&#\s]/)[0];
+      try {
+        locations.push(decodeURIComponent(raw));
+      } catch {
+        // a malformed escape names no host
+      }
+    }
+  }
+  flush();
+  return complete;
+}
+
+/** The package (and version, when the key pins one) a pnpm `packages:` key names, or null. */
+function pnpmKeyPackage(rawKey: string): { name: string; version: string | null } | null {
+  let key = rawKey.trim();
+  // The opening quote of a key whose end was not read (a long key is read for its start only).
+  if ((key[0] === "'" || key[0] === '"') && (key.length < 2 || key[key.length - 1] !== key[0])) key = key.slice(1);
+  const parsed = parsePnpmKey(key);
+  if (parsed) return { name: parsed[0], version: parsed[1] };
+  // A key that pins no registry version (`ms@https://host/x.tgz`, `name@file:...`): the name before
+  // the `@`. A key with no such name (a bare URL or path) names its package in its own fields.
+  if (key[0] === "'" || key[0] === '"') key = key.slice(1);
+  if (key.startsWith("/")) key = key.slice(1);
+  const at = key.indexOf("@", key.startsWith("@") ? 1 : 0);
+  const name = at > 0 ? key.slice(0, at) : "";
+  return isPackageName(name) ? { name, version: null } : null;
+}
+
+/** The scalar after `key:` on a trimmed YAML line, unquoted; null when the line is another key or has no value. */
+function pnpmScalar(text: string, key: string): string | null {
+  if (!text.startsWith(key) || text[key.length] !== ":") return null;
+  const value = text.slice(key.length + 1).trim();
+  const bare = value.length >= 2 && (value[0] === "'" || value[0] === '"') && value[value.length - 1] === value[0] ? value.slice(1, -1) : value;
+  return bare === "" ? null : bare;
+}
+
+/** Every `tarball: <url>` on a line (a flow mapping may hold it anywhere), unquoted. */
+function pnpmTarballs(line: string): string[] {
+  const out: string[] = [];
+  for (let at = line.indexOf("tarball:"); at >= 0; at = line.indexOf("tarball:", at + 1)) {
+    let i = at + "tarball:".length;
+    while (i < line.length && isBlank(line.charCodeAt(i))) i++;
+    if (line[i] === "'" || line[i] === '"') i++;
+    let j = i;
+    while (j < line.length && !"'\",} \t".includes(line[j])) j++;
+    if (j > i) out.push(line.slice(i, j));
   }
   return out;
+}
+
+/**
+ * pnpm-lock.yaml (v5 to v9), line by line: each entry's package with the `tarball:` locations
+ * written INSIDE that entry. An entry starts at every key two columns deep, whether or not the key
+ * names a package: a key that is a URL (`ms@https://pkg.pr.new/...:`) takes its name from the part
+ * before the `@` or from its own `name:` field (as the lockfile reader does), and its tarball never
+ * belongs to the entry above it. A key line is read for its name only (the first MAX_LOCKFILE_LINE
+ * characters), so its length costs nothing more; a longer line inside an entry is not examined and
+ * the answer is false: that entry's location is then not known.
+ */
+function* pnpmLockSources(text: string, onSource: (name: string, version: string | null, location: string) => void): Steps<boolean> {
+  let complete = true;
+  let step = 0;
+  let entry: { key: { name: string; version: string | null } | null; name: string | null; version: string | null; tarballs: string[] } | null = null;
+  const flush = () => {
+    if (entry && entry.tarballs.length > 0) {
+      const name = entry.name && isPackageName(entry.name) ? entry.name : (entry.key?.name ?? null);
+      if (name) for (const tarball of entry.tarballs) onSource(name, entry.version ?? entry.key?.version ?? null, tarball);
+    }
+    entry = null;
+  };
+  for (const line of textLines(text)) {
+    if ((++step & STEP_MASK) === 0) yield;
+    const indent = leadingBlanks(line);
+    if (indent === line.length) continue;
+    if (indent === 0) {
+      flush();
+      continue;
+    }
+    if (indent <= 2) {
+      flush();
+      const long = line.length > MAX_LOCKFILE_LINE;
+      const head = long ? line.slice(indent, MAX_LOCKFILE_LINE) : line.slice(indent).trimEnd();
+      // A long key is read for its name; anything after the key on that line was not examined.
+      if (long && !line.trimEnd().endsWith(":")) complete = false;
+      // `key:` alone, or `key: {...}` on one line; a URL in the key has `://`, never `: `.
+      const inline = long ? -1 : head.indexOf(": ");
+      const key = inline >= 0 ? head.slice(0, inline) : head.endsWith(":") ? head.slice(0, -1) : head;
+      entry = { key: pnpmKeyPackage(key), name: null, version: null, tarballs: inline >= 0 ? pnpmTarballs(head.slice(inline)) : [] };
+      continue;
+    }
+    if (!entry) continue;
+    if (line.length > MAX_LOCKFILE_LINE) {
+      complete = false;
+      continue;
+    }
+    const field = line.slice(indent);
+    if (indent === 4) {
+      const name = pnpmScalar(field, "name");
+      if (name !== null) entry.name = name;
+      const version = pnpmScalar(field, "version");
+      if (version !== null) entry.version = exactVersion(version);
+    }
+    if (field.includes("tarball:")) pushAll(entry.tarballs, pnpmTarballs(field));
+  }
+  flush();
+  return complete;
 }
 
 /**
@@ -1213,8 +1641,10 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
  * registry = "acme" }` was sent to OSV.dev and crates.io (blind audit round 4); a `git =` one too (R7, 4).
  * A `path =` dependency is local code, never a crates.io release: its name is private too (R8).
  */
-export function cargoManifestPrivate(content: string): Array<{ name: string; registry: string }> {
-  const out: Array<{ name: string; registry: string }> = [];
+export function cargoManifestPrivate(content: string): Array<{ name: string; registry: string; path?: string }> {
+  const out: Array<{ name: string; registry: string; path?: string }> = [];
+  /** The `path =` of a dependency that is local code (git wins, as fromElsewhere has it). */
+  const localPath = (git: string | null, local: string | null) => (!git && local ? { path: local } : {});
   const isDepTable = (name: string) => /(?:^|\.)(?:dev-|build-)?dependencies$/.test(name) || /^patch\.(?:[^.]+|.+:\/\/.+)$/.test(name);
   const fromElsewhere = (registry: string | null, git: string | null, local: string | null = null): string | null => {
     if (git) return git;
@@ -1225,7 +1655,7 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
   let single: { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null } | null = null;
   const flush = () => {
     const where = single ? fromElsewhere(single.registry, single.git, single.local) : null;
-    if (single && where) out.push({ name: single.pkg ?? single.key, registry: where });
+    if (single && where) out.push({ name: single.pkg ?? single.key, registry: where, ...localPath(single.git, single.local) });
     single = null;
   };
   for (const line of tomlLines(content)) {
@@ -1248,7 +1678,7 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
     }
     if (!isDepTable(table) || !kv.value.startsWith("{")) continue;
     const where = fromElsewhere(inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index"), inlineKey(kv.value, "git"), inlineKey(kv.value, "path"));
-    if (where) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry: where });
+    if (where) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry: where, ...localPath(inlineKey(kv.value, "git"), inlineKey(kv.value, "path")) });
   }
   flush();
   return out;
@@ -1337,12 +1767,30 @@ export function pyprojectManifestPrivate(content: string): Array<{ name: string;
  * pyproject.toml.
  */
 export function manifestPrivateSources(dir: string, ecosystem: string): PrivateIndexEntry[] {
-  const read = (file: string, parse: (content: string) => Array<{ name: string; registry: string; local?: true }>): PrivateIndexEntry[] => {
-    const text = safeRead(file);
+  // A manifest that is there and could not be read is said (unreadEntry), never "no private source".
+  const unread: PrivateIndexEntry[] = [];
+  const noteUnread = (file: string, reason: string) => {
+    if (!unread.some((u) => u.file === file)) unread.push(unreadEntry(file, reason));
+  };
+  const textOf = (file: string): string => {
+    const got = readRuleFile(file);
+    if (got.state === "unreadable") noteUnread(file, got.reason);
+    return got.state === "read" ? got.text : "";
+  };
+  // `path`: where local code is, relative to the manifest (`at`).
+  const read = (file: string, text: string, parse: (content: string) => Array<{ name: string; registry: string; local?: true; path?: string }>): PrivateIndexEntry[] => {
     if (!text) return [];
     try {
-      return parse(text).map((p) => ({ name: p.name, version: null, registry: p.registry, file, ...(p.local ? { local: true as const } : {}) }));
+      return parse(text).map((p) => ({
+        name: p.name,
+        version: null,
+        registry: p.registry,
+        file,
+        ...(p.local ? { local: true as const } : {}),
+        ...(p.local && p.path !== undefined ? { at: path.resolve(path.dirname(file), p.path) } : {}),
+      }));
     } catch {
+      noteUnread(file, "could not be parsed");
       return [];
     }
   };
@@ -1350,24 +1798,29 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
     const cargo = (text: string) =>
       cargoManifestPrivate(text).map((p) => ({
         name: p.name,
-        ...(p.registry.startsWith("the local path ") ? { local: true as const } : {}),
-        registry: p.registry.startsWith("the local path ") ? p.registry : /^[a-z+]*https?:\/\//i.test(p.registry) || /^(?:ssh|git):/i.test(p.registry) ? sourceLabel(p.registry) : `the "${p.registry}" registry`,
+        ...(p.path !== undefined ? { local: true as const, path: p.path } : {}),
+        registry: p.path !== undefined ? p.registry : /^[a-z+]*https?:\/\//i.test(p.registry) || /^(?:ssh|git):/i.test(p.registry) ? sourceLabel(p.registry) : `the "${p.registry}" registry`,
       }));
     // The workspace's own crates (the root package and every member) are local code too (R8).
     const ownName = (text: string) => {
       const name = cargoPackageName(text);
-      return name ? [{ name, registry: "a local workspace crate (not a crates.io release)", local: true as const }] : [];
+      return name ? [{ name, registry: "a local workspace crate (not a crates.io release)", local: true as const, path: "." }] : [];
     };
     const root = path.join(dir, "Cargo.toml");
+    const rootText = textOf(root);
     let members: string[] = [];
     try {
-      members = cargoWorkspaceManifests(dir, safeRead(root));
+      members = cargoWorkspaceManifests(dir, rootText);
     } catch {
       members = [];
     }
-    return [root, ...members].flatMap((file) => [...read(file, cargo), ...read(file, ownName)]);
+    const found = [[root, rootText] as const, ...members.map((file) => [file, textOf(file)] as const)].flatMap(([file, text]) => [...read(file, text, cargo), ...read(file, text, ownName)]);
+    return [...found, ...unread];
   }
-  if (ecosystem === "PyPI") return read(path.join(dir, "pyproject.toml"), pyprojectManifestPrivate);
+  if (ecosystem === "PyPI") {
+    const file = path.join(dir, "pyproject.toml");
+    return [...read(file, textOf(file), pyprojectManifestPrivate), ...unread];
+  }
   return [];
 }
 
@@ -1387,12 +1840,141 @@ function cargoPackageName(content: string): string | null {
 }
 
 /**
+ * Local packages a uv.lock or poetry.lock in `dir` names with their directory: uv `source = {
+ * editable | directory | virtual | path = "<dir>" }`, Poetry `[package.source] type = "directory"`.
+ * Each with `at`, so one inside the project is recognised as the project's own package (a uv
+ * workspace member, the project itself). The readers already hold every local package as private;
+ * a lockfile that cannot be read here only leaves them so.
+ */
+export function pythonLocalPackages(dir: string): PrivateIndexEntry[] {
+  const out: PrivateIndexEntry[] = [];
+  for (const lock of ["uv.lock", "poetry.lock"]) {
+    const file = path.join(dir, lock);
+    const got = readRuleFile(file);
+    if (got.state !== "read") continue;
+    let pkg: { name: string | null; version: string | null; dir: string | null; directory: boolean; url: string | null } | null = null;
+    let table = "";
+    const flush = () => {
+      const at = pkg?.dir ?? (pkg?.directory ? pkg.url : null);
+      if (pkg?.name && at !== null && at !== undefined) out.push({ name: pkg.name, version: pkg.version, registry: `local code (${at})`, file, local: true, at: path.resolve(dir, at) });
+      pkg = null;
+    };
+    for (const raw of textLines(got.text)) {
+      const line = raw.trim();
+      if (line.startsWith("[")) {
+        if (line === "[[package]]") {
+          flush();
+          pkg = { name: null, version: null, dir: null, directory: false, url: null };
+        }
+        table = line;
+        continue;
+      }
+      if (!pkg) continue;
+      const kv = /^([A-Za-z-]+)\s*=\s*(.*)$/.exec(line);
+      if (!kv) continue;
+      const str = /^"([^"]*)"/.exec(kv[2])?.[1] ?? null;
+      if (table === "[[package]]") {
+        if (kv[1] === "name") pkg.name = str;
+        else if (kv[1] === "version") pkg.version = str;
+        else if (kv[1] === "source") pkg.dir = /^\{\s*(?:editable|directory|virtual|path)\s*=\s*"([^"]*)"/.exec(kv[2])?.[1] ?? pkg.dir;
+      } else if (table === "[package.source]") {
+        if (kv[1] === "type") pkg.directory = str === "directory";
+        else if (kv[1] === "url") pkg.url = str;
+      }
+    }
+    flush();
+  }
+  return out;
+}
+
+/** Whether `dir` is `root` or below it. */
+export function insideDir(root: string, dir: string): boolean {
+  const rel = path.relative(path.resolve(root), path.resolve(dir));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+const GO_MODULE = /^module\s+"?([^\s"]+)"?/m;
+
+/** A go.work's `use` directories, and the modules its `replace` points at a directory (with that directory). */
+function goWorkDirectives(content: string): { uses: string[]; replaced: Array<{ module: string; dir: string }> } {
+  const uses: string[] = [];
+  const replaced: Array<{ module: string; dir: string }> = [];
+  const unquote = (s: string) => s.replace(/^["`]|["`]$/g, "");
+  let block: "use" | "replace" | null = null;
+  for (const raw of textLines(content)) {
+    const line = raw.replace(/\/\/.*$/, "").trim();
+    if (!line) continue;
+    if (block && line === ")") {
+      block = null;
+      continue;
+    }
+    const opener = /^(use|replace)\s*\($/.exec(line);
+    if (opener) {
+      block = opener[1] as "use" | "replace";
+      continue;
+    }
+    const single = /^(use|replace)\s+(.+)$/.exec(line);
+    const kind = single ? single[1] : block;
+    const rest = single ? single[2] : line;
+    if (kind === "use") uses.push(unquote(rest.trim()));
+    else if (kind === "replace") {
+      const [left, right] = rest.split("=>").map((s) => s.trim().split(/\s+/).map(unquote));
+      // `=> ./dir` (one word that is a path) is local code; `=> other/module v1.2.3` is not.
+      if (left?.[0] && right?.length === 1 && /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|[A-Za-z]:[\\/])/.test(right[0])) replaced.push({ module: left[0], dir: right[0] });
+    }
+  }
+  return { uses, replaced };
+}
+
+/**
+ * The modules of the go.work that governs `dir`: the first one from `dir` up to `root`, as the go
+ * command looks for one (none with GOWORK=off). Each `use` directory inside `root` with the module
+ * its go.mod names, and each module its `replace` points at a directory inside `root`. The go
+ * command builds every one from the workspace whatever version a go.mod requires: local code, never
+ * sent, and the project's own package. Nothing outside `root` is read. A go.work that is there and
+ * cannot be read is said (unreadEntry).
+ */
+export function goWorkModules(dir: string, root: string, env: NodeJS.ProcessEnv = process.env): PrivateIndexEntry[] {
+  if ((env.GOWORK ?? "").trim() === "off" || !insideDir(root, dir)) return [];
+  let file: string | null = null;
+  let got: ReturnType<typeof readRuleFile> = { state: "absent" };
+  for (let d = path.resolve(dir); insideDir(root, d); d = path.dirname(d)) {
+    got = readRuleFile(path.join(d, "go.work"));
+    if (got.state !== "absent") {
+      file = path.join(d, "go.work");
+      break;
+    }
+    if (path.dirname(d) === d) break;
+  }
+  if (file === null) return [];
+  if (got.state === "unreadable") return [unreadEntry(file, got.reason)];
+  if (got.state !== "read") return [];
+  const base = path.dirname(file);
+  const out: PrivateIndexEntry[] = [];
+  const add = (name: string, at: string) => out.push({ name, version: null, registry: "local code (a go.work workspace module)", file, local: true, at, workspace: true });
+  const { uses, replaced } = goWorkDirectives(got.text);
+  for (const use of uses) {
+    const at = path.resolve(base, use);
+    if (!insideDir(root, at)) continue;
+    const mod = readRuleFile(path.join(at, "go.mod"));
+    const module = mod.state === "read" ? GO_MODULE.exec(mod.text)?.[1] : undefined;
+    if (module) add(module, at);
+  }
+  for (const { module, dir: target } of replaced) {
+    const at = path.resolve(base, target);
+    if (insideDir(root, at)) add(module, at);
+  }
+  return out;
+}
+
+/**
  * Why a group's lockfile shows a private DEFAULT registry, or null: every package it installs comes
  * from one host that is not public, and no rule that names packages (a scope mapped to that host, a
  * per-package index or registry in the manifest) explains it. Then the package manager fetched names
  * from there with no visible configuration (an Artifactory set in a CI environment, a deleted
  * `.npmrc`), and a name not installed yet would come from there too (pre-publish round 10, W4).
- * `entries`: the group's lockfile entries from a private source (mirrors already removed);
+ * `entries`: the group's lockfile entries from a private source (mirrors already removed), and the
+ * entry of any file of the group that could not be read (PrivateIndexEntry.unread), which alone is a reason;
  * `installed`: the names the lockfile installs; `explained(name)`: a name rule covers it.
  */
 export function lockfileRegistryWide(
@@ -1401,6 +1983,10 @@ export function lockfileRegistryWide(
   installed: readonly string[],
   explained: (name: string) => boolean,
 ): string | null {
+  // A lockfile or manifest of the group that is there and could not be read: what the group
+  // installs from is not known, whatever the files that were read list.
+  const unread = entries.find((p) => p.unread !== undefined);
+  if (unread) return unreadRuleReason(unread.file, unread.unread ?? "could not be read", ecosystem);
   // A registry location: git, a local path or file names one package, never a default registry.
   const registries = entries.filter((p) => !p.local && !p.wide && !/^(?:git\+|git:|ssh:)|\.git(?:[#?/]|$)/i.test(p.registry));
   const hostOfEntry = (p: PrivateIndexEntry) => hostOf(p.registry.replace(/^[a-z]+\+/i, ""));
@@ -1431,17 +2017,13 @@ export function requirementsWideReason(file: string, setting: string, registry: 
   return `${file} sets ${setting} ${registry}: pip may install any package of it from there, not pypi.org; ${PUBLIC_MIRRORS_HINT}`;
 }
 
-/** Lockfiles are bounded by the readers (bounded-read.ts); this pass reads at most this much. */
-const LOCK_READ_CAP = 64 * 1024 * 1024;
-
-function safeRead(file: string, cap = 1024 * 1024): string {
-  try {
-    const stat = fs.statSync(file);
-    if (!stat.isFile() || stat.size > cap) return "";
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
+/**
+ * Why no name of `ecosystem` under a rule file that is there and could not be read is treated as
+ * public: the file may map any of them to a private registry, index or source, and what it says is
+ * not known. `reason` completes "<file> <reason>" (readRuleFile).
+ */
+export function unreadRuleReason(file: string, reason: string, ecosystem: string): string {
+  return `${file} ${reason}: it may name a private registry or source for any ${ecosystem} package here, so none is treated as public`;
 }
 
 /** The sentence a private item or coverage line says. */

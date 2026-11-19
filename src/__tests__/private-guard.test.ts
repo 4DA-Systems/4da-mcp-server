@@ -63,7 +63,7 @@ describe("nothing in src/ reaches the network around the choke point", () => {
   /** The only places a bare fetch() may appear, and why. */
   const ALLOWED: Record<string, string> = {
     "live/http-utils.ts": "the choke point itself: refusePrivateRequest runs first",
-    "embeddings.ts": "the user's own embedding provider (opt-in), never a registry or OSV.dev",
+    "live/loopback-http.ts": "a service on this machine only (a local Ollama): any other address is refused before the request",
   };
 
   it("every bare fetch() is in an allowed file, and the guarded ones call the guard", () => {

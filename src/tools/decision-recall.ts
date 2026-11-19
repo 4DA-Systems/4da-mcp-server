@@ -55,6 +55,8 @@ export interface DecisionRecallResult<T extends DecisionLike> {
   /** id -> cosine similarity to the query (empty in pure-lexical mode). */
   semanticById: Map<number, number>;
   recall_mode: "hybrid" | "ranked_lexical";
+  /** Said when text that names a private package was kept from the embedding provider (embeddings.ts). */
+  semantic_note?: string;
 }
 
 /** Pure lexical ranking (the default, provider-free path). */
@@ -108,11 +110,13 @@ export async function hybridDecisionRecall<T extends DecisionLike>(
     config,
   );
 
+  const note = sem.privateWithheld ? { semantic_note: sem.privateWithheld.note } : {};
   if (!sem.queryEmbedded || sem.embeddedCount === 0) {
     return {
       ranked: rankDecisionsLexical(rows, query, limit),
       semanticById: new Map(),
       recall_mode: "ranked_lexical",
+      ...note,
     };
   }
 
@@ -128,5 +132,5 @@ export async function hybridDecisionRecall<T extends DecisionLike>(
     .slice(0, limit)
     .map((x) => x.row);
 
-  return { ranked, semanticById: sem.semanticById, recall_mode: "hybrid" };
+  return { ranked, semanticById: sem.semanticById, recall_mode: "hybrid", ...note };
 }

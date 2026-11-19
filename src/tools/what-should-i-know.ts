@@ -198,6 +198,8 @@ export interface WhatShouldIKnowResult {
   summary: string;
   /** How relevant_wisdom was retrieved: "hybrid" when an embedding provider is active. */
   wisdom_recall_mode: WisdomRecallMode;
+  /** Said when the task or stored text names a private package and was kept from the embedding provider. */
+  wisdom_recall_note?: string;
   _meta: { untrusted_text: string };
 }
 
@@ -547,7 +549,7 @@ export async function executeWhatShouldIKnow(
   // came back safe_to_delegate).
   const notCovered = exclusionNotes(liveIntel?.getDiscovery?.() ?? null).filter((n) => n.startsWith("NOT COVERED"));
 
-  const finalize = (relevantWisdom: WisdomEntry[], wisdomMode: WisdomRecallMode): WhatShouldIKnowResult => {
+  const finalize = (relevantWisdom: WisdomEntry[], wisdomMode: WisdomRecallMode, wisdomNote?: string): WhatShouldIKnowResult => {
     const delegation = assessDelegation({
       notCovered,
       scanStatus,
@@ -580,6 +582,7 @@ export async function executeWhatShouldIKnow(
       scan: scanBlock,
       summary: `${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions)}`,
       wisdom_recall_mode: wisdomMode,
+      ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       _meta: { untrusted_text: UNTRUSTED },
     };
   };
@@ -590,8 +593,8 @@ export async function executeWhatShouldIKnow(
   if (!embedConfig) {
     return finalize(getRelevantWisdom(db, task, files), "ranked_lexical");
   }
-  const { wisdom, recall_mode } = await getRelevantWisdomHybrid(db, task, files, embedConfig);
-  return finalize(wisdom, recall_mode);
+  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig);
+  return finalize(wisdom, recall_mode, recall_note);
 }
 
 // ============================================================================

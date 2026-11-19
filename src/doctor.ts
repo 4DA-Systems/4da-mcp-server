@@ -21,11 +21,45 @@ import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { checkLookupReachability } from "./doctor-network.js";
 import { pushAll } from "./array-utils.js";
+import { embeddingEndpoint, getEmbeddingConfig, isLocalProvider, isOfflineMode, modelTag } from "./embeddings.js";
 
 interface Check {
   name: string;
   status: "pass" | "warn" | "fail";
   detail: string;
+}
+
+/**
+ * The semantic recall line: the provider the server will use (getEmbeddingConfig), never which
+ * variables happen to be set. Off, it says why, and names a variable that is set but not read.
+ */
+export function semanticRecallCheck(): Check {
+  const env = process.env;
+  const name = "Semantic recall provider";
+  const config = getEmbeddingConfig();
+  if (config) {
+    let host: string = config.provider;
+    try {
+      host = new URL(embeddingEndpoint(config)).host;
+    } catch {
+      // an Ollama URL that does not parse: named by provider
+    }
+    const where = isLocalProvider(config) ? "on this machine" : "not on this machine: text that names a private package is never sent to it";
+    return { name, status: "pass", detail: `${modelTag(config)} at ${host} (${where})` };
+  }
+  const named = (env.FOURDA_EMBED_PROVIDER ?? "").trim();
+  const why = isOfflineMode()
+    ? "FOURDA_OFFLINE is set, so no provider is asked"
+    : named.toLowerCase() === "openai" && !env.OPENAI_API_KEY
+      ? "FOURDA_EMBED_PROVIDER=openai, but OPENAI_API_KEY is not set"
+      : named && !["ollama", "openai"].includes(named.toLowerCase())
+        ? `FOURDA_EMBED_PROVIDER=${named} is not a provider this server knows (ollama, openai)`
+        : "no usable provider is configured (FOURDA_EMBED_PROVIDER, or the embedding block of settings.json; OpenAI needs an API key)";
+  const unread = [
+    ...(env.OPENAI_API_KEY && !named ? ["OPENAI_API_KEY alone does not turn it on (set FOURDA_EMBED_PROVIDER=openai)"] : []),
+    ...["OLLAMA_HOST", "OLLAMA_BASE_URL"].filter((k) => env[k]).map((k) => `${k} is not read (set FOURDA_EMBED_PROVIDER=ollama and OLLAMA_URL)`),
+  ];
+  return { name, status: "warn", detail: `Off: ${why}. Keyword recall is used.${unread.length > 0 ? ` ${unread.join("; ")}.` : ""}` };
 }
 
 export async function runDoctor(): Promise<void> {
@@ -117,28 +151,7 @@ export async function runDoctor(): Promise<void> {
   }
 
   // 6. Semantic recall provider (optional)
-  const embedProvider = process.env.FOURDA_EMBED_PROVIDER;
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasOllama =
-    process.env.FOURDA_EMBED_PROVIDER === "ollama" ||
-    process.env.OLLAMA_HOST ||
-    process.env.OLLAMA_BASE_URL;
-
-  if (embedProvider || hasOpenAI || hasOllama) {
-    checks.push({
-      name: "Semantic recall provider",
-      status: "pass",
-      detail: embedProvider
-        ? `${embedProvider} configured`
-        : hasOllama ? "Ollama endpoint configured" : "OpenAI API key set",
-    });
-  } else {
-    checks.push({
-      name: "Semantic recall provider",
-      status: "warn",
-      detail: "Not configured — keyword recall remains available",
-    });
-  }
+  checks.push(semanticRecallCheck());
 
   // Proxy: said only when a proxy is configured; a proxy this process does not use fails every lookup.
   const proxy = configureProxy();

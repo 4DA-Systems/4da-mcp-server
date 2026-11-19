@@ -42,17 +42,6 @@ export interface PrivateSetting {
   from: string;
 }
 
-/** A file read whole, or "" (missing, not a file, larger than `cap`). */
-export function readSmall(file: string, cap = 1024 * 1024): string {
-  try {
-    const stat = fs.statSync(file);
-    if (!stat.isFile() || stat.size > cap) return "";
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
-}
-
 /** FOURDA_PUBLIC_MIRRORS: hosts (or URLs) the user declares mirror only the public registries. */
 export function publicMirrorHosts(env: NodeJS.ProcessEnv): Set<string> {
   const out = new Set<string>();
@@ -141,9 +130,14 @@ export function yarnRcFilename(env: NodeJS.ProcessEnv): string {
 
 /** A `.yarnrc.yml`'s top-level `npmRegistryServer` (yarn's default registry), or null. */
 export function yarnrcRegistry(content: string): string | null {
+  // By position: the key, a colon, then the value up to a `#` comment.
   for (const raw of content.split(/\r?\n/)) {
-    const m = /^npmRegistryServer\s*:\s*(.+?)\s*(?:#.*)?$/.exec(raw);
-    if (m) return m[1].replace(/^["']|["']$/g, "");
+    if (!raw.startsWith("npmRegistryServer")) continue;
+    const rest = raw.slice("npmRegistryServer".length).trimStart();
+    if (!rest.startsWith(":")) continue;
+    const comment = rest.indexOf("#");
+    const value = (comment >= 0 ? rest.slice(1, comment) : rest.slice(1)).trim();
+    if (value) return value.replace(/^["']|["']$/g, "");
   }
   return null;
 }

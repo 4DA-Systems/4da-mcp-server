@@ -234,6 +234,8 @@ export interface VulnerabilityScanResult {
    * nothing is known about them. `dependencies` lists at most 50, each with why.
    */
   privateExcluded?: { count: number; dependencies: PrivateDependency[] };
+  /** The project's own packages recognised (workspace members, local packages inside it): not dependencies, so in no count. */
+  ownPackages?: number;
   /** An `.npmrc` default registry that is not public: unscoped names are still looked up publicly (private-packages.ts). */
   registryNotice?: string;
   /** Dependencies answered from an OSV answer older than the 1 h cache life, because a fresh query failed. */
