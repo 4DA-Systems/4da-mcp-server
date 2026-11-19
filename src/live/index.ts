@@ -35,12 +35,15 @@ import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
 import {
+  goWorkModules,
+  insideDir,
   lockEntryReason,
   lockfileRegistryWide,
   manifestPrivateSources,
   normName,
   npmLockPrivateSourcesSteps,
   PrivatePackageRules,
+  pythonLocalPackages,
   requirementsWideReason,
   type PrivateDependency,
   type PrivateIndexEntry,
@@ -135,6 +138,10 @@ export class LiveIntelligence {
   private npmLockPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
   /** Groups whose manifest takes packages from a private registry or index (manifestPrivateSources). */
   private manifestPrivate = new Map<GroupResolution, PrivateIndexEntry[]>();
+  /** Local code a group's go.work, uv.lock or poetry.lock names with its directory (PrivateIndexEntry.at). */
+  private localPackages = new Map<GroupResolution, PrivateIndexEntry[]>();
+  /** The project's own packages recognised in the dependency set, by `${ecosystem}\0${normalised name}`. */
+  private ownPackages = new Set<string>();
   /**
    * Every name a group declares, resolves or lists, by `${ecosystem}\0${normalised name}`, when its
    * ecosystem's registry, index or proxy is not public (PrivatePackageRules.ecosystemWide), with why.
@@ -373,8 +380,9 @@ export class LiveIntelligence {
       yield;
     }
     this.groupResults = results;
-    yield* this.rebuildDependencySetSteps();
+    // Before the set is built: which packages are the project's own is judged against its root.
     this.projectRoot = projectRoot;
+    yield* this.rebuildDependencySetSteps();
     this.initialized = true;
     return true;
   }
@@ -403,6 +411,17 @@ export class LiveIntelligence {
     // Poetry `source =`): private with no lockfile too (blind audit round 4).
     this.manifestPrivate = new Map(
       this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
+    );
+    // go.work modules (never sent: the workspace's copy is built) and Python local packages, with
+    // where each is, read inside the project only.
+    this.localPackages = new Map(
+      this.groupResults
+        .map((r) => {
+          const ecosystem = mapEcosystem(r.group.language);
+          const list = ecosystem === "Go" ? goWorkModules(r.group.dir, this.projectRoot ?? r.group.dir) : ecosystem === "PyPI" ? pythonLocalPackages(r.group.dir) : [];
+          return [r, list] as const;
+        })
+        .filter(([, list]) => list.length > 0),
     );
     yield;
     // A registry, index or proxy that is not public and is consulted for any name: every name the
@@ -448,11 +467,17 @@ export class LiveIntelligence {
     // pause every STEP_MASK + 1 copies (pre-publish round 10, W11).
     const auditOpen: ResolvedDependency[] = [];
     const auditPrivate: ResolvedDependency[] = [];
+    // The project's own packages are not dependencies: neither checked nor unchecked, never sent.
+    this.ownPackages = new Set();
     let step = 0;
     for (const r of this.groupResults) {
+      for (const entry of this.lockPrivateOf(r)) {
+        if (entry.local && entry.at !== undefined && this.insideProject(r, entry.at)) this.ownPackages.add(`${mapEcosystem(r.group.language)}\0${normName(mapEcosystem(r.group.language), entry.name)}`);
+      }
       for (const dep of r.audit) {
         if ((++step & STEP_MASK) === 0) yield;
-        (isPublic(r, dep) ? auditOpen : auditPrivate).push(dep);
+        if (isPublic(r, dep)) auditOpen.push(dep);
+        else if (!this.ownPackageIn(r, dep)) auditPrivate.push(dep);
       }
     }
     this.auditDeps = yield* dedupeDependenciesSteps(auditOpen);
@@ -496,6 +521,26 @@ export class LiveIntelligence {
     this.privateShorts = null;
   }
 
+  /** Whether `dir` is inside the scanned project (the group's own directory when no project is set). */
+  private insideProject(r: GroupResolution, dir: string): boolean {
+    return insideDir(this.projectRoot ?? r.group.dir, dir);
+  }
+
+  /**
+   * Whether a dependency of this group is the project's own package: every entry for its name is
+   * local code and one of them is inside the project (a Cargo workspace crate or `path =` crate, a
+   * go.work module, a uv workspace member or local package). The copy must be that local one: a
+   * versioned copy (a registry release of the same name) is a dependency, except for a go.work
+   * module, which the go command builds from the workspace whatever version is required. Local code
+   * outside the project, git and private-registry packages stay private dependencies.
+   */
+  private ownPackageIn(r: GroupResolution, dep: ResolvedDependency): boolean {
+    const entries = this.lockPrivateIndex(r, dep.ecosystem).get(normName(dep.ecosystem, dep.name)) ?? [];
+    if (entries.length === 0 || !entries.every((p) => p.local)) return false;
+    if (dep.version !== null && !entries.some((p) => p.workspace)) return false;
+    return entries.some((p) => p.at !== undefined && this.insideProject(r, p.at));
+  }
+
   /**
    * Why a dependency of this group is private, and the kind of reason, or null: its lockfile's
    * source, then a source that serves any name, then the name rules.
@@ -503,8 +548,9 @@ export class LiveIntelligence {
   private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): { why: string; kind: PrivateKind } | null {
     const fromLock = this.lockPrivateIndex(r, ecosystem)
       .get(normName(ecosystem, name))
-      // A local entry a manifest names (no version) says nothing about a registry copy a lockfile installs.
-      ?.find((p) => (p.version === null || version === null || p.version === version) && !(p.local && p.version === null && r.source?.kind === "lockfile"));
+      // A local entry a manifest names (no version) says nothing about a registry copy a lockfile
+      // installs; a go.work module does: the workspace's copy is built whatever version is required.
+      ?.find((p) => (p.version === null || version === null || p.version === version) && !(p.local && p.version === null && !p.workspace && r.source?.kind === "lockfile"));
     // A registry, index or proxy that is not public and serves any name: pip's configured index or
     // an extra one (for what a requirements file installs), uv's, Poetry's, npm's default registry,
     // GOPROXY, a Cargo source replacement (PrivatePackageRules.ecosystemWide), a requirements option,
@@ -534,7 +580,9 @@ export class LiveIntelligence {
     if (option) return requirementsWideReason(option.file, option.setting, option.registry);
     // A manifest that could not be read matters when no lockfile records where each package comes from.
     const unreadManifest = r.source?.kind === "lockfile" ? [] : (this.manifestPrivate.get(r) ?? []).filter((p) => p.unread !== undefined);
-    const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? []), ...unreadManifest].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
+    // A go.work that could not be read: which modules the workspace builds is not known.
+    const unreadLocal = (this.localPackages.get(r) ?? []).filter((p) => p.unread !== undefined);
+    const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? []), ...unreadManifest, ...unreadLocal].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
     if (fromLockfile.length === 0) return null;
     const pinned = new Set((this.manifestPrivate.get(r) ?? []).map((p) => normName(ecosystem, p.name)));
     return lockfileRegistryWide(
@@ -746,7 +794,7 @@ export class LiveIntelligence {
   /** What a group's lockfiles install from a private source: the readers' entries, and npm's `resolved` hosts. */
   private lockPrivateOf(r: GroupResolution): PrivateIndexEntry[] {
     const npm = this.npmLockPrivate.get(r) ?? [];
-    const manifest = this.manifestPrivate.get(r) ?? [];
+    const manifest = [...(this.manifestPrivate.get(r) ?? []), ...(this.localPackages.get(r) ?? [])];
     const all = npm.length > 0 || manifest.length > 0 ? [...(r.privateIndex ?? []), ...npm, ...manifest] : (r.privateIndex ?? []);
     // A host FOURDA_PUBLIC_MIRRORS declares a mirror of the public registry serves public packages,
     // whether a lockfile, a requirements file or the configuration names it (R7: one policy).
@@ -808,10 +856,16 @@ export class LiveIntelligence {
     return this.privateAudit;
   }
 
+  /** How many of the project's own packages (workspace members, local packages inside it) were recognised and left out of the dependencies. */
+  getOwnPackageCount(): number {
+    return this.ownPackages.size;
+  }
+
   /** The private part of a scan in this scope, attached to its result so every answer reports it. */
   private withPrivate(scan: VulnerabilityScanResult, includeDev: boolean): VulnerabilityScanResult {
     const notice = this.getRegistryNotice();
-    const result = notice ? { ...scan, registryNotice: notice } : scan;
+    const own = this.ownPackages.size;
+    const result = notice || own > 0 ? { ...scan, ...(notice ? { registryNotice: notice } : {}), ...(own > 0 ? { ownPackages: own } : {}) } : scan;
     if (this.privateAudit.length === 0) return result;
     const scoped = applyInstanceDevScope(this.db, this.privateAudit);
     const inScope = includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));

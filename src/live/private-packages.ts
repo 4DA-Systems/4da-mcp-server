@@ -121,6 +121,14 @@ export interface PrivateIndexEntry {
    */
   local?: true;
   /**
+   * The directory a local entry's code is in, when the file says (a Cargo `path =`, the crate's own
+   * manifest, a uv `editable` / `directory` / `path` source, a `go.work` `use`): code inside the
+   * project is the project's own package, not a dependency (LiveIntelligence.getOwnPackageCount).
+   */
+  at?: string;
+  /** A `go.work` workspace module: the workspace's copy is built whatever version a go.mod requires. */
+  workspace?: true;
+  /**
    * The requirements option that makes every name of the file private (`--index-url`,
    * `--extra-index-url`, `--find-links`): a registry-kind reason, which the answer names with the
    * FOURDA_PUBLIC_MIRRORS escape (pre-publish round 10, W4).
@@ -1633,8 +1641,10 @@ function* pnpmLockSources(text: string, onSource: (name: string, version: string
  * registry = "acme" }` was sent to OSV.dev and crates.io (blind audit round 4); a `git =` one too (R7, 4).
  * A `path =` dependency is local code, never a crates.io release: its name is private too (R8).
  */
-export function cargoManifestPrivate(content: string): Array<{ name: string; registry: string }> {
-  const out: Array<{ name: string; registry: string }> = [];
+export function cargoManifestPrivate(content: string): Array<{ name: string; registry: string; path?: string }> {
+  const out: Array<{ name: string; registry: string; path?: string }> = [];
+  /** The `path =` of a dependency that is local code (git wins, as fromElsewhere has it). */
+  const localPath = (git: string | null, local: string | null) => (!git && local ? { path: local } : {});
   const isDepTable = (name: string) => /(?:^|\.)(?:dev-|build-)?dependencies$/.test(name) || /^patch\.(?:[^.]+|.+:\/\/.+)$/.test(name);
   const fromElsewhere = (registry: string | null, git: string | null, local: string | null = null): string | null => {
     if (git) return git;
@@ -1645,7 +1655,7 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
   let single: { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null } | null = null;
   const flush = () => {
     const where = single ? fromElsewhere(single.registry, single.git, single.local) : null;
-    if (single && where) out.push({ name: single.pkg ?? single.key, registry: where });
+    if (single && where) out.push({ name: single.pkg ?? single.key, registry: where, ...localPath(single.git, single.local) });
     single = null;
   };
   for (const line of tomlLines(content)) {
@@ -1668,7 +1678,7 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
     }
     if (!isDepTable(table) || !kv.value.startsWith("{")) continue;
     const where = fromElsewhere(inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index"), inlineKey(kv.value, "git"), inlineKey(kv.value, "path"));
-    if (where) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry: where });
+    if (where) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry: where, ...localPath(inlineKey(kv.value, "git"), inlineKey(kv.value, "path")) });
   }
   flush();
   return out;
@@ -1767,10 +1777,18 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
     if (got.state === "unreadable") noteUnread(file, got.reason);
     return got.state === "read" ? got.text : "";
   };
-  const read = (file: string, text: string, parse: (content: string) => Array<{ name: string; registry: string; local?: true }>): PrivateIndexEntry[] => {
+  // `path`: where local code is, relative to the manifest (`at`).
+  const read = (file: string, text: string, parse: (content: string) => Array<{ name: string; registry: string; local?: true; path?: string }>): PrivateIndexEntry[] => {
     if (!text) return [];
     try {
-      return parse(text).map((p) => ({ name: p.name, version: null, registry: p.registry, file, ...(p.local ? { local: true as const } : {}) }));
+      return parse(text).map((p) => ({
+        name: p.name,
+        version: null,
+        registry: p.registry,
+        file,
+        ...(p.local ? { local: true as const } : {}),
+        ...(p.local && p.path !== undefined ? { at: path.resolve(path.dirname(file), p.path) } : {}),
+      }));
     } catch {
       noteUnread(file, "could not be parsed");
       return [];
@@ -1780,13 +1798,13 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
     const cargo = (text: string) =>
       cargoManifestPrivate(text).map((p) => ({
         name: p.name,
-        ...(p.registry.startsWith("the local path ") ? { local: true as const } : {}),
-        registry: p.registry.startsWith("the local path ") ? p.registry : /^[a-z+]*https?:\/\//i.test(p.registry) || /^(?:ssh|git):/i.test(p.registry) ? sourceLabel(p.registry) : `the "${p.registry}" registry`,
+        ...(p.path !== undefined ? { local: true as const, path: p.path } : {}),
+        registry: p.path !== undefined ? p.registry : /^[a-z+]*https?:\/\//i.test(p.registry) || /^(?:ssh|git):/i.test(p.registry) ? sourceLabel(p.registry) : `the "${p.registry}" registry`,
       }));
     // The workspace's own crates (the root package and every member) are local code too (R8).
     const ownName = (text: string) => {
       const name = cargoPackageName(text);
-      return name ? [{ name, registry: "a local workspace crate (not a crates.io release)", local: true as const }] : [];
+      return name ? [{ name, registry: "a local workspace crate (not a crates.io release)", local: true as const, path: "." }] : [];
     };
     const root = path.join(dir, "Cargo.toml");
     const rootText = textOf(root);
@@ -1819,6 +1837,134 @@ function cargoPackageName(content: string): string | null {
     if (kv && table === "package" && kv.key === "name") return tomlString(kv.value);
   }
   return null;
+}
+
+/**
+ * Local packages a uv.lock or poetry.lock in `dir` names with their directory: uv `source = {
+ * editable | directory | virtual | path = "<dir>" }`, Poetry `[package.source] type = "directory"`.
+ * Each with `at`, so one inside the project is recognised as the project's own package (a uv
+ * workspace member, the project itself). The readers already hold every local package as private;
+ * a lockfile that cannot be read here only leaves them so.
+ */
+export function pythonLocalPackages(dir: string): PrivateIndexEntry[] {
+  const out: PrivateIndexEntry[] = [];
+  for (const lock of ["uv.lock", "poetry.lock"]) {
+    const file = path.join(dir, lock);
+    const got = readRuleFile(file);
+    if (got.state !== "read") continue;
+    let pkg: { name: string | null; version: string | null; dir: string | null; directory: boolean; url: string | null } | null = null;
+    let table = "";
+    const flush = () => {
+      const at = pkg?.dir ?? (pkg?.directory ? pkg.url : null);
+      if (pkg?.name && at !== null && at !== undefined) out.push({ name: pkg.name, version: pkg.version, registry: `local code (${at})`, file, local: true, at: path.resolve(dir, at) });
+      pkg = null;
+    };
+    for (const raw of textLines(got.text)) {
+      const line = raw.trim();
+      if (line.startsWith("[")) {
+        if (line === "[[package]]") {
+          flush();
+          pkg = { name: null, version: null, dir: null, directory: false, url: null };
+        }
+        table = line;
+        continue;
+      }
+      if (!pkg) continue;
+      const kv = /^([A-Za-z-]+)\s*=\s*(.*)$/.exec(line);
+      if (!kv) continue;
+      const str = /^"([^"]*)"/.exec(kv[2])?.[1] ?? null;
+      if (table === "[[package]]") {
+        if (kv[1] === "name") pkg.name = str;
+        else if (kv[1] === "version") pkg.version = str;
+        else if (kv[1] === "source") pkg.dir = /^\{\s*(?:editable|directory|virtual|path)\s*=\s*"([^"]*)"/.exec(kv[2])?.[1] ?? pkg.dir;
+      } else if (table === "[package.source]") {
+        if (kv[1] === "type") pkg.directory = str === "directory";
+        else if (kv[1] === "url") pkg.url = str;
+      }
+    }
+    flush();
+  }
+  return out;
+}
+
+/** Whether `dir` is `root` or below it. */
+export function insideDir(root: string, dir: string): boolean {
+  const rel = path.relative(path.resolve(root), path.resolve(dir));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+const GO_MODULE = /^module\s+"?([^\s"]+)"?/m;
+
+/** A go.work's `use` directories, and the modules its `replace` points at a directory (with that directory). */
+function goWorkDirectives(content: string): { uses: string[]; replaced: Array<{ module: string; dir: string }> } {
+  const uses: string[] = [];
+  const replaced: Array<{ module: string; dir: string }> = [];
+  const unquote = (s: string) => s.replace(/^["`]|["`]$/g, "");
+  let block: "use" | "replace" | null = null;
+  for (const raw of textLines(content)) {
+    const line = raw.replace(/\/\/.*$/, "").trim();
+    if (!line) continue;
+    if (block && line === ")") {
+      block = null;
+      continue;
+    }
+    const opener = /^(use|replace)\s*\($/.exec(line);
+    if (opener) {
+      block = opener[1] as "use" | "replace";
+      continue;
+    }
+    const single = /^(use|replace)\s+(.+)$/.exec(line);
+    const kind = single ? single[1] : block;
+    const rest = single ? single[2] : line;
+    if (kind === "use") uses.push(unquote(rest.trim()));
+    else if (kind === "replace") {
+      const [left, right] = rest.split("=>").map((s) => s.trim().split(/\s+/).map(unquote));
+      // `=> ./dir` (one word that is a path) is local code; `=> other/module v1.2.3` is not.
+      if (left?.[0] && right?.length === 1 && /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|[A-Za-z]:[\\/])/.test(right[0])) replaced.push({ module: left[0], dir: right[0] });
+    }
+  }
+  return { uses, replaced };
+}
+
+/**
+ * The modules of the go.work that governs `dir`: the first one from `dir` up to `root`, as the go
+ * command looks for one (none with GOWORK=off). Each `use` directory inside `root` with the module
+ * its go.mod names, and each module its `replace` points at a directory inside `root`. The go
+ * command builds every one from the workspace whatever version a go.mod requires: local code, never
+ * sent, and the project's own package. Nothing outside `root` is read. A go.work that is there and
+ * cannot be read is said (unreadEntry).
+ */
+export function goWorkModules(dir: string, root: string, env: NodeJS.ProcessEnv = process.env): PrivateIndexEntry[] {
+  if ((env.GOWORK ?? "").trim() === "off" || !insideDir(root, dir)) return [];
+  let file: string | null = null;
+  let got: ReturnType<typeof readRuleFile> = { state: "absent" };
+  for (let d = path.resolve(dir); insideDir(root, d); d = path.dirname(d)) {
+    got = readRuleFile(path.join(d, "go.work"));
+    if (got.state !== "absent") {
+      file = path.join(d, "go.work");
+      break;
+    }
+    if (path.dirname(d) === d) break;
+  }
+  if (file === null) return [];
+  if (got.state === "unreadable") return [unreadEntry(file, got.reason)];
+  if (got.state !== "read") return [];
+  const base = path.dirname(file);
+  const out: PrivateIndexEntry[] = [];
+  const add = (name: string, at: string) => out.push({ name, version: null, registry: "local code (a go.work workspace module)", file, local: true, at, workspace: true });
+  const { uses, replaced } = goWorkDirectives(got.text);
+  for (const use of uses) {
+    const at = path.resolve(base, use);
+    if (!insideDir(root, at)) continue;
+    const mod = readRuleFile(path.join(at, "go.mod"));
+    const module = mod.state === "read" ? GO_MODULE.exec(mod.text)?.[1] : undefined;
+    if (module) add(module, at);
+  }
+  for (const { module, dir: target } of replaced) {
+    const at = path.resolve(base, target);
+    if (insideDir(root, at)) add(module, at);
+  }
+  return out;
 }
 
 /**
