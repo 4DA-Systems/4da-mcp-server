@@ -30,6 +30,9 @@
  *      and release.yml's `verify` job fetch it: each such file must be named in
  *      the conformance job, and both jobs must require the corpus and check the
  *      report (scripts/ci-gates.mjs). Two corpus tests ran in no job until this.
+ *   7. Mutants still apply. Each mutant in scripts/mutation/mutations.mjs names exact text in a
+ *      source file; a change that moves or rewrites that text must update the mutant with it
+ *      (the same check as `node scripts/mutation/run.mjs --check`; it reads files only).
  *
  * Exit 1 on any finding.
  */
@@ -38,6 +41,8 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { corpusGatedTests, workflowGateFindings } from "./ci-gates.mjs";
+import { listFindings } from "./mutation/lib.mjs";
+import { mutations } from "./mutation/mutations.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const rel = (p) => relative(root, p).replaceAll("\\", "/");
@@ -153,8 +158,11 @@ findings.push(
   }),
 );
 
+// 7. Mutants still apply ---------------------------------------------------------
+findings.push(...listFindings(mutations, root));
+
 if (findings.length) {
   console.error(`check-repo: ${findings.length} finding(s)\n  ${findings.join("\n  ")}`);
   process.exit(1);
 }
-console.log(`check-repo: OK (${sources.length} source files, ${shipped.length} shipped text files, ${gated.length} corpus-gated test files)`);
+console.log(`check-repo: OK (${sources.length} source files, ${shipped.length} shipped text files, ${gated.length} corpus-gated test files, ${mutations.length} mutants that apply)`);

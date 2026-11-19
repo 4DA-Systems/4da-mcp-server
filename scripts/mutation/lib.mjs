@@ -50,6 +50,15 @@ export function validate(list, root) {
 }
 
 /**
+ * `validate` as repository-gate findings (scripts/check-repo.mjs): the same check as
+ * `run.mjs --check`, so a change that moves or rewrites a mutant's text fails the pull request
+ * until the mutant is updated with it. Reads files only.
+ */
+export function listFindings(list, root) {
+  return validate(list, root).map((p) => `scripts/mutation/mutations.mjs: mutant ${p} (update its find/replace in the same change; scripts/mutation/README.md)`);
+}
+
+/**
  * The failed tests in a vitest JSON report, as `src/__tests__/<file> :: <test>`; a file that
  * failed to load counts as one. Null when there is no report.
  */

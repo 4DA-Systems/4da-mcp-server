@@ -14,6 +14,7 @@ export interface Located {
 export function locate(m: Mutation, root: string): Located | { error: string };
 export function applied(m: Mutation, loc: Located): string;
 export function validate(list: readonly Mutation[], root: string): string[];
+export function listFindings(list: readonly Mutation[], root: string): string[];
 
 /** Failed tests of a vitest JSON report; totals are null when the report does not give them. */
 export interface FailureReport {
