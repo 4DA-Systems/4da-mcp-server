@@ -27,6 +27,20 @@ export interface AffectedSpan {
   introduced: string;
   fixed: string | null;
   lastAffected: string | null;
+  /**
+   * The closing event had no `introduced` before it, as its range lists them. OSV's own evaluation
+   * gives such an event no effect; here it reads as affected since the beginning, the cautious
+   * reading. It is not knowledge: advisoryKnownToAffect leaves it out, so OSV.dev's answer for an
+   * exact version decides wherever there is one.
+   */
+  presumed?: true;
+  /**
+   * The span's range has a bound this ecosystem's grammar cannot read, so the span says nothing
+   * about any version (it is never compared). "list": its affected entry enumerates versions, and
+   * membership in that list decides instead. "nothing": the entry enumerates none, and the advisory
+   * cannot be decided from the record (advisoryReading "undecided").
+   */
+  unread?: "list" | "nothing";
 }
 
 /** What one advisory says about one package: its spans plus any versions it lists explicitly. */
@@ -53,11 +67,16 @@ export interface AdvisoryRanges {
   aliases?: string[];
 }
 
+type RangeEvent = { kind: "introduced" | "fixed" | "last_affected"; value: string };
+
 /**
- * Flatten the matching package's version ranges into spans. OSV sorts events
- * within a range; each `introduced` opens a span and the next `fixed` or
- * `last_affected` closes it. GIT ranges hold commit hashes, not versions,
- * and are skipped.
+ * Flatten the matching package's version ranges into spans, each range read the way the OSV
+ * schema's evaluation algorithm reads it: its events sorted by version, each `introduced` opening
+ * a span that the next `fixed` or `last_affected` closes. GIT ranges hold commit hashes, not
+ * versions, and are skipped.
+ *
+ * A range with a bound the ecosystem's grammar cannot read is not read in part (its events cannot
+ * be put in order): its spans are kept as written, marked `unread`, and decide nothing.
  */
 export function collectAffectedSpans(
   affected: OsvVulnerability["affected"] | undefined,
@@ -69,32 +88,106 @@ export function collectAffectedSpans(
     // Names compare the registry's way: PEP 503 for PyPI (`Jinja2` is
     // `jinja2`), `-`/`_` folding for crates.
     if (!a.package || a.package.ecosystem !== ecosystem || !samePackageName(a.package.name, packageName, ecosystem)) continue;
+    const enumerated = (a.versions ?? []).length > 0;
     for (const range of a.ranges || []) {
       if (range.type === "GIT") continue;
-      let open: AffectedSpan | null = null;
-      for (const event of range.events || []) {
-        if (event.introduced !== undefined) {
-          if (open) spans.push(open);
-          open = { introduced: coerceBound(event.introduced, ecosystem), fixed: null, lastAffected: null };
-        } else if (event.fixed !== undefined || event.last_affected !== undefined) {
-          const close = {
-            fixed: event.fixed !== undefined ? coerceBound(event.fixed, ecosystem) : null,
-            lastAffected: event.fixed === undefined && event.last_affected !== undefined ? coerceBound(event.last_affected, ecosystem) : null,
-          };
-          if (open) {
-            spans.push({ ...open, ...close });
-            open = null;
-          } else {
-            // A closing event with no preceding `introduced`: affected since
-            // inception ("0" = OSV's since-the-beginning sentinel).
-            spans.push({ introduced: "0", ...close });
-          }
-        }
+      const events = rangeEvents(range.events || [], ecosystem);
+      if (events.every((e) => isComparable(e.value, ecosystem))) {
+        pushAll(spans, sortedSpans(events, ecosystem));
+        continue;
       }
-      if (open) spans.push(open);
+      // Kept for what they name (a fixed version) and as the mark that the range was not read. A
+      // span of it with every bound readable and no fix says nothing, and is dropped.
+      const unread = enumerated ? ("list" as const) : ("nothing" as const);
+      pushAll(
+        spans,
+        listedSpans(events)
+          .filter((s) => s.fixed !== null || !boundsReadable(s, ecosystem))
+          .map(({ presumed: _presumed, ...s }) => ({ ...s, unread })),
+      );
     }
   }
   return spans;
+}
+
+/** A range's events as bounds (coerceBound); an event that is none of the three (`limit`) is left out. */
+function rangeEvents(events: ReadonlyArray<{ introduced?: string; fixed?: string; last_affected?: string }>, ecosystem: string): RangeEvent[] {
+  const out: RangeEvent[] = [];
+  for (const event of events) {
+    if (event.introduced !== undefined) out.push({ kind: "introduced", value: coerceBound(event.introduced, ecosystem) });
+    else if (event.fixed !== undefined) out.push({ kind: "fixed", value: coerceBound(event.fixed, ecosystem) });
+    else if (event.last_affected !== undefined) out.push({ kind: "last_affected", value: coerceBound(event.last_affected, ecosystem) });
+  }
+  return out;
+}
+
+const closing = (e: RangeEvent) => (e.kind === "fixed" ? { fixed: e.value, lastAffected: null } : { fixed: null, lastAffected: e.value });
+
+/**
+ * Events paired in the order the record lists them: each `introduced` opens a span and the next
+ * closing event ends it. A closing event with nothing open reads as affected since the beginning
+ * ("0", OSV's sentinel), marked `presumed`.
+ */
+function listedSpans(events: readonly RangeEvent[]): AffectedSpan[] {
+  const spans: AffectedSpan[] = [];
+  let open: AffectedSpan | null = null;
+  for (const e of events) {
+    if (e.kind === "introduced") {
+      if (open) spans.push(open);
+      open = { introduced: e.value, fixed: null, lastAffected: null };
+    } else if (open) {
+      spans.push({ ...open, ...closing(e) });
+      open = null;
+    } else {
+      spans.push({ introduced: "0", ...closing(e), presumed: true });
+    }
+  }
+  if (open) spans.push(open);
+  return spans;
+}
+
+/**
+ * The OSV schema's evaluation, as spans. With the events sorted by version ("0" first; equal
+ * versions keep their listed order), a version is affected from an `introduced` at or below it
+ * until a `fixed` at or below it or a `last_affected` below it. So an `introduced` inside an open
+ * span changes nothing, and neither does a closing event with no span open, with one reading kept
+ * on purpose: a closing event that has no `introduced` before it even as the record lists its
+ * events ("fixed in 2.1.0" and nothing else) still reads as affected since the beginning, marked
+ * `presumed`. Sorting alone never adds that reading: a range listed `introduced 4.0.0-beta1, fixed
+ * 4.0.0-beta.11`, its fix ordered below its own start, presumes nothing below it.
+ *
+ * Paired in listed order instead, that range was the empty `[4.0.0-beta1, 4.0.0-beta.11)`: npm
+ * `derby` 4.2.3 was named the newest safe release on its line while OSV.dev, which sorts, reported
+ * it affected by the same advisory (GHSA-82jv-9wjw-pqh6).
+ */
+function sortedSpans(events: readonly RangeEvent[], ecosystem: string): AffectedSpan[] {
+  const unopened = new Set<RangeEvent>();
+  let listedOpen = false;
+  for (const e of events) {
+    if (e.kind === "introduced") listedOpen = true;
+    else if (listedOpen) listedOpen = false;
+    else unopened.add(e);
+  }
+  const spans: AffectedSpan[] = [];
+  let open: string | null = null;
+  for (const e of [...events].sort((x, y) => compareVersions(x.value, y.value, ecosystem))) {
+    if (e.kind === "introduced") {
+      open ??= e.value;
+    } else if (open !== null) {
+      spans.push({ introduced: open, ...closing(e) });
+      open = null;
+    } else if (unopened.has(e)) {
+      spans.push({ introduced: "0", ...closing(e), presumed: true });
+    }
+  }
+  if (open !== null) spans.push({ introduced: open, fixed: null, lastAffected: null });
+  return spans;
+}
+
+/** Whether every bound of a span is a version this ecosystem orders ("0" is OSV's since-the-beginning). */
+function boundsReadable(s: AffectedSpan, ecosystem: string): boolean {
+  const ok = (v: string | null) => v === null || isComparable(v, ecosystem);
+  return ok(s.introduced) && ok(s.fixed) && ok(s.lastAffected);
 }
 
 const SEMVER_FAMILY = new Set(["npm", "crates.io", "Go"]);
@@ -176,30 +269,64 @@ export function oneIdPerAdvisory(ids: readonly string[], advisories: readonly Ad
 }
 
 /**
- * True when `version` lies in a span (or the explicit list) of this advisory.
+ * What one advisory's record says about one version:
+ * - "affected": the version is listed, or lies in a span an `introduced` event opens.
+ * - "presumed": it lies only in a span presumed from a closing event (AffectedSpan.presumed).
+ * - "undecided": nothing readable covers it, and a range of the advisory could not be read with no
+ *   enumerated list to decide in its place. The record alone cannot say; OSV.dev's own answer for
+ *   the exact version can.
+ * - "clear": the record was read and does not cover it.
  *
  * A listed version matches when it is the same version in the ecosystem's
  * order, not only the same string: OSV lists certifi `2020.12.05` (from the
  * git tag) and pip installs `2020.12.5`, the same PEP 440 version, which OSV
  * reports as affected by PYSEC-2024-230 (4DA conformance corpus, 2026-10-12).
  */
-export function advisoryAffects(advisory: AdvisoryRanges, version: string, ecosystem: string): boolean {
-  const cmp = (a: string, b: string) => compareVersions(a, b, ecosystem);
-  const listed = listedIndex(advisory, ecosystem);
-  if (listed.exact.has(version)) return true;
-  if (isComparable(version, ecosystem)) {
+export type AdvisoryReading = "affected" | "presumed" | "undecided" | "clear";
+
+export function advisoryReading(advisory: AdvisoryRanges, version: string, ecosystem: string): AdvisoryReading {
+  const index = readIndex(advisory, ecosystem);
+  if (index.exact.has(version)) return "affected";
+  const comparable = isComparable(version, ecosystem);
+  if (comparable) {
     // Only the listed versions that can equal it are compared: OSV lists every affected PyPI release
     // (hundreds per Django advisory), and comparing each against each candidate took 25-30 s of CPU
     // for one dependency_check of django 4.2.0 (pre-publish audit 2026-11-12, S1).
     const key = releaseKey(version);
-    const near = key === null ? listed.all : [...(listed.byKey.get(key) ?? []), ...listed.unkeyed];
-    if (near.some((v) => cmp(v, version) === 0)) return true;
+    const near = key === null ? index.all : [...(index.byKey.get(key) ?? []), ...index.unkeyed];
+    if (near.some((v) => compareVersions(v, version, ecosystem) === 0)) return "affected";
   }
-  return advisory.spans.some(
-    (s) =>
-      compareToLowerBound(version, s.introduced, ecosystem) >= 0 &&
-      (s.fixed !== null ? cmp(version, s.fixed) < 0 : s.lastAffected !== null ? cmp(version, s.lastAffected) <= 0 : true),
-  );
+  // Every bound in `firm` and `presumed` was read, so a comparison below is never the "0 for
+  // unreadable" of compareVersions. A version the ecosystem cannot order is inside any span that
+  // names no fix, as before.
+  const inside = (s: AffectedSpan) =>
+    comparable
+      ? compareToLowerBound(version, s.introduced, ecosystem) >= 0 &&
+        (s.fixed !== null ? compareVersions(version, s.fixed, ecosystem) < 0 : s.lastAffected === null || compareVersions(version, s.lastAffected, ecosystem) <= 0)
+      : s.fixed === null;
+  if (index.firm.some(inside)) return "affected";
+  if (index.presumed.some(inside)) return "presumed";
+  return index.undecidable ? "undecided" : "clear";
+}
+
+/**
+ * True unless the advisory's record was read and does not cover `version`: the question every
+ * "is this release clean?" decision asks. A version the record cannot decide (an unreadable bound,
+ * a presumed span) is never called clear of the advisory, so no release is named safe on it.
+ */
+export function advisoryAffects(advisory: AdvisoryRanges, version: string, ecosystem: string): boolean {
+  return advisoryReading(advisory, version, ecosystem) !== "clear";
+}
+
+/**
+ * True only when the record itself places `version` among the affected: the question asked before
+ * a release is called affected on the record's word, or OSV.dev's per-version answer is held to
+ * it. A bound that cannot be read is never compared, so it never makes a version affected: PYSEC-2024-264
+ * ends at `last_affected: "2.9.0-NA"`, and read as equal to every version it made every release of
+ * apache-airflow affected, the newest included, which OSV.dev's own answer does not.
+ */
+export function advisoryKnownToAffect(advisory: AdvisoryRanges, version: string, ecosystem: string): boolean {
+  return advisoryReading(advisory, version, ecosystem) === "affected";
 }
 
 /**
@@ -230,24 +357,30 @@ function releaseKeyOf(version: string): string | null {
   return parts.join(".");
 }
 
-interface ListedIndex {
+interface ReadIndex {
   exact: Set<string>;
   /** Comparable listed versions by releaseKey. */
   byKey: Map<string, string[]>;
   /** Comparable listed versions with no key: compared against every candidate. */
   unkeyed: string[];
   all: string[];
+  /** Spans whose every bound was read, opened by an `introduced` event. */
+  firm: AffectedSpan[];
+  /** Spans whose every bound was read, presumed from a closing event alone. */
+  presumed: AffectedSpan[];
+  /** A range could not be read and no enumerated list decides in its place. */
+  undecidable: boolean;
 }
 
-/** One index per advisory and ecosystem, built on first use (an advisory's lists never change once read). */
-const LISTED = new WeakMap<AdvisoryRanges, Map<string, ListedIndex>>();
+/** One index per advisory and ecosystem, built on first use (an advisory's lists and spans never change once read). */
+const READ = new WeakMap<AdvisoryRanges, Map<string, ReadIndex>>();
 
-function listedIndex(advisory: AdvisoryRanges, ecosystem: string): ListedIndex {
-  let perEco = LISTED.get(advisory);
-  if (!perEco) LISTED.set(advisory, (perEco = new Map()));
+function readIndex(advisory: AdvisoryRanges, ecosystem: string): ReadIndex {
+  let perEco = READ.get(advisory);
+  if (!perEco) READ.set(advisory, (perEco = new Map()));
   const hit = perEco.get(ecosystem);
   if (hit) return hit;
-  const index: ListedIndex = { exact: new Set(advisory.versions), byKey: new Map(), unkeyed: [], all: [] };
+  const index: ReadIndex = { exact: new Set(advisory.versions), byKey: new Map(), unkeyed: [], all: [], firm: [], presumed: [], undecidable: false };
   for (const v of advisory.versions) {
     if (v === "0" || !isComparable(v, ecosystem)) continue;
     index.all.push(v);
@@ -255,12 +388,19 @@ function listedIndex(advisory: AdvisoryRanges, ecosystem: string): ListedIndex {
     if (key === null) index.unkeyed.push(v);
     else index.byKey.set(key, [...(index.byKey.get(key) ?? []), v]);
   }
+  for (const s of advisory.spans) {
+    // A span with an unreadable bound and no mark (one cached before the mark existed) decides nothing either.
+    const unread = s.unread ?? (boundsReadable(s, ecosystem) ? null : "nothing");
+    if (unread === "nothing") index.undecidable = true;
+    else if (unread === null) (s.presumed ? index.presumed : index.firm).push(s);
+  }
   perEco.set(ecosystem, index);
   return index;
 }
 
 /**
- * The advisories (maintenance notices left out) that affect `version`: the predicate dependency_check
+ * The advisories (maintenance notices left out) that `version` cannot be called clear of
+ * (advisoryAffects): the predicate dependency_check
  * decides `proceed` by over a package's advisory list (checkRange), and the one every other tool
  * runs on a release it offers (offered-release.ts). One predicate, so no tool offers a release
  * dependency_check would refuse (final release audit of 6.2.5: upgrade_planner offered crossenv
@@ -271,13 +411,23 @@ export function advisoriesAffecting(advisories: readonly AdvisoryRanges[], versi
 }
 
 /**
- * Whether an advisory's ranges can decide anything for this package: at least one span or listed
- * version, and every bound a version this ecosystem orders ("0" is OSV's since-the-beginning).
+ * Whether an advisory's record decides every version of this package: at least one span or listed
+ * version, and no range left unread without an enumerated list to decide in its place
+ * (AffectedSpan.unread; "0" is OSV's since-the-beginning and is always read).
  */
 export function readableAdvisory(a: AdvisoryRanges, ecosystem: string): boolean {
   if (a.spans.length === 0 && a.versions.length === 0) return false;
-  const ok = (v: string | null) => v === null || v === "0" || isComparable(v, ecosystem);
-  return a.spans.every((s) => ok(s.introduced) && ok(s.fixed) && ok(s.lastAffected));
+  return !readIndex(a, ecosystem).undecidable;
+}
+
+/**
+ * The advisory as its readable ranges and listed versions alone state it: what it is KNOWN to
+ * cover. Null when nothing of it could be read.
+ */
+function readablePart(a: AdvisoryRanges, ecosystem: string): AdvisoryRanges | null {
+  if (readableAdvisory(a, ecosystem)) return a;
+  const spans = a.spans.filter((s) => s.unread === undefined && boundsReadable(s, ecosystem));
+  return spans.length === 0 && a.versions.length === 0 ? null : { ...a, spans };
 }
 
 /** Every "clean release" decision, over one package's advisories (CleanReleases). */
@@ -418,6 +568,13 @@ export interface CleanTarget {
   aboveListed?: boolean;
   /** Advisories whose ranges cannot be read: no target is named, and the reason says so (#981 rule b). */
   unreadable?: string[];
+  /**
+   * With `unreadable` and no target: the answer as the readable ranges alone give it. It is NOT a
+   * release to name. It becomes the answer only when OSV.dev, asked about `ifConfirmed.target`
+   * itself, names none of the unread advisories against it (batch-confirm.ts confirmTargets);
+   * every reader that does not ask sees no target.
+   */
+  ifConfirmed?: CleanTarget;
   /** No target: every fixing release brings in these advisories, which the installed version does not have. */
   introduces?: string[];
   /**
@@ -506,9 +663,18 @@ export function smallestCleanVersion(input: {
   // The #981 rule (cleanReleases): an advisory whose ranges cannot be read leaves the decision
   // unknown, no release named; a malware advisory is never "unfixable", so a release it affects is
   // never the target.
-  const unreadable = [...new Set(input.advisories.filter((a) => !a.maintenance && !readableAdvisory(a, ecosystem)).map((a) => a.id))];
+  const unread = input.advisories.filter((a) => !a.maintenance && !readableAdvisory(a, ecosystem));
+  const unreadable = [...new Set(unread.map((a) => a.id))];
   if (unreadable.length > 0) {
-    return { target: null, basis, floor, floorAffectedBy: unreadable, stillAffectedBy: unreadable, unfixable: [], withheld: [], unreadable };
+    // What the readable ranges and lists alone decide. An advisory with no ranges at all leaves
+    // nothing to hold OSV.dev's per-version answer against, so nothing is worked out past it.
+    const decided = unread.some((a) => a.spans.length === 0 && a.versions.length === 0)
+      ? null
+      : smallestCleanVersion({ ...input, advisories: input.advisories.flatMap((a) => readablePart(a, ecosystem) ?? []) });
+    if (!decided) return { target: null, basis, floor, floorAffectedBy: unreadable, stillAffectedBy: unreadable, unfixable: [], withheld: [], unreadable };
+    // No release even so: the reasons are the known ones, and the unread advisories are named beside them.
+    if (decided.target === null) return { ...decided, unreadable };
+    return { target: null, basis, floor, floorAffectedBy: [], stillAffectedBy: [], unfixable: [], withheld: [], unreadable, ifConfirmed: decided };
   }
   const has = (a: AdvisoryRanges) => !input.installed || advisoryAffects(a, input.installed, ecosystem);
   const unfixable = newest ? input.advisories.filter((a) => !a.malware && advisoryAffects(a, newest, ecosystem) && has(a)) : [];

@@ -48,10 +48,11 @@ import type { FourDADatabase } from "../db.js";
 import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import type { LiveIntelligence } from "../live/index.js";
-import { missingFromList, type FixPathSources } from "../live/fix-paths.js";
+import type { FixPathSources } from "../live/fix-paths.js";
+import { unaccountedIds } from "../live/batch-confirm.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
 import { npmWeeklyDownloads } from "../live/npm-downloads.js";
-import { advisoryAffects, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { pushAll } from "../array-utils.js";
 import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
@@ -241,8 +242,10 @@ interface Resolved extends CheckItem {
   /**
    * Advisories OSV.dev's batch query named for `to` or `from` that the package's advisory list
    * (/v1/query) did not hold: the list is incomplete, so no release is named safe from it.
+   * `misread`: advisories the list holds whose ranges do not show a release affected that the
+   * batch query names them for; the list's ranges cannot name a safe release either.
    */
-  listGap?: { ids: string[]; versions: string[] };
+  listGap?: ListGap;
   /**
    * OSV.dev's batch query gave no current answer, so the package's advisory list (/v1/query) could
    * not be held against it: no release is named safe from the list (blind audit round 5).
@@ -706,16 +709,17 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   // proxy that answered {} for /v1/query made lodash 4.17.20 avoid and named 4.0.0, which eight
   // advisories affect, the smallest safe release on its line (blind audit round 4). Nothing is
   // computed from it: no safe release, no range check, and the answer says NOT CHECKED.
-  const gaps = new Map<string, { ids: string[]; versions: string[] }>();
+  const gaps = new Map<string, ListGap>();
   for (const item of items) {
     const list = advisoryLists.get(lookupKey(item));
     if (!list) continue;
     for (const version of new Set(item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)])) {
       if (!version) continue;
-      const missing = missingFromList(list, (byInstance.get(instanceKey(item.ecosystem, item.package, version)) ?? []).map((e) => e.vulnId));
-      if (missing.length === 0) continue;
+      // A release the batch query names an advisory against is never called safe from the list: not when the list left the id out, and not when it reads the advisory's ranges as not reaching that release.
+      const { missing, misread } = unaccountedIds(list, (byInstance.get(instanceKey(item.ecosystem, item.package, version)) ?? []).map((e) => e.vulnId), version, item.ecosystem);
+      if (missing.length === 0 && misread.length === 0) continue;
       const gap = gaps.get(lookupKey(item)) ?? { ids: [], versions: [] };
-      gaps.set(lookupKey(item), { ids: [...new Set([...gap.ids, ...missing])], versions: [...new Set([...gap.versions, version])] });
+      gaps.set(lookupKey(item), { ids: [...new Set([...gap.ids, ...missing])], versions: [...new Set([...gap.versions, version])], misread: [...new Set([...(gap.misread ?? []), ...misread])] });
     }
   }
   // Per package: every item of a package whose list is incomplete loses what was computed from it.
@@ -1035,14 +1039,28 @@ function rangePicks(item: Resolved): string[] {
   );
 }
 
+interface ListGap {
+  ids: string[];
+  versions: string[];
+  misread?: string[];
+}
+
+/** The batch query names advisories for releases that the list's own ranges do not show as affected. */
+function misreadText(pkg: string, gap: ListGap): string {
+  const ids = gap.misread ?? [];
+  return `OSV.dev's batch query names ${ids.slice(0, 3).join(", ")}${ids.length > 3 ? ` and ${ids.length - 3} more` : ""} for ${pkg} ${andList(gap.versions)}, which the ranges in ${pkg}'s advisory list (/v1/query) do not show as affecting ${gap.versions.length === 1 ? "it" : "them"}`;
+}
+
 /** NOT CHECKED: the package's advisory list is incomplete (Resolved.listGap), so no release is named. */
-function listGapText(pkg: string, gap: { ids: string[]; versions: string[] }): string {
+function listGapText(pkg: string, gap: ListGap): string {
+  if (gap.ids.length === 0) return `NOT CHECKED: ${misreadText(pkg, gap)}, so those ranges cannot be relied on and no release of ${pkg} is named safe from them (the verdict on the version checked comes from the batch query and stands). Check a specific version with dependency_check.`;
   const ids = `${gap.ids.slice(0, 3).join(", ")}${gap.ids.length > 3 ? ` and ${gap.ids.length - 3} more` : ""}`;
   return `NOT CHECKED: OSV.dev's advisory list for ${pkg} (/v1/query) left out ${ids}, which its batch query names for ${andList(gap.versions)}, so the list is incomplete and no release of ${pkg} is named safe from it (the verdict on the version checked comes from the batch query and stands). Check again later, or check a specific version with dependency_check.`;
 }
 
 /** The same gap under a proceed or wait: what was confirmed comes first, and nothing reads as NOT CHECKED. */
-function listGapConfirmedText(item: Resolved, gap: { ids: string[]; versions: string[] }): string {
+function listGapConfirmedText(item: Resolved, gap: ListGap): string {
+  if (gap.ids.length === 0) return `OSV.dev's batch check lists no advisory for ${item.package} ${item.to}. ${misreadText(item.package, gap)}, so other releases were not compared and none is named as an alternative.`;
   const ids = `${gap.ids.slice(0, 3).join(", ")}${gap.ids.length > 3 ? ` and ${gap.ids.length - 3} more` : ""}`;
   return `OSV.dev's batch check lists no advisory for ${item.package} ${item.to}. Its full advisory list for ${item.package} (/v1/query) was incomplete (it left out ${ids}, which the batch check names for ${andList(gap.versions)}), so other releases were not compared and none is named as an alternative.`;
 }
@@ -1102,7 +1120,8 @@ function heldAdviceText(item: Resolved, rc: RangeCheck): string {
 
 /** The advisories of a package's list (maintenance notices left out) that affect `version`. */
 function listAffecting(list: readonly AdvisoryRanges[], version: string, ecosystem: CheckEcosystem): AdvisoryRanges[] {
-  return list.filter((a) => !a.maintenance && advisoryAffects(a, version, ecosystem));
+  // Known to affect it: a range that cannot be read, or one only presumed, is not held against OSV.dev's own answer for the version.
+  return list.filter((a) => !a.maintenance && advisoryKnownToAffect(a, version, ecosystem));
 }
 
 /** Those of `known` that the batch answer for the same release does not name, by id or alias. */
@@ -1124,7 +1143,7 @@ function probeRelease(ecosystem: CheckEcosystem, index: PackageReleaseIndex, lis
     .filter((r) => !r.withdrawn && isConcreteVersion(r.version) && !isSecurityHoldingRelease(ecosystem, r.version))
     .map((r) => r.version)
     .sort((a, b) => compareIn(ecosystem, b, a));
-  return versions.find((v) => real.some((a) => advisoryAffects(a, v, ecosystem))) ?? null;
+  return versions.find((v) => real.some((a) => advisoryKnownToAffect(a, v, ecosystem))) ?? null;
 }
 
 /** The ids of the advisories (maintenance notices left out) that are open from the first release with no fix. */

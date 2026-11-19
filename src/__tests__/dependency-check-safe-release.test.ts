@@ -159,7 +159,8 @@ describe("prereleases are not offered as the safe release", () => {
     OSV.push(pypiRecord("PYSEC-2026-9999", "litellm", { versions: ["1.107.0rc1"] }, { database_specific: { severity: "MODERATE" } }));
     const out = await check([
       { ecosystem: "PyPI", package: "litellm", to: "1.107.0rc1" },
-      { ecosystem: "PyPI", package: "litellm", to: ">=1.107.0rc1,<1.107.0" },
+      // The upper bound is itself a pre-release: PEP 440's `<1.107.0` admits no pre-release of 1.107.0, as pip reads it.
+      { ecosystem: "PyPI", package: "litellm", to: ">=1.107.0rc1,<1.107.0rc4" },
     ]);
     expect(out.results[0].verdict).toBe("review");
     expect(out.results[0].range_check).toMatchObject({ basis: "same_line", smallest_safe_in_range: "1.107.0.dev1", newest_safe_in_range: "1.107.0rc3" });

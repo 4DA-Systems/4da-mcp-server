@@ -115,9 +115,14 @@ function comparatorSet(token: string, bareIsCaret: boolean): Comparator[] | null
     case "=":
       return xrange(p);
     default:
-      return bareIsCaret && p.major !== null ? caret(p) : xrange(p);
+      // Cargo: a bare version is a caret requirement ("1.0" admits 1.6.1), but a wildcard is the
+      // line it writes out ("1.0.*" is >=1.0.0, <1.1.0; "1.*" is >=1.0.0, <2.0.0).
+      return bareIsCaret && p.major !== null && !WILD_PART.test(m[2]) ? caret(p) : xrange(p);
   }
 }
+
+/** A version written with a wildcard part ("1.*", "1.0.x"). */
+const WILD_PART = /(?:^|\.)[xX*](?:\.|$)/;
 
 function test(set: Comparator[], version: SemverPrecedence): boolean {
   for (const c of set) {
