@@ -199,7 +199,7 @@ describe("damaged JavaScript inputs", () => {
       const live = new LiveIntelligence(new Database(":memory:"));
       const { entries, discovery } = scanProjectTree(dir);
       live.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
-      return (await executeUpgradePlanner(null as never, { project_path: dir } as never, live)) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      return (await executeUpgradePlanner(null as never, { project_path: dir } as never, live)) as Record<string, any>;
     };
 
     it("is reported unreadable by the resolution", () => {
@@ -236,7 +236,7 @@ describe("damaged JavaScript inputs", () => {
       const live = new LiveIntelligence(new Database(":memory:"));
       const { entries, discovery } = scanProjectTree(dir);
       live.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
-      const answer = (await executeDependencyHealth(null, {}, live)) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      const answer = (await executeDependencyHealth(null, {}, live)) as Record<string, any>;
       expect(answer.healthScore).toBeNull();
       expect(answer.summary).toMatch(/^Nothing was checked.*UNREADABLE.*package\.json/);
     });

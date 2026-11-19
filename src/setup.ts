@@ -485,6 +485,7 @@ function describeEntry(entry: Record<string, unknown> | undefined): string {
   if (typeof command === "string" && Array.isArray(args) && args.every((arg) => typeof arg === "string")) words = [command, ...args].join(" ");
   else if (command === undefined && args === undefined) words = "(no command)";
   else words = JSON.stringify({ command, args });
+  // eslint-disable-next-line no-control-regex -- replaces control characters on purpose: the line must stay one printable line
   const line = `${words}${type === undefined ? "" : ` (type ${JSON.stringify(type)})`}`.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ");
   return line.length > 240 ? `${line.slice(0, 240)}...` : line;
 }

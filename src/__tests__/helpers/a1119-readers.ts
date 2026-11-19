@@ -99,7 +99,6 @@ export function stubOsv(records: OsvVulnerability[], npm: Record<string, NpmDoc>
   return { asked };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ScanAnswer = Record<string, any>;
 
 /** vulnerability_scan of `dir`, detailed, on a live layer of its own. */

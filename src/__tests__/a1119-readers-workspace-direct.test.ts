@@ -38,9 +38,7 @@ function liveFor(dir: string): LiveIntelligence {
 }
 
 /** upgrade_planner for `dir`, on `live` (a layer of its own by default). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function plan(dir: string, extra: Record<string, unknown> = {}, live = liveFor(dir)): Promise<Record<string, any>> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (await executeUpgradePlanner(null as never, { project_path: dir, ...extra } as never, live)) as Record<string, any>;
 }
 

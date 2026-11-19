@@ -87,10 +87,4 @@ export default defineConfig(
       "@typescript-eslint/prefer-promise-reject-errors": "error",
     },
   },
-  {
-    // One unused import (`tomlLockDamage`, line 40) is left until the branches that rewrite that
-    // import line are merged. Remove it, then delete this block.
-    files: ["src/live/lockfile-parsers.ts"],
-    rules: { "@typescript-eslint/no-unused-vars": ["warn", unusedVars] },
-  },
 );
