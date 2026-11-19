@@ -39,7 +39,7 @@ import {
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
 import { inspectYarnLock, type YarnInspection } from "./js-dev-scope.js";
-import { DEPENDENCY_SECTIONS, isLocalSpec, isRuntimeSection, readManifestDeclarations, type DeclaredSpec } from "./js-manifests.js";
+import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec } from "./js-manifests.js";
 import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
@@ -177,18 +177,51 @@ function damagedProblem(file: string, damage: LockDamage): LockfileProblem {
  * peerDependencies are not owed an entry (not every package manager installs
  * the project's own). `skipLocal` leaves out `link:`/`portal:`/`workspace:`
  * declarations and `members` the project's own packages, for lockfiles that
- * write no entry for local code.
+ * write no entry for local code. When the member list is not known whole
+ * (`members.complete` false), any declared name may be a member, so none is
+ * reported. `ignoredOptional` names optional dependencies the package manager
+ * was told to leave out.
  */
-function declaredWithoutEntry(cwd: string, has: (name: string) => boolean, options: { skipLocal?: boolean; members?: ReadonlySet<string> } = {}): DeclaredSpec[] {
+function declaredWithoutEntry(
+  cwd: string,
+  has: (name: string) => boolean,
+  options: { skipLocal?: boolean; members?: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional?: string[] } = {},
+): DeclaredSpec[] {
   const manifest = readManifestDeclarations(path.join(cwd, "package.json"));
-  if (!manifest) return [];
+  if (!manifest || options.members?.complete === false) return [];
   const seen = new Set<string>();
   return manifest.declared.filter((spec) => {
     if (spec.section === "peerDependencies" || seen.has(spec.name)) return false;
     seen.add(spec.name);
     if (options.skipLocal && isLocalSpec(spec.spec)) return false;
-    return !options.members?.has(spec.name) && !has(spec.name);
+    if (spec.section === "optionalDependencies" && options.ignoredOptional && nameMatchesAny(options.ignoredOptional, spec.name)) return false;
+    return !options.members?.names.has(spec.name) && !has(spec.name);
   });
+}
+
+/**
+ * What pnpm leaves out of a root importer on purpose: the workspace members (a link to one is
+ * omitted under `excludeLinksFromLockfile`), from pnpm-workspace.yaml `packages`, and the
+ * optional dependencies `ignoredOptionalDependencies` names (in package.json's `pnpm` field,
+ * pnpm-workspace.yaml, or as the lockfile records it).
+ */
+function pnpmOmissions(cwd: string, lockContent: string): { members: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional: string[] } {
+  let workspaceYaml = "";
+  try {
+    workspaceYaml = readTextFile(path.join(cwd, "pnpm-workspace.yaml"));
+  } catch {
+    // no pnpm-workspace.yaml: no members, no settings there
+  }
+  const ignoredOptional = [...pnpmYamlList(workspaceYaml, "ignoredOptionalDependencies"), ...pnpmYamlList(lockContent, "ignoredOptionalDependencies")];
+  try {
+    const field = (JSON.parse(readTextFile(path.join(cwd, "package.json"))) as { pnpm?: { ignoredOptionalDependencies?: unknown } }).pnpm?.ignoredOptionalDependencies;
+    if (Array.isArray(field)) for (const name of field) if (typeof name === "string") ignoredOptional.push(name);
+  } catch {
+    // unreadable package.json: declaredWithoutEntry reads nothing from it either
+  }
+  const expanded = expandWorkspaces(cwd, pnpmYamlList(workspaceYaml, "packages"));
+  const members = memberNamesOf(cwd, expanded.dirs);
+  return { members: { names: members.names, complete: members.complete && expanded.complete }, ignoredOptional };
 }
 
 /** "a (dependencies) and 2 more", for a note. */
@@ -382,9 +415,10 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const installs = yield* readPnpmLockSteps(content, versions, instances, report);
       // pnpm writes every dependency of the project into its root importer; a link can be left out (excludeLinksFromLockfile).
       const listed = report.rootEntries;
-      if (versions.size === 0) return emptyRead(emptyLockProblem(file, declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true })));
+      const omitted = pnpmOmissions(cwd, content);
+      if (versions.size === 0) return emptyRead(emptyLockProblem(file, declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true, ...omitted })));
       const damage = yield* pnpmLockDamageSteps(content, report.missingDirect, installs);
-      const undeclared = listed ? declaredWithoutEntry(cwd, (name) => listed.has(name), { skipLocal: true }) : [];
+      const undeclared = listed ? declaredWithoutEntry(cwd, (name) => listed.has(name), { skipLocal: true, ...omitted }) : [];
       const problem = incompleteProblem(file, damage, undeclared);
       return {
         versions,
@@ -422,7 +456,10 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       }
       // Each declared dependency has an entry in a whole yarn.lock (a git or local one too), except a
       // workspace member (classic writes none) and a link.
-      const undeclared = declaredWithoutEntry(cwd, (name) => inspection?.hasEntry(name) === true, { skipLocal: true, members: inspection?.memberNames });
+      const undeclared = declaredWithoutEntry(cwd, (name) => inspection?.hasEntry(name) === true, {
+        skipLocal: true,
+        members: inspection ? { names: inspection.memberNames, complete: inspection.membersComplete } : undefined,
+      });
       if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
       const problems: LockfileProblem[] = skipped > 0 ? [yarnSkippedProblem(file, skipped)] : [];
       const incomplete = incompleteProblem(file, yarnLockDamage(report.incomplete, inspection?.dangling ?? []), undeclared);
