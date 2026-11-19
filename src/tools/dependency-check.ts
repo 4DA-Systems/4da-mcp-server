@@ -51,63 +51,29 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
-import { type AdvisoryRanges } from "../live/osv-ranges.js";
-import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup } from "../live/release-metadata.js";
+import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
-import { goPathMajor, goVersionMajor } from "../live/upgrade-go.js";
-import {
-  advisoriesSignal,
-  decide,
-  installScriptSignal,
-  introducedDependencies,
-  newDependenciesSignal,
-  publishTrustSignal,
-  releaseAgeSignal,
-  selectBaseline,
-  trustBaseline,
-  upgradeTypeSignal,
-  withdrawnSignal,
-  type CheckItem,
-  type CreatedAtFact,
-  type Signal,
-  type Verdict,
-} from "./dependency-check-signals.js";
-import {
-  compareIn,
-  isPrereleaseIn,
-  parseTarget,
-  rangeAdmits,
-} from "./dependency-check-versions.js";
-import { pythonSupportSignal } from "./dependency-check-python.js";
-import { andList } from "../live/held-dependencies.js";
-import { closestPopularNpm, maliciousSignal } from "./dependency-check-malicious.js";
-import { closestPopularPypi } from "./briefing-names.js";
+import type { Verdict } from "./dependency-check-signals.js";
+import { parseTarget, rangeAdmits } from "./dependency-check-versions.js";
 import { lengthProblem } from "../tool-args.js";
-import { quoteThirdParty, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
+import { UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
 import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, type NpmWhy } from "./dependency-check-resolution.js";
-import {
-  ECOSYSTEMS,
-  head,
-  lookupKey,
-  provisional,
-  type ItemResult,
-  type Requested,
-  type Resolved,
-} from "./dependency-check-items.js";
+import { ECOSYSTEMS, head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
 import { offlineResults, screenItems } from "./dependency-check-screen.js";
-import { batchUnreadText, listGapText, withAlternatives } from "./dependency-check-reason.js";
+import { itemResults, nameCrateSpellings, readFirstPublished } from "./dependency-check-verdict.js";
 import { gatherFindings } from "./dependency-check-findings.js";
 import { adviseNpmNoSafeRelease, caveatGoPicks, checkSameLines, findAffectedExact, offerCleanOutsideRanges } from "./dependency-check-alternatives.js";
 import { advisoryFacts, dropIncompleteLists, findContradictions, markBatchUnread, queryBatch, readDeclaredNotices } from "./dependency-check-batch.js";
 import { judgeReleaseContents, redateGoTargets, resolveItems } from "./dependency-check-resolve.js";
-import { adoptPublishedCrateNames, firstLookups, mapLimit, passContext, REGISTRY_CONCURRENCY } from "./dependency-check-lookups.js";
+import { adoptPublishedCrateNames, firstLookups, passContext } from "./dependency-check-lookups.js";
 
 /** The tests import these from this module. */
 export { refs } from "./dependency-check-batch.js";
+export { crateSpellingReason } from "./dependency-check-verdict.js";
 
 export interface DependencyCheckParams {
   items?: unknown;
@@ -115,9 +81,6 @@ export interface DependencyCheckParams {
 }
 
 const MAX_ITEMS = 25;
-/** First-publish lookups for newly introduced dependencies, per call (each is a registry read). */
-const MAX_NEW_DEP_LOOKUPS = 40;
-
 const PRIVACY_NOTE =
   "Registry requests carried package names (npm full packument, crates.io versions API and sparse index, PyPI JSON API, Go proxy version list), " +
   "plus per-release documents of the releases being judged: the Go proxy's .info and .mod (the list has no dates) and PyPI's own document of a judged release that is not the latest " +
@@ -403,16 +366,13 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   }
 
   const ctx = passContext(liveIntel, requested, now);
-  const { sources, projectPython, pythonUnreadAt, heldAt } = ctx;
   const lookups = await firstLookups(ctx);
-  const { indexes, advisoryLists } = lookups;
   await adoptPublishedCrateNames(ctx, lookups);
   let items = await resolveItems(ctx, lookups);
   items = await redateGoTargets(ctx, lookups, items);
   items = await judgeReleaseContents(ctx, lookups, items);
 
   const batch = await queryBatch(ctx, lookups, items);
-  const { scan } = batch;
   const declaredFor = await readDeclaredNotices(ctx, lookups, items, batch);
   const contradictionOf = findContradictions(ctx, items, batch);
   const advisoriesFor = advisoryFacts(batch, contradictionOf, declaredFor);
@@ -425,175 +385,11 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   await offerCleanOutsideRanges(ctx, lookups, items);
   await adviseNpmNoSafeRelease(ctx, lookups, items);
 
-  const { holdWaivers, malicious, nameChecks } = await gatherFindings(ctx, lookups, items, advisoriesFor);
-
-  // Phase 2: first-publish dates of newly introduced dependencies.
-  const plans = items.map((item) => planItem(item, indexes.get(lookupKey(item))!));
-  const wantedCreated = new Map<string, { ecosystem: CheckEcosystem; name: string }>();
-  for (const p of plans) {
-    for (const name of p.introduced ?? []) {
-      if (wantedCreated.size >= MAX_NEW_DEP_LOOKUPS) break;
-      wantedCreated.set(`${p.item.ecosystem}\0${name}`, { ecosystem: p.item.ecosystem, name });
-    }
-  }
-  const created = new Map<string, CreatedAtFact>();
-  await mapLimit([...wantedCreated.entries()], REGISTRY_CONCURRENCY, async ([key, { ecosystem, name }]) => {
-    const lookup = await sources[ecosystem].getCreatedAt(name);
-    created.set(key, lookup.status === "ok" ? { status: "ok", createdAt: lookup.data } : lookup);
-  });
-
-  const results: ItemResult[] = plans.map((p) => {
-    const extra = p.item.rangeCheck ? { range_check: p.item.rangeCheck } : {};
-    const noticesOf = (s: Signal) => {
-      const ids = (s.value as { maintenance_notices?: string[] } | null)?.maintenance_notices;
-      return ids && ids.length > 0 ? { maintenance_notices: ids } : {};
-    };
-    const bad = malicious.get(p.item);
-    const nameCheck = nameChecks.get(p.item);
-    // A near-miss name that is not established is a finding whatever else could not be read.
-    const nameFinding = nameCheck && (nameCheck.effect === "avoid" || nameCheck.effect === "review") ? nameCheck : null;
-    if (p.blocked) {
-      // No release metadata: only the advisory lookup can still speak, and
-      // only a negative finding is worth more than "unknown".
-      if (bad) {
-        const sig = maliciousSignal(p.item, bad, null);
-        return { ...head(p.item), verdict: "avoid" as const, reason: `${sig.id}: ${sig.evidence}`, signals: [sig], ...extra };
-      }
-      // Not on the registry, yet OSV.dev lists advisories against every release of the name: they are
-      // what is known about it, named, never dropped for a bare "not found" (round 8, B3).
-      const gone = indexes.get(lookupKey(p.item))?.status === "not_found" ? everyRelease(advisoryLists.get(lookupKey(p.item))) : [];
-      if (gone.length > 0) {
-        const evidence = `OSV.dev lists ${andList(gone)} against every release of ${p.item.package}, which ${p.item.ecosystem} no longer serves. Do not add it.`;
-        return {
-          ...head(p.item),
-          verdict: "avoid" as const,
-          reason: `advisories: ${evidence} | ${p.blocked}`,
-          signals: [{ id: "advisories", value: { affecting_every_release: gone }, effect: "avoid", evidence }],
-          ...extra,
-        };
-      }
-      if (p.item.unresolved) {
-        const outside = p.item.rangeCheck?.newest_safe_outside_range ? ` Newest safe release outside it: ${p.item.rangeCheck.newest_safe_outside_range}.` : "";
-        const unnamed = p.item.listGap
-          ? ` | ${listGapText(p.item.package, p.item.listGap)}`
-          : p.item.batchUnread
-            ? ` | ${batchUnreadText(p.item.package, p.item.batchUnread)}`
-            : "";
-        return {
-          ...head(p.item),
-          verdict: nameFinding ? (nameFinding.effect as Verdict) : ("unknown" as const),
-          reason: `${nameFinding ? `name_check: ${nameFinding.evidence} | ` : ""}${p.blocked}${outside}${unnamed}`,
-          signals: nameCheck ? [nameCheck] : [],
-          ...extra,
-        };
-      }
-      const advisories = advisoriesSignal(p.item, advisoriesFor(p.item), heldAt(p.item));
-      const found = [advisories, ...(nameFinding ? [nameFinding] : [])].filter((s) => s.effect === "avoid" || s.effect === "review");
-      const negative = found.length > 0;
-      return {
-        ...head(p.item),
-        verdict: found.some((s) => s.effect === "avoid") ? "avoid" : negative ? "review" : "unknown",
-        reason: withAlternatives(
-          negative ? `${found.map((s) => `${s.id}: ${s.evidence}`).join(" | ")} | ${p.blocked}` : p.blocked,
-          p.item,
-          found.some((s) => s.effect === "avoid") ? "avoid" : negative ? "review" : "unknown",
-        ),
-        signals: [advisories, ...(nameCheck ? [nameCheck] : [])],
-        ...extra,
-        ...noticesOf(advisories),
-      };
-    }
-    const { item, index } = p;
-    const to = index!.releases[item.to];
-    const base = selectBaseline(index!, item);
-    const own = advisoriesSignal(item, advisoriesFor(item), heldAt(item));
-    const advisories = bad ? maliciousSignal(item, bad, own) : own;
-    const createdForItem = new Map<string, CreatedAtFact>();
-    for (const name of p.introduced ?? []) {
-      const fact = created.get(`${item.ecosystem}\0${name}`);
-      if (fact) createdForItem.set(name, fact);
-    }
-    const signals: Signal[] = [
-      advisories,
-      ...(nameCheck ? [nameCheck] : []),
-      releaseAgeSignal(item, to, advisories, now, holdWaivers.get(item)),
-      publishTrustSignal(item, to, trustBaseline(index!, item)),
-      installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
-      newDependenciesSignal(item, to, base, p.introduced, createdForItem),
-      withdrawnSignal(item, to, index!),
-      ...[pythonSupportSignal(item, to, projectPython, pythonUnreadAt)].filter((s): s is Signal => s !== null),
-      upgradeTypeSignal(item, releasesBack(item, index!)),
-    ];
-    const decided = decide(signals, item.ecosystem);
-    return { ...head(item), verdict: decided.verdict, reason: withAlternatives(decided.reason, item, decided.verdict), signals, ...extra, ...noticesOf(advisories) };
-  });
-
-  // A crate asked under another spelling is named as published (round 10, W2).
-  results.forEach((res, i) => {
-    const asked = items[i].asked;
-    if (asked) {
-      res.reason = `${asked} is published as ${res.package}: ${crateSpellingReason(asked, res.package)}, so it was checked as ${res.package}; write the published spelling, ${res.package}, in Cargo.toml. | ${res.reason}`;
-    }
-  });
-  return pass(results, { offline: scan.offline, osvCached: scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
-}
-
-/**
- * Why crates.io took `asked` as `published`: letter case, "-" against "_", or both. "Smallvec" was
- * told crates.io read "-" and "_" as the same when the difference was case (pre-publish round 10, W10).
- */
-export function crateSpellingReason(asked: string, published: string): string {
-  const fold = (s: string) => s.replace(/_/g, "-");
-  const caseDiffers = fold(asked) !== fold(published);
-  const dashDiffers = asked.toLowerCase() !== published.toLowerCase();
-  if (caseDiffers && dashDiffers) return `crates.io treats crate names that differ only in letter case or in "-" against "_" as the same crate`;
-  if (caseDiffers) return "crates.io treats crate names that differ only in letter case as the same crate";
-  return `crates.io and Cargo read "-" and "_" in a crate name as the same crate`;
-}
-
-/** For a downgrade: the published, stable releases above `to` up to and including `from` (upgradeTypeSignal). */
-function releasesBack(item: Resolved, index: PackageReleaseIndex): number | null {
-  if (!item.from || compareIn(item.ecosystem, item.to, item.from) >= 0) return null;
-  return Object.values(index.releases).filter(
-    (r) => !r.withdrawn && !isPrereleaseIn(item.ecosystem, r.version) && compareIn(item.ecosystem, r.version, item.to) > 0 && compareIn(item.ecosystem, r.version, item.from!) <= 0,
-  ).length;
-}
-
-/** The ids of the advisories (maintenance notices left out) that are open from the first release with no fix. */
-function everyRelease(list: readonly AdvisoryRanges[] | null | undefined): string[] {
-  const open = (a: AdvisoryRanges) => a.spans.some((s) => s.fixed === null && s.lastAffected === null && /^0(?:\.0)*(?:-0)?$/.test(s.introduced));
-  return [...new Set((list ?? []).filter((a) => !a.maintenance && open(a)).map((a) => a.id))].sort();
-}
-
-function planItem(item: Resolved, lookup: RegistryLookup<PackageReleaseIndex>) {
-  if (lookup.status === "unreachable") {
-    return { item, blocked: `Registry could not be reached (${quoteThirdParty(lookup.detail, 160)}); nothing about ${item.to} was verified.`, index: null, introduced: null };
-  }
-  if (lookup.status === "not_found") {
-    const guess = item.ecosystem === "npm" ? closestPopularNpm(item.package) : item.ecosystem === "PyPI" ? closestPopularPypi(item.package) : null;
-    return {
-      item,
-      blocked: `${quoteThirdParty(lookup.detail, 160)}. If it is a private package this tool cannot judge it; otherwise check the name for a typo or a hallucinated package before adding it${guess ? ` (did you mean ${guess}?)` : ""}.`,
-      index: null,
-      introduced: null,
-    };
-  }
-  if (item.unresolved) return { item, blocked: item.unresolved, index: lookup.data, introduced: null };
-  const index = lookup.data;
-  const to = index.releases[item.to];
-  if (!to) {
-    return { item, blocked: `${item.package}@${item.to} is not a published version on ${item.ecosystem}.${goMajorHint(item)}`, index, introduced: null };
-  }
-  return { item, blocked: null, index, introduced: introducedDependencies(to, selectBaseline(index, item).record) };
-}
-
-/** Go majors 2+ live at their own module path. */
-function goMajorHint(item: CheckItem): string {
-  if (item.ecosystem !== "Go") return "";
-  const major = goVersionMajor(item.to);
-  const pathMajor = goPathMajor(item.package) ?? 1;
-  if (major === null || major < 2 || major === pathMajor) return "";
-  return ` Go major ${major} is a different module: ${item.package.replace(/\/v\d+$/, "")}/v${major}.`;
+  const findings = await gatherFindings(ctx, lookups, items, advisoriesFor);
+  const { plans, created } = await readFirstPublished(ctx, lookups, items);
+  const results = itemResults(plans, { ctx, lookups, advisoriesFor, findings, created });
+  nameCrateSpellings(results, items);
+  return pass(results, { offline: batch.scan.offline, osvCached: batch.scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
 }
 
 function validateItems(raw: unknown): Requested[] {
