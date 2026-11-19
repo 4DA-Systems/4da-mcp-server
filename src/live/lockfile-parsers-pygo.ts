@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
-import { pyprojectRequirements } from "./pyproject-requirements.js";
+import { pyprojectRequirements, uvOverrideRequirements } from "./pyproject-requirements.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
@@ -428,7 +428,8 @@ function readPipfileLock(lock: unknown, file: string): PipfileLockRead {
  * its tool always writes:
  * - poetry.lock ends with a `[metadata]` table;
  * - uv.lock holds a table for the project itself and for every package another table depends
- *   on, and for every requirement `pyproject.toml` declares for all environments.
+ *   on, and for every requirement `pyproject.toml` declares for all environments that no
+ *   `[tool.uv]` override or constraint covers.
  * pdm.lock carries nothing of the kind (its `[metadata]` comes first).
  */
 function pythonLockDamage(name: string, content: string, pyproject: string | null): { reason: string; missing: number; behindManifest?: true } | null {
@@ -445,8 +446,10 @@ function pythonLockDamage(name: string, content: string, pyproject: string | nul
       parts.push(`${dangling.length} package${dangling.length === 1 ? "" : "s"} named as ${dangling.length === 1 ? "a dependency has" : "dependencies have"} no [[package]] table (${some(dangling)})`);
     }
     // A requirement behind an environment marker need not be locked; one for every environment is.
+    // One an override or constraint names may legitimately not be locked (its marker can rule it out everywhere).
     const declared = pyproject === null ? [] : pyprojectRequirements(pyproject).filter((r) => r.section === "dependencies" && !r.text.includes(";"));
-    const undeclared = [...new Set(declared.map((r) => requirementName(r.text)).filter((n): n is string => n !== null && !tables.has(n)))].sort();
+    const covered = new Set(pyproject === null ? [] : uvOverrideRequirements(pyproject).map(requirementName));
+    const undeclared = [...new Set(declared.map((r) => requirementName(r.text)).filter((n): n is string => n !== null && !tables.has(n) && !covered.has(n)))].sort();
     if (undeclared.length > 0 && tables.size > 0) {
       outOfDate = dangling.length === 0;
       parts.push(`pyproject.toml declares ${undeclared.length === 1 ? "a dependency" : `${undeclared.length} dependencies`} it holds no [[package]] table for (${some(undeclared)})`);
