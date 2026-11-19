@@ -103,7 +103,9 @@ interface UpgradeRecommendation {
    * latest release, or no release up to the latest admits one): force the version (npm `overrides`, pnpm
    * `pnpm.overrides`, yarn `resolutions`, Cargo `[patch]`) or replace the parent;
    * `no_fix_available` = vulnerable with no fixed release to move to;
-   * `not_built_on_this_host` = every advisory is against code this host never compiles;
+   * `not_built_on_this_host` = every advisory is against code this host never compiles: kept apart
+   * from this host's steps and never counted with them, with the fix for where it IS built on the
+   * row (`whenBuilt`, `appliesWhenBuiltFor` and the usual commands);
    * `upgrade_parent_unverified` = transitive, a parent release that admits a clean version exists,
    * but no release of the declared dependency that brings it in was verified (every lever's `to`
    * is null): `parentUpgrades` says what to check; nothing is counted as fixed;
@@ -176,6 +178,18 @@ interface UpgradeRecommendation {
   refreshInferred?: boolean;
   /** False when the dependency is gated behind a target spec not active on this host (label, never suppressed). */
   platformActive: boolean;
+  /**
+   * not_built_on_this_host: where the copy is built, so where its fix applies: the target spec
+   * that gates it (`cfg(unix)`), or "a target other than <this host's triple>" when cargo builds it
+   * for no target here.
+   */
+  appliesWhenBuiltFor?: string[];
+  /**
+   * not_built_on_this_host: the action that fixes the copy where it is built (upgrade_direct,
+   * lockfile_refresh, upgrade_parent, override_or_replace, ...), whose commands this row carries;
+   * "not_determined" when that could not be read.
+   */
+  whenBuilt?: string;
   /** npm: the version node_modules holds, when it differs from `currentVersion` (the lockfile's). */
   installedVersion?: string;
   /** npm: the command that reinstalls from the lockfile, when `installedVersion` is set. */
@@ -656,6 +670,7 @@ async function executeStandalonePlanner(
       scope: "direct",
       action,
       platformActive,
+      ...(action === "not_built_on_this_host" && vulns ? { appliesWhenBuiltFor: builtFor(vulns) } : {}),
       ...(installedVersion ? { installedVersion, installFix } : {}),
       ...(dep.declaredRange ? { declaredRange: dep.declaredRange } : {}),
     };
@@ -726,6 +741,7 @@ async function executeStandalonePlanner(
         scope: "transitive",
         action: !platformActive ? "not_built_on_this_host" : target ? "waiting_on_upstream" : "no_fix_available",
         platformActive,
+        ...(!platformActive ? { appliesWhenBuiltFor: builtFor(entries) } : {}),
       };
       recommendations.push(rec);
       // The same input vulnerability_scan verifies for this copy (fix-verdicts.ts): one answer per finding.
@@ -781,6 +797,8 @@ async function executeStandalonePlanner(
   withholdUnconfirmedTargets(limited);
   // A fix path that was not read is not determined; "waiting on upstream" is kept for the paths read and found blocked.
   markUndetermined(limited);
+  // A copy this host does not build: its fix is on the row, labelled with where it applies.
+  labelOtherTargets(limited);
   // Targets that pin (or narrowly range) an affected dependency, or whose held dependencies could not be
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
@@ -842,7 +860,10 @@ async function executeStandalonePlanner(
   if (unknownRisk > 0) parts.push(`${unknownRisk} NOT CHECKED: OSV.dev gave no answer for ${unknownRisk === 1 ? "it" : "them"}, so ${unknownRisk === 1 ? "its" : "their"} advisories are not known (risk "unknown", not low)`);
   if (unconfirmedNewer > 0) parts.push(`${unconfirmedNewer} newer release${unconfirmedNewer !== 1 ? "s" : ""} NOT CHECKED against advisories, so no targetVersion is given (run dependency_check before writing one)`);
   if (noFix > 0) parts.push(`${noFix} vulnerable with no fixed release yet`);
-  if (inactive > 0) parts.push(`${inactive} vulnerable only in code not built on this host`);
+  if (inactive > 0) {
+    const targets = [...new Set(limited.filter((r) => r.action === "not_built_on_this_host").flatMap((r) => r.appliesWhenBuiltFor ?? []))];
+    parts.push(`${inactive} vulnerable only in code not built on this host (the fix on each row applies when you build for its target: ${targets.join("; ")})`);
+  }
   const criticalCount = limited.filter((r) => r.risk === "critical").length;
   if (criticalCount > 0) parts.push(`${criticalCount} critical`);
   if (devOnly > 0) parts.push(`${devOnly} dev-only (isDev)`);
@@ -886,6 +907,48 @@ async function executeStandalonePlanner(
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
   };
+}
+
+/** Where a copy this host does not build IS built, in words: its declared target spec, or any target but this host's. */
+function builtFor(entries: VulnerabilityEntry[]): string[] {
+  const specs = [...new Set(entries.filter((e) => !e.platformActive).map((e) => e.target).filter((t): t is string => Boolean(t)))];
+  const words = specs.map((spec) => {
+    const triple = /^not built for (\S+)$/.exec(spec)?.[1];
+    return triple ? `a target other than ${triple}` : spec;
+  });
+  return words.length > 0 ? [...new Set(words)] : ["another target"];
+}
+
+/**
+ * The reason that carries a not-built-here row's fix: what to do where the copy is built, with the
+ * commands the row holds. The row keeps its own action and count; nothing here is this host's step.
+ */
+function labelOtherTargets(rows: UpgradeRecommendation[]): void {
+  for (const r of rows) {
+    if (r.action !== "not_built_on_this_host" || !r.appliesWhenBuiltFor) continue;
+    const pending = r.reasons.indexOf(TRANSITIVE_PENDING);
+    if (pending >= 0) r.reasons[pending] = "Transitive dependency — not declared in your manifest";
+    const named = [...(r.upgradeCommands ?? []), ...(r.refreshCommands ?? [])].map((c) => "`" + c.command + "` in " + c.dir);
+    const edits = (r.upgradeInstructions ?? []).map((i) => i.instruction);
+    const run = named.length + edits.length > 0 ? ` (${[...named, ...edits].join("; ")})` : "";
+    const copy = `${r.package} ${r.currentVersion ?? ""}`.trimEnd();
+    const how = !r.targetVersion
+      ? "no release is named for it (the reasons above say why)"
+      : r.whenBuilt === "upgrade_direct"
+        ? `upgrade ${copy} to ${r.targetVersion}${run}`
+        : r.whenBuilt === "lockfile_refresh"
+          ? `a lockfile refresh moves ${copy} to ${r.targetVersion}${run}`
+          : r.whenBuilt === "upgrade_parent"
+            ? `upgrade the parent that pins ${copy} (the reasons above and parentUpgrades name the release)`
+            : r.whenBuilt === "upgrade_parent_unverified"
+              ? `a parent of ${copy} has to move, and no release of it was verified (parentUpgrades says what to check)`
+              : r.whenBuilt === "override_or_replace"
+                ? `force ${copy} to ${r.targetVersion} with an override, or replace the parent that pins it (the reasons above say how)`
+                : r.whenBuilt === "waiting_on_upstream"
+                  ? `${copy} waits on a parent release (the reasons above say which)`
+                  : `${r.targetVersion} is the release to move ${copy} to; how it is reached there was NOT DETERMINED in this call (the registry or the lockfile could not be read, or time ran out): ask again`;
+    r.reasons.push(`Applies when you build for ${r.appliesWhenBuiltFor.join(", ")}: this host does not compile ${r.package}, so this is not one of its steps; where that target is built or deployed, ${how}`);
+  }
 }
 
 /** What a transitive row says in place of its pending reason once its fix path is known to be undetermined. */

@@ -191,6 +191,12 @@ export interface FixPathStep {
    */
   withheld?: string[];
   isDev?: boolean;
+  /**
+   * On a `not_built_on_this_host` step: the action that fixes the copy where it is built
+   * (upgrade_direct, lockfile_refresh, upgrade_parent, ...), whose commands the step carries;
+   * "not_determined" when that could not be read.
+   */
+  whenBuilt?: string;
 }
 
 export interface FixPathInput {
@@ -396,8 +402,13 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
   const heldUnclean = clean ? Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined : false;
   // Code this host never builds still names a release, and it is checked like any other: the plan
   // named crypto-bigint 0.7.6, which crates.io yanked, for a crate not built on Windows (audit
-  // 2026-11-11). Only the target is settled; no command or parent move is worked out for this host.
-  if (step.action === "not_built_on_this_host") return inactiveTarget(step, clean, ecosystem);
+  // 2026-11-11). The target is settled first; then how it is reached where the copy IS built, kept
+  // apart from this host's steps under `whenBuilt`.
+  if (step.action === "not_built_on_this_host") {
+    const outcome = inactiveTarget(step, clean, ecosystem);
+    if (outcome === "verified" && clean?.target && !heldUnclean) await fixWhereBuilt(input, sources, liveIntel, clean.target, clean.unfixable);
+    return outcome;
+  }
   if (malicious.length > 0) {
     step.reasons.push(malwareText(step.package, malicious));
     // A malware record with a fixed release (MAL-2023-462: fsevents 1.2.9-1.2.10, clean from
@@ -559,7 +570,25 @@ function withLineWords(step: FixPathStep, clean: FixTargetResult): void {
   if (clean.newestSafe && clean.newestSafe !== step.targetVersion && step.latestVersion === undefined) step.latestVersion = clean.newestSafe;
 }
 
-/** A row for code this host does not build: its target checked against every advisory and the registry's withdrawals, nothing else. */
+/**
+ * A copy this host does not build is still built somewhere (another target, a deployment), and is
+ * fixed there the way a built copy is: the declared dependency's command, the refresh, or the
+ * parent's move. Worked out as for a built copy and left on the row with `whenBuilt` naming the
+ * step; the row keeps its own action, so it is never counted among this host's fixes.
+ */
+async function fixWhereBuilt(input: FixPathInput, sources: FixPathSources, liveIntel: Intel, target: string, unfixable: string[]): Promise<void> {
+  const { step } = input;
+  if (!step.currentVersion) return;
+  step.action = step.scope === "direct" ? "upgrade_direct" : "waiting_on_upstream";
+  if (step.scope === "transitive") await refreshOrUpstream(input, sources, liveIntel, target, unfixable);
+  withUpgradeCommands(input, liveIntel);
+  // Still pending: nothing was decided for it (its parents or the registry could not be read).
+  const pending = step.scope === "transitive" && step.action === "waiting_on_upstream" && step.reasons.some((r) => TRANSITIVE_REASON.test(r));
+  step.whenBuilt = pending ? "not_determined" : step.action;
+  step.action = "not_built_on_this_host";
+}
+
+/** A row for code this host does not build: its target checked against every advisory and the registry's withdrawals. */
 function inactiveTarget(step: FixPathStep, clean: FixTargetResult | null, ecosystem: OsvEcosystem): Outcome {
   if (!clean) return "failed";
   if (clean.withheld.length > 0) step.withheld = clean.withheld;
@@ -1009,7 +1038,8 @@ function forcedAcrossMajor(step: FixPathStep, installed: string, target: string,
  */
 export function settleTransitiveBreaking(steps: FixPathStep[]): void {
   for (const s of steps) {
-    if (s.scope !== "transitive" || (s.action !== "upgrade_parent" && s.action !== "upgrade_parent_unverified")) continue;
+    const how = s.action === "not_built_on_this_host" ? s.whenBuilt : s.action;
+    if (s.scope !== "transitive" || (how !== "upgrade_parent" && how !== "upgrade_parent_unverified")) continue;
     const ups = s.parentUpgrades ?? [];
     if (ups.some((u) => !u.refreshOnly && (u.levers.length > 0 ? u.levers.some((l) => l.breaking) : u.breaking))) s.breaking = true;
   }
