@@ -183,7 +183,7 @@ export interface AdvisorySource {
    * The full record of each id it can find; a missing id is left out, never fatal. Ids the source
    * did not ask for at all (its per-scan limit, the time it has) are added to `unread`, with why.
    */
-  details(ids: string[], unread?: DetailsUnread): Promise<Map<string, OsvVulnerability>>;
+  details(ids: string[], unread?: DetailsUnread, options?: { refresh?: boolean }): Promise<Map<string, OsvVulnerability>>;
   /**
    * The full records affecting one exact dependency (OSV.dev's `/v1/query` with a version), or
    * null when they cannot be had. Asked only for a dependency whose record fetch failed: the
@@ -402,13 +402,16 @@ export class OsvHttpSource implements AdvisorySource {
    * Bounded: at most MAX_DETAIL_FETCHES misses are asked for, and no request starts after
    * DETAIL_WINDOW_MS. What was not asked for is reported in `unread`, never fetched later by
    * this call: the requests a scan can cause end with it.
+   *
+   * `refresh` asks for every record again, cached or not. A cached record is replaced when the
+   * new one arrives and stands when it does not: nothing is dropped ahead of its replacement.
    */
-  async details(ids: string[], unread?: DetailsUnread): Promise<Map<string, OsvVulnerability>> {
+  async details(ids: string[], unread?: DetailsUnread, options: { refresh?: boolean } = {}): Promise<Map<string, OsvVulnerability>> {
     const out = new Map<string, OsvVulnerability>();
     const toFetch: string[] = [];
 
     for (const id of ids) {
-      const cached = this.cache.get<OsvVulnerability>(`osv:detail:${id}`);
+      const cached = options.refresh ? null : this.cache.get<OsvVulnerability>(`osv:detail:${id}`);
       if (cached) out.set(id, cached);
       else toFetch.push(id);
     }
@@ -441,8 +444,17 @@ export class OsvHttpSource implements AdvisorySource {
     });
     this.cache.setMany(fetched, "osv", OSV_DETAIL_TTL);
 
-    if (unread && notAsked.length > 0) {
-      for (const id of notAsked) unread.ids.add(id);
+    if (options.refresh) {
+      // The record that did not arrive (or was not asked for) keeps its cached copy.
+      for (const id of toFetch) {
+        if (out.has(id)) continue;
+        const kept = this.cache.get<OsvVulnerability>(`osv:detail:${id}`);
+        if (kept) out.set(id, kept);
+      }
+    }
+    const stillUnasked = notAsked.filter((id) => !out.has(id));
+    if (unread && stillUnasked.length > 0) {
+      for (const id of stillUnasked) unread.ids.add(id);
       const why = [
         notAsked.length > late ? `a scan asks for at most ${limit.toLocaleString("en-US")} advisory records it does not already hold` : null,
         late > 0 ? `reading advisory records stopped after ${Math.round(windowMs / 1000)} s` : null,
@@ -563,14 +575,19 @@ export class OsvScanner {
     if (keys.length > 0) this.cache.deleteMany(keys);
   }
 
-  async scan(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean } = {}): Promise<VulnerabilityScanResult> {
+  /**
+   * `refresh`: ask OSV.dev again about every dependency given and re-read every matched record,
+   * whatever the cache holds. Nothing is removed from the cache first: an answer is replaced when
+   * its replacement arrives, and when it does not the cached one stands in, counted as stale.
+   */
+  async scan(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean; refresh?: boolean } = {}): Promise<VulnerabilityScanResult> {
     const requests = { made: 0 };
     const result = await osvRequests.run(requests, () => this.scanCounted(deps, projectPath, options));
     // Only a network source sends anything: a pinned source answers from its own records.
     return this.source.network ? { ...result, osvRequests: requests.made } : result;
   }
 
-  private async scanCounted(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean }): Promise<VulnerabilityScanResult> {
+  private async scanCounted(deps: ResolvedDependency[], projectPath: string, options: { cacheOnly?: boolean; refresh?: boolean }): Promise<VulnerabilityScanResult> {
     const start = Date.now();
     const scannable = deps.filter((d) => d.version !== null);
     const ecosystems = [...new Set(scannable.map((d) => d.ecosystem))];
@@ -581,6 +598,8 @@ export class OsvScanner {
     // with its fetched_at so the result states its age, fresh or past its TTL. Offline scans
     // used to ignore the cache and call every dependency NOT CHECKED (pre-publish round 10, W5).
     const cacheOnly = network && options.cacheOnly === true;
+    // Offline nothing can be fetched, so a refresh keeps to the cache like any offline scan.
+    const refresh = network && !cacheOnly && options.refresh === true;
 
     // Check cache for each dep individually
     const uncached: ResolvedDependency[] = [];
@@ -588,7 +607,7 @@ export class OsvScanner {
 
     // Read in batches, yielding to the event loop between them: one statement per dependency kept a
     // 250,000-entry lockfile's scan from answering `ping` for 7.4 s (blind audit round 4).
-    const cachedFor = network && !cacheOnly ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
+    const cachedFor = network && !cacheOnly && !refresh ? await readInBatches(scannable, (keys) => this.cache.getMany<VulnerabilityEntry[]>(keys)) : new Map<string, VulnerabilityEntry[]>();
     for (const dep of scannable) {
       const cached = cachedFor.get(osvCacheKey(dep)) ?? null;
       if (cached !== null) {
@@ -621,11 +640,12 @@ export class OsvScanner {
       uncached.length = 0;
       pushAll(uncached, releases);
     }
-    const theirs = network && !cacheOnly ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
+    // A refreshing scan asks for itself: another scan's lookup may be answering from the cache.
+    const theirs = network && !cacheOnly && !refresh ? uncached.filter((d) => this.inFlight.has(osvCacheKey(d))) : [];
     const mine = theirs.length > 0 ? uncached.filter((d) => !this.inFlight.has(osvCacheKey(d))) : uncached;
     const ask = async (batch: ResolvedDependency[]) => {
       try {
-        return await this.batchQuery(batch);
+        return await this.batchQuery(batch, refresh);
       } catch (error) {
         // The source layer turns network failures into `outcome.failure`; an
         // exception here is a fault in this server, not an OSV outage, and
@@ -740,6 +760,8 @@ export class OsvScanner {
       // An expired answer is not a current one: every consumer says so (audit 6.2.5 B-2).
       ...(staleAnswers > 0 ? { staleReason: failure ?? "OSV.dev could not be queried", staleOldestFetchedAt: staleOldest } : {}),
       ...(cacheOnly ? { cacheOnly: true as const, staleExpired } : {}),
+      // A refresh that got no new answer for some dependencies: the cached ones stand in, and are said to.
+      ...(refresh && staleAnswers > 0 ? { refreshFailed: true as const } : {}),
       ...(detailsUnchecked.length > 0 ? { detailsUnchecked } : {}),
       ...(notAskedIds.length > 0 && detailsNotAsked ? { detailsNotAsked: notAskedIds.length, detailsUncheckedReason: detailsNotAsked } : {}),
       ...(rated.report ? { aliasSeverity: rated.report } : {}),
@@ -872,6 +894,7 @@ export class OsvScanner {
 
   private async batchQuery(
     deps: ResolvedDependency[],
+    refresh = false,
   ): Promise<{ vulns: VulnerabilityEntry[]; unanswered: ResolvedDependency[]; failure: string | null; detailsNotAsked?: string | null }> {
     // Phase 1 — enumerate advisory IDs per dep (OSV: the lightweight batch index).
     const answer = await this.source.query(deps);
@@ -889,7 +912,7 @@ export class OsvScanner {
     const uniqueIds = [...new Set(matches.flatMap((m) => m.ids))];
     // An id that is not one is never looked up: it stays an advisory known by nothing but that.
     const unread: DetailsUnread = { ids: new Set(), reason: null };
-    const detailById = await this.source.details(uniqueIds.filter(isOsvAdvisoryId), unread);
+    const detailById = await this.source.details(uniqueIds.filter(isOsvAdvisoryId), unread, { refresh });
     // Phase 2b — a record whose fetch failed, from the dependency's own advisory list.
     const recordsByDep = await this.recordsForUnread(matches, detailById);
 

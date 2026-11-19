@@ -929,10 +929,10 @@ export class LiveIntelligence {
       return this.withPrivate(emptyVulnResult(projectPath, false), options?.includeDev ?? false);
     }
 
-    // Offline the cache is the only answer there is: a forced refresh cannot fetch, so it keeps it.
-    if (options?.forceRefresh && this.enabled) {
-      this.cache.invalidateSource("osv");
-    }
+    // A forced refresh asks OSV.dev again about this scan's dependencies only, and replaces a
+    // cached answer when the new one arrives (OsvScanner.scan `refresh`): no other cached answer
+    // is touched, and none is dropped first. Offline it cannot fetch, so it keeps to the cache.
+    const refresh = Boolean(options?.forceRefresh && this.enabled);
 
     // The same scan already running (the startup warm-up, or a second call
     // while the first is out) is awaited, not repeated. A forced refresh
@@ -940,7 +940,7 @@ export class LiveIntelligence {
     const shareKey = `${this.generation}\u0000${options?.includeDev ? "dev" : "runtime"}\u0000${projectPath}`;
     const running = options?.forceRefresh ? undefined : this.scansInFlight.get(shareKey);
     if (running) return running;
-    const scan = this.runScan(deps, projectPath, options?.includeDev ?? false);
+    const scan = this.runScan(deps, projectPath, options?.includeDev ?? false, refresh);
     if (!options?.forceRefresh) {
       this.scansInFlight.set(shareKey, scan);
       void scan.finally(() => this.scansInFlight.delete(shareKey));
@@ -948,11 +948,11 @@ export class LiveIntelligence {
     return scan;
   }
 
-  private async runScan(deps: ResolvedDependency[], projectPath: string, includeDev: boolean): Promise<VulnerabilityScanResult> {
+  private async runScan(deps: ResolvedDependency[], projectPath: string, includeDev: boolean, refresh = false): Promise<VulnerabilityScanResult> {
     const generation = this.generation;
     const request = ++this.scanRequests;
     try {
-      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled }), includeDev);
+      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled, refresh }), includeDev);
       if (generation === this.generation && request > this.storedScanRequest) {
         this.lastVulnScan = result;
         this.lastVulnScanIncludesDev = includeDev;
@@ -1203,8 +1203,8 @@ export class LiveIntelligence {
    * scanner, cache and rate limit as vulnerability_scan; never touches the
    * stored project scan. Disabled or failed yields an `offline` result.
    */
-  async queryAdvisories(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
-    return this.runInContext(() => this.queryAdvisoriesIn(deps));
+  async queryAdvisories(deps: ResolvedDependency[], options: { refresh?: boolean } = {}): Promise<VulnerabilityScanResult> {
+    return this.runInContext(() => this.queryAdvisoriesIn(deps, options.refresh === true));
   }
 
   /**
@@ -1215,7 +1215,7 @@ export class LiveIntelligence {
     this.osvScanner.forget(deps);
   }
 
-  private async queryAdvisoriesIn(deps: ResolvedDependency[]): Promise<VulnerabilityScanResult> {
+  private async queryAdvisoriesIn(deps: ResolvedDependency[], refresh = false): Promise<VulnerabilityScanResult> {
     // Offline: answered from the cache alone, each answer's age stated (OsvScanner cacheOnly; W5).
     // A private name is never asked about (a held dependency of a private parent): it has no
     // answer, so the result is not checked for it, never clean.
@@ -1223,7 +1223,7 @@ export class LiveIntelligence {
     const open = priv.length > 0 ? deps.filter((d) => !priv.includes(d)) : deps;
     let result: VulnerabilityScanResult;
     try {
-      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check", { cacheOnly: !this.enabled }) : emptyVulnResult("dependency_check", false);
+      result = open.length > 0 ? await this.osvScanner.scan(open, "dependency_check", { cacheOnly: !this.enabled, refresh: refresh && this.enabled }) : emptyVulnResult("dependency_check", false);
     } catch (error) {
       return emptyVulnResult("dependency_check", true, { count: deps.length, reason: `the scan failed (${String(error).slice(0, 120)})` });
     }

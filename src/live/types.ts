@@ -250,6 +250,11 @@ export interface VulnerabilityScanResult {
   cacheOnly?: true;
   staleExpired?: number;
   /**
+   * The scan was asked to refresh (force_refresh) and OSV.dev gave no new answer for the
+   * `staleAnswers` dependencies: the cached answers were kept and stand in for them.
+   */
+  refreshFailed?: true;
+  /**
    * Ids of advisories OSV matched whose record it did not return (rows with
    * `detailUnavailable`). Their severity and fix version are not known, so
    * the scan is not a complete answer: absent when every record was read.

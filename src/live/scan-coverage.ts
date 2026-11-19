@@ -131,6 +131,10 @@ function staleLine(result: VulnerabilityScanResult, stale: number): string {
     return `${n} dependenc${stale === 1 ? "y was" : "ies were"} answered only from the local cache, not asked now${oldest}; an advisory published since would not show, so this is not a current all-clear.${past} Call again with live lookups on (unset FOURDA_OFFLINE).`;
   }
   const oldest = result.staleOldestFetchedAt ? ` (the oldest fetched ${result.staleOldestFetchedAt} UTC)` : "";
+  if (result.refreshFailed) {
+    // A refresh was asked for and did not arrive: the cached answer was kept, and is not the refresh.
+    return `${n} dependenc${stale === 1 ? "y was" : "ies were"} answered only from the cached answer, which could not be refreshed${oldest}; an advisory published since would not show, so this is not a current all-clear. Call again once OSV.dev answers (force_refresh).`;
+  }
   return `${n} dependenc${stale === 1 ? "y was" : "ies were"} answered only from an expired cached answer${oldest}; an advisory published since would not show, so this is not a current all-clear. Call again once OSV.dev answers (force_refresh).`;
 }
 
