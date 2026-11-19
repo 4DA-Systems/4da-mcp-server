@@ -50,7 +50,7 @@ import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn,
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
 import { requiresNote, withRequiredTargets } from "./required-targets.js";
-import type { RequirementEcosystem, RequirementSources } from "./release-requirements.js";
+import type { RequirementEcosystem, RequirementOptions, RequirementSources } from "./release-requirements.js";
 import { confirmTargets } from "./batch-confirm.js";
 import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
@@ -1133,7 +1133,7 @@ export async function verifyFixTargets(
   options: {
     heldQuery?: AdvisoryQuery;
     /** Go, crates.io, PyPI: the items (by key) whose target is judged by what it requires (required-targets.ts). */
-    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null; pythons?: readonly string[] | null };
+    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null; pythons?: RequirementOptions["pythons"] };
   } = {},
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
@@ -1701,7 +1701,8 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       const bounded = op === "^" || op === "~";
       if (bounded && npmRangeAdmits(declared, target) === true) return isShellSafeName(name, "npm") ? { command: npmDirectRefresh(manager, name), refresh: true } : null;
       const command = npmDirectCommand(manager, declared, name, target);
-      return command ? { command } : null;
+      // berry's `yarn up` is a project command: at a workspace root it rewrites the members' declarations too (hasWorkspaces).
+      return command ? { command: manager === "yarn-berry" && hasWorkspaces(json!) ? command.replace(/^yarn up /, "yarn add ") : command } : null;
     }
     case "crates.io": {
       const manifest = read("Cargo.toml");
@@ -1772,6 +1773,20 @@ function yarnMemberFix(projectDir: string, manager: "yarn1" | "yarn-berry", name
   const section = declared[0].section;
   const flag = manager === "yarn1" && section === "devDependencies" ? " --dev" : manager === "yarn1" && section === "optionalDependencies" ? " --optional" : "";
   return { command: `yarn workspace ${member.name} add ${spec}${flag}` };
+}
+
+/**
+ * Whether a package.json declares workspaces. At a yarn berry workspace root, `yarn up "x@v"` rewrote
+ * a member's `~0.0.8` as well as the root's own declaration (yarn 4.9.1, 2026-11-19); `yarn add <spec>`
+ * there moved only the root's, keeping its section and operator, so the root's step names `yarn add`.
+ */
+function hasWorkspaces(packageJson: string): boolean {
+  try {
+    const w = (JSON.parse(packageJson) as { workspaces?: unknown }).workspaces;
+    return Array.isArray(w) ? w.length > 0 : Array.isArray((w as { packages?: unknown } | null)?.packages);
+  } catch {
+    return false;
+  }
 }
 
 /** For a lockfile with no in-place refresh command (yarn 1, bun): the steps that move the copy. */

@@ -21,7 +21,7 @@
 
 import { callMemo } from "../call-budget.js";
 import { andList, clearsText, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
-import { isRequirementEcosystem, requirementAdvisories, type RequirementEcosystem, type RequirementRelease, type RequirementSources } from "./release-requirements.js";
+import { isRequirementEcosystem, requirementAdvisories, type RequirementEcosystem, type RequirementOptions, type RequirementRelease, type RequirementSources } from "./release-requirements.js";
 import { compareVersions, inEcosystemForm, isComparable } from "./version-compare.js";
 import type { FixTargetResult } from "./fix-paths.js";
 import type { ResolvedDependency } from "./types.js";
@@ -70,8 +70,8 @@ export async function withRequiredTargets(
   items: RequiredTargetItem[],
   deadline: number,
   selected?: (ecosystem: RequirementEcosystem, name: string) => string | null,
-  /** PyPI: the Python versions the project declares (RequirementOptions.pythons). */
-  pythons?: readonly string[] | null,
+  /** PyPI: the Python versions the project declares, or each package's own (RequirementOptions.pythons). */
+  pythons?: RequirementOptions["pythons"],
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
   const examined = examinedThisCall();

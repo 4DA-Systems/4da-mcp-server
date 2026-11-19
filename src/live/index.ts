@@ -335,10 +335,15 @@ export class LiveIntelligence {
     return [...byFile].map(([file, names]) => ({ file, names: [...names] }));
   }
 
-  /** Lockfiles present in a resolved directory that could not be read, each with the reason. */
+  /**
+   * Lockfiles present in a resolved directory that could not be read, each with the reason: one
+   * problem per file, and beside it the note that it was not cross-checked against its manifests,
+   * which is no read problem and never stands in for one.
+   */
   getLockfileProblems(): LockfileProblem[] {
     const seen = new Set<string>();
-    return this.groupResults.flatMap((r) => r.problems ?? []).filter((p) => !seen.has(p.file) && (seen.add(p.file), true));
+    const key = (p: LockfileProblem) => `${p.file}\0${p.notCrossChecked ? "uncrossed" : "read"}`;
+    return this.groupResults.flatMap((r) => r.problems ?? []).filter((p) => !seen.has(key(p)) && (seen.add(key(p)), true));
   }
 
   /** What the project-tree walk left out (lockfiles past its bounds); null when the set did not come from a walk. */
