@@ -39,6 +39,12 @@
 - A Python prefix-match pin such as `requests==2.32.*` is listed as unpinned. It was checked as the version "2.32.*", which matched every advisory OSV.dev holds for the package.
 - `severity_filter` never hides an advisory whose severity is unknown, and maintenance notices and advisories on packages not built on this host are always listed in full.
 - A yarn.lock entry whose header line is longer than the reader accepts makes that lockfile's npm names private (not sent, NOT CHECKED), as an overlong line inside an entry already did.
+- `vulnerability_scan` of a large project answers within one call. Advisory records it runs out of time for are marked NOT CHECKED and read in a bounded background queue, so the next call is complete from the cache. Measured on a 2,084-dependency tree with an empty cache: complete in one call at 18 to 20 s.
+- A dependency a Yarn workspace member declares is fixed in that member: the step names its directory and `yarn workspace <name> add <version>`, keeping its section and operator. At the root of a Yarn berry workspace the step is `yarn add <version>`, which does not rewrite the members' declarations.
+- In a Yarn project (classic or berry), a vulnerable transitive dependency's fix names the dependency your package.json (or a workspace member's) declares and the command that upgrades it, when the lockfile proves the link; otherwise the step stays unverified.
+- `dependency_check`, `upgrade_planner` and `vulnerability_scan` judge a Python package against the Python declared by the project that declares it, not only the repository root, and name the folder where a release is unsupported.
+- A Poetry project with no poetry.lock has its exact versions checked. Ranges are listed as unpinned, git and url entries as not checkable, and path or private-source entries are never sent. Before, `requests = "2.31.0"` was listed as unpinned and never scanned.
+- When a yarn or pnpm lockfile cannot be checked against package.json because the workspace member list could not be read whole, the answer says so (NOT CROSS-CHECKED) and why, without calling the lockfile damaged. A lockfile that is both damaged and not cross-checked shows both notes.
 
 ### Fixed
 
@@ -74,6 +80,9 @@
 - A uv.lock is not called damaged for a dependency that a `[tool.uv]` override or constraint removes.
 - Cargo: `1.0.0-alpha.x` is a prerelease, not a wildcard requirement.
 - When an archive holds more changelog-named files than are read, the answer says so instead of blaming the file it read.
+- Upgrade-target checks stay within the call's time budget. They could run past it, which replaced the whole scan answer with "did not finish".
+- Repeat scans no longer ask OSV.dev again for advisory records it does not hold (remembered for one hour; `force_refresh` asks again).
+- Changing a package.json in a Yarn project is picked up by the next plan even when yarn.lock is unchanged.
 
 ### Hardening
 
@@ -89,6 +98,8 @@
 - GitHub release pages and raw changelog files up to 64 MB are read, and are parsed under the same time allowance as archive changelogs.
 - An oversized answer is never written to the cache, batch writes included.
 - Requests to a local Ollama never go through a configured proxy.
+- The background queue that finishes advisory reads is bounded (16 at once, 2,000 waiting), holds ids only, stops when the server shuts down, and reads each record under the private-name rules of the project that queued it. An OSV.dev answer naming tens of thousands of ids still costs no more than the per-scan limit of requests.
+- The OSV.dev dependency query goes out as up to 8 smaller requests at once, and a slow advisory request is retried in parallel (at most 8 per scan).
 
 ### Tooling and tests
 
@@ -97,6 +108,8 @@
 - A weekly mutation check runs 90 mutants and fails on any survivor outside the equivalent list.
 - `scripts/release.mjs` bumps every version pin, and a test holds them to package.json.
 - New tests hold rules that had none (HTTP rules, PEP 440 ordering, name folding, malware, control characters, fail-closed verdicts, batch attribution, private-name casing, README statements; only the two HTTP helpers may call the global fetch); tests that could not fail now can, and none depends on machine speed or a random port.
+- `pnpm run check` fails when a mutation-check mutant no longer applies to the code. Two had gone stale unnoticed; all 90 apply and were run on the merged tree.
+- `checkPass` in `dependency_check` (548 lines) is split into named stages in nine modules; the function is 46 lines. Behaviour is unchanged and no existing test was edited.
 
 ## 6.3.0 — 2026-11-15
 
