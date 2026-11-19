@@ -67,7 +67,9 @@ function osvCoverage(
   const details = result.detailsUnchecked ?? [];
   if (unchecked <= 0 && stale <= 0 && details.length === 0) return null;
   const detailsGap = details.length > 0 ? { details_unchecked: details.length } : {};
-  const notAsked = result.detailsUncheckedReason ? { count: result.detailsNotAsked ?? details.length, why: result.detailsUncheckedReason } : null;
+  const notAsked = result.detailsUncheckedReason
+    ? { count: result.detailsNotAsked ?? details.length, why: result.detailsUncheckedReason, readingOn: result.detailsInBackground ?? 0 }
+    : null;
   const withDetails = (note: string) => (details.length > 0 ? `${note} ${detailsLine(details, notAsked)}` : note);
   if (unchecked > 0) {
     const gap = build(result.totalScanned, unchecked, result.uncheckedReason ?? "OSV.dev could not be queried");
@@ -105,12 +107,23 @@ function osvCoverage(
 }
 
 /** "OSV.dev matched N advisories (ids) but did not return their records ..." */
-function detailsLine(ids: string[], notAsked: { count: number; why: string } | null = null): string {
+function detailsLine(ids: string[], notAsked: { count: number; why: string; readingOn?: number } | null = null): string {
   const one = ids.length === 1;
   const listed = `${ids.slice(0, 5).join(", ")}${ids.length > 5 ? ", ..." : ""}`;
+  const n = (x: number) => x.toLocaleString("en-US");
+  if (notAsked && (notAsked.readingOn ?? 0) > 0) {
+    // The call's time ran out first: the records are being read after it, so the next call has them.
+    const reading = notAsked.readingOn!;
+    const failed = ids.length - notAsked.count;
+    const unread = `${n(notAsked.count)} of their records were not read in this call (${notAsked.why})${failed > 0 ? ` and OSV.dev did not return the other ${n(failed)}` : ""}`;
+    const next =
+      reading >= ids.length
+        ? `${one ? "It is" : "They are"} being read in the background now and kept in the cache, so calling again in a few seconds gives the complete answer.`
+        : `${n(reading)} of them ${reading === 1 ? "is" : "are"} being read in the background now and kept in the cache: call again, and each call reads on.`;
+    return `OSV.dev matched ${n(ids.length)} advisor${one ? "y" : "ies"} (${listed}), but ${unread}, so ${one ? "its" : "their"} severity and fix version are unknown: unknown is not low, and no fix version listed is not "no fix published". ${next}`;
+  }
   if (notAsked) {
     // Records the scan did not ask for (its limit, its time): a later call reads on, nothing to force.
-    const n = (x: number) => x.toLocaleString("en-US");
     const failed = ids.length - notAsked.count;
     const split = failed > 0 ? `${n(notAsked.count)} of their records were not asked for in this call (${notAsked.why}) and OSV.dev did not return the other ${n(failed)}` : `${one ? "its record was" : "their records were"} not asked for in this call (${notAsked.why})`;
     return `OSV.dev matched ${n(ids.length)} advisor${one ? "y" : "ies"} (${listed}), but ${split}, so ${one ? "its" : "their"} severity and fix version are unknown: unknown is not low, and no fix version listed is not "no fix published". Call again: the records already read are kept, so each call reads on.`;

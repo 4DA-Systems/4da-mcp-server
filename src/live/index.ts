@@ -964,16 +964,21 @@ export class LiveIntelligence {
     unregisterPrivateNames(this);
   }
 
+  /**
+   * `deadline` (epoch ms): when the calling tool must answer. Advisory records not read by then are
+   * NOT CHECKED in this result and are read on after it (osv-scanner.ts details); such a result is
+   * not kept as the project's current scan.
+   */
   async scanVulnerabilities(
     projectPath: string,
-    options?: { includeDev?: boolean; forceRefresh?: boolean },
+    options?: { includeDev?: boolean; forceRefresh?: boolean; deadline?: number },
   ): Promise<VulnerabilityScanResult> {
     return this.runInContext(() => this.scanVulnerabilitiesIn(projectPath, options));
   }
 
   private async scanVulnerabilitiesIn(
     projectPath: string,
-    options?: { includeDev?: boolean; forceRefresh?: boolean },
+    options?: { includeDev?: boolean; forceRefresh?: boolean; deadline?: number },
   ): Promise<VulnerabilityScanResult> {
     // Offline (FOURDA_OFFLINE) the scan still runs, from the cache alone: OsvScanner's cacheOnly
     // mode asks nothing, states every cached answer's age, and leaves a dependency without one
@@ -1001,7 +1006,7 @@ export class LiveIntelligence {
     const shareKey = `${this.generation}\u0000${options?.includeDev ? "dev" : "runtime"}\u0000${projectPath}`;
     const running = options?.forceRefresh ? undefined : this.scansInFlight.get(shareKey);
     if (running) return running;
-    const scan = this.runScan(deps, projectPath, options?.includeDev ?? false, refresh);
+    const scan = this.runScan(deps, projectPath, options?.includeDev ?? false, refresh, options?.deadline);
     if (!options?.forceRefresh) {
       this.scansInFlight.set(shareKey, scan);
       void scan.finally(() => this.scansInFlight.delete(shareKey));
@@ -1009,12 +1014,14 @@ export class LiveIntelligence {
     return scan;
   }
 
-  private async runScan(deps: ResolvedDependency[], projectPath: string, includeDev: boolean, refresh = false): Promise<VulnerabilityScanResult> {
+  private async runScan(deps: ResolvedDependency[], projectPath: string, includeDev: boolean, refresh = false, deadline?: number): Promise<VulnerabilityScanResult> {
     const generation = this.generation;
     const request = ++this.scanRequests;
     try {
-      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled, refresh }), includeDev);
-      if (generation === this.generation && request > this.storedScanRequest) {
+      const result = this.withPrivate(await this.osvScanner.scan(deps, projectPath, { cacheOnly: !this.enabled, refresh, ...(deadline !== undefined ? { deadline } : {}) }), includeDev);
+      // A scan cut short by its call's deadline is that call's answer only: the records it did not
+      // read are being read on, and the next scan has them.
+      if (generation === this.generation && request > this.storedScanRequest && !result.detailsInBackground) {
         this.lastVulnScan = result;
         this.lastVulnScanIncludesDev = includeDev;
         this.storedScanRequest = request;
