@@ -258,6 +258,10 @@ export class FixPathSources {
    * The requirements `parent@parentVersion` declares on `dep`, from the
    * registry: npm (pnpm lockfiles record none) and crates.io (Cargo.lock
    * records none). Null when unknown; [] when the parent declares none.
+   *
+   * Both are read from the parent's whole-package document (npm's abbreviated document, the
+   * crates.io sparse index entry), never from a URL that names `parentVersion`: the registry
+   * learns which package is asked about, not which version is installed.
    */
   async parentRequirements(ecosystem: OsvEcosystem, parent: string, parentVersion: string, dep: string): Promise<string[] | null> {
     if (ecosystem === "crates.io") {
@@ -269,22 +273,13 @@ export class FixPathSources {
     const key = `fixpath:v${CACHE_VERSION}:npm-version-deps:${parent}@${parentVersion}`;
     let deps = this.cached<Record<string, string>>(key);
     if (!deps) {
-      if (!this.rateLimiter.consume("fixpath-registry")) return null;
-      try {
-        const res = await fetchWithTimeout(
-          `https://registry.npmjs.org/${encodeURIComponent(parent)}/${encodeURIComponent(parentVersion)}`,
-          { headers: { Accept: "application/json" } },
-          TIMEOUT_MS,
-        );
-        if (!res.ok) return null;
-        const doc = (await res.json()) as Record<string, Record<string, string> | undefined>;
-        // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
-        // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
-        deps = { ...doc.optionalDependencies, ...doc.dependencies };
-        this.store(key, deps, "npm", VERSION_DEPS_TTL);
-      } catch {
-        return null;
-      }
+      const release = (await this.npmDocument(parent))?.versions?.[parentVersion];
+      // Unread, or a version the registry does not list: unknown, never "requires nothing".
+      if (!release) return null;
+      // Not peerDependencies, as in the 4DA app: a peer is resolved from whoever provides it
+      // higher in the tree, so the parent's peer range does not decide which copy a refresh picks.
+      deps = { ...release.optionalDependencies, ...release.dependencies };
+      this.store(key, deps, "npm", VERSION_DEPS_TTL);
     }
     return typeof deps[dep] === "string" ? [deps[dep]] : [];
   }
