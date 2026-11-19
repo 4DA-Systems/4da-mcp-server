@@ -68,6 +68,7 @@ import { confirmTargets, listConfirmed } from "../live/batch-confirm.js";
 import { heldAdvisories, heldText, heldVerb, HELD_CANDIDATES, type AdvisoryQuery, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { withinCallBudget } from "../call-budget.js";
+import { aimAtDeclaringMembers } from "./declaring-members.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
 import { pythonParentMove } from "./upgrade-planner-pyparent.js";
 import { yieldIfDue } from "../live/yield-point.js";
@@ -379,6 +380,8 @@ function setTarget(step: FixPathStep, target: string): void {
 async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel: Intel, heldQuery: AdvisoryQuery | null): Promise<Outcome> {
   await yieldIfDue();
   const { step } = input;
+  // A direct copy a workspace member declares moves in that member's directory (declaring-members.ts).
+  await aimAtDeclaringMembers(input, liveIntel);
   const ecosystem = step.ecosystem as OsvEcosystem;
   // #981 round 3: an installed copy flagged malicious names no release at all: remove or replace it.
   const own = step.currentVersion ? await sources.packageAdvisories(ecosystem, step.package).catch(() => null) : null;

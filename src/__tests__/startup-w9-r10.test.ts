@@ -64,7 +64,8 @@ describe("readPnpmLock reads each package once, as before", () => {
     const instances = new InstanceSet();
     const installs = readPnpmLock(lock, versions, instances, { missingDirect: [], uncheckable: [], incomplete: 0 });
     expect([...versions]).toEqual([["a", "1.0.0"], ["b", "2.0.0"]]);
-    expect(instances.toArray()).toEqual([{ name: "a", version: "1.0.0" }, { name: "b", version: "2.0.0" }, { name: "b", version: "3.0.0" }]);
+    // `a` is what the importer's `dependencies` reach: runtime. Nothing reaches either `b`, so their scope is not stated.
+    expect(instances.toArray()).toEqual([{ name: "a", version: "1.0.0", dev: false }, { name: "b", version: "2.0.0" }, { name: "b", version: "3.0.0" }]);
     expect([...installs]).toEqual(["a\0" + "1.0.0", "b\0" + "2.0.0", "b\0" + "3.0.0"]);
   });
 

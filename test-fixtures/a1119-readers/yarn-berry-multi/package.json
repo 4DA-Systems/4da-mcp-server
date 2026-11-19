@@ -1,0 +1,13 @@
+{
+  "name": "fx-yarn-berry-multi",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "yarn@4.5.3",
+  "dependencies": {
+    "gonzales-pe": "4.3.0",
+    "minimist": "^1.2.0"
+  },
+  "devDependencies": {
+    "mkdirp": "0.5.1"
+  }
+}

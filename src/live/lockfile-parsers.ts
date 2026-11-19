@@ -26,7 +26,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readBunLock } from "./bun-lockfile.js";
+import { pushAll } from "../array-utils.js";
+import { readBunLock, stripTrailingCommas } from "./bun-lockfile.js";
 import {
   emptyReadReport,
   MAX_LOCKFILE_LINE,
@@ -37,9 +38,11 @@ import {
   type LockDamage,
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
+import { inspectYarnLock, type YarnInspection } from "./js-dev-scope.js";
+import { DEPENDENCY_SECTIONS, isLocalSpec, isRuntimeSection, readManifestDeclarations, type DeclaredSpec } from "./js-manifests.js";
 import { goWorkCandidates, requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
-import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
@@ -48,7 +51,8 @@ import type { OsvEcosystem } from "./types.js";
 export type { PackageInstance, VersionSource } from "./lockfile-types.js";
 
 const LOCKFILES: Partial<Record<OsvEcosystem, string[]>> = {
-  npm: ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"],
+  // npm installs from npm-shrinkwrap.json and ignores package-lock.json when both are present.
+  npm: ["npm-shrinkwrap.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"],
   "crates.io": ["Cargo.lock"],
   PyPI: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   Go: ["go.mod", "go.sum"],
@@ -162,6 +166,77 @@ function damagedProblem(file: string, damage: LockDamage): LockfileProblem {
   return partialRead(file, damage.reason, damage.missing);
 }
 
+/**
+ * The dependencies the project's package.json declares that the lockfile
+ * beside it has no entry for (`has`), each name once, in the order declared.
+ * A text lockfile has no closing bracket to lose, so one cut between two
+ * entries parses whole; but every lockfile a package manager writes holds an
+ * entry for each declared dependency, so a declared name with none says the
+ * file stops early or was written before the dependency was added.
+ *
+ * peerDependencies are not owed an entry (not every package manager installs
+ * the project's own). `skipLocal` leaves out `link:`/`portal:`/`workspace:`
+ * declarations and `members` the project's own packages, for lockfiles that
+ * write no entry for local code.
+ */
+function declaredWithoutEntry(cwd: string, has: (name: string) => boolean, options: { skipLocal?: boolean; members?: ReadonlySet<string> } = {}): DeclaredSpec[] {
+  const manifest = readManifestDeclarations(path.join(cwd, "package.json"));
+  if (!manifest) return [];
+  const seen = new Set<string>();
+  return manifest.declared.filter((spec) => {
+    if (spec.section === "peerDependencies" || seen.has(spec.name)) return false;
+    seen.add(spec.name);
+    if (options.skipLocal && isLocalSpec(spec.spec)) return false;
+    return !options.members?.has(spec.name) && !has(spec.name);
+  });
+}
+
+/** "a (dependencies) and 2 more", for a note. */
+function declaredText(specs: DeclaredSpec[]): string {
+  return `${specs[0].name} (${specs[0].section})${specs.length > 1 ? ` and ${specs.length - 1} more` : ""}`;
+}
+
+/**
+ * One problem for a lockfile that was read but is not whole: its own damage
+ * (`damage`), the declared dependencies it has no entry for (`undeclared`),
+ * or both. Null when neither.
+ */
+function incompleteProblem(file: string, damage: LockDamage | null, undeclared: DeclaredSpec[]): LockfileProblem | null {
+  if (undeclared.length === 0) return damage ? damagedProblem(file, damage) : null;
+  const them = undeclared.length === 1 ? "it" : "them";
+  const missing = undeclared.length + (damage?.missing ?? 0);
+  return {
+    file,
+    partial: true,
+    skipped: missing,
+    error: `package.json declares ${declaredText(undeclared)}, but this lockfile has no entry for ${them}: it is truncated, or older than package.json${damage ? `; also, ${damage.reason}` : ""}. What it would install for ${them}, and anything past a cut, was not checked: reinstall to regenerate the lockfile`,
+  };
+}
+
+/**
+ * A lockfile that holds no package at all beside a package.json that
+ * declares dependencies: not a project with nothing installed. Null when
+ * package.json declares nothing that is owed an entry.
+ */
+function emptyLockProblem(file: string, undeclared: DeclaredSpec[]): LockfileProblem | null {
+  if (undeclared.length === 0) return null;
+  return {
+    file,
+    error: `it holds no package, but package.json declares ${declaredText(undeclared)}: it is truncated, or older than package.json, so nothing it would install was checked: reinstall to regenerate the lockfile`,
+  };
+}
+
+/** "it is truncated or damaged: ..." for a yarn.lock, from what its reader and its graph found, or null. */
+function yarnLockDamage(incomplete: number, dangling: string[]): LockDamage | null {
+  const parts: string[] = [];
+  if (incomplete > 0) parts.push(incomplete === 1 ? "1 entry names a package but no version" : `${incomplete} entries name a package but no version`);
+  if (dangling.length > 0) {
+    const list = `${dangling.slice(0, 3).join(", ")}${dangling.length > 3 ? ", ..." : ""}`;
+    parts.push(`${dangling.length} package${dangling.length === 1 ? " named as a dependency has" : "s named as dependencies have"} no entry (${list})`);
+  }
+  return parts.length > 0 ? { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing: incomplete + dangling.length } : null;
+}
+
 /** Lines git writes into a file it could not merge. */
 const CONFLICT_MARKER = /^(?:<{7}|>{7})(?: |$)|^={7}$/m;
 
@@ -216,15 +291,18 @@ function describeParseError(file: string, error: unknown): string | null {
     return `could not be read (${readError instanceof Error ? readError.message : String(readError)})`;
   }
   if (CONFLICT_MARKER.test(content)) return "it contains git merge-conflict markers (<<<<<<< / >>>>>>>): resolve the conflict and reinstall to regenerate it";
-  if (isJsonLockfile(file)) {
+  // Every JSON-format lockfile is validated as JSON whatever its name. bun.lock is JSON with
+  // trailing commas: a cut one is unparseable JSON, not a text lockfile that read short.
+  const json = isJsonLockfile(file) || path.basename(file) === "bun.lock";
+  if (json) {
     try {
-      JSON.parse(content);
+      JSON.parse(path.basename(file) === "bun.lock" ? stripTrailingCommas(content) : content);
     } catch (parseError) {
       return `invalid JSON (${parseError instanceof Error ? parseError.message.slice(0, 120) : String(parseError)})`;
     }
   }
   if (error) return `could not be parsed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
-  if (isJsonLockfile(file)) return null;
+  if (json) return null;
   // A text lockfile of some size that gave no package at all is damaged or in a format this reader does not know.
   const lines = content.split(/\r?\n/).filter((l) => l.trim() !== "").length;
   return lines > 20 ? "no package versions could be read from it (unsupported format or damaged)" : null;
@@ -259,7 +337,7 @@ function declaredRanges(declared: Map<string, string>, exact: (spec: string) => 
 }
 
 // =============================================================================
-// npm: package-lock.json > npm-shrinkwrap.json > pnpm-lock.yaml > yarn.lock > bun.lock > package.json ranges
+// npm: npm-shrinkwrap.json > package-lock.json > pnpm-lock.yaml > yarn.lock > bun.lock > package.json ranges
 // =============================================================================
 
 /** What one npm-family lockfile holds, as its reader reports it. */
@@ -269,63 +347,106 @@ interface NpmLockRead {
   uncheckable: NonRegistryEntry[];
   aliases?: Map<string, string>;
   problems: LockfileProblem[];
+  /** Copies the project's own manifests declare, workspace members included (VersionSource.declared). */
+  declared?: DeclaredDependency[];
+  /** True when the reader graded the scope of every copy itself (VersionSource.scopeGraded). */
+  scopeGraded?: boolean;
+  /** The file holds no package although package.json declares dependencies: `problems` says so, and it is not read. */
+  empty?: true;
+}
+
+/** The read of a lockfile with no package in it: null, or `empty` when package.json says it should hold some. */
+function emptyRead(problem: LockfileProblem | null): NpmLockRead | null {
+  return problem ? { versions: new Map(), instances: new InstanceSet(), uncheckable: [], problems: [problem], empty: true } : null;
 }
 
 /**
  * The npm-family lockfiles in the order they are preferred, each with its
- * reader. A reader returns null for a file that holds no package at all and
+ * reader. A reader returns null for a file that holds no package at all (or
+ * an `empty` read when package.json declares dependencies it should hold) and
  * throws for one it cannot parse.
  */
 const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) => NpmLockRead | null | Steps<NpmLockRead | null> }> = [
-  { name: "package-lock.json", read: readNpmLockFile },
+  // npm's own order: with both present it installs from the shrinkwrap and never opens package-lock.json.
   { name: "npm-shrinkwrap.json", read: readNpmLockFile },
+  { name: "package-lock.json", read: readNpmLockFile },
   {
     // v5.x, v6 and v9, read by column; see js-lockfile-readers.ts
     name: "pnpm-lock.yaml",
     // A generator: the read that can take seconds pauses where it may (resolveNpmSteps, W11).
-    *read(file) {
+    *read(file, cwd) {
       const content = readTextFile(file);
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const report = emptyReadReport();
       const installs = yield* readPnpmLockSteps(content, versions, instances, report);
-      if (versions.size === 0) return null;
+      // pnpm writes every dependency of the project into its root importer; a link can be left out (excludeLinksFromLockfile).
+      const listed = report.rootEntries;
+      if (versions.size === 0) return emptyRead(emptyLockProblem(file, declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true })));
       const damage = yield* pnpmLockDamageSteps(content, report.missingDirect, installs);
-      return { versions, instances, uncheckable: report.uncheckable, problems: damage ? [damagedProblem(file, damage)] : [] };
+      const undeclared = listed ? declaredWithoutEntry(cwd, (name) => listed.has(name), { skipLocal: true }) : [];
+      const problem = incompleteProblem(file, damage, undeclared);
+      return {
+        versions,
+        instances,
+        uncheckable: report.uncheckable,
+        problems: problem ? [problem] : [],
+        declared: report.declared,
+        scopeGraded: report.scopeGraded,
+      };
     },
   },
   {
     // v1 and berry
     name: "yarn.lock",
     read(file, cwd) {
+      const content = readTextFile(file);
       const versions = new Map<string, string>();
-      const instances = new InstanceSet();
+      const copies = new InstanceSet();
       const specs = new Map<string, string>();
       const report = emptyReadReport();
-      const skipped = readYarnLock(readTextFile(file), versions, instances, specs, report);
+      const skipped = readYarnLock(content, versions, copies, specs, report);
       // The copy a direct dependency resolves to is the one its package.json range names.
       for (const [name, range] of manifestRanges(cwd)) {
         const version = specs.get(`${name}@${range}`);
         if (version) versions.set(name, version);
       }
-      if (versions.size === 0) return null;
-      const problems: LockfileProblem[] = skipped > 0 ? [yarnSkippedProblem(file, skipped)] : [];
-      if (report.incomplete > 0) {
-        const entries = report.incomplete === 1 ? "1 entry names a package but no version" : `${report.incomplete} entries name a package but no version`;
-        problems.push(damagedProblem(file, { reason: `it is truncated or damaged: ${entries}`, missing: report.incomplete }));
+      // yarn.lock states no scope: it is derived from the lockfile's graph and the package.json files.
+      const read = copies.toArray();
+      const keys = new Set(read.map((copy) => `${copy.name}\0${copy.version}`));
+      let inspection: YarnInspection | null;
+      try {
+        inspection = inspectYarnLock(content, cwd, (key) => keys.has(key));
+      } catch {
+        inspection = null;
       }
-      return { versions, instances, uncheckable: report.uncheckable, problems };
+      // Each declared dependency has an entry in a whole yarn.lock (a git or local one too), except a
+      // workspace member (classic writes none) and a link.
+      const undeclared = declaredWithoutEntry(cwd, (name) => inspection?.hasEntry(name) === true, { skipLocal: true, members: inspection?.memberNames });
+      if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
+      const problems: LockfileProblem[] = skipped > 0 ? [yarnSkippedProblem(file, skipped)] : [];
+      const incomplete = incompleteProblem(file, yarnLockDamage(report.incomplete, inspection?.dangling ?? []), undeclared);
+      if (incomplete) problems.push(incomplete);
+      const grade = inspection?.grade ?? { scopes: new Map<string, boolean>(), declared: [], graded: false };
+      const instances = new InstanceSet();
+      for (const copy of read) instances.add(copy.name, copy.version, grade.scopes.get(`${copy.name}\0${copy.version}`));
+      return { versions, instances, uncheckable: report.uncheckable, problems, declared: grade.declared, scopeGraded: grade.graded };
     },
   },
   {
     // Bun 1.2+ text lockfile; the binary bun.lockb is not readable (binaryBunLock)
     name: "bun.lock",
-    read(file) {
+    read(file, cwd) {
       const versions = new Map<string, string>();
       const instances = new InstanceSet();
       const report = emptyReadReport();
       readBunLock(readTextFile(file), versions, instances, report);
-      return versions.size > 0 ? { versions, instances, uncheckable: report.uncheckable, problems: [] } : null;
+      // Bun keys the copy each dependency of the project resolves to by its name.
+      const listed = report.rootEntries;
+      const undeclared = declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true });
+      if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
+      const problem = incompleteProblem(file, null, undeclared);
+      return { versions, instances, uncheckable: report.uncheckable, problems: problem ? [problem] : [], declared: report.declared, scopeGraded: report.scopeGraded };
     },
   },
 ];
@@ -333,12 +454,15 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
 function readNpmLockFile(file: string): NpmLockRead | null {
   const read = readPackageLock(JSON.parse(readTextFile(file)));
   if (read.instances.size === 0 && read.uncheckable.length === 0) return null;
-  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [] };
+  // npm writes `dev` on every entry only devDependencies reach: the lockfile's own grading.
+  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [], declared: read.declared, scopeGraded: true };
 }
 
 function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
   let chosen: { name: string; file: string; read: NpmLockRead } | null = null;
   const others: string[] = [];
+  // Lockfiles ranked above the one read that hold no package although package.json declares some.
+  const emptied: LockfileProblem[] = [];
   for (const reader of NPM_LOCK_READERS) {
     const file = path.join(cwd, reader.name);
     if (!fs.existsSync(file)) continue;
@@ -349,31 +473,32 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     try {
       const out = reader.read(file, cwd);
       const read = out && isSteps(out) ? yield* out : out;
-      if (read) chosen = { name: reader.name, file, read };
+      if (read?.empty) pushAll(emptied, read.problems);
+      else if (read) chosen = { name: reader.name, file, read };
     } catch { /* unreadable: the next lockfile; unreadLockfiles names this one and why */ }
   }
 
   if (chosen) {
     const { file, read } = chosen;
-    const problems = [...read.problems, ...lockfileConflicts(cwd, chosen, others)];
+    const problems = [...emptied, ...read.problems, ...lockfileConflicts(cwd, chosen, others)];
     return found(read.versions, read.instances, file, "lockfile", {
       ...(read.uncheckable.length > 0 ? { uncheckable: read.uncheckable.map((u) => ({ ...u, file })) } : {}),
       ...(read.aliases && read.aliases.size > 0 ? { aliases: read.aliases } : {}),
       ...(problems.length > 0 ? { problems } : {}),
+      ...(read.declared && read.declared.length > 0 ? { declared: read.declared } : {}),
+      ...(read.scopeGraded ? { scopeGraded: true as const } : {}),
     });
   }
 
   // No readable lockfile. A binary bun.lockb pins everything, but not in a form this server reads.
   const bunBinary = path.join(cwd, BUN_BINARY_LOCK);
-  const problems: LockfileProblem[] = fs.existsSync(bunBinary)
-    ? [
-        {
-          file: bunBinary,
-          error:
-            "bun.lockb is Bun's binary lockfile, which this server cannot read: run `bun install --save-text-lockfile` (Bun 1.2 or later) to write bun.lock, then scan again",
-        },
-      ]
-    : [];
+  const problems: LockfileProblem[] = [...emptied];
+  if (fs.existsSync(bunBinary)) {
+    problems.push({
+      file: bunBinary,
+      error: "bun.lockb is Bun's binary lockfile, which this server cannot read: run `bun install --save-text-lockfile` (Bun 1.2 or later) to write bun.lock, then scan again",
+    });
+  }
 
   // No lockfile: package.json declares ranges, not installed versions.
   const pkgPath = path.join(cwd, "package.json");
@@ -381,9 +506,19 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     const declared = new Map<string, string>();
     const uncheckable: NonRegistryEntry[] = [];
     const aliases = new Map<string, string>();
+    let pkg: Record<string, unknown>;
     try {
-      const pkg = JSON.parse(readTextFile(pkgPath));
-      for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
+      const parsed: unknown = JSON.parse(readTextFile(pkgPath));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("it is not a JSON object");
+      pkg = parsed as Record<string, unknown>;
+    } catch (error) {
+      // What it declares is unknown, which is not "nothing declared": said, never a clean result.
+      problems.push({ file: pkgPath, error: manifestParseError(error) });
+      return { ...emptySource(), problems };
+    }
+    try {
+      const sections = (field: string) => (pkg[field] && typeof pkg[field] === "object" && !Array.isArray(pkg[field]) ? (pkg[field] as Record<string, unknown>) : {});
+      for (const [name, spec] of Object.entries({ ...sections("dependencies"), ...sections("devDependencies") })) {
         if (typeof spec !== "string") continue;
         // `"x": "github:user/repo"` or a tarball URL is not a version of the registry's x.
         const other = nonRegistrySource(spec, spec);
@@ -408,6 +543,12 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
   }
 
   return problems.length > 0 ? { ...emptySource(), problems } : emptySource();
+}
+
+/** Why a package.json with no lockfile beside it could not be read, and what that leaves unchecked. */
+function manifestParseError(error: unknown): string {
+  const why = error instanceof SyntaxError ? `it is not valid JSON (${error.message.slice(0, 120)})` : `it could not be read (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+  return `${why}, so no dependency it declares was read or checked: fix the file, then scan again`;
 }
 
 /** A reader that returned its work as steps (a generator) rather than its result. */
@@ -447,6 +588,11 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     } catch (error) {
       failure = describeParseError(file, error) ?? "could not be parsed";
     }
+    // A lockfile with no package in it hides nothing, whatever package.json says it should hold.
+    if (other?.empty) {
+      other = null;
+      failure = describeParseError(file, null);
+    }
     if (!other) {
       if (failure) problems.push({ file, conflict: true, error: `${chosen.name} was read instead, and this lockfile could not be compared with it: ${failure}` });
       continue;
@@ -460,10 +606,15 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     }
     if (differing.length === 0) continue;
     differing.sort();
+    const differ = `${differing.length} package${differing.length === 1 ? "" : "s"} differ (${differing.slice(0, CONFLICT_EXAMPLES).join("; ")}${differing.length > CONFLICT_EXAMPLES ? "; ..." : ""})`;
+    // Between npm's two lockfiles the stale one is known: npm never reads package-lock.json beside a shrinkwrap.
+    const npmPair = chosen.name === "npm-shrinkwrap.json" && name === "package-lock.json";
     problems.push({
       file,
       conflict: true,
-      error: `${chosen.name} was read instead (it ranks first), and this lockfile pins a different set: ${differing.length} package${differing.length === 1 ? "" : "s"} differ (${differing.slice(0, CONFLICT_EXAMPLES).join("; ")}${differing.length > CONFLICT_EXAMPLES ? "; ..." : ""}). One of the two is stale and the scan cannot tell which: delete the one your package manager does not write`,
+      error: npmPair
+        ? `${chosen.name} was read instead: npm installs from ${chosen.name} and ignores ${name} when both are present. This ignored lockfile pins a different set: ${differ}. It is the stale one: delete it, or delete ${chosen.name} if ${name} is the one you mean to install from`
+        : `${chosen.name} was read instead (it ranks first), and this lockfile pins a different set: ${differ}. One of the two is stale and the scan cannot tell which: delete the one your package manager does not write`,
     });
   }
   const bunBinary = path.join(cwd, BUN_BINARY_LOCK);
@@ -475,6 +626,22 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     });
   }
   return problems;
+}
+
+/**
+ * Node's lookup of `name` from the package-lock key `from` (an install path,
+ * a workspace directory, or "" for the project): its own node_modules, then
+ * each enclosing package's, then the root's. Null when no entry answers.
+ */
+export function resolveInstallPath(packages: Record<string, unknown>, from: string, name: string): string | null {
+  let dir = from;
+  for (;;) {
+    const candidate = `${dir ? `${dir}/` : ""}node_modules/${name}`;
+    if (Object.hasOwn(packages, candidate)) return candidate;
+    if (dir === "") return null;
+    const cut = dir.lastIndexOf("/node_modules/");
+    dir = cut >= 0 ? dir.slice(0, cut) : "";
+  }
 }
 
 /** The package name a package-lock `packages` key installs: the segment after its LAST `node_modules/`. */
@@ -524,11 +691,12 @@ const V1_ALIAS = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(\d\S*)$/;
 export function readPackageLock(lock: {
   packages?: Record<string, LockEntry>;
   dependencies?: Record<string, LockEntry>;
-}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string> } {
+}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[] } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: NonRegistryEntry[] = [];
   const aliases = new Map<string, string>();
+  const declared = new Map<string, DeclaredDependency>();
 
   if (lock.packages) {
     // What asked for each name, to tell a URL dependency from a registry with tarball paths of its own.
@@ -579,8 +747,30 @@ export function readPackageLock(lock: {
       if (!versions.has(name)) versions.set(name, version);
     }
     // A workspace package's own nested copy (packages/x/node_modules/a) when nothing is hoisted.
+    const copies = new Set<string>();
     for (const instance of instances.toArray()) {
+      copies.add(`${instance.name}\0${instance.version}`);
       if (!versions.has(instance.name)) versions.set(instance.name, instance.version);
+    }
+    // What the project and each workspace member declare: the entries keyed by a directory, not an
+    // install path, each dependency resolved from that directory as Node resolves it.
+    for (const [key, value] of Object.entries(lock.packages)) {
+      if (!value || value.link || packageNameFromNodeModulesPath(key) !== "") continue;
+      for (const section of DEPENDENCY_SECTIONS) {
+        const specs = value[section];
+        if (!specs || typeof specs !== "object") continue;
+        for (const dep of Object.keys(specs)) {
+          const at = resolveInstallPath(lock.packages, key, dep);
+          const target = at ? lock.packages[at] : undefined;
+          if (!target || target.link || typeof target.version !== "string") continue;
+          const name = typeof target.name === "string" && NPM_NAME.test(target.name) ? target.name : dep;
+          const id = `${name}\0${target.version}`;
+          if (!copies.has(id)) continue;
+          const prior = declared.get(id);
+          if (prior) prior.runtime ||= isRuntimeSection(section);
+          else declared.set(id, { name, version: target.version, runtime: isRuntimeSection(section) });
+        }
+      }
     }
   }
 
@@ -614,7 +804,7 @@ export function readPackageLock(lock: {
     }
   }
 
-  return { versions, instances, uncheckable, aliases };
+  return { versions, instances, uncheckable, aliases, declared: [...declared.values()] };
 }
 
 // =============================================================================

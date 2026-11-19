@@ -70,11 +70,31 @@ export interface VersionSource {
    */
   aliases?: Map<string, string>;
   /**
+   * npm family: every copy a manifest of this lockfile declares, the project's own or a workspace
+   * member's, as the lockfile resolves it. Such a copy is a direct dependency wherever it is declared.
+   */
+  declared?: DeclaredDependency[];
+  /**
+   * Set when the reader graded the scope of every copy itself (an npm-family lockfile whose runtime
+   * roots it could read). A copy it left ungraded is then of unknown scope even when a manifest
+   * lists the name under devDependencies: a runtime path to it could not be ruled out.
+   */
+  scopeGraded?: true;
+  /**
    * PyPI: requirement names with no exact version anywhere in this directory
    * (`pydantic>=2.0.0`, a bare `requests`), by the file that lists them.
    * There is no installed version to ask about, so they are not checked.
    */
   unpinned?: UnpinnedRequirements[];
+}
+
+/** A copy the project's own manifests declare (see VersionSource.declared). */
+export interface DeclaredDependency {
+  /** The registry package (an alias is named by the package behind it). */
+  name: string;
+  version: string;
+  /** True when a `dependencies`, `optionalDependencies` or `peerDependencies` section declares it anywhere; false when only `devDependencies` do. */
+  runtime: boolean;
 }
 
 /** A dependency that is not a registry release (see VersionSource.uncheckable). */
@@ -179,7 +199,7 @@ export function found(
   instances: InstanceSet | PackageInstance[],
   source: string,
   kind: SourceKind,
-  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "registryWide" | "indexRecorded"> = {},
+  extra: Pick<VersionSource, "extraSources" | "ranges" | "direct" | "uncheckable" | "aliases" | "unpinned" | "problems" | "privateIndex" | "extraIndexes" | "registryWide" | "indexRecorded" | "declared" | "scopeGraded"> = {},
 ): VersionSource {
   return {
     versions,

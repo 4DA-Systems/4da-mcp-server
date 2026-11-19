@@ -24,7 +24,7 @@ import { oversize, tooLargeText } from "./bounded-read.js";
 import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
 import { checkInstallState } from "./install-state.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
-import { mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
+import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
 import { readTextFile } from "./text-file.js";
 import { runSteps, type Steps } from "./yield-point.js";
@@ -127,7 +127,9 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   const readFiles = read.source ? [read.source, ...(read.extraSources ?? [])] : [];
   // The manifest only matters when the resolver fell back to it; editing a
   // script in package.json must not throw away a scan of an unchanged lockfile.
-  if (manifest && !readFiles.includes(manifest)) signatures.delete(manifest);
+  // One reported unreadable is watched, so fixing it re-resolves the group.
+  const manifestProblem = manifest !== null && (read.problems ?? []).some((p) => p.file === manifest);
+  if (manifest && !readFiles.includes(manifest) && !manifestProblem) signatures.delete(manifest);
 
   // Ruby and PHP: the lockfile (and composer.json) name the direct dependencies; the project scanner does not.
   const fromLock = group.deps.length === 0 && group.devDeps.length === 0 && read.direct;
@@ -135,7 +137,8 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   const real = (names: string[]) => (read.aliases ? [...new Set(names.map((name) => read.aliases?.get(name) ?? name))] : names);
   const deps = real(fromLock ? fromLock.deps : group.deps);
   const devDeps = real(fromLock ? fromLock.devDeps : group.devDeps);
-  let resolved = resolveVersionsFrom(group.dir, deps, devDeps, ecosystem, read.versions, group.targets);
+  const lockScope = lockScopeOf(read);
+  let resolved = resolveVersionsFrom(group.dir, deps, devDeps, ecosystem, read.versions, group.targets, lockScope);
   // No lockfile: a ranged dependency's version is the range's floor, a label.
   const ranges = read.kind === "declared_ranges" ? read.ranges ?? new Map<string, string>() : null;
   if (ranges && ranges.size > 0) {
@@ -168,6 +171,7 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
       group.targets,
       resolved,
       read.instances,
+      lockScope,
     ),
     ...driftAudit,
   ].filter((dep) => !dep.declaredRange);

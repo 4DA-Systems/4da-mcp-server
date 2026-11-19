@@ -22,7 +22,7 @@ import * as path from "node:path";
 import { callMemo } from "../call-budget.js";
 import { stripTrailingCommas } from "./bun-lockfile.js";
 import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, textLines, yarnBlockVersion, yarnPackageName } from "./js-lockfile-readers.js";
-import { packageNameFromNodeModulesPath, parseCargoLockPackages } from "./lockfile-parsers.js";
+import { packageNameFromNodeModulesPath, parseCargoLockPackages, resolveInstallPath } from "./lockfile-parsers.js";
 
 export type LockfileFormat = "package-lock" | "pnpm" | "yarn" | "yarn-berry" | "bun" | "cargo";
 
@@ -298,18 +298,6 @@ interface LockEntry {
 
 type PackageLock = { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry>; name?: string };
 
-/** Node's lookup from install path `from`: its own node_modules, then each ancestor's, then the root's. */
-function resolveInstallPath(packages: Record<string, LockEntry>, from: string, name: string): string | null {
-  let dir = from;
-  for (;;) {
-    const candidate = `${dir ? `${dir}/` : ""}node_modules/${name}`;
-    if (Object.hasOwn(packages, candidate)) return candidate;
-    if (dir === "") return null;
-    const cut = dir.lastIndexOf("/node_modules/");
-    dir = cut >= 0 ? dir.slice(0, cut) : "";
-  }
-}
-
 /**
  * The package a bundled copy at install path `at` ships inside: the nearest enclosing entry that is
  * not itself `inBundle`. A level the lockfile does not list is passed over. Null when none is found.
@@ -459,6 +447,8 @@ function* pnpmIndex(content: string): IndexBuild {
   let section = "";
   let parent: [string, string] | null = null;
   let importer: string | null = null;
+  // The importer's section being read: what its local edges say declares the dependency.
+  let importerSection: ImporterSection = "dependencies";
   let inDeps = false;
   let depIndent = -1;
   let pendingDep: string | null = null;
@@ -473,7 +463,8 @@ function* pnpmIndex(content: string): IndexBuild {
     if (indent === 0) {
       section = text.endsWith(":") ? text.slice(0, -1) : "";
       parent = null;
-      importer = section === "dependencies" || section === "devDependencies" || section === "optionalDependencies" ? "." : null;
+      importer = isImporterSection(section) ? "." : null;
+      if (isImporterSection(section)) importerSection = section;
       inDeps = importer !== null;
       depIndent = inDeps ? 2 : -1;
       continue;
@@ -497,7 +488,9 @@ function* pnpmIndex(content: string): IndexBuild {
         continue;
       }
       if (indent === 4) {
-        inDeps = /^(?:dependencies|devDependencies|optionalDependencies):$/.test(text);
+        const block = text.endsWith(":") ? text.slice(0, -1) : "";
+        inDeps = isImporterSection(block);
+        if (isImporterSection(block)) importerSection = block;
         depIndent = 4;
         continue;
       }
@@ -509,7 +502,7 @@ function* pnpmIndex(content: string): IndexBuild {
       pendingDep = m ? m[1] ?? m[2] ?? m[3] : null;
       importerSpecifier = null;
       if (pendingDep && m?.[4]) {
-        add(installs(pendingDep, m[4]), { parent: importer, parentVersion: null, range: null, local: true, dir: importer });
+        add(installs(pendingDep, m[4]), { parent: importer, parentVersion: null, range: null, local: true, dir: importer, section: importerSection });
         pendingDep = null;
       }
     } else if (indent === depIndent + 4 && pendingDep) {
@@ -517,12 +510,19 @@ function* pnpmIndex(content: string): IndexBuild {
       if (spec) importerSpecifier = spec[1].replace(/^['"]|['"]$/g, "");
       const ver = /^version:\s*(.+)$/.exec(text);
       if (ver) {
-        add(installs(pendingDep, ver[1]), { parent: importer, parentVersion: null, range: importerSpecifier, local: true, dir: importer });
+        add(installs(pendingDep, ver[1]), { parent: importer, parentVersion: null, range: importerSpecifier, local: true, dir: importer, section: importerSection });
         pendingDep = null;
       }
     }
   }
   return out;
+}
+
+/** A dependency section pnpm writes for an importer (bun for a workspace), as a local edge names it. */
+type ImporterSection = "dependencies" | "devDependencies" | "optionalDependencies";
+
+function isImporterSection(text: string): text is ImporterSection {
+  return text === "dependencies" || text === "devDependencies" || text === "optionalDependencies";
 }
 
 export function pnpmParents(content: string, name: string, version: string): ParentEdge[] {
@@ -677,11 +677,17 @@ function* bunIndex(lock: BunLock): IndexBuild {
   }
   for (const [dir, ws] of Object.entries(lock.workspaces ?? {})) {
     if (!isRecord(ws)) continue;
-    const names = new Set<string>([...Object.keys(ws.dependencies ?? {}), ...Object.keys(ws.devDependencies ?? {}), ...Object.keys(ws.optionalDependencies ?? {})]);
-    for (const dep of names) {
-      const range = ws.dependencies?.[dep] ?? ws.devDependencies?.[dep] ?? ws.optionalDependencies?.[dep];
-      const installed = entryOf(dep)?.version;
-      if (typeof range === "string" && installed !== undefined) push(out, dep, installed, { parent: dir || ".", parentVersion: null, range, local: true });
+    // Per dependency, the first section that declares it names the edge.
+    const taken = new Set<string>();
+    for (const section of ["dependencies", "devDependencies", "optionalDependencies"] as const) {
+      const declared = ws[section];
+      if (!isRecord(declared)) continue;
+      for (const [dep, range] of Object.entries(declared)) {
+        if (typeof range !== "string" || taken.has(dep)) continue;
+        taken.add(dep);
+        const installed = entryOf(dep)?.version;
+        if (installed !== undefined) push(out, dep, installed, { parent: dir || ".", parentVersion: null, range, local: true, dir: dir || ".", section });
+      }
     }
   }
   return out;

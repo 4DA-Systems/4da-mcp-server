@@ -453,8 +453,10 @@ async function executeStandalonePlanner(
     expectedTotal: scopeTotal,
     notLoaded: `${scanUnfinishedText(scanWaitMs)}, or OSV.dev was unreachable`,
   });
-  // A project whose only manifests are ones this server does not read (pom.xml) has no data at all (audit 6.2.5 A-6).
-  const nothingReadable = (vulnResult?.totalScanned ?? 0) === 0 && (liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0;
+  // A project whose only manifests are ones this server does not read (pom.xml), or could not read
+  // (an unparseable package.json, a damaged lockfile), has no data at all (audit 6.2.5 A-6).
+  const nothingReadable =
+    (vulnResult?.totalScanned ?? 0) === 0 && ((liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0 || liveIntel.getLockfileProblems().length > 0);
   const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
@@ -697,17 +699,21 @@ async function executeStandalonePlanner(
   // than a same-named direct dep is its own finding (anyhow 1.0.102 transitive
   // beside anyhow 1.0.104 direct), not a duplicate of the direct row.
   let devTransitiveLeftOut = 0;
+  // A copy a workspace member (or a root optional or peer section) declares is direct, but not one
+  // of the root's resolved rows above: it is planned below, as a direct row.
+  const rootDirect = new Set(liveIntel.getResolvedDeps().filter((d) => d.isDirect).map((d) => instanceKey(d.ecosystem, d.name, d.version)));
+  const devDeclaredSkipped = new Set<string>();
   if (vulnResult) {
     const transitive = new Map<string, typeof vulnResult.vulnerabilities>();
     const devSkipped = new Set<string>();
     for (const v of vulnResult.vulnerabilities) {
-      if (v.isDirect) continue;
+      if (v.isDirect && (v.installDriftOf || rootDirect.has(instanceKey(v.ecosystem, v.package, v.currentVersion)))) continue;
       if (!named(v.package, v.ecosystem)) continue;
       if (isMaintenanceNotice(v)) continue;
       if (directPackages.has(instanceKey(v.ecosystem, v.package, v.currentVersion))) continue;
       const key = instanceKey(v.ecosystem, v.package, v.currentVersion);
       if (!includeDev && isDevOnlyCopy(v)) {
-        devSkipped.add(key);
+        (v.isDirect ? devDeclaredSkipped : devSkipped).add(key);
         continue;
       }
       if (!transitive.has(key)) transitive.set(key, []);
@@ -715,12 +721,15 @@ async function executeStandalonePlanner(
     }
 
     devTransitiveLeftOut = [...devSkipped].filter((k) => !transitive.has(k)).length;
+    for (const k of devDeclaredSkipped) if (transitive.has(k)) devDeclaredSkipped.delete(k);
     for (const entries of transitive.values()) {
       const first = entries[0];
       const fixedVersions = entries.map((e) => e.fixedVersion).filter((f): f is string => Boolean(f));
       const platformActive = !entries.every((e) => !e.platformActive);
       const groups = groupAdvisories(entries);
-      const reasons = [vulnerabilitiesReason(groups), TRANSITIVE_PENDING];
+      // Declared by a manifest of the project, as vulnerability_scan builds the same step (fix-verdicts.ts stepOf).
+      const declared = entries.some((e) => e.isDirect === true);
+      const reasons = declared ? [vulnerabilitiesReason(groups)] : [vulnerabilitiesReason(groups), TRANSITIVE_PENDING];
       if (!platformActive) {
         reasons.push("Affected code is gated behind a target not active on this platform");
       }
@@ -736,17 +745,17 @@ async function executeStandalonePlanner(
         upgradeType: upgradeTypeBetween(first.currentVersion, target),
         risk: platformActive ? riskOf(entries.filter((e) => e.platformActive)) : "low",
         reasons,
-        breaking: false,
+        breaking: declared && upgradeTypeBetween(first.currentVersion, target) === "major",
         isDev: entries.every((e) => e.isDev),
-        scope: "transitive",
-        action: !platformActive ? "not_built_on_this_host" : target ? "waiting_on_upstream" : "no_fix_available",
+        scope: declared ? "direct" : "transitive",
+        action: !platformActive ? "not_built_on_this_host" : target ? (declared ? "upgrade_direct" : "waiting_on_upstream") : "no_fix_available",
         platformActive,
         ...(!platformActive ? { appliesWhenBuiltFor: builtFor(entries) } : {}),
       };
       recommendations.push(rec);
       // The same input vulnerability_scan verifies for this copy (fix-verdicts.ts): one answer per finding.
       // A copy not built on this host is checked too, for its target only (never a yanked release).
-      if (rec.action === "waiting_on_upstream" || rec.action === "no_fix_available" || (rec.action === "not_built_on_this_host" && target)) {
+      if (rec.action === "waiting_on_upstream" || rec.action === "upgrade_direct" || rec.action === "no_fix_available" || (rec.action === "not_built_on_this_host" && target)) {
         fixPathInputs.set(rec, fixInputOf(entries));
       }
     }
@@ -869,9 +878,11 @@ async function executeStandalonePlanner(
   if (devOnly > 0) parts.push(`${devOnly} dev-only (isDev)`);
   // The population, worded as dependency_health and vulnerability_scan word it (finding 6).
   if (vulnResult) parts.push(populationNote(vulnResult.vulnerabilities, liveIntel.getAuditDeps(), includeDev, named));
-  if (devDirectLeftOut + devTransitiveLeftOut + devDirectUnchecked > 0) {
+  // A workspace member's vulnerable devDependency is one too.
+  const devDeclaredLeftOut = devDirectLeftOut + devDeclaredSkipped.size;
+  if (devDeclaredLeftOut + devTransitiveLeftOut + devDirectUnchecked > 0) {
     const left: string[] = [];
-    if (devDirectLeftOut > 0) left.push(`${devDirectLeftOut} vulnerable devDependenc${devDirectLeftOut !== 1 ? "ies" : "y"}`);
+    if (devDeclaredLeftOut > 0) left.push(`${devDeclaredLeftOut} vulnerable devDependenc${devDeclaredLeftOut !== 1 ? "ies" : "y"}`);
     if (devDirectUnchecked > 0) left.push(`${devDirectUnchecked} devDependenc${devDirectUnchecked !== 1 ? "ies" : "y"} not checked for vulnerabilities`);
     if (devTransitiveLeftOut > 0) left.push(`${devTransitiveLeftOut} dev-only vulnerable transitive cop${devTransitiveLeftOut !== 1 ? "ies" : "y"}`);
     parts.push(`include_dev: false left out ${left.join(" and ")} (the default, true, plans them)`);
