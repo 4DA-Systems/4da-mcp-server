@@ -1115,10 +1115,10 @@ export function gradeFromAliases(
 }
 
 /**
- * Derive a severity bucket honestly: a CVSS base score (numeric or computed
- * from a vector) wins; otherwise the GitHub-advisory label; otherwise unknown.
- * Never fabricates a default bucket — an advisory with no severity signal is
- * reported as `unknown`, not silently labeled "medium".
+ * Derive a severity bucket honestly: the curated label wins; otherwise the band
+ * of the highest valid CVSS score; otherwise unknown. Never fabricates a default
+ * bucket — an advisory with no severity signal is reported as `unknown`, not
+ * silently labeled "medium".
  */
 export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   severity: VulnerabilityEntry["severity"];
@@ -1127,7 +1127,7 @@ export function deriveSeverity(vuln: Partial<OsvVulnerability>): {
   // The curated label first, the CVSS band second (the rule shared with the 4DA app, 2026-10-18,
   // severity vectors sv-015..sv-017): on the pinned corpus 123 of 3,923 records disagree, all GHSA,
   // 113 beside a CVSS v4 vector, where the label follows. A CVSS 0.0 goes by its label. A record with no
-  // label is graded by its v3.x vector, else its v4.0 one (cvss4.ts).
+  // label is graded by the highest score among its v3.x and v4.0 vectors (extractCvssScore, cvss4.ts).
   const cvssScore = extractCvssScore(vuln.severity);
   const label = labelToSeverity(vuln.database_specific?.severity);
   if (label !== "unknown") return { severity: label, cvssScore };
@@ -1151,34 +1151,30 @@ function labelToSeverity(label: string | undefined): VulnerabilityEntry["severit
   }
 }
 
+/**
+ * The highest valid score among every severity entry a record carries: an explicit number, a v3.x
+ * vector's base score, a v4.0 vector's. An entry that scores 0.0, cannot be read or has no score
+ * never hides one that scores: PYSEC-2026-1943 carries a v3.1 vector with no impact (0.0) beside a
+ * v4.0 one that scores 8.7. Null when no entry can be read.
+ */
 export function extractCvssScore(severity: Array<{ type: string; score: string }> | undefined): number | null {
-  if (!severity || severity.length === 0) return null;
-
-  // Prefer an explicit numeric base score when present.
-  for (const s of severity) {
-    const raw = s.score.trim();
+  if (!Array.isArray(severity)) return null;
+  let best: number | null = null;
+  for (const entry of severity) {
+    const raw = typeof entry?.score === "string" ? entry.score.trim() : "";
+    if (raw === "") continue;
+    let score: number | null = null;
     if (/^\d+(?:\.\d+)?$/.test(raw)) {
       const num = Number(raw);
-      if (!isNaN(num) && num >= 0 && num <= 10) return num;
+      score = num >= 0 && num <= 10 ? num : null;
+    } else if (/^CVSS:4\.0\//i.test(raw)) {
+      score = cvss4Score(raw);
+    } else if (raw.includes("AV:")) {
+      score = cvssBaseScore(raw);
     }
+    if (score !== null && (best === null || score > best)) best = score;
   }
-
-  // OSV most often gives a CVSS *vector* string — compute its base score.
-  for (const s of severity) {
-    if (s.score.includes("AV:")) {
-      const score = cvssBaseScore(s.score);
-      if (score !== null) return score;
-    }
-  }
-  // A v4.0 vector only when no v3.x one scored: RustSec records now often carry v4.0 alone
-  // (RUSTSEC-2026-0459 was graded unknown), and v3 keeps its place where both are given.
-  for (const s of severity) {
-    if (/^\s*CVSS:4\.0\//i.test(s.score)) {
-      const score = cvss4Score(s.score);
-      if (score !== null) return score;
-    }
-  }
-  return null;
+  return best;
 }
 
 function cvssToSeverity(score: number): "critical" | "high" | "medium" | "low" | "unknown" {
