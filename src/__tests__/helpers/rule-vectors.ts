@@ -278,7 +278,7 @@ function checkRangeCheck(v: Vector, records: Records): string | null {
   const target = parseTarget(eco, constraint);
   if (!target) return `constraint ${JSON.stringify(constraint)} is unreadable`;
   // An exact pin ("==3.1.6") is a one-release constraint here.
-  const range = target.kind === "range" || target.kind === "exact_or_series" ? target.range : constraint;
+  const range = target.kind === "range" ? target.range : constraint;
   const advisories = ((v.record_ids as string[] | undefined) ?? []).map((id) => records.ranges(id, eco, name));
   const from = optStr(v, "from");
   const rc = checkRange({ ecosystem: eco, index, range, basis: "requested", advisories, ...(from ? { from } : {}) });

@@ -66,7 +66,6 @@ function createTestDatabase(): FourDADatabase {
   const rawDb = new Database(":memory:");
   rawDb.exec(SCHEMA);
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = rawDb;
   return instance;
 }
@@ -81,7 +80,7 @@ describe("what_should_i_know hybrid wisdom", () => {
     installEmbeddingStub();
     db = createTestDatabase();
     // A decision that chose Postgres over "mongo".
-    executeDecisionMemory(db, {
+    void executeDecisionMemory(db, {
       action: "record",
       subject: "Datastore choice",
       decision: "Use PostgreSQL for relational data",
@@ -90,7 +89,7 @@ describe("what_should_i_know hybrid wisdom", () => {
       context_tags: ["storage"],
     });
     // An unrelated memory (auth topic).
-    executeAgentMemory(db, {
+    void executeAgentMemory(db, {
       action: "store",
       session_id: "s1",
       agent_type: "claude_code",

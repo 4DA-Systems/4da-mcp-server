@@ -106,7 +106,6 @@ export const advisory = (id: string, name: string, severity: string, affected: {
 export function memoryDb(): FourDADatabase {
   const raw = new Database(":memory:");
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = raw;
   return instance;
 }

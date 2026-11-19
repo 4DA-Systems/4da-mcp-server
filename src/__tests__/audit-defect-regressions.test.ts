@@ -25,7 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
-import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
+import { standalonePlan } from "./helpers/standalone-plan.js";
 import { executeKnowledgeGaps } from "../tools/knowledge-gaps.js";
 import { restampDepContext } from "../live/osv-scanner.js";
 import { resolveVersions } from "../live/version-resolver.js";
@@ -131,7 +131,7 @@ describe("upgrade_planner — CVEs attach to the scanned INSTANCE, not the name"
     // Direct anyhow resolves to 1.0.104 from the lockfile fixture; the CVE was
     // scanned against the transitive 1.0.102 instance.
     const scan = makeScan([makeEntry({})], rustDir);
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const result = await standalonePlan(noDb, {}, makeIntel(scan));
 
     const directRow = result.recommendations.find(
       (r) => r.package === "anyhow" && r.scope === "direct",
@@ -155,7 +155,7 @@ describe("upgrade_planner — CVEs attach to the scanned INSTANCE, not the name"
       [makeEntry({ currentVersion: "1.0.104", isDirect: true, devScopeKnown: true, fixedVersion: "1.0.105" })],
       rustDir,
     );
-    const result = await executeUpgradePlanner(noDb, {}, makeIntel(scan));
+    const result = await standalonePlan(noDb, {}, makeIntel(scan));
 
     const directRow = result.recommendations.find(
       (r) => r.package === "anyhow" && r.scope === "direct",

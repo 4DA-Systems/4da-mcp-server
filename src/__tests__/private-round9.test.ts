@@ -16,7 +16,7 @@ import { FourDADatabase } from "../db.js";
 import { LiveIntelligence } from "../live/index.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { setLiveIntelligence } from "../live-singleton.js";
+import { clearLiveIntelligence } from "../live-singleton.js";
 
 let scratch: string;
 let sent: string[];
@@ -68,7 +68,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
-  setLiveIntelligence(null);
+  clearLiveIntelligence();
   try {
     fs.rmSync(scratch, { recursive: true, force: true });
   } catch {
@@ -90,7 +90,7 @@ describe("a guessed name in a project whose registries are all private (r9 B1)",
       const result = await brief(task);
       expect(leaks(/zqxpy[-_]new/i)).toEqual([]);
       expect(JSON.stringify(result)).toMatch(/NOT CHECKED \(private\)/);
-      expect(result.delegation?.level ?? "").not.toBe("safe_to_delegate");
+      expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
     });
   }
 

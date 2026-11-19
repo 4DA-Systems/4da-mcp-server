@@ -224,7 +224,7 @@ describe("the choke point reads every body form", () => {
   ])("refuses a body in %s", async (_, body) => {
     const spy = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", spy);
-    await expect(fetchWithTimeout("https://api.osv.dev/v1/query", { method: "POST", body: body as BodyInit })).rejects.toBeInstanceOf(PrivateRequestRefused);
+    await expect(fetchWithTimeout("https://api.osv.dev/v1/query", { method: "POST", body: body as RequestInit["body"] })).rejects.toBeInstanceOf(PrivateRequestRefused);
     expect(spy).not.toHaveBeenCalled();
   });
 

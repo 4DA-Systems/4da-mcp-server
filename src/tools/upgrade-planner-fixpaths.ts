@@ -55,7 +55,7 @@ import {
   type RequirementHistory,
 } from "../live/fix-paths.js";
 import { lockfileParentIndex, prepareLockfileParents, readLockfileParents, type LockfileFormat, type ParentEdge } from "../live/lockfile-parents.js";
-import { advisoriesAffecting, advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { projectOverride } from "../live/overrides.js";
 import { registryQuote } from "../untrusted-text.js";
 import { pypiCompiledInstruction, pypiPinnedTogether } from "../live/pypi-advice.js";

@@ -52,13 +52,12 @@ function createTestDatabase(): FourDADatabase {
   const rawDb = new Database(":memory:");
   rawDb.exec(AGENT_MEMORY_SCHEMA);
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = rawDb;
   return instance;
 }
 
 function store(db: FourDADatabase, subject: string, content: string, tags: string[]): void {
-  executeAgentMemory(db, {
+  void executeAgentMemory(db, {
     action: "store",
     agent_type: "claude_code",
     session_id: "s1",

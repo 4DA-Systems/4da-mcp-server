@@ -108,7 +108,6 @@ function createTestDatabase(): FourDADatabase {
   `);
 
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = rawDb;
   return instance;
 }
@@ -132,7 +131,7 @@ describe("FourDADatabase.validateDatabase", () => {
 
   it("returns valid with table list for a valid in-memory database written to disk", async () => {
     const { tmpdir } = await import("os");
-    const { writeFileSync, unlinkSync } = await import("fs");
+    const { unlinkSync } = await import("fs");
     const { join } = await import("path");
 
     // Create a real SQLite file via better-sqlite3

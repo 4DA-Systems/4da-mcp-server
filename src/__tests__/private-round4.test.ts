@@ -30,7 +30,7 @@ import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { deriveTechStackForHeadlines, executeEcosystemPulse } from "../tools/ecosystem-pulse.js";
 import { executeGetContext } from "../tools/get-context.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { setLiveIntelligence } from "../live-singleton.js";
+import { clearLiveIntelligence, setLiveIntelligence } from "../live-singleton.js";
 
 const noDb = null as unknown as FourDADatabase;
 let scratch: string;
@@ -92,7 +92,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.FOURDA_PRIVATE_PACKAGES;
-  setLiveIntelligence(null);
+  clearLiveIntelligence();
   try {
     fs.rmSync(scratch, { recursive: true, force: true });
   } catch {

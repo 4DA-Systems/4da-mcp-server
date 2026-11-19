@@ -71,13 +71,6 @@ interface InterestRow {
   weight: number;
 }
 
-interface TopicAffinityRow {
-  topic: string;
-  positive_signals: number;
-  negative_signals: number;
-  total_exposures: number;
-}
-
 interface SourceCountRow {
   source_type: string;
   item_count: number;
@@ -102,13 +95,6 @@ interface ProjectCountRow {
 
 interface DepCountRow {
   dep_count: number;
-}
-
-interface InteractionRow {
-  item_id: number;
-  action_type: string;
-  item_source: string;
-  timestamp: string;
 }
 
 // =============================================================================
@@ -322,17 +308,6 @@ export function executeDeveloperDna(
   let blindSpots: BlindSpotEntry[] = [];
   if (includeBlindSpots && topDependencies.length > 0) {
     try {
-      // Get all interactions for cross-referencing
-      const recentInteractions = rawDb
-        .prepare(
-          `SELECT i.item_id, i.action_type, i.item_source, i.timestamp
-           FROM interactions i
-           WHERE i.action_type IN ('click', 'save')
-           ORDER BY i.timestamp DESC`,
-        )
-        .all() as InteractionRow[];
-
-      // Build set of recently engaged dependency names
       const now = Date.now();
 
       for (const dep of topDependencies) {

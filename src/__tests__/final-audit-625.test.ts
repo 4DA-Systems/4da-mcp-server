@@ -998,7 +998,7 @@ describe("maintenance notices never block a release; a malicious landing is repo
   });
   const leafFix = { id: "GHSA-synt-0000-0021", ranges: [{ introduced: "0", fixed: "1.1.0" }] };
   const unmaintained = (pkg: string) => ({ id: "GHSA-synt-0000-0099", summary: `${pkg} is unmaintained`, ranges: [{ introduced: "1.1.0" }] });
-  const leafStep = async (v: unknown) =>
+  const leafStep = async (v: Parameters<typeof planParentReleaseLine>[0]) =>
     ((await planParentReleaseLine(v)).recommendations as Array<Record<string, unknown>>).find((r) => r.package === "leaf")!;
 
   it("planner: a notice the installed copy lacks names the target and no `introduces`", async () => {

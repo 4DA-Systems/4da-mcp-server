@@ -60,7 +60,7 @@ export class HeldJudge {
    * another, after every registry read had finished).
    */
   prefetch(pkgs: string[]): void {
-    for (const pkg of new Set(pkgs)) this.readSpecs(pkg);
+    for (const pkg of new Set(pkgs)) void this.readSpecs(pkg);
   }
 
   private readSpecs(pkg: string): Promise<void> {

@@ -272,7 +272,6 @@ function createTestDatabase(): FourDADatabase {
   // Build a FourDADatabase without invoking the file-opening constructor.
   // The class stores its connection in a private field named `db`.
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = rawDb;
   return instance;
 }
@@ -1487,7 +1486,7 @@ describe("4DA MCP Tool Handlers", () => {
   // ---------------------------------------------------------------------------
   describe("agent and decision recall", () => {
     it("recalls agent memories from content, not just subject or tags", () => {
-      executeAgentMemory(db, {
+      void executeAgentMemory(db, {
         action: "store",
         session_id: "s1",
         agent_type: "codex",
@@ -1511,7 +1510,7 @@ describe("4DA MCP Tool Handlers", () => {
     });
 
     it("detects decision conflicts through aliases in rejected alternatives", async () => {
-      executeDecisionMemory(db, {
+      void executeDecisionMemory(db, {
         action: "record",
         subject: "local database",
         decision: "Use SQLite for local-first storage",
@@ -1530,14 +1529,14 @@ describe("4DA MCP Tool Handlers", () => {
     });
 
     it("returns relevant wisdom in pre-task briefings", async () => {
-      executeDecisionMemory(db, {
+      void executeDecisionMemory(db, {
         action: "record",
         subject: "MCP HTTP transport",
         decision: "Keep HTTP transport localhost-only until signed auth is enforced.",
         rationale: "Network exposure without signature verification is unsafe.",
         context_tags: ["mcp", "auth"],
       });
-      executeAgentMemory(db, {
+      void executeAgentMemory(db, {
         action: "store",
         session_id: "s2",
         agent_type: "codex",

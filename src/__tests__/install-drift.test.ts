@@ -22,7 +22,7 @@ import { restampDepContext } from "../live/osv-scanner.js";
 import { installFixFor, readInstalledVersion } from "../live/install-state.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
-import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
+import { standalonePlan } from "./helpers/standalone-plan.js";
 import type { FourDADatabase } from "../db.js";
 import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 
@@ -424,7 +424,7 @@ describe("dependency_health and upgrade_planner show the installed version", () 
 
   it("upgrade_planner turns a vulnerable installed copy of a patched lockfile into a reinstall step", async () => {
     const dir = project("4.13.5", "4.13.1");
-    const result = await executeUpgradePlanner(noDb, {}, offlineIntelWithScan(dir));
+    const result = await standalonePlan(noDb, {}, offlineIntelWithScan(dir));
 
     const hono = result.recommendations.find((r) => r.package === "hono");
     expect(hono).toBeDefined();

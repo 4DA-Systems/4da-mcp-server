@@ -12,7 +12,6 @@
  */
 
 import { isActionableVulnerability } from "../live/maintenance.js";
-import { presentedSeverity, SEVERITY_RANK, type SeverityTier } from "../live/severity-scope.js";
 import type { InstallDriftRecord, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -52,12 +51,6 @@ export function lockfileAlsoAffected(v: VulnerabilityEntry, all: VulnerabilityEn
       [x.vulnId, ...x.aliases].some((id) => ids.has(id)),
   );
 }
-
-const topTier = (entries: VulnerabilityEntry[]): SeverityTier =>
-  entries.map(presentedSeverity).reduce<SeverityTier>(
-    (a, b) => (SEVERITY_RANK[b] > SEVERITY_RANK[a] ? b : a),
-    "unknown",
-  );
 
 /** Group the actionable drift rows of a scan per (package, installed, locked). */
 export function groupDriftRows(vulns: VulnerabilityEntry[]): VulnerabilityEntry[][] {

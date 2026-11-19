@@ -58,7 +58,6 @@ function createTestDatabase(): FourDADatabase {
   const rawDb = new Database(":memory:");
   rawDb.exec(DECISIONS_SCHEMA);
   const instance = Object.create(FourDADatabase.prototype) as FourDADatabase;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (instance as any).db = rawDb;
   return instance;
 }
@@ -70,7 +69,7 @@ function record(
   alternatives: string[],
   tags: string[],
 ): void {
-  executeDecisionMemory(db, {
+  void executeDecisionMemory(db, {
     action: "record",
     subject,
     decision,
@@ -82,13 +81,12 @@ function record(
 
 describe("developer_decisions semantic recall", () => {
   let db: FourDADatabase;
-  let fetchMock: ReturnType<typeof installEmbeddingStub>;
 
   beforeEach(() => {
     process.env.FOURDA_EMBED_PROVIDER = "ollama";
     process.env.FOURDA_EMBED_MODEL = "test-embed";
     delete process.env.FOURDA_OFFLINE;
-    fetchMock = installEmbeddingStub();
+    installEmbeddingStub();
     db = createTestDatabase();
     // A decision that chose Postgres and rejected "mongo".
     record(

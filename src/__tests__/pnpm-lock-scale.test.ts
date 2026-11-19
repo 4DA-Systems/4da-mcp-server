@@ -6,7 +6,7 @@
  * hostile) pnpm project froze it (audit 6.2.5 C-8; 20k entries took 8 s).
  */
 import { describe, expect, it } from "vitest";
-import { readPnpmLock } from "../live/js-lockfile-readers.js";
+import { emptyReadReport, readPnpmLock } from "../live/js-lockfile-readers.js";
 
 function lockOf(n: number): string {
   const lines = ["lockfileVersion: '9.0'", "", "importers:", "  .:", "    dependencies:", "      pkg0:", "        specifier: ^1.0.0", "        version: 1.0.0", "", "packages:"];
@@ -22,7 +22,7 @@ describe("readPnpmLock scale", () => {
     const versions = new Map<string, string>();
     let added = 0;
     const started = Date.now();
-    readPnpmLock(text, versions, { add: () => added++ } as never, new Map());
+    readPnpmLock(text, versions, { add: () => added++ } as never, emptyReadReport());
     const ms = Date.now() - started;
     expect(versions.size).toBe(30_000);
     expect(added).toBeGreaterThanOrEqual(30_000);
