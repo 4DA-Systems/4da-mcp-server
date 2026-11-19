@@ -11,11 +11,11 @@ import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup } from "../liv
 import type { ProjectPython } from "../live/project-python.js";
 import { noteRegistryFacts } from "./dependency-check-facts.js";
 import { WAIT_DAYS } from "./dependency-check-signals.js";
-import { checkRange, compareIn, isPrereleaseIn, rangeAdmits, rangeNamesPrerelease } from "./dependency-check-versions.js";
-import type { HeldRangeFilter } from "./dependency-check-held.js";
+import { checkRange, compareIn, isPrereleaseIn, ownSafeInRange, rangeAdmits, rangeNamesPrerelease } from "./dependency-check-versions.js";
+import { judgedRangeCandidates as rangeCandidates, type HeldRangeFilter } from "./dependency-check-held.js";
 import { pythonRangeFilter } from "./dependency-check-python.js";
 import { npmPick, type NpmWhy } from "./dependency-check-resolution.js";
-import { lookupKey, provisional, yieldToEventLoop, type Requested, type Resolved } from "./dependency-check-items.js";
+import { installedNotJudged, lookupKey, provisional, yieldToEventLoop, type Requested, type Resolved } from "./dependency-check-items.js";
 import { fetchIndexes, type Lookups, type PassContext } from "./dependency-check-lookups.js";
 
 const DAY_MS = 86_400_000;
@@ -59,6 +59,43 @@ export async function redateGoTargets(ctx: PassContext, lookups: Lookups, items:
         : item,
     );
   }
+  return items;
+}
+
+/** What each release brings with it, judged; a constraint is then resolved again among the releases that bring nothing affected. */
+export async function judgeReleaseContents(ctx: PassContext, lookups: Lookups, items: Resolved[]): Promise<Resolved[]> {
+  const { requested, now, projectPython, supportsPython, judgeOf, judgeAll } = ctx;
+  const { indexes, advisoryLists } = lookups;
+  // What a release installs or requires comes with it (npm, audit 6.2.5 D-4: express 4.20.0
+  // exact-pins an affected qs; crates.io and PyPI: a requirement held at an affected release; Go: a
+  // required minimum with advisories). Judge `to` and, for a constraint, the smallest and newest
+  // safe releases in it, then pick again among the releases that bring nothing affected.
+  /** A release the registry lists: a requirement list is read for no other. */
+  const isListed = (i: Resolved) => {
+    const lookup = indexes.get(lookupKey(i));
+    return lookup?.status === "ok" && Boolean(lookup.data.releases[i.to]);
+  };
+  const isJudged = (i: Resolved) => !i.unresolved && judgeOf(i.ecosystem) !== null && (i.ecosystem === "npm" || isListed(i));
+  await judgeAll(
+    items.filter(isJudged).map((item) => {
+      const eco = item.ecosystem;
+      const lookup = indexes.get(lookupKey(item));
+      const advisories = advisoryLists.get(lookupKey(item));
+      // Only releases that could be picked are worth judging: on PyPI, those supporting the project's Python.
+      const ownSafe = item.rangeCheck && lookup?.status === "ok" && advisories
+        ? ownSafeInRange({ ecosystem: eco, index: lookup.data, range: item.rangeCheck.range, advisories, allowPrerelease: rangeNamesPrerelease(eco, item.rangeCheck.range) }).filter(supportsPython(item, lookup.data))
+        : [];
+      return { ecosystem: eco, pkg: item.package, versions: [item.to, ...rangeCandidates(eco, ownSafe, (v) => !item.from || compareIn(eco, v, item.from) > 0, installedNotJudged(item))] };
+    }),
+  );
+  items = items.map((item, i) => {
+    const filter = isJudged(item) && item.rangeCheck?.basis === "requested" ? judgeOf(item.ecosystem)!.rangeFilter(item.package) : null;
+    if (!filter) return item;
+    const r = requested[i];
+    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter, projectPython);
+  });
+  // `to` is what the constraint installs (resolvedRelease, round 8): judge it too (normally a no-op).
+  await judgeAll(items.filter(isJudged).map((item) => ({ ecosystem: item.ecosystem, pkg: item.package, versions: [item.to] })));
   return items;
 }
 

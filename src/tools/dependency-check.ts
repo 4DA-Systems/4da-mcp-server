@@ -92,7 +92,6 @@ import {
   ownSafeInRange,
   parseTarget,
   rangeAdmits,
-  rangeNamesPrerelease,
   type RangeCheck,
 } from "./dependency-check-versions.js";
 import { adviseNoSafeRelease, judgedRangeCandidates as rangeCandidates, minimumsCaveat, offerRequirementCleanOutside } from "./dependency-check-held.js";
@@ -121,7 +120,7 @@ import {
   type Resolved,
 } from "./dependency-check-items.js";
 import { offlineResults, screenItems } from "./dependency-check-screen.js";
-import { isYoung, redateGoTargets, resolveItems, resolveTarget } from "./dependency-check-resolve.js";
+import { isYoung, judgeReleaseContents, redateGoTargets, resolveItems } from "./dependency-check-resolve.js";
 import { adoptPublishedCrateNames, firstLookups, mapLimit, passContext, REGISTRY_CONCURRENCY, type AdvisoryListReader } from "./dependency-check-lookups.js";
 
 export interface DependencyCheckParams {
@@ -424,38 +423,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   await adoptPublishedCrateNames(ctx, lookups);
   let items = await resolveItems(ctx, lookups);
   items = await redateGoTargets(ctx, lookups, items);
-
-  // What a release installs or requires comes with it (npm, audit 6.2.5 D-4: express 4.20.0
-  // exact-pins an affected qs; crates.io and PyPI: a requirement held at an affected release; Go: a
-  // required minimum with advisories). Judge `to` and, for a constraint, the smallest and newest
-  // safe releases in it, then pick again among the releases that bring nothing affected.
-  const isNpm = (i: Resolved) => i.ecosystem === "npm" && !i.unresolved;
-  /** A release the registry lists: a requirement list is read for no other. */
-  const isListed = (i: Resolved) => {
-    const lookup = indexes.get(lookupKey(i));
-    return lookup?.status === "ok" && Boolean(lookup.data.releases[i.to]);
-  };
-  const isJudged = (i: Resolved) => !i.unresolved && judgeOf(i.ecosystem) !== null && (i.ecosystem === "npm" || isListed(i));
-  await judgeAll(
-    items.filter(isJudged).map((item) => {
-      const eco = item.ecosystem;
-      const lookup = indexes.get(lookupKey(item));
-      const advisories = advisoryLists.get(lookupKey(item));
-      // Only releases that could be picked are worth judging: on PyPI, those supporting the project's Python.
-      const ownSafe = item.rangeCheck && lookup?.status === "ok" && advisories
-        ? ownSafeInRange({ ecosystem: eco, index: lookup.data, range: item.rangeCheck.range, advisories, allowPrerelease: rangeNamesPrerelease(eco, item.rangeCheck.range) }).filter(supportsPython(item, lookup.data))
-        : [];
-      return { ecosystem: eco, pkg: item.package, versions: [item.to, ...rangeCandidates(eco, ownSafe, (v) => !item.from || compareIn(eco, v, item.from) > 0, installedNotJudged(item))] };
-    }),
-  );
-  items = items.map((item, i) => {
-    const filter = isJudged(item) && item.rangeCheck?.basis === "requested" ? judgeOf(item.ecosystem)!.rangeFilter(item.package) : null;
-    if (!filter) return item;
-    const r = requested[i];
-    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter, projectPython);
-  });
-  // `to` is what the constraint installs (resolvedRelease, round 8): judge it too (normally a no-op).
-  await judgeAll(items.filter(isJudged).map((item) => ({ ecosystem: item.ecosystem, pkg: item.package, versions: [item.to] })));
+  items = await judgeReleaseContents(ctx, lookups, items);
 
   // Round 8 (B7): the batch answer is held against what each package's own advisory list (/v1/query)
   // says about the same releases. Where every judged release is clean by the list, one release the
@@ -673,6 +641,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   }
   // Nothing in range is safe: never point at a release years older when a low or moderate advisory on a
   // held dependency is what stands in the way; say which, and how to clear it (Y3, nx -> 13.2.4).
+  const isNpm = (i: Resolved) => i.ecosystem === "npm" && !i.unresolved;
   for (const item of items.filter(isNpm)) {
     const lookup = indexes.get(lookupKey(item));
     if (!item.rangeCheck || lookup?.status !== "ok") continue;
