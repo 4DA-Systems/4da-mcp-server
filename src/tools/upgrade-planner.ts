@@ -35,10 +35,11 @@ import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
 import { appTracksProject, liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
-import { FIX_PATH_UNDETERMINED, reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
+import { FIX_PATH_UNDETERMINED, judgeDirectRequirements, reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
+import { MAX_REQUIRED_TARGETS, REQUIRES_AFFECTED_REASON, REQUIRES_CAP_REASON, REQUIRES_UNEXAMINED_REASON } from "../live/required-targets.js";
 import { unconfirmedTargetNote, withholdUnconfirmedTargets } from "./unconfirmed-targets.js";
 import { dedupeParentCommands } from "./upgrade-planner-dedupe.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
@@ -790,6 +791,8 @@ async function executeStandalonePlanner(
   // A direct bump must not stop at a release that still pins a vulnerable transitive a slightly
   // newer release clears (express 4.20.0 still pins path-to-regexp 0.1.10; audit H1).
   await reconcileDirectTargets(limited, verifiedInputs, liveIntel);
+  // Go, crates.io, PyPI: a direct target is judged by what the release itself requires (required-targets.ts).
+  await judgeDirectRequirements(limited, liveIntel);
   // A transitive fix that needs a major upgrade of what the project declares is breaking.
   settleTransitiveBreaking(limited);
   // One command per move: two parents reached through one direct dependency name its upgrade once (r7).
@@ -863,6 +866,18 @@ async function executeStandalonePlanner(
   if (heldRows.length > 0) {
     parts.push(
       `${heldRows.length} fix target${heldRows.length !== 1 ? "s" : ""} NOT a clean fix: the release exact-pins, narrowly ranges or holds a range whose newest release is affected, or what it holds could not be checked (see reasons; confirm with dependency_check)`,
+    );
+  }
+  // Go, crates.io, PyPI: which of those the target's own requirements decided, and how many were not examined (required-targets.ts).
+  const requiresAffected = heldRows.filter((r) => r.reasons.some((x) => REQUIRES_AFFECTED_REASON.test(x))).length;
+  const requiresUnexamined = heldRows.filter((r) => r.reasons.some((x) => REQUIRES_UNEXAMINED_REASON.test(x)));
+  if (requiresAffected > 0) {
+    parts.push(`${requiresAffected} of them because the target's own requirements (a Go go.mod, a crate's or PyPI release's requirements) carry advisories: the reasons name which, how many, and what to raise afterwards`);
+  }
+  if (requiresUnexamined.length > 0) {
+    const capped = requiresUnexamined.filter((r) => r.reasons.some((x) => REQUIRES_CAP_REASON.test(x))).length;
+    parts.push(
+      `${requiresUnexamined.length} target${requiresUnexamined.length !== 1 ? "s" : ""} whose own requirements were not examined${capped > 0 ? ` (${capped} past the ${MAX_REQUIRED_TARGETS} a call examines)` : ""}: not a clean fix until dependency_check examines ${requiresUnexamined.length === 1 ? "it" : "them"}`,
     );
   }
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);

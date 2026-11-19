@@ -55,10 +55,13 @@ describe("a direct Go upgrade whose fixed release declares a newer go directive"
 
   it("says the check did not run when the proxy gives no go.mod for the release", async () => {
     goProject();
-    // No .mod served for v0.41.0: what Go it needs is unread, and said, not assumed fine.
+    // No .mod served for v0.41.0: what Go it needs is unread, and said, not assumed fine. What the
+    // release requires is in the same go.mod, so it was not examined either: the target is not a
+    // clean fix, and is named only in the reasons (required-targets.ts).
     const { step } = await h.plan();
     const row = step("golang.org/x/text");
-    expect(row).toMatchObject({ action: "upgrade_direct", targetVersion: "v0.41.0" });
+    expect(row).toMatchObject({ action: "upgrade_direct", targetVersion: null });
     expect(row.reasons.join(" ")).toMatch(/whether golang\.org\/x\/text v0\.41\.0 needs a newer Go than go\.mod's go 1\.21 was NOT CHECKED/);
+    expect(row.reasons.join(" ")).toMatch(/what v0\.41\.0 itself requires was not examined/);
   });
 });

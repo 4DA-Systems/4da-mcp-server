@@ -24,6 +24,7 @@
  * cached, and any failure degrades to the old answer, never to a guess.
  */
 
+import { withinCallBudget } from "../call-budget.js";
 import { isShellSafeCargoTarget, isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -47,6 +48,8 @@ import { CRATES_USER_AGENT } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
+import { requiresNote, withRequiredTargets } from "./required-targets.js";
+import type { RequirementEcosystem, RequirementSources } from "./release-requirements.js";
 import { confirmTargets } from "./batch-confirm.js";
 import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
@@ -703,6 +706,14 @@ export type FixTargetResult = CleanTarget & {
   heldBlocked?: { affected: HeldDependency[]; searched: string[]; unchecked?: string[] };
   /** Whether the target's held dependencies are affected could not be checked, and why: not a clean fix either. */
   heldUnchecked?: string;
+  /**
+   * Go, crates.io, PyPI (required-targets.ts): the target's own requirements carry advisories (a Go
+   * go.mod minimum, a crates.io or PyPI requirement whose newest admitted release is affected): not a
+   * clean fix. `examined`: how many requirements were judged.
+   */
+  requiresAffected?: { affected: HeldDependency[]; examined: number };
+  /** Go, crates.io, PyPI: what the target requires was not examined, and why: not a clean fix either. */
+  requiresUnchecked?: string;
   /** The newest stable release no advisory leaves unclean, when it is above `target` (withLineFacts). */
   newestSafe?: string;
   /** No release on the installed version's line above it clears every advisory: `target` is on the nearest later line that has one (withLineFacts). */
@@ -730,7 +741,12 @@ export type FixTargetResult = CleanTarget & {
  * version was judged clean (audit 6.2.5 D-4).
  */
 export function targetCheckedAll(clean: FixTargetResult): boolean {
-  return !clean.advisoriesUnread && !clean.heldBlocked && clean.heldUnchecked === undefined;
+  return !clean.advisoriesUnread && !clean.heldBlocked && clean.heldUnchecked === undefined && !clean.requiresAffected && clean.requiresUnchecked === undefined;
+}
+
+/** Whether what the target holds or requires makes it not a clean fix, or was not judged (held and required checks). */
+export function targetUnclean(clean: FixTargetResult): boolean {
+  return Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined || Boolean(clean.requiresAffected) || clean.requiresUnchecked !== undefined;
 }
 
 /** A target above every release the registry listed (CleanTarget.aboveListed), in plain words. */
@@ -739,10 +755,14 @@ export function aboveListedText(target: string): string {
 }
 
 /** A reason heldNote writes for a target that is not a clean fix (heldBlocked / heldUnchecked): the plan summary counts those rows apart. */
-export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|(?:exact-pins or narrowly ranges|holds) are affected was NOT CHECKED \(/;
+export const HELD_UNCLEAN_REASON = /is NOT a clean fix: confirm a release with dependency_check before pinning it|(?:exact-pins or narrowly ranges|holds) are affected was NOT CHECKED \(|itself requires was not examined \(/;
 
-/** The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked), or null when there is nothing to say. */
-export function heldNote(clean: FixTargetResult): string | null {
+/**
+ * The words for a target's held dependencies (FixTargetResult.heldFrom / heldBlocked / heldUnchecked)
+ * or, on Go, crates.io and PyPI, its requirements (requiresAffected / requiresUnchecked), or null
+ * when there is nothing to say.
+ */
+export function heldNote(clean: FixTargetResult, ecosystem = ""): string | null {
   if (clean.heldFrom && clean.heldPast && clean.heldPast.length > 0 && clean.target) {
     const [first, ...rest] = clean.heldPast;
     const names = [...new Set(rest.flatMap((p) => p.affected.map((d) => d.name)))];
@@ -762,7 +782,7 @@ export function heldNote(clean: FixTargetResult): string | null {
   if (clean.heldUnchecked !== undefined && clean.target) {
     return `whether the dependencies ${clean.target} holds are affected was NOT CHECKED (${clean.heldUnchecked}): confirm it with dependency_check before pinning it`;
   }
-  return null;
+  return requiresNote(clean, ecosystem);
 }
 
 /**
@@ -1102,7 +1122,11 @@ export async function verifyFixTargets(
   items: Array<{ key: string; ecosystem: OsvEcosystem; name: string; fixes: string[]; installed?: string; ids?: string[] }>,
   budgetMs: number,
   concurrency = 12,
-  options: { heldQuery?: AdvisoryQuery } = {},
+  options: {
+    heldQuery?: AdvisoryQuery;
+    /** Go, crates.io, PyPI: the items (by key) whose target is judged by what it requires (required-targets.ts). */
+    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null };
+  } = {},
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
   const todo = items.filter((i) => i.fixes.length > 0 || i.installed);
@@ -1147,6 +1171,14 @@ export async function verifyFixTargets(
     const held = await withHeldTargets(sources, options.heldQuery, npm, Math.max(deadline, Date.now() + HELD_FLOOR_MS));
     for (const [key, clean] of held) out.set(key, clean);
   }
+  const req = options.requirements;
+  if (options.heldQuery && req) {
+    // Go, crates.io, PyPI: what each direct target itself requires, in one advisory lookup, with the
+    // same floor as npm's held check and never past the call's own budget.
+    const items = todo.filter((i) => req.keys.has(i.key) && out.has(i.key)).map((i) => ({ key: i.key, ecosystem: i.ecosystem, name: i.name, clean: out.get(i.key)! }));
+    const until = Date.now() + withinCallBudget(Math.max(deadline - Date.now(), HELD_FLOOR_MS), 500);
+    for (const [key, clean] of await withRequiredTargets(req.sources, options.heldQuery, items, until, req.selected)) out.set(key, clean);
+  }
   return out;
 }
 
@@ -1165,11 +1197,11 @@ export function targetNote(clean: FixTargetResult, ecosystem = ""): string | nul
     // The advisory-side reasoning is about the release the advisories pointed at; the held step follows it.
     const { heldFrom, heldPast: _past, targetNotice, ...rest } = clean;
     const base = targetNote({ ...rest, target: heldFrom }, ecosystem);
-    return [base, heldNote(clean), targetNotice ?? null].filter((p): p is string => Boolean(p)).join("; ") || null;
+    return [base, heldNote(clean, ecosystem), targetNotice ?? null].filter((p): p is string => Boolean(p)).join("; ") || null;
   }
-  const held = heldNote(clean);
+  const held = heldNote(clean, ecosystem);
   if (held) {
-    const { heldBlocked: _b, heldUnchecked: _u, ...rest } = clean;
+    const { heldBlocked: _b, heldUnchecked: _u, requiresAffected: _ra, requiresUnchecked: _ru, ...rest } = clean;
     return [targetNote(rest, ecosystem), held].filter((p): p is string => Boolean(p)).join("; ");
   }
   const withheld = withheldText(clean, ecosystem);

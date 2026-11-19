@@ -57,6 +57,12 @@ function stubNetwork() {
       const q = JSON.parse(String(init?.body)) as { package: { name: string } };
       return json({ vulns: ADVISORIES[q.package.name] ?? [] });
     }
+    // One release's own document: what it requires (none here), read to judge a target's requirements.
+    const pypiOne = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
+    if (pypiOne) {
+      const known = RELEASES[decodeURIComponent(pypiOne[1]).toLowerCase()]?.includes(decodeURIComponent(pypiOne[2]));
+      return known ? json({ info: { requires_dist: null, requires_python: null } }) : json({}, 404);
+    }
     const pypi = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
     if (pypi) {
       const name = decodeURIComponent(pypi[1]).toLowerCase();

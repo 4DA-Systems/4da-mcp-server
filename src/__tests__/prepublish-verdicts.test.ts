@@ -110,6 +110,8 @@ describe("S7: a go.mod `replace` decides what is built", () => {
         if (url.includes("/v1/vulns/")) return json(GIN);
         if (url === "https://api.osv.dev/v1/query") return json({ vulns: [GIN] });
         if (url.endsWith("/@v/list")) return new Response("v1.6.0\nv1.6.3\nv1.9.1\n");
+        // The target's own go.mod (it requires nothing here), read to judge what the target brings in.
+        if (url.endsWith("/@v/v1.9.1.mod")) return new Response("module github.com/gin-gonic/gin\n\ngo 1.18\n");
         if (url.endsWith("/@latest")) return json({ Version: "v1.9.1", Time: "2023-06-01T00:00:00Z" });
         if (/\/@v\/v[^/]+\.info$/.test(url)) return json({ Version: "v1.9.1", Time: "2023-06-01T00:00:00Z" });
         return json({}, 404);

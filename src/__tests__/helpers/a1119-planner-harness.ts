@@ -49,6 +49,8 @@ export interface Harness {
   GO: Record<string, string[]>;
   /** "module@vX" -> the go directive of that version's go.mod ("" for a go.mod that declares none; absent: not served). */
   GOMOD: Record<string, string>;
+  /** "module@vX" -> the `require` lines of that version's go.mod ("path vY"; served with GOMOD's entry). */
+  GOREQ: Record<string, string[]>;
   /** Hosts that refuse every connection (the registry is unreachable). */
   down: Set<string>;
   /** Every URL asked, in order. */
@@ -74,6 +76,7 @@ export function createHarness(): Harness {
     PYPI: {},
     GO: {},
     GOMOD: {},
+    GOREQ: {},
     down: new Set(),
     requests: [],
     write(file, body) {
@@ -173,7 +176,9 @@ export function createHarness(): Harness {
       const directive = h.GOMOD[`${goMod[1]}@${goMod[2]}`];
       if (directive === undefined) return new Response("not found", { status: 404 });
       // "" is a go.mod with no go directive, as old module versions have.
-      return new Response(`module ${goMod[1]}\n${directive ? `\ngo ${directive}\n` : ""}`, { status: 200 });
+      const requires = h.GOREQ[`${goMod[1]}@${goMod[2]}`] ?? [];
+      const block = requires.length > 0 ? `\nrequire (\n${requires.map((r) => `\t${r}\n`).join("")})\n` : "";
+      return new Response(`module ${goMod[1]}\n${directive ? `\ngo ${directive}\n` : ""}${block}`, { status: 200 });
     }
     const go = /^https:\/\/proxy\.golang\.org\/(.+)\/@v\/(list|v[^/]+\.info)$/.exec(url);
     if (go) {

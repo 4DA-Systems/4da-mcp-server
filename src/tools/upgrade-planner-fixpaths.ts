@@ -44,6 +44,7 @@ import {
   refreshVerdict,
   REGISTRY_UNREAD_NOTE,
   targetNote,
+  targetUnclean,
   introducesText,
   malwareText,
   unreadableText,
@@ -54,6 +55,8 @@ import {
   type RefreshVerdict,
   type RequirementHistory,
 } from "../live/fix-paths.js";
+import { isRequirementEcosystem, requirementSources } from "../live/release-requirements.js";
+import { requiresNote, selectedGoModules, withRequiredTargets } from "../live/required-targets.js";
 import { lockfileParentIndex, prepareLockfileParents, readLockfileParents, type LockfileFormat, type ParentEdge } from "../live/lockfile-parents.js";
 import { advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { projectOverride } from "../live/overrides.js";
@@ -213,7 +216,7 @@ export interface FixPathInput {
 }
 
 type Intel = Pick<LiveIntelligence, "getFixPathSources" | "lockfileFor" | "getProjectRoot" | "getResolvedDeps"> &
-  Partial<Pick<LiveIntelligence, "queryAdvisories">>;
+  Partial<Pick<LiveIntelligence, "queryAdvisories" | "getReleaseSources" | "getAuditDeps">>;
 
 /** Time a parent's or lever's advisory list may spend being confirmed by the batch query (batch-confirm.ts). */
 const LIST_CONFIRM_MS = 5_000;
@@ -402,7 +405,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     const held = await withHeldTargets(sources, heldQuery, [{ key: "step", name: step.package, installed: step.currentVersion, clean }], Date.now() + HELD_BUDGET_MS);
     clean = held.get("step") ?? clean;
   }
-  const heldUnclean = clean ? Boolean(clean.heldBlocked) || clean.heldUnchecked !== undefined : false;
+  const heldUnclean = clean ? targetUnclean(clean) : false;
   // Code this host never builds still names a release, and it is checked like any other: the plan
   // named crypto-bigint 0.7.6, which crates.io yanked, for a crate not built on Windows (audit
   // 2026-11-11). The target is settled first; then how it is reached where the copy IS built, kept
@@ -445,7 +448,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
       step.withheld = clean.withheld;
       step.reasons.push(passed);
     }
-    const heldWords = heldNote(clean);
+    const heldWords = heldNote(clean, ecosystem);
     if (heldWords) step.reasons.push(heldWords);
     setTarget(step, clean.target);
     step.breaking = step.scope === "direct" && step.upgradeType === "major";
@@ -542,7 +545,7 @@ async function verifyOne(input: FixPathInput, sources: FixPathSources, liveIntel
     // The withdrawn releases passed, in the registry's words: "4.18.0 is deprecated on npm (...); 4.18.1 is the smallest clean release".
     if (withheld) step.reasons.push(withheld);
   }
-  const heldWords = heldNote(clean);
+  const heldWords = heldNote(clean, ecosystem);
   if (heldWords) step.reasons.push(heldWords);
   if (clean.aboveListed) step.reasons.push(aboveListedText(clean.target));
   if (step.targetVersion !== clean.target) setTarget(step, clean.target);
@@ -2237,6 +2240,40 @@ function judgeRaisedHolds(own: FixPathStep, release: string, check: HeldCheck | 
       ? `${heldText(release, check.affected)}: installing ${release} installs them, so ${release} is NOT a clean fix: confirm a release with dependency_check before pinning it`
       : `whether the dependencies ${release} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`,
   );
+}
+
+/**
+ * Go, crates.io, PyPI: each direct upgrade's final target (after reconcileDirectTargets raised it)
+ * judged by what that release itself requires, as dependency_check judges it: gin v1.9.1's go.mod
+ * requires old x/crypto, x/net and protobuf, so "upgrade to v1.9.1" is not a clean fix. A target
+ * whose requirements carry advisories, or could not be read, is no longer checked against every
+ * advisory (its targetVersion is withheld downstream) and its reasons say which, how many and what
+ * to raise, or that they were not examined. One advisory lookup for all of them, at most
+ * MAX_REQUIRED_TARGETS per call (required-targets.ts), within the call's budget.
+ */
+export async function judgeDirectRequirements(steps: FixPathStep[], liveIntel: Intel, budgetMs = withinCallBudget(HELD_BUDGET_MS, 500)): Promise<void> {
+  const sources = liveIntel.getFixPathSources();
+  const query = liveIntel.queryAdvisories?.bind(liveIntel);
+  if (!sources || !query || !liveIntel.getReleaseSources) return;
+  const rows = steps.filter(
+    (s) => s.scope === "direct" && s.action === "upgrade_direct" && s.targetVersion && s.fixPathChecked === "all_advisories" && isRequirementEcosystem(s.ecosystem),
+  );
+  if (rows.length === 0) return;
+  const items = rows.map((s, i) => ({ key: String(i), ecosystem: s.ecosystem, name: s.package, clean: { target: s.targetVersion } as FixTargetResult }));
+  const judged = await withRequiredTargets(
+    requirementSources(liveIntel.getReleaseSources(), sources),
+    query,
+    items,
+    Date.now() + budgetMs,
+    selectedGoModules([...liveIntel.getResolvedDeps(), ...(liveIntel.getAuditDeps?.() ?? [])]),
+  );
+  for (const [key, clean] of judged) {
+    const step = rows[Number(key)];
+    const words = requiresNote(clean, step.ecosystem);
+    if (!words) continue;
+    step.reasons.push(words);
+    step.fixPathChecked = "installed_advisories_only";
+  }
 }
 
 /** At most this many raised releases' held checks run at once (pre-publish round 10, W16). */

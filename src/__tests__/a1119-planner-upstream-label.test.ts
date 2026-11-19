@@ -44,6 +44,8 @@ describe("a blocking parent that is the project's own direct dependency (uv.lock
       },
       idna: { "2.10": {}, "3.7": { requiresPython: ">=3.5" }, "3.15": { requiresPython: ">=3.8" } },
       urllib3: { "1.26.5": {}, "1.26.20": {}, "2.8.0": { requiresPython: ">=3.9" } },
+      // What requests 2.33.0 requires is judged too: each requirement needs a readable release list.
+      certifi: { "2024.2.2": {} },
     };
     h.write("pyproject.toml", `[project]\nname = "example"\nversion = "0.1.0"\nrequires-python = "${requiresPython}"\ndependencies = ["requests==2.25.1"]\n`);
     h.write("uv.lock", [
