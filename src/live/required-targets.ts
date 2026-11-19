@@ -67,6 +67,8 @@ export async function withRequiredTargets(
   items: RequiredTargetItem[],
   deadline: number,
   selected?: (ecosystem: RequirementEcosystem, name: string) => string | null,
+  /** PyPI: the Python versions the project declares (RequirementOptions.pythons). */
+  pythons?: readonly string[] | null,
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
   const examined = examinedThisCall();
@@ -84,7 +86,7 @@ export async function withRequiredTargets(
   if (releases.length === 0) return out;
   let answer: Awaited<ReturnType<typeof requirementAdvisories>>;
   try {
-    answer = await requirementAdvisories(sources, query, releases, { deadline, ...(selected ? { selected } : {}) });
+    answer = await requirementAdvisories(sources, query, releases, { deadline, ...(selected ? { selected } : {}), pythons: pythons ?? null });
   } catch (err) {
     const why = `the check failed: ${err instanceof Error ? err.message.slice(0, 120) : "unknown error"}`;
     for (const r of releases) out.set(r.key, { ...items.find((i) => i.key === r.key)!.clean, requiresUnchecked: why });

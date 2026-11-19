@@ -191,6 +191,8 @@ export class RequirementJudge {
     private readonly sources: RequirementSources | null,
     private readonly query: AdvisoryQuery,
     private readonly selected?: (ecosystem: RequirementEcosystem, name: string) => string | null,
+    /** PyPI: the Python versions the project declares (RequirementOptions.pythons). */
+    private readonly pythons?: readonly string[] | null,
   ) {}
 
   private key(ecosystem: string, pkg: string, version: string): string {
@@ -215,7 +217,7 @@ export class RequirementJudge {
       }
     }
     if (releases.size === 0) return;
-    const answer = await requirementAdvisories(this.sources, this.query, [...releases.values()], { deadline: this.deadlineAt, ...(this.selected ? { selected: this.selected } : {}) });
+    const answer = await requirementAdvisories(this.sources, this.query, [...releases.values()], { deadline: this.deadlineAt, ...(this.selected ? { selected: this.selected } : {}), pythons: this.pythons ?? null });
     for (const [key, check] of answer) this.checks.set(key, check);
   }
 

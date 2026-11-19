@@ -80,6 +80,13 @@ export interface HeldDependency {
   indirect?: true;
   /** Go: the smallest release that clears `ids`, confirmed with OSV.dev; null when none is known. */
   fixedIn?: string | null;
+  /**
+   * PyPI: an environment marker gates the requirement (release-requirements.ts). `marker` is its
+   * canonical text (null when it did not parse); `on` the declared Pythons it is installed on, when
+   * only some; `uncertain` when whether it is installed for this project was not established (no
+   * declared Python, or a platform variable): then it is a caveat, never by itself an avoid.
+   */
+  condition?: { marker: string | null; on?: string[]; uncertain?: true };
 }
 
 export type HeldCheck =
@@ -282,15 +289,26 @@ export function heldVerb(affected: HeldDependency[]): string {
 export function heldText(release: string, affected: HeldDependency[]): string {
   const shown = affected.slice(0, 3);
   const and = andList;
-  const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})`);
+  const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})${conditionText(d)}`);
   const ranged = shown
     .filter((d) => !d.exact)
     // PyPI: a requirement with no specifier admits every release.
-    .map((d) => `${d.name} ${d.spec === "" ? "(any release)" : `"${d.spec}"`}, whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})`);
+    .map((d) => `${d.name} ${d.spec === "" ? "(any release)" : `"${d.spec}"`}, whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})${conditionText(d)}`);
   const clauses = [...(exact.length > 0 ? [`exact-pins ${and(exact)}`] : []), ...(ranged.length > 0 ? [`requires ${and(ranged)}`] : [])];
   const rest = affected.length - shown.length;
   const more = rest > 0 ? `, and ${rest} more affected dependenc${rest === 1 ? "y" : "ies"}` : "";
   return `${release} ${clauses.join("; it also ")}${more}`;
+}
+
+/** PyPI: when a marker gates the requirement, on which Pythons it applies or that this was not established. */
+export function conditionText(d: HeldDependency): string {
+  const c = d.condition;
+  if (!c) return "";
+  const where = c.marker ? `only where ${c.marker}` : "only where an environment marker that could not be read holds";
+  if (!c.uncertain) return ` [installed ${where}: on Python ${andList(c.on ?? [])} of the versions this project declares]`;
+  if (c.on) return ` [installed ${where}: it may apply on Python ${andList(c.on)} of the versions this project declares, depending on the platform, which was not established]`;
+  const python = c.marker !== null && /\bpython_(?:full_)?version\b/.test(c.marker);
+  return ` [installed ${where}: ${python ? "this project declares no Python version this check read" : "it depends on the platform or interpreter"}, so whether it applies was not established]`;
 }
 
 /** The worst severity among held dependencies' advisories. */

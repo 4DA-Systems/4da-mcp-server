@@ -1125,7 +1125,7 @@ export async function verifyFixTargets(
   options: {
     heldQuery?: AdvisoryQuery;
     /** Go, crates.io, PyPI: the items (by key) whose target is judged by what it requires (required-targets.ts). */
-    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null };
+    requirements?: { sources: RequirementSources; keys: Set<string>; selected?: (ecosystem: RequirementEcosystem, name: string) => string | null; pythons?: readonly string[] | null };
   } = {},
 ): Promise<Map<string, FixTargetResult>> {
   const out = new Map<string, FixTargetResult>();
@@ -1177,7 +1177,7 @@ export async function verifyFixTargets(
     // same floor as npm's held check and never past the call's own budget.
     const items = todo.filter((i) => req.keys.has(i.key) && out.has(i.key)).map((i) => ({ key: i.key, ecosystem: i.ecosystem, name: i.name, clean: out.get(i.key)! }));
     const until = Date.now() + withinCallBudget(Math.max(deadline - Date.now(), HELD_FLOOR_MS), 500);
-    for (const [key, clean] of await withRequiredTargets(req.sources, options.heldQuery, items, until, req.selected)) out.set(key, clean);
+    for (const [key, clean] of await withRequiredTargets(req.sources, options.heldQuery, items, until, req.selected, req.pythons)) out.set(key, clean);
   }
   return out;
 }

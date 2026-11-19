@@ -562,6 +562,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
       return liveIntel.queryAdvisories(deps);
     },
     selectedGoVersions(liveIntel),
+    projectPython?.covers ?? null,
   );
   /** The judge of what an ecosystem's releases bring with them; null where nothing is read (a source without requirement lists). */
   const judgeOf = (ecosystem: CheckEcosystem): ReleaseJudge | null => (ecosystem === "npm" ? held : reqs.of(ecosystem));

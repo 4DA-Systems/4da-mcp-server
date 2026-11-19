@@ -90,6 +90,8 @@ export interface ReleaseRequirement {
   indirect?: true;
   /** PyPI: an environment marker (Python version, platform) decides whether it is installed. */
   conditional?: true;
+  /** PyPI: that marker in canonical PEP 508 form (pep508-marker.ts); absent when it did not parse. */
+  marker?: string;
 }
 
 /** What one release requires, as its registry publishes it. */

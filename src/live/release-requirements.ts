@@ -27,6 +27,18 @@ import { compareVersions, isComparable, parsePep440 } from "./version-compare.js
 import type { OsvEcosystem, ResolvedDependency } from "./types.js";
 import { pep440SpecAdmits, rangeNamesPrerelease } from "../tools/dependency-check-versions.js";
 import { quoteThirdParty } from "../untrusted-text.js";
+import { markerApplies } from "./pep508-marker.js";
+
+/** PyPI: whether a marker-gated requirement is installed for the project, as HeldDependency.condition; "drop" when on none of its Pythons. */
+function requirementCondition(requirement: ReleaseRequirement, pythons: readonly string[] | null | undefined): HeldDependency["condition"] | "drop" | undefined {
+  if (!requirement.conditional) return undefined;
+  if (requirement.marker === undefined) return { marker: null, uncertain: true };
+  const applies = markerApplies(requirement.marker, pythons);
+  if (applies.kind === "none") return "drop";
+  if (applies.kind === "all") return undefined;
+  if (applies.kind === "some") return { marker: requirement.marker, on: applies.on };
+  return { marker: requirement.marker, uncertain: true, ...(applies.on ? { on: applies.on } : {}) };
+}
 
 /** The registries whose releases' requirements are read here (npm: held-dependencies.ts). */
 export type RequirementEcosystem = "crates.io" | "PyPI" | "Go";
@@ -73,6 +85,13 @@ export interface RequirementOptions {
   deadline: number;
   /** Go: the version of a module the project's own go.mod / go.sum already selects, or null. */
   selected?: (ecosystem: RequirementEcosystem, name: string) => string | null;
+  /**
+   * PyPI: the Python versions the project declares (project-python.ts `covers`), or null when it
+   * declares none. A requirement whose environment marker no declared Python satisfies is dropped;
+   * one that applies on some is judged and says on which; one whose marker cannot be settled
+   * (no declared Python, a platform variable) is judged as a caveat (`condition.uncertain`).
+   */
+  pythons?: readonly string[] | null;
 }
 
 export interface RequirementRelease {
@@ -128,6 +147,7 @@ async function pooled<T>(items: T[], limit: number, deadline: number, work: (ite
 
 interface Judged {
   requirement: ReleaseRequirement;
+  condition?: HeldDependency["condition"];
   /** The version an install gets; null when it could not be resolved. */
   version: string | null;
   exact: boolean;
@@ -158,8 +178,10 @@ export async function requirementAdvisories(
     if (lookup.status !== "ok") out.set(release.key, { status: "unchecked", reason: `its requirement list could not be read from ${REGISTRY_NAME[release.ecosystem]} (${quoteThirdParty(lookup.detail, 120)})` });
     else {
       const cap = MAX_REQUIREMENTS_EXAMINED[release.ecosystem];
-      if (lookup.data.requirements.length > cap) cut.set(release.key, lookup.data.requirements.length);
-      lists.set(release.key, { ...lookup.data, requirements: lookup.data.requirements.slice(0, cap) });
+      // A requirement no declared Python installs is not one of this project's (PyPI markers).
+      const applying = lookup.data.requirements.filter((r) => requirementCondition(r, options.pythons) !== "drop");
+      if (applying.length > cap) cut.set(release.key, applying.length);
+      lists.set(release.key, { ...lookup.data, requirements: applying.slice(0, cap) });
       readable.push(release);
     }
   });
@@ -192,7 +214,8 @@ export async function requirementAdvisories(
         return { requirement, version: raised ? own : requirement.spec, exact: false, selected: raised };
       }
       const resolved = resolveRequirement(eco, requirement.spec, facts.get(`${eco}\0${requirement.name}`));
-      return { requirement, version: resolved?.version ?? null, exact: resolved?.exact ?? false, selected: false };
+      const condition = requirementCondition(requirement, options.pythons);
+      return { requirement, version: resolved?.version ?? null, exact: resolved?.exact ?? false, selected: false, ...(condition && condition !== "drop" ? { condition } : {}) };
     });
     judged.set(release.key, rows);
     for (const row of rows) if (row.version) wanted.set(`${eco}\0${row.requirement.name}@${row.version}`, lookupDep(eco, row.requirement.name, row.version));
@@ -227,6 +250,7 @@ export async function requirementAdvisories(
           ...(release.ecosystem === "Go" ? { minimum: true as const, fixedIn: null } : {}),
           ...(row.selected ? { selected: true as const } : {}),
           ...(row.requirement.indirect ? { indirect: true as const } : {}),
+          ...(row.condition ? { condition: row.condition } : {}),
         },
       ];
     });

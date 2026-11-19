@@ -75,6 +75,7 @@ import { aimAtDeclaringMembers } from "./declaring-members.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
 import { pythonParentMove } from "./upgrade-planner-pyparent.js";
 import { yieldIfDue } from "../live/yield-point.js";
+import { readProjectPython } from "../live/project-python.js";
 
 /** One dependency the project declares that moves a blocking parent. */
 export interface ParentLever {
@@ -2266,6 +2267,7 @@ export async function judgeDirectRequirements(steps: FixPathStep[], liveIntel: I
     items,
     Date.now() + budgetMs,
     selectedGoModules([...liveIntel.getResolvedDeps(), ...(liveIntel.getAuditDeps?.() ?? [])]),
+    rows.some((s) => s.ecosystem === "PyPI") ? (readProjectPython(liveIntel.getProjectRoot() ?? process.cwd())?.covers ?? null) : null,
   );
   for (const [key, clean] of judged) {
     const step = rows[Number(key)];

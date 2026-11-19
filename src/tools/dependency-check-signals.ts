@@ -208,11 +208,20 @@ export function advisoriesSignal(item: CheckItem, facts: AdvisoryFacts, held?: H
     };
   }
   if (held.affected.every((d) => d.minimum)) return minimumsSignal(item, own, held.affected, held.examined ?? held.affected.length);
-  const severity = heldSeverity(held.affected);
+  // PyPI: a requirement whose marker was not established to apply is a caveat, never by itself an avoid.
+  const certain = held.affected.filter((d) => !d.condition?.uncertain);
+  const severity = heldSeverity(certain);
   // A held advisory whose record could not be read counts as high, as one on `to` does.
-  const heldEffect: SignalEffect = severity === "critical" || severity === "high" || held.affected.some((d) => d.unread) ? "avoid" : "review";
+  const heldEffect: SignalEffect = severity === "critical" || severity === "high" || certain.some((d) => d.unread) ? "avoid" : "review";
   const effect = own.effect === "avoid" || heldEffect === "avoid" ? "avoid" : "review";
-  const affected = held.affected.map((d) => ({ package: d.name, spec: d.spec, installs: d.version, advisories: d.ids, severity: d.severity }));
+  const affected = held.affected.map((d) => ({
+    package: d.name,
+    spec: d.spec,
+    installs: d.version,
+    advisories: d.ids,
+    severity: d.severity,
+    ...(d.condition ? { installed_only_where: d.condition.marker, ...(d.condition.on ? { on_pythons: d.condition.on } : {}), ...(d.condition.uncertain ? { applies: "not established" } : {}) } : {}),
+  }));
   const heldNote = `${heldText(item.to, held.affected)}: installing ${item.to} installs ${held.affected.length === 1 ? "it" : "them"}.`;
   return {
     id: "advisories",
