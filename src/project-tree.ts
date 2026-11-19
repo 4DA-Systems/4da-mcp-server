@@ -719,22 +719,25 @@ export function discoveryFor(root: string): TreeDiscovery {
 }
 
 /** A lockfile problem as the notes read it (lockfile-types.ts LockfileProblem). */
-export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true };
+export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true };
 
 /**
  * The kinds, kept apart: a file that could not be read (UNREADABLE), one read
  * but not all of it (PARTIAL: entries skipped, `skipped`, audit L5; or
  * truncated or damaged, `partial`), a requirements include refused because it
- * points outside the project (`refused`, B-11), and a second lockfile that
- * disagrees with the one that was read (`conflict`).
+ * points outside the project (`refused`, B-11), a second lockfile that
+ * disagrees with the one that was read (`conflict`), and one read whole but not
+ * compared with the manifests that declare its dependencies (`notCrossChecked`).
  */
-export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[] } {
+export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[]; uncrossed: P[] } {
   const isPartial = (p: P) => Boolean(p.skipped) || p.partial === true;
+  const other = (p: P) => p.refused === true || p.conflict === true || p.notCrossChecked === true;
   return {
-    unreadable: problems.filter((p) => !isPartial(p) && !p.refused && !p.conflict),
-    partial: problems.filter((p) => isPartial(p) && !p.refused && !p.conflict),
+    unreadable: problems.filter((p) => !isPartial(p) && !other(p)),
+    partial: problems.filter((p) => isPartial(p) && !other(p)),
     refused: problems.filter((p) => p.refused === true),
     conflicts: problems.filter((p) => p.conflict === true),
+    uncrossed: problems.filter((p) => p.notCrossChecked === true && !p.refused && !p.conflict),
   };
 }
 
@@ -750,7 +753,7 @@ function isLockfileName(file: string): boolean {
  */
 export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (file: string) => string = (f) => f): string[] {
   const listed = (ps: LockfileProblemLike[]) => `${ps.slice(0, 3).map((p) => `${show(p.file)} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
-  const { unreadable, partial, refused, conflicts } = splitLockfileProblems(problems);
+  const { unreadable, partial, refused, conflicts, uncrossed } = splitLockfileProblems(problems);
   const notes: string[] = [];
   if (unreadable.length > 0) {
     // A manifest (package.json, pyproject.toml, ...) can be the file that could not be read: "lockfile" only when each one is.
@@ -774,6 +777,9 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
     notes.push(
       `CONFLICT: ${conflicts.length} lockfile${conflicts.length === 1 ? "" : "s"} beside the one that was read ${conflicts.length === 1 ? "was" : "were"} not used: ${listed(conflicts)}.`,
     );
+  }
+  if (uncrossed.length > 0) {
+    notes.push(`NOT CROSS-CHECKED: ${uncrossed.length} lockfile${uncrossed.length === 1 ? " was" : "s were"} not cross-checked against the package.json files: ${listed(uncrossed)}.`);
   }
   return notes;
 }

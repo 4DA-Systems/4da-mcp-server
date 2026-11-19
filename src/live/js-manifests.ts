@@ -174,16 +174,40 @@ export function pnpmYamlList(content: string, key: string): string[] {
 /** Member manifests read for one project; past this, the member list is incomplete. */
 export const MAX_MEMBER_MANIFESTS = 2_000;
 
-/** The package names of the workspace members in `dirs`; `complete` is false when one could not be read or there are too many. */
-export function memberNamesOf(cwd: string, dirs: string[]): { names: Set<string>; complete: boolean } {
+/**
+ * The package names of the workspace members in `dirs`; `complete` is false when one could not be
+ * read (`unreadable`, by directory) or there are too many.
+ */
+export function memberNamesOf(cwd: string, dirs: string[]): { names: Set<string>; complete: boolean; unreadable: string[] } {
   const names = new Set<string>();
-  let complete = dirs.length <= MAX_MEMBER_MANIFESTS;
+  const unreadable: string[] = [];
   for (const dir of dirs.slice(0, MAX_MEMBER_MANIFESTS)) {
     const member = readManifestDeclarations(path.join(cwd, dir, "package.json"));
-    if (!member) complete = false;
+    if (!member) unreadable.push(dir);
     else if (member.name !== null) names.add(member.name);
   }
-  return { names, complete };
+  return { names, complete: dirs.length <= MAX_MEMBER_MANIFESTS && unreadable.length === 0, unreadable };
+}
+
+/** Why a workspace member list is not whole, in words for a note. */
+export interface MemberListGap {
+  /** Member directories whose package.json could not be read. */
+  unreadable: string[];
+  /** A pattern could not be expanded, or a member lies outside the project. */
+  unlisted: boolean;
+  /** More members than MAX_MEMBER_MANIFESTS. */
+  tooMany: boolean;
+}
+
+export function memberListGapText(gap: MemberListGap): string {
+  const parts: string[] = [];
+  if (gap.unreadable.length > 0) {
+    const shown = gap.unreadable.slice(0, 3).map((d) => `${d}/package.json`);
+    parts.push(`${shown.join(", ")}${gap.unreadable.length > 3 ? ` and ${gap.unreadable.length - 3} more` : ""} could not be read`);
+  }
+  if (gap.unlisted) parts.push("a workspaces pattern could not be expanded, or names a directory outside the project");
+  if (gap.tooMany) parts.push(`more than ${MAX_MEMBER_MANIFESTS} members are listed, and only that many were read`);
+  return parts.length > 0 ? parts.join("; ") : "the member list could not be read whole";
 }
 
 /** The workspace member directories of a project, relative to it with `/`, and whether every pattern could be expanded. */
