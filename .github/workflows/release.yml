@@ -130,7 +130,13 @@ jobs:
                 echo "CI passed on $GITHUB_SHA: $url"
                 exit 0
               fi
-              echo "::error::CI did not pass on $GITHUB_SHA (conclusion: $conclusion): $url. Fix main, then release the commit that is green."
+              case "$conclusion" in
+                cancelled)
+                  # ci.yml's concurrency cancels a pending main run when a newer push arrives: nothing failed.
+                  echo "::error::CI on $GITHUB_SHA was cancelled (a newer push to main can cancel a pending run), so it never finished: $url. Re-run CI on $GITHUB_SHA (re-run that workflow run), then re-run this job." ;;
+                *)
+                  echo "::error::CI did not pass on $GITHUB_SHA (conclusion: $conclusion): $url. Fix main, then release the commit that is green." ;;
+              esac
               exit 1
             fi
             if [ "$status" = "none" ] && [ "$attempt" -ge 6 ]; then

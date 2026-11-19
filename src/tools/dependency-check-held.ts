@@ -269,7 +269,7 @@ export class RequirementJudge {
         return {
           unsafe: (v) => unchecked(v) || affected(pkg, v),
           notChecked: unchecked,
-          reason: reasons[0] ?? "what they require was not examined",
+          reason: reasons[0] ?? "a call examines only the smallest and newest candidates in a range",
           note: REQUIREMENT_RANGE_NOTE,
         };
       },
