@@ -209,8 +209,8 @@ export class RequirementJudge {
     private readonly sources: RequirementSources | null,
     private readonly query: AdvisoryQuery,
     private readonly selected?: (ecosystem: RequirementEcosystem, name: string) => string | null,
-    /** PyPI: the Python versions the project declares (RequirementOptions.pythons). */
-    private readonly pythons?: readonly string[] | null,
+    /** PyPI: the Python versions the project declares, per package (RequirementOptions.pythons). */
+    private readonly pythons?: readonly string[] | null | ((name: string) => readonly string[] | null),
   ) {}
 
   private key(ecosystem: string, pkg: string, version: string): string {

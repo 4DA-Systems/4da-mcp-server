@@ -12,6 +12,12 @@
  * A declaration that is there but cannot be read is reported as such (readProjectPythonUnread), so
  * an answer says it was not read instead of silently judging nothing.
  *
+ * In a repository of several projects, a project's declaration is read in its own folder, then in
+ * each folder above it up to the repository root (readProjectPythonAt: uv takes `.python-version`
+ * and a workspace's requires-python from above); `source` then names the file by its path from the
+ * root, and `folder` the project. Several declarations judged together (mergeProjectPythons) cover
+ * every Python any of them covers, and keep each one in `parts`.
+ *
  * A release is unsupported only when its `requires_python` lower bound excludes a Python the
  * declaration covers (the lowest version declared, and each later 3.x minor up to the declared
  * upper bound, or NEWEST_PYTHON_MINOR when there is none): `uv lock` for `requires-python >=3.9`
@@ -37,6 +43,12 @@ export interface ProjectPython {
   source: string;
   /** The Python versions a release must support, lowest first. */
   covers: string[];
+  /** The project folder this was read for, relative to the repository root ("." for the root). */
+  folder?: string;
+  /** When several projects' declarations are judged together: each one (mergeProjectPythons). */
+  parts?: ProjectPython[];
+  /** Declarations of the projects judged together that could not be read, by `source`. */
+  unreadIn?: string[];
 }
 
 /** A release's Python requirement as the registry reader keeps it (ReleaseRecord). */
@@ -77,6 +89,58 @@ export function readProjectPython(root: string): ProjectPython | null {
 export function readProjectPythonUnread(root: string): string | null {
   const found = readDeclaration(root);
   return found && "unread" in found ? found.unread : null;
+}
+
+/**
+ * The declaration that applies to the project in `dir`: its own, else the nearest folder's above it
+ * up to `root` (the walk never leaves the repository). `source` (or `unread`) is prefixed with the
+ * file's folder relative to `root` when that is not the root itself.
+ */
+export function readProjectPythonAt(root: string, dir: string): { python: ProjectPython } | { unread: string } | null {
+  const top = path.resolve(root);
+  const folder = relativeFolder(top, path.resolve(dir));
+  if (folder === null) return null;
+  let here = path.resolve(dir);
+  for (;;) {
+    const found = readDeclaration(here);
+    const at = relativeFolder(top, here) ?? ".";
+    const prefix = at === "." ? "" : `${at}/`;
+    if (found && "unread" in found) return { unread: `${prefix}${found.unread}` };
+    if (found) return { python: { ...found.python, source: `${prefix}${found.python.source}`, folder } };
+    if (here === top) return null;
+    here = path.dirname(here);
+  }
+}
+
+/** `dir` relative to `root` with "/" ("." for the root), or null when it is not inside it. */
+function relativeFolder(root: string, dir: string): string | null {
+  const rel = path.relative(root, dir);
+  if (rel === "") return ".";
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return rel.replace(/\\/g, "/");
+}
+
+/** Several projects' declarations judged as one: every Python any of them covers; each kept in `parts`. */
+export function mergeProjectPythons(parts: ProjectPython[], unreadIn: string[] = []): ProjectPython {
+  const covers = [...new Set(parts.flatMap((p) => p.covers))].sort(comparePython);
+  return {
+    declared: parts.map((p) => p.declared).join("; "),
+    spec: parts.map((p) => p.spec).join("; "),
+    source: parts.map((p) => p.source).join("; "),
+    covers,
+    parts,
+    ...(unreadIn.length > 0 ? { unreadIn } : {}),
+  };
+}
+
+function comparePython(a: string, b: string): number {
+  const x = a.split(".").map(Number);
+  const y = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return a.length - b.length;
 }
 
 /** Whether `release` supports every Python the project declares. */
