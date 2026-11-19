@@ -1,5 +1,84 @@
 # Changelog
 
+## 6.4.0 — unreleased
+
+### Behaviour changes
+
+- `project_path` refuses a home directory (like a drive root) and a network path on another machine, before anything is opened.
+- `vulnerability_scan` detailed answers are a page: at most 200 advisory rows by default, `limit` (up to 1,000) and `offset` for the rest, with a `truncated` block; totals still describe the whole result.
+- Concise `upgrade_impact` answers list at most 150 changelog entries.
+- `--setup` writes a pinned `npx @4da/mcp-server@<version>`, keeps an existing 4da entry that differs (`--update` replaces it), refuses unknown arguments (exit 2) and exits 1 when a config was not written.
+- Exact `==` pins in `pyproject.toml` with no lockfile are checked (the answer says NO LOCKFILE), and a pin with other clauses (`idna>=2.5,==2.8`) is an exact pin.
+- Redirects are followed only over https to the same host or its own download host, and never for a request with a body; any other redirect is refused.
+- A workspace member's dependencies, and the root's optional and peer dependencies, are direct: graded, labelled and planned as direct, with the fix run where they are declared.
+- Every pin in any requirements file is a direct dependency; it is dev-only only when every file that brings it in is a dev file.
+- A copy is dev-only only when no runtime root reaches it; where that cannot be read whole, the scope is unknown (treated as runtime).
+- A project's own packages (Cargo workspace and `path =` crates, go.work modules, uv and Poetry local packages) are not dependencies and no longer make a scan NOT CHECKED (private); the scan counts them in `own_packages`.
+- npm security placeholders (`0.0.N-security`) are listed under `security_placeholders` with `remove_dependency`, never counted clean.
+- `dependency_check` gives `review` when a Go, crates.io or PyPI release's own requirements carry advisories, or when a PyPI release does not support the Python the project declares; `unknown` when those cannot be read.
+- `dependency_check` flags a PyPI name one or two edits from a popular project: `review` ("did you mean"), `avoid` when under 30 days old with at most 3 releases.
+- `vulnerability_scan` and `upgrade_planner` judge a Go, crates.io or PyPI direct upgrade by what the target release itself requires: when that carries advisories or could not be read, the step says so and the target is not a clean fix (the planner withholds it from `targetVersion`); at most 10 targets are examined per call, and `requirements_note` and the plan summary count the rest.
+- A transitive fix path that could not be read is `not_determined` (NOT DETERMINED), not "waiting on upstream"; a PyPI copy blocked by a parent the project declares is an upgrade of that parent.
+- A parent upgrade is a fix only when every holder of that parent moves; `parentUpgrades[].paths` counts them.
+- An npm parent release that fixes a copy and carries over only affected dependencies the installed parent already holds is named, with what it carries over.
+- A vulnerable copy this host does not build carries its fix, under `whenBuilt` and `appliesWhenBuiltFor`.
+- `severity_filter` also keeps a row whose advisory's own severity meets the floor, and the answer counts what it hid.
+- `force_refresh` asks again only for what the call needs and never empties the cache first; when OSV.dev does not answer, the cached answers stand in, marked STALE.
+- npm-shrinkwrap.json is read in preference to package-lock.json, as npm does.
+- deno.lock is listed under NOT COVERED.
+- `what_should_i_know` leaves `newer_releases` out when the desktop feed has no answer for a package, instead of `[]`.
+- A file that decides private names and cannot be read makes the names of its ecosystem under its folder private.
+- pnpm tarball locations and yarn aliases mark the package they belong to, so a neighbouring package is no longer made private.
+- A semantic-recall query that names a private package is not sent to a remote embedding provider: recall is skipped for that call and the answer says so.
+- `_meta.privacy` and `_meta.sources` of `vulnerability_scan`, `dependency_check` and `upgrade_impact` name the hosts the call actually sent requests to, redirect hops included, and say when nothing was sent.
+- `dependency_check` asks PyPI for a judged release's own document by version when it is not the latest release (the only place its requirements are served).
+
+### Fixed
+
+- A CRLF go.mod's `retract` directives are read.
+- yarn berry: a lockfile key listing several descriptors resolves the direct dependency to the copy its range names.
+- An OSV.dev batch answer is attributed to its own batch only.
+- Advisory ranges: an unreadable bound decides nothing, events are evaluated in version order, and OSV.dev's answer for an exact version is never contradicted.
+- PEP 440: `>V`, `<V` and `==V+local` admit what pip admits, and PyPI's latest stable release is the highest final release in PEP 440 order.
+- A Cargo wildcard requirement (`1.0.*`) is the line it writes, not `^1.0`.
+- An unlabelled advisory is graded by the highest valid CVSS score it carries.
+- A merge-conflicted npm or bun lockfile whose blocks are all closed is judged by the locations it holds.
+- Damaged or truncated lockfiles and manifests (JavaScript, Python, Go, Cargo, Ruby, PHP) and an unparseable package.json are reported UNREADABLE or PARTIAL, never read as complete or absent.
+- gems.locked, go.work `replace` directives and pyproject.toml exact pins are read.
+- A direct Go upgrade says when the fixed release needs a newer Go than go.mod states.
+- The Go requirement caveat claims the minimum only for modules the project's build uses.
+- PyPI answers say what holds a release back: no release that supports the project's Python, or none clear of the advisories on it.
+- A proceed beside an unmaintained-package notice names the notice.
+- The concise scan summary states advisories on dependencies not built on this host.
+- Changelogs: "BREAK CHANGES" headings and PyYAML's release titles are read, and a denied "breaking change" is not flagged.
+- An npm parent's requirement is read from its whole-package document, so the installed version is not sent to the registry.
+- Text that names a private package is never sent to a remote embedding provider, and remote embedding requests use the proxy settings.
+- `--doctor` reports the semantic recall provider the server will actually use; `ecosystem_pulse` offline says Hacker News was not searched.
+- `developer_dna` reads only the rows it uses.
+- `--setup` accepts a config with a UTF-8 BOM, refuses one that is not UTF-8 or has duplicate or second 4da entries, keeps file permissions, and removes its backup after a failed write.
+- A cold scan reads advisory records 48 at a time instead of 24.
+- The README, SECURITY.md, the Gemini extension and the .mcpb description state what the code does: pinned versions, which tools send which versions to a registry, that ecosystem pulse sends dependency names to Hacker News search, model-instance raters, `gems.locked`, and the concise scan's size (about 10k tokens for about 290 advisories).
+- An unreadable manifest is called a file, not a lockfile.
+
+### Hardening
+
+- Manifest patterns are matched without regular expressions, member walks and import scans are bounded, and archives are read to at most 32 files and 8 MB of text; an archive path is shown plain or as its basename.
+- Changelogs are parsed under a time allowance; a cut-off parse is labelled.
+- Registry-supplied names, versions, dates and licences, and crate dependency names from the sparse index, are held to their shapes.
+- Response bodies have a per-host size limit, and rows over 24 MB are not cached.
+- Advisory record requests are capped per scan (2,000 records, none started after 60 s); what was not read is NOT CHECKED and counted in `coverage.details_unchecked`.
+- Files that decide private names go through one decoding reader under one size cap; private patterns are matched by a bounded matcher.
+- The pyproject.toml array reader and the Cargo.toml dependency reader run in linear time.
+- The plugin hook bounds what it reads and repeats only shaped names and version specifiers.
+
+### Tooling and tests
+
+- A release requires green CI on the tagged commit, with the conformance suites run and required; CI runs every corpus-gated test, and the nightly report names every failed job.
+- `pnpm run lint` (ESLint, correctness rules only) and `pnpm run typecheck` (the test suite type-checked) run in CI and pass with no warnings.
+- A weekly mutation check runs 90 mutants and fails on any survivor outside the equivalent list.
+- `scripts/release.mjs` bumps every version pin, and a test holds them to package.json.
+- New tests hold rules that had none (HTTP rules, PEP 440 ordering, name folding, malware, control characters, fail-closed verdicts, batch attribution, private-name casing, README statements; only the two HTTP helpers may call the global fetch); tests that could not fail now can, and none depends on machine speed or a random port.
+
 ## 6.3.0 — 2026-11-15
 
 - **Pre-publish fixes (round 10).**
