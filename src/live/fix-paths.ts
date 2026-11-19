@@ -41,6 +41,7 @@ import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, parseGoMod, requirementOptions } from "./lockfile-parsers-pygo.js";
 import { requirementFiles } from "./lockfile-parsers-pygo.js";
 import { projectOverride } from "./overrides.js";
+import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
@@ -1353,7 +1354,7 @@ export function overrideReaches(blocking: Array<{ bundled?: boolean }>): boolean
  * Null, and the plan keeps its plain "bump it where it is declared", for anything this cannot
  * read with certainty: a dependency declared in two sections; a declared spec that does not
  * admit the installed copy; `>=`, `||`, x-range, tag, git, `workspace:` or alias specs; a git,
- * path or alternate-registry crate; a yarn workspace member (`yarn up` is project-wide); a Go
+ * path or alternate-registry crate; a yarn workspace member with no name (yarnMemberFix); a Go
  * `replace`; hashed or compiled (pip-compile, uv) requirements; bun or an unknown tool.
  */
 export type DirectFix =
@@ -1684,8 +1685,8 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
     case "npm": {
       const manager = npmManager(projectDir);
       if (!manager) return null;
-      // yarn's up / upgrade act on the whole workspace: from a member they rewrite siblings too.
-      if ((manager === "yarn1" || manager === "yarn-berry") && !fs.existsSync(path.join(projectDir, "yarn.lock"))) return null;
+      // A yarn workspace member: yarnMemberFix (yarn's up / upgrade do not act on one member alone).
+      if ((manager === "yarn1" || manager === "yarn-berry") && !fs.existsSync(path.join(projectDir, "yarn.lock"))) return yarnMemberFix(projectDir, manager, name, installed, target);
       const json = read("package.json");
       const declared = json === null ? null : npmDeclared(json, name);
       if (declared === null || npmRangeAdmits(declared, installed) !== true) return null;
@@ -1749,6 +1750,28 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
     default:
       return null;
   }
+}
+
+/**
+ * A dependency a Yarn workspace member declares: `yarn workspace <member> add <spec>`, which moved
+ * only that member's declaration, keeping its operator and section (yarn 1.22.22 and 4.9.1, a
+ * two-member workspace, 2026-11-19). yarn 4's `up` rewrote the sibling's declaration too, and yarn
+ * 1's `upgrade` in a member wrote a devDependency into `dependencies`; yarn 1's `add` keeps a dev
+ * or optional dependency in its section only with `--dev` / `--optional`. Null when `projectDir` is
+ * no member of the workspace above it, the member's name cannot be carried in a command, or the
+ * declaration is not one npmDirectCommand reads (the plan then names the member, with no command).
+ */
+function yarnMemberFix(projectDir: string, manager: "yarn1" | "yarn-berry", name: string, installed: string, target: string): DirectFix | null {
+  const member = yarnWorkspaceMember(projectDir);
+  if (!member?.name || !isShellSafeName(member.name, "npm") || !isShellSafeName(name, "npm") || !isShellSafeVersion(target)) return null;
+  const declared = member.declared.filter((d) => d.name === name && d.section !== "peerDependencies");
+  if (declared.length !== 1 || npmRangeAdmits(declared[0].spec, installed) !== true) return null;
+  const op = npmOperator(declared[0].spec);
+  if (op === null) return null;
+  const spec = op === "" ? `${name}@${target}` : `"${name}@${op}${target}"`;
+  const section = declared[0].section;
+  const flag = manager === "yarn1" && section === "devDependencies" ? " --dev" : manager === "yarn1" && section === "optionalDependencies" ? " --optional" : "";
+  return { command: `yarn workspace ${member.name} add ${spec}${flag}` };
 }
 
 /** For a lockfile with no in-place refresh command (yarn 1, bun): the steps that move the copy. */

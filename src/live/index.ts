@@ -30,6 +30,7 @@ import { commonPathRoot, dedupeDependencies, dedupeDependenciesSteps, emptyVulnR
 import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
 import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
+import { normalizePythonName } from "./lockfile-parsers-pygo.js";
 import type { TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
@@ -941,6 +942,22 @@ export class LiveIntelligence {
    */
   getProjectRoot(): string | null {
     return this.projectRoot;
+  }
+
+  /**
+   * The Python projects the project-tree walk resolved, one per directory, with the names their
+   * manifests declare (PEP 503 normalised): where dependency_check finds the Python a package's
+   * project declares. Empty before init or when no group is a Python one.
+   */
+  getPythonProjects(): Array<{ dir: string; names: ReadonlySet<string> }> {
+    const byDir = new Map<string, Set<string>>();
+    for (const r of this.groupResults) {
+      if (mapEcosystem(r.group.language) !== "PyPI") continue;
+      const names = byDir.get(r.group.dir) ?? new Set<string>();
+      for (const name of [...r.group.deps, ...r.group.devDeps]) names.add(normalizePythonName(name));
+      byDir.set(r.group.dir, names);
+    }
+    return [...byDir].map(([dir, names]) => ({ dir, names }));
   }
 
   /**

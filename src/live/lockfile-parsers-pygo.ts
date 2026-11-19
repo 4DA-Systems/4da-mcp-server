@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
 import { pyprojectRequirements, uvOverrideRequirements } from "./pyproject-requirements.js";
+import { poetryRequirements } from "./poetry-requirements.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
@@ -321,10 +322,11 @@ function pythonLockAbove(dir: string): boolean {
 }
 
 /**
- * What a pyproject.toml's `[project] dependencies`, `[project.optional-dependencies]` and
- * `[dependency-groups]` declare, read as requirement lines are: exact pins (`requests==2.19.1`),
- * the names with no exact version, and direct references (`name @ git+https://…`). A pin in a
- * dependency group is a development one; an extra's or the project's own is not.
+ * What a pyproject.toml's `[project] dependencies`, `[project.optional-dependencies]`,
+ * `[dependency-groups]` and Poetry dependency tables (poetry-requirements.ts) declare, read as
+ * requirement lines are: exact pins (`requests==2.19.1`, Poetry `requests = "2.19.1"`), the names
+ * with no exact version, and direct references (`name @ git+https://…`). A pin in a dependency
+ * group (or a Poetry dev table or group) is a development one; an extra's or the project's own is not.
  */
 function pyprojectPins(content: string): {
   pins: Array<{ name: string; version: string; dev: boolean }>;
@@ -333,11 +335,12 @@ function pyprojectPins(content: string): {
   references: Array<{ name: string; location: string }>;
 } {
   const declared = pyprojectRequirements(content);
+  // Poetry's tables, written as the same requirement strings (poetry-requirements.ts).
+  const poetry = poetryRequirements(content);
   // One requirement per line, as a requirements file holds them; a string that spans lines is no requirement.
   const lines = (dev: boolean) =>
-    declared
-      .filter((r) => (r.section === "dependency-groups") === dev && !/[\r\n]/.test(r.text))
-      .map((r) => r.text)
+    [...declared.filter((r) => (r.section === "dependency-groups") === dev).map((r) => r.text), ...poetry.filter((r) => r.dev === dev).map((r) => r.text)]
+      .filter((text) => !/[\r\n]/.test(text))
       .join("\n");
   const pins = [
     ...parseRequirements(lines(false)).map((pin) => ({ ...pin, dev: false })),

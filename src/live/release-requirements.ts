@@ -90,8 +90,14 @@ export interface RequirementOptions {
    * declares none. A requirement whose environment marker no declared Python satisfies is dropped;
    * one that applies on some is judged and says on which; one whose marker cannot be settled
    * (no declared Python, a platform variable) is judged as a caveat (`condition.uncertain`).
+   * A function gives each package's own: the Python of the project that declares it.
    */
-  pythons?: readonly string[] | null;
+  pythons?: readonly string[] | null | ((name: string) => readonly string[] | null);
+}
+
+/** The Python versions a release of `name` is judged on (RequirementOptions.pythons). */
+function pythonsFor(options: RequirementOptions, name: string): readonly string[] | null | undefined {
+  return typeof options.pythons === "function" ? options.pythons(name) : options.pythons;
 }
 
 export interface RequirementRelease {
@@ -179,7 +185,7 @@ export async function requirementAdvisories(
     else {
       const cap = MAX_REQUIREMENTS_EXAMINED[release.ecosystem];
       // A requirement no declared Python installs is not one of this project's (PyPI markers).
-      const applying = lookup.data.requirements.filter((r) => requirementCondition(r, options.pythons) !== "drop");
+      const applying = lookup.data.requirements.filter((r) => requirementCondition(r, pythonsFor(options, release.name)) !== "drop");
       if (applying.length > cap) cut.set(release.key, applying.length);
       lists.set(release.key, { ...lookup.data, requirements: applying.slice(0, cap) });
       readable.push(release);
@@ -214,7 +220,7 @@ export async function requirementAdvisories(
         return { requirement, version: raised ? own : requirement.spec, exact: false, selected: raised };
       }
       const resolved = resolveRequirement(eco, requirement.spec, facts.get(`${eco}\0${requirement.name}`));
-      const condition = requirementCondition(requirement, options.pythons);
+      const condition = requirementCondition(requirement, pythonsFor(options, release.name));
       return { requirement, version: resolved?.version ?? null, exact: resolved?.exact ?? false, selected: false, ...(condition && condition !== "drop" ? { condition } : {}) };
     });
     judged.set(release.key, rows);
