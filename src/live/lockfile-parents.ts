@@ -17,11 +17,13 @@
  * event loop between them, so the server keeps answering while it builds.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { callMemo } from "../call-budget.js";
 import { stripTrailingCommas } from "./bun-lockfile.js";
 import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, textLines, yarnBlockVersion, yarnPackageName } from "./js-lockfile-readers.js";
+import { expandWorkspaces, MAX_MEMBER_MANIFESTS, readManifestDeclarations, type ManifestDeclarations } from "./js-manifests.js";
 import { packageNameFromNodeModulesPath, parseCargoLockPackages, resolveInstallPath } from "./lockfile-parsers.js";
 
 export type LockfileFormat = "package-lock" | "pnpm" | "yarn" | "yarn-berry" | "bun" | "cargo";
@@ -65,6 +67,22 @@ export interface ParentIndex {
    * keyed by that descriptor, else the one entry of that name); null when none or several answer.
    */
   resolve?(name: string, spec: string): string | null;
+  /** yarn.lock only: the package.json files its local edges were read from, by content hash (null: unreadable). */
+  manifests?: ManifestStamp[];
+}
+
+/** A manifest a parent index was read from, as it was then: its content's hash, or null when it could not be read. */
+interface ManifestStamp {
+  file: string;
+  hash: string | null;
+}
+
+function manifestHash(file: string): string | null {
+  try {
+    return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 const DEP_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
@@ -118,7 +136,7 @@ const INDEX_STEP = 2_000;
 const MAX_CACHED_INDEXES = 8;
 
 /** child key -> its parent edges, in the order the lockfile lists them; a yarn.lock's also resolves declarations (ParentIndex.resolve). */
-type EdgeMap = Map<string, ParentEdge[]> & { resolve?: ParentIndex["resolve"] };
+type EdgeMap = Map<string, ParentEdge[]> & { resolve?: ParentIndex["resolve"]; manifests?: ManifestStamp[] };
 /** Builds an EdgeMap, yielding every INDEX_STEP units of work. */
 type IndexBuild = Generator<void, EdgeMap, void>;
 
@@ -132,7 +150,7 @@ function push(map: EdgeMap, name: string, version: string, edge: ParentEdge): vo
 }
 
 function indexOf(format: LockfileFormat, edges: EdgeMap): ParentIndex {
-  return { format, parents: (name, version) => [...(edges.get(childKey(name, version)) ?? [])], ...(edges.resolve ? { resolve: edges.resolve } : {}) };
+  return { format, parents: (name, version) => [...(edges.get(childKey(name, version)) ?? [])], ...(edges.resolve ? { resolve: edges.resolve } : {}), ...(edges.manifests ? { manifests: edges.manifests } : {}) };
 }
 
 function runSync(build: IndexBuild): EdgeMap {
@@ -186,7 +204,7 @@ function startBuild(file: string): { format: LockfileFormat; build: IndexBuild }
         return { format, build: pnpmIndex(content) };
       case "yarn":
       case "yarn-berry":
-        return { format, build: yarnIndex(content) };
+        return { format, build: yarnIndex(content, path.dirname(file)) };
       case "bun":
         return { format, build: bunIndex(JSON.parse(stripTrailingCommas(content))) };
       case "cargo":
@@ -226,6 +244,10 @@ function remember(file: string, sig: string, index: ParentIndex | null): ParentI
 function cachedFor(file: string, sig: string): Cached | null {
   const hit = cache.get(file);
   if (!hit || hit.sig !== sig) return null;
+  // A yarn index's local edges are the manifests' as well as the lockfile's: one changed since, it is rebuilt.
+  // Compared by content (once per tool call), so a same-size edit within the clock's resolution counts too.
+  const stamps = hit.index?.manifests;
+  if (stamps && !callMemo(`lockfile-parents-manifests:${sig}:${file}`, () => stamps.every((m) => manifestHash(m.file) === m.hash))) return null;
   // Most recently used last.
   cache.delete(file);
   cache.set(file, hit);
@@ -609,9 +631,12 @@ function* parseYarnBlocks(content: string, blocks: YarnBlock[]): Generator<void,
  * package, with the real package's range; it resolves through the block whose
  * spec is `string-width-cjs@npm:string-width@^4.2.0`.
  */
-function* yarnIndex(content: string): IndexBuild {
+function* yarnIndex(content: string, dir?: string): IndexBuild {
   const blocks: YarnBlock[] = [];
   yield* parseYarnBlocks(content, blocks);
+  // The project's and its members' own declarations, read from their package.json files (yarnManifests).
+  const stamps: ManifestStamp[] = [];
+  const manifests = dir === undefined ? null : yarnManifests(dir, blocks, stamps);
   const resolved = new Map<string, YarnBlock>();
   const byName = new Map<string, Set<string>>();
   for (const b of blocks) {
@@ -619,6 +644,7 @@ function* yarnIndex(content: string): IndexBuild {
     byName.set(b.name, (byName.get(b.name) ?? new Set()).add(b.version));
   }
   const out: EdgeMap = new Map();
+  if (dir !== undefined) out.manifests = stamps;
   out.resolve = (name, spec) => {
     const hit = resolved.get(`${name}@${spec.trim().replace(/^npm:/, "")}`);
     if (hit) return hit.version;
@@ -628,6 +654,8 @@ function* yarnIndex(content: string): IndexBuild {
   let n = 0;
   for (const b of blocks) {
     if (++n % INDEX_STEP === 0) yield;
+    // A berry workspace entry is the project or a member: its edges are the local ones below, named by its manifest.
+    if (manifests && b.specs.some((spec) => spec.includes("@workspace:"))) continue;
     for (const [dep, rawRange] of b.deps) {
       const spec = rawRange.replace(/^npm:/, "");
       const target = resolved.get(`${dep}@${spec}`);
@@ -635,6 +663,53 @@ function* yarnIndex(content: string): IndexBuild {
       const alias = /^npm:((?:@[^\s/@]+\/)?[^\s/@]+)@(.+)$/.exec(rawRange);
       push(out, target.name, target.version, { parent: b.name, parentVersion: b.version, range: alias ? alias[2] : spec, local: false });
     }
+  }
+  if (manifests) {
+    for (const { rel, manifest } of manifests) {
+      if (++n % INDEX_STEP === 0) yield;
+      // Per dependency, the first section that declares it names the edge (as package-lock's local edges).
+      const taken = new Set<string>();
+      for (const section of LOCAL_DEP_FIELDS) {
+        for (const d of manifest.declared) {
+          if (d.section !== section || taken.has(d.name)) continue;
+          taken.add(d.name);
+          // Only the entry that descriptor keys: a patch:, portal:, workspace: or link: spec, or one with no entry, names no copy.
+          const target = resolved.get(`${d.name}@${d.spec.trim().replace(/^npm:/, "")}`);
+          if (target) push(out, target.name, target.version, { parent: manifest.name ?? rel, parentVersion: null, range: d.spec, local: true, dir: rel, section });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** yarn.lock: a berry workspace entry's directory (`app@workspace:packages/a`), or null. */
+function berryWorkspaceDir(spec: string): string | null {
+  const at = spec.indexOf("@workspace:", 1);
+  return at > 0 ? spec.slice(at + "@workspace:".length) : null;
+}
+
+/**
+ * The manifests whose declarations become local edges: the project's package.json beside the
+ * lockfile and each workspace member's (berry names them in its workspace entries; classic does
+ * not, so the root's `workspaces` patterns are expanded, bounded). A member outside the project or
+ * whose package.json cannot be read gives no edge. Null when the root package.json cannot be read.
+ */
+function yarnManifests(dir: string, blocks: YarnBlock[], stamps: ManifestStamp[]): Array<{ rel: string; manifest: ManifestDeclarations }> | null {
+  const rootFile = path.join(dir, "package.json");
+  stamps.push({ file: rootFile, hash: manifestHash(rootFile) });
+  const root = readManifestDeclarations(rootFile);
+  if (!root) return null;
+  const berry = blocks.flatMap((b) => b.specs.map(berryWorkspaceDir)).filter((d): d is string => d !== null);
+  const dirs = berry.length > 0 ? berry : expandWorkspaces(dir, root.workspaces).dirs;
+  const out = [{ rel: ".", manifest: root }];
+  for (const raw of [...new Set(dirs)].slice(0, MAX_MEMBER_MANIFESTS)) {
+    const rel = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+    if (rel === "" || rel === "." || path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel) || rel.split("/").includes("..")) continue;
+    const memberFile = path.join(dir, rel, "package.json");
+    stamps.push({ file: memberFile, hash: manifestHash(memberFile) });
+    const manifest = readManifestDeclarations(memberFile);
+    if (manifest) out.push({ rel, manifest });
   }
   return out;
 }

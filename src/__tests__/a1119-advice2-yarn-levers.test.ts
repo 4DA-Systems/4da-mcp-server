@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Settles whether yarn.lock's lack of local parent edges (it names no manifest as a parent) keeps
- * upgrade_planner from reaching the declared dependency above a transitive copy. The same project
- * (root declares mkdirp 0.5.1, which pins minimist 0.0.8) is planned from a package-lock.json and
- * from a yarn.lock (classic and berry): the step should name mkdirp as the parent to move in all three.
- * Today it does for npm only (the yarn cases are marked as known failures below).
+ * yarn.lock names no manifest as a parent, so its local parent edges come from the package.json
+ * files (the project's and each workspace member's), claimed only where the lockfile keys that
+ * declared descriptor to the copy. With them a transitive fix in a Yarn project names the declared
+ * parent to upgrade, with its command, as from a package-lock.json. The same project (root declares
+ * mkdirp 0.5.1, which pins minimist 0.0.8) is planned from npm, yarn classic and berry lockfiles.
  */
 
 import Database from "better-sqlite3";
@@ -88,10 +88,7 @@ describe("a transitive copy under a declared dependency, per lockfile", () => {
   });
 
   for (const [kind, lock] of Object.entries(LOCKS)) {
-    // Settled 2026-11-19: real for yarn. With no local edge the planner cannot see that the root declares
-    // mkdirp ("the lockfile names no parent of mkdirp 0.5.1"), so the step is upgrade_parent_unverified with
-    // no command. Fail-closed, but weaker than npm's. `it.fails` until yarn.lock gets local edges.
-    (kind === "npm" ? it : it.fails)(`${kind}: the step names mkdirp, the declared parent, as what to upgrade`, async () => {
+    it(`${kind}: the step names mkdirp, the declared parent, as what to upgrade`, async () => {
       stubOsv([MINIMIST], DOCS);
       const dir = tempProject({ "package.json": ROOT, ...lock });
       dirs.push(dir);
@@ -102,6 +99,70 @@ describe("a transitive copy under a declared dependency, per lockfile", () => {
       const row = plan.recommendations.find((r: { package: string }) => r.package === "minimist");
       expect(row).toMatchObject({ scope: "transitive", action: "upgrade_parent" });
       expect(JSON.stringify(row.parentUpgrades)).toMatch(/"name":"mkdirp"/);
+      expect(row.parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: COMMANDS[kind] }]);
     });
   }
+
+  const planRow = async (files: Record<string, string>, docs: Record<string, NpmDoc> = DOCS) => {
+    stubOsv([MINIMIST], docs);
+    const dir = tempProject(files);
+    dirs.push(dir);
+    const live = new LiveIntelligence(new Database(":memory:"));
+    const { entries, discovery } = scanProjectTree(dir);
+    live.initFromProjectTree(dir, treeResolutionGroups(entries), discovery);
+    const plan = (await executeUpgradePlanner(null as never, { project_path: dir } as never, live)) as Record<string, any>;
+    return plan.recommendations.find((r: { package: string }) => r.package === "minimist");
+  };
+  const classicBlock = (keys: string, version: string, deps: Record<string, string> = {}) =>
+    `${keys}:
+  version "${version}"
+  resolved "https://registry.yarnpkg.com/x/-/x-${version}.tgz"
+  integrity sha512-AAAA
+${Object.keys(deps).length > 0 ? `  dependencies:
+${Object.entries(deps).map(([d, r]) => `    ${d} "${r}"
+`).join("")}` : ""}
+`;
+
+  it("two declared parents share one entry under two specifiers: each is named, with its command", async () => {
+    const docs: Record<string, NpmDoc> = { ...DOCS, optimist: { latest: "0.6.2", versions: { "0.6.1": { dependencies: { minimist: "~0.0.8" } }, "0.6.2": { dependencies: { minimist: "^1.2.6" } } } } };
+    const row = await planRow(
+      {
+        "package.json": JSON.stringify({ name: "app", dependencies: { mkdirp: "0.5.1", optimist: "0.6.1" } }),
+        "yarn.lock": `# yarn lockfile v1
+
+
+${classicBlock("minimist@0.0.8, minimist@~0.0.8", "0.0.8")}${classicBlock("mkdirp@0.5.1", "0.5.1", { minimist: "0.0.8" })}${classicBlock("optimist@0.6.1", "0.6.1", { minimist: "~0.0.8" })}`,
+      },
+      docs,
+    );
+    expect(row).toMatchObject({ action: "upgrade_parent" });
+    const names = row.parentUpgrades.map((u: { parent: string }) => u.parent).sort();
+    expect(names).toEqual(["mkdirp", "optimist"]);
+    const commands = row.parentUpgrades.flatMap((u: { levers: Array<{ commands?: Array<{ command: string }> }> }) => u.levers.flatMap((l) => (l.commands ?? []).map((c) => c.command))).sort();
+    expect(commands).toEqual(["yarn upgrade mkdirp@0.5.6", "yarn upgrade optimist@0.6.2"]);
+  });
+
+  it("a damaged lockfile (the parent's specifier keys no entry): stays unverified, no parent is guessed", async () => {
+    const row = await planRow({
+      "package.json": ROOT,
+      "yarn.lock": `# yarn lockfile v1
+
+
+${classicBlock("minimist@0.0.8", "0.0.8")}${classicBlock("mkdirp@0.5.1", "0.5.1", { minimist: "^0.0.8" })}`,
+    });
+    expect(row.action).not.toBe("upgrade_parent");
+    expect(JSON.stringify(row)).not.toMatch(/"command"/);
+  });
+
+  it("a workspace member as the declaring parent: the lever is named, run in that member", async () => {
+    const row = await planRow({
+      "package.json": JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"] }),
+      "packages/api/package.json": JSON.stringify({ name: "api", version: "1.0.0", dependencies: { mkdirp: "0.5.1" } }),
+      "yarn.lock": LOCKS["yarn classic"]["yarn.lock"],
+    });
+    expect(row).toMatchObject({ scope: "transitive", action: "upgrade_parent" });
+    expect(row.parentUpgrades[0].levers[0].commands).toEqual([{ dir: "packages/api", command: "yarn workspace api add mkdirp@0.5.6" }]);
+  });
 });
+
+const COMMANDS: Record<string, string> = { npm: "npm install mkdirp@0.5.6 --save-exact", "yarn classic": "yarn upgrade mkdirp@0.5.6", "yarn berry": "yarn up mkdirp@0.5.6" };
