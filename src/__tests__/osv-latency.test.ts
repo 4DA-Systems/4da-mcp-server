@@ -11,7 +11,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { LiveCache } from "../live/cache.js";
 import { LiveIntelligence } from "../live/index.js";
-import { OsvScanner } from "../live/osv-scanner.js";
+import { HYDRATE_CONCURRENCY, OsvScanner } from "../live/osv-scanner.js";
 import { RateLimiter } from "../live/rate-limiter.js";
 import type { ResolvedDependency } from "../live/types.js";
 
@@ -51,14 +51,15 @@ afterEach(() => {
 });
 
 describe("OSV advisory hydration", () => {
-  it("keeps up to 24 detail requests in flight instead of rounds of 8", async () => {
+  it("keeps up to HYDRATE_CONCURRENCY (48) detail requests in flight, never more", async () => {
     const stats = stubOsv({ delayMs: 20 });
-    const deps = Array.from({ length: 60 }, (_, i) => dep(`pkg-${i}`));
+    const deps = Array.from({ length: 120 }, (_, i) => dep(`pkg-${i}`));
     const result = await scanner().scan(deps, "/proj");
-    expect(result.vulnerabilities).toHaveLength(60);
+    expect(result.vulnerabilities).toHaveLength(120);
     expect(result.vulnerabilities.every((v) => v.severity === "high")).toBe(true);
-    expect(stats.maxInFlight).toBeGreaterThan(8);
-    expect(stats.maxInFlight).toBeLessThanOrEqual(24);
+    expect(HYDRATE_CONCURRENCY).toBe(48);
+    expect(stats.maxInFlight).toBeGreaterThan(24);
+    expect(stats.maxInFlight).toBeLessThanOrEqual(HYDRATE_CONCURRENCY);
   });
 
   it("two scans at once fetch each advisory once (the warm-up and the first tool call)", async () => {

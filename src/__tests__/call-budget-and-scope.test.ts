@@ -520,10 +520,17 @@ describe("nothing checked is never a good score, an online claim, or a silent pr
     const concise = (await executeVulnerabilityScan(null, {}, li)) as Record<string, any>;
     expect(concise._meta.offline).toBe(false);
     expect(concise._meta.osv_contacted).toBe(false);
-    // Asked again with the network still dead, it says so.
+    // Asked to refresh with the network still dead, it says so: the cached answers are kept and
+    // stand in as stale ones, never as the refresh, and the totals are withheld.
     const forced = (await executeVulnerabilityScan(null, { force_refresh: true, response_format: "detailed" }, li)) as Record<string, any>;
-    expect(forced.summary).toMatch(/^NOT CHECKED/);
-    expect(forced._meta.offline).toBe(true);
+    expect(forced.summary).toMatch(/^STALE: OSV\.dev unreachable .* answered only from the cached answer, which could not be refreshed/);
+    expect(forced.total_vulnerable_packages).toBeNull();
+    expect(forced._meta.stale_osv_answers).toBeGreaterThan(0);
+    expect(forced._meta).not.toHaveProperty("osv_contacted");
+    // The failed refresh discarded nothing: the next plain call is still answered from the cache.
+    const after = (await executeVulnerabilityScan(null, { response_format: "detailed" }, li)) as Record<string, any>;
+    expect(after.summary).toBeUndefined();
+    expect(after._meta.osv_cached).toBe(true);
   });
 
   it("proxy variables: every lookup goes through them (proxy-lookups.test.ts), and the startup line says so", () => {

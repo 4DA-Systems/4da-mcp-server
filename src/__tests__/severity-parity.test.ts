@@ -234,7 +234,7 @@ describe("vulnerability_scan — sandbox@3.1.2 graded as the app grades it", () 
     expect(sandbox.severity).toBe("high");
   });
 
-  it("filters on the presented grade: severity_filter critical no longer lists it", async () => {
+  it("severity_filter critical keeps it: the advisory's own severity is critical, though it is presented as high", async () => {
     const prior = process.env.FOURDA_OFFLINE;
     delete process.env.FOURDA_OFFLINE;
     const li = new LiveIntelligence(new Database(":memory:"));
@@ -244,7 +244,9 @@ describe("vulnerability_scan — sandbox@3.1.2 graded as the app grades it", () 
     vi.spyOn(process, "cwd").mockReturnValue(paddleDir);
 
     const critical = (await executeVulnerabilityScan(noDb, { severity_filter: "critical", response_format: "detailed" }, li)) as Record<string, any>;
-    expect(critical.vulnerabilities).toHaveLength(0);
+    expect(critical.vulnerabilities).toHaveLength(1);
+    expect(critical.vulnerabilities[0]).toMatchObject({ package: "sandbox", severity: "high", advisory_severity: "critical" });
+    expect(critical.severity_filter).toMatchObject({ minimum: "critical", shown: 1, hidden: 0 });
     const high = (await executeVulnerabilityScan(noDb, { severity_filter: "high", response_format: "detailed" }, li)) as Record<string, any>;
     expect(high.vulnerabilities).toHaveLength(1);
   });

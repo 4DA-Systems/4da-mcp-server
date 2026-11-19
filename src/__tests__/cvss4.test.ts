@@ -64,13 +64,13 @@ describe("a record graded by its CVSS v4.0 vector", () => {
     expect(deriveSeverity(rustsec)).toEqual({ severity: "medium", cvssScore: 6.8 });
   });
 
-  it("the curated label still wins over the vector, and a v3.x vector over a v4.0 one", () => {
+  it("the curated label still wins over the vector; beside a v3.x vector the higher score counts", () => {
     expect(deriveSeverity({ ...rustsec, database_specific: { severity: "HIGH" } }).severity).toBe("high");
     const both = [
       { type: "CVSS_V4", score: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N" },
       { type: "CVSS_V3", score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L" },
     ];
-    expect(extractCvssScore(both)).toBe(5.3);
+    expect(extractCvssScore(both)).toBe(9.3);
   });
 
   it("each band: critical >= 9, high >= 7, medium >= 4, low > 0", () => {

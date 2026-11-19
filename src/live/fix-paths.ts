@@ -192,14 +192,26 @@ export class FixPathSources {
     while (this.memo.size > MEMO_KEPT) this.memo.delete(this.memo.keys().next().value!);
   }
 
+  /** Advisory lists to ask OSV.dev for again at their next read (a forced refresh). */
+  private refreshDue = new Set<string>();
+
+  /** Local state only, no lookup: the list is asked for again by the next `packageAdvisories` for it. */
+  readonly refreshAdvisoriesOnNextRead = (ecosystem: OsvEcosystem, name: string): void => {
+    this.refreshDue.add(`fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`);
+  };
+
   /** Every non-withdrawn OSV advisory for a package, as ranges; null when OSV could not be read. */
   async packageAdvisories(ecosystem: OsvEcosystem, name: string): Promise<AdvisoryRanges[] | null> {
     const key = `fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`;
+    const due = this.refreshDue.delete(key);
     const hit = this.cached<AdvisoryRanges[]>(key);
-    if (hit) return hit;
+    if (hit && !due) return hit;
     const running = this.advisoriesInFlight.get(key);
     if (running) return running;
-    const lookup = this.fetchPackageAdvisories(key, ecosystem, name).finally(() => this.advisoriesInFlight.delete(key));
+    // A list due for a refresh is replaced when the new one arrives; when it does not, the cached list stands.
+    const lookup = this.fetchPackageAdvisories(key, ecosystem, name)
+      .then((fresh) => fresh ?? (due ? hit : null))
+      .finally(() => this.advisoriesInFlight.delete(key));
     this.advisoriesInFlight.set(key, lookup);
     return lookup;
   }

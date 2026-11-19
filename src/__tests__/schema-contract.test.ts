@@ -99,6 +99,14 @@ describe("argument validation", () => {
     expect(validateToolArgs("vulnerability_scan", vuln, { severity: "high" })).toMatch(/unknown parameter "severity".*severity_filter/);
   });
 
+  it("vulnerability_scan's detailed page: limit is 1 to 1000 and offset is not negative", () => {
+    expect(validateToolArgs("vulnerability_scan", vuln, { response_format: "detailed", limit: 200, offset: 0 })).toBeNull();
+    expect(validateToolArgs("vulnerability_scan", vuln, { limit: 1001 })).toMatch(/"limit" must be <= 1000; got 1001/);
+    expect(validateToolArgs("vulnerability_scan", vuln, { limit: 0 })).toMatch(/"limit" must be >= 1; got 0/);
+    expect(validateToolArgs("vulnerability_scan", vuln, { limit: 2.5 })).toMatch(/"limit" must be a integer/);
+    expect(validateToolArgs("vulnerability_scan", vuln, { offset: -1 })).toMatch(/"offset" must be >= 0; got -1/);
+  });
+
   it("reports a missing required parameter", () => {
     const briefing = TOOL_REGISTRY.what_should_i_know.definition.inputSchema;
     expect(validateToolArgs("what_should_i_know", briefing, {})).toMatch(/missing required parameter "task"/);

@@ -169,6 +169,11 @@ export interface VulnerabilityEntry {
    * and never worded as "no fix published".
    */
   detailUnavailable?: true;
+  /**
+   * With `detailUnavailable`: the record was not asked for at all in this scan (its limit on
+   * record requests, or the time it had for them), which is not OSV.dev failing to return it.
+   */
+  detailNotAsked?: true;
   summary: string;
   fixedVersion: string | null;
   published: string;
@@ -245,13 +250,46 @@ export interface VulnerabilityScanResult {
   cacheOnly?: true;
   staleExpired?: number;
   /**
+   * The scan was asked to refresh (force_refresh) and OSV.dev gave no new answer for the
+   * `staleAnswers` dependencies: the cached answers were kept and stand in for them.
+   */
+  refreshFailed?: true;
+  /**
    * Ids of advisories OSV matched whose record it did not return (rows with
    * `detailUnavailable`). Their severity and fix version are not known, so
    * the scan is not a complete answer: absent when every record was read.
    */
   detailsUnchecked?: string[];
+  /** How many of `detailsUnchecked` the scan did not ask for at all, and why, in words (absent when none). */
+  detailsNotAsked?: number;
+  detailsUncheckedReason?: string;
   /** Records rated from a GHSA alias, and those that name one but stay unknown (cap, time budget, no answer), with why. */
   aliasSeverity?: AliasSeverityReport;
+  /**
+   * Requests to OSV.dev made for this scan (its own, or a concurrent scan's that carried its
+   * dependencies): 0 when every answer came from the cache. Absent on a result no network scan
+   * produced (a stub, a scan that did not finish), where what was sent is not known from here.
+   */
+  osvRequests?: number;
+  /**
+   * Installed copies at npm's security-placeholder version (`0.0.N-security`) of a name a
+   * malicious-package record covers. Not in `vulnerabilities` (the placeholder is not the
+   * malware) and never in `cleanCount`: the step is removing the dependency. Absent when none.
+   */
+  securityPlaceholders?: SecurityPlaceholder[];
+}
+
+/** One installed copy that claims to be npm's empty placeholder for a name taken down as malware. */
+export interface SecurityPlaceholder {
+  ecosystem: OsvEcosystem;
+  package: string;
+  version: string;
+  /** The malicious-package records that name the package, sorted. */
+  ids: string[];
+  isDirect: boolean;
+  isDev: boolean;
+  devScopeKnown: boolean;
+  sourceDirs: string[];
 }
 
 export interface AliasSeverityReport {

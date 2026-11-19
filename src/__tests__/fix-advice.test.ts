@@ -40,8 +40,10 @@ const ADVISORIES: Record<string, OsvVulnerability[]> = {
   minimist: [adv("GHSA-minimist", "minimist", [{ introduced: "0" }, { fixed: "1.2.6" }])],
   fs: [{ id: "MAL-2023-0001", summary: "Malicious code in fs", affected: [{ package: { name: "fs", ecosystem: "npm" }, ranges: range([{ introduced: "0" }]) }] }],
   jest: [adv("GHSA-jest", "jest", [{ introduced: "0" }, { fixed: "30.0.0" }])],
-  // GHSA-c2m4-w5hm-vqjw, "crossenv is malware": introduced 0, last_affected 1.0.1.
-  crossenv: [adv("GHSA-c2m4-w5hm-vqjw", "crossenv", [{ introduced: "0" }, { last_affected: "1.0.1" }])],
+  // GHSA-c2m4-w5hm-vqjw, "crossenv is malware": introduced 0, last_affected 1.0.1, malware by CWE-506 as the real record is.
+  crossenv: [{ ...adv("GHSA-c2m4-w5hm-vqjw", "crossenv", [{ introduced: "0" }, { last_affected: "1.0.1" }]), summary: "crossenv is malware", database_specific: { severity: "CRITICAL", cwe_ids: ["CWE-506"] } }],
+  // An ordinary vulnerability whose range covers a release shaped like npm's placeholder.
+  "holder-vuln": [adv("GHSA-holder-vuln", "holder-vuln", [{ introduced: "0" }, { fixed: "1.0.0" }])],
   // A publisher's own `-security` prerelease is code, not npm's placeholder.
   "own-sec": [adv("GHSA-own-sec", "own-sec", [{ introduced: "0" }, { fixed: "1.0.1" }])],
 };
@@ -136,17 +138,28 @@ describe("fix targets", () => {
     expect(result.recommendations[0]).toMatch(/Upgrade only-last 0\.9\.0 → 1\.0\.1 .*no advisory names a fixed version/);
   });
 
-  it("A5: an npm -security placeholder is not reported as malware", async () => {
+  it("A5: an npm -security placeholder is not reported as malware, and is not passed over either", async () => {
     project({}, {}, { fs: { version: "0.0.1-security" } });
     const result = await scan();
     expect(result.total_vulnerable_packages).toBe(0);
+    expect(result.security_placeholders).toMatchObject({ count: 1, packages: [{ package: "fs", current_version: "0.0.1-security", advisories: ["MAL-2023-0001"], action: "remove_dependency" }] });
   });
 
-  it("L4: the placeholder holds under ANY advisory id, not only MAL- (crossenv 0.0.2-security, GHSA-c2m4)", async () => {
+  it("L4: the placeholder holds under any malware record, not only MAL- ids (crossenv 0.0.2-security, GHSA-c2m4)", async () => {
     project({}, {}, { crossenv: { version: "0.0.2-security" } });
-    expect((await scan()).total_vulnerable_packages).toBe(0);
+    const held = await scan();
+    expect(held.total_vulnerable_packages).toBe(0);
+    expect(held.security_placeholders).toMatchObject({ count: 1, packages: [{ package: "crossenv", advisories: ["GHSA-c2m4-w5hm-vqjw"] }] });
     project({}, {}, { crossenv: { version: "1.0.1" } });
     expect((await scan()).total_vulnerable_packages).toBe(1);
+  });
+
+  it("a placeholder-shaped version is exempt from nothing but malware records: an ordinary advisory on it is a finding", async () => {
+    project({}, {}, { "holder-vuln": { version: "0.0.1-security" } });
+    const result = await scan();
+    expect(result.total_vulnerable_packages).toBe(1);
+    expect(result.vulnerable_packages[0]).toMatchObject({ package: "holder-vuln", current_version: "0.0.1-security", ids: ["GHSA-holder-vuln"] });
+    expect(result.security_placeholders).toBeUndefined();
   });
 
   it("L4: only npm's 0.0.<n>-security shape is a placeholder; a publisher's 1.0.0-security stays affected", async () => {
