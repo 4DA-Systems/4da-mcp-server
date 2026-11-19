@@ -30,7 +30,7 @@ const dep = (name: string, version = "1.0.0", extra: Partial<ResolvedDependency>
   name, version, ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: ["/proj"], ...extra,
 });
 
-function scannerWith(limits = DEFAULT_RATE_LIMITS, tokenWaitMs?: number): OsvScanner {
+function scannerWith(limits: ConstructorParameters<typeof RateLimiter>[0] = DEFAULT_RATE_LIMITS, tokenWaitMs?: number): OsvScanner {
   const cache = new LiveCache(new Database(":memory:"));
   const limiter = new RateLimiter(limits);
   return new OsvScanner(cache, limiter, new OsvHttpSource(cache, limiter, tokenWaitMs));

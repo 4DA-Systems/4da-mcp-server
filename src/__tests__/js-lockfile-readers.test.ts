@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { parsePnpmKey, readPnpmLock, readYarnLock } from "../live/js-lockfile-readers.js";
 import { resolveVersionSource } from "../live/lockfile-parsers.js";
 
-function read(content: string, reader = readPnpmLock): Map<string, string> {
+function read(content: string, reader: (content: string, versions: Map<string, string>) => unknown = readPnpmLock): Map<string, string> {
   const versions = new Map<string, string>();
   reader(content, versions);
   return versions;

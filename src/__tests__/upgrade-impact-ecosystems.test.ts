@@ -235,6 +235,7 @@ describe("upgrade_impact on PyPI", () => {
   });
 
   it("matches import sites on the module name and says the name was assumed", async () => {
+    // @ts-expect-error -- "pypi" is an alias the tool accepts beyond its schema enum ("PyPI").
     const r = (await run({ package: "flask", ecosystem: "pypi", from_version: "2.3.2" }, recorded(flaskRoutes()))) as Record<string, any>;
     expect(r.to_version).toBe("3.0.0");
     expect(r.your_code.files).toEqual([{ path: "app/web.py", matches: 2 }]);

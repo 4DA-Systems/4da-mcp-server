@@ -52,8 +52,7 @@ export interface SqliteDatabase {
   prepare(source: string): SqliteStatement;
   exec(source: string): unknown;
   pragma(source: string, options?: { simple?: boolean }): unknown;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  transaction<F extends (...args: any[]) => unknown>(fn: F): (...args: Parameters<F>) => ReturnType<F>;
+  transaction<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R;
   close(): unknown;
   readonly open: boolean;
   readonly readonly: boolean;

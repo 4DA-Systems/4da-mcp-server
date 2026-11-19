@@ -129,7 +129,7 @@ afterEach(() => {
 
 const check = async (items: unknown[]) =>
   (await executeDependencyCheck(noDb, { items } as never, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
-const advisoriesOf = (r: { signals: Array<{ id: string }> }) => r.signals.find((s) => s.id === "advisories") as { value: any; effect: string; evidence: string };
+const advisoriesOf = (r: { signals: Array<{ id: string; value: any; effect: string; evidence: string }> }) => r.signals.find((s) => s.id === "advisories") as { value: any; effect: string; evidence: string };
 const impact = async (from: string, to: string) =>
   (await executeUpgradeImpact(noDb, { ecosystem: "npm", package: "mocha", from_version: from, to_version: to }, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
 

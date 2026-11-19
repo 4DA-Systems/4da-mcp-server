@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { LiveIntelligence } from "../live/index.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
-import { decide, upgradeType, upgradeTypeSignal } from "../tools/dependency-check-signals.js";
+import { decide, upgradeType, upgradeTypeSignal, type Signal } from "../tools/dependency-check-signals.js";
 import type { FourDADatabase } from "../db.js";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "dependency-check");
@@ -390,7 +390,7 @@ describe("a breaking version range is review, not proceed", () => {
     const s = upgradeTypeSignal({ ecosystem: "npm", package: "x", from, to });
     expect(s.effect).toBe("review");
     expect(s.evidence).toBe(`${from} -> ${to}: major${zeroX}: breaking version range, run upgrade_impact to see what changes for this project.`);
-    const clean = [
+    const clean: Signal[] = [
       { id: "advisories", value: null, evidence: "none", effect: "proceed" as const },
       { id: "release_age", value: null, evidence: "old enough", effect: "proceed" as const },
     ];

@@ -91,6 +91,11 @@ jobs:
       - name: Repository gates (SPDX, retired claims, REMOVE BY, pnpm pin)
         run: pnpm run check
 
+      # The build compiles src/ without the tests; this compiles the tests
+      # too (tsconfig.test.json), so a test that no longer type-checks fails.
+      - name: Type-check the source and the tests
+        run: pnpm run typecheck
+
       # npm retired the audit endpoint pnpm <= 10 uses (HTTP 410, 2026-07-14);
       # pnpm 11 speaks the bulk advisory endpoint. It reads the overrides from
       # pnpm-workspace.yaml (it ignores package.json's `pnpm` field, issue #9).

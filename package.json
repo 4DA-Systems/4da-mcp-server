@@ -30,6 +30,7 @@
     "test:watch": "vitest",
     "prepublishOnly": "pnpm run build",
     "check": "node scripts/check-repo.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "contract": "node scripts/app-schema-contract.mjs",
     "contract:sync": "node scripts/sync-app-schema.mjs"
   },

@@ -294,9 +294,9 @@ export async function planParentReleaseLine(v: Json): Promise<Json> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "parent-release-vector-"));
   try {
     if (v.mode !== "graph") return await planRows(v, dir);
-    let captured: Json = null;
-    await checkGraph(v, dir, (r) => (captured = r));
-    return captured;
+    const seen: Json[] = [];
+    await checkGraph(v, dir, (r) => seen.push(r));
+    return seen[0];
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

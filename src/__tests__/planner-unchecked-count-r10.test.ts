@@ -172,7 +172,7 @@ async function liveFor(): Promise<LiveIntelligence> {
 const plan = async (params: Record<string, unknown> = {}) =>
   (await executeUpgradePlanner(noDb, { project_path: dir, max_recommendations: 50, ...params }, await liveFor())) as Record<string, any>;
 const scan = async (params: Record<string, unknown> = {}) => (await executeVulnerabilityScan(null, { project_path: dir, ...params }, await liveFor())) as Record<string, any>;
-const health = async (params: Record<string, unknown> = {}) => (await executeDependencyHealth(null, { project_path: dir, ...params }, await liveFor())) as Record<string, any>;
+const health = async (params: Record<string, unknown> = {}) => (await executeDependencyHealth(null, { ...params }, await liveFor())) as Record<string, any>;
 
 /**
  * express: vulnerable with a fix. lodash: vulnerable, no advisory names a fix. Both answered.

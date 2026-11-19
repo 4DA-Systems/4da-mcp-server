@@ -175,7 +175,7 @@ describe("defect 1: an incomplete OSV advisory list never names a safe release",
 
   it("fix targets (vulnerability_scan, briefings, upgrade_planner): an incomplete list is read as unread, never as checked against every advisory", async () => {
     QUERY_EMPTY = true;
-    const sources = new LiveIntelligence(new Database(":memory:")).getFixPathSources();
+    const sources = new LiveIntelligence(new Database(":memory:")).getFixPathSources()!;
     const clean = await cleanFixTarget(sources, "npm", "lodash", ["4.17.21"], "4.17.20", ["GHSA-35jh-r3h4-6jhm"]);
     // Without the ids, the empty list would count as a complete one (OSV's normal answer for a clean package).
     const blind = await cleanFixTarget(sources, "npm", "lodash", ["4.17.21"], "4.17.20");

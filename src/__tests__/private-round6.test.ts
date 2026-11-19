@@ -24,7 +24,7 @@ import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
 import { executeUpgradeImpact } from "../tools/upgrade-impact.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { setLiveIntelligence } from "../live-singleton.js";
+import { clearLiveIntelligence } from "../live-singleton.js";
 
 const noDb = null as unknown as FourDADatabase;
 let scratch: string;
@@ -93,7 +93,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.GOPRIVATE;
-  setLiveIntelligence(null);
+  clearLiveIntelligence();
   try {
     fs.rmSync(scratch, { recursive: true, force: true });
   } catch {
