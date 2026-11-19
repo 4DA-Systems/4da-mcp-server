@@ -50,7 +50,8 @@ import type { OsvEcosystem } from "./types.js";
 export type { PackageInstance, VersionSource } from "./lockfile-types.js";
 
 const LOCKFILES: Partial<Record<OsvEcosystem, string[]>> = {
-  npm: ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"],
+  // npm installs from npm-shrinkwrap.json and ignores package-lock.json when both are present.
+  npm: ["npm-shrinkwrap.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"],
   "crates.io": ["Cargo.lock"],
   PyPI: ["poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock"],
   Go: ["go.mod", "go.sum"],
@@ -251,7 +252,7 @@ function declaredRanges(declared: Map<string, string>, exact: (spec: string) => 
 }
 
 // =============================================================================
-// npm: package-lock.json > npm-shrinkwrap.json > pnpm-lock.yaml > yarn.lock > bun.lock > package.json ranges
+// npm: npm-shrinkwrap.json > package-lock.json > pnpm-lock.yaml > yarn.lock > bun.lock > package.json ranges
 // =============================================================================
 
 /** What one npm-family lockfile holds, as its reader reports it. */
@@ -273,8 +274,9 @@ interface NpmLockRead {
  * throws for one it cannot parse.
  */
 const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) => NpmLockRead | null | Steps<NpmLockRead | null> }> = [
-  { name: "package-lock.json", read: readNpmLockFile },
+  // npm's own order: with both present it installs from the shrinkwrap and never opens package-lock.json.
   { name: "npm-shrinkwrap.json", read: readNpmLockFile },
+  { name: "package-lock.json", read: readNpmLockFile },
   {
     // v5.x, v6 and v9, read by column; see js-lockfile-readers.ts
     name: "pnpm-lock.yaml",
@@ -479,10 +481,15 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
     }
     if (differing.length === 0) continue;
     differing.sort();
+    const differ = `${differing.length} package${differing.length === 1 ? "" : "s"} differ (${differing.slice(0, CONFLICT_EXAMPLES).join("; ")}${differing.length > CONFLICT_EXAMPLES ? "; ..." : ""})`;
+    // Between npm's two lockfiles the stale one is known: npm never reads package-lock.json beside a shrinkwrap.
+    const npmPair = chosen.name === "npm-shrinkwrap.json" && name === "package-lock.json";
     problems.push({
       file,
       conflict: true,
-      error: `${chosen.name} was read instead (it ranks first), and this lockfile pins a different set: ${differing.length} package${differing.length === 1 ? "" : "s"} differ (${differing.slice(0, CONFLICT_EXAMPLES).join("; ")}${differing.length > CONFLICT_EXAMPLES ? "; ..." : ""}). One of the two is stale and the scan cannot tell which: delete the one your package manager does not write`,
+      error: npmPair
+        ? `${chosen.name} was read instead: npm installs from ${chosen.name} and ignores ${name} when both are present. This ignored lockfile pins a different set: ${differ}. It is the stale one: delete it, or delete ${chosen.name} if ${name} is the one you mean to install from`
+        : `${chosen.name} was read instead (it ranks first), and this lockfile pins a different set: ${differ}. One of the two is stale and the scan cannot tell which: delete the one your package manager does not write`,
     });
   }
   const bunBinary = path.join(cwd, BUN_BINARY_LOCK);
