@@ -13,10 +13,11 @@ import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metada
 import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { isConcreteVersion } from "../live/release-version.js";
 import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
+import { unaccountedIds } from "../live/batch-confirm.js";
 import { noteScanFacts } from "./dependency-check-facts.js";
 import type { AdvisoryFacts, AdvisoryRef, CheckItem } from "./dependency-check-signals.js";
 import { compareIn } from "./dependency-check-versions.js";
-import { instanceKey, lookupKey, type Resolved } from "./dependency-check-items.js";
+import { instanceKey, lookupKey, type ListGap, type Resolved } from "./dependency-check-items.js";
 import type { Lookups, PassContext } from "./dependency-check-lookups.js";
 
 /** OSV.dev's batch answer for the releases a pass judges, and the lists it is held against. */
@@ -149,6 +150,59 @@ export function advisoryFacts(
     return { available: true, to, from: item.from ? at(item.from) : [] };
   };
   return advisoriesFor;
+}
+
+/** An advisory list that leaves out what the batch query names is incomplete: nothing computed from it stands. */
+export function dropIncompleteLists(lookups: Lookups, items: Resolved[], batch: BatchAnswer): void {
+  const { advisoryLists } = lookups;
+  const { byInstance } = batch;
+  // A list that leaves out an advisory the batch query named for `to` or `from` is incomplete: a
+  // proxy that answered {} for /v1/query made lodash 4.17.20 avoid and named 4.0.0, which eight
+  // advisories affect, the smallest safe release on its line (blind audit round 4). Nothing is
+  // computed from it: no safe release, no range check, and the answer says NOT CHECKED.
+  const gaps = new Map<string, ListGap>();
+  for (const item of items) {
+    const list = advisoryLists.get(lookupKey(item));
+    if (!list) continue;
+    for (const version of new Set(item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)])) {
+      if (!version) continue;
+      // A release the batch query names an advisory against is never called safe from the list: not when the list left the id out, and not when it reads the advisory's ranges as not reaching that release.
+      const { missing, misread } = unaccountedIds(list, (byInstance.get(instanceKey(item.ecosystem, item.package, version)) ?? []).map((e) => e.vulnId), version, item.ecosystem);
+      if (missing.length === 0 && misread.length === 0) continue;
+      const gap = gaps.get(lookupKey(item)) ?? { ids: [], versions: [] };
+      gaps.set(lookupKey(item), { ids: [...new Set([...gap.ids, ...missing])], versions: [...new Set([...gap.versions, version])], misread: [...new Set([...(gap.misread ?? []), ...misread])] });
+    }
+  }
+  // Per package: every item of a package whose list is incomplete loses what was computed from it.
+  for (const item of items) {
+    const gap = gaps.get(lookupKey(item));
+    if (!gap) continue;
+    advisoryLists.set(lookupKey(item), null);
+    item.listGap = gap;
+    delete item.rangeCheck;
+  }
+}
+
+/** Whether an item's batch answer can be read (current, not contradicted); where it cannot, no release is named safe from its list. */
+export function markBatchUnread(items: Resolved[], batch: BatchAnswer, contradictionOf: (item: CheckItem) => string | null): (item: CheckItem) => boolean {
+  const { scan } = batch;
+  // The list can be held against the batch query only when the batch query answered. With it
+  // failed (HTTP 500, truncated JSON) or answered only from an expired cache, an empty list is
+  // what a proxy answering {"vulns":[]} looks like, and `{npm, lodash, "4.x"}` said "Safe in 4.x:
+  // smallest 4.0.0" (blind audit round 5). No release is named safe then; the list still speaks
+  // for what it finds against a release (malware, a negative finding), never for a clean one.
+  const batchAnswered = !scan.offline && (scan.staleAnswers ?? 0) === 0;
+  const batchRead = (item: CheckItem) => batchAnswered && !contradictionOf(item);
+  for (const item of items) {
+    if (batchRead(item) || item.listGap || !item.rangeCheck) continue;
+    item.batchUnread = scan.offline
+      ? (scan.uncheckedReason ?? "the query failed")
+      : !batchAnswered
+        ? `only an expired cached answer (${scan.staleReason ?? "the fresh query failed"})`
+        : `${contradictionOf(item)!.replace(/^OSV\.dev's /, "")}, so it was not used`;
+    delete item.rangeCheck;
+  }
+  return batchRead;
 }
 
 /**

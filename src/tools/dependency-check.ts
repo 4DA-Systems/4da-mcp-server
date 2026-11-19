@@ -51,7 +51,6 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
-import { unaccountedIds } from "../live/batch-confirm.js";
 import { npmWeeklyDownloads } from "../live/npm-downloads.js";
 import { type AdvisoryRanges } from "../live/osv-ranges.js";
 import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource } from "../live/release-metadata.js";
@@ -105,7 +104,6 @@ import {
   ECOSYSTEMS,
   head,
   installedNotJudged,
-  instanceKey,
   lookupKey,
   provisional,
   yieldToEventLoop,
@@ -115,7 +113,7 @@ import {
   type Resolved,
 } from "./dependency-check-items.js";
 import { offlineResults, screenItems } from "./dependency-check-screen.js";
-import { advisoryFacts, findContradictions, hasRealAdvisory, queryBatch, rangePicks, readDeclaredNotices } from "./dependency-check-batch.js";
+import { advisoryFacts, dropIncompleteLists, findContradictions, hasRealAdvisory, markBatchUnread, queryBatch, readDeclaredNotices } from "./dependency-check-batch.js";
 import { isYoung, judgeReleaseContents, redateGoTargets, resolveItems } from "./dependency-check-resolve.js";
 import { adoptPublishedCrateNames, firstLookups, mapLimit, passContext, REGISTRY_CONCURRENCY, type AdvisoryListReader } from "./dependency-check-lookups.js";
 
@@ -425,7 +423,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   items = await judgeReleaseContents(ctx, lookups, items);
 
   const batch = await queryBatch(ctx, lookups, items);
-  const { scan, byInstance } = batch;
+  const { scan } = batch;
   const declaredFor = await readDeclaredNotices(ctx, lookups, items, batch);
   const contradictionOf = findContradictions(ctx, items, batch);
   const advisoriesFor = advisoryFacts(batch, contradictionOf, declaredFor);
@@ -445,47 +443,8 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   );
   const moreLists = await packageAdvisoryLists(affectedExact.filter((i) => !advisoryLists.has(lookupKey(i))));
   for (const [k, v] of moreLists) advisoryLists.set(k, v);
-  // A list that leaves out an advisory the batch query named for `to` or `from` is incomplete: a
-  // proxy that answered {} for /v1/query made lodash 4.17.20 avoid and named 4.0.0, which eight
-  // advisories affect, the smallest safe release on its line (blind audit round 4). Nothing is
-  // computed from it: no safe release, no range check, and the answer says NOT CHECKED.
-  const gaps = new Map<string, ListGap>();
-  for (const item of items) {
-    const list = advisoryLists.get(lookupKey(item));
-    if (!list) continue;
-    for (const version of new Set(item.unresolved ? rangePicks(item) : [item.to, item.from, ...rangePicks(item)])) {
-      if (!version) continue;
-      // A release the batch query names an advisory against is never called safe from the list: not when the list left the id out, and not when it reads the advisory's ranges as not reaching that release.
-      const { missing, misread } = unaccountedIds(list, (byInstance.get(instanceKey(item.ecosystem, item.package, version)) ?? []).map((e) => e.vulnId), version, item.ecosystem);
-      if (missing.length === 0 && misread.length === 0) continue;
-      const gap = gaps.get(lookupKey(item)) ?? { ids: [], versions: [] };
-      gaps.set(lookupKey(item), { ids: [...new Set([...gap.ids, ...missing])], versions: [...new Set([...gap.versions, version])], misread: [...new Set([...(gap.misread ?? []), ...misread])] });
-    }
-  }
-  // Per package: every item of a package whose list is incomplete loses what was computed from it.
-  for (const item of items) {
-    const gap = gaps.get(lookupKey(item));
-    if (!gap) continue;
-    advisoryLists.set(lookupKey(item), null);
-    item.listGap = gap;
-    delete item.rangeCheck;
-  }
-  // The list can be held against the batch query only when the batch query answered. With it
-  // failed (HTTP 500, truncated JSON) or answered only from an expired cache, an empty list is
-  // what a proxy answering {"vulns":[]} looks like, and `{npm, lodash, "4.x"}` said "Safe in 4.x:
-  // smallest 4.0.0" (blind audit round 5). No release is named safe then; the list still speaks
-  // for what it finds against a release (malware, a negative finding), never for a clean one.
-  const batchAnswered = !scan.offline && (scan.staleAnswers ?? 0) === 0;
-  const batchRead = (item: CheckItem) => batchAnswered && !contradictionOf(item);
-  for (const item of items) {
-    if (batchRead(item) || item.listGap || !item.rangeCheck) continue;
-    item.batchUnread = scan.offline
-      ? (scan.uncheckedReason ?? "the query failed")
-      : !batchAnswered
-        ? `only an expired cached answer (${scan.staleReason ?? "the fresh query failed"})`
-        : `${contradictionOf(item)!.replace(/^OSV\.dev's /, "")}, so it was not used`;
-    delete item.rangeCheck;
-  }
+  dropIncompleteLists(lookups, items, batch);
+  const batchRead = markBatchUnread(items, batch, contradictionOf);
   const lines = affectedExact.flatMap((item) => {
     if (!batchRead(item)) return [];
     const lookup = indexes.get(lookupKey(item))!;
