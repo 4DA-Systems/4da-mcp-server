@@ -276,8 +276,12 @@ export class LiveCache {
       INSERT OR REPLACE INTO live_cache (cache_key, data, source, fetched_at, expires_at)
       VALUES (?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'))
     `);
+    // The row limit holds here as in set(): an oversized row is skipped, the rest are written.
     this.conn().transaction(() => {
-      for (const [key, data] of entries) insert.run(key, JSON.stringify(data), source, ttlSeconds);
+      for (const [key, data] of entries) {
+        const text = JSON.stringify(data);
+        if (text.length <= MAX_ROW_CHARS) insert.run(key, text, source, ttlSeconds);
+      }
     })();
   }
 

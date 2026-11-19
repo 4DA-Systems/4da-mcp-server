@@ -314,9 +314,40 @@ const exactFor = (ecosystem, spec) => {
  * characters is kept. Text after that run (a comment, a sentence) is not a version and is dropped.
  */
 const NAME_TEXT = /^[@A-Za-z0-9][\w.\-/~@]{0,213}$/;
-const SPEC_TEXT = /^[\w.\-+~^<>=!*,| ]{1,80}/;
-/** The leading version-specifier run of a value, without an operator left dangling at its end ("4.17.21 <" reads "4.17.21"). */
-const specText = (spec) => (typeof spec === "string" ? (SPEC_TEXT.exec(spec.trim())?.[0] ?? "").replace(/[\s<>=~^!,|]+$/, "") : "");
+/**
+ * A version specifier is a sequence of comparator clauses: an optional operator (`^ ~ > < = !`
+ * and their combinations), an optional `v`, then a version that starts with a digit and is made
+ * of `[0-9A-Za-z.+_-]` and `*`/`x` wildcards; or a bare `*`. Clauses are joined by `||`, `,`,
+ * ` - ` or a space. Reading stops at the first token that is not a clause, so a word or sentence
+ * after a version ("4.17.21 IMPORTANT ...") is never repeated, and an operator or joiner left
+ * dangling before it ("4.17.21 <", "1.2 ||") goes with it. At most SPEC_MAX characters are kept,
+ * in whole clauses.
+ */
+const SPEC_CLAUSE = /(?:[~^<>=!]{1,3}\s*)?(?:v?\d[0-9A-Za-z.+_*-]*|\*)/y;
+const SPEC_JOINER = /\s*\|\|\s*|\s*,\s*|\s+-\s+|\s+/y;
+const SPEC_MAX = 80;
+const specText = (spec) => {
+  if (typeof spec !== "string") return "";
+  const s = spec.trim().slice(0, SPEC_MAX * 2);
+  let kept = "";
+  let at = 0;
+  for (let first = true; ; first = false) {
+    let joiner = "";
+    if (!first) {
+      SPEC_JOINER.lastIndex = at;
+      const j = SPEC_JOINER.exec(s);
+      if (!j) break;
+      joiner = j[0];
+      at = SPEC_JOINER.lastIndex;
+    }
+    SPEC_CLAUSE.lastIndex = at;
+    const c = SPEC_CLAUSE.exec(s);
+    if (!c || kept.length + joiner.length + c[0].length > SPEC_MAX) break;
+    kept += joiner + c[0];
+    at = SPEC_CLAUSE.lastIndex;
+  }
+  return kept;
+};
 
 /** The changes fit to repeat: shaped names, cleaned versions, nothing else. */
 function repeatable(changes) {

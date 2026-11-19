@@ -10,6 +10,8 @@
  * fetchWithTimeout (http-utils.ts), which applies the private-name check and the proxy.
  */
 
+import { Agent } from "undici";
+
 import { noteCallHost } from "../call-budget.js";
 import { shutdownSignal } from "../shutdown.js";
 
@@ -27,6 +29,17 @@ export function isLoopbackUrl(url: string): boolean {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+/**
+ * The dispatcher every loopback request is made with: a plain connection to the address named,
+ * never the environment proxy agent (a Node that honours NODE_USE_ENV_PROXY would otherwise send
+ * the request to HTTPS_PROXY when NO_PROXY does not list localhost).
+ */
+let direct: Agent | null = null;
+export function directDispatcher(): Agent {
+  direct ??= new Agent();
+  return direct;
+}
 
 /**
  * The JSON a loopback service answers with, or null when its status is not 2xx. Throws for an
@@ -47,7 +60,7 @@ export async function fetchLoopbackJson(url: string, init: RequestInit = {}, tim
   try {
     // Recorded like every other request, so an answer that names its hosts names this one too.
     noteCallHost(new URL(url).host);
-    const response = await fetch(url, { ...init, signal: controller.signal, redirect: "error" });
+    const response = await fetch(url, { ...init, signal: controller.signal, redirect: "error", dispatcher: directDispatcher() } as RequestInit);
     return response.ok ? await response.json() : null;
   } finally {
     clearTimeout(timeout);

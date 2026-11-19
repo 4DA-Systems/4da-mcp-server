@@ -13,7 +13,7 @@
  */
 
 import { inflateRawSync } from "node:zlib";
-import { ArchiveError, MAX_ARCHIVE_TEXT_BYTES, MAX_ARCHIVE_TEXT_FILES, MAX_COMPRESSED_BYTES, MAX_ENTRY_PATH, MAX_FILE_BYTES } from "./package-archive.js";
+import { ArchiveError, ArchiveTextFiles, MAX_ARCHIVE_TEXT_BYTES, MAX_ARCHIVE_TEXT_FILES, MAX_COMPRESSED_BYTES, MAX_ENTRY_PATH, MAX_FILE_BYTES } from "./package-archive.js";
 
 const EOCD_SIG = 0x06054b50;
 const CDH_SIG = 0x02014b50;
@@ -46,7 +46,7 @@ export function readZipRootTextFiles(
   buf: Buffer,
   accept: (basename: string) => boolean,
   root: string | null = null,
-): Map<string, string> {
+): ArchiveTextFiles {
   if (buf.length > MAX_COMPRESSED_BYTES) {
     throw new ArchiveError(`archive is ${buf.length} bytes compressed (cap ${MAX_COMPRESSED_BYTES})`);
   }
@@ -58,7 +58,7 @@ export function readZipRootTextFiles(
   if (cdOffset === 0xffffffff || count === 0xffff) throw new ArchiveError("zip64 archives are not read");
   if (cdOffset + cdSize > buf.length || count > MAX_ENTRIES) throw new ArchiveError("corrupt zip central directory");
 
-  const files = new Map<string, string>();
+  const files = new ArchiveTextFiles();
   // Local headers already read: a directory may list the same stored bytes under many names.
   const read = new Set<number>();
   let kept = 0;
@@ -98,7 +98,10 @@ export function readZipRootTextFiles(
     if (data.includes(0)) continue;
     // A few root-level text files are wanted, so a few are kept: every accepted entry costs up
     // to MAX_FILE_BYTES of memory, and an archive may list hundreds of thousands of them.
-    if (files.size >= MAX_ARCHIVE_TEXT_FILES || kept + data.length > MAX_ARCHIVE_TEXT_BYTES) break;
+    if (files.size >= MAX_ARCHIVE_TEXT_FILES || kept + data.length > MAX_ARCHIVE_TEXT_BYTES) {
+      files.stoppedAtLimit = true;
+      break;
+    }
     kept += data.length;
     files.set(name, data.toString("utf8"));
   }

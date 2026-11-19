@@ -54,10 +54,10 @@ describe("yarn.lock and pnpm-lock.yaml are read line by line, each line once", (
     expect(names(lockDir("yarn.lock", `"zq-a@^1.0.0":\n  version "1.0.0"\n${long}\n`))).toEqual(["UNREAD yarn.lock"]);
   });
 
-  it("yarn.lock: an entry whose header is too long is skipped, as the lockfile reader skips it; the next entry is read", () => {
+  it("yarn.lock: an entry whose header is too long is not read, so the file is named as not fully read; the next entry is read", () => {
     const header = `${Array.from({ length: 400 }, (_, i) => `"zq-long@^1.0.${i}"`).join(", ")}:`;
     expect(header.length).toBeGreaterThan(4096);
-    expect(names(lockDir("yarn.lock", `${header}\n  version "1.0.400"\n  resolved "https://npm.zqacme.example/zq-long/-/zq-long-1.0.400.tgz"\n\n${PRIVATE_ENTRY}`))).toEqual(["zq-a"]);
+    expect(names(lockDir("yarn.lock", `${header}\n  version "1.0.400"\n  resolved "https://npm.zqacme.example/zq-long/-/zq-long-1.0.400.tgz"\n\n${PRIVATE_ENTRY}`))).toEqual(["zq-a", "UNREAD yarn.lock"]);
   });
 
   it("pnpm-lock.yaml: one package key line of a megabyte", () => {

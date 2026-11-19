@@ -4,7 +4,7 @@
 
 ### Behaviour changes
 
-- `project_path` refuses a home directory (like a drive root) and a network path on another machine, before anything is opened.
+- `project_path` refuses a home directory (like a drive root) and a network path on another machine, before anything is opened. The same holds when the server itself is started in the home directory and a tool is called without `project_path`: nothing is scanned at startup and the tool asks for `project_path` (before, the server scanned every project under the home directory as one and sent each dependency name to OSV.dev and the registries).
 - `vulnerability_scan` detailed answers are a page: at most 200 advisory rows by default, `limit` (up to 1,000) and `offset` for the rest, with a `truncated` block; totals still describe the whole result.
 - Concise `upgrade_impact` answers list at most 150 changelog entries.
 - `--setup` writes a pinned `npx @4da/mcp-server@<version>`, keeps an existing 4da entry that differs (`--update` replaces it), refuses unknown arguments (exit 2) and exits 1 when a config was not written.

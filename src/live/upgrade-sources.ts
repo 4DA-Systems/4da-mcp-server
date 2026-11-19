@@ -23,9 +23,9 @@
 import { compareVersionPrecedence, parseSemverPrecedence } from "./semver-precedence.js";
 import { osvAdvisoryId, quoteThirdParty, thirdPartyTimestamp, thirdPartyUrl, URL_MAX } from "../untrusted-text.js";
 import { isMalwareRecord } from "./malware.js";
-import { ArchiveError, defaultFetch, displayArchivePath, fetchArchiveBytes, readRootTextFiles, type FetchFn } from "./package-archive.js";
+import { ArchiveError, defaultFetch, displayArchivePath, fetchArchiveBytes, readRootTextFiles, stoppedAtLimit, type FetchFn } from "./package-archive.js";
 import { registryEchoedName, registryVersionText } from "./registry-fields.js";
-import { CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelogWithin, type ChangelogSection, type VersionOrder } from "./changelog.js";
+import { CHANGELOG_INCOMPLETE_NOTE, CHANGELOG_PARSER_VERSION, findChangelogFile, isChangelogName, parseChangelogWithin, type ChangelogSection, type VersionOrder } from "./changelog.js";
 import { compareVersions, isComparable } from "./version-compare.js";
 import { isPrereleaseVersion } from "./osv-ranges.js";
 import { looksLikeZip, readZipRootTextFiles } from "./zip-archive.js";
@@ -67,7 +67,7 @@ export const CRATES_USER_AGENT = "4da-mcp-server (https://4da.ai; upgrade_impact
 const INDEX_TTL = 6 * 3600;
 const CHANGELOG_TTL = 7 * 86_400;
 const INCOMPLETE_TTL = 3600;
-const INCOMPLETE_NOTE = "reading this changelog stopped at the time allowed for one file; sections after the last one listed were not read";
+const INCOMPLETE_NOTE = CHANGELOG_INCOMPLETE_NOTE;
 const OSV_TTL = 3600;
 const CACHE_SOURCE = "upgrade-impact";
 const INDEX_TIMEOUT_MS = 30_000;
@@ -316,7 +316,7 @@ export async function getChangelog(
   if (hit) return hit;
 
   const headers: Record<string, string> = index.ecosystem === "crates.io" ? { "User-Agent": CRATES_USER_AGENT } : {};
-  let files: Map<string, string>;
+  let files: ReadonlyMap<string, string>;
   try {
     const bytes = await fetchArchiveBytes(url, net.fetch, headers);
     // A Go module zip holds its files under `<module>@<version>/`; a zip sdist and every tar one directory deep.
@@ -336,10 +336,19 @@ export async function getChangelog(
   // The path is shown, so it is the plain one or the basename alone (package-archive.ts
   // displayArchivePath): the directory part of an archive path is the packer's free text.
   const file = archivePath ? displayArchivePath(archivePath) : null;
+  // A read that stopped at the archive limits did not see every changelog-named file, so
+  // "none" or "no headings" is said of the files read, not of the archive.
+  const unseen = stoppedAtLimit(files) ? `the ${version.version} archive holds more changelog-named files than are read` : null;
   const result: ChangelogResult = !file
-    ? { found: false, reason: `the ${version.version} archive ships no changelog file` }
+    ? { found: false, reason: unseen ?? `the ${version.version} archive ships no changelog file` }
     : sections.length === 0
-      ? { found: false, file, reason: parsed.complete ? `${file} has no version headings this parser recognises` : `${file} could not be read within the time allowed for one changelog` }
+      ? {
+          found: false,
+          file,
+          reason: parsed.complete
+            ? `${file} has no version headings this parser recognises${unseen ? `, and ${unseen}` : ""}`
+            : `${file} could not be read within the time allowed for one changelog`,
+        }
       : { found: true, file, sections, source: "archive", ...(parsed.complete ? {} : { incomplete: INCOMPLETE_NOTE }) };
   // A cut-off parse depends on how busy the machine was, so it is not remembered for a week.
   net.cache?.set(key, result, CACHE_SOURCE, parsed.complete ? CHANGELOG_TTL : INCOMPLETE_TTL);

@@ -1463,9 +1463,8 @@ function yarnField(text: string, key: string): string | null {
  * (v1 `resolved "<url>"`; berry `resolution: "name@<url>"`, or a registry entry whose tarball came
  * from elsewhere, `name@npm:1.0.0::__archiveUrl=https%3A%2F%2Fhost%2F...`). Nothing here matches
  * across a line break, and a line over MAX_LOCKFILE_LINE is not examined, so blank lines and long
- * lines cost their length once. False when a line inside a block that was being read is too long:
- * that block's location is then not known. A block whose header is too long is skipped, as the
- * lockfile reader skips it.
+ * lines cost their length once. False when a line inside a block that was being read is too long,
+ * or a block's header is: that block's location is then not known.
  */
 function* yarnLockSources(text: string, onSource: (name: string, version: string | null, location: string) => void): Steps<boolean> {
   let complete = true;
@@ -1488,8 +1487,12 @@ function* yarnLockSources(text: string, onSource: (name: string, version: string
     const indent = leadingBlanks(line);
     if (indent === line.length) continue;
     if (line.length > MAX_LOCKFILE_LINE) {
-      if (indent === 0) flush();
-      else if (name) complete = false;
+      // A header too long to read opens a block whose package is not known: its locations are
+      // not read, so the file is not fully read.
+      if (indent === 0) {
+        flush();
+        complete = false;
+      } else if (name) complete = false;
       continue;
     }
     if (indent === 0) {

@@ -327,7 +327,9 @@ describe("the scan's coverage says a partial yarn.lock is partial, not unreadabl
       fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ dependencies: { lodash: "^4" } }));
       fs.writeFileSync(path.join(dir, "yarn.lock"), `# yarn lockfile v1\n\n${long}\nlodash@^4:\n  version "4.17.20"\n`);
       const result = (await executeVulnerabilityScan(null, { project_path: dir }, new LiveIntelligence(new Database(":memory:")))) as Record<string, any>;
-      expect(result.total_dependencies_scanned).toBe(1);
+      // The skipped entry's source is not known, so no npm name in this lockfile is treated as public.
+      expect(result.total_dependencies_scanned).toBe(0);
+      expect(result.coverage.private_dependency_list).toEqual([expect.objectContaining({ name: "lodash", why: expect.stringMatching(/yarn\.lock has a line longer than/) })]);
       expect(result.coverage.note).toMatch(/PARTIAL: 1 lockfile was read with entries skipped: yarn\.lock \(1 entry on a line longer than 4096 characters/);
       expect(result.coverage.note).not.toMatch(/UNREADABLE/);
       // A partial read is not an unreadable lockfile (review of L5): its own key.
