@@ -51,6 +51,7 @@ describe("a mutant that no longer applies is refused, never run", () => {
     const m = { ...base, find: "v >= 1;", nth: 2, replace: "v > 1;" };
     expect(validate([m], root)).toEqual([]);
     const loc = locate(m, root);
+    if (loc.error !== undefined) throw new Error(loc.error);
     expect(loc.line).toBe(2);
     expect(applied(m, loc)).toBe("export const lo = (v: number) => v >= 1;\nexport const hi = (v: number) => v > 1;\nexport const one = 1;\n");
     expect(readFileSync(join(root, "src", "a.ts"), "utf8")).toContain("hi = (v: number) => v >= 1;");

@@ -444,7 +444,7 @@ describe("platform activity is tracked per lockfile", () => {
       // No cargo, or the fixture's crates are not in the local registry cache (CI fetches them first).
       if (process.env.FOURDA_REQUIRE_CARGO === "1") throw new Error("FOURDA_REQUIRE_CARGO=1 but `cargo tree` could not resolve test-fixtures/cargo-platform");
       // Nothing can be asserted without cargo's answer: reported as skipped, never as passed.
-      skip("cargo tree could not resolve test-fixtures/cargo-platform here");
+      return skip("cargo tree could not resolve test-fixtures/cargo-platform here");
     }
     // The project's real lockfile locks itoa and never builds it (an optional dependency no feature enables).
     expect(resolved.has("itoa")).toBe(false);

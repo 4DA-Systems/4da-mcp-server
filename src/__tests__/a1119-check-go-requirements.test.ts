@@ -207,8 +207,8 @@ describe("dependency_check: what a Go release's go.mod requires", () => {
       "v1.9.1": expect.stringMatching(/^v1\.9\.1 requires 2 modules at versions with known advisories \(example\.com\/xnet v0\.10\.0, example\.com\/xcrypto v0\.9\.0\): after writing it and running go mod tidy, raise each one your go\.mod lists/),
     });
     expect(r.reason).toMatch(/Safe in v1: smallest v1\.9\.1, newest v1\.12\.0\. v1\.9\.1 requires 2 modules at versions with known advisories/);
-    const concise = (await runDependencyCheck(noDb, { items: [{ ecosystem: "Go", package: WEB, to: "v1" }] }, new LiveIntelligence(new Database(":memory:")))) as { results: Array<{ safe: Record<string, unknown> }> };
-    expect(concise.results[0].safe.caveats).toEqual(r.range_check!.requirement_caveats);
+    const concise = (await runDependencyCheck(noDb, { items: [{ ecosystem: "Go", package: WEB, to: "v1" }] }, new LiveIntelligence(new Database(":memory:")))) as { results: Array<Record<string, unknown>> };
+    expect((concise.results[0].safe as Record<string, unknown>).caveats).toEqual(r.range_check!.requirement_caveats);
   });
 
   it("a required module that is private is never sent anywhere, and the release is not called clean", async () => {
