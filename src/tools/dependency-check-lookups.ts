@@ -14,14 +14,13 @@ import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetada
 import type { ResolvedDependency } from "../live/types.js";
 import type { HeldCheck } from "../live/held-dependencies.js";
 import { requirementSources } from "../live/release-requirements.js";
-import { readProjectPython, readProjectPythonUnread, type ProjectPython } from "../live/project-python.js";
 import { GO_VERSION, goVersion } from "../live/go-releases.js";
 import { samePackageName } from "../live/version-compare.js";
 import { noteListFacts } from "./dependency-check-facts.js";
 import type { CheckItem } from "./dependency-check-signals.js";
 import { compareIn } from "./dependency-check-versions.js";
 import { HeldJudge, RequirementJudge, type ReleaseJudge } from "./dependency-check-held.js";
-import { pythonRangeFilter } from "./dependency-check-python.js";
+import { projectPythons, pythonRangeFilter, type ItemPythons } from "./dependency-check-python.js";
 import { ECOSYSTEMS, lookupKey, provisional, type Requested } from "./dependency-check-items.js";
 
 /** Registry reads in flight per ecosystem (each registry has its own pool: crates.io's one-a-second pacing never holds up npm or PyPI). */
@@ -37,10 +36,8 @@ export interface PassContext {
   requested: Requested[];
   sources: Record<CheckEcosystem, ReleaseMetadataSource>;
   fixSources: FixPathSources | null;
-  /** PyPI: the Python versions the project declares, read from its own files; null when it declares none. */
-  projectPython: ProjectPython | null;
-  /** Where the project declares a Python that could not be read. */
-  pythonUnreadAt: string | null;
+  /** PyPI: per package, the Python versions declared by the project that declares it, and where a declaration could not be read (projectPythons). */
+  pythons: ItemPythons;
   /** Whether a PyPI release supports the project's Python (true when nothing is judged). */
   supportsPython: (item: CheckItem, index: PackageReleaseIndex) => (v: string) => boolean;
   /** Each package's advisory list, requested once per pass however many stages ask for it. */
@@ -69,15 +66,13 @@ export interface Lookups {
 export function passContext(liveIntel: LiveIntelligence, requested: Requested[], now: Date): PassContext {
   const sources = liveIntel.getReleaseSources();
   const fixSources = liveIntel.getFixPathSources();
-  // PyPI: the Python versions the project declares, read from its own files; null when it declares
-  // none, and then nothing is judged against a Python version.
+  // PyPI: per package, the Python versions declared by the project that declares it (dependency-check-python.ts
+  // projectPythons); null when none is declared, and then nothing is judged against a Python version.
   const projectRoot = requested.some((r) => r.ecosystem === "PyPI") ? (liveIntel.getProjectRoot?.() ?? null) : null;
-  const projectPython = projectRoot ? readProjectPython(projectRoot) : null;
-  /** Where the project declares a Python that could not be read: the answer says so instead of judging nothing silently. */
-  const pythonUnreadAt = projectRoot && !projectPython ? readProjectPythonUnread(projectRoot) : null;
+  const pythons = projectPythons(projectRoot ? (liveIntel.getPythonProjects?.() ?? []) : [], projectRoot);
   /** Whether a PyPI release supports the project's Python (true when nothing is judged). */
   const supportsPython = (item: CheckItem, index: PackageReleaseIndex) => {
-    const filter = pythonRangeFilter(projectPython, item.ecosystem, index);
+    const filter = pythonRangeFilter(pythons.of(item), item.ecosystem, index);
     return (v: string) => !filter?.unsupported(v);
   };
   const packageAdvisoryLists = advisoryListReader(fixSources);
@@ -96,7 +91,7 @@ export function passContext(liveIntel: LiveIntelligence, requested: Requested[],
       return liveIntel.queryAdvisories(deps);
     },
     selectedGoVersions(liveIntel),
-    projectPython?.covers ?? null,
+    pythons.coversOf,
   );
   /** The judge of what an ecosystem's releases bring with them; null where nothing is read (a source without requirement lists). */
   const judgeOf = (ecosystem: CheckEcosystem): ReleaseJudge | null => (ecosystem === "npm" ? held : reqs.of(ecosystem));
@@ -106,7 +101,7 @@ export function passContext(liveIntel: LiveIntelligence, requested: Requested[],
   const heldAt = (item: CheckItem) => judgeOf(item.ecosystem)?.at(item.package, item.to);
   /** `to` brings in an affected dependency that keeps it out of the safe releases (never a Go minimum: that is a caveat). */
   const heldAffected = (item: CheckItem) => item.ecosystem !== "Go" && Boolean(judgeOf(item.ecosystem)?.affected(item.package, item.to));
-  return { now, liveIntel, requested, sources, fixSources, projectPython, pythonUnreadAt, supportsPython, packageAdvisoryLists, heldAsked, held, judgeOf, judgeAll, heldAt, heldAffected };
+  return { now, liveIntel, requested, sources, fixSources, pythons, supportsPython, packageAdvisoryLists, heldAsked, held, judgeOf, judgeAll, heldAt, heldAffected };
 }
 
 /** The first lookups of a pass, all started at once: the registry reads and the advisory lists the next stages need first. */

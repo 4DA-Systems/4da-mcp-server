@@ -17,12 +17,12 @@ import { hasRealAdvisory } from "./dependency-check-batch.js";
 
 /** The exact targets that get the safe releases on their own line, with the advisory lists that takes. */
 export async function findAffectedExact(ctx: PassContext, lookups: Lookups, items: Resolved[], advisoriesFor: (item: CheckItem) => AdvisoryFacts): Promise<Resolved[]> {
-  const { projectPython, heldAffected, packageAdvisoryLists } = ctx;
+  const { pythons, heldAffected, packageAdvisoryLists } = ctx;
   const { indexes, advisoryLists } = lookups;
   /** PyPI: an exact `to` that does not support every Python the project declares. */
   const lacksPython = (i: Resolved) => {
     const lookup = indexes.get(lookupKey(i));
-    return lookup?.status === "ok" && lacksProjectPython(projectPython, i.ecosystem, lookup.data.releases[i.to]);
+    return lookup?.status === "ok" && lacksProjectPython(pythons.of(i), i.ecosystem, lookup.data.releases[i.to]);
   };
   // An exact `to` an advisory affects (its own, or one it holds), or that does not support the
   // project's Python: the safe releases on its own line.
@@ -39,7 +39,7 @@ export async function findAffectedExact(ctx: PassContext, lookups: Lookups, item
 
 /** The range check over each affected exact target's own line, what its candidates bring with them judged first. */
 export async function checkSameLines(ctx: PassContext, lookups: Lookups, affectedExact: Resolved[], batchRead: (item: CheckItem) => boolean): Promise<void> {
-  const { now, projectPython, supportsPython, judgeOf, judgeAll } = ctx;
+  const { now, pythons, supportsPython, judgeOf, judgeAll } = ctx;
   const { indexes, advisoryLists } = lookups;
   const lines = affectedExact.flatMap((item) => {
     if (!batchRead(item)) return [];
@@ -65,7 +65,7 @@ export async function checkSameLines(ctx: PassContext, lookups: Lookups, affecte
   for (const { item, index, advisories, line } of lines) {
     await yieldToEventLoop();
     const filter = judgeOf(item.ecosystem)?.rangeFilter(item.package) ?? undefined;
-    const python = pythonRangeFilter(projectPython, item.ecosystem, index);
+    const python = pythonRangeFilter(pythons.of(item), item.ecosystem, index);
     // The safe releases on the line of a stable `to` are stable ones; of a prerelease `to`, prereleases too.
     item.rangeCheck = checkRange({
       ecosystem: item.ecosystem,

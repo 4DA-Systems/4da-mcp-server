@@ -153,7 +153,7 @@ function blockedResult(p: Plan & { blocked: string }, { extra, bad, nameCheck }:
 
 /** A published release: every signal, and the verdict they decide. */
 function judgedResult(p: Plan, { extra, bad, nameCheck }: PlanFacts, a: AnswerInputs): ItemResult {
-  const { now, projectPython, pythonUnreadAt, heldAt } = a.ctx;
+  const { now, pythons, heldAt } = a.ctx;
   const { advisoriesFor, created } = a;
   const { holdWaivers } = a.findings;
   const { item, index } = p;
@@ -174,7 +174,7 @@ function judgedResult(p: Plan, { extra, bad, nameCheck }: PlanFacts, a: AnswerIn
     installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),
     newDependenciesSignal(item, to, base, p.introduced, createdForItem),
     withdrawnSignal(item, to, index!),
-    ...[pythonSupportSignal(item, to, projectPython, pythonUnreadAt)].filter((s): s is Signal => s !== null),
+    ...[pythonSupportSignal(item, to, pythons.of(item), pythons.unreadOf(item))].filter((s): s is Signal => s !== null),
     upgradeTypeSignal(item, releasesBack(item, index!)),
   ];
   const decided = decide(signals, item.ecosystem);

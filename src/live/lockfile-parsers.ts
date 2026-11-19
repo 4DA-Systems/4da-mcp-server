@@ -39,7 +39,7 @@ import {
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
 import { inspectYarnLock, type YarnInspection } from "./js-dev-scope.js";
-import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec } from "./js-manifests.js";
+import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, MAX_MEMBER_MANIFESTS, memberListGapText, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec, type MemberListGap } from "./js-manifests.js";
 import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
@@ -166,6 +166,8 @@ function damagedProblem(file: string, damage: LockDamage): LockfileProblem {
   return partialRead(file, damage.reason, damage.missing);
 }
 
+type EntryCheckOptions = { skipLocal?: boolean; members?: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional?: string[] };
+
 /**
  * The dependencies the project's package.json declares that the lockfile
  * beside it has no entry for (`has`), each name once, in the order declared.
@@ -179,14 +181,10 @@ function damagedProblem(file: string, damage: LockDamage): LockfileProblem {
  * declarations and `members` the project's own packages, for lockfiles that
  * write no entry for local code. When the member list is not known whole
  * (`members.complete` false), any declared name may be a member, so none is
- * reported. `ignoredOptional` names optional dependencies the package manager
- * was told to leave out.
+ * reported (notCrossCheckedProblem says so). `ignoredOptional` names optional
+ * dependencies the package manager was told to leave out.
  */
-function declaredWithoutEntry(
-  cwd: string,
-  has: (name: string) => boolean,
-  options: { skipLocal?: boolean; members?: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional?: string[] } = {},
-): DeclaredSpec[] {
+function declaredWithoutEntry(cwd: string, has: (name: string) => boolean, options: EntryCheckOptions = {}): DeclaredSpec[] {
   const manifest = readManifestDeclarations(path.join(cwd, "package.json"));
   if (!manifest || options.members?.complete === false) return [];
   const seen = new Set<string>();
@@ -200,12 +198,40 @@ function declaredWithoutEntry(
 }
 
 /**
+ * The cross-check declaredWithoutEntry does not make when the member list is not whole: the
+ * declared names with no entry that are not known members may be members (which need none) or
+ * missing from the lockfile. Said, never silent, and never as damage: the file itself was read
+ * whole. Null when the member list is whole or every declared name has an entry.
+ */
+function notCrossCheckedProblem(file: string, cwd: string, has: (name: string) => boolean, options: EntryCheckOptions, gap: MemberListGap): LockfileProblem | null {
+  if (!options.members || options.members.complete) return null;
+  const unsure = declaredWithoutEntry(cwd, has, { ...options, members: { names: options.members.names, complete: true } });
+  if (unsure.length === 0) return null;
+  const one = unsure.length === 1;
+  return {
+    file,
+    notCrossChecked: true,
+    error: `${declaredText(unsure)} ${one ? "has" : "have"} no entry in it and may be ${one ? "a workspace member, which needs" : "workspace members, which need"} no entry, but the member list could not be read whole (${memberListGapText(gap)}), so whether ${one ? "it is" : "they are"} missing from this lockfile was not checked`,
+  };
+}
+
+/**
+ * A pnpm lockfile that records no importer for the project (none of `importers:`, v5's top-level
+ * `dependencies:`): what it holds for package.json cannot be told, so the two were not compared.
+ */
+function noImporterProblem(file: string, cwd: string, options: EntryCheckOptions): LockfileProblem | null {
+  const declared = declaredWithoutEntry(cwd, () => false, { ...options, members: options.members ? { names: options.members.names, complete: true } : undefined });
+  if (declared.length === 0) return null;
+  return { file, notCrossChecked: true, error: `it records no importer for the project itself, so what it holds for ${declaredText(declared)}, declared in package.json, was not checked against it` };
+}
+
+/**
  * What pnpm leaves out of a root importer on purpose: the workspace members (a link to one is
  * omitted under `excludeLinksFromLockfile`), from pnpm-workspace.yaml `packages`, and the
  * optional dependencies `ignoredOptionalDependencies` names (in package.json's `pnpm` field,
  * pnpm-workspace.yaml, or as the lockfile records it).
  */
-function pnpmOmissions(cwd: string, lockContent: string): { members: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional: string[] } {
+function pnpmOmissions(cwd: string, lockContent: string): { members: { names: ReadonlySet<string>; complete: boolean }; ignoredOptional: string[]; gap: MemberListGap } {
   let workspaceYaml = "";
   try {
     workspaceYaml = readTextFile(path.join(cwd, "pnpm-workspace.yaml"));
@@ -221,7 +247,8 @@ function pnpmOmissions(cwd: string, lockContent: string): { members: { names: Re
   }
   const expanded = expandWorkspaces(cwd, pnpmYamlList(workspaceYaml, "packages"));
   const members = memberNamesOf(cwd, expanded.dirs);
-  return { members: { names: members.names, complete: members.complete && expanded.complete }, ignoredOptional };
+  const gap = { unreadable: members.unreadable, unlisted: !expanded.complete, tooMany: expanded.dirs.length > MAX_MEMBER_MANIFESTS };
+  return { members: { names: members.names, complete: members.complete && expanded.complete }, ignoredOptional, gap };
 }
 
 /** "a (dependencies) and 2 more", for a note. */
@@ -415,16 +442,17 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const installs = yield* readPnpmLockSteps(content, versions, instances, report);
       // pnpm writes every dependency of the project into its root importer; a link can be left out (excludeLinksFromLockfile).
       const listed = report.rootEntries;
-      const omitted = pnpmOmissions(cwd, content);
+      const { gap, ...omitted } = pnpmOmissions(cwd, content);
       if (versions.size === 0) return emptyRead(emptyLockProblem(file, declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true, ...omitted })));
       const damage = yield* pnpmLockDamageSteps(content, report.missingDirect, installs);
       const undeclared = listed ? declaredWithoutEntry(cwd, (name) => listed.has(name), { skipLocal: true, ...omitted }) : [];
       const problem = incompleteProblem(file, damage, undeclared);
+      const uncrossed = listed ? notCrossCheckedProblem(file, cwd, (name) => listed.has(name), { skipLocal: true, ...omitted }, gap) : noImporterProblem(file, cwd, { skipLocal: true, ...omitted });
       return {
         versions,
         instances,
         uncheckable: report.uncheckable,
-        problems: problem ? [problem] : [],
+        problems: [problem, uncrossed].filter((p): p is LockfileProblem => p !== null),
         declared: report.declared,
         scopeGraded: report.scopeGraded,
       };
@@ -456,14 +484,14 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       }
       // Each declared dependency has an entry in a whole yarn.lock (a git or local one too), except a
       // workspace member (classic writes none) and a link.
-      const undeclared = declaredWithoutEntry(cwd, (name) => inspection?.hasEntry(name) === true, {
-        skipLocal: true,
-        members: inspection ? { names: inspection.memberNames, complete: inspection.membersComplete } : undefined,
-      });
+      const entryCheck: EntryCheckOptions = { skipLocal: true, members: inspection ? { names: inspection.memberNames, complete: inspection.membersComplete } : undefined };
+      const undeclared = declaredWithoutEntry(cwd, (name) => inspection?.hasEntry(name) === true, entryCheck);
       if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
       const problems: LockfileProblem[] = skipped > 0 ? [yarnSkippedProblem(file, skipped)] : [];
       const incomplete = incompleteProblem(file, yarnLockDamage(report.incomplete, inspection?.dangling ?? []), undeclared);
       if (incomplete) problems.push(incomplete);
+      const uncrossed = inspection ? notCrossCheckedProblem(file, cwd, (name) => inspection.hasEntry(name), entryCheck, inspection.membersGap) : null;
+      if (uncrossed) problems.push(uncrossed);
       const grade = inspection?.grade ?? { scopes: new Map<string, boolean>(), declared: [], graded: false };
       const instances = new InstanceSet();
       for (const copy of read) instances.add(copy.name, copy.version, grade.scopes.get(`${copy.name}\0${copy.version}`));

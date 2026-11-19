@@ -46,7 +46,10 @@ describe("yarn classic workspaces", () => {
       "packages/b/package.json": "{ not json",
       "yarn.lock": YARN,
     });
-    expect(resolveVersionSource(dir, "npm").problems ?? []).toEqual([]);
+    // Not damage: the one note says the lockfile was not cross-checked, and why (a1119-advice2-uncrossed.test.ts).
+    const problems = resolveVersionSource(dir, "npm").problems ?? [];
+    expect(problems).toEqual([expect.objectContaining({ notCrossChecked: true })]);
+    expect(problems[0].partial).toBeUndefined();
   });
 
   it("with the member list whole, a declared name no member has is still a missing entry", () => {

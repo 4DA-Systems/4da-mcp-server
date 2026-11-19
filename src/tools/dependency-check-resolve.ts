@@ -22,14 +22,14 @@ const DAY_MS = 86_400_000;
 
 /** Each item's `to` resolved to one version, in the order asked. */
 export async function resolveItems(ctx: PassContext, lookups: Lookups): Promise<Resolved[]> {
-  const { requested, now, projectPython } = ctx;
+  const { requested, now, pythons } = ctx;
   const { indexes, advisoryLists } = lookups;
   // One package at a time, yielding between them: a package with hundreds of releases and advisories
   // is CPU work, and the event loop must stay free for the call budget's timer and other calls
   // (pre-publish audit 2026-11-12, S1: ping and lodash waited 22 s behind django).
   let items: Resolved[] = [];
   for (const r of requested) {
-    const resolved = resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, undefined, projectPython);
+    const resolved = resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, undefined, pythons.of(r));
     items.push(resolved);
     const index = indexes.get(lookupKey(r));
     if (!resolved.unresolved && index?.status === "ok") noteRegistryFacts(r, resolved.to, index.data.releases[resolved.to]);
@@ -40,7 +40,7 @@ export async function resolveItems(ctx: PassContext, lookups: Lookups): Promise<
 
 /** Go: a target chosen from the proxy's list is read again with its date (the list has none), and its constraint resolved again. */
 export async function redateGoTargets(ctx: PassContext, lookups: Lookups, items: Resolved[]): Promise<Resolved[]> {
-  const { requested, sources, now, projectPython } = ctx;
+  const { requested, sources, now, pythons } = ctx;
   const { indexes, advisoryLists } = lookups;
   // Go dates come from per-version .info: read them for versions chosen from the list
   // (a constraint, "latest", or `v2.0.0` listed as `v2.0.0+incompatible`).
@@ -55,7 +55,7 @@ export async function redateGoTargets(ctx: PassContext, lookups: Lookups, items:
     // With `to`'s date read, the range's safe picks obey the release-age hold (applyHold) as elsewhere.
     items = items.map((item, i) =>
       item.ecosystem === "Go" && item.rangeCheck?.basis === "requested" && keys.has(lookupKey(item))
-        ? resolveTarget(requested[i], indexes.get(lookupKey(item))!, advisoryLists.get(lookupKey(item)), now, undefined, projectPython)
+        ? resolveTarget(requested[i], indexes.get(lookupKey(item))!, advisoryLists.get(lookupKey(item)), now, undefined, pythons.of(item))
         : item,
     );
   }
@@ -64,7 +64,7 @@ export async function redateGoTargets(ctx: PassContext, lookups: Lookups, items:
 
 /** What each release brings with it, judged; a constraint is then resolved again among the releases that bring nothing affected. */
 export async function judgeReleaseContents(ctx: PassContext, lookups: Lookups, items: Resolved[]): Promise<Resolved[]> {
-  const { requested, now, projectPython, supportsPython, judgeOf, judgeAll } = ctx;
+  const { requested, now, pythons, supportsPython, judgeOf, judgeAll } = ctx;
   const { indexes, advisoryLists } = lookups;
   // What a release installs or requires comes with it (npm, audit 6.2.5 D-4: express 4.20.0
   // exact-pins an affected qs; crates.io and PyPI: a requirement held at an affected release; Go: a
@@ -92,7 +92,7 @@ export async function judgeReleaseContents(ctx: PassContext, lookups: Lookups, i
     const filter = isJudged(item) && item.rangeCheck?.basis === "requested" ? judgeOf(item.ecosystem)!.rangeFilter(item.package) : null;
     if (!filter) return item;
     const r = requested[i];
-    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter, projectPython);
+    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter, pythons.of(r));
   });
   // `to` is what the constraint installs (resolvedRelease, round 8): judge it too (normally a no-op).
   await judgeAll(items.filter(isJudged).map((item) => ({ ecosystem: item.ecosystem, pkg: item.package, versions: [item.to] })));

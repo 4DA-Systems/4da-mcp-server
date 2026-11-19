@@ -59,6 +59,12 @@ export interface LockfileParents {
 export interface ParentIndex {
   format: LockfileFormat;
   parents(name: string, version: string): ParentEdge[];
+  /**
+   * yarn.lock only (it writes no entry for the project or a member: their declarations are not
+   * edges): the version a declared `name@spec` installs, as js-dev-scope.ts resolves it (the entry
+   * keyed by that descriptor, else the one entry of that name); null when none or several answer.
+   */
+  resolve?(name: string, spec: string): string | null;
 }
 
 const DEP_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
@@ -111,8 +117,8 @@ const INDEX_STEP = 2_000;
 /** Lockfiles whose index is kept; the least recently used is dropped past this. */
 const MAX_CACHED_INDEXES = 8;
 
-/** child key -> its parent edges, in the order the lockfile lists them. */
-type EdgeMap = Map<string, ParentEdge[]>;
+/** child key -> its parent edges, in the order the lockfile lists them; a yarn.lock's also resolves declarations (ParentIndex.resolve). */
+type EdgeMap = Map<string, ParentEdge[]> & { resolve?: ParentIndex["resolve"] };
 /** Builds an EdgeMap, yielding every INDEX_STEP units of work. */
 type IndexBuild = Generator<void, EdgeMap, void>;
 
@@ -126,7 +132,7 @@ function push(map: EdgeMap, name: string, version: string, edge: ParentEdge): vo
 }
 
 function indexOf(format: LockfileFormat, edges: EdgeMap): ParentIndex {
-  return { format, parents: (name, version) => [...(edges.get(childKey(name, version)) ?? [])] };
+  return { format, parents: (name, version) => [...(edges.get(childKey(name, version)) ?? [])], ...(edges.resolve ? { resolve: edges.resolve } : {}) };
 }
 
 function runSync(build: IndexBuild): EdgeMap {
@@ -607,8 +613,18 @@ function* yarnIndex(content: string): IndexBuild {
   const blocks: YarnBlock[] = [];
   yield* parseYarnBlocks(content, blocks);
   const resolved = new Map<string, YarnBlock>();
-  for (const b of blocks) for (const spec of b.specs) resolved.set(spec, b);
+  const byName = new Map<string, Set<string>>();
+  for (const b of blocks) {
+    for (const spec of b.specs) resolved.set(spec, b);
+    byName.set(b.name, (byName.get(b.name) ?? new Set()).add(b.version));
+  }
   const out: EdgeMap = new Map();
+  out.resolve = (name, spec) => {
+    const hit = resolved.get(`${name}@${spec.trim().replace(/^npm:/, "")}`);
+    if (hit) return hit.version;
+    const versions = byName.get(name);
+    return versions?.size === 1 ? [...versions][0] : null;
+  };
   let n = 0;
   for (const b of blocks) {
     if (++n % INDEX_STEP === 0) yield;

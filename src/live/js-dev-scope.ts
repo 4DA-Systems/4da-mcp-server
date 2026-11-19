@@ -16,7 +16,7 @@
 
 import * as path from "node:path";
 import { exactVersion, MAX_LOCKFILE_LINE, yarnHeaderSpecs, yarnPackageName } from "./js-lockfile-readers.js";
-import { expandWorkspaces, isLocalSpec, MAX_MEMBER_MANIFESTS, isRuntimeSection, readManifestDeclarations, type ManifestDeclarations } from "./js-manifests.js";
+import { expandWorkspaces, isLocalSpec, MAX_MEMBER_MANIFESTS, isRuntimeSection, readManifestDeclarations, type ManifestDeclarations, type MemberListGap } from "./js-manifests.js";
 import type { DeclaredDependency } from "./lockfile-types.js";
 import { ScopeGraph } from "./scope-graph.js";
 
@@ -149,6 +149,8 @@ export interface YarnInspection {
   memberNames: ReadonlySet<string>;
   /** False when some member could not be read or listed: a name not in `memberNames` may still be a member. */
   membersComplete: boolean;
+  /** What kept the member list from being whole (all empty when it is). */
+  membersGap: MemberListGap;
 }
 
 /**
@@ -197,12 +199,14 @@ export function inspectYarnLock(content: string, cwd: string, isInstance: (key: 
     if (entry.workspaceDir === null) for (const name of entry.peers) for (const target of byName.get(name) ?? []) graph.edge(index, target);
   });
   // A dependency on a workspace member has no entry in classic, which links the member instead.
+  const gap: MemberListGap = { unreadable: [], unlisted: false, tooMany: false };
   const inspection = (grade: LockGrade, memberNames: ReadonlySet<string>, membersComplete: boolean): YarnInspection => ({
     grade,
     dangling: [...dangling].filter((name) => !memberNames.has(name)).sort(),
     hasEntry: (name) => byName.has(name),
     memberNames,
     membersComplete,
+    membersGap: gap,
   });
 
   const root = readManifestDeclarations(path.join(cwd, "package.json"));
@@ -218,21 +222,30 @@ export function inspectYarnLock(content: string, cwd: string, isInstance: (key: 
     memberDirs = [];
     for (const dir of berryDirs) {
       const inside = insideProject(dir);
-      if (inside === null) membersComplete = false;
-      else if (inside !== ".") memberDirs.push(inside);
+      if (inside === null) {
+        membersComplete = false;
+        gap.unlisted = true;
+      } else if (inside !== ".") memberDirs.push(inside);
     }
   } else {
     const expanded = expandWorkspaces(cwd, root.workspaces);
     memberDirs = expanded.dirs;
     membersComplete &&= expanded.complete;
+    if (!expanded.complete) gap.unlisted = true;
   }
   const manifests: ManifestDeclarations[] = [root];
   for (const dir of memberDirs.slice(0, MAX_MEMBER_MANIFESTS)) {
     const member = readManifestDeclarations(path.join(cwd, dir, "package.json"));
     if (member) manifests.push(member);
-    else membersComplete = false;
+    else {
+      membersComplete = false;
+      gap.unreadable.push(dir);
+    }
   }
-  if (memberDirs.length > MAX_MEMBER_MANIFESTS) membersComplete = false;
+  if (memberDirs.length > MAX_MEMBER_MANIFESTS) {
+    membersComplete = false;
+    gap.tooMany = true;
+  }
   complete &&= membersComplete;
   const memberNames = new Set(manifests.map((m) => m.name).filter((n): n is string => n !== null));
   // An edge to a package no entry installs (and no member provides) is where a damaged file stops.
