@@ -499,3 +499,48 @@ describe("no private-recognition module reads a file except through readRuleFile
     expect(DIRECT_READ.test("if (fs.existsSync(manifest)) out.push(manifest);")).toBe(false);
   });
 });
+
+describe("a lockfile read whole that is not valid JSON (a merge conflict) is judged by the locations in its text", () => {
+  const conflicted = (ours: string, theirs: string) => `<<<<<<< HEAD\n${ours}\n=======\n${theirs}\n>>>>>>> feature\n`;
+  const publicLock = () => npmLock(MIXED, publicNpm);
+  const bunLock = (location: (name: string, version: string) => string) =>
+    JSON.stringify({ lockfileVersion: 1, packages: Object.fromEntries(Object.entries(MIXED).map(([name, version]) => [name, [`${name}@${version}`, location(name, version), {}, "sha512-x"]])) });
+
+  it("package-lock.json: both sides install from the public registry, so nothing is private and lodash is asked about", async () => {
+    const live = liveFor({ "package.json": pkgJson(MIXED), "package-lock.json": conflicted(publicLock(), publicLock()) });
+    expect(npmLockPrivateSources(project, new Set())).toEqual([]);
+    expect(privateNames(live)).toEqual([]);
+  });
+
+  it("package-lock.json: one side installs from a private registry, so the ecosystem here fails closed and nothing private is sent", async () => {
+    const live = liveFor({ "package.json": pkgJson(MIXED), "package-lock.json": conflicted(publicLock(), mixedLock()) });
+    expect(npmLockPrivateSources(project, new Set())).toEqual([expect.objectContaining({ file: path.join(project, "package-lock.json"), unread: "is not valid JSON" })]);
+    expect(privateNames(live)).toEqual(["@zqacme/secret-lib", "lodash"]);
+    const scan = await call("vulnerability_scan", { force_refresh: true });
+    expect(leaks(/zqacme/i)).toEqual([]);
+    expect(scan).toContain("NOT CHECKED (private)");
+    expect(scan).toContain("not valid JSON");
+  });
+
+  it("bun.lock: the same rule, with the default registry written as an empty location", () => {
+    write(project, "bun.lock", conflicted(bunLock(() => ""), bunLock(() => "")));
+    expect(npmLockPrivateSources(project, new Set())).toEqual([]);
+    write(project, "bun.lock", conflicted(bunLock(() => ""), bunLock((name, version) => (name.startsWith("@zqacme/") ? privateNpm(name, version) : ""))));
+    expect(npmLockPrivateSources(project, new Set())).toEqual([expect.objectContaining({ file: path.join(project, "bun.lock"), unread: "is not valid JSON" })]);
+  });
+
+  it("a mirror the configuration declares is public here too", () => {
+    write(project, "package-lock.json", conflicted(publicLock(), mixedLock()));
+    expect(npmLockPrivateSources(project, new Set(["npm.zqacme.example"]))).toEqual([]);
+  });
+
+  it("a location written with JSON escapes is read as JSON reads it; one that cannot be read, or an unclosed block, fails closed", () => {
+    const unread = () => npmLockPrivateSources(project, new Set()).filter((p) => p.unread).length;
+    write(project, "package-lock.json", conflicted(publicLock(), mixedLock().replaceAll("https://npm.zqacme.example/", "https:\\/\\/npm.zqacme.example\\/")));
+    expect(unread()).toBe(1);
+    write(project, "package-lock.json", conflicted(publicLock(), `{"packages": {"node_modules/@zqacme/x": {"resolved": "${PRIVATE_HOST}/x.tgz\n}}}`));
+    expect(unread()).toBe(1);
+    write(project, "package-lock.json", `<<<<<<< HEAD\n${publicLock()}\n=======\n${publicLock()}\n`);
+    expect(unread()).toBe(1);
+  });
+});

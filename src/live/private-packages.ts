@@ -1302,11 +1302,25 @@ export function npmLockPrivateSources(dir: string, mirrorHosts: ReadonlySet<stri
 /** npmLockPrivateSources, pausing every STEP_MASK + 1 yarn.lock or pnpm-lock.yaml lines (runStepsYielding; pre-publish round 10, W11). */
 export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySet<string>): Steps<PrivateIndexEntry[]> {
   const out: PrivateIndexEntry[] = [];
-  const take = (file: string, name: string, version: string | null, location: string) => {
-    if (!/^https?:\/\//i.test(location)) return;
+  const privateLocation = (location: string): boolean => {
+    if (!/^https?:\/\//i.test(location)) return false;
     const host = hostOf(location);
-    if (!host || isPublicNpmHost(host) || mirrorHosts.has(host) || CODE_HOSTS.test(host)) return;
-    out.push({ name, version, registry: sourceLabel(location), file });
+    return !!host && !isPublicNpmHost(host) && !mirrorHosts.has(host) && !CODE_HOSTS.test(host);
+  };
+  const take = (file: string, name: string, version: string | null, location: string) => {
+    if (privateLocation(location)) out.push({ name, version, registry: sourceLabel(location), file });
+  };
+  // A lockfile that is not valid JSON makes every name of the ecosystem here unknown (unreadEntry),
+  // with one exception: a merge conflict whose every block is closed holds both sides whole, so the
+  // locations in its text are all of them. Then only a location that is not public (or a value that
+  // cannot be read) makes the names unknown; none means the file names no private source.
+  const notJson = (file: string, text: string, values: RegExp, keys: RegExp | null) => {
+    if (wholeMergeConflict(text)) {
+      const found = [...text.matchAll(values)].map((m) => jsonString(m[1]));
+      const complete = keys === null || [...text.matchAll(keys)].length === found.length;
+      if (complete && !found.some((value) => value === null || privateLocation(value))) return;
+    }
+    out.push(unreadEntry(file, NOT_JSON));
   };
   // A lockfile's text, null when nothing is there. One that is there and could not be read is said
   // (unreadEntry): what it installs from is not known, and that is never "nothing private".
@@ -1334,7 +1348,7 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
       };
       if (!doc.packages) walk(doc.dependencies);
     } catch {
-      out.push(unreadEntry(file, NOT_JSON));
+      notJson(file, text, RESOLVED_VALUE, RESOLVED_KEY);
     }
   }
   const yarn = path.join(dir, "yarn.lock");
@@ -1355,7 +1369,7 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
         take(bunFile, spec.slice(0, at), spec.slice(at + 1) || null, value[1]);
       }
     } catch {
-      out.push(unreadEntry(bunFile, NOT_JSON));
+      notJson(bunFile, bunText, QUOTED_STRING, null);
     }
   }
   const pnpm = path.join(dir, "pnpm-lock.yaml");
@@ -1365,6 +1379,28 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
 }
 
 const NOT_JSON = "is not valid JSON";
+/** A `"resolved": "<location>"` value in package-lock.json text (the only field the JSON read takes a location from). */
+const RESOLVED_VALUE = /"resolved"\s*:\s*"((?:[^"\\\r\n]|\\.)*)"/g;
+/** Every `"resolved"` key: one whose value RESOLVED_VALUE cannot read leaves the locations incomplete. */
+const RESOLVED_KEY = /"resolved"/g;
+/** Every quoted string on one line, in bun.lock text (its `packages` values carry the registry or tarball URL). */
+const QUOTED_STRING = /"((?:[^"\\\r\n]|\\.)*)"/g;
+
+/** A JSON string's body (`https:\/\/x`) as the string it stands for, or null when it is not one. */
+function jsonString(body: string): string | null {
+  try {
+    return JSON.parse(`"${body}"`) as string;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether `text` is a merge conflict whose every block is closed: each side is there, whole. */
+function wholeMergeConflict(text: string): boolean {
+  const count = (marker: RegExp) => [...text.matchAll(marker)].length;
+  const open = count(/^<{7}(?=[ \t\r\n]|$)/gm);
+  return open > 0 && count(/^={7}\r?$/gm) === open && count(/^>{7}(?=[ \t\r\n]|$)/gm) === open;
+}
 const LINE_TOO_LONG = `has a line longer than ${MAX_LOCKFILE_LINE.toLocaleString("en-US")} characters inside an entry, which was not read`;
 
 const isBlank = (code: number) => code === 32 || code === 9;
