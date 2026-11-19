@@ -40,21 +40,21 @@ describe("severity_filter: the advisory's own severity counts as much as the pre
   it("critical: a transitive copy carrying a critical advisory is kept (it is presented as high)", () => {
     const full = formatScanResult(scanOf(TREE), "critical", ctx);
     const rows = full.vulnerabilities.map((v) => `${v.package}@${v.current_version}:${v.severity}/${v.advisory_severity}`);
-    expect(rows).toEqual(["minimist@1.2.5:critical/critical", "devtool@1.0.0:high/critical", "minimist@0.2.3:high/critical"]);
+    expect(rows).toEqual(["minimist@1.2.5:critical/critical", "devtool@1.0.0:high/critical", "minimist@0.2.3:high/critical", "mystery@1.0.0:unknown/unknown"]);
     expect(full.advisory_by_severity).toMatchObject({ critical: 3 });
   });
 
-  it("says how many rows it left out, and that an unknown severity is among them", () => {
+  it("says how many rows it left out, and keeps an advisory with no known severity (unknown is not below the floor)", () => {
     const full = formatScanResult(scanOf(TREE), "critical", ctx);
-    expect(full.severity_filter).toMatchObject({ minimum: "critical", shown: 3, hidden: 3, hidden_by_severity: { high: 1, medium: 1, unknown: 1 } });
-    expect(full.severity_filter?.note).toMatch(/3 advisor(y|ies) .*below critical.*not shown/);
-    expect(full.severity_filter?.note).toMatch(/1 of them has no known severity/);
+    expect(full.severity_filter).toMatchObject({ minimum: "critical", shown: 4, hidden: 2, hidden_by_severity: { high: 1, medium: 1 } });
+    expect(full.severity_filter?.note).toMatch(/2 advisor(y|ies) .*below critical.*not shown/);
+    expect(full.severity_filter?.note).toMatch(/1 advisory with no known severity is kept/);
   });
 
   it("high: keeps rows at high or above by either grade, hides the rest and counts them", () => {
     const full = formatScanResult(scanOf(TREE), "high", ctx);
-    expect(full.vulnerabilities.map((v) => v.package).sort()).toEqual(["devtool", "lodash", "minimist", "minimist"]);
-    expect(full.severity_filter).toMatchObject({ minimum: "high", shown: 4, hidden: 2 });
+    expect(full.vulnerabilities.map((v) => v.package).sort()).toEqual(["devtool", "lodash", "minimist", "minimist", "mystery"]);
+    expect(full.severity_filter).toMatchObject({ minimum: "high", shown: 5, hidden: 1 });
   });
 
   it("a filter that hides nothing still says so (hidden: 0)", () => {
@@ -78,8 +78,8 @@ describe("severity_filter: the advisory's own severity counts as much as the pre
 
   it("concise: the kept transitive copy is a row, and the hidden count is stated", () => {
     const concise = conciseScanResult(formatScanResult(scanOf(TREE), "critical", ctx));
-    expect(concise.vulnerable_packages.map((p) => `${p.package}@${p.current_version}`)).toEqual(["minimist@1.2.5", "devtool@1.0.0", "minimist@0.2.3"]);
-    expect(concise.severity_filter).toMatchObject({ minimum: "critical", hidden: 3 });
+    expect(concise.vulnerable_packages.map((p) => `${p.package}@${p.current_version}`)).toEqual(["minimist@1.2.5", "devtool@1.0.0", "minimist@0.2.3", "mystery@1.0.0"]);
+    expect(concise.severity_filter).toMatchObject({ minimum: "critical", hidden: 2 });
   });
 
   it("the input schema describes the rule", () => {

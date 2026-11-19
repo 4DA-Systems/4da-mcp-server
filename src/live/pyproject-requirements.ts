@@ -106,3 +106,22 @@ export function pyprojectRequirements(content: string): PyprojectRequirement[] {
   collect("dependency-groups", "dependency-groups", null);
   return out;
 }
+
+/**
+ * The requirement strings `[tool.uv]` lists under `override-dependencies` and
+ * `constraint-dependencies`: they change or remove what uv locks for a name,
+ * so a `[project]` dependency they cover need not have a table in uv.lock.
+ */
+export function uvOverrideRequirements(content: string): string[] {
+  const out: string[] = [];
+  for (const body of tableBodies(content, "tool.uv")) {
+    const nextKey = new RegExp(ARRAY_KEY.source, ARRAY_KEY.flags);
+    for (let key = nextKey.exec(body); key !== null; key = nextKey.exec(body)) {
+      const name = key[1] ?? key[2] ?? key[3];
+      const { strings, end } = arrayStrings(body, key.index + key[0].length);
+      nextKey.lastIndex = Math.max(end, nextKey.lastIndex);
+      if (name === "override-dependencies" || name === "constraint-dependencies") for (const text of strings) if (text.trim() !== "") out.push(text.trim());
+    }
+  }
+  return out;
+}

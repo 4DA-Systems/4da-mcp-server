@@ -154,6 +154,15 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
     return Object.hasOwn(packages, dep) ? dep : null;
   };
 
+  // Every dependency and optional dependency bun resolved has an entry: one without is damage, and
+  // the graph that loses it cannot prove anything dev-only. A peer without one is simply not installed.
+  let whole = true;
+  const installed = (key: string): Set<string> => {
+    const value = packages[key];
+    if (!Array.isArray(value)) return new Set();
+    const meta = [value[2], value[1]].find((part) => part && typeof part === "object" && !Array.isArray(part)) as BunMeta | undefined;
+    return new Set(meta ? Object.keys({ ...meta.dependencies, ...meta.optionalDependencies }) : []);
+  };
   const reach = (roots: Iterable<string>): Set<string> => {
     const seen = new Set<string>();
     const stack = [...roots];
@@ -161,9 +170,11 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
       const key = stack.pop() as string;
       if (seen.has(key)) continue;
       seen.add(key);
+      const required = installed(key);
       for (const dep of requires(key)) {
         const next = resolve(key, dep);
         if (next && !seen.has(next)) stack.push(next);
+        else if (!next && required.has(dep)) whole = false;
       }
     }
     return seen;
@@ -205,6 +216,6 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
     const e = entry(key);
     if (!e) continue;
     if (key === e.name && !versions.has(e.name)) versions.set(e.name, e.version);
-    instances?.add(e.name, e.version, runtime.has(key) ? false : dev.has(key) ? true : undefined);
+    instances?.add(e.name, e.version, runtime.has(key) ? false : dev.has(key) && whole ? true : undefined);
   }
 }

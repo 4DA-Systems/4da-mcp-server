@@ -117,12 +117,18 @@ function comparatorSet(token: string, bareIsCaret: boolean): Comparator[] | null
     default:
       // Cargo: a bare version is a caret requirement ("1.0" admits 1.6.1), but a wildcard is the
       // line it writes out ("1.0.*" is >=1.0.0, <1.1.0; "1.*" is >=1.0.0, <2.0.0).
-      return bareIsCaret && p.major !== null && !WILD_PART.test(m[2]) ? caret(p) : xrange(p);
+      return bareIsCaret && p.major !== null && !WILD_PART.test(numericCore(m[2])) ? caret(p) : xrange(p);
   }
 }
 
-/** A version written with a wildcard part ("1.*", "1.0.x"). */
+/** A version written with a wildcard part ("1.*", "1.0.x"), tested on its numeric core only. */
 const WILD_PART = /(?:^|\.)[xX*](?:\.|$)/;
+
+/** "1.0.0-alpha.x+b.1" -> "1.0.0": prerelease and build identifiers are never wildcards. */
+function numericCore(version: string): string {
+  const cut = version.search(/[-+]/);
+  return cut < 0 ? version : version.slice(0, cut);
+}
 
 function test(set: Comparator[], version: SemverPrecedence): boolean {
   for (const c of set) {

@@ -16,7 +16,7 @@
 
 import * as path from "node:path";
 import { exactVersion, MAX_LOCKFILE_LINE, yarnHeaderSpecs, yarnPackageName } from "./js-lockfile-readers.js";
-import { expandWorkspaces, isLocalSpec, isRuntimeSection, readManifestDeclarations, type ManifestDeclarations } from "./js-manifests.js";
+import { expandWorkspaces, isLocalSpec, MAX_MEMBER_MANIFESTS, isRuntimeSection, readManifestDeclarations, type ManifestDeclarations } from "./js-manifests.js";
 import type { DeclaredDependency } from "./lockfile-types.js";
 import { ScopeGraph } from "./scope-graph.js";
 
@@ -73,12 +73,18 @@ interface YarnEntry {
   peers: string[];
 }
 
-function readYarnEntries(content: string): YarnEntry[] {
+/** The entries of a yarn.lock; `whole` is false when an entry or one of its lines was too long to read. */
+function readYarnEntries(content: string): { entries: YarnEntry[]; whole: boolean } {
   const entries: YarnEntry[] = [];
+  let whole = true;
   for (const block of content.split(/\r?\n(?=\S)/)) {
     const lines = block.split(/\r?\n/);
     const firstLine = lines[0];
-    if (firstLine.length > MAX_LOCKFILE_LINE || firstLine.startsWith("#")) continue;
+    if (firstLine.length > MAX_LOCKFILE_LINE) {
+      whole = false;
+      continue;
+    }
+    if (firstLine.startsWith("#")) continue;
     const header = /^"?(@?[^@\s"]+)@/.exec(firstLine);
     if (!header || header[1].startsWith("__")) continue;
     const entry: YarnEntry = { specs: yarnHeaderSpecs(firstLine), identity: null, workspaceDir: null, deps: [], peers: [] };
@@ -86,7 +92,10 @@ function readYarnEntries(content: string): YarnEntry[] {
     let section = "";
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
-      if (line.length > MAX_LOCKFILE_LINE) continue;
+      if (line.length > MAX_LOCKFILE_LINE) {
+        whole = false;
+        continue;
+      }
       const text = line.trim();
       if (text === "") continue;
       const indent = line.length - line.trimStart().length;
@@ -113,7 +122,7 @@ function readYarnEntries(content: string): YarnEntry[] {
     if (version) entry.identity = `${yarnPackageName(block, firstLine, header[1])}\0${version}`;
     entries.push(entry);
   }
-  return entries;
+  return { entries, whole };
 }
 
 /** A workspace directory a lockfile names, when it stays inside the project. */
@@ -124,8 +133,6 @@ function insideProject(dir: string): string | null {
   return clean;
 }
 
-/** Workspace manifests read for one lockfile; a project with more is graded as incomplete. */
-const MAX_MEMBER_MANIFESTS = 2_000;
 
 /** What reading a yarn.lock against the project's package.json files establishes. */
 export interface YarnInspection {
@@ -140,6 +147,8 @@ export interface YarnInspection {
   hasEntry(name: string): boolean;
   /** The names of the project's own packages: the root's and each workspace member's. */
   memberNames: ReadonlySet<string>;
+  /** False when some member could not be read or listed: a name not in `memberNames` may still be a member. */
+  membersComplete: boolean;
 }
 
 /**
@@ -155,7 +164,7 @@ export interface YarnInspection {
  * name, which can only make more copies runtime, never fewer.
  */
 export function inspectYarnLock(content: string, cwd: string, isInstance: (key: string) => boolean): YarnInspection {
-  const entries = readYarnEntries(content);
+  const { entries, whole } = readYarnEntries(content);
   const bySpec = new Map<string, number>();
   const byName = new Map<string, number[]>();
   entries.forEach((entry, index) => {
@@ -188,40 +197,46 @@ export function inspectYarnLock(content: string, cwd: string, isInstance: (key: 
     if (entry.workspaceDir === null) for (const name of entry.peers) for (const target of byName.get(name) ?? []) graph.edge(index, target);
   });
   // A dependency on a workspace member has no entry in classic, which links the member instead.
-  const inspection = (grade: LockGrade, memberNames: ReadonlySet<string>): YarnInspection => ({
+  const inspection = (grade: LockGrade, memberNames: ReadonlySet<string>, membersComplete: boolean): YarnInspection => ({
     grade,
     dangling: [...dangling].filter((name) => !memberNames.has(name)).sort(),
     hasEntry: (name) => byName.has(name),
     memberNames,
+    membersComplete,
   });
 
   const root = readManifestDeclarations(path.join(cwd, "package.json"));
-  if (!root) return inspection({ scopes: new Map(), declared: [], graded: false }, new Set());
+  if (!root) return inspection({ scopes: new Map(), declared: [], graded: false }, new Set(), false);
 
   // The members: the entries berry writes for them, else the patterns package.json states.
-  let complete = true;
+  // An unreadable entry or line is part of the graph that cannot be followed.
+  let complete = whole;
+  let membersComplete = true;
   const berryDirs = entries.map((e) => e.workspaceDir).filter((d): d is string => d !== null);
   let memberDirs: string[];
   if (berryDirs.length > 0) {
     memberDirs = [];
     for (const dir of berryDirs) {
       const inside = insideProject(dir);
-      if (inside === null) complete = false;
+      if (inside === null) membersComplete = false;
       else if (inside !== ".") memberDirs.push(inside);
     }
   } else {
     const expanded = expandWorkspaces(cwd, root.workspaces);
     memberDirs = expanded.dirs;
-    complete &&= expanded.complete;
+    membersComplete &&= expanded.complete;
   }
   const manifests: ManifestDeclarations[] = [root];
   for (const dir of memberDirs.slice(0, MAX_MEMBER_MANIFESTS)) {
     const member = readManifestDeclarations(path.join(cwd, dir, "package.json"));
     if (member) manifests.push(member);
-    else complete = false;
+    else membersComplete = false;
   }
-  if (memberDirs.length > MAX_MEMBER_MANIFESTS) complete = false;
+  if (memberDirs.length > MAX_MEMBER_MANIFESTS) membersComplete = false;
+  complete &&= membersComplete;
   const memberNames = new Set(manifests.map((m) => m.name).filter((n): n is string => n !== null));
+  // An edge to a package no entry installs (and no member provides) is where a damaged file stops.
+  for (const name of dangling) if (!memberNames.has(name)) complete = false;
 
   const runtimeRoots: number[] = [];
   const devRoots: number[] = [];
@@ -251,5 +266,5 @@ export function inspectYarnLock(content: string, cwd: string, isInstance: (key: 
     const cut = key.indexOf("\0");
     return { name: key.slice(0, cut), version: key.slice(cut + 1), runtime: isRuntime };
   });
-  return inspection({ scopes, declared, graded: true }, memberNames);
+  return inspection({ scopes, declared, graded: true }, memberNames, membersComplete);
 }
