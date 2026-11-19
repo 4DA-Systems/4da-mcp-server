@@ -10,6 +10,7 @@
  * fetchWithTimeout (http-utils.ts), which applies the private-name check and the proxy.
  */
 
+import { noteCallHost } from "../call-budget.js";
 import { shutdownSignal } from "../shutdown.js";
 
 /** Whether `url` names this machine: `localhost`, 127.0.0.0/8 or `::1`, over http or https. */
@@ -44,6 +45,8 @@ export async function fetchLoopbackJson(url: string, init: RequestInit = {}, tim
   const timeout = setTimeout(stop, timeoutMs);
   timeout.unref?.();
   try {
+    // Recorded like every other request, so an answer that names its hosts names this one too.
+    noteCallHost(new URL(url).host);
     const response = await fetch(url, { ...init, signal: controller.signal, redirect: "error" });
     return response.ok ? await response.json() : null;
   } finally {

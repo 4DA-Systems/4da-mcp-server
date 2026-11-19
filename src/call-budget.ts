@@ -114,6 +114,16 @@ export function callHosts(): string[] {
   return [...(current.getStore()?.hosts ?? [])].sort();
 }
 
+/**
+ * The hosts the running call has sent a request to, sorted: a record, not a derivation. Empty when
+ * the call sent nothing; null outside a tool call, where nothing is recorded and an answer that
+ * names its hosts falls back to deriving them.
+ */
+export function recordedCallHosts(): string[] | null {
+  const hosts = current.getStore()?.hosts;
+  return hosts ? [...hosts].sort() : null;
+}
+
 const current = new AsyncLocalStorage<Budget>();
 
 /** Run `work` as one tool call whose budget started at `startedAt` (epoch ms). */

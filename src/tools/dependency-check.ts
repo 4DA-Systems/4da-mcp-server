@@ -61,7 +61,7 @@ import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.j
 import { pushAll } from "../array-utils.js";
 import type { CheckEcosystem, PackageReleaseIndex, RegistryLookup, ReleaseMetadataSource } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
-import { callFinding, callFindingKey, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
+import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { findingReason } from "../late-answer.js";
 import { noteListFacts, noteRegistryFacts, noteScanFacts } from "./dependency-check-facts.js";
 import { unquotePackageName } from "./package-name.js";
@@ -1819,6 +1819,21 @@ function summaryLine(results: ItemResult[], parts: string[]): string {
   return `${checked} checked: ${checkedParts.join(", ")}; ${notChecked}. ${advice}`;
 }
 
+/** Every host dependency_check may ask; named as its sources outside a tool call, where nothing is recorded. */
+const CHECK_HOSTS = ["registry.npmjs.org", "api.npmjs.org", "crates.io", "index.crates.io", "pypi.org", "proxy.golang.org", "osv.dev"];
+
+/**
+ * `_meta.sources`: inside a tool call, the hosts this call's requests went to (redirect hops
+ * included; call-budget.ts recordedCallHosts), and when there were none, a note that nothing was
+ * sent. Outside one, every host the tool may ask.
+ */
+export function checkSources(): { sources: string[]; sources_note?: string } {
+  const recorded = recordedCallHosts();
+  if (!recorded) return { sources: CHECK_HOSTS };
+  if (recorded.length === 0) return { sources: [], sources_note: "Nothing was sent in this call: every answer was read from the local cache." };
+  return { sources: recorded };
+}
+
 function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string; timeBudget?: { unfinished: number; ms: number } }) {
   const counts = new Map<Verdict, number>();
   for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
@@ -1831,7 +1846,7 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       : summaryLine(results, parts),
     results,
     _meta: {
-      sources: ["registry.npmjs.org", "api.npmjs.org", "crates.io", "index.crates.io", "pypi.org", "proxy.golang.org", "osv.dev"],
+      ...checkSources(),
       verdict_rule: VERDICT_RULE,
       untrusted_text: UNTRUSTED_TEXT_FIELDS.dependency_check,
       privacy: PRIVACY_NOTE,

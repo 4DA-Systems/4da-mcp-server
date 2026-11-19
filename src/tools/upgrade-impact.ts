@@ -63,6 +63,7 @@ import { flagOldSyntax } from "./upgrade-impact-literals.js";
 import { shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
 import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
 import { isOfflineMode } from "../env-flags.js";
+import { recordedCallHosts } from "../call-budget.js";
 import { heldAffectedRows, heldImpactText, judgeTargetHeld, type HeldContext, type HeldImpact } from "./upgrade-impact-held.js";
 
 export interface UpgradeImpactParams {
@@ -120,6 +121,19 @@ export interface UpgradeImpactContext {
 
 const MAX_LISTED_VERSIONS = 200;
 const UNTRUSTED = UNTRUSTED_TEXT_FIELDS.upgrade_impact;
+const PRIVACY_NOTHING_SENT = "Nothing was sent in this call: every answer was read from the local cache; a private package's name is never sent; nothing about your code left the machine";
+
+/**
+ * `_meta.sources` and `privacy`: inside a tool call, the hosts this call's requests went to,
+ * redirect hops included (call-budget.ts recordedCallHosts); outside one, the first hop of each
+ * request made through `net`. No host: nothing was sent, and the privacy line says so.
+ */
+export function impactSources(contacted: Set<string>): { sources: string[]; privacy: string } {
+  const sources = recordedCallHosts() ?? [...contacted].sort();
+  if (sources.length === 0) return { sources, privacy: PRIVACY_NOTHING_SENT };
+  return { sources, privacy: sources.some((h) => /github/i.test(h)) ? PRIVACY_GITHUB : PRIVACY };
+}
+
 const PRIVACY = "Only the package's own registry and OSV.dev were contacted; a private package's name is never sent (it is refused); nothing about your code left the machine";
 const PRIVACY_GITHUB =
   "The package's own registry and OSV.dev were contacted, and GitHub for release notes because FOURDA_GITHUB_CHANGELOG is on (repository name and versions only); a private package's name is never sent; nothing about your code left the machine";
@@ -510,10 +524,9 @@ export async function analyzeUpgradeImpact(
     ...heldFields,
     release_notes_url: thirdPartyUrl(releaseNotesUrl(repository)) ?? thirdPartyUrl(index.changelogLinks?.[0]) ?? null,
     _meta: {
-      sources: [...ctx.net.contacted].sort(),
+      ...impactSources(ctx.net.contacted),
       untrusted_text: UNTRUSTED,
       ...(counted ? { classification: CLASSIFICATION } : {}),
-      privacy: [...ctx.net.contacted].some((h) => /github/i.test(h)) ? PRIVACY_GITHUB : PRIVACY,
     },
     summary: summarize({
       pkg: index.name,
