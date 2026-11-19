@@ -85,6 +85,16 @@ export function withPrivateContext<T>(source: PrivateNameSource, fn: () => T): T
   return context.run(source, fn);
 }
 
+/**
+ * Runs a function later as made for the project of the request running now: work queued for after
+ * a call keeps that project's rules. Outside any project it runs outside one too, where every
+ * registered project's rules apply.
+ */
+export function bindPrivateContext(): <T>(fn: () => T) => T {
+  const own = context.getStore();
+  return own ? <T>(fn: () => T): T => context.run(own, fn) : <T>(fn: () => T): T => context.exit(fn);
+}
+
 /** How many sources are registered (tests assert nothing leaks between them). */
 export function privateGuardSize(): number {
   return byKey.size + sources.size;

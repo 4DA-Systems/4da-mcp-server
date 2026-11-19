@@ -1168,7 +1168,7 @@ export async function verifyFixTargets(
     sources,
     options.heldQuery ?? (async () => { throw new Error("no batch query"); }),
     listed,
-    Math.max(deadline, Date.now() + HELD_FLOOR_MS),
+    Math.max(deadline, Date.now() + withinCallBudget(HELD_FLOOR_MS, FLOOR_RESERVE_MS)),
   );
   for (const [key, clean] of confirmed) out.set(key, clean);
   if (options.heldQuery) {
@@ -1176,7 +1176,7 @@ export async function verifyFixTargets(
     // (audit 6.2.5 D-4). It gets at least HELD_FLOOR_MS even when the targets used the budget up:
     // without it a cold scan would downgrade every npm target that holds a dependency.
     const npm = todo.filter((i) => i.ecosystem === "npm" && out.has(i.key)).map((i) => ({ key: i.key, name: i.name, installed: i.installed, clean: out.get(i.key)! }));
-    const held = await withHeldTargets(sources, options.heldQuery, npm, Math.max(deadline, Date.now() + HELD_FLOOR_MS));
+    const held = await withHeldTargets(sources, options.heldQuery, npm, Math.max(deadline, Date.now() + withinCallBudget(HELD_FLOOR_MS, FLOOR_RESERVE_MS)));
     for (const [key, clean] of held) out.set(key, clean);
   }
   const req = options.requirements;
@@ -1184,14 +1184,16 @@ export async function verifyFixTargets(
     // Go, crates.io, PyPI: what each direct target itself requires, in one advisory lookup, with the
     // same floor as npm's held check and never past the call's own budget.
     const items = todo.filter((i) => req.keys.has(i.key) && out.has(i.key)).map((i) => ({ key: i.key, ecosystem: i.ecosystem, name: i.name, clean: out.get(i.key)! }));
-    const until = Date.now() + withinCallBudget(Math.max(deadline - Date.now(), HELD_FLOOR_MS), 500);
+    const until = Date.now() + withinCallBudget(Math.max(deadline - Date.now(), HELD_FLOOR_MS), FLOOR_RESERVE_MS);
     for (const [key, clean] of await withRequiredTargets(req.sources, options.heldQuery, items, until, req.selected, req.pythons)) out.set(key, clean);
   }
   return out;
 }
 
-/** The least time the held-dependency check of a scan's npm targets gets (verifyFixTargets). */
+/** The least time the held-dependency check of a scan's npm targets gets (verifyFixTargets), within what is left of the call. */
 const HELD_FLOOR_MS = 3_000;
+/** What a floor leaves of the call's budget for the answer to be built: the call answers within its budget. */
+const FLOOR_RESERVE_MS = 1_000;
 
 /** Said whenever the registry could not be read: withdrawn releases are then not ruled out, never silently. */
 export const REGISTRY_UNREAD_NOTE = "the registry could not be read, so whether it yanked or deprecated this release was not checked";
