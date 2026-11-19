@@ -1,0 +1,127 @@
+name: Mutation check
+
+# Does the suite notice when the code it guards is wrong? Every mutant in
+# scripts/mutation/mutations.mjs is applied in turn and the tests run against it
+# (scripts/mutation/README.md). A mutant that survives, outside the list's
+# `equivalent` entries, fails the run; a scheduled failure opens or updates an
+# issue, as the nightly does. Weekly: the full list takes about an hour.
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Mutant ids to run, comma-separated (empty: all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    name: Mutation check
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      survivors: ${{ steps.publish.outputs.survivors }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Some mutants only the conformance suites kill, so the corpus is fetched
+      # and required (FOURDA_REQUIRE_CONFORMANCE below): without it they would
+      # read as survivors.
+      - name: Read the pinned corpus commit
+        id: lock
+        run: |
+          commit=$(node -e "console.log(JSON.parse(require('fs').readFileSync('conformance.lock', 'utf8')).commit)")
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::conformance.lock has no commit SHA (got '$commit')"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: conformance/corpus
+          key: conformance-corpus-${{ steps.lock.outputs.commit }}
+
+      - name: Fetch the corpus (skipped when the cache holds this commit)
+        run: node scripts/fetch-conformance.mjs
+
+      - name: Every mutant still applies
+        run: node scripts/mutation/run.mjs --check
+
+      - name: Run the mutants
+        id: run
+        run: |
+          set +e
+          node scripts/mutation/run.mjs --out "$RUNNER_TEMP/mutation" ${ONLY:+--only "$ONLY"}
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+        env:
+          ONLY: ${{ inputs.only }}
+          FOURDA_REQUIRE_CONFORMANCE: "1"
+
+      - name: Publish the summary
+        id: publish
+        if: always()
+        run: |
+          [ -f "$RUNNER_TEMP/mutation/summary.md" ] && cat "$RUNNER_TEMP/mutation/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "survivors<<SURVIVORS_EOF"
+            cat "$RUNNER_TEMP/mutation/survivors.txt" 2>/dev/null || echo "(no survivor list: the run stopped before judging the mutants; see the log)"
+            echo "SURVIVORS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        if: always()
+        with:
+          name: mutation-results
+          path: ${{ runner.temp }}/mutation
+          if-no-files-found: ignore
+
+      - name: Fail when a mutant was not killed
+        if: steps.run.outputs.status != '0'
+        run: |
+          echo "::error::scripts/mutation/run.mjs exited ${{ steps.run.outputs.status }} (1: a mutant survived or does not compile; 2: the list or the baseline is broken; 3: a file was not restored)"
+          exit 1
+
+  report:
+    name: Report a weekly mutation failure
+    needs: [mutation]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SURVIVORS: ${{ needs.mutation.outputs.survivors }}
+        run: |
+          title="Weekly mutation check failed"
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          body="The weekly mutation check failed: $RUN_URL
+
+          Not killed (outside the equivalent list):
+          ${SURVIVORS:-not reported}
+
+          Each line is a wrong behaviour the test suite does not notice. Add a test that fails with the mutant and name its file in the mutant's \`tests\` (scripts/mutation/mutations.mjs). A mutant whose text is no longer found means the code it targets changed: update its \`find\` and \`replace\`. See scripts/mutation/README.md."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

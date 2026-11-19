@@ -123,17 +123,19 @@ function factory(): Server {
   return server;
 }
 
+/**
+ * One raw request. Resolves with everything the server sent once the connection has closed (each
+ * request asks for `Connection: close`), however long that takes: a reply cut off by a timer here
+ * would read as a wrong answer on a loaded machine.
+ */
 function raw(port: number, text: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = net.connect(port, "127.0.0.1", () => socket.write(text));
     let out = "";
     socket.on("data", (d) => (out += d.toString()));
-    socket.on("end", () => resolve(out));
-    socket.on("error", reject);
-    setTimeout(() => {
-      socket.destroy();
-      resolve(out);
-    }, 3000);
+    // A reset after the reply arrived (the server closing first) still carries the reply.
+    socket.on("error", (error) => (out ? resolve(out) : reject(error)));
+    socket.on("close", () => resolve(out));
   });
 }
 
@@ -405,7 +407,7 @@ describe("9: command-line arguments", () => {
     expect(parseCliArgs(["--http"])).toEqual({ ok: true, command: { kind: "http", port: 4840, host: "127.0.0.1" } });
     expect(parseCliArgs(["--http", "--port", "8080", "--host", "::1"])).toEqual({ ok: true, command: { kind: "http", port: 8080, host: "::1" } });
     expect(parseCliArgs(["--port=8081", "--http"])).toEqual({ ok: true, command: { kind: "http", port: 8081, host: "127.0.0.1" } });
-    expect(parseCliArgs(["--setup", "--dry-run"])).toEqual({ ok: true, command: { kind: "setup", dryRun: true } });
+    expect(parseCliArgs(["--setup", "--dry-run"])).toEqual({ ok: true, command: { kind: "setup", dryRun: true, update: false } });
     expect(parseCliArgs(["doctor"])).toEqual({ ok: true, command: { kind: "doctor" } });
     expect(parseCliArgs(["-v"])).toEqual({ ok: true, command: { kind: "version" } });
   });
@@ -474,21 +476,54 @@ describe.skipIf(!fs.existsSync(serverEntry))("the built server", () => {
     expect(lines().find((l) => l.id === 2)?.result?.content?.[0]?.text).toMatch(/Live intelligence disabled|FOURDA_OFFLINE/);
   }, 60_000);
 
+  /**
+   * A loopback port the OS reports free. A port picked at random can be one the OS will not bind
+   * (Windows reserves ranges: `netsh interface ipv4 show excludedportrange protocol=tcp`) or one in
+   * use, and the server then exits with EACCES / EADDRINUSE before it ever listens.
+   */
+  const freePort = () =>
+    new Promise<number>((resolve, reject) => {
+      const probe = net.createServer();
+      probe.once("error", reject);
+      probe.listen(0, "127.0.0.1", () => {
+        const { port } = probe.address() as net.AddressInfo;
+        probe.close(() => resolve(port));
+      });
+    });
+
+  /**
+   * Starts `--http` and resolves when the server says it listens. Readiness is the server's own
+   * line or its exit, never a deadline; a port another process took in between is tried again.
+   */
+  async function startHttp(env: NodeJS.ProcessEnv, cwd: string): Promise<{ child: ReturnType<typeof spawn>; port: number; stderr: () => string }> {
+    for (let attempt = 1; ; attempt++) {
+      const port = await freePort();
+      const child = spawn(process.execPath, [serverEntry, "--http", "--port", String(port)], { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+      let err = "";
+      const outcome = await new Promise<"listening" | "exited">((resolve) => {
+        child.stderr.on("data", (d) => {
+          err += d;
+          if (/listening on/.test(err)) resolve("listening");
+        });
+        child.once("exit", () => resolve("exited"));
+      });
+      if (outcome === "listening") return { child, port, stderr: () => err };
+      if (attempt >= 5 || !/EADDRINUSE|EACCES/.test(err)) throw new Error(`the --http server exited before it listened (attempt ${attempt}, port ${port}): ${err}`);
+    }
+  }
+
   it("2: GET http://[ does not end an --http server, with authentication required", async () => {
     const { h, env } = home();
-    const port = 20_000 + Math.floor(Math.random() * 20_000);
-    const child = spawn(process.execPath, [serverEntry, "--http", "--port", String(port)], { cwd: h, env: { ...env, MCP_AUTH_REQUIRED: "true", MCP_AUTH_SECRET: "s" }, stdio: ["pipe", "pipe", "pipe"] });
-    let err = "";
-    child.stderr.on("data", (d) => (err += d));
-    const deadline = Date.now() + 20_000;
-    while (!/listening on/.test(err) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-    const reply = await raw(port, "GET http://[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-    const health = await raw(port, `GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
-    const alive = child.exitCode === null;
-    child.kill();
-    expect(reply).toMatch(/^HTTP\/1\.1 400/);
-    expect(health).toMatch(/^HTTP\/1\.1 200/);
-    expect(alive).toBe(true);
-    expect(err).not.toMatch(/Invalid URL/);
+    const { child, port, stderr } = await startHttp({ ...env, MCP_AUTH_REQUIRED: "true", MCP_AUTH_SECRET: "s" }, h);
+    try {
+      const reply = await raw(port, "GET http://[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+      const health = await raw(port, `GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
+      expect(reply).toMatch(/^HTTP\/1\.1 400/);
+      expect(health).toMatch(/^HTTP\/1\.1 200/);
+      expect(child.exitCode).toBeNull();
+      expect(stderr()).not.toMatch(/Invalid URL/);
+    } finally {
+      child.kill();
+    }
   }, 60_000);
 });

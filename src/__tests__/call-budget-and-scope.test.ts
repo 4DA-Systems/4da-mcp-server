@@ -176,7 +176,13 @@ describe("one time budget per tool call", () => {
     const result = await dispatchTool("vulnerability_scan", null, { response_format: "detailed" }, { startedAt: started });
     expect(Date.now() - started).toBeLessThan(3_000);
     const answer = parse(result);
-    expect(answer.summary).toMatch(/^NOT CHECKED: the OSV\.dev scan did not finish within 0\.4 s, the time this call had for it \(it keeps running and its answers are cached: call again\)/);
+    // How much of that 0.4 s is left when the scan's wait begins depends on the machine, and the
+    // answer states what was left (or, with under 0.1 s left, that the budget was used up). The
+    // outcome is the same on a slow machine: NOT CHECKED, for the time, with the way forward.
+    expect(answer.summary).toMatch(
+      /^NOT CHECKED: (the OSV\.dev scan did not finish within 0\.[1-4] s, the time this call had for it|this call's time budget \(6\.4 s, from FOURDA_CALL_BUDGET_MS\) was used up before the OSV\.dev scan could finish)/,
+    );
+    expect(answer.summary).toContain("it keeps running and its answers are cached: call again");
     expect(answer.coverage).toMatchObject({ complete: false, unchecked_dependencies: 2 });
     expect(answer.total_vulnerable_packages).toBeNull();
     expect(answer.clean_dependencies).toBeNull();
@@ -431,13 +437,14 @@ describe("platform activity is tracked per lockfile", () => {
     }
   })();
 
-  it("with cargo: a lockfile cargo cannot resolve no longer makes the project's unbuilt crates count as the project's", () => {
+  it("with cargo: a lockfile cargo cannot resolve no longer makes the project's unbuilt crates count as the project's", ({ skip }) => {
     _resetCargoPlatformCache();
     const resolved = cargo ? activeCratesForHost(FIXTURE_DIR) : null;
     if (resolved === null) {
       // No cargo, or the fixture's crates are not in the local registry cache (CI fetches them first).
       if (process.env.FOURDA_REQUIRE_CARGO === "1") throw new Error("FOURDA_REQUIRE_CARGO=1 but `cargo tree` could not resolve test-fixtures/cargo-platform");
-      return;
+      // Nothing can be asserted without cargo's answer: reported as skipped, never as passed.
+      skip("cargo tree could not resolve test-fixtures/cargo-platform here");
     }
     // The project's real lockfile locks itoa and never builds it (an optional dependency no feature enables).
     expect(resolved.has("itoa")).toBe(false);

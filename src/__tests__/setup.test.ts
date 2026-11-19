@@ -36,8 +36,10 @@ import {
   type SetupContext,
 } from "../setup.js";
 
-const ENTRY = { command: "npx", args: ["@4da/mcp-server"] };
-const VSCODE_ENTRY = { type: "stdio", command: "npx", args: ["@4da/mcp-server"] };
+// Setup pins the version it runs as (a1119-tooling-setup.test.ts holds the pin itself).
+const PINNED = `@4da/mcp-server@${JSON.parse(readFileSync(path.resolve("package.json"), "utf8")).version}`;
+const ENTRY = { command: "npx", args: [PINNED] };
+const VSCODE_ENTRY = { type: "stdio", command: "npx", args: [PINNED] };
 
 function byName(ctx: SetupContext): Record<string, { configPath: string; key: string; entry: Record<string, unknown> }> {
   return Object.fromEntries(editorTargets(ctx).map((t) => [t.name, t]));
@@ -152,12 +154,13 @@ describe("planConfig", () => {
     });
   });
 
-  it("updates an existing 4da entry in place, keeping its other fields", () => {
+  it("keeps an existing 4da entry that differs; with update, replaces it in place, keeping its other fields", () => {
     const existing = JSON.stringify({
       mcpServers: { "4da": { command: "node", args: ["/old/dist/index.js"], env: { FOURDA_OFFLINE: "true" } } },
     });
-    const plan = planConfig(existing, "mcpServers", ENTRY);
-    expect(plan.action).toBe("update");
+    expect(planConfig(existing, "mcpServers", ENTRY)).toEqual({ action: "keep", previous: { command: "node", args: ["/old/dist/index.js"] } });
+    const plan = planConfig(existing, "mcpServers", ENTRY, { update: true });
+    expect(plan.action).toBe("replace");
     const parsed = JSON.parse(plan.content!);
     expect(Object.keys(parsed.mcpServers)).toEqual(["4da"]);
     expect(parsed.mcpServers["4da"]).toEqual({ ...ENTRY, env: { FOURDA_OFFLINE: "true" } });
