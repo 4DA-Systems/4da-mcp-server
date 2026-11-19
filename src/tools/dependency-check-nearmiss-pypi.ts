@@ -6,16 +6,16 @@
  *
  * The rule, for a PyPI dependency this project's lockfiles do not hold whose name (PEP 503
  * normalised) is a near-miss of a popular project (briefing-names.ts closestPopularPypi: one edit
- * for names of 5 characters or more, two for 8 or more; never a name on the popular list itself):
- * - `review`, with "did you mean X", unless the name is established;
+ * for names of 5 characters or more, two for 8 or more; never a name on the popular list itself,
+ * which holds the 2,000 most-downloaded projects: pyaml is one edit from pyyaml and is on it):
+ * - `review`, with "did you mean X";
  * - `avoid` when it was first published under 30 days ago with at most 3 releases: a near-miss
- *   name nobody can have come to rely on yet is how a typo-squat looks before it is taken down;
- * - nothing (an `info` line) when it is established.
+ *   name nobody can have come to rely on yet is how a typo-squat looks before it is taken down.
  *
- * PyPI publishes no download counts (npm's measure), so "established" is read from the project's
- * own history in the document dependency_check already fetched: first published at least 2 years
- * ago, with at least 10 releases. A history that cannot be read never counts as established. No
- * request is made for this check.
+ * npm calls a near-miss established by its weekly downloads; PyPI publishes no download counts,
+ * and a long release history does not show that anyone installs a project under that name (numpi
+ * has published since 2019). So nothing here is read as established: the answer states the
+ * history it has and asks for the user's confirmation. No request is made for this check.
  */
 
 import type { PackageReleaseIndex } from "../live/release-metadata.js";
@@ -24,10 +24,6 @@ import { editDistance } from "./dependency-check-malicious.js";
 import { NEW_PACKAGE_DAYS } from "./dependency-check-nearmiss.js";
 import type { Signal } from "./dependency-check-signals.js";
 
-/** First published at least this long ago... */
-export const ESTABLISHED_PYPI_DAYS = 730;
-/** ...with at least this many releases: established in its own right. */
-export const ESTABLISHED_PYPI_RELEASES = 10;
 /** A near-miss this new with this few releases: strong evidence. */
 const FEW_RELEASES = 3;
 const DAY_MS = 86_400_000;
@@ -56,13 +52,15 @@ export function pypiNameCheckSignal(input: { package: string; nearMiss: { of: st
     downloads_lookup: "not_applicable",
   };
   const close = `${pkg} is ${nearMiss.closeness === "one_edit" ? "one character" : "two characters"} away from ${nearMiss.of}, one of the most-used PyPI projects`;
-  const history = `${at ? `first published ${at.slice(0, 10)} (${ageDays} day${ageDays === 1 ? "" : "s"} ago)` : "no first publish date on record"}, ${releases} release${releases === 1 ? "" : "s"}`;
-  if (ageDays !== null && ageDays >= ESTABLISHED_PYPI_DAYS && releases >= ESTABLISHED_PYPI_RELEASES) {
-    return { id: "name_check", value, effect: "info", evidence: `${close}, and is established in its own right (${history}): judged as its own package. Make sure it is the one you mean.` };
-  }
-  const shape = `${close}, and nothing shows it is established: PyPI publishes no download counts, and its history is short (${history}; a project is taken as established at ${ESTABLISHED_PYPI_DAYS / 365} years and ${ESTABLISHED_PYPI_RELEASES} releases).`;
+  const history = `${at ? `first published ${at.slice(0, 10)}` : "no first publish date on record"}, ${releases} release${releases === 1 ? "" : "s"}`;
+  const shape = `${close} (${pkg}: ${history}). PyPI publishes no download counts, so nothing shows that anyone installs it under this name.`;
   if (ageDays !== null && ageDays < NEW_PACKAGE_DAYS && releases <= FEW_RELEASES) {
-    return { id: "name_check", value, effect: "avoid", evidence: `${shape} A near-miss name this new, that nobody can have come to rely on yet, is how a typo-squat looks before it is taken down. Do not install it. Did you mean ${nearMiss.of}?` };
+    return {
+      id: "name_check",
+      value,
+      effect: "avoid",
+      evidence: `${shape} A near-miss name ${ageDays} day${ageDays === 1 ? "" : "s"} old, that nobody can have come to rely on yet, is how a typo-squat looks before it is taken down. Do not install it. Did you mean ${nearMiss.of}?`,
+    };
   }
   return { id: "name_check", value, effect: "review", evidence: `${shape} A misspelled name is how a typo-squat gets installed. Did you mean ${nearMiss.of}? Write ${pkg} only if the user confirms it is the package they want.` };
 }

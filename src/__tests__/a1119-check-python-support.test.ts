@@ -138,10 +138,22 @@ describe("dependency_check: the project's Python", () => {
     // A PyPI release's line is its minor series (==2.33.*); the newer 2.34.2 needs Python 3.10 too, so none is offered outside it.
     expect(r.range_check).toMatchObject({ basis: "same_line", range: "==2.33.*", smallest_safe_in_range: null, smallest_safe_upgrade: null, python_excluded: 1 });
     expect(r.range_check!.newest_safe_outside_range ?? null).toBeNull();
+    // Nothing on that line is affected, and no release anywhere clears the advisories on Python 3.9.
     expect(r.reason).toContain(
-      "No release on 2.33.0's line (==2.33.*) clears py-http2's advisories on the Python this project declares: the 1 release that clears them does not support it (2.33.0 requires Python >=3.10, and this project declares Python >=3.9 (pyproject.toml [project] requires-python)).",
+      "No release on 2.33.0's line (==2.33.*) supports the Python this project declares (2.33.0 requires Python >=3.10, and this project declares Python >=3.9 (pyproject.toml [project] requires-python)). No release of py-http2 outside it was found both clear of known advisories and supporting that Python.",
     );
     expect(r.reason).not.toMatch(/concern found/);
+  });
+
+  it("a package with no advisory at all: the sentence says no release there supports the Python, and names one outside that does", async () => {
+    net.osv = [];
+    const r = (await check([{ ecosystem: "PyPI", package: PKG, to: "2.34.2" }], liveFor(PY39))).results[0];
+    expect(r.verdict).toBe("review");
+    expect(r.range_check).toMatchObject({ range: "==2.34.*", smallest_safe_in_range: null, python_excluded: 1, vulnerable_in_range: 0, newest_safe_outside_range: "2.32.5" });
+    expect(r.reason).toContain(
+      "No release on 2.34.2's line (==2.34.*) supports the Python this project declares (2.34.2 requires Python >=3.10, and this project declares Python >=3.9 (pyproject.toml [project] requires-python)). Newest safe release outside it: 2.32.5.",
+    );
+    expect(r.reason).not.toMatch(/advisories on the Python/);
   });
 
   it("a constraint names no safe release that does not support the project's Python, and says when none does", async () => {
@@ -149,7 +161,9 @@ describe("dependency_check: the project's Python", () => {
     expect(r).toMatchObject({ to: "2.34.2", verdict: "review" });
     expect(r.range_check).toMatchObject({ smallest_safe_in_range: null, newest_safe_in_range: null, safe_versions: [], python_excluded: 2, vulnerable_in_range: 2 });
     expect(r.range_check!.newest_safe_outside_range ?? null).toBeNull();
-    expect(r.reason).toContain("No release in >=2.31 clears py-http2's advisories on the Python this project declares");
+    expect(r.reason).toContain(
+      "No release in >=2.31 clears py-http2's advisories on the Python this project declares: the 2 releases that clear them do not support it (2 releases (2.33.0 to 2.34.2) require Python >=3.10, and this project declares Python >=3.9 (pyproject.toml [project] requires-python)). No release of py-http2 outside it was found both clear of known advisories and supporting that Python.",
+    );
     const concise = (await runDependencyCheck(noDb, { items: [{ ecosystem: "PyPI", package: PKG, to: ">=2.31" }] }, liveFor(PY39))) as { results: Array<Record<string, unknown>> };
     expect(concise.results[0]).toMatchObject({ verdict: "review", safe: { smallest: null, newest: null } });
   });

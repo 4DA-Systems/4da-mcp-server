@@ -37,7 +37,6 @@ beforeEach(() => {
   net = emptyNet();
   net.pypi.numpi = project(1, 100);
   net.pypi.numpy = project(12, 4000);
-  net.pypi.jinja = project(12, 4000);
   net.pypi["python3-dateutil"] = project(2, 300);
   net.pypi["Python_Dateutil"] = project(12, 4000);
   stubNet(net);
@@ -85,16 +84,19 @@ describe("dependency_check: a PyPI name one slip from a popular project", () => 
     expect(nameCheck(r)!.evidence).toContain("Do not install it. Did you mean numpy?");
   });
 
-  it("an established project is not flagged for its name, and a popular one is not checked at all", async () => {
-    const [jinja, numpy, dateutil] = (
+  it("a long release history is stated, never read as established; a popular name is not checked at all", async () => {
+    // The real numpi has published since 2019 with 36 releases: history does not show anyone installs it.
+    net.pypi.numpi = project(36, 2600);
+    const [numpi, numpy, dateutil] = (
       await check([
-        { ecosystem: "PyPI", package: "jinja", to: latest("jinja") },
+        { ecosystem: "PyPI", package: "numpi", to: latest("numpi") },
         { ecosystem: "PyPI", package: "numpy", to: latest("numpy") },
         { ecosystem: "PyPI", package: "Python_Dateutil", to: latest("Python_Dateutil") },
       ])
     ).results;
-    expect(nameCheck(jinja)).toMatchObject({ effect: "info", value: { near_miss_of: "jinja2", releases: 12 } });
-    expect(jinja.verdict).toBe("proceed");
+    expect(numpi.verdict).toBe("review");
+    expect(nameCheck(numpi)).toMatchObject({ effect: "review", value: { near_miss_of: "numpy", releases: 36, age_days: 2600 } });
+    expect(nameCheck(numpi)!.evidence).toContain(`numpi is one character away from numpy, one of the most-used PyPI projects (numpi: first published ${daysAgo(2600).slice(0, 10)}, 36 releases). PyPI publishes no download counts`);
     // A name on the popular list is its own package, whatever it neighbours (pyaml, one edit from pyyaml).
     expect(pypiNearMissOf("pyaml")).toBeNull();
     expect(nameCheck(numpy)).toBeUndefined();
