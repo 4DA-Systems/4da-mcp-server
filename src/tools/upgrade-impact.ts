@@ -149,7 +149,7 @@ const PRIVACY_GITHUB =
  * answer so an agent never reads the flags as exhaustive.
  */
 const CLASSIFICATION =
-  "Entries are flagged from the changelog's headings and wording, not by reading code. On 20 upgrades across npm, crates.io, PyPI and Go held out from rule-making (three blind raters, 2026-10-11), 95% of entries flagged breaking were breaking and about 72% of breaking entries were flagged; behaviour changes filed under fixes and release notes written as prose are the usual misses. Read every entry of a major upgrade, using `under` for each entry's heading."
+  "Entries are flagged from the changelog's headings and wording, not by reading code. On 20 upgrades across npm, crates.io, PyPI and Go held out from rule-making (three blind raters, each a model instance, 2026-10-11), 95% of entries flagged breaking were breaking and about 72% of breaking entries were flagged; behaviour changes filed under fixes and release notes written as prose are the usual misses. Read every entry of a major upgrade, using `under` for each entry's heading."
 
 export const upgradeImpactTool = {
   name: "upgrade_impact",

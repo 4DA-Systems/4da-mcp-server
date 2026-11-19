@@ -738,6 +738,12 @@ export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P
   };
 }
 
+/** Whether `file` has a lockfile's name (not a manifest's, such as package.json or pyproject.toml). */
+function isLockfileName(file: string): boolean {
+  const base = file.split(/[\\/]/).pop() ?? file;
+  return /^(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|poetry\.lock|uv\.lock|pdm\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|gems\.locked|composer\.lock)$/.test(base);
+}
+
 /**
  * One wording for every tool (vulnerability_scan, dependency_health,
  * upgrade_planner). `show` renders a path (the scan shows it relative).
@@ -747,8 +753,10 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
   const { unreadable, partial, refused, conflicts } = splitLockfileProblems(problems);
   const notes: string[] = [];
   if (unreadable.length > 0) {
+    // A manifest (package.json, pyproject.toml, ...) can be the file that could not be read: "lockfile" only when each one is.
+    const kind = unreadable.every((p) => isLockfileName(p.file)) ? "lockfile" : "file";
     notes.push(
-      `UNREADABLE: ${unreadable.length} lockfile${unreadable.length === 1 ? "" : "s"} could not be read, so ${unreadable.length === 1 ? "its" : "their"} dependencies were not checked: ${listed(unreadable)}.`,
+      `UNREADABLE: ${unreadable.length} ${kind}${unreadable.length === 1 ? "" : "s"} could not be read, so ${unreadable.length === 1 ? "its" : "their"} dependencies were not checked: ${listed(unreadable)}.`,
     );
   }
   const skippedEntries = partial.filter((p) => !p.partial);

@@ -187,7 +187,7 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
           }${notes.length > 0 ? ` ${notes.join(" ")}` : ""}`
         : notes.length > 0
           ? `Nothing was checked, so there is no health score; this is not a healthy result. ${notes.join(" ")}`
-          : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, composer.lock), and none of an unsupported one either; no health score.`,
+          : `No manifest or lockfile of a supported ecosystem was found in ${root} (package.json, Cargo.toml, pyproject.toml, requirements*.txt, go.mod, Gemfile.lock, gems.locked, composer.lock), and none of an unsupported one either; no health score.`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };
