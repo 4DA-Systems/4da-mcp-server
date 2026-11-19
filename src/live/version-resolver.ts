@@ -12,7 +12,8 @@
 import type { OsvEcosystem, ResolvedDependency } from "./types.js";
 import { targetActiveOnHost } from "./platform.js";
 import { activeCratesForHost, hostTriple } from "./cargo-platform.js";
-import { resolveVersionSource, type PackageInstance } from "./lockfile-parsers.js";
+import { resolveVersionSource, type PackageInstance, type VersionSource } from "./lockfile-parsers.js";
+import type { DeclaredDependency } from "./lockfile-types.js";
 import { normalizePythonName } from "./lockfile-parsers-pygo.js";
 
 // Alias -> OSV ecosystem. Mirrors the desktop app's canonical
@@ -88,6 +89,51 @@ function canonicalCrateName(name: string, versionMap: Map<string, string>): stri
   return versionMap.has(swapped) ? swapped : name;
 }
 
+/** What a lockfile read established beyond one version per name (lockfile-types.ts VersionSource). */
+export interface LockScope {
+  /** Every installed copy, with the scope the lockfile gives it. */
+  instances?: PackageInstance[];
+  /** Copies the project's own manifests declare, workspace members included. */
+  declared?: DeclaredDependency[];
+  /** True when the reader graded every copy's scope itself (VersionSource.scopeGraded). */
+  graded?: boolean;
+}
+
+interface ScopeIndex {
+  /** `name\0version` to the lockfile's own scope for that copy: true dev-only, false runtime, undefined not stated. */
+  lockDev: Map<string, boolean | undefined>;
+  /** `name\0version` of copies a manifest declares: true when a runtime section does. */
+  declaredRuntime: Map<string, boolean>;
+  graded: boolean;
+}
+
+function scopeIndex(ecosystem: OsvEcosystem, scope: LockScope = {}): ScopeIndex {
+  const lockDev = new Map<string, boolean | undefined>();
+  for (const copy of scope.instances ?? []) lockDev.set(copyKey(copy.name, copy.version, ecosystem), copy.dev);
+  const declaredRuntime = new Map<string, boolean>();
+  for (const copy of scope.declared ?? []) {
+    const key = copyKey(copy.name, copy.version, ecosystem);
+    declaredRuntime.set(key, (declaredRuntime.get(key) ?? false) || copy.runtime);
+  }
+  return { lockDev, declaredRuntime, graded: scope.graded === true };
+}
+
+/**
+ * The scope of a copy the project declares. It is dev-only only when nothing
+ * runtime reaches it: declared in a runtime section anywhere, or marked
+ * runtime by the lockfile (a runtime dependency also installs it), it is
+ * runtime. `devOnlySection` is false when the manifest itself lists the name
+ * in a runtime section. When the reader grades scope itself and could not
+ * establish this copy's, it is unknown, never dev-only on the manifest's word.
+ */
+function declaredScope(index: ScopeIndex, key: string, devOnlySection: boolean): { isDev: boolean; devScopeKnown: boolean } {
+  if (!devOnlySection || index.declaredRuntime.get(key) === true) return { isDev: false, devScopeKnown: true };
+  const lock = index.lockDev.get(key);
+  if (lock === false) return { isDev: false, devScopeKnown: true };
+  if (lock === undefined && index.graded) return { isDev: false, devScopeKnown: false };
+  return { isDev: true, devScopeKnown: true };
+}
+
 export function resolveVersions(
   cwd: string,
   deps: string[],
@@ -96,8 +142,13 @@ export function resolveVersions(
   targets: Record<string, string> = {},
 ): ResolvedDependency[] {
   const ecosystem = mapEcosystem(language);
-  const versionMap = resolveVersionSource(cwd, ecosystem).versions;
-  return resolveVersionsFrom(cwd, deps, devDeps, ecosystem, versionMap, targets);
+  const read = resolveVersionSource(cwd, ecosystem);
+  return resolveVersionsFrom(cwd, deps, devDeps, ecosystem, read.versions, targets, lockScopeOf(read));
+}
+
+/** The scope facts of a lockfile read, as the resolvers take them. */
+export function lockScopeOf(read: Pick<VersionSource, "instances" | "declared" | "scopeGraded">): LockScope {
+  return { instances: read.instances, declared: read.declared, graded: read.scopeGraded === true };
 }
 
 /** `resolveVersions` over a version map the caller already read from `cwd`. */
@@ -108,20 +159,26 @@ export function resolveVersionsFrom(
   ecosystem: OsvEcosystem,
   versionMap: Map<string, string>,
   targets: Record<string, string> = {},
+  scope: LockScope = {},
 ): ResolvedDependency[] {
   const results: ResolvedDependency[] = [];
+  const index = scopeIndex(ecosystem, scope);
+  const runtimeNames = new Set(deps);
 
   const build = (rawName: string, isDev: boolean): ResolvedDependency => {
     const name =
       ecosystem === "crates.io" ? canonicalCrateName(rawName, versionMap) : rawName;
     const target = targets[rawName] ?? targets[name] ?? null;
+    const version = versionMap.get(normalizePackageName(name, ecosystem)) || null;
+    // A devDependency is graded by what reaches the copy it resolves to, not by its section alone.
+    const graded = isDev && version ? declaredScope(index, copyKey(name, version, ecosystem), !runtimeNames.has(rawName)) : { isDev, devScopeKnown: true };
     return {
       name,
-      version: versionMap.get(normalizePackageName(name, ecosystem)) || null,
+      version,
       ecosystem,
-      isDev,
+      isDev: graded.isDev,
       isDirect: true,
-      devScopeKnown: true,
+      devScopeKnown: graded.devScopeKnown,
       target,
       platformActive: targetActiveOnHost(target),
       // Provenance recorded at the point of resolution: this version came from
@@ -149,7 +206,7 @@ export function resolveAuditVersions(
 ): ResolvedDependency[] {
   const ecosystem = mapEcosystem(language);
   const read = resolveVersionSource(cwd, ecosystem);
-  return resolveAuditVersionsFrom(cwd, deps, devDeps, ecosystem, read.versions, targets, undefined, read.instances);
+  return resolveAuditVersionsFrom(cwd, deps, devDeps, ecosystem, read.versions, targets, undefined, read.instances, lockScopeOf(read));
 }
 
 /**
@@ -157,7 +214,8 @@ export function resolveAuditVersions(
  * lets the caller pass direct entries it has already enriched (install state)
  * so the audit set carries the same objects' context. `instances` is every
  * installed copy the lockfile holds; without it the version map (one copy per
- * name) is all there is.
+ * name) is all there is. `scope` carries what the lockfile read established
+ * about scope and about the copies workspace members declare.
  */
 export function resolveAuditVersionsFrom(
   cwd: string,
@@ -166,9 +224,13 @@ export function resolveAuditVersionsFrom(
   ecosystem: OsvEcosystem,
   versionMap: Map<string, string>,
   targets: Record<string, string> = {},
-  direct: ResolvedDependency[] = resolveVersionsFrom(cwd, deps, devDeps, ecosystem, versionMap, targets),
+  directEntries?: ResolvedDependency[],
   instances: PackageInstance[] = [...versionMap].map(([name, version]) => ({ name, version })),
+  scope: Omit<LockScope, "instances"> = {},
 ): ResolvedDependency[] {
+  const lockScope: LockScope = { ...scope, instances };
+  const direct = directEntries ?? resolveVersionsFrom(cwd, deps, devDeps, ecosystem, versionMap, targets, lockScope);
+  const index = scopeIndex(ecosystem, lockScope);
   // Canonicalize the same way resolveVersions does, so a dep declared under its
   // import spelling still marks the lock file's canonical entry as direct.
   const canonical = (name: string) =>
@@ -207,10 +269,13 @@ export function resolveAuditVersionsFrom(
 
   for (const { name, version, dev } of instances) {
     const normalized = normalizePackageName(name, ecosystem);
+    const key = copyKey(name, version, ecosystem);
     // Direct only for the copy a manifest dependency resolves to; another
     // installed version of the same name is somebody else's transitive.
-    const isDirect =
-      (directNames.has(normalized) || devNames.has(normalized)) && versionMap.get(name) === version;
+    const resolvesHere = versionMap.get(name) === version;
+    const inRuntimeSection = resolvesHere && directNames.has(normalized);
+    const isDirect = inRuntimeSection || (resolvesHere && devNames.has(normalized));
+    const graded = isDirect ? declaredScope(index, key, !inRuntimeSection) : { isDev: dev === true, devScopeKnown: dev !== undefined };
     const declaredTarget = targets[name] ?? null;
     const builtOnHost = hostCrates ? hostCrates.has(name) : true;
     // Prefer the manifest's own cfg() spec when it has one — it is the more
@@ -222,19 +287,20 @@ export function resolveAuditVersionsFrom(
       name,
       version,
       ecosystem,
-      // A direct dependency's scope is its manifest section; a transitive's is
-      // whatever the lockfile recorded for that copy (npm `dev`, pnpm 5/6
-      // `dev`, Pipfile `develop`, poetry `category`), else unknown.
-      isDev: isDirect ? devNames.has(normalized) : dev === true,
+      // A transitive's scope is whatever the lockfile recorded for that copy
+      // (npm `dev`, pnpm 5/6 `dev`, Pipfile `develop`, poetry `category`, or
+      // the reader's own reachability), else unknown. A declared copy's is
+      // declaredScope: its section, unless something runtime reaches it too.
+      isDev: graded.isDev,
       isDirect,
-      devScopeKnown: isDirect || dev !== undefined,
+      devScopeKnown: graded.devScopeKnown,
       target,
       platformActive: targetActiveOnHost(declaredTarget) && builtOnHost,
       sourceDirs: [cwd],
     };
-    const key = dependencyKey(candidate);
-    if (!seen.has(key)) {
-      seen.add(key);
+    const candidateKey = dependencyKey(candidate);
+    if (!seen.has(candidateKey)) {
+      seen.add(candidateKey);
       results.push(candidate);
     }
   }
@@ -245,6 +311,11 @@ export function resolveAuditVersionsFrom(
 function normalizePackageName(name: string, ecosystem: OsvEcosystem): string {
   // PEP 503: the lockfile readers store Python names normalised the same way.
   return ecosystem === "PyPI" ? normalizePythonName(name) : name;
+}
+
+/** One installed copy, by normalised name and version. */
+function copyKey(name: string, version: string, ecosystem: OsvEcosystem): string {
+  return `${normalizePackageName(name, ecosystem)}\0${version}`;
 }
 
 function dependencyKey(dep: ResolvedDependency): string {

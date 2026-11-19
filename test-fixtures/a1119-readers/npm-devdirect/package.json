@@ -1,0 +1,11 @@
+{
+  "name": "fx-npm-devdirect",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "optimist": "0.6.1"
+  },
+  "devDependencies": {
+    "minimist": "0.0.8"
+  }
+}

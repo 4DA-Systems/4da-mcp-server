@@ -37,9 +37,11 @@ import {
   type LockDamage,
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
+import { gradeYarnLock, type LockGrade } from "./js-dev-scope.js";
+import { DEPENDENCY_SECTIONS, isRuntimeSection } from "./js-manifests.js";
 import { requirementFiles, resolveGo, resolvePython, tomlLockDamage } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
-import { emptySource, found, InstanceSet, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
+import { emptySource, found, InstanceSet, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import { readTextFile } from "./text-file.js";
 import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
@@ -259,6 +261,10 @@ interface NpmLockRead {
   uncheckable: NonRegistryEntry[];
   aliases?: Map<string, string>;
   problems: LockfileProblem[];
+  /** Copies the project's own manifests declare, workspace members included (VersionSource.declared). */
+  declared?: DeclaredDependency[];
+  /** True when the reader graded the scope of every copy itself (VersionSource.scopeGraded). */
+  scopeGraded?: boolean;
 }
 
 /**
@@ -281,18 +287,26 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const installs = yield* readPnpmLockSteps(content, versions, instances, report);
       if (versions.size === 0) return null;
       const damage = yield* pnpmLockDamageSteps(content, report.missingDirect, installs);
-      return { versions, instances, uncheckable: report.uncheckable, problems: damage ? [damagedProblem(file, damage)] : [] };
+      return {
+        versions,
+        instances,
+        uncheckable: report.uncheckable,
+        problems: damage ? [damagedProblem(file, damage)] : [],
+        declared: report.declared,
+        scopeGraded: report.scopeGraded,
+      };
     },
   },
   {
     // v1 and berry
     name: "yarn.lock",
     read(file, cwd) {
+      const content = readTextFile(file);
       const versions = new Map<string, string>();
-      const instances = new InstanceSet();
+      const copies = new InstanceSet();
       const specs = new Map<string, string>();
       const report = emptyReadReport();
-      const skipped = readYarnLock(readTextFile(file), versions, instances, specs, report);
+      const skipped = readYarnLock(content, versions, copies, specs, report);
       // The copy a direct dependency resolves to is the one its package.json range names.
       for (const [name, range] of manifestRanges(cwd)) {
         const version = specs.get(`${name}@${range}`);
@@ -304,7 +318,18 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
         const entries = report.incomplete === 1 ? "1 entry names a package but no version" : `${report.incomplete} entries name a package but no version`;
         problems.push(damagedProblem(file, { reason: `it is truncated or damaged: ${entries}`, missing: report.incomplete }));
       }
-      return { versions, instances, uncheckable: report.uncheckable, problems };
+      // yarn.lock states no scope: it is derived from the lockfile's graph and the package.json files.
+      const read = copies.toArray();
+      const keys = new Set(read.map((copy) => `${copy.name}\0${copy.version}`));
+      let grade: LockGrade;
+      try {
+        grade = gradeYarnLock(content, cwd, (key) => keys.has(key));
+      } catch {
+        grade = { scopes: new Map(), declared: [], graded: false };
+      }
+      const instances = new InstanceSet();
+      for (const copy of read) instances.add(copy.name, copy.version, grade.scopes.get(`${copy.name}\0${copy.version}`));
+      return { versions, instances, uncheckable: report.uncheckable, problems, declared: grade.declared, scopeGraded: grade.graded };
     },
   },
   {
@@ -315,7 +340,8 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const instances = new InstanceSet();
       const report = emptyReadReport();
       readBunLock(readTextFile(file), versions, instances, report);
-      return versions.size > 0 ? { versions, instances, uncheckable: report.uncheckable, problems: [] } : null;
+      if (versions.size === 0) return null;
+      return { versions, instances, uncheckable: report.uncheckable, problems: [], declared: report.declared, scopeGraded: report.scopeGraded };
     },
   },
 ];
@@ -323,7 +349,8 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
 function readNpmLockFile(file: string): NpmLockRead | null {
   const read = readPackageLock(JSON.parse(readTextFile(file)));
   if (read.instances.size === 0 && read.uncheckable.length === 0) return null;
-  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [] };
+  // npm writes `dev` on every entry only devDependencies reach: the lockfile's own grading.
+  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [], declared: read.declared, scopeGraded: true };
 }
 
 function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
@@ -350,6 +377,8 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
       ...(read.uncheckable.length > 0 ? { uncheckable: read.uncheckable.map((u) => ({ ...u, file })) } : {}),
       ...(read.aliases && read.aliases.size > 0 ? { aliases: read.aliases } : {}),
       ...(problems.length > 0 ? { problems } : {}),
+      ...(read.declared && read.declared.length > 0 ? { declared: read.declared } : {}),
+      ...(read.scopeGraded ? { scopeGraded: true as const } : {}),
     });
   }
 
@@ -467,6 +496,22 @@ function lockfileConflicts(cwd: string, chosen: { name: string; read: NpmLockRea
   return problems;
 }
 
+/**
+ * Node's lookup of `name` from the package-lock key `from` (an install path,
+ * a workspace directory, or "" for the project): its own node_modules, then
+ * each enclosing package's, then the root's. Null when no entry answers.
+ */
+export function resolveInstallPath(packages: Record<string, unknown>, from: string, name: string): string | null {
+  let dir = from;
+  for (;;) {
+    const candidate = `${dir ? `${dir}/` : ""}node_modules/${name}`;
+    if (Object.hasOwn(packages, candidate)) return candidate;
+    if (dir === "") return null;
+    const cut = dir.lastIndexOf("/node_modules/");
+    dir = cut >= 0 ? dir.slice(0, cut) : "";
+  }
+}
+
 /** The package name a package-lock `packages` key installs: the segment after its LAST `node_modules/`. */
 export function packageNameFromNodeModulesPath(lockPath: string): string {
   const marker = "node_modules/";
@@ -514,11 +559,12 @@ const V1_ALIAS = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(\d\S*)$/;
 export function readPackageLock(lock: {
   packages?: Record<string, LockEntry>;
   dependencies?: Record<string, LockEntry>;
-}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string> } {
+}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[] } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: NonRegistryEntry[] = [];
   const aliases = new Map<string, string>();
+  const declared = new Map<string, DeclaredDependency>();
 
   if (lock.packages) {
     // What asked for each name, to tell a URL dependency from a registry with tarball paths of its own.
@@ -569,8 +615,30 @@ export function readPackageLock(lock: {
       if (!versions.has(name)) versions.set(name, version);
     }
     // A workspace package's own nested copy (packages/x/node_modules/a) when nothing is hoisted.
+    const copies = new Set<string>();
     for (const instance of instances.toArray()) {
+      copies.add(`${instance.name}\0${instance.version}`);
       if (!versions.has(instance.name)) versions.set(instance.name, instance.version);
+    }
+    // What the project and each workspace member declare: the entries keyed by a directory, not an
+    // install path, each dependency resolved from that directory as Node resolves it.
+    for (const [key, value] of Object.entries(lock.packages)) {
+      if (!value || value.link || packageNameFromNodeModulesPath(key) !== "") continue;
+      for (const section of DEPENDENCY_SECTIONS) {
+        const specs = value[section];
+        if (!specs || typeof specs !== "object") continue;
+        for (const dep of Object.keys(specs)) {
+          const at = resolveInstallPath(lock.packages, key, dep);
+          const target = at ? lock.packages[at] : undefined;
+          if (!target || target.link || typeof target.version !== "string") continue;
+          const name = typeof target.name === "string" && NPM_NAME.test(target.name) ? target.name : dep;
+          const id = `${name}\0${target.version}`;
+          if (!copies.has(id)) continue;
+          const prior = declared.get(id);
+          if (prior) prior.runtime ||= isRuntimeSection(section);
+          else declared.set(id, { name, version: target.version, runtime: isRuntimeSection(section) });
+        }
+      }
     }
   }
 
@@ -604,7 +672,7 @@ export function readPackageLock(lock: {
     }
   }
 
-  return { versions, instances, uncheckable, aliases };
+  return { versions, instances, uncheckable, aliases, declared: [...declared.values()] };
 }
 
 // =============================================================================

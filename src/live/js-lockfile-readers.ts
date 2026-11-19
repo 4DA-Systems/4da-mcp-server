@@ -18,7 +18,8 @@
  * file, link) is dropped instead of being queried as a package name.
  */
 
-import type { InstanceSet } from "./lockfile-types.js";
+import type { DeclaredDependency, InstanceSet } from "./lockfile-types.js";
+import { ScopeGraph } from "./scope-graph.js";
 import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 
 const DEPENDENCY_BLOCKS = new Set(["dependencies:", "devDependencies:", "optionalDependencies:"]);
@@ -39,6 +40,10 @@ export interface LockReadReport {
   incomplete: number;
   /** pnpm: direct dependencies an importer pins that have no `packages:` entry. */
   missingDirect: string[];
+  /** pnpm: every copy an importer (the project or a workspace member) declares. */
+  declared?: DeclaredDependency[];
+  /** pnpm: true when the scope of each copy is the lockfile's own, or was derived from its importers. */
+  scopeGraded?: boolean;
 }
 
 export function emptyReadReport(): LockReadReport {
@@ -229,7 +234,8 @@ export function* textLines(content: string): Generator<string> {
 
 /** A `packages:`/`snapshots:` key, or a dependency value that points at one, in one spelling: unquoted, no leading `/`. */
 export function pnpmKeyRef(raw: string): string {
-  return unquote(raw.trim()).replace(/^\//, "");
+  const ref = unquote(raw.trim());
+  return ref.startsWith("/") ? ref.slice(1) : ref;
 }
 
 export interface PnpmEntryReader {
@@ -310,7 +316,31 @@ export function readPnpmLock(content: string, versions: Map<string, string>, ins
   return runSteps(readPnpmLockSteps(content, versions, instances, report));
 }
 
-/** readPnpmLock, pausing every STEP_MASK + 1 lines and entries (runStepsYielding; pre-publish round 10, W11). */
+/** A `packages:`/`snapshots:` key without its peer suffix: every peer variant of one package is one node of the graph. */
+function pnpmNodeKey(ref: string): string {
+  const peers = ref.indexOf("(");
+  return peers < 0 ? ref : ref.slice(0, peers);
+}
+
+/** A dependency value with a protocol (`link:../a`, `file:../b`, `https://...`): never an alias of a registry package. */
+const PROTOCOL_VALUE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/** Graph roots that stand for the importers' own sections, in the "either of two keys" list. */
+const RUNTIME_ROOT = -1;
+const DEV_ROOT = -2;
+
+/**
+ * readPnpmLock, pausing every STEP_MASK + 1 lines and entries (runStepsYielding; pre-publish round 10, W11).
+ *
+ * Scope (dev-only or runtime) per copy:
+ * - lockfile 5 and 6 write it on every entry: `dev: true` (only devDependencies reach it), `dev: false`
+ *   (only runtime), or no field (both). One package keyed under several peer sets is runtime when
+ *   ANY of its entries is; it is dev-only when all of them are.
+ * - lockfile 9 dropped the field, so it is derived: the copies the importers' `dependencies` and
+ *   `optionalDependencies` reach through the `snapshots:` graph are runtime, and what only their
+ *   `devDependencies` reach is dev-only. Dev-only is claimed only when every dependency named in
+ *   the graph has an entry; otherwise the unreached copies stay of unknown scope.
+ */
 export function* readPnpmLockSteps(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): Steps<ReadonlySet<string>> {
   let step = 0;
   // Each registry (name, version) the entries install, once, under its `name\0version` key, in the
@@ -319,21 +349,71 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
   // each, held 300,000 pairs and 600,000 strings for a 150,000-entry file (pre-publish round 10, W9).
   const transitive = new Map<string, [string, string]>();
   const devByKey = new Map<string, boolean>();
-  // Every (name, version) an importer pins, for the check that each has a `packages:` entry.
+  // Copies with an entry that states no scope, in a lockfile whose version does not say what that means.
+  const unstated = new Set<string>();
+  // Every (name, version) an importer pins, for the check that each has a `packages:` entry; and
+  // those of them a runtime section (not devDependencies) pins.
   const directPins = new Map<string, string>();
-  const setFirst = (rawName: string, rawVersion: string): void => {
+  const runtimePins = new Set<string>();
+  // Importer dependencies that point at an entry under another name (an alias): [name, version, runtime].
+  const aliasPins: Array<[string, string, boolean]> = [];
+  let lockMajor = 0;
+  let sawImporter = false;
+  // Lockfile 9: the dependency graph over entry keys (pnpmNodeKey).
+  const graph = new ScopeGraph();
+  const isEntry: boolean[] = [];
+  const identityOf: string[] = [];
+  const runtimeRoots: number[] = [];
+  const devRoots: number[] = [];
+  // Edges and roots whose value is a key in one of two spellings: [from, `name@value`, `value`].
+  const either: Array<[number, number, number]> = [];
+  let graphWhole = true;
+  let entryNode = -1; // the entry whose dependency lines are being read
+  let openNode = -1; // the entry the entry reader has open (it reports an entry when the next one opens)
+  let inEdges = false;
+  const targetOfLine = new Map<string, number | [number, number] | null>();
+
+  const setFirst = (rawName: string, rawVersion: string, runtime: boolean): void => {
     const [name, version] = detachPair(rawName, rawVersion);
-    directPins.set(`${name}@${version}`, name);
+    const pinned = `${name}@${version}`;
+    directPins.set(pinned, name);
+    if (runtime) runtimePins.add(pinned);
     if (!versions.has(name)) versions.set(name, version);
+  };
+  /** The node a dependency line `name: value` points at; a pair when the value is itself a key; null for a link. */
+  const pointsAt = (name: string, rawValue: string): number | [number, number] | null => {
+    const value = pnpmNodeKey(unquote(rawValue.trim()));
+    if (/^\d/.test(value)) return graph.node(`${name}@${value}`);
+    if (/^(?:link|workspace):/.test(value)) return null;
+    const ref = value.replace(/^\//, "");
+    return [graph.node(`${name}@${ref}`), graph.node(ref)];
   };
   let section = "";
   let blockIndent = -1; // column of the dependency block being read, or -1
+  let blockRuntime = true; // false inside a devDependencies block
   let pending: string | null = null; // v6/v9: a name whose `version:` line follows
+  /** One dependency an importer block resolves: `name` to `value` (a version, or a key). */
+  const pin = (name: string, value: string): void => {
+    const version = exactVersion(value);
+    if (version) setFirst(name, version, blockRuntime);
+    else if (!PROTOCOL_VALUE.test(unquote(value.trim()))) {
+      const real = parsePnpmKey(pnpmNodeKey(pnpmKeyRef(value)));
+      if (real) aliasPins.push([real[0], real[1], blockRuntime]);
+    }
+    if (lockMajor < 9) return;
+    const target = pointsAt(name, value);
+    if (typeof target === "number") (blockRuntime ? runtimeRoots : devRoots).push(target);
+    else if (target) either.push([blockRuntime ? RUNTIME_ROOT : DEV_ROOT, target[0], target[1]]);
+  };
   const entries = pnpmEntryReader(
-    (_key, id, dev) => {
+    (_rawKey, id, dev) => {
       const key = `${id[0]}\0${id[1]}`;
       if (!transitive.has(key)) transitive.set(key, detachedFromKey(key, id[0].length));
-      if (dev !== undefined) devByKey.set(key, dev);
+      if (dev !== undefined) devByKey.set(key, (devByKey.get(key) ?? true) && dev);
+      else if (lockMajor >= 5 && lockMajor < 9) devByKey.set(key, false);
+      else if (lockMajor === 0) unstated.add(key);
+      // The entry the reader just closed is the one `openNode` was set for.
+      if (openNode >= 0) identityOf[openNode] ??= key;
     },
     report ? (other) => report.uncheckable.push(other) : undefined,
   );
@@ -347,16 +427,49 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
     if (indent === 0) {
       entries.finish();
       section = text.endsWith(":") ? text.slice(0, -1) : "";
+      if (text.startsWith("lockfileVersion:")) lockMajor = Number(/^lockfileVersion:[ \t]*['"]?(\d+)/.exec(text)?.[1] ?? "0");
       blockIndent = DEPENDENCY_BLOCKS.has(text) ? 0 : -1;
+      blockRuntime = text !== "devDependencies:";
+      if (blockIndent === 0) sawImporter = true;
       pending = null;
+      entryNode = -1;
+      openNode = -1;
+      inEdges = false;
       continue;
     }
     if (section === "packages" || section === "snapshots") {
+      // Closes the entry before this line when the line opens another: `openNode` is still that entry's.
       entries.line(indent, text);
+      if (lockMajor < 9) continue;
+      if (indent === 2) {
+        const opens = text.endsWith(":");
+        const key = opens ? text.slice(0, -1) : text.endsWith(": {}") ? text.slice(0, -4) : null;
+        entryNode = key === null ? -1 : graph.node(pnpmNodeKey(pnpmKeyRef(key)));
+        if (entryNode >= 0) isEntry[entryNode] = true;
+        // An empty `key: {}` snapshot is no entry to the reader: the one before it stays open.
+        if (opens) openNode = entryNode;
+        inEdges = false;
+      } else if (indent === 4) {
+        inEdges = entryNode >= 0 && (text === "dependencies:" || text === "optionalDependencies:");
+      } else if (indent === 6 && inEdges) {
+        // Every parent of one copy writes the same line for it: each distinct line is parsed once.
+        let target = targetOfLine.get(text);
+        if (target === undefined) {
+          const dep = line.length > MAX_LOCKFILE_LINE ? null : /^(?:'([^']+)'|"([^"]+)"|([^\s:'"]+)):[ ]+(.+)$/.exec(text);
+          // A dependency line that cannot be read is an edge that cannot be followed.
+          if (!dep) graphWhole = false;
+          target = dep ? pointsAt(dep[1] ?? dep[2] ?? dep[3], dep[4]) : null;
+          targetOfLine.set(text, target);
+        }
+        if (typeof target === "number") graph.edge(entryNode, target);
+        else if (target) either.push([entryNode, target[0], target[1]]);
+      }
       continue;
     }
     if (section === "importers" && indent <= 4) {
+      sawImporter = true;
       blockIndent = indent === 4 && DEPENDENCY_BLOCKS.has(text) ? 4 : -1;
+      blockRuntime = text !== "devDependencies:";
       pending = null;
       continue;
     }
@@ -371,12 +484,10 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
       if (value === undefined || value === "") {
         pending = name;
       } else {
-        const version = exactVersion(value); // v5: `name: 1.2.3_peer@4.5.6`
-        if (version) setFirst(name, version);
+        pin(name, value); // v5: `name: 1.2.3_peer@4.5.6`
       }
     } else if (indent === blockIndent + 4 && pending && text.startsWith("version:")) {
-      const version = exactVersion(text.slice("version:".length));
-      if (version) setFirst(pending, version);
+      pin(pending, text.slice("version:".length));
       pending = null;
     }
   }
@@ -387,13 +498,50 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
   const seen = new Set(transitive.keys());
   if (report) {
     // In a whole lockfile every version an importer pins has a `packages:` entry: one without lies past where the file stops.
-    for (const [pin, name] of directPins) {
-      if (!seen.has(`${name}\0${pin.slice(name.length + 1)}`)) report.missingDirect.push(pin);
+    for (const [pinned, name] of directPins) {
+      if (!seen.has(`${name}\0${pinned.slice(name.length + 1)}`)) report.missingDirect.push(pinned);
     }
   }
   for (const [name, version] of transitive.values()) {
     if (!versions.has(name)) versions.set(name, version);
   }
+
+  if (lockMajor >= 9) {
+    for (const [from, a, b] of either) {
+      const to = isEntry[a] ? a : isEntry[b] ? b : -1;
+      if (to < 0) graphWhole = false;
+      else if (from === RUNTIME_ROOT) runtimeRoots.push(to);
+      else if (from === DEV_ROOT) devRoots.push(to);
+      else graph.edge(from, to);
+    }
+    const known = (node: number) => isEntry[node] === true;
+    if (!graph.everyTarget(known) || !runtimeRoots.every(known) || !devRoots.every(known)) graphWhole = false;
+    const runtime = graph.reach(runtimeRoots);
+    const dev = graph.reach(devRoots);
+    for (let node = 0; node < identityOf.length; node++) {
+      if ((++step & STEP_MASK) === 0) yield;
+      const key = identityOf[node];
+      if (key === undefined) continue;
+      if (runtime[node] === 1) devByKey.set(key, false);
+      else if (dev[node] === 1 && graphWhole && devByKey.get(key) !== false) devByKey.set(key, true);
+    }
+  }
+  if (report) {
+    const declared = new Map<string, DeclaredDependency>();
+    const declare = (name: string, version: string, runtime: boolean) => {
+      const key = `${name}\0${version}`;
+      if (!seen.has(key)) return;
+      const prior = declared.get(key);
+      if (prior) prior.runtime ||= runtime;
+      else declared.set(key, { name, version, runtime });
+    };
+    for (const [pinned, name] of directPins) declare(name, pinned.slice(name.length + 1), runtimePins.has(pinned));
+    for (const [name, version, runtime] of aliasPins) declare(name, version, runtime);
+    report.declared = [...declared.values()];
+    // Lockfile 5/6 grades every entry itself; lockfile 9 is graded from its importers when it has them.
+    report.scopeGraded = lockMajor >= 9 ? sawImporter : lockMajor >= 5;
+  }
+
   if (!instances) return seen;
   for (const [name, version] of versions) {
     if ((++step & STEP_MASK) === 0) yield;
@@ -401,7 +549,8 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
   }
   for (const [key, [name, version]] of transitive) {
     if ((++step & STEP_MASK) === 0) yield;
-    instances.add(name, version, devByKey.get(key), key);
+    const dev = devByKey.get(key);
+    instances.add(name, version, dev === false || !unstated.has(key) ? dev : undefined, key);
   }
   // Every registry (name, version) an entry installs, as `name\0version`: pnpmLockDamage reuses it.
   return seen;

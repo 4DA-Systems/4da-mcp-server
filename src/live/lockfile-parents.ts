@@ -22,7 +22,7 @@ import * as path from "node:path";
 import { callMemo } from "../call-budget.js";
 import { stripTrailingCommas } from "./bun-lockfile.js";
 import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, pnpmEntryIdentities, pnpmKeyRef, textLines, yarnBlockVersion, yarnPackageName } from "./js-lockfile-readers.js";
-import { packageNameFromNodeModulesPath, parseCargoLockPackages } from "./lockfile-parsers.js";
+import { packageNameFromNodeModulesPath, parseCargoLockPackages, resolveInstallPath } from "./lockfile-parsers.js";
 
 export type LockfileFormat = "package-lock" | "pnpm" | "yarn" | "yarn-berry" | "bun" | "cargo";
 
@@ -297,18 +297,6 @@ interface LockEntry {
 }
 
 type PackageLock = { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry>; name?: string };
-
-/** Node's lookup from install path `from`: its own node_modules, then each ancestor's, then the root's. */
-function resolveInstallPath(packages: Record<string, LockEntry>, from: string, name: string): string | null {
-  let dir = from;
-  for (;;) {
-    const candidate = `${dir ? `${dir}/` : ""}node_modules/${name}`;
-    if (Object.hasOwn(packages, candidate)) return candidate;
-    if (dir === "") return null;
-    const cut = dir.lastIndexOf("/node_modules/");
-    dir = cut >= 0 ? dir.slice(0, cut) : "";
-  }
-}
 
 /**
  * The package a bundled copy at install path `at` ships inside: the nearest enclosing entry that is

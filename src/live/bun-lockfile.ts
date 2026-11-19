@@ -17,12 +17,15 @@
  */
 
 import { nonRegistrySource, type LockReadReport } from "./js-lockfile-readers.js";
-import type { InstanceSet } from "./lockfile-types.js";
+import { DEPENDENCY_SECTIONS, isRuntimeSection } from "./js-manifests.js";
+import type { DeclaredDependency, InstanceSet } from "./lockfile-types.js";
 
 interface BunWorkspace {
+  name?: string;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 }
 
 interface BunLock {
@@ -33,6 +36,7 @@ interface BunLock {
 interface BunMeta {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 }
 
 const QUOTE = 0x22;
@@ -102,9 +106,12 @@ function keySegments(key: string): string[] {
 
 /**
  * Reads a bun.lock into `versions` (the hoisted copy of each name) and
- * `instances` (every copy). Dev scope is known for every copy: dev when only
- * the workspaces' devDependencies reach it, runtime when a dependency or
- * optionalDependency does.
+ * `instances` (every copy). Scope is derived for every copy a workspace
+ * reaches: runtime when a `dependencies`, `optionalDependencies` or
+ * `peerDependencies` entry of the project or of a workspace member reaches
+ * it, dev-only when only their `devDependencies` do. Bun installs peer
+ * dependencies, so the peers a package names are followed like its
+ * dependencies; one that is not installed (an optional peer) has no entry.
  */
 export function readBunLock(content: string, versions: Map<string, string>, instances?: InstanceSet, report?: LockReadReport): void {
   const lock = JSON.parse(stripTrailingCommas(content)) as BunLock;
@@ -120,15 +127,21 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
     }
   }
 
-  const entry = (key: string): { name: string; version: string; meta: BunMeta } | null => {
+  const entry = (key: string): { name: string; version: string } | null => {
     const value = packages[key];
     if (!Array.isArray(value) || typeof value[0] !== "string") return null;
     const at = value[0].lastIndexOf("@");
     if (at <= 0) return null;
     const version = value[0].slice(at + 1);
     if (!/^\d/.test(version)) return null;
-    const meta = value[2] && typeof value[2] === "object" ? (value[2] as BunMeta) : {};
-    return { name: value[0].slice(0, at), version, meta };
+    return { name: value[0].slice(0, at), version };
+  };
+  // What an entry requires, registry release or not: a git or tarball entry keeps its metadata one place earlier.
+  const requires = (key: string): string[] => {
+    const value = packages[key];
+    if (!Array.isArray(value)) return [];
+    const meta = [value[2], value[1]].find((part) => part && typeof part === "object" && !Array.isArray(part)) as BunMeta | undefined;
+    return meta ? Object.keys({ ...meta.dependencies, ...meta.optionalDependencies, ...meta.peerDependencies }) : [];
   };
 
   // Node-style resolution: the nearest nested copy, walking up the key, else the hoisted one.
@@ -143,14 +156,12 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
 
   const reach = (roots: Iterable<string>): Set<string> => {
     const seen = new Set<string>();
-    const stack = [...roots].filter((name) => Object.hasOwn(packages, name));
+    const stack = [...roots];
     while (stack.length > 0) {
       const key = stack.pop() as string;
       if (seen.has(key)) continue;
       seen.add(key);
-      const e = entry(key);
-      if (!e) continue;
-      for (const dep of Object.keys({ ...e.meta.dependencies, ...e.meta.optionalDependencies })) {
+      for (const dep of requires(key)) {
         const next = resolve(key, dep);
         if (next && !seen.has(next)) stack.push(next);
       }
@@ -158,14 +169,36 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
     return seen;
   };
 
+  // The roots are package keys. A workspace member's own copy of a dependency is keyed under the
+  // member's name ("ws-a/ms"); anything else it declares is the hoisted copy.
   const runtimeRoots = new Set<string>();
   const devRoots = new Set<string>();
-  for (const ws of Object.values(lock.workspaces ?? {})) {
-    for (const name of Object.keys({ ...ws.dependencies, ...ws.optionalDependencies })) runtimeRoots.add(name);
-    for (const name of Object.keys(ws.devDependencies ?? {})) devRoots.add(name);
+  const declared = new Map<string, DeclaredDependency>();
+  for (const [dir, ws] of Object.entries(lock.workspaces ?? {})) {
+    if (!ws || typeof ws !== "object") continue;
+    const member = dir !== "" && typeof ws.name === "string" && ws.name !== "" ? ws.name : null;
+    for (const section of DEPENDENCY_SECTIONS) {
+      const deps = ws[section];
+      if (!deps || typeof deps !== "object") continue;
+      for (const dep of Object.keys(deps)) {
+        const key = member ? resolve(member, dep) : Object.hasOwn(packages, dep) ? dep : null;
+        if (!key) continue;
+        (isRuntimeSection(section) ? runtimeRoots : devRoots).add(key);
+        const e = entry(key);
+        if (!e) continue;
+        const id = `${e.name}\0${e.version}`;
+        const prior = declared.get(id);
+        if (prior) prior.runtime ||= isRuntimeSection(section);
+        else declared.set(id, { name: e.name, version: e.version, runtime: isRuntimeSection(section) });
+      }
+    }
   }
   const runtime = reach(runtimeRoots);
   const dev = reach(devRoots);
+  if (report) {
+    report.declared = [...declared.values()];
+    report.scopeGraded = true;
+  }
 
   for (const key of Object.keys(packages)) {
     const e = entry(key);
