@@ -1,0 +1,10 @@
+{
+  "about": "The project bench/app-mode/run.mjs scans when no --project is given: an npm project at the root and a Cargo sub-project in svc/, public package names at versions with published advisories. Kept as JSON and written to a temp folder at run time, so no lockfile with known advisories sits in this repository for scanners to report, and no server run writes beside the repository's files.",
+  "files": {
+    "package.json": "{\n  \"name\": \"appmode-fixture\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"lodash\": \"4.17.20\",\n    \"minimist\": \"1.2.5\"\n  }\n}\n",
+    "package-lock.json": "{\n  \"name\": \"appmode-fixture\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"appmode-fixture\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"lodash\": \"4.17.20\",\n        \"minimist\": \"1.2.5\"\n      }\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\n      \"license\": \"MIT\"\n    },\n    \"node_modules/minimist\": {\n      \"version\": \"1.2.5\",\n      \"resolved\": \"https://registry.npmjs.org/minimist/-/minimist-1.2.5.tgz\",\n      \"license\": \"MIT\"\n    }\n  }\n}\n",
+    "svc/Cargo.toml": "[package]\nname = \"svc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nsmallvec = \"1.6.0\"\ntime = \"0.1.43\"\n",
+    "svc/Cargo.lock": "version = 3\n\n[[package]]\nname = \"svc\"\nversion = \"0.1.0\"\ndependencies = [\n \"smallvec\",\n \"time\",\n]\n\n[[package]]\nname = \"smallvec\"\nversion = \"1.6.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e\"\n\n[[package]]\nname = \"time\"\nversion = \"0.1.43\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ca8a50ef2360fbd1eeb0ecd46795a87a19024eb4b53c5dc916ca1fd95fe62438\"\n",
+    "svc/src/main.rs": "fn main() {}\n"
+  }
+}
