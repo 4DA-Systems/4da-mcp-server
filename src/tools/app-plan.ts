@@ -230,6 +230,20 @@ export function blockedText(step: AppPlanStep, hold: AppPlanBlockedHold): string
 }
 
 /**
+ * Why a lockfile refresh is enough, for the sites the step names: the app writes `lockfile_refresh`
+ * both for a direct dependency whose declared range already admits the fix and for a transitive
+ * copy whose parents' requirements admit it.
+ */
+function refreshAdmits(step: AppPlanStep): string {
+  const sites = step.lines.flatMap((l) => l.sites ?? []);
+  const direct = sites.some((s) => s.direct);
+  const transitive = sites.some((s) => !s.direct);
+  if (direct && transitive) return `the declared range where ${step.package} is direct and every parent's requirement where it is transitive already admit it`;
+  if (direct) return `the range the project declares for ${step.package} already admits it`;
+  return "every parent's requirement already admits it";
+}
+
+/**
  * The step in words. Schema 4's `lockfile_or_parent_update` covered every transitive step; from
  * schema 5 it means the route is undecided (or differs between copies), and the decided routes have
  * their own mechanisms. A `blocked_upstream` step names no upgrade to make: it says what holds each
@@ -242,7 +256,7 @@ export function nextStep(step: AppPlanStep, schema: number): string {
     case "manifest_bump":
       return `Bump ${step.package} in each project's manifest: ${moves(step)}.`;
     case "lockfile_refresh":
-      return `Refresh the lockfile so ${step.package} resolves to the fixed release (${moves(step)}); every parent's requirement already admits it, so no manifest changes.`;
+      return `Refresh the lockfile so ${step.package} resolves to the fixed release (${moves(step)}); ${refreshAdmits(step)}, so no manifest changes.`;
     case "parent_update":
       return `Update the parent that pulls ${step.package} in to a release whose requirement admits the fix (${moves(step)}); see the plan item for which parent. Copies whose parents already admit it need only a lockfile refresh.`;
     case "blocked_upstream":
@@ -340,7 +354,7 @@ export function formatAppPlan(
     `${selected.length} step${selected.length !== 1 ? "s" : ""} from the 4DA app's stored plan (generated ${snapshot.generatedAt}) across every project it tracks, not checked against the lockfiles on disk by this server`,
   ];
   if (count("manifest_bump") > 0) parts.push(`${count("manifest_bump")} manifest bump(s)`);
-  if (count("lockfile_refresh") > 0) parts.push(`${count("lockfile_refresh")} lockfile refresh(es) (transitive, no manifest change)`);
+  if (count("lockfile_refresh") > 0) parts.push(`${count("lockfile_refresh")} lockfile refresh(es) (no manifest change: every declared range already admits the fix)`);
   if (count("parent_update") > 0) parts.push(`${count("parent_update")} parent update(s) (transitive)`);
   if (count("lockfile_or_parent_update") > 0) {
     parts.push(
