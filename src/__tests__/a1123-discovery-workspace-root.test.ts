@@ -21,6 +21,7 @@ import { executeDependencyHealth } from "../tools/dependency-health.js";
 import { executeUpgradePlanner } from "../tools/upgrade-planner.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { memoryDb } from "./helpers/briefing-stub.js";
+import { resultText, serverEntry, stdioSession } from "./helpers/stdio-session.js";
 
 const MALWARE = "GHSA-4x49-vf9v-38px";
 
@@ -175,6 +176,23 @@ describe("a1123 discovery: a workspace member, and a project with no lockfile", 
     // A repository root between the member and the workspace lockfile: the lockfile is outside it.
     fs.mkdirSync(path.join(base, "mono", "packages", ".git"));
     expect(scanProjectTree(member).discovery.workspace).toBeUndefined();
+  });
+
+  describe.skipIf(!fs.existsSync(serverEntry))("the built server started in the member (no project_path)", () => {
+    it("reports the workspace root as project_root, says so, and asks about the root lockfile's debug 4.4.2", async () => {
+      const { root, member } = pnpmWorkspace();
+      const session = await stdioSession(member, [
+        ["vulnerability_scan", {}],
+        ["dependency_health", {}],
+      ]);
+      const scan = JSON.parse(resultText(session.results[0])) as Record<string, any>;
+      expect(scan.project_root).toBe(root);
+      expect(scan.workspace_note).toMatch(/^Started in packages\/app, a member of the pnpm workspace/);
+      // The network is blocked in this session: the lookup was attempted for the workspace's lockfile, and nothing reads clean.
+      expect(session.fetches.some((u) => u.includes("api.osv.dev"))).toBe(true);
+      expect(JSON.stringify(scan)).not.toMatch(/NO LOCKFILE/);
+      expect(resultText(session.results[1])).toMatch(/Started in packages\/app, a member of the pnpm workspace/);
+    });
   });
 
   it("no lockfile read: no health score, no vulnerability data for the plan, no safe_to_delegate, and no floor shown as installed", async () => {
