@@ -5,13 +5,13 @@
     "url": "https://4da.ai"
   },
   "metadata": {
-    "description": "4DA's Claude Code plugin: upgrade intelligence for your agent, with a hook on dependency edits."
+    "description": "4DA's Claude Code plugin: upgrade intelligence for your agent, with a guard on dependency edits and install commands."
   },
   "plugins": [
     {
       "name": "4da",
       "source": "./",
-      "description": "What changes between the version you run and the one you want, which of your files it touches, which vulnerabilities it fixes; a hook points the agent at it whenever a dependency version is edited.",
+      "description": "What changes between the version you run and the one you want, which of your files it touches, which vulnerabilities it fixes; a hook stops a dependency version from being written or installed until dependency_check has judged it (FOURDA_GUARD=advise to advise instead).",
       "version": "6.4.0",
       "homepage": "https://4da.ai/mcp/",
       "license": "Apache-2.0"

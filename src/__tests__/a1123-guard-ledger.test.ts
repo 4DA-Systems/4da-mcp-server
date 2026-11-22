@@ -141,7 +141,8 @@ describe("the ledger stays small and tolerates writers together", () => {
 
   it("a reason is kept to one capped line; control characters do not survive", () => {
     const [e] = ledgerEntries([{ ecosystem: "npm", package: "x", to: "1.0.0", verdict: "avoid", reason: `bad\nline\u001b[31m ${"y".repeat(2000)}` }]);
-    expect(e.reason).not.toMatch(/[\n\u001b]/);
+    expect(e.reason).not.toContain("\n");
+    expect(e.reason).not.toContain("\u001b");
     expect(e.reason!.length).toBeLessThanOrEqual(400);
   });
 

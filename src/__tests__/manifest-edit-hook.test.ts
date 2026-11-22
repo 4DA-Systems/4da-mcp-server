@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * The plugin's PostToolUse hook (hooks/manifest-edit.mjs), exercised the way
- * Claude Code runs it: a separate Node process reading the edit on stdin.
- * It must speak only when a manifest edit changes a dependency version, and
- * must never fail or delay an edit it does not understand.
+ * The plugin hook's advice after an edit (hooks/manifest-edit.mjs, PostToolUse with
+ * FOURDA_GUARD=advise), exercised the way Claude Code runs it: a separate Node process reading the
+ * edit on stdin. It must speak only when a manifest edit changes a dependency version, and must
+ * never fail or delay an edit it does not understand. The default PreToolUse guard is covered in
+ * a1123-guard-hook.test.ts.
  */
 
 import { describe, it, expect } from "vitest";
@@ -16,10 +17,12 @@ import { tmpdir } from "node:os";
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 
 function run(payload: unknown): { status: number | null; stdout: string } {
+  const event = payload && typeof payload === "object" && Object.keys(payload).length > 0 ? { hook_event_name: "PostToolUse", ...payload } : payload;
   const res = spawnSync(process.execPath, [HOOK], {
-    input: typeof payload === "string" ? payload : JSON.stringify(payload),
+    input: typeof event === "string" ? event : JSON.stringify(event),
     encoding: "utf8",
     timeout: 10_000,
+    env: { ...process.env, FOURDA_GUARD: "advise" },
   });
   return { status: res.status, stdout: res.stdout };
 }
