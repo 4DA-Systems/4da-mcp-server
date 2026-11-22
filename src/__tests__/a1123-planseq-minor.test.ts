@@ -77,7 +77,7 @@ describe("Yarn classic: a declared package locked under several entries at the s
     expect(row.reasons.join(" ")).toMatch(/yarn\.lock holds @babel\/core 7\.19\.6 under 2 entries \("@babel\/core@\^7\.11\.6, @babel\/core@\^7\.12\.3"; "@babel\/core@\^7\.19\.6"\)/);
     expect(row.commands).toEqual([]);
     expect(result.run_order.map((s: { run: string }) => s.run)).not.toContain("yarn upgrade @babel/core");
-    expect(result.run_order_note).toMatch(/not fixed by commands alone .*: @babel\/core 7\.19\.6/);
+    expect(result.run_order_note).toMatch(/1 row is a hand edit and is not in this script: @babel\/core 7\.19\.6/);
   });
 
   it("keeps `yarn upgrade` when one entry holds the version", async () => {

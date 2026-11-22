@@ -127,9 +127,16 @@ describe("(f) every step and snippet names its directory", () => {
     const row = step("child");
     expect(row.action).toBe("override_or_replace");
     expect(row.reasons.join(" ")).toContain('npm: add "overrides": { "child": "1.0.2" } to web/package.json (npm 8.3+), then npm install in web');
-    expect(row.commands).toEqual([]);
-    expect(result.run_order).toEqual([]);
-    expect(result.run_order_note).toMatch(/not counted as fixed by their commands .*: child 1\.0\.0/);
+    // The snippet is also written as the commands that make it, in that project's directory.
+    expect(row.commands).toEqual([
+      { dir: "web", run: 'npm pkg set "overrides.child=1.0.2"' },
+      { dir: "web", run: "npm install" },
+    ]);
+    expect(result.run_order.map((s: { dir: string; run: string }) => [s.dir, s.run])).toEqual([
+      ["web", 'npm pkg set "overrides.child=1.0.2"'],
+      ["web", "npm install"],
+    ]);
+    expect(result.run_order_note).toMatch(/1 of them force a version with an override written by `npm pkg set` \(child 1\.0\.0\)/);
     for (const s of result.run_order) expect(typeof s.dir).toBe("string");
   });
 });

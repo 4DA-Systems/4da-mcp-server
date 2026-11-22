@@ -7,8 +7,10 @@
  * compiled requirements file's re-compile), after every pass that rewrites them, so the data and
  * the words never disagree. `dir` is project-relative, "." for the root. A compound command is one
  * entry per command, in order. A step the developer does by hand (deleting yarn.lock or bun.lock
- * entries, adding an override, editing a manifest) is not a command: it stays in the row's
- * reasons and `upgradeInstructions`, and `commands` holds only what can be run.
+ * entries, editing a manifest) is not a command: it stays in the row's reasons and
+ * `upgradeInstructions`, and `commands` holds only what can be run. An override that does not
+ * cross a major of what its parents declare is a command where one writes it exactly
+ * (`npm pkg set "overrides.<name>=<version>"`, then the install: upgrade-plan-overrides.ts).
  */
 
 import * as path from "node:path";
@@ -17,6 +19,7 @@ import { pypiCompileCommand } from "../live/pypi-advice.js";
 import type { ReleaseMetadataSource } from "../live/release-metadata.js";
 import { isShellSafeName, isShellSafeVersion } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
+import { overrideCommandsOf } from "./upgrade-plan-overrides.js";
 import { peerConflictReader, type PeerContext } from "./upgrade-plan-peers.js";
 
 export interface PlanCommand {
@@ -42,6 +45,9 @@ export interface CommandRow {
   parentUpgrades?: Array<{ levers: Array<{ commands?: CommandField[] }>; refreshCommands?: CommandField[] }>;
   installFix?: string;
   commands?: PlanCommand[];
+  action?: string;
+  /** True when the row's target crosses a major (an override then forces it past what its parents were written for). */
+  breaking?: boolean;
 }
 
 /**
@@ -85,6 +91,7 @@ export function rowCommands(row: CommandRow, ctx: CommandContext): PlanCommand[]
   for (const u of row.parentUpgrades ?? []) for (const c of u.refreshCommands ?? []) add(c.dir, c.command);
   for (const c of row.refreshCommands ?? []) add(c.dir, c.command);
   for (const c of compiledCommands(row, ctx.root)) add(c.dir, c.command);
+  if (row.action === "override_or_replace" && row.breaking !== true) for (const c of overrideCommandsOf(row)) add(c.dir, c.command);
   if (row.installFix) for (const dir of ctx.installDirs && ctx.installDirs.length > 0 ? ctx.installDirs : ["."]) add(dir, row.installFix);
   return out;
 }
@@ -269,6 +276,18 @@ export interface RunOrder {
 /** The actions whose commands are the whole fix on this host (the ones the summary counts as fixed). */
 const FIX_ACTIONS = new Set(["upgrade_direct", "lockfile_refresh", "upgrade_parent", "reinstall"]);
 
+/** A row whose commands are its whole fix on this host: a fix action, or an override written as commands. */
+const isRunnable = (opts: Pick<RunOrderOptions, "heldUnclean">) => (r: SequencedRow) =>
+  (FIX_ACTIONS.has(r.action) || (r.action === "override_or_replace" && r.commands.length > 0)) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null);
+
+/** A row left out because part of its fix is done by hand: a manifest or lockfile edit, an override, a lever with no command. */
+function isHandEdit(r: SequencedRow): boolean {
+  if (r.action === "override_or_replace") return r.reasons.some((x) => /^Transitive dependency.*\bForce \S+ to \S+: /.test(x));
+  if ((r.upgradeInstructions ?? []).length > 0) return true;
+  if ([...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.refreshCommands ?? [])].some((c) => isManualStep(c.command))) return true;
+  return (r.parentUpgrades ?? []).some((u) => u.levers.some((l) => l.to !== null && !l.commands?.length && l.sameCommandsAs === undefined && (l.instructions?.length ?? 0) > 0));
+}
+
 const keyOf = (r: SequencedRow) => `${r.ecosystem}:${r.package}`;
 const copyOf = (r: SequencedRow) => `${r.package}${r.currentVersion ? ` ${r.currentVersion}` : ""}`;
 
@@ -298,7 +317,7 @@ function installedVersions(rows: SequencedRow[]): Map<string, string[]> {
  */
 export function buildRunOrder(opts: RunOrderOptions): RunOrder {
   const peerBlocked = new Map<SequencedRow, string>();
-  const runnable = opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null));
+  const runnable = opts.rows.filter(isRunnable(opts));
   const groups: string[][] = [];
   const extra: ExtraSet[] = [];
   let graph = buildGraph(runnable, opts, groups, extra);
@@ -765,14 +784,18 @@ function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlock
       : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, safe to run from the first to the last, each in the directory it names: upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
   );
   if (opts.totalRows > shown) parts.push(`it covers only the rows shown, not the other ${opts.totalRows - shown} (raise max_recommendations for them)`);
+  const forced = ran.filter((r) => r.action === "override_or_replace");
+  if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override written by \`npm pkg set\` (${named(forced)}): the override applies to every copy its key names, so re-scan after running`);
+  const inScript = new Set(runnable);
+  const eligible = (r: SequencedRow) => !inScript.has(r) && !opts.heldUnclean(r) && (FIX_ACTIONS.has(r.action) || r.action === "override_or_replace") && (r.action !== "upgrade_direct" || r.targetVersion !== null);
+  const hand = opts.rows.filter((r) => eligible(r) && isHandEdit(r));
+  // The script alone does not finish the job: what is left to edit by hand is counted and named.
+  if (hand.length > 0) parts.push(`${hand.length} row${hand.length === 1 ? " is a hand edit" : "s are hand edits"} and ${hand.length === 1 ? "is" : "are"} not in this script: ${named(hand)} (a manifest or lockfile edit, or an override that crosses a major; ${hand.length === 1 ? "its reasons say" : "their reasons say"} what to edit)`);
   const groups: Array<[string, SequencedRow[]]> = [
-    [
-      "are not fixed by commands alone (a hand edit such as a lockfile entry or a manifest line, or no command was named: their reasons say what to do)",
-      opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && !opts.heldUnclean(r) && !wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null)),
-    ],
+    ["name no command for their fix (their reasons say why)", opts.rows.filter((r) => eligible(r) && !isHandEdit(r) && r.action !== "override_or_replace")],
     ["name no confirmed target (NOT CHECKED; their reasons say why)", opts.rows.filter((r) => r.action === "upgrade_direct" && r.targetVersion === null && !opts.heldUnclean(r))],
     ["have a target that is NOT a clean fix (it holds an affected dependency; see their reasons)", opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && opts.heldUnclean(r))],
-    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", opts.rows.filter((r) => r.action === "override_or_replace" || r.action === "upgrade_parent_unverified")],
+    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", opts.rows.filter((r) => (r.action === "override_or_replace" && !inScript.has(r) && !hand.includes(r)) || r.action === "upgrade_parent_unverified")],
     ["apply where the code is built, not on this host (not_built_on_this_host)", opts.rows.filter((r) => r.action === "not_built_on_this_host")],
     [
       "have nothing to run (waiting on upstream, no fix, not determined, not checked, hold, or remove)",

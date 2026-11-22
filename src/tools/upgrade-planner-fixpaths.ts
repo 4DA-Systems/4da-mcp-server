@@ -82,6 +82,7 @@ import { withCargoFeatures } from "./upgrade-planner-cargo-features.js";
 import { withLeverHolds } from "./upgrade-planner-lever-holds.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { projectPythons } from "./dependency-check-python.js";
+import { carryOverrideCommands, recordOverrideCommands } from "./upgrade-plan-overrides.js";
 
 /** One dependency the project declares that moves a blocking parent. */
 export interface ParentLever {
@@ -359,6 +360,7 @@ function warmInBackground(rows: FixPathInput[], sources: FixPathSources, liveInt
 function commit(step: FixPathStep, draft: FixPathStep): void {
   for (const key of Object.keys(step) as Array<keyof FixPathStep>) if (!(key in draft)) delete step[key];
   Object.assign(step, draft);
+  carryOverrideCommands(draft, step);
   const standings = STANDINGS.get(draft);
   if (standings) STANDINGS.set(step, standings);
 }
@@ -1051,7 +1053,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     step.action = "override_or_replace";
     const others = moves.length > 0 ? `. The other parents can move: ${moves.map((m) => m.text).join("; ")}` : "";
     replaceReason(
-      `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${overrideHints(verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace the parent${others}`,
+      `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${recordedOverrideHints(step, verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace the parent${others}`,
     );
     forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
@@ -1063,7 +1065,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     // the app's "replace <lever>, or force <pkg> >= <target> with <override>".
     step.action = "override_or_replace";
     replaceReason(
-      `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${overrideHints(verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
+      `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${recordedOverrideHints(step, verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
     );
     forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
@@ -2630,6 +2632,13 @@ export function overrideHint(format: LockfileFormat, name: string, target: strin
     case "cargo":
       return `Cargo cannot select a version outside the parent's requirement; point [patch.crates-io] ${name} at a fork or path that carries the fix${dir === "." ? "" : ` (in ${file("Cargo.toml")})`}`;
   }
+}
+
+/** overrideHints, with the same snippet recorded as commands where a plain command writes it (upgrade-plan-overrides.ts). */
+function recordedOverrideHints(step: FixPathStep, verdicts: Array<{ lockfile: string; verdict: { format: LockfileFormat } }>, name: string, target: string, root: string, scope: OverrideScope | null): string {
+  const lockfiles = [...new Map(verdicts.map((v) => [v.lockfile, { format: v.verdict.format, dir: relativeDir(path.dirname(v.lockfile), root) }])).values()];
+  recordOverrideCommands(step, lockfiles, root, name, target, scope && scope.others.length > 0 && scope.parents.length > 0 ? scope.parents : null);
+  return overrideHints(verdicts, name, target, root, scope);
 }
 
 /** One override snippet per lockfile the step's copies are in, each naming that lockfile's project. */

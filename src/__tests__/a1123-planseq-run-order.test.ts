@@ -214,7 +214,7 @@ describe("what run_order leaves out, and the note", () => {
     const note = out.run_order_note;
     expect(note).toMatch(/^run_order is 1 step for 1 of the 6 rows shown/);
     expect(note).toMatch(/it covers only the rows shown, not the other 34/);
-    expect(note).toMatch(/1 that are not fixed by commands alone .*: d 1\.0\.0/);
+    expect(note).toMatch(/1 row is a hand edit and is not in this script: d 1\.0\.0/);
     expect(note).toMatch(/1 that have a target that is NOT a clean fix .*: e 1\.0\.0/);
     expect(note).toMatch(/1 that are not counted as fixed by their commands .*: c 1\.0\.0/);
     expect(note).toMatch(/1 that apply where the code is built, not on this host .*: f 1\.0\.0/);
