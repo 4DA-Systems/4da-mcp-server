@@ -141,8 +141,12 @@ interface NpmAbbreviatedDoc {
 const NPM_DOC_MEMORY_MS = 120_000;
 const NPM_DOCS_KEPT = 16;
 
-/** Per published release of a parent: its requirements on one package, and whether it declares it only as a peer. */
-export type RequirementHistory = Record<string, { reqs: string[]; peer: boolean }>;
+/**
+ * Per published release of a parent: its requirements on one package, and whether it declares it
+ * only as a peer (`peer`) or as a peer as well as a dependency (`alsoPeer`, npm). pnpm resolves
+ * either kind as a peer, from the copy the project already has (vitest 4.1.12 kept vite 5.3.1).
+ */
+export type RequirementHistory = Record<string, { reqs: string[]; peer: boolean; alsoPeer?: true }>;
 
 /**
  * How long, and how many, cache answers are also kept parsed in memory. A plan and a scan read the
@@ -319,7 +323,8 @@ export class FixPathSources {
       return Object.fromEntries(Object.entries(sparse.reqs).map(([v, deps]) => [v, { reqs: (deps[dep] ?? []).map((d) => d.req), peer: false }]));
     }
     if (ecosystem !== "npm") return null;
-    const key = `fixpath:v${CACHE_VERSION}:npm-requirement-history:${parent}:${dep}`;
+    // "-peers": entries written before `alsoPeer` existed never answer for it.
+    const key = `fixpath:v${CACHE_VERSION}:npm-requirement-history-peers:${parent}:${dep}`;
     const hit = this.cached<RequirementHistory>(key);
     if (hit) return hit;
     const doc = await this.npmDocument(parent);
@@ -329,7 +334,11 @@ export class FixPathSources {
       const req = m?.dependencies?.[dep] ?? m?.optionalDependencies?.[dep];
       const peer = m?.peerDependencies?.[dep];
       out[version] =
-        typeof req === "string" ? { reqs: [req], peer: false } : typeof peer === "string" ? { reqs: [peer], peer: true } : { reqs: [], peer: false };
+        typeof req === "string"
+          ? { reqs: [req], peer: false, ...(typeof peer === "string" ? { alsoPeer: true as const } : {}) }
+          : typeof peer === "string"
+            ? { reqs: [peer], peer: true }
+            : { reqs: [], peer: false };
     }
     this.store(key, out, "npm", VERSIONS_TTL);
     return out;

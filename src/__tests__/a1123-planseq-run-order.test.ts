@@ -135,11 +135,44 @@ describe("(e) a target that breaks a peer range never runs alone", () => {
     const vite = row("vite", "upgrade_direct", ['npm install "vite@^6.4.5"'], { targetVersion: "6.4.5" });
     const esbuild = parentRow("esbuild", "vite", "5.0.0", 'npm install "vite@^6.4.5"');
     const nanoid = row("nanoid", "lockfile_refresh", ["npm update nanoid"]);
-    const peerConflict = (_dir: string, pkg: string, version: string) => (pkg === "vite" && version === "6.4.5" ? "vite 6.4.5 leaves the peer range" : null);
+    const peerConflict = (_dir: string, pkg: string, version: string) =>
+      pkg === "vite" && version === "6.4.5" ? { holders: ["@vitejs/plugin-react-swc"], who: '@vitejs/plugin-react-swc 3.5.0 declares "^4 || ^5"', text: "vite 6.4.5 leaves the peer range" } : null;
     const out = plan([vite, esbuild, nanoid], { peerConflict });
     expect(out.run_order.map((s) => s.run)).toEqual(["npm update nanoid"]);
     expect([...out.peerBlocked.keys()]).toEqual([vite, esbuild]);
+    expect(out.peerBlocked.get(vite)).toBe("vite 6.4.5 leaves the peer range");
     expect(out.run_order_note).toMatch(/2 that break a peer range an installed dependency declares .*: vite 1\.0\.0, esbuild 1\.0\.0/);
+  });
+
+  it("when the script upgrades the holder too, both run in one command (h3: vitest 4 against @vitest/coverage-v8 1.6.0's exact peer)", () => {
+    const vite = row("vite", "upgrade_parent", ['pnpm up "vitest@^4.1.12"', 'pnpm up "@vitest/coverage-v8@^4.1.11"'], {
+      parentUpgrades: [
+        {
+          levers: [
+            { name: "vitest", version: "1.6.0", to: "4.1.12", commands: [{ dir: ".", command: 'pnpm up "vitest@^4.1.12"' }] },
+            { name: "@vitest/coverage-v8", version: "1.6.0", to: "4.1.11", commands: [{ dir: ".", command: 'pnpm up "@vitest/coverage-v8@^4.1.11"' }] },
+          ],
+        },
+      ],
+    });
+    const nanoid = row("nanoid", "lockfile_refresh", ["pnpm update nanoid --depth Infinity"]);
+    const peerConflict = (_dir: string, pkg: string) =>
+      pkg === "vitest" ? { holders: ["@vitest/coverage-v8"], who: '@vitest/coverage-v8 1.6.0 declares "1.6.0"', text: "vitest 4.1.12 leaves the peer range" } : null;
+    for (const rows of [[vite, nanoid], [nanoid, vite]]) {
+      const out = plan(rows, { peerConflict });
+      expect(out.peerBlocked.size).toBe(0);
+      expect(out.run_order.map((s) => s.run)).toEqual(["pnpm update nanoid --depth Infinity", 'pnpm up "@vitest/coverage-v8@^4.1.11" "vitest@^4.1.12"']);
+      expect(out.run_order_note).toMatch(/vitest 4\.1\.12 runs in one command with @vitest\/coverage-v8 in the project root, which the script upgrades too: installed, @vitest\/coverage-v8 1\.6\.0 declares "1\.6\.0"/);
+    }
+  });
+
+  it("a holder whose command differs in more than its spec cannot share one: the step is left out", () => {
+    const a = row("a", "upgrade_direct", ["npm install a@2.0.0 --save-exact"]);
+    const b = row("b", "upgrade_direct", ['npm install "b@^3.0.0"']);
+    const peerConflict = (_dir: string, pkg: string) => (pkg === "a" ? { holders: ["b"], who: 'b 1.0.0 declares "^1"', text: "a 2.0.0 leaves the peer range" } : null);
+    const out = plan([a, b], { peerConflict });
+    expect([...out.peerBlocked.keys()]).toEqual([a]);
+    expect(out.run_order.map((s) => s.run)).toEqual(['npm install "b@^3.0.0"']);
   });
 });
 

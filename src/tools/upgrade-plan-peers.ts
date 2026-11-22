@@ -121,10 +121,11 @@ export interface PeerContext {
 }
 
 /**
- * Why setting `pkg` to `version` in `dir` breaks a peer range an installed direct dependency
- * declares on it, or null. Read once per lockfile per plan.
+ * How setting `pkg` to `version` in `dir` breaks a peer range installed direct dependencies declare
+ * on it (which ones, and the sentence for a row that cannot run with them), or null. Read once per
+ * lockfile per plan.
  */
-export function peerConflictReader(ctx: PeerContext): (dir: string, pkg: string, version: string) => string | null {
+export function peerConflictReader(ctx: PeerContext): (dir: string, pkg: string, version: string) => { holders: string[]; who: string; text: string } | null {
   const indexes = new Map<string, PeerIndex>();
   return (dir, pkg, version) => {
     const lockfile = ctx.lockfileFor(path.resolve(ctx.root, dir));
@@ -139,7 +140,12 @@ export function peerConflictReader(ctx: PeerContext): (dir: string, pkg: string,
     );
     if (held.length === 0) return null;
     const who = [...new Set(held.map((h) => `${h.holder} ${h.holderVersion} declares "${h.range}"`))].join(", ");
-    const names = [...new Set(held.map((h) => h.holder))].join(", ");
-    return `${pkg} ${version} leaves a peer range an installed direct dependency holds on it (${who}): installing it alone breaks ${names}, and npm then refuses later installs with ERESOLVE. Upgrade ${names} in the same command to a release whose peer range admits ${pkg} ${version}; no such release was read in this call, so this step is left out of run_order`;
+    const holders = [...new Set(held.map((h) => h.holder))];
+    const names = holders.join(", ");
+    return {
+      holders,
+      who,
+      text: `${pkg} ${version} leaves a peer range an installed direct dependency holds on it (${who}): installing it alone breaks ${names}, and npm then refuses later installs with ERESOLVE. Upgrade ${names} in the same command to a release whose peer range admits ${pkg} ${version}; this plan names no such release, so this step is left out of run_order`,
+    };
   };
 }

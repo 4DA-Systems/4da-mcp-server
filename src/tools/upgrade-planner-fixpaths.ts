@@ -75,6 +75,7 @@ import { withinCallBudget } from "../call-budget.js";
 import { aimAtDeclaringMembers } from "./declaring-members.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
 import { pythonParentMove } from "./upgrade-planner-pyparent.js";
+import { isShellSafeName, isShellSafeVersion } from "../live/shell-safe.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { projectPythons } from "./dependency-check-python.js";
 
@@ -1249,6 +1250,54 @@ function commandText(lever: ParentLever): string {
 /** A refresh among a row's fixes (the declaration already admits the target), in the app's words. */
 const REFRESH_LABEL = " (a lockfile refresh: the declared range already admits it)";
 
+/** The manifest section of `dir`/package.json that declares `name`, or null. */
+function declaredSection(dir: string, name: string): "dependencies" | "devDependencies" | "optionalDependencies" | null {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8")) as Record<string, Record<string, unknown> | undefined>;
+    for (const s of ["dependencies", "devDependencies", "optionalDependencies"] as const) if (typeof pkg[s]?.[name] === "string") return s;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * pnpm takes a package a release lists under peerDependencies (alone, or beside dependencies) from
+ * the copy the project already has, even one outside the peer range: after `pnpm up
+ * "vitest@^4.1.12"` vitest's vite stayed 5.3.1, and neither `pnpm update vite --depth Infinity` nor
+ * `pnpm up "vite@^6.4.5"` moved it; declaring it did, `pnpm add -D "vite@^6.4.5"` (pnpm 9.3.0 on
+ * h3's lockfile, 2026-11-23). The declaring command, in each directory whose manifest declares
+ * `holder` (the release that takes `pkg` as a peer), in the section `holder` is in; none outside
+ * pnpm, or when `holder`'s release does not list `pkg` as a peer.
+ */
+function pnpmPeerDeclare(
+  ctx: MoveContext,
+  b: Blocking,
+  entry: RequirementHistory[string] | undefined,
+  holder: string,
+  pkg: string,
+  floor: string,
+  dirs: string[],
+): Array<{ dir: string; command: string }> {
+  if (b.format !== "pnpm" || !entry || !(entry.peer || entry.alsoPeer)) return [];
+  if (!isShellSafeName(pkg, "npm") || !isShellSafeVersion(floor)) return [];
+  const root = ctx.intel.getProjectRoot() ?? process.cwd();
+  const out: Array<{ dir: string; command: string }> = [];
+  for (const dir of [...new Set(dirs)]) {
+    const section = declaredSection(dir, holder);
+    if (section === null) continue;
+    const flag = section === "devDependencies" ? "-D " : section === "optionalDependencies" ? "-O " : "";
+    out.push({ dir: relativeDir(dir, root), command: `pnpm add ${flag}"${pkg}@^${floor}"` });
+  }
+  return out;
+}
+
+/** The words for pnpmPeerDeclare's commands. */
+function peerDeclareText(holder: string, release: string, pkg: string, installed: string, commands: Array<{ command: string }>): string {
+  if (commands.length === 0) return "";
+  return `; ${holder} ${release} lists ${pkg} as a peer dependency, and pnpm takes a peer from the copy the project already has, so it keeps ${pkg} ${installed} after that upgrade: then declare it, ${commands.map((c) => `\`${c.command}\``).join(", ")}`;
+}
+
 /** The refresh that moves `name` from `installed` inside the ranges, in the lockfile's directory. */
 function refreshFor(ctx: MoveContext, b: Blocking, name: string, installed: string, target: string): { dir: string; command: string } {
   const root = ctx.intel.getProjectRoot() ?? process.cwd();
@@ -1738,7 +1787,8 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       if (v !== smallestNamed) upgrade.smallest = smallestNamed;
       else delete upgrade.smallest;
       const refreshes = refreshAt(v);
-      const allRefreshes = [...also.refreshes.filter((r) => !refreshes.some((x) => x.dir === r.dir && x.command === r.command)), ...refreshes];
+      const declares = pnpmPeerDeclare(ctx, b, history[v], parent, pkg, target, route.dirs);
+      const allRefreshes = [...also.refreshes.filter((r) => !refreshes.some((x) => x.dir === r.dir && x.command === r.command)), ...refreshes, ...declares];
       if (allRefreshes.length > 0) upgrade.refreshCommands = allRefreshes;
       else delete upgrade.refreshCommands;
       const heldLift =
@@ -1746,7 +1796,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
           ? `; ${parent} ${found.version}, not ${smallestOwn.version}: ${smallestOwn.version} brings in a dependency with a known advisory (an exact pin, or a range whose newest admitted release is affected), and ${found.version} is the smallest release past it whose held dependencies ${carried.length > 0 ? "bring in none the installed release lacks" : "are clean"}`
           : "";
       const paths = also.paths > 0 ? `. That upgrade alone covers ${1 + co.length - also.paths} of ${1 + co.length} paths to ${pkg} ${ctx.installed}: it is also installed through ${also.texts.join("; and through ")}` : "";
-      return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}${paths}`;
+      return `${head}; ${heldLift ? clauseOf(smallestOwn!) : requirementClause}${ownClause}${heldLift}: upgrade ${parent} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${atText(v)}${commandText(lever)}${keepsText(refreshes, pkgAt(v)?.requirement ?? null)}${peerDeclareText(parent, v, pkg, ctx.installed, declares)}${paths}`;
     };
     const text = render(new Map())!;
     MOVES.set(upgrade, { text, render });
@@ -1792,6 +1842,9 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       newestOfLever.set(l.name, f ? (await ownClean(ctx, l.name, f, l.version)).newest : null);
     }
   }
+  // pnpm: whether a lever's release takes the parent as a peer (pnpmPeerDeclare); a cached read.
+  const leverHistory = new Map<string, RequirementHistory | null>();
+  if (b.format === "pnpm") for (const { l, hop } of hops) if (hop) leverHistory.set(l.name, await sources.requirementHistory(ecosystem, l.name, parent).catch(() => null));
   const many = route.levers.length + route.more > 1;
   const tail = route.more > 0 ? `; and ${route.more} more declared ${route.more === 1 ? "dependency brings" : "dependencies bring"} it in, each of which must move the same way` : "";
   const render = (lifts: ReadonlyMap<string, string>): string | null => {
@@ -1835,6 +1888,9 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
         const r = refreshFor(ctx, b, parent, from, at.brings);
         if (!refreshes.some((x) => x.command === r.command)) refreshes.unshift(r);
       }
+      const declares = at.brings === null ? [] : pnpmPeerDeclare(ctx, b, leverHistory.get(l.name)?.[v], l.name, parent, found.version, l.dirs);
+      for (const d of declares) if (!refreshes.some((x) => x.dir === d.dir && x.command === d.command)) refreshes.push(d);
+      const peerWords = peerDeclareText(l.name, v, parent, from, declares);
       if (at.brings && (!brought || compareVersions(at.brings, brought, ecosystem) > 0)) brought = at.brings;
       const lifted = v !== hop.version;
       const smallest = lifted ? `${l.name} ${v} (the smallest that does is ${hop.version})` : `${l.name} ${v} is the smallest ${l.name} release that`;
@@ -1843,8 +1899,8 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
           ? `${smallest} no longer brings in ${parent}, so ${pkg} ${ctx.installed} goes away from that path: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}`
           : lifted
             ? // #981 round 3: the lever's own smallest release, then the release its own upgrade moves to.
-              `${l.name} ${hop.version} is the smallest ${l.name} release that brings in a ${parent} that admits it, and ${l.name} ${v}, the release ${l.name}'s own upgrade moves to, also brings in ${parent} ${at.brings} (>= ${parent} ${found.version})${at.keepsParent ? ` (its requirement still admits ${parent} ${from}, which an install keeps)` : ""}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}`
-            : `${smallest} brings in ${parent} ${at.brings}${at.brings === found.version ? "" : ` (>= ${found.version})`}${at.keepsParent ? ` (its requirement still admits ${parent} ${from}, which an install keeps)` : ""}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}`,
+              `${l.name} ${hop.version} is the smallest ${l.name} release that brings in a ${parent} that admits it, and ${l.name} ${v}, the release ${l.name}'s own upgrade moves to, also brings in ${parent} ${at.brings} (>= ${parent} ${found.version})${at.keepsParent ? ` (its requirement still admits ${parent} ${from}, which an install keeps)` : ""}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}${peerWords}`
+            : `${smallest} brings in ${parent} ${at.brings}${at.brings === found.version ? "" : ` (>= ${found.version})`}${at.keepsParent ? ` (its requirement still admits ${parent} ${from}, which an install keeps)` : ""}: upgrade ${l.name} to ${v}${lever.breaking ? " (a major upgrade)" : ""}${commandText(lever)}${peerWords}`,
       );
     }
     upgrade.levers = levers;

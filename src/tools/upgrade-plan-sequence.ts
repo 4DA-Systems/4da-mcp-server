@@ -177,6 +177,8 @@ export function parseCommand(run: string): Parsed {
   }
   const member = new RegExp(`^yarn workspace (\\S+) add ${SPEC}( --dev| --optional)?$`).exec(run);
   if (member) return { kind: "set", tool: "yarn", pkg: member[2], version: member[3], flags: `workspace ${member[1]}` };
+  const pnpmAdd = new RegExp(`^pnpm add (-D |-O )?${SPEC}$`).exec(run);
+  if (pnpmAdd) return { kind: "set", tool: "pnpm", pkg: pnpmAdd[2], version: pnpmAdd[3], flags: "" };
   for (const [form, tool] of REFRESH_FORMS) {
     const m = form.exec(run);
     if (m) return { kind: "refresh", tool, pkg: m[1] };
@@ -233,8 +235,17 @@ export interface RunOrderOptions {
    * not be read, undefined when it was not looked up.
    */
   goRequires?: (module: string, version: string) => Map<string, string> | null | undefined;
-  /** Why setting `pkg` to `version` in `dir` breaks a peer range an installed direct dependency declares; null when it does not. */
-  peerConflict?: (dir: string, pkg: string, version: string) => string | null;
+  /** How setting `pkg` to `version` in `dir` breaks a peer range installed direct dependencies declare (which, and why); null when it does not. */
+  peerConflict?: (dir: string, pkg: string, version: string) => PeerConflict | null;
+}
+
+export interface PeerConflict {
+  /** The installed direct dependencies whose peer range on the package excludes the version. */
+  holders: string[];
+  /** "@vitest/coverage-v8 1.6.0 declares "1.6.0"", per holder. */
+  who: string;
+  /** The sentence for the row when the step cannot run with them. */
+  text: string;
 }
 
 export interface RunOrder {
@@ -277,13 +288,16 @@ function installedVersions(rows: SequencedRow[]): Map<string, string[]> {
 export function buildRunOrder(opts: RunOrderOptions): RunOrder {
   const peerBlocked = new Map<SequencedRow, string>();
   const runnable = opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null));
-  let graph = buildGraph(runnable, opts);
-  // A peer conflict leaves its rows out entirely; their other commands are re-merged without them.
-  for (let round = 0; round < 5 && opts.peerConflict; round++) {
-    const blocked = graph.conflicts(opts.peerConflict);
-    if (blocked.size === 0) break;
-    for (const [row, why] of blocked) peerBlocked.set(row, why);
-    graph = buildGraph(runnable.filter((r) => !peerBlocked.has(r)), opts);
+  const groups: string[][] = [];
+  let graph = buildGraph(runnable, opts, groups);
+  // A target that breaks a peer range runs in one command with the holder's own upgrade when the
+  // script upgrades the holder too; otherwise its rows are left out entirely and the rest re-merged.
+  for (let round = 0; round < 6 && opts.peerConflict; round++) {
+    const found = graph.conflicts(opts.peerConflict);
+    if (found.blocked.size === 0 && found.combine.length === 0) break;
+    for (const [row, why] of found.blocked) peerBlocked.set(row, why);
+    for (const pair of found.combine) joinGroup(groups, pair);
+    graph = buildGraph(runnable.filter((r) => !peerBlocked.has(r)), opts, groups);
   }
   const steps = graph.order().map((n, i) => ({ n: i + 1, dir: n.dir, run: n.run, fixes: [...n.fixes].sort() }));
   const note = runOrderNote(opts, runnable, peerBlocked, steps.length, graph.notes);
@@ -291,12 +305,39 @@ export function buildRunOrder(opts: RunOrderOptions): RunOrder {
 }
 
 interface Graph {
-  conflicts(peerConflict: NonNullable<RunOrderOptions["peerConflict"]>): Map<SequencedRow, string>;
+  /** Rows whose step breaks a peer range it cannot run with the holder's upgrade, and pairs of steps to run as one. */
+  conflicts(peerConflict: NonNullable<RunOrderOptions["peerConflict"]>): { blocked: Map<SequencedRow, string>; combine: Array<[string, string]> };
   order(): Array<{ dir: string; run: string; fixes: Set<string> }>;
   notes: string[];
 }
 
-function buildGraph(rows: SequencedRow[], opts: RunOrderOptions): Graph {
+/** Put two version-setting steps in one group (one command), merging the groups they are in. */
+function joinGroup(groups: string[][], [a, b]: [string, string]): void {
+  const ga = groups.find((g) => g.includes(a));
+  const gb = groups.find((g) => g.includes(b));
+  if (ga && ga === gb) return;
+  if (ga && gb) {
+    pushAll(ga, gb.filter((k) => !ga.includes(k)));
+    groups.splice(groups.indexOf(gb), 1);
+  } else if (ga) ga.push(b);
+  else if (gb) gb.push(a);
+  else groups.push([a, b]);
+}
+
+/**
+ * One command for several version-setting commands of one tool in one directory: the same command
+ * with every spec (`pnpm up "vitest@^4.1.12" "@vitest/coverage-v8@^4.1.11"`). Null when they differ
+ * in anything but the spec (`npm install a@1 --save-exact` beside `npm install "b@^2"`).
+ */
+function combineRuns(runs: string[]): string | null {
+  const parts = runs.map((r) => /^(.*?) ("?(?:@[^/\s"@]+\/)?[^@\s"]+@[^"\s]+"?)((?: --?\S+)*)$/.exec(r));
+  if (parts.some((p) => !p)) return null;
+  const [first] = parts as RegExpExecArray[];
+  if (!(parts as RegExpExecArray[]).every((p) => p[1] === first[1] && p[3] === first[3])) return null;
+  return `${first[1]} ${(parts as RegExpExecArray[]).map((p) => p[2]).join(" ")}${first[3]}`;
+}
+
+function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[][]): Graph {
   const nodes = new Map<string, Node>();
   const sets = new Map<string, SetState>();
   const edges = new Map<string, Set<string>>();
@@ -340,12 +381,16 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions): Graph {
         const state = sets.get(key) ?? newSet(ECOSYSTEM_OF_TOOL[p.tool] ?? "npm");
         sets.set(key, state);
         state.candidates.push({ version: p.version, run: c.run, fix, row });
-        return node(key, c.dir, PHASE.set, `${p.tool} ${p.pkg}`, () => {
-          const chosen = state.chosen();
-          // Never below a version a row says is installed there (rule b).
-          const below = (installed.get(`${c.dir}\0${p.pkg}`) ?? []).find((v) => compareVersions(chosen.version, v, state.ecosystem) < 0);
-          return below ? null : chosen.run;
-        });
+        const group = groups.find((g) => g.includes(key));
+        if (group) {
+          // Run as one command with the steps it must not run without (rule e).
+          return node(`group\0${[...group].sort().join("\u0001")}`, c.dir, PHASE.set, `${p.tool} ${[...group].map((k) => k.split("\0")[3]).sort().join(" ")}`, () => {
+            const members = group.filter((k) => sets.has(k)).sort();
+            if (members.some((k) => setRun(k) === null)) return null;
+            return combineRuns(members.map((k) => setRun(k)!));
+          });
+        }
+        return node(key, c.dir, PHASE.set, `${p.tool} ${p.pkg}`, () => setRun(key));
       }
       case "refresh":
         return node(`${c.dir}\0refresh\0${p.tool}\0${p.pkg}`, c.dir, PHASE.refresh, `${p.tool} ${p.pkg}`, () => c.run);
@@ -403,6 +448,15 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions): Graph {
     }
   }
 
+  /** A version-setting step's command at its chosen version; null when that is below a version installed there (rule b). */
+  function setRun(key: string): string | null {
+    const state = sets.get(key)!;
+    const [dir, , , pkg] = key.split("\0");
+    const chosen = state.chosen();
+    const below = (installed.get(`${dir}\0${pkg}`) ?? []).find((v) => compareVersions(chosen.version, v, state.ecosystem) < 0);
+    return below ? null : chosen.run;
+  }
+
   // A pre-update before every --precise of its directory; a crate it no longer names moves by its own --precise first.
   for (const [dir] of pres) {
     for (const [key, p] of precises) {
@@ -413,30 +467,52 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions): Graph {
   }
   for (const [key, state] of sets) {
     const chosen = state.chosen();
-    const n = nodes.get(key)!;
-    const pkg = key.split("\0")[3];
+    const [dir, , , pkg] = key.split("\0");
     const versions = [...new Set(state.candidates.map((c) => c.version))].sort((a, b) => compareVersions(a, b, state.ecosystem));
     if (versions.length > 1) {
       const lower = [...new Set(state.candidates.filter((c) => c.version !== chosen.version).map((c) => copyOf(c.row)))];
       notes.push(
-        `${pkg} is set once in ${dirWords(n.dir)}, at ${chosen.version}, for rows that named ${andList(versions)}: the highest any row needs, so no step lowers what another sets; that it also brings in the fix of ${andList(lower)}, whose ${lower.length === 1 ? "row" : "rows"} named a lower release, was not confirmed (re-scan after running)`,
+        `${pkg} is set once in ${dirWords(dir)}, at ${chosen.version}, for rows that named ${andList(versions)}: the highest any row needs, so no step lowers what another sets; that it also brings in the fix of ${andList(lower)}, whose ${lower.length === 1 ? "row" : "rows"} named a lower release, was not confirmed (re-scan after running)`,
       );
     }
-    if (n.render() === null) notes.push(`${pkg} ${chosen.version} is not run in ${dirWords(n.dir)}: a newer ${pkg} is installed there`);
+    if (setRun(key) === null) notes.push(`${pkg} ${chosen.version} is not run in ${dirWords(dir)}: a newer ${pkg} is installed there`);
   }
 
   return {
     notes,
     conflicts(peerConflict) {
-      const out = new Map<SequencedRow, string>();
+      const blocked = new Map<SequencedRow, string>();
+      const combine: Array<[string, string]> = [];
       for (const [key, state] of sets) {
-        const n = nodes.get(key)!;
-        const [, , tool, pkg] = key.split("\0");
+        const [dir, , tool, pkg] = key.split("\0");
         if (tool !== "npm" && tool !== "pnpm" && tool !== "yarn") continue;
-        const why = peerConflict(n.dir, pkg, state.chosen().version);
-        if (why) for (const c of state.candidates) out.set(c.row, why);
+        const chosen = state.chosen().version;
+        const conflict = peerConflict(dir, pkg, chosen);
+        if (!conflict) continue;
+        // Each holder the script upgrades too runs in the same command; one it does not leaves the step out.
+        const group = groups.find((g) => g.includes(key)) ?? [key];
+        const pending: Array<[string, string]> = [];
+        let together = true;
+        for (const holder of conflict.holders) {
+          const other = [...sets.keys()].find((k) => {
+            const [d, , t, n] = k.split("\0");
+            return d === dir && t === tool && n === holder;
+          });
+          if (other && group.includes(other)) continue;
+          const runs = other ? [...new Set([...group, other])].map((k) => setRun(k)) : [];
+          if (!other || runs.some((r) => r === null) || combineRuns(runs as string[]) === null) {
+            together = false;
+            break;
+          }
+          pending.push([key, other]);
+        }
+        if (!together) for (const c of state.candidates) blocked.set(c.row, conflict.text);
+        else {
+          pushAll(combine, pending);
+          notes.push(`${pkg} ${chosen} runs in one command with ${andList(conflict.holders)} in ${dirWords(dir)}, which the script upgrades too: installed, ${conflict.who}, a peer range that excludes ${chosen}`);
+        }
       }
-      return out;
+      return { blocked, combine };
     },
     order: () => topological(nodes, edges),
   };
