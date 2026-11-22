@@ -53,6 +53,7 @@ import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.
 import { registryQuote } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
+import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -203,6 +204,8 @@ interface UpgradeRecommendation {
   declaredRange?: string;
   /** Private packages this transitive step arrives through: never looked up, so its fix path is not checked (upgrade-planner-private.ts). */
   privateParents?: Array<{ parent: string; why: string }>;
+  /** Every command this row tells the developer to run, as data (upgrade-plan-sequence.ts); empty when its reasons say why nothing is run. */
+  commands: PlanCommand[];
 }
 
 export interface UpgradePlanResult {
@@ -224,6 +227,10 @@ export interface UpgradePlanResult {
   vulnerabilityDataAvailable: boolean;
   /** Present when the vulnerability check is missing or incomplete: what was not checked and why. */
   vulnerabilityCoverage?: VulnerabilityCoverage;
+  /** The rows shown as one script, safe to run from the first step to the last (upgrade-plan-sequence.ts). */
+  run_order: RunOrderStep[];
+  /** What run_order covers (the rows shown) and what it leaves out, and why. */
+  run_order_note: string;
   provenance: {
     mode: "lockfile_engine";
     note: string;
@@ -236,6 +243,8 @@ export interface UpgradePlanResult {
 
 /** Time the plan spends checking the newer releases its rows offer against their advisories. */
 const OFFER_CHECK_BUDGET_MS = 10_000;
+/** Time run_order may spend reading the go.mod of the `go get` targets it combines. */
+const SEQUENCE_BUDGET_MS = 3_000;
 
 /** The newer release a registry row would offer (its latest stable), or null when it offers none. */
 function offeredUpgrade(dep: { ecosystem: string; currentVersion: string | null; latestStableVersion: string | null; latestVersion: string | null }): string | null {
@@ -292,14 +301,25 @@ export const upgradePlannerTool = {
 
 const RISK_LEVELS: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3, unknown: 3 };
 
-/** critical > high > medium > low, then runtime before dev-only, then fixable now (direct) before transitive, then non-breaking first (quick wins). */
-function planOrder(a: UpgradeRecommendation, b: UpgradeRecommendation): number {
-  const riskDiff = RISK_LEVELS[b.risk] - RISK_LEVELS[a.risk];
-  if (riskDiff !== 0) return riskDiff;
-  if (a.isDev !== b.isDev) return a.isDev ? 1 : -1;
-  if (a.scope !== b.scope) return a.scope === "direct" ? -1 : 1;
-  if (a.breaking !== b.breaking) return a.breaking ? 1 : -1;
-  return 0;
+const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * critical > high > medium > low, then runtime before dev-only, then fixable now (direct) before
+ * transitive, then non-breaking first (quick wins); then a total tiebreak (ecosystem, package,
+ * directories, version), so which tied rows max_recommendations shows never depends on the order
+ * the lookups returned them in.
+ */
+function planOrder(dirsOf: (r: UpgradeRecommendation) => string): (a: UpgradeRecommendation, b: UpgradeRecommendation) => number {
+  return (a, b) => {
+    const riskDiff = RISK_LEVELS[b.risk] - RISK_LEVELS[a.risk];
+    if (riskDiff !== 0) return riskDiff;
+    if (a.isDev !== b.isDev) return a.isDev ? 1 : -1;
+    if (a.scope !== b.scope) return a.scope === "direct" ? -1 : 1;
+    if (a.breaking !== b.breaking) return a.breaking ? 1 : -1;
+    const av = a.currentVersion ?? "";
+    const bv = b.currentVersion ?? "";
+    return byText(a.ecosystem, b.ecosystem) || byText(a.package, b.package) || byText(dirsOf(a), dirsOf(b)) || compareVersions(av, bv, a.ecosystem) || byText(av, bv);
+  };
 }
 
 /**
@@ -385,6 +405,8 @@ async function executeStandalonePlanner(
       lockfileRefreshes: 0,
       parentUpgradeSteps: 0,
       vulnerabilityDataAvailable: false,
+      run_order: [],
+      run_order_note: "run_order is empty: nothing was planned.",
       provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
     };
   }
@@ -491,6 +513,8 @@ async function executeStandalonePlanner(
   const directPackages = new Set<string>();
   // Per vulnerable step: the per-advisory fixes and where it is pinned, for fix-path verification.
   const fixPathInputs = new Map<UpgradeRecommendation, Omit<FixPathInput, "step">>();
+  // Per reinstall row: the directories whose node_modules drifted, where its command runs.
+  const installDirsOf = new Map<UpgradeRecommendation, string[]>();
 
   for (const dep of registryData) {
     directPackages.add(instanceKey(dep.ecosystem, dep.name, dep.currentVersion));
@@ -675,8 +699,10 @@ async function executeStandalonePlanner(
       ...(action === "not_built_on_this_host" && vulns ? { appliesWhenBuiltFor: builtFor(vulns) } : {}),
       ...(installedVersion ? { installedVersion, installFix } : {}),
       ...(dep.declaredRange ? { declaredRange: dep.declaredRange } : {}),
+      commands: [],
     };
     recommendations.push(rec);
+    if (installFix) installDirsOf.set(rec, [...new Set(drifted.map((r) => relativeDir(r.dir, root)))]);
     if (fixable && !reinstallOnly && action === "upgrade_direct" && vulns) {
       // The manifest directories that declare it: where its upgrade command runs (audit E8).
       fixPathInputs.set(rec, {
@@ -751,6 +777,7 @@ async function executeStandalonePlanner(
         action: !platformActive ? "not_built_on_this_host" : target ? (declared ? "upgrade_direct" : "waiting_on_upstream") : "no_fix_available",
         platformActive,
         ...(!platformActive ? { appliesWhenBuiltFor: builtFor(entries) } : {}),
+        commands: [],
       };
       recommendations.push(rec);
       // The same input vulnerability_scan verifies for this copy (fix-verdicts.ts): one answer per finding.
@@ -778,8 +805,10 @@ async function executeStandalonePlanner(
     : deduped.filter((r) => RISK_LEVELS[r.risk] >= RISK_LEVELS[threshold]);
 
   // Sort: critical > high > medium > low, then fixable-now (direct) before
-  // waiting-on-upstream (transitive), then non-breaking first (quick wins).
-  filtered.sort(planOrder);
+  // waiting-on-upstream (transitive), then non-breaking first (quick wins), then a total tiebreak.
+  const dirsOf = (r: UpgradeRecommendation) => [...new Set((fixPathInputs.get(r)?.sourceDirs ?? []).map((d) => relativeDir(d, root)))].sort().join("\n");
+  const order = planOrder(dirsOf);
+  filtered.sort(order);
 
   const maxRecs = params.max_recommendations ?? 20;
   const limited = filtered.slice(0, maxRecs);
@@ -798,7 +827,7 @@ async function executeStandalonePlanner(
   dedupeParentCommands(limited);
   // A fix path through a private parent was never looked up: said first, never a proceed (upgrade-planner-private.ts).
   markPrivateParents(limited, (r) => fixPathInputs.get(r)?.sourceDirs ?? [], liveIntel);
-  limited.sort(planOrder);
+  limited.sort(order);
   // Go module versions carry their `v` in every field, as currentVersion does (audit 7e).
   for (const r of limited) {
     r.targetVersion = inEcosystemForm(r.ecosystem, r.targetVersion);
@@ -810,11 +839,26 @@ async function executeStandalonePlanner(
   markUndetermined(limited);
   // A copy this host does not build: its fix is on the row, labelled with where it applies.
   labelOtherTargets(limited);
+  // Every command a row names, as data, from the fields its words were built from (all passes done).
+  attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));
   // Targets that pin (or narrowly range) an affected dependency, or whose held dependencies could not be
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
   const heldRows = limited.filter(heldUnclean);
+  // The rows shown as one script safe to run top to bottom (upgrade-plan-sequence.ts).
+  const declaredNpm = new Set(
+    [...liveIntel.getResolvedDeps(), ...(liveIntel.getAuditDeps() as Array<{ ecosystem: string; name: string; version: string | null; isDirect?: boolean }>)]
+      .filter((d) => d.isDirect && d.ecosystem === "npm")
+      .map((d) => `${d.name}\0${d.version}`),
+  );
+  const sequence = await sequencePlan(limited, {
+    totalRows: filtered.length,
+    heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x)),
+    goSource: liveIntel.getReleaseSources().Go,
+    peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
+    budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
+  });
   const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
   // Rows whose advisories OSV.dev did not answer for, or whose newer release was not confirmed (r7).
   const unknownRisk = limited.filter((r) => r.risk === "unknown").length;
@@ -930,6 +974,8 @@ async function executeStandalonePlanner(
     parentUpgradeSteps,
     vulnerabilityDataAvailable,
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
+    run_order: sequence.run_order,
+    run_order_note: sequence.run_order_note,
     provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
 }
