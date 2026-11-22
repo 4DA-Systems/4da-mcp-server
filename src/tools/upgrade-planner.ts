@@ -49,7 +49,7 @@ import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.
 import { registryQuote } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
-import { attachCommands, type PlanCommand } from "./upgrade-plan-sequence.js";
+import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -223,6 +223,10 @@ export interface UpgradePlanResult {
   vulnerabilityDataAvailable: boolean;
   /** Present when the vulnerability check is missing or incomplete: what was not checked and why. */
   vulnerabilityCoverage?: VulnerabilityCoverage;
+  /** The rows shown as one script, safe to run from the first step to the last (upgrade-plan-sequence.ts). */
+  run_order: RunOrderStep[];
+  /** What run_order covers (the rows shown) and what it leaves out, and why. */
+  run_order_note: string;
   provenance: {
     mode: "standalone_heuristic";
     note: string;
@@ -235,6 +239,8 @@ export interface UpgradePlanResult {
 
 /** Time the plan spends checking the newer releases its rows offer against their advisories. */
 const OFFER_CHECK_BUDGET_MS = 10_000;
+/** Time run_order may spend reading the go.mod of the `go get` targets it combines. */
+const SEQUENCE_BUDGET_MS = 3_000;
 
 /** The newer release a registry row would offer (its latest stable), or null when it offers none. */
 function offeredUpgrade(dep: { ecosystem: string; currentVersion: string | null; latestStableVersion: string | null; latestVersion: string | null }): string | null {
@@ -389,6 +395,8 @@ async function executeStandalonePlanner(
       lockfileRefreshes: 0,
       parentUpgradeSteps: 0,
       vulnerabilityDataAvailable: false,
+      run_order: [],
+      run_order_note: "run_order is empty: nothing was planned.",
       provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
     };
   }
@@ -826,6 +834,19 @@ async function executeStandalonePlanner(
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
   const heldRows = limited.filter(heldUnclean);
+  // The rows shown as one script safe to run top to bottom (upgrade-plan-sequence.ts).
+  const declaredNpm = new Set(
+    [...liveIntel.getResolvedDeps(), ...(liveIntel.getAuditDeps() as Array<{ ecosystem: string; name: string; version: string | null; isDirect?: boolean }>)]
+      .filter((d) => d.isDirect && d.ecosystem === "npm")
+      .map((d) => `${d.name}\0${d.version}`),
+  );
+  const sequence = await sequencePlan(limited, {
+    totalRows: filtered.length,
+    heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x)),
+    goSource: liveIntel.getReleaseSources().Go,
+    peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
+    budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
+  });
   const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
   // Rows whose advisories OSV.dev did not answer for, or whose newer release was not confirmed (r7).
   const unknownRisk = limited.filter((r) => r.risk === "unknown").length;
@@ -941,6 +962,8 @@ async function executeStandalonePlanner(
     parentUpgradeSteps,
     vulnerabilityDataAvailable,
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
+    run_order: sequence.run_order,
+    run_order_note: sequence.run_order_note,
     provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
   };
 }

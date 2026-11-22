@@ -963,10 +963,9 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     // A parent that will not move makes "waiting on upstream" a dead end (A4, request 2.88.2):
     // the step is an override of the transitive, or replacing that parent.
     step.action = "override_or_replace";
-    const formats = [...new Set(verdicts.map((v) => v.verdict.format))];
     const others = moves.length > 0 ? `. The other parents can move: ${moves.map((m) => m.text).join("; ")}` : "";
     replaceReason(
-      `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace the parent${others}`,
+      `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${overrideHints(verdicts, step.package, target, root)}; or replace the parent${others}`,
     );
     forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
@@ -977,9 +976,8 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     // its own (pr-011): the step is an override of the transitive, or replacing that dependency,
     // the app's "replace <lever>, or force <pkg> >= <target> with <override>".
     step.action = "override_or_replace";
-    const formats = [...new Set(verdicts.map((v) => v.verdict.format))];
     replaceReason(
-      `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${formats.map((f) => overrideHint(f, step.package, target)).join("; ")}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
+      `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${overrideHints(verdicts, step.package, target, root)}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
     );
     forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
@@ -2451,19 +2449,31 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
 }
 
 
-/** How to force one transitive version, per lockfile format. */
-export function overrideHint(format: LockfileFormat, name: string, target: string): string {
+/**
+ * How to force one transitive version, per lockfile format, in the project whose lockfile it is:
+ * `dir` is that lockfile's directory relative to the root. An override is read only beside the
+ * lockfile (the workspace root), so outside the root the snippet names the file and where to
+ * install: a root snippet changed nothing in zustand's examples/demo.
+ */
+export function overrideHint(format: LockfileFormat, name: string, target: string, dir = "."): string {
+  const file = (manifest: string) => (dir === "." ? manifest : `${dir}/${manifest}`);
+  const there = dir === "." ? "" : ` in ${dir}`;
   switch (format) {
     case "package-lock":
-      return `npm: add "overrides": { "${name}": "${target}" } to package.json (npm 8.3+), then npm install`;
+      return `npm: add "overrides": { "${name}": "${target}" } to ${file("package.json")} (npm 8.3+), then npm install${there}`;
     case "pnpm":
-      return `pnpm: add "pnpm": { "overrides": { "${name}": "${target}" } } to package.json (or overrides: in pnpm-workspace.yaml), then pnpm install`;
+      return `pnpm: add "pnpm": { "overrides": { "${name}": "${target}" } } to ${file("package.json")} (or overrides: in ${file("pnpm-workspace.yaml")}), then pnpm install${there}`;
     case "yarn":
     case "yarn-berry":
-      return `yarn: add "resolutions": { "${name}": "${target}" } to package.json, then yarn install`;
+      return `yarn: add "resolutions": { "${name}": "${target}" } to ${file("package.json")}, then yarn install${there}`;
     case "bun":
-      return `bun: add "overrides": { "${name}": "${target}" } to package.json, then bun install`;
+      return `bun: add "overrides": { "${name}": "${target}" } to ${file("package.json")}, then bun install${there}`;
     case "cargo":
-      return `Cargo cannot select a version outside the parent's requirement; point [patch.crates-io] ${name} at a fork or path that carries the fix`;
+      return `Cargo cannot select a version outside the parent's requirement; point [patch.crates-io] ${name} at a fork or path that carries the fix${dir === "." ? "" : ` (in ${file("Cargo.toml")})`}`;
   }
+}
+
+/** One override snippet per lockfile the step's copies are in, each naming that lockfile's project. */
+function overrideHints(verdicts: Array<{ lockfile: string; verdict: { format: LockfileFormat } }>, name: string, target: string, root: string): string {
+  return [...new Set(verdicts.map((v) => overrideHint(v.verdict.format, name, target, relativeDir(path.dirname(v.lockfile), root))))].join("; ");
 }
