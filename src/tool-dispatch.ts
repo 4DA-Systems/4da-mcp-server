@@ -9,6 +9,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/server";
 
 import type { FourDADatabase } from "./db.js";
+import { withAppCompatibility } from "./app-compat.js";
 import { assertToolPermission } from "./auth-context.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { cleanStrings } from "./tool-args.js";
@@ -164,8 +165,11 @@ export async function dispatchTool(
   const annotated = withFreshness ? attachFreshness(db!, result) : desktopOnly ? attachDesktopAppNote(name, result) : result;
   // Every tool that returns third-party text says which fields hold it (`_meta.untrusted_text`),
   // here when the tool does not say it itself.
-  const payload = cleanStrings(
-    withRegistryQuotes(withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated), quotes),
+  // An attached app outside the supported range is said on every answer that reads its data (app-compat.ts).
+  const payload = withAppCompatibility(
+    name,
+    db,
+    cleanStrings(withRegistryQuotes(withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated), quotes)),
   );
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.
