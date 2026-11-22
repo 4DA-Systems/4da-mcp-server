@@ -114,7 +114,7 @@ export const dependencyCheckTool = {
     "- publish_trust (npm, crates.io): trusted publisher / provenance dropped -> review. install_script_added (npm): new install script -> review. new_dependencies (npm, crates.io): a new runtime dependency under 30 days old -> review. Not applicable elsewhere, and said so.",
     "- upgrade_type: major (0.x minor counts) -> review: call upgrade_impact for what it breaks.",
     "",
-    "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed.",
+    "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed. An item with `retry_after_seconds` was held back by this server's own request limit (the registry is not at fault): ask again for it after that many seconds. An item refused as written (`not_checked: \"input\"`, its reason says why) is answered in its place and the others are checked.",
     "",
     "Privacy: registries get the package name only (Go: also the judged versions' .info and .mod, as `go get` does; PyPI: also the judged release's own metadata document when it is not the latest release, never the installed version), and the names of the packages a judged release requires; OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
   ].join("\n"),
