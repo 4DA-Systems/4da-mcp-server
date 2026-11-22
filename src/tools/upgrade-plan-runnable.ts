@@ -18,6 +18,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pushAll } from "../array-utils.js";
 import type { FixPathSources } from "../live/fix-paths.js";
 import { npmDeclared } from "../live/fix-paths.js";
 import { wildcardMatch } from "../live/glob-match.js";
@@ -55,7 +56,7 @@ function tomlTableStrings(content: string, table: string, key: string): string[]
       continue;
     }
     const kv = tomlKeyValue(line);
-    if (kv && current === table && kv.key === key) out.push(...tomlStrings(kv.value));
+    if (kv && current === table && kv.key === key) pushAll(out, tomlStrings(kv.value));
   }
   return out;
 }
