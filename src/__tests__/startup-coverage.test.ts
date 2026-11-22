@@ -101,7 +101,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("resources/list and the startup lin
       const { stderr, results } = await stdioSession(dir, [["get_context", {}]], { FOURDA_DB_PATH: "./data/missing.db" });
       expect(resultText(results[0])).toMatch(/FOURDA_DB_PATH/);
       expect(stderr).not.toMatch(/started — 16 tools,/);
-      expect(stderr).toMatch(/no tool can run until the database problem above is fixed/);
+      expect(stderr).toMatch(/dependency tools answer from the project's files; every other tool returns the database problem above/);
     } finally {
       removeQuietly(dir);
     }

@@ -124,9 +124,10 @@ describe("resources and the startup line say what this mode serves (L6)", () => 
     const { startupToolsLine } = await import("../schema-registry.js");
     expect(startupToolsLine({ valid: true, standalone: false }, true)).toBe("16 tools");
     expect(startupToolsLine({ valid: false, standalone: true }, true)).toBe("11 standalone tools");
-    const refused = startupToolsLine({ valid: false, standalone: false }, true);
+    // A refused database: the dependency tools still answer from the project's files.
+    const refused = startupToolsLine({ valid: false, standalone: false }, true, 4);
     expect(refused).not.toMatch(/^16 tools$/);
-    expect(refused).toMatch(/no tool can run until the database problem above is fixed/);
+    expect(refused).toMatch(/^4 dependency tools answer from the project's files; every other tool returns the database problem above/);
     expect(startupToolsLine({ valid: false, standalone: false }, false, 5)).toMatch(/^5 dependency tools run without a database/);
   });
 });
