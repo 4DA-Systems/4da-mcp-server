@@ -19,7 +19,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
 import { inEcosystemForm } from "../live/version-compare.js";
 import { scopeAppPlanSteps, type AppPlanRead, type AppPlanSnapshot, type AppPlanStepView } from "./app-plan.js";
-import { normalizeProjectPath } from "./project-scope.js";
+import { isWithin, normalizeProjectPath } from "./project-scope.js";
 
 export type AppPlanCheckStatus = "agrees" | "differs" | "not_comparable" | "no_plan" | "unverified";
 
@@ -166,17 +166,26 @@ function lockfileChangedSince(dir: string, sinceMs: number): { file: string; mti
   return newest;
 }
 
-/** The plan as one map: per installed copy, the target the app's plan names for it. */
-function appLines(steps: AppPlanStepView[], includeDev: boolean): Map<string, AppPlanDifference> {
-  const out = new Map<string, AppPlanDifference>();
+/**
+ * The plan as one map: per installed copy, the target the app's plan names for it. A line whose
+ * sites all lie in directories this answer does not scan (gitignored, test fixtures: its coverage
+ * names them) is out of its reach, counted in `outOfScan`, never a difference.
+ */
+function appLines(steps: AppPlanStepView[], includeDev: boolean, excludedDirs: string[]): { lines: Map<string, AppPlanDifference>; outOfScan: number } {
+  const lines = new Map<string, AppPlanDifference>();
+  let outOfScan = 0;
   for (const step of steps) {
     for (const line of step.lines) {
       if (!includeDev && line.sites.length > 0 && line.sites.every((s) => s.dev)) continue;
+      if (line.sites.length > 0 && line.sites.every((s) => excludedDirs.some((d) => isWithin(s.project, d)))) {
+        outOfScan++;
+        continue;
+      }
       const key = copyKey(step.ecosystem, step.package, line.installed);
-      if (!out.has(key)) out.set(key, { ecosystem: step.ecosystem, package: step.package, installed: line.installed, app_target: line.target ?? null, server_target: null });
+      if (!lines.has(key)) lines.set(key, { ecosystem: step.ecosystem, package: step.package, installed: line.installed, app_target: line.target ?? null, server_target: null });
     }
   }
-  return out;
+  return { lines, outOfScan };
 }
 
 /** ecosystem + package + installed version, spelled the same on both sides (case, PyPI separators, Go's `v`). */
@@ -203,10 +212,12 @@ export interface ServerPlanFacts {
   newestLockfile: { file: string; mtimeMs: number } | null;
   /** The project root, for naming files relative to it. */
   root: string;
+  /** Directories below the root that this answer does not scan (skipped lockfiles' directories, test-fixture directories). */
+  excludedDirs: string[];
 }
 
 /** The live layer's view of a project, as far as the comparison needs it. */
-type PlanLiveLayer = Pick<LiveIntelligence, "getVulnerabilities" | "getResolutionProvenance">;
+type PlanLiveLayer = Pick<LiveIntelligence, "getVulnerabilities" | "getResolutionProvenance" | "getDiscovery">;
 
 /** What the app's stored plan is compared with: the rows shown, every copy the scan found vulnerable, the newest lockfile read. */
 export function serverPlanFacts(
@@ -226,7 +237,12 @@ export function serverPlanFacts(
     }
     if (mtimeMs !== null && (!newestLockfile || mtimeMs > newestLockfile.mtimeMs)) newestLockfile = { file: source.path, mtimeMs };
   }
-  return { rows: plan.recommendations, vulnerable, complete: plan.vulnerabilityDataAvailable, newestLockfile, root: plan.projectPath };
+  const discovery = live?.getDiscovery() ?? null;
+  const root = plan.projectPath;
+  const excludedDirs = [...(discovery?.skipped ?? []).map((s) => path.dirname(s.path)), ...(discovery?.fixtures?.dirs ?? [])]
+    .map((rel) => path.resolve(root, rel))
+    .filter((dir) => normalizeProjectPath(dir) !== normalizeProjectPath(root));
+  return { rows: plan.recommendations, vulnerable, complete: plan.vulnerabilityDataAvailable, newestLockfile, root, excludedDirs };
 }
 
 /**
@@ -267,7 +283,7 @@ export function checkProjectPlan(
 
   const wanted = params.package?.trim().toLowerCase();
   const steps = scopeAppPlanSteps(snapshot.steps, scope).filter((s) => !wanted || s.package.toLowerCase() === wanted);
-  const app = appLines(steps, params.include_dev ?? true);
+  const { lines: app, outOfScan } = appLines(steps, params.include_dev ?? true, server.excludedDirs);
   const shown = new Map<string, string | null>();
   for (const r of server.rows) {
     const key = copyKey(r.ecosystem, r.package, r.currentVersion);
@@ -292,7 +308,11 @@ export function checkProjectPlan(
     differences.push({ ecosystem: r.ecosystem, package: r.package, installed: r.currentVersion, app_target: null, server_target: r.targetVersion });
   }
   const packages = new Set(differences.map((d) => `${d.ecosystem.toLowerCase()}\0${d.package.toLowerCase()}`)).size;
-  const unseen = notCompared > 0 ? ` (${notCompared} of the app's rows name copies this answer does not show; raise max_recommendations or lower risk_threshold to compare them)` : "";
+  const asides = [
+    ...(notCompared > 0 ? [`${notCompared} of the app's rows name copies this answer does not show (raise max_recommendations or lower risk_threshold to compare them)`] : []),
+    ...(outOfScan > 0 ? [`${outOfScan} of the app's rows are in directories this answer does not scan (its coverage names them)`] : []),
+  ];
+  const unseen = asides.length > 0 ? ` (${asides.join("; ")})` : "";
   const ageNote = age.hours === null ? " The app records no time for its advisory data." : "";
   if (differences.length === 0) {
     return { status: "agrees", note: `${computed}; the 4DA app's stored plan (generated ${snapshot.generatedAt}) agrees with it on every package either one names${unseen}.${ageNote}`, ...base };

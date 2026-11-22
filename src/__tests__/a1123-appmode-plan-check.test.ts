@@ -106,6 +106,10 @@ beforeAll(() => {
   other = path.join(root, "other-project");
   elsewhere = path.join(root, "not-a-project");
   npmProject(project, { minimist: "1.2.5", lodash: "4.17.20" }, { braces: "3.0.2" });
+  // A directory the repository ignores: the app indexes it, this server does not scan it.
+  fs.writeFileSync(path.join(project, ".gitignore"), "ignored/\n");
+  npmProject(path.join(project, "ignored"), { qs: "6.5.2" });
+  backdate(path.join(project, "ignored"));
   npmProject(other, { qs: "6.5.2" });
   fs.mkdirSync(elsewhere, { recursive: true });
   backdate(project);
@@ -198,6 +202,20 @@ describe("one project: this server's plan, never the app's stored one", () => {
     expect(check.note).toContain("differs from it on 2 packages");
     // The answer is still this server's.
     expect(rowOf(result, "minimist")?.targetVersion).toBe("1.2.6");
+  });
+
+  it("a stored step in a directory .gitignore excludes is not planned, and not counted as a difference", async () => {
+    const plan = snapshot([
+      step("minimist", [["1.2.5", "1.2.6", [site(project)]]]),
+      step("lodash", [["4.17.20", "4.17.21", [site(project)]]]),
+      step("braces", [["3.0.2", "3.0.3", [site(project, true)]]]),
+      step("qs", [["6.5.2", "6.5.3", [site(path.join(project, "ignored"))]]]),
+    ]);
+    const result = await planFor(appDb("ignored-dir", plan));
+    expect(rowOf(result, "qs")).toBeUndefined();
+    expect(result.app_plan_check?.status).toBe("agrees");
+    expect(result.app_plan_check?.note).toContain("1 of the app's rows are in directories this answer does not scan");
+    expect(result.summary).toContain("ignored/package-lock.json");
   });
 
   it("lists at most 10 differences, and the note gives the full count", async () => {
