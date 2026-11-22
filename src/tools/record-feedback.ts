@@ -45,26 +45,37 @@ Only "save" and "mark_irrelevant" are relevance labels. Use them only when the u
 
 const validActions: FeedbackAction[] = ["click", "save", "dismiss", "mark_irrelevant"];
 
+/** A failed record carries `error` too, which makes the call an error (`isError: true`, tool-dispatch.ts). */
+type FeedbackAnswer = FeedbackResult & { error?: string };
+
+/** Nothing was recorded: say so as an error, and for a lock (the app writing), that a retry will do. */
+function failed(result: FeedbackResult): FeedbackAnswer {
+  const locked = /database is locked|SQLITE_BUSY/i.test(result.message);
+  const error = locked ? `${result.message}. The 4DA app is writing to its database; retry in a few seconds.` : result.message;
+  return { ...result, error };
+}
+
 /**
  * Execute the record_feedback tool
  */
 export function executeRecordFeedback(
   db: FourDADatabase,
   params: RecordFeedbackParams
-): FeedbackResult {
+): FeedbackAnswer {
   if (!params.item_id || !params.action) {
-    return {
+    return failed({
       success: false,
       message: "item_id and action are required",
-    };
+    });
   }
 
   if (!validActions.includes(params.action)) {
-    return {
+    return failed({
       success: false,
       message: `Invalid action: ${params.action}. Valid actions: ${validActions.join(", ")}`,
-    };
+    });
   }
 
-  return db.recordFeedback(params.item_id, params.source_type, params.action);
+  const result = db.recordFeedback(params.item_id, params.source_type, params.action);
+  return result.success ? result : failed(result);
 }

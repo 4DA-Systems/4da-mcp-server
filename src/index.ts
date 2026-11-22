@@ -93,6 +93,7 @@ const SERVER_VERSION: string = (() => {
 
 import {
   createDatabase,
+  DatabaseUnavailableError,
   DEPENDENCY_GROUP_QUERY,
   FourDADatabase,
   isUnreadableDbError,
@@ -338,14 +339,14 @@ function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }, prepar
  * so the dependency tools (DATABASE_FREE_TOOLS) still answer. Every other
  * tool returns the driver error, which says how to fix it.
  */
-function initWithoutDatabase(): void {
+function initWithoutDatabase(why: string): void {
   if (liveIntel) return;
   liveIntel = new LiveIntelligence(null);
   setLiveIntelligence(liveIntel);
   const cwd = resolveProjectDir();
   const { entries, discovery } = projectTreeFor(cwd);
   const groups = treeResolutionGroups(entries);
-  console.error(`[4DA] No SQLite driver: the dependency tools run without a database (${cwd}).`);
+  console.error(`[4DA] ${why}: the dependency tools run without a database (${cwd}).`);
   // Kept with no groups too: the coverage notes come from the walk (H3).
   liveIntel.initFromProjectTree(cwd, groups, discovery);
   if (groups.length === 0) {
@@ -362,14 +363,19 @@ function noSupportedProjectNote(cwd: string, discovery: TreeDiscovery): string {
     : `No project manifests found in ${cwd} — tools will return empty results`;
 }
 
-/** The database for a tool call; null only for a database-free tool when no SQLite driver is usable. */
-function databaseFor(tool: string): FourDADatabase | null {
+/**
+ * The database for a tool call. Null only for a database-free tool when there is none to use: no
+ * SQLite driver, or the selected database is unavailable (FOURDA_DB_PATH names no file, a file
+ * with no tables, one that cannot be opened); `note` then says which, for the answer.
+ */
+function databaseFor(tool: string): { database: FourDADatabase | null; note: string | null } {
   try {
-    return getDatabase();
+    return { database: getDatabase(), note: null };
   } catch (error) {
-    if (!(error instanceof SqliteUnavailableError) || !DATABASE_FREE_TOOLS.has(tool)) throw error;
-    initWithoutDatabase();
-    return null;
+    const unavailable = error instanceof DatabaseUnavailableError ? error : null;
+    if (!(unavailable || error instanceof SqliteUnavailableError) || !DATABASE_FREE_TOOLS.has(tool)) throw error;
+    initWithoutDatabase(unavailable ? "The database is unavailable" : "No SQLite driver");
+    return { database: null, note: unavailable?.note ?? null };
   }
 }
 
@@ -504,11 +510,11 @@ export function buildServer(): Server {
       // so a ping sent with it is answered first (pre-publish round 10, W9). An error it meets is
       // met again, and answered, by databaseFor.
       await prepareDatabase().catch(() => undefined);
-      const database = databaseFor(name);
+      const { database, note: unavailableNote } = databaseFor(name);
       // A changed .npmrc, .yarnrc.yml, go env file or environment re-reads which names are private (stat calls only).
       liveIntel?.refreshPrivateRules();
       const result = await dispatchTool(name, database, args as Record<string, unknown> | undefined, { startedAt });
-      const note = database?.takeCreationNote() ?? null;
+      const note = database?.takeCreationNote() ?? unavailableNote;
       return note ? withDatabaseNote(result, note) : result;
     } catch (error) {
       // A database that turns out damaged mid-session (SQLITE_CORRUPT on a
@@ -711,8 +717,11 @@ async function main() {
     console.error(`  Dependency tools (${[...DATABASE_FREE_TOOLS].join(", ")}) still run, without a database.`);
   }
 
-  if (validation.valid) {
-    console.error(`[4DA] Database validated — ${validation.tables?.length ?? 0} tables found`);
+  if (validation.valid && validation.standalone) {
+    // The own store's schema is completed by the first open, whatever a killed or concurrent first start left.
+    console.error(`[4DA] Standalone mode: the server's own database is ${validation.path}.`);
+  } else if (validation.valid) {
+    console.error(`[4DA] The 4DA app's database: ${validation.path} (${validation.tables?.length ?? 0} tables, read-only).`);
   } else if (validation.standalone) {
     // No existing DB — standalone mode will create one on first tool call
     console.error(`[4DA] No existing database found — standalone mode enabled.`);
