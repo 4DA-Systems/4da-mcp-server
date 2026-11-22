@@ -17,6 +17,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pushAll } from "../array-utils.js";
 import { normalizePythonName } from "./lockfile-parsers-pygo.js";
 import { pythonSpecAdmits } from "./pygo-parents.js";
 import { isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
@@ -80,14 +81,15 @@ function uvRequirements(projectDir: string, name: string): UvRequirement[] | nul
     const found = entriesOf(own, name, "[project] dependencies");
     const foundDev = entriesOf(inlineDev, name, "a development dependency group");
     if (found === null || foundDev === null) return null;
-    out.push(...found, ...foundDev);
+    pushAll(out, found);
+    pushAll(out, foundDev);
   }
   const dev = subTable(root, "package.metadata.requires-dev");
   if (dev !== null) {
     for (const group of arrays(dev)) {
       const found = entriesOf(group.body, name, `the "${group.key}" dependency group`);
       if (found === null) return null;
-      out.push(...found);
+      pushAll(out, found);
     }
   }
   return out;
