@@ -334,6 +334,12 @@ async function runProject(entry) {
   return result;
 }
 
+/** The line of a command's output that says why it failed (package managers end with a log pointer). */
+const reason = (out) => {
+  const lines = String(out ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  return (lines.find((l) => /ERESOLVE|error[:\s]|ERR!|ERR_|did not match|failed to|unsatisfiable|not found/i.test(l) && !/complete log of this run/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 240);
+};
+
 function summaryMarkdown(results, t, findings, thresholds) {
   const lines = [];
   lines.push(`# Plan execution: ${path.basename(server)} (${results.find((r) => r.server_version)?.server_version ?? "version unknown"})`, "");
@@ -353,11 +359,12 @@ function summaryMarkdown(results, t, findings, thresholds) {
     lines.push("## Steps that did not simply work", "");
     for (const { id, s } of bad) {
       const cmd = s.cmds.find((c) => c.refused || (c.exit !== undefined && c.exit !== 0)) ?? s.cmds[0];
-      lines.push(`- ${id} #${s.n} ${s.outcome}${s.lowered.length ? `, lowered ${s.lowered.map((l) => `${l.key.split("|").slice(1).join(" ")} ${l.from} -> ${l.to} (${l.set_by})`).join("; ")}` : ""}: \`${cmd?.run ?? ""}\`${cmd?.refused ? ` (refused: ${cmd.refused})` : cmd?.exit !== undefined && cmd.exit !== 0 ? ` exit ${cmd.exit}: ${String(cmd.out ?? "").split("\n").pop()?.slice(0, 200)}` : ""}`);
+      lines.push(`- ${id} #${s.n} ${s.outcome}${s.lowered.length ? `, lowered ${s.lowered.map((l) => `${l.key.split("|").slice(1).join(" ")} ${l.from} -> ${l.to} (${l.set_by})`).join("; ")}` : ""}: \`${cmd?.run ?? ""}\`${cmd?.refused ? ` (refused: ${cmd.refused})` : cmd?.exit !== undefined && cmd.exit !== 0 ? ` exit ${cmd.exit}: ${reason(cmd.out)}` : ""}`);
     }
     lines.push("");
   }
-  lines.push(`## Gate (${path.basename(thresholdsPath)})`, "", "```json", JSON.stringify(thresholds, null, 1), "```", "", findings.length ? `FAILED:\n${findings.map((f) => `- ${f}`).join("\n")}` : "PASSED", "");
+  const { about: _about, ...limits } = thresholds;
+  lines.push(`## Gate (${path.basename(thresholdsPath)})`, "", "```json", JSON.stringify(limits, null, 1), "```", "", findings.length ? `FAILED:\n${findings.map((f) => `- ${f}`).join("\n")}` : "PASSED", "");
   return lines.join("\n");
 }
 

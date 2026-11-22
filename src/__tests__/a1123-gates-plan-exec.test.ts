@@ -67,8 +67,9 @@ describe("commands the harness runs", () => {
     }
   });
 
-  it("quotes every token for the shell", () => {
-    expect(shellLine(["npm", "install", "vite@^4 || ^5"])).toBe('"npm" "install" "vite@^4 || ^5"');
+  it("quotes every argument for the shell and leaves the program bare", () => {
+    expect(shellLine(["npm", "install", "vite@^4 || ^5"])).toBe('npm "install" "vite@^4 || ^5"');
+    expect(() => shellLine(["./npm", "install"])).toThrow(/plain program name/);
   });
 });
 

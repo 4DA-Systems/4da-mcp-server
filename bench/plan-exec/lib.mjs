@@ -114,9 +114,15 @@ export function prepareCommand(argv, { yarnFlavor = "classic" } = {}) {
   return { argv: [...argv, ...added], added, env };
 }
 
-/** One argv as a shell line: every token double-quoted (SAFE_TOKEN holds nothing a shell expands inside double quotes). */
+/**
+ * One argv as a shell line: every argument double-quoted (SAFE_TOKEN holds nothing a shell
+ * expands inside double quotes). The program stays bare: it is a plain allowlisted word, and
+ * cmd.exe runs a quoted `.cmd` shim (npm, npx, corepack on Windows) with the wrong `%~dp0`.
+ */
 export function shellLine(argv) {
-  return argv.map((t) => `"${t}"`).join(" ");
+  const [program, ...args] = argv;
+  if (!/^[A-Za-z0-9._-]+$/.test(program)) throw new Error(`not a plain program name: ${JSON.stringify(program)}`);
+  return [program, ...args.map((t) => `"${t}"`)].join(" ");
 }
 
 /** The yarn classic refresh the planner gives as prose: "delete every yarn.lock entry that resolves to X ..., then run yarn install". */
