@@ -137,3 +137,12 @@ export function recordVerdicts(items: readonly CheckedItem[], options: { now?: D
   queue = queue.then(() => append(dir, text)).catch(() => undefined);
   return queue;
 }
+
+/**
+ * Settles once every ledger write started so far has finished (or failed). The server's
+ * shutdown waits on it, so an answer the client has already read is never left unrecorded
+ * because the host closed stdin right after it. Never rejects.
+ */
+export function ledgerWritesSettled(): Promise<void> {
+  return queue;
+}

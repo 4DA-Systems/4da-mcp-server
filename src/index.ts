@@ -72,6 +72,7 @@ import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { shutdown } from "./shutdown.js";
 import { closeServerCacheDb } from "./live/cache.js";
+import { ledgerWritesSettled } from "./check-ledger.js";
 import { systemDirectoryProblem } from "./tools/project-scope.js";
 import { MAX_DEPTH, MAX_PROJECTS } from "./project-tree.js";
 
@@ -501,6 +502,8 @@ function stopServer(reason: string, first?: () => Promise<void>): void {
         opened = null;
       },
       () => closeServerCacheDb(),
+      // A verdict already answered reaches the ledger the guard hook reads (check-ledger.ts).
+      () => ledgerWritesSettled(),
     ],
     exit: (code) => process.exit(code),
     log: (line) => console.error(line),
