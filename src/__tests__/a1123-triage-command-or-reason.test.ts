@@ -90,7 +90,7 @@ describe("upgrade_planner: a freshness upgrade in a uv project", () => {
       return new Response("{}", { status: 404 });
     });
     const intel = new LiveIntelligence(new Database(":memory:"));
-    const plan = (await executeUpgradePlanner(null, { project_path: dir }, intel)) as { recommendations: Array<{ package: string; action: string; commands: unknown[]; reasons: string[] }> };
+    const plan = (await executeUpgradePlanner(null as never, { project_path: dir }, intel)) as { recommendations: Array<{ package: string; action: string; commands: unknown[]; reasons: string[] }> };
     const httpx = plan.recommendations.find((r) => r.package === "httpx");
     expect(httpx, JSON.stringify(plan).slice(0, 800)).toBeDefined();
     for (const r of plan.recommendations) {
