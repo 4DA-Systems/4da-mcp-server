@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { FourDADatabase } from "../db.js";
 import { NEWEST_TESTED_APP, OLDEST_SUPPORTED_APP, SUPPORTED_PLAN_FORMATS } from "../app-compat.js";
+import { maxOf } from "../array-utils.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
 import { inEcosystemForm } from "../live/version-compare.js";
@@ -115,7 +116,7 @@ function advisoryAgeProblem(age: { hours: number | null; since: string | null })
 /** Why a stored plan in an unknown format cannot be read, naming both versions and the side to update. */
 export function planFormatNote(found: unknown): string {
   const formats = `this server reads plan formats ${SUPPORTED_PLAN_FORMATS.join(" and ")} (${OLDEST_SUPPORTED_APP.release} through ${NEWEST_TESTED_APP.release})`;
-  if (typeof found === "number" && found > Math.max(...SUPPORTED_PLAN_FORMATS)) {
+  if (typeof found === "number" && found > maxOf(SUPPORTED_PLAN_FORMATS)) {
     return `The 4DA app stored its plan in format ${found} and ${formats}: the app is newer than this server, so update @4da/mcp-server to compare them.`;
   }
   if (typeof found === "number") {
