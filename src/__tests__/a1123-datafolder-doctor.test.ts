@@ -20,6 +20,8 @@ import { serverEntry } from "./helpers/stdio-session.js";
 
 const ENV = ["FOURDA_MCP_HOME", "FOURDA_DB_PATH", "FOURDA_DATA_DIR", "APPDATA", "XDG_DATA_HOME", "HOME"] as const;
 const sha = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+/** The colour codes --doctor prints around its icons. */
+const ANSI_COLOUR = new RegExp(`${String.fromCharCode(27)}\\[\\d+m`, "g");
 let saved: Record<string, string | undefined>;
 let base: string;
 let home: string;
@@ -135,7 +137,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("--doctor through the built server"
     const childEnv: NodeJS.ProcessEnv = { ...process.env, FOURDA_OFFLINE: "1", HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", ...env };
     delete childEnv.FOURDA_DB_PATH;
     const r = spawnSync(process.execPath, [serverEntry, "--doctor"], { cwd: base, env: childEnv, encoding: "utf8", timeout: 120_000 });
-    return { status: r.status, text: (r.stdout + r.stderr).replace(/\x1b\[\d+m/g, "") };
+    return { status: r.status, text: (r.stdout + r.stderr).replace(ANSI_COLOUR, "") };
   };
 
   it("names the data folder, the own store and the cache on a fresh folder", () => {
