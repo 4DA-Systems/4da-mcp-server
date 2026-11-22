@@ -54,6 +54,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
+import { recordVerdicts } from "../check-ledger.js";
 import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
 import type { Verdict } from "./dependency-check-signals.js";
@@ -155,9 +156,15 @@ export const dependencyCheckTool = {
   },
 };
 
-/** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
+/**
+ * The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`).
+ * Each final verdict also goes to the local check ledger (check-ledger.ts), unawaited: the answer
+ * never waits on it or changes with it.
+ */
 export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
-  return shapeDependencyCheck(await executeDependencyCheck(db, params, liveIntel), params.response_format);
+  const answer = await executeDependencyCheck(db, params, liveIntel);
+  void recordVerdicts(answer.results);
+  return shapeDependencyCheck(answer, params.response_format);
 }
 
 export async function executeDependencyCheck(
