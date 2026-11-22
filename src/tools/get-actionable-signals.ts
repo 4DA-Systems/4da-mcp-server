@@ -18,6 +18,7 @@ import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { adviceFor, scanAdvice } from "./scan-advice.js";
 import { normalizeStoredPriority, type SignalPriority, type SignalType } from "./signal-classifier.js";
 import type { ScanStatus } from "./what-should-i-know.js";
+import { hoursText, type FeedWindow } from "./get-relevant-content.js";
 import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
 
 // The priority vocabulary lives in signal-classifier.ts; re-exported for existing importers.
@@ -58,6 +59,11 @@ This project's own vulnerabilities come from its vulnerability scan, which
 the call starts and waits for when none has run in this session; \`scan\`
 says whether it completed, and when it did not, \`note\` starts NOT CHECKED
 (an empty list is then not a clean result).
+
+since_hours, when you pass it, is never widened: \`note\` says when nothing in
+the feed matched in that window. The default 48 hours is widened to 168 and
+then 720 when empty, and \`window\` ({ requested_hours, used_hours, widened })
+and \`note\` say so. Live findings are not windowed.
 
 Use this to get prioritized, actionable intelligence from 4DA's feed.`,
   inputSchema: {
@@ -112,6 +118,8 @@ export interface SignalsScan {
 
 /** Widest window a caller may ask for: 30 days. */
 const MAX_SINCE_HOURS = 720;
+/** The window when the caller passes none; it is widened when it holds nothing, and the answer says so. */
+const DEFAULT_SINCE_HOURS = 48;
 /** Windows past this reach rows the current scoring pipeline may not have re-scored. */
 const DEEP_WINDOW_HOURS = 168;
 /** How long a call waits for the project's scan when none has run yet (bounded by the call's budget). */
@@ -308,9 +316,12 @@ export async function executeGetActionableSignals(
   db: FourDADatabase,
   params: GetActionableSignalsParams,
   liveIntel: SignalsLiveIntel | null = getLiveIntelligence(),
-): Promise<{ signals: ClassifiedSignal[]; total: number; summary: Record<string, number>; scan: SignalsScan; note?: string }> {
+): Promise<{ signals: ClassifiedSignal[]; total: number; summary: Record<string, number>; scan: SignalsScan; window?: FeedWindow; note?: string }> {
   const limit = Math.max(1, Math.min(100, params.limit ?? 20));
-  const sinceHours = Math.max(1, Math.min(MAX_SINCE_HOURS, params.since_hours ?? 48));
+  // A window the caller passes is never widened; the default one is, and the answer says so.
+  const asked = typeof params.since_hours === "number" && Number.isFinite(params.since_hours);
+  const requestedHours = asked ? params.since_hours! : DEFAULT_SINCE_HOURS;
+  const sinceHours = Math.max(1, Math.min(MAX_SINCE_HOURS, requestedHours));
 
   // Get items from DB (low min score to get more items). A signal_type filter
   // is pushed into the read as well: the general read is capped at the top
@@ -327,19 +338,24 @@ export async function executeGetActionableSignals(
     return [...stored, ...general.filter((item) => !seen.has(item.id))];
   };
 
-  // Try progressively wider time windows if no items found. A window wider
-  // than seven days reaches the stale-epoch tail, so it carries the same
-  // current-pipeline-version guard as the deep fallback below.
+  // The default window only: progressively wider when it holds nothing. A window wider than
+  // seven days reaches the stale-epoch tail, so it carries the same current-pipeline-version
+  // guard as the deep fallback below.
   let items = fetchItems(0.1, sinceHours, sinceHours > DEEP_WINDOW_HOURS);
-  if (items.length === 0 && sinceHours < 168) {
-    items = fetchItems(0.1, 168, false); // Try 7 days
+  let usedHours = sinceHours;
+  let anyScore = false;
+  if (!asked && items.length === 0 && sinceHours < DEEP_WINDOW_HOURS) {
+    items = fetchItems(0.1, DEEP_WINDOW_HOURS, false); // Try 7 days
+    usedHours = DEEP_WINDOW_HOURS;
   }
-  if (items.length === 0) {
+  if (!asked && items.length === 0) {
     // Deep 30-day/any-score fallback reaches the stale-epoch tail after a
     // pipeline-version bump. This path trusts stored signal_type/signal_priority
     // verbatim (confidence 0.90 below), so it MUST only see current-version
     // rows — stale persisted signals are claims the live brain no longer makes.
-    items = fetchItems(0.0, 720, true);
+    items = fetchItems(0.0, MAX_SINCE_HOURS, true);
+    usedHours = MAX_SINCE_HOURS;
+    anyScore = true;
   }
 
   const signals: ClassifiedSignal[] = [];
@@ -483,15 +499,33 @@ export async function executeGetActionableSignals(
   }
 
   // The scan's state first: a missing or partial scan is said before anything else.
+  const window: FeedWindow = { requested_hours: requestedHours, used_hours: usedHours, widened: usedHours > sinceHours };
+  const windowNote = feedWindowNote(window, sinceHours, signals.filter((s) => s.source_type !== "osv_live").length, anyScore, asked);
   const notes = [
     scanNote,
-    signals.length === 0 && items.length === 0 ? "No source items in the database. Run the 4DA desktop app to fetch content, or use vulnerability_scan to check dependencies directly." : null,
+    windowNote,
+    !asked && signals.length === 0 && items.length === 0 ? "No source items in the database. Run the 4DA desktop app to fetch content, or use vulnerability_scan to check dependencies directly." : null,
   ].filter((n): n is string => n !== null);
   return {
     signals: signals.slice(0, limit),
     total: signals.length,
     summary,
     scan: scanBlock,
+    ...(windowNote ? { window } : {}),
     ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
   };
+}
+
+/** What the answer says about the feed's window, or null when the window asked for answered. */
+function feedWindowNote(window: FeedWindow, sinceHours: number, feedSignals: number, anyScore: boolean, asked: boolean): string | null {
+  const parts: string[] = [];
+  if (window.requested_hours > sinceHours) parts.push(`since_hours is at most ${MAX_SINCE_HOURS}, so the 4DA feed's last ${hoursText(sinceHours)} were read`);
+  if (window.widened) {
+    parts.push(
+      `The 4DA feed had nothing in the last ${hoursText(sinceHours)}, so the default window was widened to the last ${hoursText(window.used_hours)}${anyScore ? " at any relevance score" : ""}${feedSignals === 0 ? ", and nothing matched there either" : ": each feed signal's discovered_ago says how old it is"}`,
+    );
+  } else if (asked && feedSignals === 0) {
+    parts.push(`Nothing in the 4DA feed matched in the last ${hoursText(sinceHours)}; the window was not widened (omit since_hours to let it widen, or pass a larger one)`);
+  }
+  return parts.length > 0 ? `${parts.join(". ")}. This project's live findings are not windowed.` : null;
 }

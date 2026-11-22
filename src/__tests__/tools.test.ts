@@ -545,7 +545,8 @@ describe("4DA MCP Tool Handlers", () => {
         .prepare("UPDATE source_items SET relevance_score = 0.94, scored_pipeline_version = 16 WHERE id = ?")
         .run(stale);
 
-      const result = executeGetRelevantContent(db, { min_score: 0.5, since_hours: 24, limit: 50 });
+      // The default window: only a window the caller did not pass is widened to the deep fallback.
+      const result = executeGetRelevantContent(db, { min_score: 0.5, limit: 50 });
       const ids = result.map((r) => r.id);
       expect(ids).toContain(current);
       expect(ids).not.toContain(stale);
@@ -707,7 +708,8 @@ describe("4DA MCP Tool Handlers", () => {
         )
         .run(current);
 
-      const { signals } = await executeGetActionableSignals(db, { since_hours: 24, limit: 50 });
+      // The default window: only a window the caller did not pass is widened to the deep fallback.
+      const { signals } = await executeGetActionableSignals(db, { limit: 50 });
       const ids = signals.map((s) => s.id);
       expect(ids).toContain(current);
       expect(ids).not.toContain(stale);
