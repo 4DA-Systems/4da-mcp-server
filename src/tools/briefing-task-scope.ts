@@ -15,10 +15,11 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
-import { isActionableVulnerability } from "../live/maintenance.js";
+import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { collapseAliases } from "./vulnerability-scan-format.js";
 import { compareVersions } from "../live/version-compare.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 
 /** A dependency the task names, with every installed copy. */
 export interface TaskPackage {
@@ -99,8 +100,14 @@ export function detectTaskPackages(
       const window = [...tokens.slice(Math.max(0, i - 2), i), ...tokens.slice(i + 1, i + 3)];
       if (!window.some((w) => QUALIFIERS.test(w))) return;
     }
-    const key = `${matches[0].ecosystem}\0${matches[0].name}`;
-    if (!found.has(key)) found.set(key, { deps: matches, at: i });
+    // One package per ecosystem and name: jsonwebtoken on crates.io and jsonwebtoken on npm are two
+    // packages, each with its own copies (one row of both read `installed: ["11.1.0", "9.0.3"]`).
+    for (const dep of matches) {
+      const key = `${dep.ecosystem}\0${dep.name}`;
+      const entry = found.get(key);
+      if (!entry) found.set(key, { deps: [dep], at: i });
+      else if (entry.at === i) entry.deps.push(dep);
+    }
   });
 
   const packages = [...found.values()].map(({ deps: copies, at }) => {
@@ -118,6 +125,12 @@ export function detectTaskPackages(
   });
   packages.sort((a, b) => Number(b.direct) - Number(a.direct));
   return packages.slice(0, limit);
+}
+
+/** A package's name as a sentence says it: with its ecosystem when another ecosystem's package in `all` has the same name. */
+export function packageLabel(pkg: { name: string; ecosystem: string }, all: ReadonlyArray<{ name: string; ecosystem: string }>): string {
+  const twin = all.some((p) => p.ecosystem !== pkg.ecosystem && p.name.toLowerCase() === pkg.name.toLowerCase());
+  return twin ? `${pkg.name} (${pkg.ecosystem})` : pkg.name;
 }
 
 /** Words after a name that make it a family: "tauri plugins", "@tauri-apps packages". */
@@ -234,9 +247,23 @@ export function advisoriesFor(pkg: TaskPackage, vulns: VulnerabilityEntry[]) {
       installed: v.currentVersion,
       severity: presentedSeverity(v),
       fixed_version: v.fixedVersion,
-      summary: v.summary.length > 160 ? `${v.summary.slice(0, 157)}...` : v.summary,
+      // OSV.dev's text: one line, capped.
+      summary: quoteThirdParty(v.summary, 160),
     }))
     .sort((a, b) => rank[b.severity] - rank[a.severity]);
+}
+
+/**
+ * The maintenance notices ("X is unmaintained") on the installed copies of one package that this
+ * host builds: listed apart from its vulnerabilities, as the scan lists them, never as an
+ * advisory with no fix.
+ */
+export function maintenanceNoticesFor(pkg: TaskPackage, vulns: VulnerabilityEntry[]): Array<{ id: string; installed: string; summary: string }> {
+  return collapseAliases(vulns.filter((v) => v.package === pkg.name && v.ecosystem === pkg.ecosystem && v.platformActive !== false && isMaintenanceNotice(v))).map((v) => ({
+    id: v.vulnId,
+    installed: v.currentVersion,
+    summary: quoteThirdParty(v.summary, 160),
+  }));
 }
 
 const RELEASE_SOURCES: Record<string, { source: string; prefix: string }> = {

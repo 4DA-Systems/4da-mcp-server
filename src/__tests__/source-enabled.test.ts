@@ -104,9 +104,9 @@ describe("turned-off sources (sources.enabled = 0)", () => {
     expect(payload.sources_note).toMatch(/turned off/);
   });
 
-  it("get_actionable_signals leaves them out", () => {
+  it("get_actionable_signals leaves them out", async () => {
     const { db } = appDb();
-    const out = executeGetActionableSignals(db, {}, null);
+    const out = await executeGetActionableSignals(db, {}, null);
     expect(out.signals.length).toBeGreaterThan(0);
     expect(out.signals.some((s) => s.source_type === "hackernews")).toBe(false);
   });

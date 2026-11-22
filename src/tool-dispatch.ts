@@ -19,7 +19,7 @@ import { withRegistryQuotes, withUntrustedTextNote } from "./untrusted-text.js";
 import { TOOL_REGISTRY } from "./schema-registry.js";
 
 import {
-  executeGetRelevantContent,
+  getRelevantContentAnswer,
   executeGetContext,
   executeRecordFeedback,
   executeGetActionableSignals,
@@ -61,7 +61,7 @@ const DISPATCH_MAP: Record<string, ToolExecutor> = {
   what_should_i_know: executeWhatShouldIKnow,
   ecosystem_pulse: (db, params) => executeEcosystemPulse(db, params, getLiveIntelligence()),
   get_context: async (db, params) => withUpdateNotice(executeGetContext(db, params), getLiveIntelligence()),
-  get_relevant_content: executeGetRelevantContent,
+  get_relevant_content: getRelevantContentAnswer,
   get_actionable_signals: executeGetActionableSignals,
   knowledge_gaps: (db, params) => executeKnowledgeGaps(db, params, getLiveIntelligence()),
   record_feedback: executeRecordFeedback,

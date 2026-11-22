@@ -9,12 +9,16 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
-import type { VulnerabilityEntry } from "../live/types.js";
+import type { VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
+import { LOOKUPS_DISABLED, vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { presentedSeverity, scopeAdjustmentReason } from "../live/severity-scope.js";
 import { getLiveIntelligence } from "../live-singleton.js";
-import { driftAction } from "./install-drift-notes.js";
+import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
+import { adviceFor, FEED_MAINTENANCE_ACTION, maintenanceAction, scanAdvice } from "./scan-advice.js";
 import { normalizeStoredPriority, type SignalPriority, type SignalType } from "./signal-classifier.js";
+import type { ScanStatus } from "./what-should-i-know.js";
+import { hoursText, type FeedWindow } from "./get-relevant-content.js";
 import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
 
 // The priority vocabulary lives in signal-classifier.ts; re-exported for existing importers.
@@ -50,6 +54,16 @@ Categorizes items into signal types: security_alert, breaking_change,
 tool_discovery, tech_trend, learning, competitive_intel.
 Each signal has a priority level (critical/high/medium/low) based on
 signal type, relevance score, and tech stack match.
+
+This project's own vulnerabilities come from its vulnerability scan, which
+the call starts and waits for when none has run in this session; \`scan\`
+says whether it completed, and when it did not, \`note\` starts NOT CHECKED
+(an empty list is then not a clean result).
+
+since_hours, when you pass it, is never widened: \`note\` says when nothing in
+the feed matched in that window. The default 48 hours is widened to 168 and
+then 720 when empty, and \`window\` ({ requested_hours, used_hours, widened })
+and \`note\` say so. Live findings are not windowed.
 
 Use this to get prioritized, actionable intelligence from 4DA's feed.`,
   inputSchema: {
@@ -89,13 +103,75 @@ export interface GetActionableSignalsParams {
   since_hours?: number;
 }
 
-/** The slice of the live layer this tool reads; a stub suffices in tests. */
-export type SignalsLiveIntel = Pick<LiveIntelligence, "getVulnerabilities">;
+/**
+ * The slice of the live layer this tool reads; a stub suffices in tests. Without
+ * `ensureVulnerabilities` the stored scan is read as it is.
+ */
+export type SignalsLiveIntel = Pick<LiveIntelligence, "getVulnerabilities"> &
+  Partial<Pick<LiveIntelligence, "ensureVulnerabilities" | "isEnabled" | "getProjectRoot" | "getAuditDeps">>;
+
+/** What backed the live findings: the scan this answer read, and whether it is a complete one. */
+export interface SignalsScan {
+  status: ScanStatus;
+  scanned_at: string | null;
+}
 
 /** Widest window a caller may ask for: 30 days. */
 const MAX_SINCE_HOURS = 720;
+/** The window when the caller passes none; it is widened when it holds nothing, and the answer says so. */
+const DEFAULT_SINCE_HOURS = 48;
 /** Windows past this reach rows the current scoring pipeline may not have re-scored. */
 const DEEP_WINDOW_HOURS = 168;
+/** How long a call waits for the project's scan when none has run yet (bounded by the call's budget). */
+const SCAN_WAIT_MS = 60_000;
+/** Kept back from the call's budget for what follows the scan. */
+const SCAN_RESERVE_MS = 8_000;
+
+/**
+ * The project's vulnerability scan, started and awaited when none has run in this session: the
+ * feed rows alone are not this project's findings. `note` is set, starting NOT CHECKED, whenever
+ * the scan is missing or incomplete, so an empty list never reads as a clean project. With
+ * `start` false (no security signal asked for) nothing is looked up: the stored scan, if any, is read.
+ */
+async function projectScan(liveIntel: SignalsLiveIntel | null, start: boolean): Promise<{ scan: VulnerabilityScanResult | null; block: SignalsScan; note: string | null }> {
+  if (!start) {
+    const stored = liveIntel?.getVulnerabilities() ?? null;
+    const ready = stored !== null && stored.totalScanned > 0 && !stored.offline && !(stored.staleAnswers ?? 0);
+    return { scan: stored, block: { status: !liveIntel ? "disabled" : ready ? "ready" : "unavailable", scanned_at: stored?.scannedAt ?? null }, note: null };
+  }
+  if (!liveIntel) {
+    return {
+      scan: null,
+      block: { status: "disabled", scanned_at: null },
+      note: "NOT CHECKED: no live vulnerability layer is running (FOURDA_OFFLINE, or it was not initialised), so this project's dependencies were not scanned; the absence of live findings here is not a clean result.",
+    };
+  }
+  const enabled = liveIntel.isEnabled?.() ?? true;
+  const waitMs = withinCallBudget(SCAN_WAIT_MS, SCAN_RESERVE_MS);
+  let scan: VulnerabilityScanResult | null = null;
+  if (enabled && liveIntel.ensureVulnerabilities) {
+    try {
+      scan = await liveIntel.ensureVulnerabilities(liveIntel.getProjectRoot?.() ?? process.cwd(), waitMs, { includeDev: true });
+    } catch {
+      scan = null;
+    }
+  }
+  // A scan that could not complete is still read for what it found; the note says what it is not.
+  scan = scan ?? liveIntel.getVulnerabilities();
+  const ready = scan !== null && scan.totalScanned > 0 && !scan.offline && !(scan.staleAnswers ?? 0);
+  const block: SignalsScan = { status: !enabled ? "disabled" : ready ? "ready" : "unavailable", scanned_at: scan?.scannedAt ?? null };
+  const gap = vulnerabilityCoverage(scan, {
+    enabled,
+    expectedTotal: liveIntel.getAuditDeps?.().length ?? 0,
+    notLoaded: `${scanUnfinishedText(waitMs)}, or OSV.dev was unreachable`,
+  });
+  if (gap) return { scan, block, note: gap.note };
+  if (!enabled) return { scan, block, note: `NOT CHECKED: ${LOOKUPS_DISABLED}, so this project's dependencies were not scanned; the absence of live findings here is not a clean result.` };
+  if (scan && scan.totalScanned === 0) {
+    return { scan, block, note: "NOT CHECKED: no dependency version was read for this project (no lockfile the server reads), so nothing was scanned; the absence of live findings here is not a clean result. vulnerability_scan says what was found." };
+  }
+  return { scan, block, note: null };
+}
 
 // ============================================================================
 // Alias clustering for live vulnerabilities
@@ -186,9 +262,50 @@ function judgeVerdicts(db: FourDADatabase, ids: number[]): Map<number, number> {
   return out;
 }
 
+/** The advisory ids a feed row of an advisory source stands for: its source id, and the `[ID]` its title starts with. */
+function feedAdvisoryIds(item: { source_id?: string | null; title: string }): string[] {
+  const ids = [item.source_id ?? "", /^\[([^\]\s]+)\]/.exec(item.title)?.[1] ?? ""].map((id) => id.trim().toUpperCase()).filter(Boolean);
+  return [...new Set(ids)];
+}
+
+const GRADES: Record<string, SignalPriority> = { critical: "critical", high: "high", moderate: "medium", medium: "medium", low: "low" };
+
+/**
+ * The advisory's own grade in the app's copy of OSV.dev (`osv_advisories.severity_label`), the
+ * highest over its records, or null when that copy has none: then the row keeps its stored grade.
+ */
+function ownGrade(db: FourDADatabase, ids: string[]): SignalPriority | null {
+  if (ids.length === 0 || !db.hasColumn("osv_advisories", "severity_label") || !db.hasColumn("osv_advisories", "advisory_id")) return null;
+  const aliases = db.hasColumn("osv_advisories", "aliases");
+  const live = db.hasColumn("osv_advisories", "withdrawn_at") ? " AND withdrawn_at IS NULL" : "";
+  const rank: Record<SignalPriority, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+  let best: SignalPriority | null = null;
+  try {
+    const stmt = db
+      .getRawDb()
+      .prepare(`SELECT severity_label AS label FROM osv_advisories WHERE (upper(advisory_id) = ?${aliases ? " OR upper(aliases) LIKE ? ESCAPE '\\'" : ""})${live}`);
+    for (const id of ids) {
+      const rows = (aliases ? stmt.all(id, `%"${id.replace(/[\\%_]/g, "\\$&")}"%`) : stmt.all(id)) as Array<{ label: string | null }>;
+      for (const row of rows) {
+        const grade = GRADES[(row.label ?? "").toLowerCase()];
+        if (grade && (best === null || rank[grade] > rank[best])) best = grade;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return best;
+}
+
+/** What an agent can do with an advisory-source row the project's scan did not report. */
+function advisoryRowAction(scanReady: boolean): string {
+  return scanReady
+    ? "Advisory record not matched to any installed version this project's vulnerability scan read: it may concern another project the 4DA app tracks (vulnerability_scan with that project's project_path checks it)."
+    : "Advisory record, NOT CHECKED against this project's installed versions (its vulnerability scan did not complete; see note): run vulnerability_scan.";
+}
+
 /** What an agent can do with a signal of this type and source. */
 function actionFor(type: SignalType, source: string): string {
-  if (ADVISORY_SOURCES.has(source)) return "Advisory record: run vulnerability_scan to see whether your installed versions are affected.";
   if (source === "crates_io" || source === "npm_registry" || source === "pypi" || source === "go_modules") {
     return "New release of a dependency: call upgrade_impact for what changed before bumping.";
   }
@@ -201,13 +318,16 @@ function actionFor(type: SignalType, source: string): string {
 // Execution
 // ============================================================================
 
-export function executeGetActionableSignals(
+export async function executeGetActionableSignals(
   db: FourDADatabase,
   params: GetActionableSignalsParams,
   liveIntel: SignalsLiveIntel | null = getLiveIntelligence(),
-): { signals: ClassifiedSignal[]; total: number; summary: Record<string, number> } {
+): Promise<{ signals: ClassifiedSignal[]; total: number; summary: Record<string, number>; scan: SignalsScan; window?: FeedWindow; note?: string }> {
   const limit = Math.max(1, Math.min(100, params.limit ?? 20));
-  const sinceHours = Math.max(1, Math.min(MAX_SINCE_HOURS, params.since_hours ?? 48));
+  // A window the caller passes is never widened; the default one is, and the answer says so.
+  const asked = typeof params.since_hours === "number" && Number.isFinite(params.since_hours);
+  const requestedHours = asked ? params.since_hours! : DEFAULT_SINCE_HOURS;
+  const sinceHours = Math.max(1, Math.min(MAX_SINCE_HOURS, requestedHours));
 
   // Get items from DB (low min score to get more items). A signal_type filter
   // is pushed into the read as well: the general read is capped at the top
@@ -224,23 +344,34 @@ export function executeGetActionableSignals(
     return [...stored, ...general.filter((item) => !seen.has(item.id))];
   };
 
-  // Try progressively wider time windows if no items found. A window wider
-  // than seven days reaches the stale-epoch tail, so it carries the same
-  // current-pipeline-version guard as the deep fallback below.
+  // The default window only: progressively wider when it holds nothing. A window wider than
+  // seven days reaches the stale-epoch tail, so it carries the same current-pipeline-version
+  // guard as the deep fallback below.
   let items = fetchItems(0.1, sinceHours, sinceHours > DEEP_WINDOW_HOURS);
-  if (items.length === 0 && sinceHours < 168) {
-    items = fetchItems(0.1, 168, false); // Try 7 days
+  let usedHours = sinceHours;
+  let anyScore = false;
+  if (!asked && items.length === 0 && sinceHours < DEEP_WINDOW_HOURS) {
+    items = fetchItems(0.1, DEEP_WINDOW_HOURS, false); // Try 7 days
+    usedHours = DEEP_WINDOW_HOURS;
   }
-  if (items.length === 0) {
+  if (!asked && items.length === 0) {
     // Deep 30-day/any-score fallback reaches the stale-epoch tail after a
     // pipeline-version bump. This path trusts stored signal_type/signal_priority
     // verbatim (confidence 0.90 below), so it MUST only see current-version
     // rows — stale persisted signals are claims the live brain no longer makes.
-    items = fetchItems(0.0, 720, true);
+    items = fetchItems(0.0, MAX_SINCE_HOURS, true);
+    usedHours = MAX_SINCE_HOURS;
+    anyScore = true;
   }
 
   const signals: ClassifiedSignal[] = [];
   const verdicts = judgeVerdicts(db, items.map((item) => item.id));
+  // The project's scan first: a feed row about an advisory it found is that finding, reported once
+  // below at the scan's grade with the scan's instruction.
+  // Only a call that can show security signals needs the scan; another type looks nothing up.
+  const { scan: vulnResult, block: scanBlock, note: scanNote } = await projectScan(liveIntel, !params.signal_type || params.signal_type === "security_alert");
+  const clusters = vulnResult ? clusterVulnerabilities(vulnResult.vulnerabilities) : [];
+  const foundIds = new Set(clusters.flatMap((c) => c.ids.map((id) => id.toUpperCase())));
 
   for (const item of items) {
     // Only the pipeline's own classifications, and only when they can be
@@ -255,12 +386,20 @@ export function executeGetActionableSignals(
     if (verdict !== undefined ? verdict < 0.5 : !structured) continue;
 
     const storedType = item.signal_type as SignalType;
-    let priority = normalizeStoredPriority(item.signal_priority);
+    const advisoryRow = ADVISORY_SOURCES.has(item.source_type);
+    const advisoryIds = advisoryRow ? feedAdvisoryIds(item) : [];
+    if (advisoryIds.some((id) => foundIds.has(id))) continue;
+    // An advisory record is graded by the advisory's own grade where the app's copy of it knows
+    // one, not by the feed's stamp (RUSTSEC-2026-0461, CVSS 7.5, was stamped critical).
+    let priority = (advisoryRow ? ownGrade(db, advisoryIds) : null) ?? normalizeStoredPriority(item.signal_priority);
     // A headline about security is not an advisory against your versions:
     // never above medium unless it comes from an advisory database.
-    if (storedType === "security_alert" && !ADVISORY_SOURCES.has(item.source_type) && (priority === "critical" || priority === "high")) {
+    if (storedType === "security_alert" && !advisoryRow && (priority === "critical" || priority === "high")) {
       priority = "medium";
     }
+    // An advisory record that reads as a maintenance notice is one: low, as the scan's own are.
+    const notice = advisoryRow && isMaintenanceNotice({ summary: item.title });
+    if (notice) priority = "low";
 
     // Apply filters
     if (params.priority_filter && priority !== params.priority_filter) continue;
@@ -274,7 +413,11 @@ export function executeGetActionableSignals(
       relevance_score: item.relevance_score,
       signal_type: storedType,
       signal_priority: priority,
-      action: actionFor(storedType, item.source_type),
+      action: notice
+        ? `${FEED_MAINTENANCE_ACTION} ${scanBlock.status === "ready" ? "This project's vulnerability scan matched it to no installed version." : "NOT CHECKED against this project's installed versions (its vulnerability scan did not complete)."}`
+        : advisoryRow
+          ? advisoryRowAction(scanBlock.status === "ready")
+          : actionFor(storedType, item.source_type),
       triggers: [],
       // The judge's verdict when there is one; a structured row carries none.
       confidence: verdict ?? (structured ? 0.5 : 0),
@@ -284,10 +427,11 @@ export function executeGetActionableSignals(
 
   // Inject live vulnerability data as security_alert signals — one per
   // vulnerability (alias clusters), not one per OSV record.
-  const vulnResult = liveIntel?.getVulnerabilities() ?? null;
   if (vulnResult && vulnResult.vulnerabilities.length > 0) {
     if (!params.signal_type || params.signal_type === "security_alert") {
-      for (const { representative: vuln, ids } of clusterVulnerabilities(vulnResult.vulnerabilities)) {
+      // Each finding's instruction is the scan's for that package version (scan-advice.ts).
+      const advice = await scanAdvice(liveIntel, vulnResult);
+      for (const { representative: vuln, ids } of clusters) {
         // The grade every surface shares (AD-046; twin of the app's
         // `osv::identity::scope_adjusted_urgency`), not the raw advisory tier:
         // a transitive of unknown scope read "CRITICAL: Sandbox Breakout" here
@@ -300,14 +444,9 @@ export function executeGetActionableSignals(
           presented === "high" ? "high" :
           presented === "low" ? "low" : "medium";
         let relevance = presented === "critical" ? 1.0 : presented === "high" ? 0.9 : presented === "low" ? 0.5 : 0.7;
-        // An installed copy the lockfile does not pin is fixed by a reinstall,
-        // not an upgrade: the lockfile is already where it should be.
-        let action = vuln.installDriftOf
-          ? driftAction(vuln)
-          : vuln.fixedVersion
-            ? // The advisory's own fix, not checked against the package's other advisories here.
-              `Upgrade ${vuln.package}: the advisory names ${vuln.fixedVersion} as its fix, NOT CHECKED against ${vuln.package}'s other advisories (run dependency_check on a release before pinning it)`
-            : `Review ${vuln.package} — no fix version published`;
+        // An installed copy the lockfile does not pin is fixed by a reinstall, not an upgrade: the
+        // lockfile is already where it should be. Every other copy: the scan's verdict for it.
+        let action = adviceFor(advice, vuln);
         const adjusted = scopeAdjustmentReason(vuln);
         if (adjusted) {
           action += ` (the advisory rates it ${vuln.severity}; graded ${presented} as a ${adjusted})`;
@@ -323,13 +462,17 @@ export function executeGetActionableSignals(
         if (maintenance) {
           priority = "low";
           relevance = 0.3;
-          action = "Maintenance notice — no fix to apply";
+          action = maintenanceAction(vuln.package, vuln.currentVersion);
           label = "MAINTENANCE";
         }
         if (vuln.platformActive === false) {
           priority = "low";
           relevance = 0.3;
-          action = `Not built on this host — ${action}`;
+          // The scan gives no step for a copy this host never builds: none is needed here, and the
+          // checked fix for a build that compiles it is on the scan's platform_inactive_vulnerabilities row.
+          action = maintenance
+            ? `Not built on this host — ${action}`
+            : `Not built on this host${vuln.target ? ` (only for ${vuln.target})` : ""}: nothing to fix for this host. For a build that compiles it, vulnerability_scan's platform_inactive_vulnerabilities row gives the checked fix.`;
           // The title must agree with the priority: "MEDIUM: ... (glib@0.18.5)" at
           // priority low read as a medium issue on a Windows host that never builds glib.
           if (!maintenance) label = `NOT BUILT HERE (${presented})`;
@@ -339,7 +482,8 @@ export function executeGetActionableSignals(
 
         signals.push({
           id: -1,
-          title: `${label}: ${vuln.summary} (${vuln.package}@${vuln.currentVersion})`,
+          // OSV.dev's summary is third-party text: one line, capped, never raw in the title.
+          title: `${label}: ${quoteThirdParty(vuln.summary, HEADLINE_MAX)} (${vuln.package}@${vuln.currentVersion})`,
           url: vuln.references[0] || null,
           source_type: "osv_live",
           relevance_score: relevance,
@@ -368,10 +512,34 @@ export function executeGetActionableSignals(
     summary[s.signal_type] = (summary[s.signal_type] || 0) + 1;
   }
 
+  // The scan's state first: a missing or partial scan is said before anything else.
+  const window: FeedWindow = { requested_hours: requestedHours, used_hours: usedHours, widened: usedHours > sinceHours };
+  const windowNote = feedWindowNote(window, sinceHours, signals.filter((s) => s.source_type !== "osv_live").length, anyScore, asked);
+  const notes = [
+    scanNote,
+    windowNote,
+    !asked && signals.length === 0 && items.length === 0 ? "No source items in the database. Run the 4DA desktop app to fetch content, or use vulnerability_scan to check dependencies directly." : null,
+  ].filter((n): n is string => n !== null);
   return {
     signals: signals.slice(0, limit),
     total: signals.length,
     summary,
-    ...(signals.length === 0 && items.length === 0 ? { note: "No source items in the database. Run the 4DA desktop app to fetch content, or use vulnerability_scan to check dependencies directly." } : {}),
+    scan: scanBlock,
+    ...(windowNote ? { window } : {}),
+    ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
   };
+}
+
+/** What the answer says about the feed's window, or null when the window asked for answered. */
+function feedWindowNote(window: FeedWindow, sinceHours: number, feedSignals: number, anyScore: boolean, asked: boolean): string | null {
+  const parts: string[] = [];
+  if (window.requested_hours > sinceHours) parts.push(`since_hours is at most ${MAX_SINCE_HOURS}, so the 4DA feed's last ${hoursText(sinceHours)} were read`);
+  if (window.widened) {
+    parts.push(
+      `The 4DA feed had nothing in the last ${hoursText(sinceHours)}, so the default window was widened to the last ${hoursText(window.used_hours)}${anyScore ? " at any relevance score" : ""}${feedSignals === 0 ? ", and nothing matched there either" : ": each feed signal's discovered_ago says how old it is"}`,
+    );
+  } else if (asked && feedSignals === 0) {
+    parts.push(`Nothing in the 4DA feed matched in the last ${hoursText(sinceHours)}; the window was not widened (omit since_hours to let it widen, or pass a larger one)`);
+  }
+  return parts.length > 0 ? `${parts.join(". ")}. This project's live findings are not windowed.` : null;
 }

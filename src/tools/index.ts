@@ -52,6 +52,7 @@ export { getContextTool, executeGetContext } from "./get-context.js";
 export {
   getRelevantContentTool,
   executeGetRelevantContent,
+  getRelevantContentAnswer,
 } from "./get-relevant-content.js";
 
 export {
