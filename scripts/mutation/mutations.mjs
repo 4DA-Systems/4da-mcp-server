@@ -425,9 +425,8 @@ export const mutations = [
     intent: "the default (concise) dependency_check answer drops not_checked (private / time_budget / module_path) from each item",
     tests: ["src/__tests__/private-r7-layouts.test.ts", "src/__tests__/private-r8-layouts.test.ts", "src/__tests__/private-every-tool.test.ts"] },
   { id: "O6", area: "fail-closed", file: "src/tools/vulnerability-scan-format.ts",
-    find: "    ...(osvGap ? { summary: osvGap.note } : {}),",
-    // Keeps `summary` in the result type (the concise view reads it), so the mutant compiles.
-    replace: "    ...(osvGap ? { summary: undefined as unknown as string } : {}),",
+    find: "  const summary = [osvGap?.note, advisoryCriticalLine(active, osvGap !== null)]",
+    replace: "  const summary = [advisoryCriticalLine(active, osvGap !== null)]",
     intent: "vulnerability_scan no longer leads with the NOT CHECKED / STALE summary line when OSV.dev did not answer",
     tests: ["src/__tests__/robustness-r7.test.ts", "src/__tests__/osv-fail-closed.test.ts", "src/__tests__/call-budget-and-scope.test.ts"] },
   { id: "O7", area: "fail-closed", file: "src/tools/vulnerability-scan-format.ts",
