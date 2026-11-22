@@ -77,6 +77,7 @@ import { aimAtDeclaringMembers } from "./declaring-members.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
 import { pythonParentMove } from "./upgrade-planner-pyparent.js";
 import { withCargoFeatures } from "./upgrade-planner-cargo-features.js";
+import { withLeverHolds } from "./upgrade-planner-lever-holds.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { projectPythons } from "./dependency-check-python.js";
 
@@ -2305,7 +2306,9 @@ const RAISED_HOLDS_CONCURRENCY = 4;
 
 export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs = withinCallBudget(RECONCILE_BUDGET_MS, 500)): Promise<void> {
   await reconcileTargets(steps, inputs, liveIntel, budgetMs);
-  // The releases are final here: a Cargo upgrade whose target lacks a feature the manifest enables is not a command alone.
+  // The releases are final here: an npm lever release is judged by what it holds, and a Cargo
+  // upgrade whose target lacks a feature the manifest enables is not a command alone.
+  await withLeverHolds(steps, liveIntel, Date.now() + withinCallBudget(HELD_BUDGET_MS, 500));
   await withCargoFeatures(steps, liveIntel);
 }
 
@@ -2486,4 +2489,25 @@ export function overrideHint(format: LockfileFormat, name: string, target: strin
     case "cargo":
       return `Cargo cannot select a version outside the parent's requirement; point [patch.crates-io] ${name} at a fork or path that carries the fix`;
   }
+}
+
+/** Whether release `version` of a lever still brings its row's fix in; null when that is not known for this lever. */
+export function leverBringsAt(lever: ParentLever, version: string): boolean | null {
+  const admits = LEVER_ADMITS.get(lever);
+  return admits ? admits(version) !== null : null;
+}
+
+/**
+ * Re-render a parent upgrade with its levers at the releases in `lifts`, rewriting the step's words
+ * where they say it (as reconcileDirectTargets does). False, and nothing changed, when a lifted
+ * release no longer brings the fix in or the move was not rendered here.
+ */
+export function liftMove(step: FixPathStep, upgrade: ParentUpgrade, lifts: ReadonlyMap<string, string>): boolean {
+  const move = MOVES.get(upgrade);
+  if (!move) return false;
+  const after = move.render(lifts);
+  if (after === null) return false;
+  step.reasons = step.reasons.map((r) => r.split(move.text).join(after));
+  MOVES.set(upgrade, { text: after, render: move.render });
+  return true;
 }
