@@ -53,6 +53,7 @@ import type {
 } from "./types.js";
 
 import type { ProjectScanResult } from "./project-scanner.js";
+import { EVIDENCE_STRENGTH, groundedEvidenceClass, oneItemPerAdvisory } from "./feed-advisory-twins.js";
 import { dbRecoveryNote, readDbRecoveredMarker, readEngineBlockMarker } from "./freshness-markers.js";
 
 /**
@@ -1437,7 +1438,8 @@ export class FourDADatabase {
 
     const stmt = this.db.prepare(query);
     const fetched = stmt.all(...params) as Array<SourceItem & { relevance_score: number; content_type: string | null; signal_type: string | null; signal_priority: string | null; dep_match_count: number }>;
-    const items = dedupeByTitle(fetched).slice(0, limit);
+    // One item per advisory (the best-grounded of its twins) before near-duplicate titles collapse by score.
+    const items = dedupeByTitle(oneItemPerAdvisory(fetched, (item) => EVIDENCE_STRENGTH[groundedEvidenceClass(item)])).slice(0, limit);
 
     const now = Date.now();
     return items.map((item) => {
@@ -1454,12 +1456,7 @@ export class FourDADatabase {
 
       // Provenance: grounded (matched one of the user's installed deps) vs
       // semantic-only. A grounded security advisory is the OSV-verified gold tier.
-      const grounded = (item.dep_match_count ?? 0) > 0;
-      const evidence_class: RelevantItem["evidence_class"] = grounded
-        ? item.content_type === "security_advisory"
-          ? "osv_verified"
-          : "dependency_grounded"
-        : "semantic_only";
+      const evidence_class: RelevantItem["evidence_class"] = groundedEvidenceClass(item);
 
       return {
         id: item.id,
@@ -1556,9 +1553,11 @@ export class FourDADatabase {
       }
     }
 
-    return scoredItems
-      .sort((a, b) => b.relevance_score - a.relevance_score)
-      .slice(0, limit);
+    // Every item here is keyword_heuristic: of an advisory's twins the higher-scored is kept.
+    return oneItemPerAdvisory(
+      scoredItems.sort((a, b) => b.relevance_score - a.relevance_score),
+      () => 0,
+    ).slice(0, limit);
   }
 
   /**
