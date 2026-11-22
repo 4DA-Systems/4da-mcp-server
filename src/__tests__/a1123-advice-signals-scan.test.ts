@@ -56,6 +56,15 @@ describe("get_actionable_signals as the first call of a session", () => {
     expect(out.note).toMatch(/not a clean result/);
   });
 
+  it("a call for another signal type looks nothing up", async () => {
+    stubNetwork(net);
+    const li = await liveFor(dir);
+    const out = await executeGetActionableSignals(appDb().db, { signal_type: "breaking_change" }, li);
+    expect(net.asked).toEqual([]);
+    expect(out.scan.status).toBe("unavailable");
+    expect(li.getVulnerabilities()).toBeNull();
+  });
+
   it("says NOT CHECKED when there is no live layer at all", async () => {
     const out = await executeGetActionableSignals(appDb().db, {}, null);
     expect(out.scan.status).toBe("disabled");

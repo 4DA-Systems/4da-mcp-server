@@ -130,9 +130,15 @@ const SCAN_RESERVE_MS = 8_000;
 /**
  * The project's vulnerability scan, started and awaited when none has run in this session: the
  * feed rows alone are not this project's findings. `note` is set, starting NOT CHECKED, whenever
- * the scan is missing or incomplete, so an empty list never reads as a clean project.
+ * the scan is missing or incomplete, so an empty list never reads as a clean project. With
+ * `start` false (no security signal asked for) nothing is looked up: the stored scan, if any, is read.
  */
-async function projectScan(liveIntel: SignalsLiveIntel | null): Promise<{ scan: VulnerabilityScanResult | null; block: SignalsScan; note: string | null }> {
+async function projectScan(liveIntel: SignalsLiveIntel | null, start: boolean): Promise<{ scan: VulnerabilityScanResult | null; block: SignalsScan; note: string | null }> {
+  if (!start) {
+    const stored = liveIntel?.getVulnerabilities() ?? null;
+    const ready = stored !== null && stored.totalScanned > 0 && !stored.offline && !(stored.staleAnswers ?? 0);
+    return { scan: stored, block: { status: !liveIntel ? "disabled" : ready ? "ready" : "unavailable", scanned_at: stored?.scannedAt ?? null }, note: null };
+  }
   if (!liveIntel) {
     return {
       scan: null,
@@ -362,7 +368,8 @@ export async function executeGetActionableSignals(
   const verdicts = judgeVerdicts(db, items.map((item) => item.id));
   // The project's scan first: a feed row about an advisory it found is that finding, reported once
   // below at the scan's grade with the scan's instruction.
-  const { scan: vulnResult, block: scanBlock, note: scanNote } = await projectScan(liveIntel);
+  // Only a call that can show security signals needs the scan; another type looks nothing up.
+  const { scan: vulnResult, block: scanBlock, note: scanNote } = await projectScan(liveIntel, !params.signal_type || params.signal_type === "security_alert");
   const clusters = vulnResult ? clusterVulnerabilities(vulnResult.vulnerabilities) : [];
   const foundIds = new Set(clusters.flatMap((c) => c.ids.map((id) => id.toUpperCase())));
 
