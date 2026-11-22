@@ -43,6 +43,8 @@ export interface ItemResult {
   not_checked?: "private" | "module_path" | "time_budget";
   /** not_checked "module_path": the path the module declares, or the one the spelling most likely means. */
   canonical_module_path?: string;
+  /** Unknown because this server's own request limit held a registry read back: seconds until asking again can read it. */
+  retry_after_seconds?: number;
 }
 
 /** A validated request item. */

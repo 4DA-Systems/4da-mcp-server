@@ -485,6 +485,19 @@ export function checkSources(): { sources: string[]; sources_note?: string } {
   return { sources: recorded };
 }
 
+/** How a registry is named where this server's own request limit for it held items back. */
+const LIMITED_REGISTRY: Record<string, string> = { Go: "the Go proxy", npm: "the npm registry", "crates.io": "crates.io", PyPI: "PyPI" };
+
+/** The summary's opening for items this server's own request limit held back (retry_after_seconds), or "". */
+function ownLimitText(results: ItemResult[]): string {
+  const held = results.filter((r) => r.retry_after_seconds);
+  if (held.length === 0) return "";
+  const registries = [...new Set(held.map((r) => LIMITED_REGISTRY[r.ecosystem] ?? r.ecosystem))].join(" and ");
+  const after = Math.max(...held.map((r) => r.retry_after_seconds!));
+  const n = results.length;
+  return `NOT CHECKED: ${held.length} of ${n} item${n === 1 ? "" : "s"} could not be checked: this server's own request limit for ${registries} was reached (the registry was not asked and is not at fault). Call dependency_check again for ${held.length === 1 ? "it" : "them"} in ${after} s (retry_after_seconds). `;
+}
+
 function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string; timeBudget?: { unfinished: number; ms: number } }) {
   const counts = new Map<Verdict, number>();
   for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
@@ -492,9 +505,9 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
   const parts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
   return {
     checked_at: checkedAt,
-    summary: meta.timeBudget
+    summary: ownLimitText(results) + (meta.timeBudget
       ? `NOT CHECKED: ${meta.timeBudget.unfinished} of ${results.length} item${results.length === 1 ? "" : "s"} did not finish within ${secondsText(meta.timeBudget.ms)} (not_checked: "time_budget"): call dependency_check again for ${meta.timeBudget.unfinished === 1 ? "it" : "them"}; their lookups keep running and are cached. The other verdicts are final. ${summaryLine(results, parts)}`
-      : summaryLine(results, parts),
+      : summaryLine(results, parts)),
     results,
     _meta: {
       ...checkSources(),
