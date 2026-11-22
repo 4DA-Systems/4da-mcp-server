@@ -276,9 +276,9 @@ export interface RunOrder {
 /** The actions whose commands are the whole fix on this host (the ones the summary counts as fixed). */
 const FIX_ACTIONS = new Set(["upgrade_direct", "lockfile_refresh", "upgrade_parent", "reinstall"]);
 
-/** A row whose commands are its whole fix on this host: a fix action, or an override written as commands. */
+/** A row whose commands are its whole fix on this host: a fix action, or an override whose snippet is written as commands (not one whose only commands are a parent lever that leaves other paths). */
 const isRunnable = (opts: Pick<RunOrderOptions, "heldUnclean">) => (r: SequencedRow) =>
-  (FIX_ACTIONS.has(r.action) || (r.action === "override_or_replace" && r.commands.length > 0)) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null);
+  (FIX_ACTIONS.has(r.action) || (r.action === "override_or_replace" && r.breaking !== true && overrideCommandsOf(r).length > 0)) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null);
 
 /** A row left out because part of its fix is done by hand: a manifest or lockfile edit, an override, a lever with no command. */
 function isHandEdit(r: SequencedRow): boolean {

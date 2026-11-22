@@ -98,3 +98,23 @@ describe("what a command can write exactly", () => {
     expect(record(project({ name: "x" }), "yarn-berry", "child", ["par"])).toEqual([]);
   });
 });
+
+describe("an override row whose only commands are a parent's lever", () => {
+  it("is not in run_order: the lever covers some paths, the override is the fix, and it crosses a major (http-server cross-spawn 5.1.0)", async () => {
+    const { buildRunOrder } = await import("../tools/upgrade-plan-sequence.js");
+    const row = {
+      package: "cross-spawn",
+      ecosystem: "npm",
+      currentVersion: "5.1.0",
+      targetVersion: "6.0.6",
+      action: "override_or_replace",
+      breaking: true,
+      reasons: ["Transitive dependency: eslint 4.19.1 requires \"^5.1.0\". Force cross-spawn to 6.0.6: npm: add ..."],
+      commands: [{ dir: ".", run: 'npm install "eslint@^5.0.0"' }],
+      parentUpgrades: [{ parent: "eslint", levers: [{ name: "eslint", version: "4.19.1", to: "5.0.0", commands: [{ dir: ".", command: 'npm install "eslint@^5.0.0"' }] }] }],
+    };
+    const out = buildRunOrder({ rows: [row], totalRows: 1, heldUnclean: () => false });
+    expect(out.run_order).toEqual([]);
+    expect(out.run_order_note).toMatch(/1 row is a hand edit and is not in this script: cross-spawn 5\.1\.0/);
+  });
+});
