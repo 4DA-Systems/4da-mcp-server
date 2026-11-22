@@ -48,7 +48,6 @@ import { startHttpServer } from "./http-transport.js";
 import { runSetup } from "./setup.js";
 import { runDoctor } from "./doctor.js";
 import { exclusionNotes, scanProjectTree, treeResolutionGroups, type TreeDiscovery } from "./project-tree.js";
-import { IgnoreRules } from "./gitignore.js";
 import { LiveIntelligence } from "./live/index.js";
 import { setLiveIntelligence } from "./live-singleton.js";
 import { SERVER_INSTRUCTIONS } from "./server-instructions.js";
@@ -94,7 +93,6 @@ const SERVER_VERSION: string = (() => {
 import {
   createDatabase,
   DatabaseUnavailableError,
-  DEPENDENCY_GROUP_QUERY,
   FourDADatabase,
   isUnreadableDbError,
   unreadableDbMessage,
@@ -183,7 +181,7 @@ async function prepareInSteps(): Promise<void> {
   if (!db) finishInit(step, prepared);
 }
 
-/** The project tree of a standalone init, and whether the live layer already resolved it (resolveInSteps). */
+/** The project tree of an init, and whether the live layer already resolved it (resolveInSteps). */
 interface PreparedTree {
   cwd: string;
   tree: ReturnType<typeof projectTreeFor>;
@@ -191,15 +189,14 @@ interface PreparedTree {
 }
 
 /**
- * Standalone mode: the project tree, and its lockfiles resolved into `step.live` in steps
- * (initFromProjectTreeYielding), before the init is finished. The resolution was one synchronous
- * step of 2.3 s on a 150,000-entry pnpm-lock.yaml, and a `ping` sent during the first tool call
- * waited for all of it (pre-publish round 10, W11). A caller that needs the database meanwhile
- * (getDatabase) finishes the init synchronously; this one then stops at its next pause and
- * leaves the set to it (`db` is set, so prepareInSteps does not finish again).
+ * The project tree, and its lockfiles resolved into `step.live` in steps
+ * (initFromProjectTreeYielding), before the init is finished, with or without the app's database.
+ * The resolution was one synchronous step of 2.3 s on a 150,000-entry pnpm-lock.yaml, and a `ping`
+ * sent during the first tool call waited for all of it (pre-publish round 10, W11). A caller that
+ * needs the database meanwhile (getDatabase) finishes the init synchronously; this one then stops
+ * at its next pause and leaves the set to it (`db` is set, so prepareInSteps does not finish again).
  */
 async function resolveInSteps(step: { db: FourDADatabase; live: LiveIntelligence }): Promise<PreparedTree | null> {
-  if (!step.db.isStandalone) return null;
   const cwd = resolveProjectDir();
   const tree = projectTreeFor(cwd);
   if (tree.entries.length === 0) return { cwd, tree, resolved: false };
@@ -215,121 +212,50 @@ function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }, prepar
   liveIntel = step.live;
   setLiveIntelligence(liveIntel);
 
-  // Standalone mode: auto-populate from project scan.
-  // FOURDA_PROJECT_DIR overrides cwd for hosts where cwd is meaningless
-  // (Claude Desktop launches extension servers from an app directory, not
-  // the user's code) — the .mcpb bundle wires its directory picker to this.
-  if (db.isStandalone) {
-    const cwd = prepared?.cwd ?? resolveProjectDir();
-    // The root and every independently-locked project below it
-    // (project-tree.ts): a repo root's own lockfile is often not the only one.
-    const { entries: tree, discovery } = prepared?.tree ?? projectTreeFor(cwd);
-    if (tree.length === 0) {
-      // A system directory: nothing is scanned (projectTreeFor). The tools say so and ask for project_path.
-      liveIntel.initFromProjectTree(cwd, [], discovery);
-      return;
-    }
-    const scan = tree[0].scan;
-    db.populateFromScan(scan);
-    const groups = treeResolutionGroups(tree);
+  // The dependency inventory is the project on disk, with or without the desktop app's database:
+  // the root and every independently-locked project below it (project-tree.ts), and the walk's
+  // record of what it left out, which every tool's coverage note is built from. The app's
+  // `project_dependencies` rows are never the inventory: a sub-project it had not indexed vanished
+  // from every answer with no note, and a scan with the app attached carried no coverage at all.
+  // FOURDA_PROJECT_DIR overrides cwd for hosts where cwd is meaningless (Claude Desktop launches
+  // extension servers from an app directory, not the user's code); the .mcpb bundle wires its
+  // directory picker to it.
+  const cwd = prepared?.cwd ?? resolveProjectDir();
+  const { entries: tree, discovery } = prepared?.tree ?? projectTreeFor(cwd);
+  if (tree.length === 0) {
+    // A system directory: nothing is scanned (projectTreeFor). The tools say so and ask for project_path.
+    liveIntel.initFromProjectTree(cwd, [], discovery);
+    return;
+  }
+  const scan = tree[0].scan;
+  // The standalone store keeps the project's stack for get_context. The app's database is the
+  // user's own profile and is never written here.
+  if (db.isStandalone) db.populateFromScan(scan);
+  const groups = treeResolutionGroups(tree);
 
-    const detected = [
-      ...scan.languages,
-      ...scan.frameworks,
-    ].filter(Boolean);
+  const detected = [
+    ...scan.languages,
+    ...scan.frameworks,
+  ].filter(Boolean);
 
+  const mode = db.isStandalone ? "Standalone mode" : "4DA app database attached; dependencies are read from disk";
+  console.error(`[4DA] ${mode}: scanned ${scan.projectPath} (${tree.length} project${tree.length === 1 ? "" : "s"})`);
+  // Also with NO groups: the walk's report of what it found but does not read (pom.xml,
+  // build.gradle, test-fixture lockfiles) is what every tool's coverage note is built from
+  // (readiness audit H3). Already done, in steps, when the init came from a tool call (resolveInSteps).
+  if (!prepared?.resolved) liveIntel.initFromProjectTree(cwd, groups, discovery);
+  if (groups.length > 0) {
     console.error(
-      `[4DA] Standalone mode: scanned ${scan.projectPath} (${tree.length} project${tree.length === 1 ? "" : "s"})`
+      `[4DA]   Detected: ${detected.join(", ") || "lockfiles"} | ${scan.dependencies.length} deps, ${scan.devDependencies.length} dev deps at the root`
     );
-    // Initialize live intelligence with per-ecosystem resolved versions
-    // (targets carry platform-gated dep info so advisories can be flagged
-    // platform-relevant for the host). Also with NO groups: the walk's
-    // report of what it found but does not read (pom.xml, build.gradle,
-    // test-fixture lockfiles) is what every tool's coverage note is built
-    // from. Started inside spring-petclinic, 6.2.5 kept nothing and said
-    // "none of an unsupported one either" (readiness audit H3). Already done, in steps, when
-    // the init came from a tool call (resolveInSteps).
-    if (!prepared?.resolved) liveIntel.initFromProjectTree(cwd, groups, discovery);
-    if (groups.length > 0) {
-      console.error(
-        `[4DA]   Detected: ${detected.join(", ") || "lockfiles"} | ${scan.dependencies.length} deps, ${scan.devDependencies.length} dev deps at the root`
-      );
 
-      if (liveIntel.isEnabled()) {
-        // Nothing is sent at startup (audit 2026-11-11 A1 #7: `initialize` + `tools/list` alone
-        // sent every dependency name to OSV.dev). The first tool that needs the scan starts it.
-        console.error(`[4DA]   Live intelligence: enabled (OSV.dev); no lookup is made until a tool needs one.`);
-      }
-    } else {
-      console.error(`[4DA]   ${noSupportedProjectNote(cwd, discovery)}`);
+    if (liveIntel.isEnabled()) {
+      // Nothing is sent at startup (audit 2026-11-11 A1 #7: `initialize` + `tools/list` alone
+      // sent every dependency name to OSV.dev). The first tool that needs the scan starts it.
+      console.error(`[4DA]   Live intelligence: enabled (OSV.dev); no lookup is made until a tool needs one.`);
     }
   } else {
-    // Full 4DA database mode — resolve each dependency's version from its OWN
-    // manifest directory. project_dependencies stores a per-dependency
-    // project_path, and dependencies span multiple ecosystems and locations
-    // (Rust crates under src-tauri/, relay/, etc.; npm packages at the repo
-    // root and in sub-packages). Resolving everything against a single cwd
-    // silently dropped all Rust deps (no Cargo.lock at the repo root) and most
-    // npm deps living in sub-packages.
-    try {
-      const rawDb = db.getRawDb();
-      const rows = rawDb.prepare(DEPENDENCY_GROUP_QUERY).all() as Array<{ package_name: string; language: string; project_path: string; is_dev: number; is_direct: number }>;
-
-      // Scope to the active project root. Sibling projects tracked in the same
-      // database (the ACE engine indexes every local project) must not bleed
-      // into this project's vulnerability scan.
-      const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
-      const rootNorm = norm(resolveProjectDir());
-      // The app indexes every project it can see, including directories the
-      // repository ignores (4DA's victauri-gauntlet/ and cli/); their
-      // advisories are not this project's. Same rule as standalone mode.
-      const ignore = new IgnoreRules(resolveProjectDir());
-
-      const groups = new Map<string, { dir: string; language: string; deps: string[]; devDeps: string[] }>();
-      for (const row of rows) {
-        const projectPath = row.project_path || process.cwd();
-        const pp = norm(projectPath);
-        if (rootNorm && pp !== rootNorm && !pp.startsWith(`${rootNorm}/`)) continue;
-        if (pp.includes("/.claude/worktrees/") || pp.includes("/.codex/worktrees/")) continue;
-        if (rootNorm && ignore.ignoresDirectory(projectPath)) continue;
-        const language = row.language || "npm";
-        const key = `${projectPath}::${language}`;
-        let group = groups.get(key);
-        if (!group) {
-          group = { dir: projectPath, language, deps: [], devDeps: [] };
-          groups.set(key, group);
-        }
-        if (row.is_direct) {
-          (row.is_dev ? group.devDeps : group.deps).push(row.package_name);
-        }
-      }
-
-      if (groups.size > 0) {
-        liveIntel.initFromDependencyGroups([...groups.values()]);
-      } else {
-        // The app tracks nothing under this directory (it indexes the
-        // projects it was pointed at, not every directory a host starts the
-        // server in). Its tables say nothing about this project, so read it
-        // from disk as standalone mode does; never write the scan into the
-        // app's database. Without this every tool read the project as empty
-        // and the planner answered "0 steps" (audit 6.2.5 D-1).
-        const root = resolveProjectDir();
-        const { entries: tree, discovery } = projectTreeFor(root);
-        liveIntel.initFromProjectTree(root, treeResolutionGroups(tree), discovery);
-        console.error(`[4DA]   The 4DA app tracks no project at ${root}; reading its lockfiles directly.`);
-      }
-
-      // Nothing is looked up here: headlines are fetched only when ecosystem_pulse is called, and
-      // the vulnerability scan only when a tool needs it (what_should_i_know, upgrade_planner and
-      // dependency_health start and await it through ensureVulnerabilities, so the first briefing
-      // of a session still reads a scan, never an empty cache).
-    } catch (err) {
-      // Non-fatal — live intel just won't have version data — but log to stderr
-      // so a silent empty scan (e.g. project_dependencies schema drift) is
-      // diagnosable rather than looking like "no vulnerabilities".
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[4da] dependency-group init from 4DA DB failed (continuing without version data): ${msg}`);
-    }
+    console.error(`[4DA]   ${noSupportedProjectNote(cwd, discovery)}`);
   }
 }
 

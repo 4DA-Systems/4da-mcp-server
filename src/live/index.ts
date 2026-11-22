@@ -353,13 +353,12 @@ export class LiveIntelligence {
 
   /**
    * Initialize from dependency groups that each carry their own resolution
-   * directory. Used in 4DA database mode, where dependencies span multiple
-   * manifests in different locations (Rust crates under src-tauri/, relay/,
-   * etc.; npm packages at the repo root and in sub-packages). Each group
-   * resolves versions from its own lock file, so a single global cwd no longer
-   * silently drops every dependency whose manifest lives in a subdirectory.
-   * Deduplicates by ecosystem+name+version so a crate shared across workspaces
-   * is scanned once.
+   * directory, for a caller that already knows its groups (tests, harnesses).
+   * The server itself always initializes from the project-tree walk
+   * (initFromProjectTree), with or without the app's database. Each group
+   * resolves versions from its own lock file; dependencies are deduplicated by
+   * ecosystem+name+version so a crate shared across workspaces is scanned once.
+   * No walk record is kept, so coverage notes are absent.
    */
   initFromDependencyGroups(
     groups: Array<{ dir: string; language: string; deps: string[]; devDeps: string[] }>,
