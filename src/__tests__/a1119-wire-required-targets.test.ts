@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runWithCallBudget } from "../call-budget.js";
-import { MAX_REQUIRED_TARGETS, notExaminedCapText, withRequiredTargets } from "../live/required-targets.js";
+import { MAX_REQUIRED_TARGETS, notExaminedCapText, setRequiredTargetWarming, withRequiredTargets } from "../live/required-targets.js";
 import type { RequirementSources } from "../live/release-requirements.js";
 import type { FixTargetResult } from "../live/fix-paths.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
@@ -133,10 +133,12 @@ describe("the work is bounded per call", () => {
   it(`at most ${MAX_REQUIRED_TARGETS} releases per call, across calls of the helper; the rest say they were not examined`, async () => {
     const asked: string[] = [];
     const items = Array.from({ length: MAX_REQUIRED_TARGETS + 2 }, (_, i) => ({ key: `k${i}`, ecosystem: "Go", name: `example.com/m${i}`, clean: clean("v1.0.1") }));
+    // What the call itself asks: the releases past the cap are examined after it (a1123-planrows-required-targets.test.ts).
+    setRequiredTargetWarming(false);
     const [first, second] = await runWithCallBudget(Date.now(), async () => [
       await withRequiredTargets(sources(asked), query, items.slice(0, 6), Date.now() + 5_000),
       await withRequiredTargets(sources(asked), query, items.slice(6), Date.now() + 5_000),
-    ]);
+    ]).finally(() => setRequiredTargetWarming(true));
     expect(asked).toHaveLength(MAX_REQUIRED_TARGETS);
     expect(first.size).toBe(0);
     // Go: past the cap the target is kept, with "not examined" (requiresMinimumsUnchecked).
