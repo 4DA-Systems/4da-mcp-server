@@ -22,16 +22,21 @@
  *   dependencies, 0 vulnerable" while backend/package-lock.json held 750
  *   packages and 171 advisories);
  * - a dot-directory is an ordinary directory (`.github/actions/x`,
- *   `.design-system`): scanned, unless it is one of the kinds below;
+ *   `.design-system`, `.vscode/extensions/x`): scanned, unless it is one of
+ *   the kinds below; so is `build/`, `dist/` or `out/` that the repository
+ *   does not ignore (microsoft/vscode's `build/npm/gyp/`);
  * - a directory .gitignore excludes is not scanned (it is as often a scratch
  *   clone or a sibling tool as the project's own code, and its advisories
  *   would be reported as the project's), but every lockfile in it is listed
  *   by path (`discovery.skipped`, reason `gitignored_directory`);
- * - directories of installed code, build output, caches, version-control
- *   data and tool state (SKIP_DIRS) are never entered: what they hold is a
- *   copy of something else. Those of them whose name is also an ordinary
- *   folder name (`build`, `dist`, `vendor`...) get one look, and a lockfile
- *   sitting directly in one is listed (reason `output_directory`);
+ * - directories of installed code, a tool's build output or cache, and
+ *   editor or agent state (EXCLUDED_DIRS) are never scanned: what they hold
+ *   is a copy of something else. One the repository does not ignore is
+ *   searched, and every lockfile in it is listed (reason
+ *   `excluded_directory`); one it ignores is left out as it says, except that
+ *   a lockfile sitting directly in an ignored `vendor/`, `target/` or `venv/`
+ *   is listed (reason `output_directory`). Version-control data is never
+ *   entered;
  * - test-fixture directories are counted, not scanned (FIXTURE_DIRS);
  * - a manifest with no lockfile beside it, and which no lockfile above
  *   holds as a workspace member, is listed (`unlockedManifests`): its
@@ -93,31 +98,45 @@ const LOCK_ECOSYSTEM: Record<string, string> = {
 };
 
 /**
- * Directories never entered. Each holds a copy of something that is not this
- * project's own dependency set: installed code, build output, caches,
- * version-control data, or the state of an editor or agent (extensions, and
- * worktree copies of whole repositories: 4DA's `.claude/worktrees` held 55).
+ * Directories excluded by their name: never scanned. Each holds a copy of
+ * something that is not this project's own dependency set: installed code, a
+ * tool's build output or cache, or the state of an editor or agent (worktree
+ * copies of whole repositories: 4DA's `.claude/worktrees` held 55). One the
+ * repository does not ignore is searched (bounded), and every lockfile in it
+ * is listed (reason `excluded_directory`); one it ignores is left out as it
+ * says. Names that are as often a project's own folder (`build`, `dist`,
+ * `out`, `coverage`, `.vscode`, `.idea`) are not here: microsoft/vscode keeps
+ * real projects in `build/npm/gyp/`, `build/win32/` and `.vscode/extensions/*`.
  */
-const SKIP_DIRS = new Set([
+const EXCLUDED_DIRS = new Set([
   // installed code
   "node_modules", "bower_components", "jspm_packages", "site-packages", "vendor", "Pods",
   ".venv", "venv", ".tox", ".nox", ".eggs", "__pycache__", ".bundle",
-  // build output
-  "target", "dist", "build", "out", "coverage", ".next", ".nuxt", ".output", ".svelte-kit", ".turbo",
+  // a tool's build output
+  "target", ".next", ".nuxt", ".output", ".svelte-kit", ".turbo",
   ".parcel-cache", ".angular", ".vercel", ".netlify", ".serverless", ".docusaurus", ".expo", ".dart_tool", ".gradle", ".nx",
-  // version control and caches
-  ".git", ".hg", ".svn", ".cache", ".pnpm-store", ".yarn", ".npm", ".pnpm", ".bun", ".cargo", ".rustup",
+  // caches
+  ".cache", ".pnpm-store", ".yarn", ".npm", ".pnpm", ".bun", ".cargo", ".rustup",
   ".mypy_cache", ".pytest_cache", ".ruff_cache", ".terraform",
   // editor and agent state
-  ".claude", ".codex", ".cursor", ".worktrees", ".vscode", ".vscode-test", ".vscode-server", ".idea", ".vs",
+  ".claude", ".codex", ".cursor", ".worktrees", ".vscode-test", ".vscode-server",
 ]);
 
+/** Version-control data: no working files, so never entered or searched. */
+const VCS_DIRS = new Set([".git", ".hg", ".svn"]);
+
+/** Never walked as part of the project: EXCLUDED_DIRS and VCS_DIRS. */
+const isNeverWalked = (name: string) => EXCLUDED_DIRS.has(name) || VCS_DIRS.has(name);
+
 /**
- * SKIP_DIRS names that are also ordinary folder names: microsoft/vscode keeps
- * `build/package-lock.json`, a real project. They are still not entered, but a
- * lockfile sitting directly in one is listed, not passed over.
+ * EXCLUDED_DIRS names that are also ordinary folder names. When the repository
+ * ignores one, a lockfile sitting directly in it is still listed (reason
+ * `output_directory`).
  */
-const AMBIGUOUS_OUTPUT_DIRS = new Set(["build", "dist", "out", "vendor", "coverage", "target", "venv"]);
+const AMBIGUOUS_OUTPUT_DIRS = new Set(["vendor", "target", "venv"]);
+
+/** Directories searched inside directories excluded by name, a budget of its own (node_modules alone can hold tens of thousands). */
+export const MAX_EXCLUDED_WALK_DIRS = 2_000;
 
 /**
  * Directories whose lockfiles are test data, not the project's dependencies:
@@ -218,7 +237,7 @@ export interface ProjectTreeEntry {
  * Why a lockfile the walk found was not scanned: past a bound, inside a
  * directory .gitignore excludes, or directly inside a build-output directory.
  */
-export type SkipReason = "depth" | "project_limit" | "gitignored_directory" | "output_directory" | "merge_conflict";
+export type SkipReason = "depth" | "project_limit" | "gitignored_directory" | "output_directory" | "excluded_directory" | "merge_conflict";
 
 /** What the walk left out, so an answer can say it is partial. */
 export interface TreeDiscovery {
@@ -241,6 +260,8 @@ export interface TreeDiscovery {
   walkStopped?: "time_budget";
   /** True when the search inside gitignored directories stopped at MAX_IGNORED_WALK_DIRS. */
   ignoredWalkTruncated?: boolean;
+  /** True when the search inside directories excluded by name stopped at its bound (MAX_EXCLUDED_WALK_DIRS). */
+  excludedWalkTruncated?: boolean;
   /** Manifests and lockfiles of ecosystems this server does not read (the first MAX_LISTED_NOT_COVERED), relative to the root. */
   notCovered?: Array<{ path: string; ecosystem: string }>;
   /** Every such file found (`notCovered` may list fewer). */
@@ -537,7 +558,7 @@ function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: 
  */
 export function scanProjectTree(
   root: string,
-  limits: { maxDepth: number; maxProjects: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
+  limits: { maxDepth: number; maxProjects: number; maxExcludedDirs?: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
   options: { includeFixtures?: boolean } = {},
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
   const entries: ProjectTreeEntry[] = [{ dir: root, scan: scanCurrentProject(root) }];
@@ -549,6 +570,9 @@ export function scanProjectTree(
   let walkTruncated = false;
   let ignoredVisited = 0;
   let ignoredWalkTruncated = false;
+  const maxExcludedDirs = limits.maxExcludedDirs ?? MAX_EXCLUDED_WALK_DIRS;
+  let excludedVisited = 0;
+  let excludedWalkTruncated = false;
   const notCovered: Array<{ path: string; ecosystem: string }> = [];
   let notCoveredCount = 0;
   const fixtures = { count: 0, dirs: [] as string[] };
@@ -584,7 +608,7 @@ export function scanProjectTree(
   // Test-fixture lockfiles: counted, never scanned (unless asked for).
   const countFixtures = (dir: string, children: fs.Dirent[]) => {
     for (const child of children) {
-      if (!child.isDirectory() || SKIP_DIRS.has(child.name)) continue;
+      if (!child.isDirectory() || isNeverWalked(child.name)) continue;
       if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
@@ -612,16 +636,38 @@ export function scanProjectTree(
     for (const name of lockfilesIn(dir, children.map((c) => c.name))) noteSkipped(`${rel}/${name}`, "gitignored_directory");
     noteRegistryConfig(dir, children.map((c) => c.name));
     for (const child of children) {
-      if (!child.isDirectory() || SKIP_DIRS.has(child.name)) continue;
+      if (!child.isDirectory() || isNeverWalked(child.name)) continue;
       listIgnored(path.join(dir, child.name), `${rel}/${child.name}`);
       if (ignoredWalkTruncated || walkTruncated) return;
     }
   };
-  // A build-output name that may be an ordinary folder: one look, no descent.
+  // An excluded name that may be an ordinary folder, which the repository ignores: one look, no descent.
   const peekOutputDir = (dir: string, rel: string) => {
     const children = listing(dir);
     if (!children) return;
     for (const name of lockfilesIn(dir, children.filter((c) => c.isFile()).map((c) => c.name))) noteSkipped(`${rel}/${name}`, "output_directory");
+  };
+  // A directory excluded by its name that the repository does not ignore: not scanned, every lockfile in it named.
+  const listExcluded = (dir: string, rel: string) => {
+    if (budget.spent()) {
+      walkTruncated = true;
+      return;
+    }
+    if (++excludedVisited > maxExcludedDirs) {
+      excludedWalkTruncated = true;
+      return;
+    }
+    const children = listing(dir);
+    if (!children) return;
+    for (const name of lockfilesIn(dir, children.map((c) => c.name))) noteSkipped(`${rel}/${name}`, "excluded_directory");
+    for (const child of children) {
+      if (!child.isDirectory() || VCS_DIRS.has(child.name)) continue;
+      const childRel = `${rel}/${child.name}`;
+      // Excluded by its name and by the repository: left out as both say.
+      if (ignore.ignores(childRel, true)) continue;
+      listExcluded(path.join(dir, child.name), childRel);
+      if (excludedWalkTruncated || walkTruncated) return;
+    }
   };
   // The lockfiles above a directory: a manifest below is covered only by one it is a workspace member of (LockCover).
   const walk = (dir: string, rel: string, depth: number, children: fs.Dirent[], covers: LockCover[]) => {
@@ -629,8 +675,11 @@ export function scanProjectTree(
       if (!child.isDirectory()) continue;
       const childRel = rel ? `${rel}/${child.name}` : child.name;
       const sub = path.join(dir, child.name);
-      if (SKIP_DIRS.has(child.name)) {
-        if (AMBIGUOUS_OUTPUT_DIRS.has(child.name)) peekOutputDir(sub, childRel);
+      if (VCS_DIRS.has(child.name)) continue;
+      if (EXCLUDED_DIRS.has(child.name)) {
+        if (!ignore.ignores(childRel, true)) listExcluded(sub, childRel);
+        else if (AMBIGUOUS_OUTPUT_DIRS.has(child.name)) peekOutputDir(sub, childRel);
+        if (walkTruncated) return;
         continue;
       }
       if (++visited > MAX_WALK_DIRS || budget.spent()) {
@@ -695,6 +744,7 @@ export function scanProjectTree(
       walkTruncated,
       ...(budget.stopped ? { walkStopped: "time_budget" as const } : {}),
       ...(ignoredWalkTruncated ? { ignoredWalkTruncated } : {}),
+      ...(excludedWalkTruncated ? { excludedWalkTruncated } : {}),
       ...(notCoveredCount > 0 ? { notCovered, notCoveredCount } : {}),
       ...(fixtures.count > 0 ? { fixtures } : {}),
       ...(unlockedCount > 0 ? { unlockedManifests: unlocked, unlockedManifestsCount: unlockedCount } : {}),
@@ -845,6 +895,7 @@ const SKIP_WORDING: Array<[SkipReason, (d: TreeDiscovery) => string]> = [
   ["project_limit", (d) => `past the ${d.maxProjects}-project limit`],
   ["gitignored_directory", () => "in a directory .gitignore excludes"],
   ["output_directory", () => "directly inside a build-output directory"],
+  ["excluded_directory", () => "inside installed code, a tool's build output or cache, or an editor's or agent's state (node_modules, target, .venv, .claude ...), which is never scanned"],
 ];
 
 /** One sentence for an answer, or null when nothing was left out. */
@@ -854,7 +905,7 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
   // Files holding a merge conflict are worded with the lockfile problems (lockfileProblemNotes), once.
   const skippedCount = discovery.skippedCount - (discovery.mergeConflictCount ?? 0);
   const skipped = discovery.skipped.filter((s) => s.reason !== "merge_conflict");
-  if (skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && unlocked === 0) return null;
+  if (skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && !discovery.excludedWalkTruncated && unlocked === 0) return null;
   const parts: string[] = [];
   if (skippedCount > 0) {
     const why = SKIP_WORDING.filter(([reason]) => skipped.some((s) => s.reason === reason))
@@ -874,6 +925,9 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
   if (discovery.walkTruncated) parts.push(discovery.walkStopped ? walkBudgetNote() : `the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
   if (discovery.ignoredWalkTruncated) {
     parts.push(`the search of gitignored directories stopped after ${MAX_IGNORED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`);
+  }
+  if (discovery.excludedWalkTruncated) {
+    parts.push(`the search of directories excluded by name (node_modules, target, .venv ...) that .gitignore does not exclude stopped after ${MAX_EXCLUDED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`);
   }
   return `Partial scan: ${parts.join("; ")}.`;
 }
