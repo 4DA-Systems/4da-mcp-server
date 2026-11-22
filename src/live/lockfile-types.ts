@@ -139,6 +139,11 @@ export interface LockfileProblem {
   /** Set for a requirements include refused because it points outside the project (B-11): a policy, not damage. */
   refused?: true;
   /**
+   * Set when the file holds git merge-conflict markers: it was not read at all, and coverage lists
+   * it as not scanned (reason `merge_conflict`), never as unreadable or partial.
+   */
+  mergeConflict?: true;
+  /**
    * Set when the file was read whole but not compared with the package.json files that declare
    * its dependencies (a declared name with no entry may be a workspace member, and the member list
    * could not be read whole): not damage, and nothing in the file was left unread.

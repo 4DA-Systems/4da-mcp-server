@@ -31,7 +31,7 @@ import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, ty
 import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
 import { normalizePythonName } from "./lockfile-parsers-pygo.js";
-import type { TreeDiscovery } from "../project-tree.js";
+import { withMergeConflicts, type TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
@@ -346,9 +346,15 @@ export class LiveIntelligence {
     return this.groupResults.flatMap((r) => r.problems ?? []).filter((p) => !seen.has(key(p)) && (seen.add(key(p)), true));
   }
 
-  /** What the project-tree walk left out (lockfiles past its bounds); null when the set did not come from a walk. */
+  /**
+   * What the project-tree walk left out (lockfiles past its bounds), with every file the resolution
+   * found holding a merge conflict (reason `merge_conflict`); null when the set did not come from a
+   * walk and no file holds one.
+   */
   getDiscovery(): TreeDiscovery | null {
-    return this.discovery;
+    const conflicted = this.getLockfileProblems().filter((p) => p.mergeConflict);
+    if (conflicted.length === 0) return this.discovery;
+    return withMergeConflicts(this.discovery, conflicted, this.projectRoot ?? commonPathRoot(this.groupResults.map((r) => r.group.dir)) ?? process.cwd());
   }
 
   /**

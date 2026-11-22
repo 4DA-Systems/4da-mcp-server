@@ -58,16 +58,51 @@ export function decodeText(bytes: Buffer): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
+/** A line git writes into a file it could not merge: `<<<<<<< ours`, `=======`, `>>>>>>> theirs`. */
+const CONFLICT_LINE = /^(?:(<{7})(?=[ \t\r\n]|$)|(={7})(?=\r?$)|(>{7})(?=[ \t\r\n]|$))/gm;
+
+/**
+ * Whether `text` holds a git merge conflict: a `<<<<<<<` line, a `=======` line after it and a
+ * `>>>>>>>` line after that, each at the start of its line. One marker alone (a reStructuredText
+ * underline in a description) is not one. Linear in the text.
+ */
+export function hasMergeConflict(text: string): boolean {
+  if (!text.includes("<<<<<<<")) return false;
+  let stage = 0;
+  for (const match of text.matchAll(CONFLICT_LINE)) {
+    if (match[1] !== undefined) stage = 1;
+    else if (match[2] !== undefined) stage = stage === 1 ? 2 : stage;
+    else if (stage === 2) return true;
+  }
+  return false;
+}
+
+/** Thrown by readTextFile for a file that holds a merge conflict: neither side is known to be what is installed. */
+export class MergeConflictError extends Error {
+  constructor(readonly file: string) {
+    super(`${file} holds git merge-conflict markers`);
+    this.name = "MergeConflictError";
+  }
+}
+
+export function isMergeConflictError(error: unknown): error is MergeConflictError {
+  return error instanceof MergeConflictError;
+}
+
 /**
  * `fs.readFileSync(file, "utf-8")` for a lockfile or manifest: throws as it
- * does when the file cannot be read, and throws for a file over the size cap
- * (bounded-read.ts) before reading a byte of it. The one reader for these
- * files, so every caller gets both the encoding and the cap.
+ * does when the file cannot be read, throws for a file over the size cap
+ * (bounded-read.ts) before reading a byte of it, and throws MergeConflictError
+ * for a file that holds a merge conflict, so no reader takes one side of it.
+ * The one reader for these files, so every caller gets the encoding, the cap
+ * and the conflict check.
  */
 export function readTextFile(file: string): string {
   const size = oversize(file);
   if (size !== null) throw new Error(`${file} ${tooLargeText(size)}`);
-  return decodeText(fs.readFileSync(file));
+  const text = decodeText(fs.readFileSync(file));
+  if (hasMergeConflict(text)) throw new MergeConflictError(file);
+  return text;
 }
 
 /**

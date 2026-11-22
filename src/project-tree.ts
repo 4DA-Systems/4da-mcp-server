@@ -218,7 +218,7 @@ export interface ProjectTreeEntry {
  * Why a lockfile the walk found was not scanned: past a bound, inside a
  * directory .gitignore excludes, or directly inside a build-output directory.
  */
-export type SkipReason = "depth" | "project_limit" | "gitignored_directory" | "output_directory";
+export type SkipReason = "depth" | "project_limit" | "gitignored_directory" | "output_directory" | "merge_conflict";
 
 /** What the walk left out, so an answer can say it is partial. */
 export interface TreeDiscovery {
@@ -230,6 +230,11 @@ export interface TreeDiscovery {
   skipped: Array<{ path: string; reason: SkipReason }>;
   /** Every lockfile found but not scanned (`skipped` may list fewer). */
   skippedCount: number;
+  /**
+   * Of `skippedCount`, the files holding a merge conflict (reason `merge_conflict`, added by the
+   * live layer: withMergeConflicts). lockfileProblemNotes words them, so discoveryNote does not.
+   */
+  mergeConflictCount?: number;
   /** True when the walk itself stopped at MAX_WALK_DIRS: lockfiles beyond it were not even counted. */
   walkTruncated: boolean;
   /** Set when the walk stopped on its time budget rather than at MAX_WALK_DIRS (walk-budget.ts). */
@@ -719,26 +724,44 @@ export function discoveryFor(root: string): TreeDiscovery {
 }
 
 /** A lockfile problem as the notes read it (lockfile-types.ts LockfileProblem). */
-export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true };
+export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true; mergeConflict?: true };
 
 /**
  * The kinds, kept apart: a file that could not be read (UNREADABLE), one read
  * but not all of it (PARTIAL: entries skipped, `skipped`, audit L5; or
  * truncated or damaged, `partial`), a requirements include refused because it
  * points outside the project (`refused`, B-11), a second lockfile that
- * disagrees with the one that was read (`conflict`), and one read whole but not
- * compared with the manifests that declare its dependencies (`notCrossChecked`).
+ * disagrees with the one that was read (`conflict`), one read whole but not
+ * compared with the manifests that declare its dependencies (`notCrossChecked`),
+ * and one holding git merge-conflict markers, never read (`mergeConflict`,
+ * listed as not scanned rather than as unreadable).
  */
-export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[]; uncrossed: P[] } {
+export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[]; uncrossed: P[]; mergeConflicts: P[] } {
   const isPartial = (p: P) => Boolean(p.skipped) || p.partial === true;
-  const other = (p: P) => p.refused === true || p.conflict === true || p.notCrossChecked === true;
+  const other = (p: P) => p.refused === true || p.conflict === true || p.notCrossChecked === true || p.mergeConflict === true;
   return {
     unreadable: problems.filter((p) => !isPartial(p) && !other(p)),
     partial: problems.filter((p) => isPartial(p) && !other(p)),
-    refused: problems.filter((p) => p.refused === true),
-    conflicts: problems.filter((p) => p.conflict === true),
-    uncrossed: problems.filter((p) => p.notCrossChecked === true && !p.refused && !p.conflict),
+    refused: problems.filter((p) => p.refused === true && !p.mergeConflict),
+    conflicts: problems.filter((p) => p.conflict === true && !p.mergeConflict),
+    uncrossed: problems.filter((p) => p.notCrossChecked === true && !p.refused && !p.conflict && !p.mergeConflict),
+    mergeConflicts: problems.filter((p) => p.mergeConflict === true),
   };
+}
+
+/**
+ * The walk's report with the files the live layer found holding a merge conflict added to
+ * `skipped` (reason `merge_conflict`), paths relative to `root`: coverage lists them with the
+ * lockfiles left out, once each. A report with none is returned as it is.
+ */
+export function withMergeConflicts(discovery: TreeDiscovery | null, conflicted: LockfileProblemLike[], root: string): TreeDiscovery | null {
+  const rel = (file: string) => path.relative(root, file).replace(/\\/g, "/") || path.basename(file);
+  const known = new Set((discovery?.skipped ?? []).map((s) => s.path));
+  const added = [...new Set(conflicted.filter((p) => p.mergeConflict).map((p) => rel(p.file)))].filter((p) => !known.has(p));
+  if (added.length === 0) return discovery;
+  const base: TreeDiscovery = discovery ?? { projects: 0, maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS, skipped: [], skippedCount: 0, walkTruncated: false };
+  const skipped = [...added.map((p) => ({ path: p, reason: "merge_conflict" as const })), ...base.skipped].slice(0, Math.max(MAX_LISTED_SKIPS, added.length));
+  return { ...base, skipped, skippedCount: base.skippedCount + added.length, mergeConflictCount: (base.mergeConflictCount ?? 0) + added.length };
 }
 
 /** Whether `file` has a lockfile's name (not a manifest's, such as package.json or pyproject.toml). */
@@ -753,8 +776,15 @@ function isLockfileName(file: string): boolean {
  */
 export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (file: string) => string = (f) => f): string[] {
   const listed = (ps: LockfileProblemLike[]) => `${ps.slice(0, 3).map((p) => `${show(p.file)} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
-  const { unreadable, partial, refused, conflicts, uncrossed } = splitLockfileProblems(problems);
+  const { unreadable, partial, refused, conflicts, uncrossed, mergeConflicts } = splitLockfileProblems(problems);
   const notes: string[] = [];
+  if (mergeConflicts.length > 0) {
+    const n = mergeConflicts.length;
+    const files = `${mergeConflicts.slice(0, 3).map((p) => show(p.file)).join(", ")}${n > 3 ? ", ..." : ""}`;
+    notes.push(
+      `NOT CHECKED (merge conflict): ${n} file${n === 1 ? " holds" : "s hold"} git merge-conflict markers (${files}), so neither side was read and nothing ${n === 1 ? "it pins or declares" : "they pin or declare"} was checked: resolve the conflict (reinstall to regenerate a lockfile), then scan again.`,
+    );
+  }
   if (unreadable.length > 0) {
     // A manifest (package.json, pyproject.toml, ...) can be the file that could not be read: "lockfile" only when each one is.
     const kind = unreadable.every((p) => isLockfileName(p.file)) ? "lockfile" : "file";
@@ -821,15 +851,18 @@ const SKIP_WORDING: Array<[SkipReason, (d: TreeDiscovery) => string]> = [
 export function discoveryNote(discovery: TreeDiscovery | null): string | null {
   if (!discovery) return null;
   const unlocked = discovery.unlockedManifestsCount ?? 0;
-  if (discovery.skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && unlocked === 0) return null;
+  // Files holding a merge conflict are worded with the lockfile problems (lockfileProblemNotes), once.
+  const skippedCount = discovery.skippedCount - (discovery.mergeConflictCount ?? 0);
+  const skipped = discovery.skipped.filter((s) => s.reason !== "merge_conflict");
+  if (skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && unlocked === 0) return null;
   const parts: string[] = [];
-  if (discovery.skippedCount > 0) {
-    const why = SKIP_WORDING.filter(([reason]) => discovery.skipped.some((s) => s.reason === reason))
+  if (skippedCount > 0) {
+    const why = SKIP_WORDING.filter(([reason]) => skipped.some((s) => s.reason === reason))
       .map(([, words]) => words(discovery))
       .join(" or ");
-    const listed = discovery.skipped.slice(0, 5).map((s) => s.path).join(", ");
+    const listed = skipped.slice(0, 5).map((s) => s.path).join(", ");
     parts.push(
-      `${discovery.skippedCount} lockfile${discovery.skippedCount === 1 ? " was" : "s were"} found but NOT scanned (${why}): ${listed}${discovery.skippedCount > 5 ? ", ..." : ""}; pass project_path to scan one of them`,
+      `${skippedCount} lockfile${skippedCount === 1 ? " was" : "s were"} found but NOT scanned (${why}): ${listed}${skippedCount > 5 ? ", ..." : ""}; pass project_path to scan one of them`,
     );
   }
   if (unlocked > 0) {

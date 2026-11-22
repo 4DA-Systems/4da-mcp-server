@@ -260,8 +260,10 @@ export async function executeDependencyHealth(
   // (scoreCoverage), so a refusal that is permanent by design does not
   // withhold the score forever. ecosystem_filter narrows these too.
   const problems = liveIntel.getLockfileProblems().filter((p) => !params.ecosystem_filter || !p.ecosystem || p.ecosystem === params.ecosystem_filter);
-  const { unreadable, partial: partialReads, refused, conflicts, uncrossed } = splitLockfileProblems(problems);
-  const readGap = unreadable.length > 0 ? `NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")} This is not a complete result.` : null;
+  const { unreadable, partial: partialReads, refused, conflicts, uncrossed, mergeConflicts } = splitLockfileProblems(problems);
+  // A file holding a merge conflict was not read at all: the same gap as an unreadable one.
+  const readGapNotes = [...lockfileProblemNotes(mergeConflicts), ...(unreadable.length > 0 ? [`NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")}`] : [])];
+  const readGap = readGapNotes.length > 0 ? `${readGapNotes.join(" ")} This is not a complete result.` : null;
   const withheld = coverage !== null || readGap !== null;
   // Direct dependencies whose registry did not answer: their outdated and deprecated state is
   // unknown, not current. Under a registry outage the score counted them neither and the summary

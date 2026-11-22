@@ -336,19 +336,16 @@ describe("dependency_health — an unreadable lockfile withholds the score (M5)"
     expect(result.summary).toMatch(/UNREADABLE: 1 lockfile could not be read.*invalid JSON/);
   });
 
-  it.each([
-    ["merge-conflict markers", `{\n<<<<<<< HEAD\n  "lockfileVersion": 3,\n=======\n  "lockfileVersion": 2,\n>>>>>>> branch\n}\n`, /merge-conflict/],
-  ])("%s: no score, no counts, NOT CHECKED first", async (_label, body, reason) => {
-    const result = await executeDependencyHealth(noDb, {}, conflicted(body));
+  // A conflicted lockfile is not read, and package.json's pins are not read in its place: nothing is scored.
+  it("merge-conflict markers: no score, no counts, NOT CHECKED for the lockfile", async () => {
+    const result = await executeDependencyHealth(noDb, {}, conflicted(`{\n<<<<<<< HEAD\n  "lockfileVersion": 3,\n=======\n  "lockfileVersion": 2,\n>>>>>>> branch\n}\n`));
     expect(result.healthScore).toBeNull();
     expect(result.healthScoreBasis).toBeUndefined();
     expect(result.vulnerableCount).toBeNull();
     expect(result.vulnerabilitySummary).toBeNull();
-    expect(result.summary).toMatch(/^NOT CHECKED: /);
-    expect(result.summary).toMatch(/package-lock\.json/);
-    expect(result.summary).toMatch(reason);
+    expect(result.withheldReason).toBe("lockfile_unreadable");
+    expect(result.summary).toMatch(/NOT CHECKED \(merge conflict\): 1 file holds git merge-conflict markers \(.*package-lock\.json\)/);
     expect(result.summary).toMatch(/Health score withheld/);
-    expect(result.summary).toMatch(/at least 1 vulnerable package/);
   });
 });
 /**
@@ -433,8 +430,9 @@ describe("dependency_health — why a score is withheld, and what a partial one 
   };
   const conflicted = `{\n<<<<<<< HEAD\n  "lockfileVersion": 3,\n=======\n  "lockfileVersion": 2,\n>>>>>>> branch\n}\n`;
 
+  // A merge-conflicted lockfile is not this case any more (it is not read, and nothing stands in for it).
   it("an unreadable lockfile: withheldReason lockfile_unreadable", async () => {
-    const { li } = intel({ "package.json": JSON.stringify({ dependencies: { lodash: "4.17.20" } }), "package-lock.json": conflicted }, [{ language: "javascript", deps: ["lodash"] }]);
+    const { li } = intel({ "package.json": JSON.stringify({ dependencies: { lodash: "4.17.20" } }), "bun.lockb": "\u0000\u0001binary" }, [{ language: "javascript", deps: ["lodash"] }]);
     const r = await executeDependencyHealth(noDb, {}, li);
     expect(r.healthScore).toBeNull();
     expect(r.withheldReason).toBe("lockfile_unreadable");

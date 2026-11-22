@@ -175,10 +175,13 @@ describe("project scans say what they did not cover", () => {
     write("package.json", JSON.stringify({ dependencies: { lodash: "^4.17.0" } }));
     write("package-lock.json", `{\n<<<<<<< HEAD\n  "name": "x"\n=======\n  "name": "y"\n>>>>>>> branch\n}\n`);
     const read = resolveVersionSource(dir, "npm");
+    expect(read.problems?.[0]).toMatchObject({ mergeConflict: true });
     expect(read.problems?.[0].error).toMatch(/merge-conflict markers/);
     const result = await scan();
-    expect(result.coverage.unreadable_lockfiles[0]).toMatchObject({ path: "package-lock.json" });
-    expect(result.coverage.unreadable_lockfiles[0].error).toMatch(/merge-conflict/);
+    // Not read at all: listed as not scanned with its reason, never as unreadable (DESIGN 2).
+    expect(result.coverage.not_scanned.lockfiles).toEqual([{ path: "package-lock.json", reason: "merge_conflict" }]);
+    expect(result.coverage.unreadable_lockfiles).toBeUndefined();
+    expect(result.coverage.note).toMatch(/NOT CHECKED \(merge conflict\)/);
     expect(JSON.stringify(result)).not.toMatch(/no lock file/i);
   });
 
