@@ -270,6 +270,50 @@ export function lowestPython(spec: string | null): string | null {
   return low;
 }
 
+/** The versions a uv.lock or poetry.lock holds of `name` (each `[[package]]` table of that name). */
+export function lockedVersions(lockfile: string, name: string): string[] {
+  const content = read(lockfile);
+  if (content === null) return [];
+  const want = normalizePythonName(name);
+  return packageBlocks(content)
+    .filter((b) => normalizePythonName(headField(b, "name") ?? "") === want)
+    .map((b) => headField(b, "version"))
+    .filter((v): v is string => v !== null);
+}
+
+/** The dependencies a uv.lock records for `name@version` (its `dependencies = [...]`), normalised names. */
+export function lockedDependencies(lockfile: string, name: string, version: string): string[] {
+  const content = read(lockfile);
+  if (content === null) return [];
+  const want = normalizePythonName(name);
+  const block = packageBlocks(content).find((b) => normalizePythonName(headField(b, "name") ?? "") === want && headField(b, "version") === version);
+  const list = block ? /^dependencies\s*=\s*\[([\s\S]*?)^\]/m.exec(block.split(/^\[package\./m)[0])?.[1] : undefined;
+  return list ? [...list.matchAll(/\{\s*name\s*=\s*"([^"]+)"/g)].map((m) => normalizePythonName(m[1])) : [];
+}
+
+/**
+ * uv keeps every other locked version it can: a requirement of `release` (its `requires_dist`)
+ * that every version the lock holds of that dependency fails, in words, or null when there is none.
+ * virtualenv 21.15.12 requires filelock ">=3.24.2" and the lock held 3.16.1: `uv lock
+ * --upgrade-package virtualenv` kept filelock and landed on 20.33.1 (uv, 2026-11-23).
+ */
+export function lockHoldsBack(lockfile: string, release: string, requiresDist: string[]): string | null {
+  // Per dependency, every requirement the release states (one per environment marker): only when each excludes what the lock holds.
+  const byName = new Map<string, string[]>();
+  for (const raw of requiresDist) {
+    const r = parsePep508(raw);
+    if (!r || r.extra) continue;
+    byName.set(r.name, [...(byName.get(r.name) ?? []), r.spec]);
+  }
+  for (const [name, specs] of byName) {
+    const locked = lockedVersions(lockfile, name);
+    if (locked.length > 0 && specs.every((s) => s !== "" && locked.every((v) => pythonSpecAdmits(s, v) === false))) {
+      return `${release} requires ${name} "${specs.join('" or "')}", which excludes the locked ${name} ${locked.join(", ")}`;
+    }
+  }
+  return null;
+}
+
 /** The command that refreshes one transitive copy in a poetry.lock or uv.lock; null when its name is not a plain token. */
 export function pythonRefreshCommand(format: "poetry" | "uv", name: string): string | null {
   if (!isShellSafeName(name, "PyPI")) return null;

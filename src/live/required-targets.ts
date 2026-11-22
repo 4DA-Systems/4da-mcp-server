@@ -29,14 +29,56 @@ import type { ResolvedDependency } from "./types.js";
 /** Distinct target releases whose requirements one tool call examines. */
 export const MAX_REQUIRED_TARGETS = 10;
 
-/** The releases this call has examined (or is examining), by `ecosystem\0name@version`. */
-function examinedThisCall(): { keys: Set<string> } {
-  return callMemo("required-targets:examined", () => ({ keys: new Set<string>() }));
+/**
+ * The releases this call has examined (or is examining), by `ecosystem\0name@version`; `fresh`
+ * those of them not examined to a verdict recently (only they count against the cap).
+ */
+function examinedThisCall(): { keys: Set<string>; fresh: Set<string> } {
+  return callMemo("required-targets:examined", () => ({ keys: new Set<string>(), fresh: new Set<string>() }));
+}
+
+/**
+ * Releases examined to a verdict recently, with when: their requirement lists and advisory answers
+ * are in the caches, so a later call answers them from there and does not count them against the
+ * cap. Without this the same first ten were examined on every call and the rest never were (63 of
+ * 198 PyPI copies, identical over four calls).
+ */
+const RECENT = new Map<string, number>();
+const RECENT_MS = 15 * 60_000;
+const isRecent = (release: string) => {
+  const at = RECENT.get(release);
+  return at !== undefined && Date.now() - at < RECENT_MS;
+};
+
+/** Releases past the cap are examined after the call returns, so that the next call answers them. */
+let warmingEnabled = true;
+const WARM_MS = 60_000;
+const warming = new Set<Promise<void>>();
+
+/** Tests that count lookups per call turn the after-call pass off (on by default). */
+export function setRequiredTargetWarming(enabled: boolean): void {
+  warmingEnabled = enabled;
+}
+
+/** Resolves when every after-call pass started so far has finished. */
+export async function requiredTargetsWarmed(): Promise<void> {
+  await Promise.all([...warming]);
+}
+
+function warmLater(sources: RequirementSources, query: AdvisoryQuery, releases: RequirementRelease[], options: Omit<RequirementOptions, "deadline">): void {
+  if (!warmingEnabled || releases.length === 0) return;
+  const run = requirementAdvisories(sources, query, releases, { ...options, deadline: Date.now() + WARM_MS })
+    .then((answer) => {
+      for (const r of releases) if (answer.get(r.key)?.status === "checked") RECENT.set(`${r.ecosystem}\0${r.name}@${r.version}`, Date.now());
+    })
+    .catch(() => undefined)
+    .finally(() => warming.delete(run));
+  warming.add(run);
 }
 
 /** Words for a target past the cap. */
 export function notExaminedCapText(): string {
-  return `this call examines what at most ${MAX_REQUIRED_TARGETS} upgrade targets require, and this one was past that; dependency_check on it examines it`;
+  return `this call examines what at most ${MAX_REQUIRED_TARGETS} upgrade targets require, and this one was past that; it is examined after this call returns, so calling again answers it (dependency_check on it examines it now)`;
 }
 
 /** Go: the version of each module the project already selects (the highest it holds). */
@@ -76,25 +118,31 @@ export async function withRequiredTargets(
   const out = new Map<string, FixTargetResult>();
   const examined = examinedThisCall();
   const releases: RequirementRelease[] = [];
+  const deferred: RequirementRelease[] = [];
+  const options = { ...(selected ? { selected } : {}), pythons: pythons ?? null };
   for (const item of items) {
     if (!item.clean.target || !isRequirementEcosystem(item.ecosystem) || !sources.reads(item.ecosystem)) continue;
     const release = `${item.ecosystem}\0${item.name}@${item.clean.target}`;
-    if (!examined.keys.has(release) && examined.keys.size >= MAX_REQUIRED_TARGETS) {
+    if (!examined.keys.has(release) && !isRecent(release) && examined.fresh.size >= MAX_REQUIRED_TARGETS) {
       out.set(item.key, unexamined(item.ecosystem, item.clean, notExaminedCapText()));
+      if (!deferred.some((d) => d.ecosystem === item.ecosystem && d.name === item.name && d.version === item.clean.target)) deferred.push({ key: item.key, ecosystem: item.ecosystem, name: item.name, version: item.clean.target });
       continue;
     }
     examined.keys.add(release);
+    if (!isRecent(release)) examined.fresh.add(release);
     releases.push({ key: item.key, ecosystem: item.ecosystem, name: item.name, version: item.clean.target });
   }
+  warmLater(sources, query, deferred, options);
   if (releases.length === 0) return out;
   let answer: Awaited<ReturnType<typeof requirementAdvisories>>;
   try {
-    answer = await requirementAdvisories(sources, query, releases, { deadline, ...(selected ? { selected } : {}), pythons: pythons ?? null });
+    answer = await requirementAdvisories(sources, query, releases, { deadline, ...options });
   } catch (err) {
     const why = `the check failed: ${err instanceof Error ? err.message.slice(0, 120) : "unknown error"}`;
     for (const r of releases) out.set(r.key, unexamined(r.ecosystem, items.find((i) => i.key === r.key)!.clean, why));
     return out;
   }
+  for (const r of releases) if (answer.get(r.key)?.status === "checked") RECENT.set(`${r.ecosystem}\0${r.name}@${r.version}`, Date.now());
   for (const item of items) {
     const check = answer.get(item.key);
     if (!check || !releases.some((r) => r.key === item.key)) continue;

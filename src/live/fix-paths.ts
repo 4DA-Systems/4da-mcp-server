@@ -40,12 +40,13 @@ import { lockfileFormatOf, prepareLockfileParents, type LockfileFormat, type Par
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, parseGoMod, requirementOptions } from "./lockfile-parsers-pygo.js";
 import { requirementFiles } from "./lockfile-parsers-pygo.js";
+import { pyprojectDirectFix } from "./pypi-direct.js";
 import { projectOverride } from "./overrides.js";
 import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
-import { CRATES_USER_AGENT } from "./crates-versions.js";
+import { CRATES_USER_AGENT, releaseFeatureNames } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
@@ -126,6 +127,8 @@ export interface CratesSparse {
   yanked?: string[];
   /** version -> dependency crate name -> requirements (one per target/kind entry; dev-dependencies left out). */
   reqs: Record<string, Record<string, CrateDepReq[]>>;
+  /** version -> the features that release offers (crates-versions.ts releaseFeatureNames); absent when not read. */
+  features?: Record<string, string[]>;
 }
 
 /** npm's abbreviated document: per version, the fields fix paths read. */
@@ -469,9 +472,13 @@ export class FixPathSources {
             vers: string;
             yanked?: boolean;
             deps?: Array<{ name: string; req: string; kind?: string | null; package?: string; optional?: boolean }>;
+            features?: unknown;
+            features2?: unknown;
           };
           if (!entry.yanked) out.versions.push(entry.vers);
           else out.yanked!.push(entry.vers);
+          const offered = releaseFeatureNames(entry);
+          if (offered) (out.features ??= {})[entry.vers] = offered;
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
@@ -1757,7 +1764,7 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
           if (rel && !files.includes(rel)) files.push(rel);
         }
       }
-      return null;
+      return pyprojectDirectFix(projectDir, name, installed, target);
     }
     default:
       return null;
@@ -1841,10 +1848,13 @@ export async function refreshVerdict(
   target: string,
   advisories: AdvisoryRanges[] | null,
   published: string[] | null,
+  /** "unbundled": the verdict for the copies no package ships bundled (null when there are none). */
+  copies?: "unbundled",
 ): Promise<RefreshVerdict | null> {
   await yieldIfDue();
   const index = await prepareLockfileParents(lockfile);
-  const parents = index ? { format: index.format, edges: index.parents(name, installed) } : null;
+  const edges = index ? index.parents(name, installed).filter((e) => copies !== "unbundled" || !e.bundled) : [];
+  const parents = index ? { format: index.format, edges } : null;
   if (!parents || parents.edges.length === 0) return null;
   const isCargo = parents.format === "cargo";
   const dialect: RequirementDialect = isCargo ? "cargo" : "npm";

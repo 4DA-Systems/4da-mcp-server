@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * npm: the release a parent upgrade names for what the project declares (the lever) is judged by
+ * what it holds, as the planner's direct targets and dependency_check are (held-dependencies.ts):
+ * nyc 18.0.0 brings istanbul-lib-processinfo's uuid fix in, and also requires glob "^13.0.6",
+ * every 13.x of which an advisory affects. A lever release that holds an affected dependency the
+ * installed release does not is not named as the fix silently:
+ * - the smallest later release that still brings every row's fix in, is clear of the lever's own
+ *   advisories and holds nothing new that is affected, is named instead (on every row that names
+ *   the lever, so one release per dependency holds), with why;
+ * - otherwise the release is kept and the row says what it brings, in words that keep the step out
+ *   of the fixed counts; when the check cannot finish, the row says it was NOT CHECKED.
+ * Within the call's budget; the lookups are the ones the planner's held checks already make.
+ */
+
+import { listConfirmed } from "../live/batch-confirm.js";
+import { heldAdvisories, heldText, HELD_CANDIDATES, type HeldCheck, type HeldDependency } from "../live/held-dependencies.js";
+import type { LiveIntelligence } from "../live/index.js";
+import { cleanReleases, isPrereleaseVersion } from "../live/osv-ranges.js";
+import { compareVersions } from "../live/version-compare.js";
+import { leverBringsAt, liftMove, type FixPathStep, type ParentLever, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
+
+type Intel = Pick<LiveIntelligence, "getFixPathSources"> & Partial<Pick<LiveIntelligence, "queryAdvisories">>;
+
+interface Use {
+  step: FixPathStep;
+  upgrade: ParentUpgrade;
+  lever: ParentLever;
+}
+
+const sameCopy = (held: HeldDependency[], d: HeldDependency) => held.some((x) => x.name === d.name && x.version === d.version);
+
+export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, deadline: number): Promise<void> {
+  const sources = liveIntel.getFixPathSources();
+  const query = liveIntel.queryAdvisories?.bind(liveIntel);
+  if (!sources || !query) return;
+  const groups = new Map<string, Use[]>();
+  for (const step of steps) {
+    if (step.ecosystem !== "npm") continue;
+    for (const upgrade of step.parentUpgrades ?? []) {
+      for (const lever of upgrade.levers) {
+        if (!lever.to || lever.outcome || (!lever.commands?.length && !lever.instructions?.length && !lever.sameCommandsAs)) continue;
+        const key = `${lever.name}\0${lever.version}\0${lever.to}`;
+        groups.set(key, [...(groups.get(key) ?? []), { step, upgrade, lever }]);
+      }
+    }
+  }
+  for (const uses of groups.values()) {
+    const { name, version } = uses[0].lever;
+    const to = uses[0].lever.to!;
+    const say = (text: string) => {
+      for (const s of new Set(uses.map((u) => u.step))) if (!s.reasons.includes(text)) s.reasons.push(text);
+    };
+    const facts = await sources.releaseFacts("npm", name).catch(() => null);
+    const judge = async (v: string): Promise<HeldCheck | undefined> => {
+      const specs = facts?.heldSpecs?.[v];
+      if (facts && !specs) return { status: "checked", affected: [] };
+      if (!specs || Date.now() >= deadline) return undefined;
+      return (await heldAdvisories(sources, query, [{ key: v, specs }], deadline).catch(() => null))?.get(v);
+    };
+    const at = facts ? await judge(to) : undefined;
+    if (!at || at.status === "unchecked") {
+      const why = at?.status === "unchecked" ? at.reason : facts ? "the planner's time budget ran out before it finished" : `the registry gave no answer for the releases of ${name}`;
+      say(`whether the dependencies ${name} ${to} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`);
+      continue;
+    }
+    if (at.affected.length === 0) continue;
+    const installed = await judge(version);
+    // What the installed release already holds is carried over by the upgrade, not brought in by it.
+    const brought = at.affected.filter((d) => !(installed?.status === "checked" && sameCopy(installed.affected, d)));
+    if (brought.length === 0) continue;
+
+    const lifted = await liftedRelease(uses, steps, facts!, judge, installed, sources, query, deadline);
+    if (lifted) {
+      const lifts = new Map([[name, lifted]]);
+      if (uses.every((u) => liftMove(u.step, u.upgrade, lifts))) {
+        say(`${name} ${lifted}, not ${to}: ${heldText(to, brought)}, an advisory the installed ${name} ${version} does not bring; ${lifted} is the smallest ${name} release past it that still brings this fix in and holds nothing affected`);
+        continue;
+      }
+    }
+    say(`${name} ${heldText(to, brought)}: upgrading ${name} to ${to} installs ${brought.length === 1 ? "it" : "them"}, so ${to} is NOT a clean fix: confirm a release with dependency_check before pinning it`);
+  }
+}
+
+/**
+ * The smallest release above the named one that every row naming the lever still gets its fix
+ * from, clear of the lever's own advisories (confirmed by OSV.dev's batch query), whose held
+ * dependencies bring nothing affected the installed release lacks. Null when none is found among
+ * the next HELD_CANDIDATES, when a check does not finish, or when the lever has its own row (its
+ * release is that row's target, already judged there).
+ */
+async function liftedRelease(
+  uses: Use[],
+  steps: FixPathStep[],
+  facts: { versions: string[] },
+  judge: (v: string) => Promise<HeldCheck | undefined>,
+  installed: HeldCheck | undefined,
+  sources: NonNullable<ReturnType<Intel["getFixPathSources"]>>,
+  query: NonNullable<Intel["queryAdvisories"]>,
+  deadline: number,
+): Promise<string | null> {
+  const { name, version } = uses[0].lever;
+  const to = uses[0].lever.to!;
+  if (steps.some((s) => s.ecosystem === "npm" && s.scope === "direct" && s.package === name && s.currentVersion === version)) return null;
+  const listed = await sources.packageAdvisories("npm", name).catch(() => null);
+  const later = facts.versions.filter((v) => !isPrereleaseVersion(v, "npm") && compareVersions(v, to, "npm") > 0).sort((a, b) => compareVersions(a, b, "npm"));
+  if (!listed || later.length === 0) return null;
+  if (!(await listConfirmed(query, listed, "npm", name, [version, later[later.length - 1]], deadline))) return null;
+  const own = cleanReleases(listed, "npm", facts.versions, version);
+  const candidates = later.filter((v) => own.clean(v) && uses.every((u) => leverBringsAt(u.lever, v) === true)).slice(0, HELD_CANDIDATES);
+  for (const v of candidates) {
+    const check = await judge(v);
+    if (!check || check.status === "unchecked") return null;
+    if (check.affected.every((d) => installed?.status === "checked" && sameCopy(installed.affected, d))) return v;
+  }
+  return null;
+}
