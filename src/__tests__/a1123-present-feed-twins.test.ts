@@ -104,8 +104,8 @@ describe("the feed tools on the app database", () => {
     expect(idsOf(items)).toEqual(expect.arrayContaining(["CVE-2026-119349", "CVE-2026-119346", "hn-1"]));
   });
 
-  it("get_actionable_signals: one signal per advisory", () => {
-    const out = executeGetActionableSignals(appDb(), { signal_type: "security_alert" }, null);
+  it("get_actionable_signals: one signal per advisory", async () => {
+    const out = await executeGetActionableSignals(appDb(), { signal_type: "security_alert" }, null);
     const urls = out.signals.map((s) => s.url);
     expect(urls.filter((u) => u?.includes("GHSA-f3mh-rxg3-f5g2") || u?.includes("CVE-2026-119346"))).toHaveLength(1);
     expect(urls.filter((u) => u?.includes("GHSA-rhh4-g77r-r9qj") || u?.includes("CVE-2026-119349"))).toHaveLength(1);
