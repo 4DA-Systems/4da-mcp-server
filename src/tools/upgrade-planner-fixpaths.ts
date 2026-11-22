@@ -188,6 +188,11 @@ export interface FixPathStep {
   refreshCommands?: Array<{ dir: string; command: string }>;
   /** lockfile_refresh: true when not every parent's requirement could be read and the verdict comes from semver compatibility. */
   refreshInferred?: boolean;
+  /**
+   * lockfile_refresh of the copies of this version installed on their own: the copies other
+   * packages ship bundled, which the refresh does not move, each waiting on its owner's release.
+   */
+  bundledCopies?: Array<{ owner: string; ownerVersion: string | null; action: "waiting_on_upstream" }>;
   /** upgrade_direct: the command that moves the declared dependency to targetVersion, per declaring project directory. */
   upgradeCommands?: Array<{ dir: string; command: string; refresh?: true }>;
   /** upgrade_direct: a manifest edit where no single verified command makes it. */
@@ -933,10 +938,26 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
   // (npm 10.9.2, checked 2026-10-15), so the only moves are a new owner release or replacing the owner.
   if (!overrideReaches(blocking)) {
     const owners = [...new Set(blocking.filter((b) => b.bundled).map((b) => b.parent))];
+    const bundledWords = `A bundled copy ships inside its owner's package, so neither a lockfile refresh nor an override can move it to ${target}: ${owners.join(", ")} must release a version that ships ${step.package} >= ${target}, or be replaced`;
+    // The same version installed on its own is a copy of its own: when its parents admit the fix,
+    // its refresh is the step, and the bundled copy's wait is said beside it.
+    const own = await Promise.all(lockfiles.map(async (l) => ({ ...l, verdict: await refreshVerdict(sources, ecosystem, l.lockfile, step.package, installed, target, advisories, published, "unbundled") })));
+    const loose = own.filter((o): o is typeof o & { verdict: RefreshVerdict } => o.verdict !== null);
+    if (loose.length > 0 && loose.every((o) => o.verdict.refreshFixes && !o.verdict.inferred)) {
+      const bundled = blocking.filter((b) => b.bundled);
+      step.action = "lockfile_refresh";
+      step.refreshCommands = loose.map((o) => ({ dir: where(o.dir), command: o.verdict.command }));
+      step.bundledCopies = bundled
+        .map((b) => ({ owner: b.parent, ownerVersion: b.parentVersion, action: "waiting_on_upstream" as const }))
+        .filter((c, i, all) => all.findIndex((x) => x.owner === c.owner && x.ownerVersion === c.ownerVersion) === i);
+      const resolves = [...new Set(loose.map((o) => o.verdict.resolvesTo).filter((v): v is string => v !== null))];
+      replaceReason(
+        `Transitive dependency: the ${step.package} ${installed} copies that are not bundled have parents whose declared requirements already admit ${target}${resolves.length > 0 ? ` (a refresh resolves them to ${resolves.join(", ")})` : ""}, so a lockfile refresh moves them (${step.refreshCommands.map((c) => `\`${c.command}\` in ${c.dir}`).join("; ")}); the bundled copy stays: ${bundled.slice(0, 3).map(blockingText).join(", ")}. ${bundledWords}`,
+      );
+      return;
+    }
     step.action = "waiting_on_upstream";
-    replaceReason(
-      `Transitive dependency, waiting on upstream: ${named}${more}. A bundled copy ships inside its owner's package, so neither a lockfile refresh nor an override can move it to ${target}: ${owners.join(", ")} must release a version that ships ${step.package} >= ${target}, or be replaced`,
-    );
+    replaceReason(`Transitive dependency, waiting on upstream: ${named}${more}. ${bundledWords}`);
     return;
   }
 

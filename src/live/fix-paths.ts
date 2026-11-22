@@ -1839,10 +1839,13 @@ export async function refreshVerdict(
   target: string,
   advisories: AdvisoryRanges[] | null,
   published: string[] | null,
+  /** "unbundled": the verdict for the copies no package ships bundled (null when there are none). */
+  copies?: "unbundled",
 ): Promise<RefreshVerdict | null> {
   await yieldIfDue();
   const index = await prepareLockfileParents(lockfile);
-  const parents = index ? { format: index.format, edges: index.parents(name, installed) } : null;
+  const edges = index ? index.parents(name, installed).filter((e) => copies !== "unbundled" || !e.bundled) : [];
+  const parents = index ? { format: index.format, edges } : null;
   if (!parents || parents.edges.length === 0) return null;
   const isCargo = parents.format === "cargo";
   const dialect: RequirementDialect = isCargo ? "cargo" : "npm";
