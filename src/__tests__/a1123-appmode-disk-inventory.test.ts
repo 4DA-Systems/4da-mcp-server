@@ -77,7 +77,7 @@ describe.skipIf(!fs.existsSync(serverEntry) || !fs.existsSync(VENDORED_APP_SCHEM
   });
 
   it("runs against the app's database (not a standalone store)", () => {
-    expect(app.stderr).toContain("Database validated");
+    expect(app.stderr).toContain("The 4DA app's database:");
     expect(app.stderr).not.toContain("standalone mode enabled");
   });
 
