@@ -2,12 +2,13 @@
 /**
  * dependency_check, the first stage of a pass (dependency-check.ts checkPass): the items no lookup
  * may be made for (a private package name, a Go module path the go command does not accept as
- * written) are answered in place, never looked up; and with live lookups off, every item is
- * answered without a lookup.
+ * written, an npm name no package can have) are answered in place, never looked up; and with live
+ * lookups off, every item is answered without a lookup.
  */
 
 import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
 import type { LiveIntelligence } from "../live/index.js";
+import { isNpmPackageName, quoteThirdParty } from "../untrusted-text.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
 import { head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
 
@@ -36,12 +37,17 @@ export async function screenItems(all: Requested[], liveIntel: LiveIntelligence 
   const goPath = await Promise.all(
     all.map((r, i) => (r.ecosystem === "Go" && !privateWhy[i] ? checkGoModulePath(r.package, live && r.target.kind === "exact" ? r.target.version : null, live ? undefined : offlineFetch) : null)),
   );
-  const requested = all.filter((_, i) => !privateWhy[i] && !(goPath[i] && !goPath[i]!.ok));
+  // An npm name shaped like a scope that npm cannot have (`babel/core`) is no package on any
+  // registry: refused as written, with the scoped spelling suggested, and never sent.
+  const npmName = all.map((r, i) => (r.ecosystem === "npm" && !privateWhy[i] ? npmScopeProblem(r.package) : null));
+  const requested = all.filter((_, i) => !privateWhy[i] && !(goPath[i] && !goPath[i]!.ok) && !npmName[i]);
   const privateItems = all.flatMap((r, i) => {
     const why = privateWhy[i];
     if (why) return [{ at: i, result: privateResult(r, why) }];
     const g = goPath[i];
-    return g && !g.ok ? [{ at: i, result: goPathResult(r, g) }] : [];
+    if (g && !g.ok) return [{ at: i, result: goPathResult(r, g) }];
+    const bad = npmName[i];
+    return bad ? [{ at: i, result: npmNameResult(r, bad) }] : [];
   });
   /** The results in the order asked, private items in their places. */
   const inOrder = (checked: ItemResult[]): ItemResult[] => {
@@ -91,6 +97,28 @@ function goPathResult(r: Requested, verdict: Extract<GoPathVerdict, { ok: false 
     signals: [],
     not_checked: "module_path",
     ...(verdict.canonical ? { canonical_module_path: verdict.canonical } : {}),
+  };
+}
+
+/**
+ * Why an npm name shaped like a scope is no name npm can have (`babel/core`: a "/" without the
+ * leading "@"; `@babel`: a scope with no name), or null. Other names are left to the registry.
+ */
+export function npmScopeProblem(name: string): string | null {
+  const valid = (n: string): boolean => isNpmPackageName(n);
+  if ((!name.includes("/") && !name.startsWith("@")) || valid(name)) return null;
+  const guess = !name.startsWith("@") && name.split("/").length === 2 && valid(`@${name}`) ? ` (did you mean "@${name}"?)` : "";
+  return `a scoped package is written "@scope/name"${guess}`;
+}
+
+/** An npm item whose name npm cannot have: unknown, refused as written, nothing sent. */
+function npmNameResult(r: Requested, problem: string): ItemResult {
+  return {
+    ...head(provisional(r)),
+    verdict: "unknown",
+    reason: `NOT CHECKED: ${JSON.stringify(quoteThirdParty(r.package, 214))} is not a valid npm package name: ${problem}. Nothing was sent to the npm registry or OSV.dev: correct it and ask again. This is not a clean result.`,
+    signals: [],
+    not_checked: "input",
   };
 }
 
