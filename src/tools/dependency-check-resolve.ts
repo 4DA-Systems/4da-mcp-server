@@ -19,6 +19,9 @@ import { installedNotJudged, lookupKey, provisional, yieldToEventLoop, type Requ
 import { fetchIndexes, type Lookups, type PassContext } from "./dependency-check-lookups.js";
 
 const DAY_MS = 86_400_000;
+/** Releases below a named safe pick judged per round, and the rounds a call spends on them. */
+const GAP_BATCH = 10;
+const GAP_ROUNDS = 3;
 
 /** Each item's `to` resolved to one version, in the order asked. */
 export async function resolveItems(ctx: PassContext, lookups: Lookups): Promise<Resolved[]> {
@@ -76,24 +79,54 @@ export async function judgeReleaseContents(ctx: PassContext, lookups: Lookups, i
     return lookup?.status === "ok" && Boolean(lookup.data.releases[i.to]);
   };
   const isJudged = (i: Resolved) => !i.unresolved && judgeOf(i.ecosystem) !== null && (i.ecosystem === "npm" || isListed(i));
+  /** The releases in the item's range clear of its own advisories (on PyPI, those supporting the project's Python). */
+  const ownSafeOf = (item: Resolved): string[] => {
+    const lookup = indexes.get(lookupKey(item));
+    const advisories = advisoryLists.get(lookupKey(item));
+    if (!item.rangeCheck || lookup?.status !== "ok" || !advisories) return [];
+    const eco = item.ecosystem;
+    return ownSafeInRange({ ecosystem: eco, index: lookup.data, range: item.rangeCheck.range, advisories, allowPrerelease: rangeNamesPrerelease(eco, item.rangeCheck.range) }).filter(supportsPython(item, lookup.data));
+  };
+  const above = (item: Resolved) => (v: string) => !item.from || compareIn(item.ecosystem, v, item.from) > 0;
+  const resolveFiltered = () =>
+    items.map((item, i) => {
+      const filter = isJudged(item) && item.rangeCheck?.basis === "requested" ? judgeOf(item.ecosystem)!.rangeFilter(item.package) : null;
+      if (!filter) return item;
+      const r = requested[i];
+      return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter, pythons.of(r));
+    });
+  // Only releases that could be picked are worth judging.
   await judgeAll(
-    items.filter(isJudged).map((item) => {
-      const eco = item.ecosystem;
-      const lookup = indexes.get(lookupKey(item));
-      const advisories = advisoryLists.get(lookupKey(item));
-      // Only releases that could be picked are worth judging: on PyPI, those supporting the project's Python.
-      const ownSafe = item.rangeCheck && lookup?.status === "ok" && advisories
-        ? ownSafeInRange({ ecosystem: eco, index: lookup.data, range: item.rangeCheck.range, advisories, allowPrerelease: rangeNamesPrerelease(eco, item.rangeCheck.range) }).filter(supportsPython(item, lookup.data))
-        : [];
-      return { ecosystem: eco, pkg: item.package, versions: [item.to, ...rangeCandidates(eco, ownSafe, (v) => !item.from || compareIn(eco, v, item.from) > 0, installedNotJudged(item))] };
-    }),
+    items.filter(isJudged).map((item) => ({
+      ecosystem: item.ecosystem,
+      pkg: item.package,
+      versions: [item.to, ...rangeCandidates(item.ecosystem, ownSafeOf(item), above(item), installedNotJudged(item))],
+    })),
   );
-  items = items.map((item, i) => {
-    const filter = isJudged(item) && item.rangeCheck?.basis === "requested" ? judgeOf(item.ecosystem)!.rangeFilter(item.package) : null;
-    if (!filter) return item;
-    const r = requested[i];
-    return resolveTarget(r, indexes.get(lookupKey(r))!, advisoryLists.get(lookupKey(r)), now, filter, pythons.of(r));
-  });
+  items = resolveFiltered();
+  // The smallest safe release named is never above a release in range that was not judged: the
+  // candidates judged first are the smallest and newest few, so the ones between them below the
+  // pick are judged next, a few at a time, and the range resolved again. npm and crates.io read every
+  // release's requirements from one document; PyPI would ask for each, and Go picks by none.
+  for (let round = 0; round < GAP_ROUNDS; round++) {
+    const gaps = items.flatMap((item) => {
+      const eco = item.ecosystem;
+      const rc = item.rangeCheck;
+      if ((eco !== "npm" && eco !== "crates.io") || !rc || rc.basis !== "requested" || !isJudged(item)) return [];
+      const below = (v: string, pick: string | null) => pick === null || compareIn(eco, v, pick) < 0;
+      const isAbove = above(item);
+      // Below the range's smallest pick, or (with `from`) above `from` and below the smallest upgrade;
+      // the releases above `from` first, since the upgrade is what the answer recommends.
+      const unjudged = ownSafeOf(item)
+        .filter((v) => judgeOf(eco)!.at(item.package, v) === undefined && (below(v, rc.smallest_safe_in_range) || (Boolean(item.from) && isAbove(v) && below(v, rc.smallest_safe_upgrade ?? null))))
+        .sort((a, b) => Number(!isAbove(a)) - Number(!isAbove(b)) || compareIn(eco, a, b))
+        .slice(0, GAP_BATCH);
+      return unjudged.length > 0 ? [{ ecosystem: eco, pkg: item.package, versions: unjudged }] : [];
+    });
+    if (gaps.length === 0) break;
+    await judgeAll(gaps);
+    items = resolveFiltered();
+  }
   // `to` is what the constraint installs (resolvedRelease, round 8): judge it too (normally a no-op).
   await judgeAll(items.filter(isJudged).map((item) => ({ ecosystem: item.ecosystem, pkg: item.package, versions: [item.to] })));
   return items;
