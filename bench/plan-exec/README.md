@@ -10,10 +10,22 @@ project of a pinned public corpus, the harness:
 4. rescans the copy from a fresh server process.
 
 It reports, per project and in total: steps run, steps that failed, steps that named a command
-the harness does not run, steps without effect (the copy they were for is still there), steps
-that lowered a version an earlier step set or that was installed, advisories before and after,
-and the plan's own prediction (which vulnerable copies it gave something to run for) against
-the copies left. Then it applies the gate in `thresholds.json`.
+the harness does not run, steps without effect, steps that lowered a version an earlier step set
+or that was installed, advisories before and after, and the plan's own prediction (which
+vulnerable copies it gave something to run for) against the copies left. Then it applies the gate
+in `thresholds.json`.
+
+- Copies are counted per lockfile entry, so a step that moves the hoisted copy of a version while
+  a bundled copy of the same version stays has moved it.
+- Without effect: some copy the step was for was still there before it, it moved none, and it
+  either changed nothing or no later step serves the same rows (a Cargo pre-update that frees the
+  crates a later `--precise` moves has done its part when it changes the lockfile). A step whose
+  copies an earlier step already moved had nothing left to do and is not counted.
+- Lowered: the step removed a version, added only lower ones, and left no version at or above it
+  on its release line (the major, or `0.minor`). Copies of one package on several lines that each
+  move up their own line onto versions the lockfile already held are not a lowering.
+- Each step records `moved` (its copies it moved) and `changes` (per lockfile, the versions of the
+  packages it serves that went and came).
 
 This checks a sequence, not single steps. The 2026-11-23 audit found single steps mostly right
 and the sequence not: later steps undid earlier ones (Go `go get` downgrades, three npm rows
