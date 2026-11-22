@@ -29,6 +29,9 @@ const MANIFEST: Record<string, string> = {
   Go: "go.mod",
 };
 
+/** Actions that name something to do for a copy: with no command, the row says its first move is by hand. */
+const HAND_FIRST_ACTIONS = new Set(["upgrade_parent", "upgrade_parent_unverified", "lockfile_refresh", "override_or_replace", "reinstall"]);
+
 /** The first words of the reason added here (a later pass can tell the row was already explained). */
 export const NO_COMMAND_REASON_START = "No command is named for this upgrade";
 
@@ -38,8 +41,15 @@ export const NO_COMMAND_REASON_START = "No command is named for this upgrade";
  */
 export function explainCommandlessRows<R extends CommandlessRow>(rows: R[], vulnerable: (row: R) => boolean): void {
   for (const r of rows) {
-    if (r.action !== "upgrade_direct" || !r.targetVersion || r.commands.length > 0) continue;
+    if (r.commands.length > 0) continue;
     if (r.reasons.some((x) => x.startsWith(NO_COMMAND_REASON_START))) continue;
+    if (HAND_FIRST_ACTIONS.has(r.action)) {
+      // A step the plan gives for this copy whose first move is not a command (a requirement or
+      // override edit, a release the project cannot take yet).
+      r.reasons.push(`${NO_COMMAND_REASON_START} on its own: this step for ${r.package} starts with an edit by hand, which the reasons and instructions on this row describe, so it is not in run_order.`);
+      continue;
+    }
+    if (r.action !== "upgrade_direct" || !r.targetVersion) continue;
     const manifest = MANIFEST[r.ecosystem] ?? "manifest";
     const copy = `${r.package} ${r.currentVersion ?? ""}`.trimEnd();
     if ((r.upgradeInstructions?.length ?? 0) > 0) {
