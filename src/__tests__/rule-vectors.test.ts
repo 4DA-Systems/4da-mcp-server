@@ -63,6 +63,10 @@ const tally = new Map<VectorFile, { pass: number; skipped: number; fail: number 
 describe.skipIf(!present && !required)("shared rule vectors (4DA)", () => {
   it("the vector files are present, well-formed, with unique ids", () => {
     if (!present) throw new Error(MISSING);
+    // Every vector file the corpus ships is scored here: a new file 4DA adds fails until this runner maps it.
+    const known = new Set<string>(VECTOR_FILES);
+    const unscored = fs.readdirSync(vectorsDir).filter((f) => f.endsWith(".jsonl") && !known.has(f.slice(0, -".jsonl".length)));
+    expect(unscored, `vector files no check in helpers/rule-vectors.ts runs`).toEqual([]);
     const seen = new Set<string>();
     for (const [file, list] of vectors) {
       expect(list.length, `${file}.jsonl is empty`).toBeGreaterThan(0);

@@ -1,0 +1,8 @@
+{
+  "about": "Gate for bench/plan-exec/run.mjs over corpus.json (the plan-exec workflow). A run fails when a project cannot be run or a scan stays NOT CHECKED, when any step fails, lowers a version that was installed or that an earlier step set, or names a command the harness does not run, when the plan has no run_order, or when fewer advisories are cleared than min_net_cleared_ratio ((before - after) / before over the corpus). min_net_cleared_ratio starts at the 6.4.0 baseline the 2026-11-23 audit measured (1,198 -> 273, 0.7721) so a release can only match or beat it; raise it to what a release measures in the change that records that run. Advisory counts drift as OSV.dev adds records for these old versions: compare a ratio, never a count.",
+  "max_failed_steps": 0,
+  "max_lowering_steps": 0,
+  "max_refused_steps": 0,
+  "min_net_cleared_ratio": 0.772,
+  "require_order_source": "run_order"
+}
