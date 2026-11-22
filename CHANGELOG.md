@@ -1,5 +1,87 @@
 # Changelog
 
+## 6.5.0 — unreleased
+
+### What is scanned
+
+- `build/`, `dist/`, `out/`, `coverage/`, `.vscode/` and `.idea/` are ordinary directories: their lockfiles are read unless the repository ignores the directory, and listed lockfile by lockfile (`gitignored_directory`) when it does. Directories never scanned by their name (installed code, a tool's build output or cache, editor or agent state: `node_modules`, `target`, `.venv`, `.claude` ...) that the repository does not ignore are searched within their own bound of 2,000 directories, and every lockfile in them is listed under `coverage.not_scanned.lockfiles` with reason `excluded_directory`.
+- A junction or directory symlink whose real path is inside the project is walked (each directory once, never looping); one that leads outside it is not scanned, and the lockfiles behind it are listed with reason `symlink_outside_root`. A directory the walk cannot list is named (reason `unreadable`, its path ending in `/`) instead of read as empty.
+- A lockfile or manifest with git merge-conflict markers is not read at all, neither side of it: it is listed with reason `merge_conflict`, `coverage.complete` is false, and every tool says `NOT CHECKED (merge conflict)` for it.
+- Started in a workspace member with no lockfile of its own, the server reads the workspace root whose lockfile holds it (npm, pnpm, Yarn and Bun workspaces, Cargo, uv, Poetry, PDM, `go.work`) and says so (`workspace_note`; `dependency_health`'s summary). The search stays inside the enclosing git repository (at most 6 levels with none, never at or above the home directory); an ancestor lockfile that cannot be confirmed to hold the directory is named, not read.
+- With no lockfile read, no tool scores or clears the project: `dependency_health` gives `healthScore: null` with `withheldReason: "no_lockfile"` and a NOT CHECKED summary, a declared range's floor is shown as `currentVersion: null` beside `declaredRange`, `upgrade_planner` sets `vulnerabilityDataAvailable: false`, and `what_should_i_know` never says `safe_to_delegate` on that basis.
+- Cargo dependencies declared as tables (`[dependencies.git2]`), dotted keys (`git2.version = "0.15"`), target tables and quoted names are read as the inline form is.
+- A package-lock v1 dependency installed from a tarball URL is kept: a registry-shaped URL is the release it names (and a private host makes it NOT CHECKED (private), never sent); one that names no release is listed as not checkable.
+- `vulnerability_scan` shows the advisory's own grade beside the scope-adjusted one: `by_advisory_severity` beside `by_severity` (the detailed answer also keeps `advisory_by_severity`), `advisory_severity` on a concise row whose own grade differs, and the summary says first (after any NOT CHECKED headline) how many advisories are critical by their own grade and how many are presented lower. Every recommendation names the own grade where it differs.
+- Scan rows have one order, whatever was answered from the cache, so detailed pages never lose or repeat a row; a concise row carries its ecosystem.
+
+### The plan
+
+- `upgrade_planner` for one project is always this server's plan from that project's lockfiles, with or without the desktop app (`provenance.mode: "lockfile_engine"`). With the app attached, `app_plan_check` says how the app's stored plan compares: `agrees`, `differs` (up to 10 `differences`), `not_comparable` (plan format not read, advisory data over 24 hours old, a lockfile changed after the plan, this server's scan incomplete) or `no_plan`. A stored step whose sites all lie in a directory this server does not scan is counted apart and never reported as a difference.
+- `project_path: "*"` with the app attached still returns the app's stored plan across every project, labelled `provenance.mode: "app_plan"` with `app_plan_check.status: "unverified"` (or `"not_comparable"`), and `stale` when it is past its expiry, its advisory data is over 24 hours old, or a lockfile of a project it covers changed after it (up to 5 named).
+- Every row carries `commands` (`{ dir, run }`); the plan carries `run_order` (`{ n, dir, run, fixes }`), the rows shown as one script that is safe to run top to bottom, and `run_order_note`, which says what it covers and what it leaves out and why. Tied rows are ordered the same way every time.
+- A row is `waiting_on_upstream` only when no command you can run today fixes that copy. A Python parent the project does not declare is moved by its own refresh when what requires it admits a fixing release (`upgrade_parent_unverified` when something holds it below that release, NOT DETERMINED when the releases could not be read). A uv project's vulnerable direct dependency gets `uv lock --upgrade-package <name>==<target>`, or the widening of its requirement first; a uv refresh that would stop below the fix because of a co-dependency the lock holds lower names the fix itself.
+- A version installed both bundled inside another package and on its own gets the refresh for the copies that are not bundled, with `bundledCopies` naming each owner whose copy stays; the summary counts that row in `lockfileRefreshes` and in `waitingOnUpstream`, and says a bundled copy remains.
+- A Cargo upgrade into a release that drops a feature the manifest enables is an instruction naming the feature, not a command cargo refuses; `upgrade_impact` lists such features in `your_code.cargo_features_removed`.
+- A parent upgrade never names a release of a declared dependency that brings in a new vulnerable copy. Overrides are scoped to the vulnerable copy's parents where the lockfile holds other versions; a Yarn classic refresh that would move only one of several entries gives the hand steps instead. On pnpm, a parent move whose new release takes the package as a peer names the step that moves the peer.
+- Upgrade targets past the per-call requirement cap are examined after the call returns, so the next call answers every one.
+- The app plan's `lockfile_refresh` is worded for a direct dependency whose declared range already admits the fix as well as for a transitive copy, and the plan summary no longer calls every refresh transitive.
+
+### The pre-write check
+
+- One refused item no longer fails a `dependency_check` batch: it is `unknown` with `not_checked: "input"` and its reason, and the others are answered. An npm scope written without its `@` is named as such, and nothing is sent.
+- Go: a retraction list that could not be read makes the item `unknown` (never `proceed`) and nothing is cached for it. A read held back by this server's own Go request limit says so, never blames the proxy, and carries `retry_after_seconds`. The limit is 300 requests a minute and an item reserves every read it needs up front, so a 25-item batch fits.
+- A constraint's smallest safe release is never above a release in the range that was not judged.
+
+### Signals and the briefing
+
+- `get_actionable_signals` starts the project's scan and waits for it when none has run in the session (`scan: { status, scanned_at }`; `note` starts NOT CHECKED when it is missing or incomplete), and gives the scan's own instruction for each finding, as `vulnerability_scan` and `what_should_i_know` do. A call filtered to a non-security signal type starts no scan.
+- `get_relevant_content` and `get_actionable_signals` never widen a `since_hours` you pass; the default window is still widened when empty, and `window: { requested_hours, used_hours, widened }` says so. They give one item per advisory, keeping the better-grounded source.
+- A feed advisory reaches a briefing package only on its ecosystem and exact name; the briefing keys packages by ecosystem and name; a signal's priority follows the presented grade; maintenance notices read as notices (`maintenance_notices` on a briefing row), never as advisories with a missing fix.
+- `ecosystem_pulse` takes its search terms from the project on disk (its frameworks and direct dependencies), with or without the desktop app; the app's stored rows are used only to keep a name another project installs privately from being sent.
+
+### With the desktop app
+
+- The dependency tools read every lockfile under the project root from disk, exactly as without the app, with the same `coverage`; the app's database is never the inventory and a scan never writes to it.
+- The supported app range is declared: 4DA v1.0.3 (schema 124, plan format 4) through the app's main of 2026-11-22 (schema 131, plan format 5). Outside it, `get_context` and every answer that reads or writes the app's data carry `_meta.app_compatibility` with a note saying which side to update; nothing fails.
+
+### Data folder
+
+- `FOURDA_DB_PATH` naming a missing file, or a file with no tables, leaves `vulnerability_scan`, `dependency_health`, `dependency_check`, `upgrade_impact`, `upgrade_planner`, `what_should_i_know` and `ecosystem_pulse` answering from the project's files, each with `_meta.database_note`; the briefing has no stored decisions, memories or feed rows then and says so in `stored_data_note`. Every other tool returns the error, which names the path. Nothing is created or changed at that path.
+- The server's own store is known by its path and completed on every open, so a first start killed mid-way, or several servers started together on a fresh folder, no longer leave a file taken for the app's database.
+- The disk cache retries a lock before falling back to memory.
+- `--doctor` names the data folder, the server's own database, the cache and the app database, each with its path and state, and exits 1 when the own store cannot be used or `FOURDA_DB_PATH` names no file or a file with no tables.
+- `record_feedback` that recorded nothing is an error (`isError`), with a retry hint when the app holds its write lock.
+
+### Plugin hook and install
+
+- The plugin hook runs before the edit or install command (PreToolUse) and denies a dependency version that has no `dependency_check` verdict of `proceed` or `review` from the last 24 hours, or whose verdict is `avoid` or `wait`, naming the call to make. `dependency_check` records each verdict in a local ledger in the data folder (`check-ledger.jsonl`, never sent). The hook reads install commands and `pnpm-workspace.yaml`, `requirements-*.txt` and `requirements/*.txt` too, and fails open. `FOURDA_GUARD=advise` restores advice after the edit; `FOURDA_GUARD=off` turns it off.
+- Every configuration `--setup` writes, the printed Claude Code command, the plugin and the Gemini extension run `npx -y --prefer-offline @4da/mcp-server@<version>`, so a cached pinned version starts without asking the registry first.
+- `get_context` carries `update_notice` and `--doctor` a "Server version" warning when a newer release is published. The newest version is read only after a tool call of the session has already contacted a registry, never at start-up or with `FOURDA_OFFLINE`, at most once a day.
+- The server instructions name `by_advisory_severity` and say that with the app attached the dependency tools still read the project from disk; `vulnerability_scan`'s description says build directories are read unless ignored.
+
+### Tests and gates
+
+- The conformance corpus is pinned to 4DA f99b6fa0c: 91 more rule vectors (malware vectors now scored) and one more OSV record (3,929); the runner fails when the corpus ships a vector file no check runs.
+- Every released app schema is tested (`contract/released/v1.0.3.sql` beside the vendored current schema): every tool runs against each without an SQL error.
+- New release harnesses, run weekly and on demand: plan execution (each corpus project's plan run top to bottom on a copy and rescanned), concurrent and killed first starts on one data folder, and an app-mode arm that must agree with standalone mode.
+
+### Changed behaviour
+
+- `upgrade_planner` no longer relays the app's stored plan for one project, and `appPlanUnavailable` is gone: read `app_plan_check` instead.
+- `provenance.mode` is `"lockfile_engine"` for every plan of one project (it was `standalone_heuristic` or `app_plan`); `"app_plan"` now means only the app's stored plan for `project_path: "*"`.
+- `FOURDA_DB_PATH` naming no file is refused and nothing is created there (before, an absolute path whose directory existed was created as a new standalone database), except at the server's own `standalone.db` path.
+- The plugin hook now denies an unchecked or `avoid` version before the edit; set `FOURDA_GUARD=advise` for the old advice.
+- A feed window is never widened when `since_hours` is passed: a call that relied on the silent widening to 168 or 720 hours gets an empty answer that says nothing matched in its window.
+- `record_feedback` that records nothing returns `isError: true` with `error`, where it returned `success: false` alone.
+- `lockfileRefreshes` and `waitingOnUpstream` can now both count one row (a refresh that leaves a bundled copy).
+
+### Known limits
+
+- A target release that brings in a vulnerable copy bundled inside it, or two levels down, is not detected.
+- A cold batch of 25 crates can need a second call: crates.io allows one request a second.
+- `run_order` holds only commands: hand steps (most of a Yarn classic plan) stay in the rows' reasons.
+- In the `"*"` scope the app's plan has one step per package, which can still cover copies whose routes differ between projects.
+
 ## 6.4.0 — 2026-11-19
 
 ### Behaviour changes
