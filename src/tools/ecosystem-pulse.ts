@@ -2,9 +2,8 @@
 /**
  * ecosystem_pulse tool
  *
- * Surfaces live ecosystem news relevant to the user's tech stack.
- * Data is already fetched on server startup from Hacker News via Algolia API.
- * This tool makes it queryable.
+ * Surfaces live ecosystem news relevant to the user's tech stack, searched on
+ * Hacker News (Algolia API) when the tool is called, never at start-up.
  */
 
 import * as fs from "node:fs";
@@ -63,21 +62,20 @@ const MAX_TERMS = 8;
 
 /**
  * The terms HN headlines are searched and matched on: the frameworks the
- * project uses and its most-used direct dependencies — names specific enough
- * that a headline naming one is about something this project runs. Language
- * names are the fallback only: matched on "rust", the pulse was "What Zig felt
- * like, coming from Rust" and an Emacs fork (live 2026-10-01). Package names
- * that are everyday words are left out (they match unrelated titles).
- * Works on both the desktop DB and the standalone minimal schema.
+ * project uses and its direct dependencies, read from the project on disk (the
+ * live layer's inventory, as every dependency tool reads it), names specific
+ * enough that a headline naming one is about something this project runs.
+ * Language names are the fallback only: matched on "rust", the pulse was "What
+ * Zig felt like, coming from Rust" and an Emacs fork (live 2026-10-01). Package
+ * names that are everyday words are left out (they match unrelated titles).
  *
- * Only the CURRENT project's (`live.getProjectRoot()`): the database is shared by every project a
- * server was started in (and the desktop app indexes every project it sees), and a server started
- * in a public project searched Hacker News for `acme-ledger`, another project's private package,
- * and for that project's public stack too (blind audit round 4). A term is also never sent when the
- * current rules call it private in any ecosystem, or when another project the database knows
- * installs it from a private source. No project known: no terms.
+ * Only the CURRENT project's (`live.getProjectRoot()`). A term is never sent when the current
+ * rules call it private in any ecosystem, or when another project the database knows installs it
+ * from a private source (the database's rows are read for that check only, never as the
+ * inventory). No project known: no terms. No database: the same terms, without that check of
+ * other projects, which the server then knows nothing of.
  */
-export function deriveTechStackForHeadlines(db: FourDADatabase, live: PulseScope | null = null): string[] {
+export function deriveTechStackForHeadlines(db: FourDADatabase | null, live: PulseScope | null = null): string[] {
   const root = live?.getProjectRoot?.() ?? null;
   if (!root) return [];
   const terms: string[] = [];
@@ -85,31 +83,17 @@ export function deriveTechStackForHeadlines(db: FourDADatabase, live: PulseScope
     const t = (term ?? "").toLowerCase().trim();
     if (t.length >= 3 && !LANGUAGES.has(t) && !COMMON_WORDS.has(t) && !terms.includes(t) && !t.includes("/")) terms.push(t);
   };
-  const rawDb = db.getRawDb();
-  const rows = dependencyRows(db);
-  const here = rows.filter((r) => !!r.project_path && isWithin(r.project_path, root));
-  // Ranked by how many projects use a name (a count, nothing else of theirs), then by name.
-  const users = new Map<string, Set<string>>();
-  for (const r of rows) {
-    const key = (r.package_name ?? "").toLowerCase();
-    const set = users.get(key) ?? new Set<string>();
-    set.add(r.project_path ?? "");
-    users.set(key, set);
-  }
-  const fromDb = here.filter((r) => r.is_direct === undefined || r.is_direct === null || Number(r.is_direct) === 1).map((r) => r.package_name);
-  // A project the database does not track (desktop mode reading it from disk): the live layer's own direct dependencies.
-  const fromLive = here.length === 0 ? (live?.getResolvedDeps?.() ?? []).filter((d) => d.isDirect).map((d) => d.name) : [];
-  const ownNames = [...new Set([...fromDb, ...fromLive].map((n) => (n ?? "").toLowerCase()))].sort(
-    (a, b) => (users.get(b)?.size ?? 0) - (users.get(a)?.size ?? 0) || a.localeCompare(b),
-  );
-  // Frameworks: the ones this project's own manifests name, ranked by the database's confidence.
+  // The project's direct dependencies, runtime ones before dev-only ones, each in name order.
+  const direct = (live?.getResolvedDeps?.() ?? []).filter((d) => d.isDirect);
+  const ownNames = [...new Set([...direct].sort((a, b) => Number(Boolean(a.isDev)) - Number(Boolean(b.isDev)) || a.name.localeCompare(b.name)).map((d) => d.name.toLowerCase()))];
+  // Frameworks: the ones this project's own manifests name, ranked by the database's confidence when it has one.
   const scan = safeScan(root);
   const ownFrameworks = new Set((scan?.frameworks ?? []).map((f) => f.toLowerCase()));
   const ownNameSet = new Set(ownNames);
   try {
-    for (const row of rawDb
+    for (const row of (db?.getRawDb()
       .prepare("SELECT name FROM detected_tech WHERE category IN ('framework', 'library') ORDER BY confidence DESC LIMIT 50")
-      .all() as Array<{ name: string }>) {
+      .all() ?? []) as Array<{ name: string }>) {
       const name = (row.name ?? "").toLowerCase();
       if (ownFrameworks.has(name) || ownNameSet.has(name)) add(name);
     }
@@ -122,10 +106,10 @@ export function deriveTechStackForHeadlines(db: FourDADatabase, live: PulseScope
   // fetcher): HN titles rarely name a library in a two-week window, and an
   // asked-for ecosystem pulse should still say what moved in the language.
   const languages: string[] = [];
-  for (const term of [...here.map((r) => r.language ?? ""), ...(scan?.languages ?? [])].map((l) => l.toLowerCase())) {
+  for (const term of (scan?.languages ?? []).map((l) => l.toLowerCase())) {
     if (term && PULSE_LANGUAGES.has(term) && !languages.includes(term)) languages.push(term);
   }
-  const elsewhere = new PrivateElsewhere(rows, root);
+  const elsewhere = new PrivateElsewhere(db ? dependencyRows(db) : [], root);
   const specific: string[] = [];
   for (const t of terms) {
     if (specific.length >= MAX_TERMS - 2) break;
@@ -137,13 +121,12 @@ export function deriveTechStackForHeadlines(db: FourDADatabase, live: PulseScope
 /** What the pulse needs from the live layer: the project it is for, and its private-name rules. */
 export type PulseScope = Partial<Pick<LiveIntelligence, "getProjectRoot" | "getResolvedDeps" | "privateReason">>;
 
-type DependencyRow = { package_name: string; project_path: string | null; language: string | null; is_direct?: number | null };
+type DependencyRow = { package_name: string; project_path: string | null };
 
-/** Every stored dependency row (any project), or none when the table is missing. */
+/** Every stored dependency row's name and project (any project), for the private-elsewhere check; none when the table is missing. */
 function dependencyRows(db: FourDADatabase): DependencyRow[] {
   try {
-    const direct = db.hasColumn?.("project_dependencies", "is_direct") ? ", is_direct" : "";
-    return db.getRawDb().prepare(`SELECT package_name, project_path, language${direct} FROM project_dependencies`).all() as DependencyRow[];
+    return db.getRawDb().prepare("SELECT package_name, project_path FROM project_dependencies").all() as DependencyRow[];
   } catch {
     return [];
   }
@@ -224,7 +207,7 @@ class PrivateElsewhere {
 const PULSE_LANGUAGES = new Set(["rust", "python", "zig", "kotlin", "swift", "ruby", "elixir"]);
 
 export async function executeEcosystemPulse(
-  db: FourDADatabase,
+  db: FourDADatabase | null,
   params: EcosystemPulseParams,
   liveIntel: LiveIntelligence | null,
 ): Promise<EcosystemPulseResult> {

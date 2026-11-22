@@ -78,16 +78,22 @@ const DISPATCH_MAP: Record<string, ToolExecutor> = {
 };
 
 /**
- * Tools that answer from the project's lockfiles and the registries alone, so
- * they still run when no SQLite driver is usable at all (sqlite-driver.ts:
- * Node < 22.13 with better-sqlite3 unbuilt). Their executors accept a null
- * database; every other tool needs one.
+ * Tools that answer from the project's files and the registries, so they still
+ * run when no database can be used: no SQLite driver (sqlite-driver.ts: Node <
+ * 22.13 with better-sqlite3 unbuilt), or a selected database that is missing,
+ * has no tables or cannot be opened. Their executors accept a null database:
+ * upgrade_planner then has no app plan to compare, what_should_i_know says its
+ * stored parts are absent (stored_data_note), ecosystem_pulse searches the
+ * project's own terms. Every other tool needs one.
  */
 export const DATABASE_FREE_TOOLS: ReadonlySet<string> = new Set([
   "vulnerability_scan",
   "dependency_health",
   "dependency_check",
   "upgrade_impact",
+  "upgrade_planner",
+  "what_should_i_know",
+  "ecosystem_pulse",
 ]);
 
 /**

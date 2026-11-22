@@ -354,7 +354,7 @@ function higherRisk(
 }
 
 export async function executeUpgradePlanner(
-  db: FourDADatabase,
+  db: FourDADatabase | null,
   params: UpgradePlannerParams,
   liveIntel: LiveIntelligence | null,
 ): Promise<UpgradePlanResult | AppPlanResult> {

@@ -859,13 +859,6 @@ export function dedupeByTitle<T extends { title: string | null }>(items: T[], th
 }
 
 /**
- * The dependency-group query the server runs at init against a pre-existing
- * database (index.ts full-DB branch). Exported as a single source of truth so
- * the schema-compatibility regression test exercises the EXACT production SQL —
- * the `is_direct` standalone-schema gap slipped through precisely because the
- * two modes were only ever tested separately.
- */
-/**
  * The app-owned tables this server is designed to write when the desktop app
  * is installed: decisions (decision_memory), agent memory (agent_memory) and
  * feedback (record_feedback -> the app's calibration). Nothing else in the
@@ -883,9 +876,6 @@ export interface WriteTarget {
   target: "database" | "app" | "server_store";
   note?: string;
 }
-
-export const DEPENDENCY_GROUP_QUERY =
-  "SELECT DISTINCT package_name, language, project_path, is_dev, is_direct FROM project_dependencies";
 
 /**
  * 4DA Database accessor
@@ -991,12 +981,10 @@ export class FourDADatabase {
     if (!standalone) return;
 
     // Schema upgrade for standalone databases created before `is_direct` was
-    // added to the minimal schema: the full-DB init branch queries that column
-    // (DEPENDENCY_GROUP_QUERY), and without it session 2+ of a standalone
-    // install throws, gets caught, and silently disables vulnerability_scan /
-    // dependency_health / upgrade_planner. Scanner-inserted manifest deps are
-    // direct by definition, so DEFAULT 1 backfills correctly. Standalone
-    // databases only: the desktop app's database is never altered.
+    // added to the minimal schema, so every standalone store has the column the
+    // current schema declares. Scanner-inserted manifest deps are direct by
+    // definition, so DEFAULT 1 backfills correctly. Standalone databases only:
+    // the desktop app's database is never altered.
     try {
       const hasDepsTable = this.db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_dependencies'")

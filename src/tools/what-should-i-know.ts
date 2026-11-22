@@ -209,8 +209,18 @@ export interface WhatShouldIKnowResult {
   wisdom_recall_mode: WisdomRecallMode;
   /** Said when the task or stored text names a private package and was kept from the embedding provider. */
   wisdom_recall_note?: string;
+  /** Present only when no database is open: which parts of the briefing are absent for that reason. */
+  stored_data_note?: string;
   _meta: { untrusted_text: string };
 }
+
+/**
+ * What the briefing says when no database is open (FOURDA_DB_PATH names a missing or table-less
+ * file, or no SQLite driver): its dependency parts come from the project's files; the parts read
+ * from stored data are absent, never reported as "none".
+ */
+export const STORED_DATA_ABSENT_NOTE =
+  "No 4DA database is open, so this briefing has no stored decisions, decision windows, memories, advisory-feed rows, release notes or reading; those lists are empty because they were not read. Its dependency findings come from the project's files.";
 
 /**
  * The slice of the live layer the briefing reads; a stub suffices in tests.
@@ -332,7 +342,7 @@ function getOpenDecisionWindows(db: FourDADatabase): WindowRow[] {
 // ============================================================================
 
 export async function executeWhatShouldIKnow(
-  db: FourDADatabase,
+  db: FourDADatabase | null,
   params: WhatShouldIKnowParams,
   liveIntel: BriefingLiveIntel | null = getLiveIntelligence(),
 ): Promise<WhatShouldIKnowResult> {
@@ -439,6 +449,7 @@ export async function executeWhatShouldIKnow(
   const vulns = scan?.vulnerabilities ?? [];
   const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages, allDeps()) : null;
   const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns, latest));
+  // With no database open, the stored parts below are not read (STORED_DATA_ABSENT_NOTE).
 
   // ── 2. Advisories: confirmed for the task, stored feed rows, project-wide
   // One row per task package (the per-advisory detail is in task_dependencies;
@@ -498,7 +509,7 @@ export async function executeWhatShouldIKnow(
   // Advisory-database rows (cve/osv sources) about a task package, by ecosystem and exact name. With
   // a ready scan they are kept only for packages the scan confirms vulnerable; without one they are
   // the only evidence, and say they are unconfirmed.
-  const stored: StoredAdvisory[] = storedAdvisoriesFor(db, packages);
+  const stored: StoredAdvisory[] = db ? storedAdvisoriesFor(db, packages) : [];
   for (const row of stored) {
     const dep = taskDependencies.find((d) => d.package === row.package && d.ecosystem === row.ecosystem);
     const confirmedVulnerable = dep !== undefined && dep.vulnerabilities.length > 0;
@@ -521,14 +532,14 @@ export async function executeWhatShouldIKnow(
   if (scan) pushAll(advisories, projectAdvisories(scan, new Set(packages.map((p) => `${p.ecosystem}\0${p.name}`))));
 
   // ── 3. Decisions: windows, conflicts, wisdom ──────────────────────────
-  const decisionWindows = getOpenDecisionWindows(db)
+  const decisionWindows = (db ? getOpenDecisionWindows(db) : [])
     .filter((w) => relevance((w.title || "") + " " + (w.description || "")) > 0)
     .slice(0, 5)
     .map((w) => ({ id: w.id, title: w.title, description: w.description, urgency: w.urgency }));
-  const decisionConflicts = await conflictsFor(db, packages);
+  const decisionConflicts = db ? await conflictsFor(db, packages) : [];
 
   // ── 4. Judge-accepted reading about the task's packages ───────────────
-  const relatedReading = judgedReadingFor(db, packages);
+  const relatedReading = db ? judgedReadingFor(db, packages) : [];
 
   // Manifests of ecosystems this server does not read (pom.xml, build.gradle, *.csproj): a
   // dependency the task names there was never checked, so the task cannot be "safe" on the
@@ -572,15 +583,17 @@ export async function executeWhatShouldIKnow(
       delegation_assessment: delegation,
       scan_status: scanStatus,
       scan: scanBlock,
-      summary: `${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions)}`,
+      summary: `${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
+      ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
       _meta: { untrusted_text: UNTRUSTED },
     };
   };
 
   // Wisdom retrieval is lexical by default and hybrid when an embedding
   // provider is configured.
+  if (!db) return finalize([], "ranked_lexical");
   const embedConfig = getEmbeddingConfig();
   if (!embedConfig) {
     return finalize(getRelevantWisdom(db, task, files), "ranked_lexical");
@@ -696,7 +709,7 @@ async function latestVersions(
 }
 
 function describePackage(
-  db: FourDADatabase,
+  db: FourDADatabase | null,
   pkg: TaskPackage,
   vulns: VulnerabilityScanResult["vulnerabilities"],
   latestByPackage: Map<string, LatestFact> | null = null,
@@ -726,7 +739,7 @@ function describePackage(
   }
   const target = pkg.requested_to && /^v?\d+\.\d+\.\d+/.test(pkg.requested_to) ? pkg.requested_to.replace(/^v/, "") : null;
   const impactArgs = JSON.stringify({ package: pkg.name, ...(target ? { to_version: target } : {}), ecosystem: pkg.ecosystem });
-  const newerReleases = releasesFor(db, pkg);
+  const newerReleases = db ? releasesFor(db, pkg) : null;
   const notices = maintenanceNoticesFor(pkg, vulns);
   return {
     package: pkg.name,

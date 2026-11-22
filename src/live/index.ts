@@ -361,10 +361,11 @@ export class LiveIntelligence {
   }
 
   /**
-   * Initialize from dependency groups that each carry their own resolution
-   * directory, for a caller that already knows its groups (tests, harnesses).
-   * The server itself always initializes from the project-tree walk
-   * (initFromProjectTree), with or without the app's database. Each group
+   * Test seam: initialize from dependency groups that each carry their own
+   * resolution directory, for a test that already knows its groups. No
+   * production code calls it: the server always initializes from the
+   * project-tree walk (initFromProjectTree), with or without the app's
+   * database. Each group
    * resolves versions from its own lock file; dependencies are deduplicated by
    * ecosystem+name+version so a crate shared across workspaces is scanned once.
    * No walk record is kept, so coverage notes are absent.
