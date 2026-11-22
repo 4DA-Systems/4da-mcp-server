@@ -95,7 +95,7 @@ else it scores; baseline mode exists so the same harness measures 6.4.0.
 
 Fails when a project cannot be run or a scan stays NOT CHECKED, when any step fails, lowers a
 version, or is refused, when the plan has no `run_order`, or when the corpus's net share of
-advisories cleared, `(before - after) / before`, is below `min_net_cleared_ratio` (starts at the
+advisories cleared, `(before - after) / before`, is below `min_net_cleared_ratio` (0.75: just under what the
 6.4.0 baseline, 0.772; raise it to what a release measures, in the change that records that
 run). Advisory counts drift as OSV.dev adds records for these old versions, so the gate reads a
 ratio, never a count.
