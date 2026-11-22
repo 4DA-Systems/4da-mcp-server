@@ -40,6 +40,7 @@ import { lockfileFormatOf, prepareLockfileParents, type LockfileFormat, type Par
 import { parseCargoLockPackages } from "./lockfile-parsers.js";
 import { compiledRequirements, confinedInclude, parseGoMod, requirementOptions } from "./lockfile-parsers-pygo.js";
 import { requirementFiles } from "./lockfile-parsers-pygo.js";
+import { pyprojectDirectFix } from "./pypi-direct.js";
 import { projectOverride } from "./overrides.js";
 import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
@@ -1748,7 +1749,7 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
           if (rel && !files.includes(rel)) files.push(rel);
         }
       }
-      return null;
+      return pyprojectDirectFix(projectDir, name, installed, target);
     }
     default:
       return null;

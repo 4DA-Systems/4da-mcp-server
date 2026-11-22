@@ -63,6 +63,7 @@ import { advisoryAffects, cleanReleases, isPrereleaseVersion, remainsText, type 
 import { projectOverride } from "../live/overrides.js";
 import { registryQuote } from "../untrusted-text.js";
 import { pypiCompiledInstruction, pypiPinnedTogether } from "../live/pypi-advice.js";
+import { PYPI_NO_COMMAND, pypiNoCommandReason } from "../live/pypi-direct.js";
 import { requirementAdmits, type RequirementDialect } from "../live/refresh-rule.js";
 import { compareVersions } from "../live/version-compare.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
@@ -728,6 +729,9 @@ function withUpgradeCommands(input: FixPathInput, liveIntel: Pick<LiveIntelligen
       for (const r of replaced) if (!step.reasons.includes(r.instruction)) step.reasons.push(r.instruction);
     }
   }
+  // A direct PyPI row always says how it moves, or why no command is named for it.
+  step.reasons = step.reasons.filter((r) => !r.startsWith(PYPI_NO_COMMAND));
+  if (step.ecosystem === "PyPI" && !fixes.commands && !fixes.instructions) step.reasons.push(pypiNoCommandReason(input.sourceDirs, step.package, step.targetVersion));
   if (step.ecosystem === "PyPI" && step.upgradeInstructions) {
     // An `==` edit of a file that pins everything is not independently safe: 4 of pygoat's 15
     // did not resolve against the other pins, nor did all 15 (audit 6.2.5 A-4). Said, per edit.
