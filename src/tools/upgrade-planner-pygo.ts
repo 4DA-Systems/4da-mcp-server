@@ -17,6 +17,8 @@ import { pypiCompileCommand } from "../live/pypi-advice.js";
 import {
   compiledParents,
   goIndirectRaise,
+  lockHoldsBack,
+  lockedDependencies,
   lowestPython,
   pythonLockParents,
   pythonRefreshCommand,
@@ -25,6 +27,7 @@ import {
   requirementsOnGated,
   type PythonParents,
 } from "../live/pygo-parents.js";
+import { isShellSafeVersion } from "../live/shell-safe.js";
 import { readTextFile } from "../live/text-file.js";
 import { compareVersions } from "../live/version-compare.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
@@ -172,15 +175,30 @@ export async function pygoRefreshOrUpstream(
     return true;
   }
 
+  // uv keeps every other locked version it can: when the release a refresh would reach needs a
+  // co-dependency the lock holds lower, the refresh names the fix itself, which moves it.
+  const needsPin = async (lockfile: string) => {
+    // Only a copy that has dependencies of its own in the lock can be held back by one of them.
+    if (lockedDependencies(lockfile, step.package, installed).length === 0) return null;
+    const dist = resolvesTo ? await sources.pypiRequiresDist(step.package, resolvesTo).catch(() => null) : null;
+    return dist && resolvesTo ? lockHoldsBack(lockfile, `${step.package} ${resolvesTo}`, dist) : null;
+  };
   const commands: Array<{ dir: string; command: string }> = [];
+  const heldBack: string[] = [];
   for (const { dir, parents } of read) {
+    const held = parents.format === "uv" && isShellSafeVersion(target) ? await needsPin(parents.file) : null;
+    if (held && !heldBack.includes(held)) heldBack.push(held);
     const command = parents.format === "compiled" ? pypiCompileCommand(dir, step.package, installed, target) : pythonRefreshCommand(parents.format, step.package);
     if (!command) return false;
-    commands.push({ dir: relativeDir(dir, root), command });
+    commands.push({ dir: relativeDir(dir, root), command: held ? `${command}==${target}` : command });
   }
   step.action = "lockfile_refresh";
   step.refreshCommands = commands;
-  const to = pinned ? "" : ` (a refresh resolves it to ${resolvesTo})`;
+  const to = pinned
+    ? ""
+    : heldBack.length > 0
+      ? ` (the newest release they admit is ${resolvesTo}, but ${heldBack.join("; ")}, and uv keeps a locked version, so the refresh names ${target} itself)`
+      : ` (a refresh resolves it to ${resolvesTo})`;
   replaceReason(
     step,
     `Transitive dependency: every parent's declared requirement already admits ${target} (${edges.slice(0, 3).map(label).join(", ")}${edges.length > 3 ? ` and ${edges.length - 3} more` : ""})${to}, so a lockfile refresh is enough, no parent upgrade: ${commands.map((c) => `\`${c.command}\` in ${c.dir}`).join("; ")}`,
