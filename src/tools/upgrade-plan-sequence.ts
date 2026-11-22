@@ -393,7 +393,9 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
         return node(key, c.dir, PHASE.set, `${p.tool} ${p.pkg}`, () => setRun(key));
       }
       case "refresh":
-        return node(`${c.dir}\0refresh\0${p.tool}\0${p.pkg}`, c.dir, PHASE.refresh, `${p.tool} ${p.pkg}`, () => c.run);
+        // Merged only when identical: `pnpm update x --no-save` and `pnpm update x --depth Infinity`
+        // move different copies, and an in-range refresh never lowers what another step sets.
+        return node(`${c.dir}\0refresh\0${c.run}`, c.dir, PHASE.refresh, `${p.tool} ${p.pkg}`, () => c.run);
       case "goget": {
         const key = `${c.dir}\0goget`;
         const mods = goNodes.get(c.dir) ?? new Map();

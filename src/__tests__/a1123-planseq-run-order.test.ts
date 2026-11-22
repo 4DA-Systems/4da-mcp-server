@@ -38,6 +38,15 @@ describe("(a) one command per package per directory, at the highest target any r
     expect(out.run_order_note).toMatch(/was not confirmed \(re-scan after running\)/);
   });
 
+  it("two different refreshes of one package both run (they move different copies); an identical one runs once", () => {
+    const rows = [
+      row("vite", "upgrade_direct", ["pnpm update vite --no-save"]),
+      row("vite", "lockfile_refresh", ["pnpm update vite --depth Infinity"], { currentVersion: "5.0.0" }),
+      row("vite", "lockfile_refresh", ["pnpm update vite --depth Infinity"], { currentVersion: "5.1.0" }),
+    ];
+    expect(runs(rows)).toEqual(["pnpm update vite --depth Infinity", "pnpm update vite --no-save"]);
+  });
+
   it("the same package in two directories is two commands", () => {
     const rows = [row("lodash", "upgrade_direct", [cmd("npm install lodash@4.17.21 --save-exact", "web")]), row("lodash", "upgrade_direct", [cmd("npm install lodash@4.17.21 --save-exact", "api")])];
     expect(plan(rows).run_order.map((s) => [s.dir, s.run])).toEqual([
