@@ -67,7 +67,7 @@ describe("Yarn classic: a declared package locked under several entries at the s
     h.write("yarn.lock", lock);
   }
 
-  it("gives the hand steps that move every entry, not `yarn upgrade`, and run_order leaves it out", async () => {
+  it("gives the hand steps that move every entry, not `yarn upgrade`", async () => {
     project(true);
     const { result, step } = await h.plan();
     const row = step("@babel/core");
@@ -75,9 +75,12 @@ describe("Yarn classic: a declared package locked under several entries at the s
     expect(row.upgradeCommands).toBeUndefined();
     expect(row.upgradeInstructions).toEqual([{ dir: ".", instruction: 'delete every yarn.lock entry that resolves to @babel/core (keys "@babel/core@…" and alias keys "…@npm:@babel/core@…"), then run yarn install' }]);
     expect(row.reasons.join(" ")).toMatch(/yarn\.lock holds @babel\/core 7\.19\.6 under 2 entries \("@babel\/core@\^7\.11\.6, @babel\/core@\^7\.12\.3"; "@babel\/core@\^7\.19\.6"\)/);
-    expect(row.commands).toEqual([]);
+    // Every copy is on one line at or below the target: the exact resolution runs instead (upgrade-plan-runnable.ts).
+    expect(row.commands).toEqual([
+      { dir: ".", run: 'npm pkg set "resolutions.@babel/core=7.20.0"' },
+      { dir: ".", run: "yarn install" },
+    ]);
     expect(result.run_order.map((s: { run: string }) => s.run)).not.toContain("yarn upgrade @babel/core");
-    expect(result.run_order_note).toMatch(/not fixed by commands alone .*: @babel\/core 7\.19\.6/);
   });
 
   it("keeps `yarn upgrade` when one entry holds the version", async () => {

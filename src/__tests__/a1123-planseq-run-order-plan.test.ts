@@ -55,7 +55,7 @@ describe("(c) one go get per module directory", () => {
 });
 
 describe("(d) a parent upgrade before the refreshes it carries", () => {
-  it("the refresh that follows a lever's install runs after it; an unrelated refresh runs first", async () => {
+  it("the refresh that follows a lever's install runs after it; an unrelated refresh runs with the other refreshes, after the upgrades", async () => {
     h.ADVISORIES = { child: [adv("GHSA-cccc-0001", "child", fixedIn("1.0.2"))], other: [adv("GHSA-oooo-0001", "other", fixedIn("2.0.1"))] };
     h.NPM = {
       par: { latest: "1.0.1", versions: { "1.0.0": { dependencies: { child: "1.0.0" } }, "1.0.1": { dependencies: { child: "^1.0.0" } } } },
@@ -74,7 +74,7 @@ describe("(d) a parent upgrade before the refreshes it carries", () => {
       { dir: ".", run: "npm install par@1.0.1 --save-exact" },
       { dir: ".", run: "npm update child" },
     ]);
-    expect(steps(result)).toEqual(["npm update other", "npm install par@1.0.1 --save-exact", "npm update child"]);
+    expect(steps(result)).toEqual(["npm install par@1.0.1 --save-exact", "npm update child", "npm update other"]);
   });
 });
 
@@ -127,9 +127,16 @@ describe("(f) every step and snippet names its directory", () => {
     const row = step("child");
     expect(row.action).toBe("override_or_replace");
     expect(row.reasons.join(" ")).toContain('npm: add "overrides": { "child": "1.0.2" } to web/package.json (npm 8.3+), then npm install in web');
-    expect(row.commands).toEqual([]);
-    expect(result.run_order).toEqual([]);
-    expect(result.run_order_note).toMatch(/not counted as fixed by their commands .*: child 1\.0\.0/);
+    // The snippet is also written as the commands that make it, in that project's directory.
+    expect(row.commands).toEqual([
+      { dir: "web", run: 'npm pkg set "overrides.child=1.0.2"' },
+      { dir: "web", run: "npm install" },
+    ]);
+    expect(result.run_order.map((s: { dir: string; run: string }) => [s.dir, s.run])).toEqual([
+      ["web", 'npm pkg set "overrides.child=1.0.2"'],
+      ["web", "npm install"],
+    ]);
+    expect(result.run_order_note).toMatch(/1 of them force a version with an override or resolution written by `npm pkg set` \(child 1\.0\.0\)/);
     for (const s of result.run_order) expect(typeof s.dir).toBe("string");
   });
 });

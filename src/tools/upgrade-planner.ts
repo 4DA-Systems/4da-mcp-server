@@ -55,6 +55,7 @@ import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
+import { declaredNpmOperator, staleLocksNote, uvWorkspaces, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -843,6 +844,14 @@ async function executeStandalonePlanner(
   markUndetermined(limited);
   // A copy this host does not build: its fix is on the row, labelled with where it applies.
   labelOtherTargets(limited);
+  // What a command can do here: a uv workspace member's own uv.lock is not the one uv uses, the
+  // workspace's own packages are not upgraded from the registry, and a uv pin whose release needs a
+  // newer Python than the project supports is a hand step first (upgrade-plan-runnable.ts).
+  const uvSpaces = uvWorkspaces(root);
+  const staleUvLocks = withUvWorkspaceLocks(limited, root, uvSpaces);
+  withoutOwnPackageUpgrades(limited, workspaceOwnNames(root, uvSpaces));
+  withYarnClassicResolutions(limited, root);
+  await withPythonSupport(limited, root, liveIntel.getFixPathSources());
   // Every command a row names, as data, from the fields its words were built from (all passes done).
   attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));
   // A direct upgrade with nothing to run says why, and the hand step that takes it.
@@ -863,6 +872,7 @@ async function executeStandalonePlanner(
     heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x)),
     goSource: liveIntel.getReleaseSources().Go,
     peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
+    declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
@@ -989,7 +999,7 @@ async function executeStandalonePlanner(
     vulnerabilityDataAvailable,
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     run_order: sequence.run_order,
-    run_order_note: sequence.run_order_note,
+    run_order_note: staleUvLocks.length > 0 ? `${sequence.run_order_note} ${staleLocksNote(staleUvLocks)}` : sequence.run_order_note,
     provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
 }

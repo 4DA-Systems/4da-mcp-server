@@ -7,15 +7,19 @@
  * compiled requirements file's re-compile), after every pass that rewrites them, so the data and
  * the words never disagree. `dir` is project-relative, "." for the root. A compound command is one
  * entry per command, in order. A step the developer does by hand (deleting yarn.lock or bun.lock
- * entries, adding an override, editing a manifest) is not a command: it stays in the row's
- * reasons and `upgradeInstructions`, and `commands` holds only what can be run.
+ * entries, editing a manifest) is not a command: it stays in the row's reasons and
+ * `upgradeInstructions`, and `commands` holds only what can be run. An override that does not
+ * cross a major of what its parents declare is a command where one writes it exactly
+ * (`npm pkg set "overrides.<name>=<version>"`, then the install: upgrade-plan-overrides.ts).
  */
 
 import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
 import { pypiCompileCommand } from "../live/pypi-advice.js";
 import type { ReleaseMetadataSource } from "../live/release-metadata.js";
+import { isShellSafeName, isShellSafeVersion } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
+import { overrideCommandsOf } from "./upgrade-plan-overrides.js";
 import { peerConflictReader, type PeerContext } from "./upgrade-plan-peers.js";
 
 export interface PlanCommand {
@@ -41,6 +45,9 @@ export interface CommandRow {
   parentUpgrades?: Array<{ levers: Array<{ commands?: CommandField[] }>; refreshCommands?: CommandField[] }>;
   installFix?: string;
   commands?: PlanCommand[];
+  action?: string;
+  /** True when the row's target crosses a major (an override then forces it past what its parents were written for). */
+  breaking?: boolean;
 }
 
 /**
@@ -84,6 +91,7 @@ export function rowCommands(row: CommandRow, ctx: CommandContext): PlanCommand[]
   for (const u of row.parentUpgrades ?? []) for (const c of u.refreshCommands ?? []) add(c.dir, c.command);
   for (const c of row.refreshCommands ?? []) add(c.dir, c.command);
   for (const c of compiledCommands(row, ctx.root)) add(c.dir, c.command);
+  if (row.action !== "override_or_replace" || row.breaking !== true) for (const c of overrideCommandsOf(row)) add(c.dir, c.command);
   if (row.installFix) for (const dir of ctx.installDirs && ctx.installDirs.length > 0 ? ctx.installDirs : ["."]) add(dir, row.installFix);
   return out;
 }
@@ -124,6 +132,8 @@ export interface SequencedRow extends CommandRow {
   action: string;
   reasons: string[];
   parentUpgrades?: Array<{
+    /** The transitive parent the levers move (vite, for esbuild's row). */
+    parent?: string;
     levers: Array<{ name: string; version: string; to: string | null; commands?: CommandField[]; instructions?: unknown[]; sameCommandsAs?: string }>;
     refreshCommands?: CommandField[];
   }>;
@@ -138,8 +148,10 @@ export interface SequencedRow extends CommandRow {
 function wholeByCommand(r: SequencedRow): boolean {
   if (r.commands.length === 0) return false;
   const refreshes = [...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.refreshCommands ?? [])];
-  if (refreshes.some((c) => isManualStep(c.command))) return false;
-  if ((r.upgradeInstructions ?? []).some((i) => !r.commands.some((c) => c.dir === i.dir && i.instruction.includes(c.run)))) return false;
+  // A hand refresh is covered where the row's resolution commands run in that directory (upgrade-plan-runnable.ts).
+  const resolved = new Set(overrideCommandsOf(r).map((c) => c.dir));
+  if (refreshes.some((c) => isManualStep(c.command) && !resolved.has(c.dir))) return false;
+  if ((r.upgradeInstructions ?? []).some((i) => !resolved.has(i.dir) && !r.commands.some((c) => c.dir === i.dir && i.instruction.includes(c.run)))) return false;
   return (r.parentUpgrades ?? []).every((u) => u.levers.every((l) => l.to === null || Boolean(l.commands?.length) || l.sameCommandsAs !== undefined));
 }
 
@@ -202,8 +214,14 @@ export function parseCommand(run: string): Parsed {
 
 const ECOSYSTEM_OF_TOOL: Record<string, string> = { npm: "npm", pnpm: "npm", yarn: "npm", cargo: "crates.io", go: "Go", compile: "PyPI" };
 
-/** Priority among steps no ordering rule ties (lower first): in-range refreshes, then upgrades, then what follows them. */
-const PHASE = { refresh: 0, pre: 0, precise: 1, set: 2, compile: 2, goget: 2, other: 2, tidy: 3, reinstall: 4 } as const;
+/**
+ * Priority among steps no ordering rule ties (lower first): Cargo's pre-updates and --precise
+ * moves, then upgrades, then in-range refreshes, then what follows them. A refresh moves a copy up
+ * within the ranges that hold it, so run after an upgrade it never lowers what the upgrade set; an
+ * upgrade run after a refresh can (fastapi-frontend: @hey-api/openapi-ts 0.97.3 pins, through
+ * @hey-api/json-schema-ref-parser 1.4.2, js-yaml 4.1.1, below the 4.3.2 `npm update js-yaml` had set).
+ */
+const PHASE = { pre: 0, precise: 1, set: 2, compile: 2, goget: 2, other: 2, refresh: 3, tidy: 4, reinstall: 5 } as const;
 
 /** One step of the script, merged from every row command that does the same thing. */
 interface Node {
@@ -237,6 +255,8 @@ export interface RunOrderOptions {
   goRequires?: (module: string, version: string) => Map<string, string> | null | undefined;
   /** How setting `pkg` to `version` in `dir` breaks a peer range installed direct dependencies declare (which, and why); null when it does not. */
   peerConflict?: (dir: string, pkg: string, version: string) => PeerConflict | null;
+  /** The operator of `name`'s declaration in `dir`/package.json ("^", "~", "" for an exact pin); null when it is not declared there or not read. */
+  declaredOperator?: (dir: string, name: string) => string | null;
 }
 
 export interface PeerConflict {
@@ -257,6 +277,18 @@ export interface RunOrder {
 
 /** The actions whose commands are the whole fix on this host (the ones the summary counts as fixed). */
 const FIX_ACTIONS = new Set(["upgrade_direct", "lockfile_refresh", "upgrade_parent", "reinstall"]);
+
+/** A row whose commands are its whole fix on this host: a fix action, or an override whose snippet is written as commands (not one whose only commands are a parent lever that leaves other paths). */
+const isRunnable = (opts: Pick<RunOrderOptions, "heldUnclean">) => (r: SequencedRow) =>
+  (FIX_ACTIONS.has(r.action) || (r.action === "override_or_replace" && r.breaking !== true && overrideCommandsOf(r).length > 0)) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null);
+
+/** A row left out because part of its fix is done by hand: a manifest or lockfile edit, an override, a lever with no command. */
+function isHandEdit(r: SequencedRow): boolean {
+  if (r.action === "override_or_replace") return r.reasons.some((x) => /^Transitive dependency.*\bForce \S+ to \S+: /.test(x));
+  if ((r.upgradeInstructions ?? []).length > 0) return true;
+  if ([...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.refreshCommands ?? [])].some((c) => isManualStep(c.command))) return true;
+  return (r.parentUpgrades ?? []).some((u) => u.levers.some((l) => l.to !== null && !l.commands?.length && l.sameCommandsAs === undefined && (l.instructions?.length ?? 0) > 0));
+}
 
 const keyOf = (r: SequencedRow) => `${r.ecosystem}:${r.package}`;
 const copyOf = (r: SequencedRow) => `${r.package}${r.currentVersion ? ` ${r.currentVersion}` : ""}`;
@@ -287,26 +319,79 @@ function installedVersions(rows: SequencedRow[]): Map<string, string[]> {
  */
 export function buildRunOrder(opts: RunOrderOptions): RunOrder {
   const peerBlocked = new Map<SequencedRow, string>();
-  const runnable = opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null));
+  const runnable = opts.rows.filter(isRunnable(opts));
   const groups: string[][] = [];
-  let graph = buildGraph(runnable, opts, groups);
+  const extra: ExtraSet[] = [];
+  let graph = buildGraph(runnable, opts, groups, extra);
   // A target that breaks a peer range runs in one command with the holder's own upgrade when the
-  // script upgrades the holder too; otherwise its rows are left out entirely and the rest re-merged.
+  // script upgrades the holder too, or a row moves the holder to a release that brings the target
+  // in; otherwise its rows are left out entirely and the rest re-merged.
   for (let round = 0; round < 6 && opts.peerConflict; round++) {
-    const found = graph.conflicts(opts.peerConflict);
+    const live = runnable.filter((r) => !peerBlocked.has(r));
+    const found = graph.conflicts(opts.peerConflict, holderMoves(live, opts));
     if (found.blocked.size === 0 && found.combine.length === 0) break;
     for (const [row, why] of found.blocked) peerBlocked.set(row, why);
+    for (const e of found.extra) if (!extra.some((x) => x.key === e.key)) extra.push(e);
     for (const pair of found.combine) joinGroup(groups, pair);
-    graph = buildGraph(runnable.filter((r) => !peerBlocked.has(r)), opts, groups);
+    graph = buildGraph(
+      runnable.filter((r) => !peerBlocked.has(r)),
+      opts,
+      groups,
+      extra.filter((e) => e.rows.some((r) => !peerBlocked.has(r))),
+    );
   }
   const steps = graph.order().map((n, i) => ({ n: i + 1, dir: n.dir, run: n.run, fixes: [...n.fixes].sort() }));
   const note = runOrderNote(opts, runnable, peerBlocked, steps.length, graph.notes);
   return { run_order: steps, run_order_note: note, peerBlocked };
 }
 
+/**
+ * A holder's upgrade the script adds to keep a peer range: a row names the holder as a lever that
+ * brings in the package whose target breaks the holder's installed peer range (esbuild's row:
+ * @vitejs/plugin-react-swc 3.5.0 to 3.7.2, by an in-range `npm update`, beside vite 6.4.5), so the
+ * holder's new release admits it, and the two install in one command.
+ */
+interface ExtraSet {
+  key: string;
+  dir: string;
+  pkg: string;
+  version: string;
+  run: string;
+  rows: SequencedRow[];
+}
+
+type HolderMoves = Map<string, { version: string; run: string }>;
+
+/** `dir\0tool\0holder\0pkg` -> the release a row's lever moves the holder to so that it brings `pkg` in, as a command that sets it. */
+function holderMoves(rows: SequencedRow[], opts: RunOrderOptions): HolderMoves {
+  const out: HolderMoves = new Map();
+  for (const r of rows) {
+    for (const u of r.parentUpgrades ?? []) {
+      if (!u.parent) continue;
+      for (const l of u.levers) {
+        if (!l.to || !isShellSafeName(l.name, "npm") || !isShellSafeVersion(l.to)) continue;
+        for (const c of l.commands ?? []) {
+          const p = parseCommand(c.command);
+          if (p.kind !== "refresh" || p.pkg !== l.name || (p.tool !== "npm" && p.tool !== "pnpm")) continue;
+          const op = opts.declaredOperator?.(c.dir, l.name);
+          if (op !== "^" && op !== "~") continue;
+          const k = `${c.dir}\0${p.tool}\0${l.name}\0${u.parent}`;
+          const held = out.get(k);
+          if (held && compareVersions(held.version, l.to, "npm") >= 0) continue;
+          out.set(k, { version: l.to, run: `${p.tool === "npm" ? "npm install" : "pnpm up"} "${l.name}@${op}${l.to}"` });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 interface Graph {
-  /** Rows whose step breaks a peer range it cannot run with the holder's upgrade, and pairs of steps to run as one. */
-  conflicts(peerConflict: NonNullable<RunOrderOptions["peerConflict"]>): { blocked: Map<SequencedRow, string>; combine: Array<[string, string]> };
+  /** Rows whose step breaks a peer range it cannot run with the holder's upgrade, pairs of steps to run as one, and holder upgrades added for them. */
+  conflicts(
+    peerConflict: NonNullable<RunOrderOptions["peerConflict"]>,
+    moves: HolderMoves,
+  ): { blocked: Map<SequencedRow, string>; combine: Array<[string, string]>; extra: ExtraSet[] };
   order(): Array<{ dir: string; run: string; fixes: Set<string> }>;
   notes: string[];
 }
@@ -337,7 +422,7 @@ function combineRuns(runs: string[]): string | null {
   return `${first[1]} ${(parts as RegExpExecArray[]).map((p) => p[2]).join(" ")}${first[3]}`;
 }
 
-function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[][]): Graph {
+function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[][], extra: ExtraSet[] = []): Graph {
   const nodes = new Map<string, Node>();
   const sets = new Map<string, SetState>();
   const edges = new Map<string, Set<string>>();
@@ -372,6 +457,11 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
       if (previous) edge(previous, n.key);
       previous = n.key;
     }
+  }
+  for (const e of extra) {
+    const p = parseCommand(e.run);
+    if (p.kind !== "set") continue;
+    for (const row of e.rows.filter((r) => rows.includes(r))) place(p, { dir: e.dir, run: e.run }, row, keyOf(row)).fixes.add(keyOf(row));
   }
 
   function place(p: Parsed, c: PlanCommand, row: SequencedRow, fix: string): Node {
@@ -482,9 +572,10 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
 
   return {
     notes,
-    conflicts(peerConflict) {
+    conflicts(peerConflict, moves) {
       const blocked = new Map<SequencedRow, string>();
       const combine: Array<[string, string]> = [];
+      const added: ExtraSet[] = [];
       for (const [key, state] of sets) {
         const [dir, , tool, pkg] = key.split("\0");
         if (tool !== "npm" && tool !== "pnpm" && tool !== "yarn") continue;
@@ -495,13 +586,20 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
         const group = groups.find((g) => g.includes(key)) ?? [key];
         const pending: Array<[string, string]> = [];
         let together = true;
+        const adding: ExtraSet[] = [];
         for (const holder of conflict.holders) {
-          const other = [...sets.keys()].find((k) => {
+          let other = [...sets.keys()].find((k) => {
             const [d, , t, n] = k.split("\0");
             return d === dir && t === tool && n === holder;
           });
           if (other && group.includes(other)) continue;
-          const runs = other ? [...new Set([...group, other])].map((k) => setRun(k)) : [];
+          const move = other ? undefined : moves.get(`${dir}\0${tool}\0${holder}\0${pkg}`);
+          if (move) {
+            other = `${dir}\0set\0${tool}\0${holder}\0`;
+            adding.push({ key: other, dir, pkg: holder, version: move.version, run: move.run, rows: state.candidates.map((c) => c.row) });
+          }
+          const runOf = (k: string) => (sets.has(k) ? setRun(k) : (adding.find((a) => a.key === k)?.run ?? null));
+          const runs = other ? [...new Set([...group, other])].map(runOf) : [];
           if (!other || runs.some((r) => r === null) || combineRuns(runs as string[]) === null) {
             together = false;
             break;
@@ -511,10 +609,11 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
         if (!together) for (const c of state.candidates) blocked.set(c.row, conflict.text);
         else {
           pushAll(combine, pending);
+          pushAll(added, adding);
           notes.push(`${pkg} ${chosen} runs in one command with ${andList(conflict.holders)} in ${dirWords(dir)}, which the script upgrades too: installed, ${conflict.who}, a peer range that excludes ${chosen}`);
         }
       }
-      return { blocked, combine };
+      return { blocked, combine, extra: added };
     },
     order: () => topological(nodes, edges),
   };
@@ -610,6 +709,8 @@ export interface SequenceContext {
   /** The Go release reader (each release's own go.mod), for one `go get` per module directory. */
   goSource?: Pick<ReleaseMetadataSource, "getRequirements"> | null;
   peers?: PeerContext;
+  /** RunOrderOptions.declaredOperator. */
+  declaredOperator?: RunOrderOptions["declaredOperator"];
   /** Time the go.mod reads may take. */
   budgetMs: number;
 }
@@ -659,7 +760,7 @@ async function goRequirements(rows: SequencedRow[], source: SequenceContext["goS
  */
 export async function sequencePlan(rows: SequencedRow[], ctx: SequenceContext): Promise<{ run_order: RunOrderStep[]; run_order_note: string }> {
   const goRequires = await goRequirements(rows, ctx.goSource, Date.now() + ctx.budgetMs);
-  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined });
+  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined, declaredOperator: ctx.declaredOperator });
   for (const [row, why] of result.peerBlocked) if (!row.reasons.includes(why)) row.reasons.push(why);
   return { run_order: result.run_order, run_order_note: result.run_order_note };
 }
@@ -682,17 +783,21 @@ function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlock
   parts.push(
     steps === 0
       ? `run_order is empty: none of the ${shown} row${shown === 1 ? "" : "s"} shown is fixed on this host by a command`
-      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, safe to run from the first to the last, each in the directory it names: in-range refreshes first, then upgrades, and every parent upgrade before the refreshes that follow it`,
+      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, safe to run from the first to the last, each in the directory it names: upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
   );
   if (opts.totalRows > shown) parts.push(`it covers only the rows shown, not the other ${opts.totalRows - shown} (raise max_recommendations for them)`);
+  const forced = ran.filter((r) => overrideCommandsOf(r).length > 0);
+  if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override or resolution written by \`npm pkg set\` (${named(forced)}): it applies to every copy its key names, so re-scan after running`);
+  const inScript = new Set(runnable);
+  const eligible = (r: SequencedRow) => !inScript.has(r) && !opts.heldUnclean(r) && (FIX_ACTIONS.has(r.action) || r.action === "override_or_replace") && (r.action !== "upgrade_direct" || r.targetVersion !== null);
+  const hand = opts.rows.filter((r) => eligible(r) && isHandEdit(r));
+  // The script alone does not finish the job: what is left to edit by hand is counted and named.
+  if (hand.length > 0) parts.push(`${hand.length} row${hand.length === 1 ? " is a hand edit" : "s are hand edits"} and ${hand.length === 1 ? "is" : "are"} not in this script: ${named(hand)} (a manifest or lockfile edit, or an override that crosses a major; ${hand.length === 1 ? "its reasons say" : "their reasons say"} what to edit)`);
   const groups: Array<[string, SequencedRow[]]> = [
-    [
-      "are not fixed by commands alone (a hand edit such as a lockfile entry or a manifest line, or no command was named: their reasons say what to do)",
-      opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && !opts.heldUnclean(r) && !wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null)),
-    ],
+    ["name no command for their fix (their reasons say why)", opts.rows.filter((r) => eligible(r) && !isHandEdit(r) && r.action !== "override_or_replace")],
     ["name no confirmed target (NOT CHECKED; their reasons say why)", opts.rows.filter((r) => r.action === "upgrade_direct" && r.targetVersion === null && !opts.heldUnclean(r))],
     ["have a target that is NOT a clean fix (it holds an affected dependency; see their reasons)", opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && opts.heldUnclean(r))],
-    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", opts.rows.filter((r) => r.action === "override_or_replace" || r.action === "upgrade_parent_unverified")],
+    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", opts.rows.filter((r) => (r.action === "override_or_replace" && !inScript.has(r) && !hand.includes(r)) || r.action === "upgrade_parent_unverified")],
     ["apply where the code is built, not on this host (not_built_on_this_host)", opts.rows.filter((r) => r.action === "not_built_on_this_host")],
     [
       "have nothing to run (waiting on upstream, no fix, not determined, not checked, hold, or remove)",

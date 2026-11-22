@@ -82,6 +82,7 @@ import { withCargoFeatures } from "./upgrade-planner-cargo-features.js";
 import { withLeverHolds } from "./upgrade-planner-lever-holds.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { projectPythons } from "./dependency-check-python.js";
+import { carryOverrideCommands, recordOverrideCommands } from "./upgrade-plan-overrides.js";
 
 /** One dependency the project declares that moves a blocking parent. */
 export interface ParentLever {
@@ -359,6 +360,7 @@ function warmInBackground(rows: FixPathInput[], sources: FixPathSources, liveInt
 function commit(step: FixPathStep, draft: FixPathStep): void {
   for (const key of Object.keys(step) as Array<keyof FixPathStep>) if (!(key in draft)) delete step[key];
   Object.assign(step, draft);
+  carryOverrideCommands(draft, step);
   const standings = STANDINGS.get(draft);
   if (standings) STANDINGS.set(step, standings);
 }
@@ -781,23 +783,26 @@ function yarnClassicEntriesAt(lockfile: string, name: string, version: string): 
 }
 
 /**
- * Yarn classic keeps one yarn.lock entry per set of ranges, and `yarn upgrade <name>` rewrites only
- * the entry the declared range keys: zustand's `@babel/core@^7.11.6, @babel/core@^7.12.3` entry
- * stayed at the vulnerable 7.19.6 (2026-11-23). When other entries resolve to the same version, the
- * in-range refresh is the hand step that moves every entry (delete them, then `yarn install`).
+ * Yarn classic keys a yarn.lock entry by every range that resolves to it, and `yarn upgrade <name>`
+ * re-resolves only the range the manifest declares: zustand's one entry
+ * `"@babel/core@^7.11.6", "@babel/core@^7.12.3", "@babel/core@^7.19.6"` kept the vulnerable 7.19.6
+ * for the two transitive ranges after `yarn upgrade @babel/core` (yarn 1.22.22, 2026-11-23). When
+ * any other range of the package resolves to the same version, in that entry or another, the
+ * in-range refresh is the hand step that moves every one (delete them, then `yarn install`).
  */
 function yarnClassicEveryEntry(step: FixPathStep, fixes: Pick<ParentLever, "commands" | "instructions">, root: string): void {
   if (!fixes.commands || !step.currentVersion) return;
   const keep: NonNullable<ParentLever["commands"]> = [];
   for (const c of fixes.commands) {
     const entries = c.refresh && c.command === `yarn upgrade ${step.package}` ? yarnClassicEntriesAt(path.join(path.resolve(root, c.dir), "yarn.lock"), step.package, step.currentVersion) : [];
-    if (entries.length <= 1) {
+    const ranges = entries.flat().filter((spec) => spec.startsWith(`${step.package}@`));
+    if (ranges.length <= 1) {
       keep.push(c);
       continue;
     }
     const steps = manualRefreshSteps("yarn", step.package);
     fixes.instructions = [...(fixes.instructions ?? []), { dir: c.dir, instruction: steps }];
-    const why = `yarn.lock${c.dir === "." ? "" : ` in ${c.dir}`} holds ${step.package} ${step.currentVersion} under ${entries.length} entries (${entries.map((e) => `"${e.join(", ")}"`).join("; ")}), and \`yarn upgrade ${step.package}\` moves only the one its declared range keys, so the others would keep ${step.currentVersion}: ${steps}`;
+    const why = `yarn.lock${c.dir === "." ? "" : ` in ${c.dir}`} holds ${step.package} ${step.currentVersion} under ${entries.length === 1 ? `one entry keyed by ${ranges.length} ranges` : `${entries.length} entries`} (${entries.map((e) => `"${e.join(", ")}"`).join("; ")}), and \`yarn upgrade ${step.package}\` moves only the one its declared range keys, so the others would keep ${step.currentVersion}: ${steps}`;
     if (!step.reasons.includes(why)) step.reasons.push(why);
   }
   if (keep.length > 0) fixes.commands = keep;
@@ -1048,7 +1053,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     step.action = "override_or_replace";
     const others = moves.length > 0 ? `. The other parents can move: ${moves.map((m) => m.text).join("; ")}` : "";
     replaceReason(
-      `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${overrideHints(verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace the parent${others}`,
+      `Transitive dependency: ${named}${more}, and ${stuck.map((s) => s.text).join("; ")}, so no parent release will widen it. Force ${step.package} to ${target}: ${recordedOverrideHints(step, verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace the parent${others}`,
     );
     forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
@@ -1060,7 +1065,7 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
     // the app's "replace <lever>, or force <pkg> >= <target> with <override>".
     step.action = "override_or_replace";
     replaceReason(
-      `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${overrideHints(verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
+      `Transitive dependency: ${moves.map((m) => m.text).join("; ")}. Force ${step.package} to ${target}: ${recordedOverrideHints(step, verdicts, step.package, target, root, overrideScope(liveIntel, verdicts, indexes, step.package, installed, input.sourceDirs))}; or replace ${[...new Set(held.map((l) => l.name))].join(", ")}`,
     );
     forcedAcrossMajor(step, installed, target, blocking.map(blockingText));
     return;
@@ -1351,6 +1356,11 @@ function declaredSection(dir: string, name: string): "dependencies" | "devDepend
  * h3's lockfile, 2026-11-23). The declaring command, in each directory whose manifest declares
  * `holder` (the release that takes `pkg` as a peer), in the section `holder` is in; none outside
  * pnpm, or when `holder`'s release does not list `pkg` as a peer.
+ *
+ * pnpm 7 on eslint-config's lockfile did move it, to 8.3.8, what a fresh resolve of vitest 4.1.12's
+ * "^6.0.0 || ^7.0.0 || ^8.0.0" picks, and `pnpm add -D "vite@^6.4.5"` then lowered it to 6.4.6
+ * (2026-11-23). So `floor` is that fresh-resolve release when one is known (it is checked clean):
+ * the declaration lands where the parent upgrade can leave it, never below.
  */
 function pnpmPeerDeclare(
   ctx: MoveContext,
@@ -1372,6 +1382,11 @@ function pnpmPeerDeclare(
     out.push({ dir: relativeDir(dir, root), command: `pnpm add ${flag}"${pkg}@^${floor}"` });
   }
   return out;
+}
+
+/** The release a peer declaration names: what a fresh resolve of the parent's requirement picks, when known and not below the target. */
+function peerFloor(resolvesTo: string | null, target: string, ecosystem: string): string {
+  return resolvesTo !== null && compareVersions(resolvesTo, target, ecosystem) > 0 ? resolvesTo : target;
 }
 
 /** The words for pnpmPeerDeclare's commands. */
@@ -1869,7 +1884,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       if (v !== smallestNamed) upgrade.smallest = smallestNamed;
       else delete upgrade.smallest;
       const refreshes = refreshAt(v);
-      const declares = pnpmPeerDeclare(ctx, b, history[v], parent, pkg, target, route.dirs);
+      const declares = pnpmPeerDeclare(ctx, b, history[v], parent, pkg, peerFloor(pkgAt(v)?.resolvesTo ?? null, target, ecosystem), route.dirs);
       const allRefreshes = [...also.refreshes.filter((r) => !refreshes.some((x) => x.dir === r.dir && x.command === r.command)), ...refreshes, ...declares];
       if (allRefreshes.length > 0) upgrade.refreshCommands = allRefreshes;
       else delete upgrade.refreshCommands;
@@ -2617,6 +2632,13 @@ export function overrideHint(format: LockfileFormat, name: string, target: strin
     case "cargo":
       return `Cargo cannot select a version outside the parent's requirement; point [patch.crates-io] ${name} at a fork or path that carries the fix${dir === "." ? "" : ` (in ${file("Cargo.toml")})`}`;
   }
+}
+
+/** overrideHints, with the same snippet recorded as commands where a plain command writes it (upgrade-plan-overrides.ts). */
+function recordedOverrideHints(step: FixPathStep, verdicts: Array<{ lockfile: string; verdict: { format: LockfileFormat } }>, name: string, target: string, root: string, scope: OverrideScope | null): string {
+  const lockfiles = [...new Map(verdicts.map((v) => [v.lockfile, { format: v.verdict.format, dir: relativeDir(path.dirname(v.lockfile), root) }])).values()];
+  recordOverrideCommands(step, lockfiles, root, name, target, scope && scope.others.length > 0 && scope.parents.length > 0 ? scope.parents : null);
+  return overrideHints(verdicts, name, target, root, scope);
 }
 
 /** One override snippet per lockfile the step's copies are in, each naming that lockfile's project. */
