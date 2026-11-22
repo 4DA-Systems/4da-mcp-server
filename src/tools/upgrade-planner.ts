@@ -297,14 +297,25 @@ export const upgradePlannerTool = {
 
 const RISK_LEVELS: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3, unknown: 3 };
 
-/** critical > high > medium > low, then runtime before dev-only, then fixable now (direct) before transitive, then non-breaking first (quick wins). */
-function planOrder(a: UpgradeRecommendation, b: UpgradeRecommendation): number {
-  const riskDiff = RISK_LEVELS[b.risk] - RISK_LEVELS[a.risk];
-  if (riskDiff !== 0) return riskDiff;
-  if (a.isDev !== b.isDev) return a.isDev ? 1 : -1;
-  if (a.scope !== b.scope) return a.scope === "direct" ? -1 : 1;
-  if (a.breaking !== b.breaking) return a.breaking ? 1 : -1;
-  return 0;
+const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * critical > high > medium > low, then runtime before dev-only, then fixable now (direct) before
+ * transitive, then non-breaking first (quick wins); then a total tiebreak (ecosystem, package,
+ * directories, version), so which tied rows max_recommendations shows never depends on the order
+ * the lookups returned them in.
+ */
+function planOrder(dirsOf: (r: UpgradeRecommendation) => string): (a: UpgradeRecommendation, b: UpgradeRecommendation) => number {
+  return (a, b) => {
+    const riskDiff = RISK_LEVELS[b.risk] - RISK_LEVELS[a.risk];
+    if (riskDiff !== 0) return riskDiff;
+    if (a.isDev !== b.isDev) return a.isDev ? 1 : -1;
+    if (a.scope !== b.scope) return a.scope === "direct" ? -1 : 1;
+    if (a.breaking !== b.breaking) return a.breaking ? 1 : -1;
+    const av = a.currentVersion ?? "";
+    const bv = b.currentVersion ?? "";
+    return byText(a.ecosystem, b.ecosystem) || byText(a.package, b.package) || byText(dirsOf(a), dirsOf(b)) || compareVersions(av, bv, a.ecosystem) || byText(av, bv);
+  };
 }
 
 /**
@@ -795,8 +806,10 @@ async function executeStandalonePlanner(
     : deduped.filter((r) => RISK_LEVELS[r.risk] >= RISK_LEVELS[threshold]);
 
   // Sort: critical > high > medium > low, then fixable-now (direct) before
-  // waiting-on-upstream (transitive), then non-breaking first (quick wins).
-  filtered.sort(planOrder);
+  // waiting-on-upstream (transitive), then non-breaking first (quick wins), then a total tiebreak.
+  const dirsOf = (r: UpgradeRecommendation) => [...new Set((fixPathInputs.get(r)?.sourceDirs ?? []).map((d) => relativeDir(d, root)))].sort().join("\n");
+  const order = planOrder(dirsOf);
+  filtered.sort(order);
 
   const maxRecs = params.max_recommendations ?? 20;
   const limited = filtered.slice(0, maxRecs);
@@ -815,7 +828,7 @@ async function executeStandalonePlanner(
   dedupeParentCommands(limited);
   // A fix path through a private parent was never looked up: said first, never a proceed (upgrade-planner-private.ts).
   markPrivateParents(limited, (r) => fixPathInputs.get(r)?.sourceDirs ?? [], liveIntel);
-  limited.sort(planOrder);
+  limited.sort(order);
   // Go module versions carry their `v` in every field, as currentVersion does (audit 7e).
   for (const r of limited) {
     r.targetVersion = inEcosystemForm(r.ecosystem, r.targetVersion);
