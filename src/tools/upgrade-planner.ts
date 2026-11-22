@@ -2,19 +2,22 @@
 /**
  * upgrade_planner tool
  *
- * One brain (AD-049): when the 4DA app's database holds its persisted Upgrade
- * Plan (current schema), the tool returns that plan's machine-readable work
- * order (`provenance.mode: "app_plan"`, flagged `stale` past its horizon) —
- * see ./app-plan.ts. Only without one does it run the standalone heuristic
- * below: version freshness, vulnerability data and deprecation status from
- * the local lockfiles (`provenance.mode: "standalone_heuristic"`).
+ * The plan for a project is always computed here, from the lockfiles on disk
+ * (`provenance.mode: "lockfile_engine"`), with or without the 4DA app: version
+ * freshness, vulnerability data and deprecation status. With the app's
+ * database attached, `app_plan_check` says how the app's stored plan compares
+ * (app-plan-check.ts); it never replaces this plan. The one exception is the
+ * all-projects scope with the app attached: only the app's stored plan covers
+ * every project, so it is returned as the app's (`provenance.mode:
+ * "app_plan"`, ./app-plan.ts), labelled as not checked against the disk and
+ * stale whenever anything shows it is.
  *
  * Honesty contract (Phase 0 hardening):
  * - Transitive CVEs are surfaced as `waiting_on_upstream` steps instead of
  *   being counted-but-never-recommended. No dependency-graph parsing happens
  *   here — parent mapping is the desktop core's job; the honest label is ours.
- * - Output carries explicit heuristic provenance: this is a point-in-time
- *   standalone plan, not the 4DA app's cross-project, version-confirmed plan.
+ * - Output carries its provenance: computed here from the lockfiles on disk,
+ *   at the time of the call.
  * - `projectPath` reports the directory set the dependencies were actually
  *   resolved from, not whatever `process.cwd()` happens to be.
  * - When no vulnerability scan has run, the planner runs one (bounded); if it
@@ -30,11 +33,12 @@ import type { LiveIntelligence } from "../live/index.js";
 import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { compareVersions, inEcosystemForm, maxVersion, namesPackage } from "../live/version-compare.js";
-import { formatAppPlan, readAppPlan, scopeAppPlanSteps, type AppPlanResult } from "./app-plan.js";
+import { formatAppPlan, readAppPlan, type AppPlanResult } from "./app-plan.js";
+import { checkAllProjectsPlan, checkProjectPlan, serverPlanFacts, type AppPlanCheck } from "./app-plan-check.js";
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
-import { appTracksProject, liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
+import { liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
 import { FIX_PATH_UNDETERMINED, judgeDirectRequirements, reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
@@ -221,11 +225,11 @@ export interface UpgradePlanResult {
   /** Present when the vulnerability check is missing or incomplete: what was not checked and why. */
   vulnerabilityCoverage?: VulnerabilityCoverage;
   provenance: {
-    mode: "standalone_heuristic";
+    mode: "lockfile_engine";
     note: string;
   };
-  /** Why the 4DA app's own plan was not used (no database, no snapshot, other schema). */
-  appPlanUnavailable?: string;
+  /** With the 4DA app's database attached: how the app's stored plan compares with this plan (app-plan-check.ts). */
+  app_plan_check?: AppPlanCheck;
   /** The project the plan covers, or null when it is not narrowed to one. */
   projectScope?: string | null;
 }
@@ -248,14 +252,14 @@ function offeredUpgrade(dep: { ecosystem: string; currentVersion: string | null;
 const PLANNER_SCAN_TIMEOUT_MS = 60_000;
 const PLAN_RESERVE_MS = 9_000;
 
-const PROVENANCE_NOTE =
-  "Point-in-time heuristic from local lockfiles plus live registry/OSV lookups. " +
-  "Not the 4DA desktop app's cross-project, version-confirmed plan (none was available).";
+const PROVENANCE_NOTE = "Computed by this server from the project's lockfiles on disk, with live registry and OSV.dev lookups.";
+/** Added with the 4DA app attached: its stored plan is compared, never relayed. */
+const APP_ATTACHED_NOTE = "The 4DA app's stored plan is never used in its place; app_plan_check says how it compares.";
 
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). When the 4DA desktop app has computed its plan, returns that plan's work order (provenance app_plan): per package the ecosystem, each installed version with its minimum clean target, upgrade type (patch/minor/major), the projects that hold it (direct/dev), the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update = route undecided or mixed, mixed, no_fix) and `next_step` in words; a blocked_upstream step names no upgrade: its `blocked_upstream` holds say what keeps each copy and list the options; flagged stale past its freshness horizon. Otherwise falls back to a standalone plan from local lockfiles (provenance standalone_heuristic): the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows either plan to one package. Privacy: the fallback may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). The plan is computed by this server from the project's lockfiles on disk, with or without the 4DA desktop app (provenance lockfile_engine). With the app's database attached, `app_plan_check` says how the app's stored plan compares (agrees; differs, with up to 10 `differences`; not_comparable when its plan format is one this server does not read, its advisory data is more than 24 hours old, or a lockfile changed after it was generated; no_plan); the app's plan never replaces this one. The exception is project_path \"*\" with the app attached: the answer is then the app's stored plan across every project it tracks (provenance app_plan, `app_plan_check.status` unverified, not checked against the lockfiles on disk): per package the ecosystem, each installed version with its minimum clean target, upgrade type, the projects that hold it, the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update, mixed, no_fix) and `next_step` in words, `stale` when past its expiry, when its advisory data is more than 24 hours old, or when a lockfile of a project it covers changed after it. The plan: the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows the plan to one package. Privacy: the plan may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -280,7 +284,7 @@ export const upgradePlannerTool = {
       project_path: {
         type: "string",
         description:
-          "Project directory to plan for: the app's plan is narrowed to the steps (and installed lines) that touch it; the standalone plan resolves that project's lockfiles. \"*\" for every project the app tracks. Default: the project the server was started in, when that directory is a project.",
+          "Project directory to plan for, from its lockfiles on disk. \"*\" for every project: with the 4DA app attached, the app's stored plan across every project it tracks (not checked against the lockfiles). Default: the project the server was started in, when that directory is a project.",
       },
     },
   },
@@ -337,31 +341,26 @@ export async function executeUpgradePlanner(
   const scope = resolveProjectScope(params.project_path);
   if (scope.kind === "error") throw new Error(scope.error);
   const scopePath = scope.kind === "project" ? scope.path : null;
-  // One brain: the app's plan wins whenever there is one, stale or not (a
-  // stale plan is returned flagged, never silently replaced by a heuristic).
-  // It covers every project the app tracks, so it is narrowed to this one.
-  // A project the app does not track is not in its plan at all; narrowing the
-  // plan to it gave "0 steps" for a project with 83 vulnerable packages
-  // (audit 6.2.5 D-1). Plan it from its own lockfiles instead.
-  const appPlan = readAppPlan(db);
-  const untracked =
-    appPlan.kind === "plan" &&
-    scopePath !== null &&
-    scopeAppPlanSteps(appPlan.snapshot.steps, scopePath).length === 0 &&
-    !appTracksProject(db, scopePath);
-  if (appPlan.kind === "plan" && !untracked) return formatAppPlan(appPlan, params, scopePath);
-  // The live layer already covers the server's own project; only an explicit
-  // project_path elsewhere resolves another tree.
+  // The desktop app's database, when it is the one attached (not this server's own store).
+  const app = db && !db.isStandalone ? db : null;
+  const appPlan = app ? readAppPlan(app) : null;
+  // Every project: only the app's stored plan covers more than one, so it is the answer, labelled
+  // as the app's and not checked against the disk, and stale whenever anything shows it is.
+  if (app && scope.kind === "all" && appPlan?.kind === "plan") return formatAppPlan(appPlan, params, checkAllProjectsPlan(app, appPlan));
+  // One project: this server's own plan from the lockfiles on disk, in every mode. The live layer
+  // already covers the server's own project; only an explicit project_path elsewhere resolves another tree.
   const scoped =
     scope.kind === "project" && scope.source === "argument"
       ? (liveIntelFor(liveIntel, db, scope) as LiveIntelligence | null)
       : liveIntel;
-  const standalone = await executeStandalonePlanner(params, scoped);
-  const appPlanUnavailable =
-    appPlan.kind === "plan"
-      ? `the 4DA app does not track ${scopePath}, so its plan does not cover it; this plan is computed from the project's own lockfiles`
-      : appPlan.reason;
-  return { ...standalone, appPlanUnavailable, projectScope: scopePath ?? standalone.projectPath };
+  const plan = await executeStandalonePlanner(params, scoped);
+  const result: UpgradePlanResult = { ...plan, projectScope: scopePath ?? plan.projectPath };
+  if (!app || !appPlan) return result;
+  return {
+    ...result,
+    provenance: { mode: "lockfile_engine", note: `${PROVENANCE_NOTE} ${APP_ATTACHED_NOTE}` },
+    app_plan_check: checkProjectPlan(app, appPlan, scopePath ?? plan.projectPath, serverPlanFacts(plan, scoped), params),
+  };
 }
 
 async function executeStandalonePlanner(
@@ -386,7 +385,7 @@ async function executeStandalonePlanner(
       lockfileRefreshes: 0,
       parentUpgradeSteps: 0,
       vulnerabilityDataAvailable: false,
-      provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
+      provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
     };
   }
 
@@ -931,7 +930,7 @@ async function executeStandalonePlanner(
     parentUpgradeSteps,
     vulnerabilityDataAvailable,
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
-    provenance: { mode: "standalone_heuristic", note: PROVENANCE_NOTE },
+    provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
 }
 

@@ -281,9 +281,9 @@ describe("upgrade_planner — CVE-blind disclosure and provenance", () => {
     });
   });
 
-  it("always labels itself a standalone heuristic", async () => {
+  it("labels its plan as computed from the lockfiles on disk", async () => {
     const result = await executeUpgradePlanner(noDb, {}, makeIntel(null));
-    expect(result.provenance.mode).toBe("standalone_heuristic");
-    expect(result.provenance.note).toContain("Not the 4DA desktop app");
+    expect(result.provenance.mode).toBe("lockfile_engine");
+    expect(result.provenance.note).toContain("lockfiles on disk");
   });
 });

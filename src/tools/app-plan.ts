@@ -3,12 +3,13 @@
  * The 4DA app's persisted Upgrade Plan, read for `upgrade_planner` (AD-049).
  *
  * The desktop app writes its ranked plan to `kv_store` under
- * `upgrade_plan_snapshot` after every plan compute (the same envelope
- * `4da plan --json` prints). From schema 4 the envelope carries `steps`: a
- * machine-readable work order keyed by plan item id, built in Rust from the
- * same per-line targets as the item titles. This module only READS it — no
- * range matching, target walking or scope grading is reimplemented here, so
- * the agent gets the app's answer, not a second opinion.
+ * `upgrade_plan_snapshot` after every plan compute. From schema 4 the envelope
+ * carries `steps`: a machine-readable work order keyed by plan item id, built
+ * in Rust from the same per-line targets as the item titles. This module only
+ * READS it. For one project the planner always answers from the lockfiles on
+ * disk and compares this plan with that answer (app-plan-check.ts); only the
+ * all-projects scope returns it, labelled as the app's stored plan, because it
+ * is the only plan that covers every project the app tracks.
  *
  * Schema 5 (the app's Y5, 2026-11-10) adds the mechanisms `lockfile_refresh`,
  * `parent_update` and `blocked_upstream`, narrows `lockfile_or_parent_update`
@@ -19,17 +20,19 @@
  * is never worded as an upgrade.
  *
  * Fail-closed like the Rust reader: any schema version not in
- * APP_PLAN_SCHEMA_VERSIONS is treated as absent and the caller falls back to
- * its standalone heuristic, saying why.
+ * APP_PLAN_SCHEMA_VERSIONS is treated as absent (`cause: "format"`), and the
+ * answer says which side to update.
  */
 
 import type { FourDADatabase } from "../db.js";
+import { NEWEST_TESTED_APP, SUPPORTED_PLAN_FORMATS } from "../app-compat.js";
+import type { AllProjectsPlanCheck, AppPlanCheck } from "./app-plan-check.js";
 import { isWithin } from "./project-scope.js";
 
-/** The snapshot schemas this reader understands (Rust `PLAN_SCHEMA_VERSION`, 4 and 5). */
-export const APP_PLAN_SCHEMA_VERSIONS: readonly number[] = [4, 5];
+/** The snapshot schemas this reader understands (Rust `PLAN_SCHEMA_VERSION`; the supported range in app-compat.ts). */
+export const APP_PLAN_SCHEMA_VERSIONS: readonly number[] = SUPPORTED_PLAN_FORMATS;
 /** The newest of them, the one the app writes today. */
-export const APP_PLAN_SCHEMA_VERSION = 5;
+export const APP_PLAN_SCHEMA_VERSION = NEWEST_TESTED_APP.planFormat;
 
 const PLAN_KV_KEY = "upgrade_plan_snapshot";
 
@@ -114,9 +117,21 @@ export interface AppPlanSnapshot {
   steps: AppPlanStepView[];
 }
 
+/**
+ * `absent` says why: `none` when the app stored no plan (no database, no plan store, never
+ * computed), `format` when it stored one this server cannot read (`found` is its format number,
+ * `formatNote` the sentence naming which side to update).
+ */
 export type AppPlanRead =
   | { kind: "plan"; snapshot: AppPlanSnapshot; stale: boolean }
-  | { kind: "absent"; reason: string };
+  | { kind: "absent"; reason: string; cause: "none" | "format"; found?: unknown; formatNote?: string };
+
+const UNREADABLE_PLAN: AppPlanRead = {
+  kind: "absent",
+  cause: "format",
+  reason: "the app's plan snapshot is unreadable",
+  formatNote: "The 4DA app's stored plan is not valid JSON, so it cannot be compared. Open the 4DA app so it recomputes the plan.",
+};
 
 /**
  * Read the app's plan from the shared database. Never throws: a missing
@@ -124,7 +139,7 @@ export type AppPlanRead =
  * or another schema version all come back as `absent` with the reason.
  */
 export function readAppPlan(db: FourDADatabase | null | undefined, now: Date = new Date()): AppPlanRead {
-  if (!db) return { kind: "absent", reason: "no 4DA database" };
+  if (!db) return { kind: "absent", cause: "none", reason: "no 4DA database" };
   let raw: string | undefined;
   try {
     const row = db
@@ -133,35 +148,37 @@ export function readAppPlan(db: FourDADatabase | null | undefined, now: Date = n
       .get(PLAN_KV_KEY) as { value?: unknown } | undefined;
     raw = typeof row?.value === "string" ? row.value : undefined;
   } catch {
-    return { kind: "absent", reason: "the database has no plan store (the 4DA app has not run on it)" };
+    return { kind: "absent", cause: "none", reason: "the database has no plan store (the 4DA app has not run on it)" };
   }
   if (raw === undefined) {
-    return { kind: "absent", reason: "the 4DA app has not computed an upgrade plan yet" };
+    return { kind: "absent", cause: "none", reason: "the 4DA app has not computed an upgrade plan yet" };
   }
 
   let env: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { kind: "absent", reason: "the app's plan snapshot is unreadable" };
-    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return UNREADABLE_PLAN;
     env = parsed as Record<string, unknown>;
   } catch {
-    return { kind: "absent", reason: "the app's plan snapshot is unreadable" };
+    return UNREADABLE_PLAN;
   }
 
   const version = env.schema_version;
   if (typeof version !== "number" || !APP_PLAN_SCHEMA_VERSIONS.includes(version)) {
     return {
       kind: "absent",
+      cause: "format",
+      found: version,
       reason: `the app's plan snapshot is schema ${String(version)}, this server reads schemas ${APP_PLAN_SCHEMA_VERSIONS.join(" and ")}`,
     };
   }
   if (!Array.isArray(env.steps) || !Array.isArray(env.items)) {
-    return { kind: "absent", reason: "the app's plan snapshot has no work order" };
+    const reason = "the app's plan snapshot has no work order";
+    return { kind: "absent", cause: "format", found: version, reason, formatNote: `The 4DA app's stored plan (format ${version}) is damaged: ${reason}. Open the 4DA app so it recomputes the plan.` };
   }
   if (typeof env.generated_at !== "string" || typeof env.expires_at !== "string") {
-    return { kind: "absent", reason: "the app's plan snapshot has no freshness stamp" };
+    const reason = "the app's plan snapshot has no freshness stamp";
+    return { kind: "absent", cause: "format", found: version, reason, formatNote: `The 4DA app's stored plan (format ${version}) is damaged: ${reason}. Open the 4DA app so it recomputes the plan.` };
   }
 
   const items = new Map<string, AppPlanItem>();
@@ -246,21 +263,25 @@ export function nextStep(step: AppPlanStep, schema: number): string {
 const URGENCY_RISK: Record<string, number> = { critical: 3, high: 2, medium: 1, watch: 0 };
 const RISK_LEVELS: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
+/** The all-projects answer with the 4DA app attached: its stored plan, labelled as such (DESIGN section 3). */
 export interface AppPlanResult {
   generatedAt: string;
   expiresAt: string;
-  /** True past `expiresAt`: the security data the plan read may have moved on. */
+  /**
+   * True past `expiresAt`, when the app's advisory data is more than a day old, or when a lockfile
+   * of a project the plan covers changed after it was generated; `staleness` says which.
+   */
   stale: boolean;
   staleness: string | null;
   totalSteps: number;
   steps: AppPlanStepView[];
   summary: string;
-  /** The project the steps were narrowed to, or null for every project in the plan. */
-  projectScope: string | null;
-  /** Steps of the full plan that only touch other projects (left out by projectScope). */
-  otherProjectSteps?: number;
+  /** Always null: the plan covers every project the app tracks. */
+  projectScope: null;
   snapshot: Omit<AppPlanSnapshot, "steps" | "generatedAt" | "expiresAt">;
   provenance: { mode: "app_plan"; note: string };
+  /** `unverified` (this server did not check it), or `not_comparable` when the app's advisory data is more than a day old. */
+  app_plan_check: AppPlanCheck;
 }
 
 /**
@@ -284,19 +305,25 @@ export function scopeAppPlanSteps(steps: AppPlanStepView[], scope: string | null
 }
 
 const APP_PROVENANCE_NOTE =
-  "The 4DA desktop app's own cross-project, version-confirmed Upgrade Plan, read from its database " +
-  "(the same plan the app shows and `4da plan --json` prints). Each step is keyed by the app's item id.";
+  "The 4DA desktop app's stored Upgrade Plan across every project it tracks, read from its database as the app wrote it: " +
+  "this server did not check it against the lockfiles on disk. For a plan computed from one project's lockfiles, call " +
+  "upgrade_planner with that project's path. Each step is keyed by the app's item id; its `verification` text is the app's " +
+  "own, and to check a step again, call upgrade_planner again.";
 
-/** Shape the app's plan as the tool result; `risk_threshold` / `max_recommendations` narrow it. */
+/**
+ * Shape the app's plan, across every project it tracks, as the tool result; `package`,
+ * `risk_threshold` and `max_recommendations` narrow it. `check` says whether it is stale.
+ */
 export function formatAppPlan(
   read: Extract<AppPlanRead, { kind: "plan" }>,
   params: { risk_threshold?: string; max_recommendations?: number; package?: string },
-  scope: string | null = null,
+  check: AllProjectsPlanCheck,
 ): AppPlanResult {
-  const { snapshot, stale } = read;
+  const { snapshot } = read;
+  // Never reported fresh when anything shows it is not: expiry, advisory age, a changed lockfile.
+  const stale = read.stale || check.staleReasons.length > 0;
   const threshold = params.risk_threshold ?? "all";
-  const scoped = scopeAppPlanSteps(snapshot.steps, scope);
-  let steps = scoped;
+  let steps = snapshot.steps;
   // `package` narrows the app's plan the same way it narrows the standalone one.
   const wanted = params.package?.trim().toLowerCase();
   if (wanted) steps = steps.filter((s) => s.package.toLowerCase() === wanted);
@@ -310,9 +337,8 @@ export function formatAppPlan(
   const count = (m: AppPlanStep["mechanism"]) => selected.filter((s) => s.mechanism === m).length;
   const majors = selected.filter((s) => s.lines.some((l) => l.upgrade_type === "major")).length;
   const parts = [
-    `${selected.length} step${selected.length !== 1 ? "s" : ""} from the 4DA app's plan (generated ${snapshot.generatedAt})${scope ? ` for ${scope}` : " across every project it tracks"}`,
+    `${selected.length} step${selected.length !== 1 ? "s" : ""} from the 4DA app's stored plan (generated ${snapshot.generatedAt}) across every project it tracks, not checked against the lockfiles on disk by this server`,
   ];
-  const otherProjectSteps = snapshot.steps.length - scoped.length;
   if (count("manifest_bump") > 0) parts.push(`${count("manifest_bump")} manifest bump(s)`);
   if (count("lockfile_refresh") > 0) parts.push(`${count("lockfile_refresh")} lockfile refresh(es) (transitive, no manifest change)`);
   if (count("parent_update") > 0) parts.push(`${count("parent_update")} parent update(s) (transitive)`);
@@ -329,14 +355,12 @@ export function formatAppPlan(
   if (count("mixed") > 0) parts.push(`${count("mixed")} mixed (direct in some projects, transitive in others)`);
   if (count("no_fix") > 0) parts.push(`${count("no_fix")} with no fix published`);
   if (majors > 0) parts.push(`${majors} cross a major version`);
-  if (selected.length < scoped.length) {
-    parts.push(`${scoped.length} in ${scope ? "the plan for this project" : "the full plan"} (raise max_recommendations for the rest)`);
+  if (selected.length < snapshot.steps.length) {
+    parts.push(`${snapshot.steps.length} in the full plan (raise max_recommendations for the rest)`);
   }
-  if (scope && otherProjectSteps > 0) {
-    parts.push(`${otherProjectSteps} step${otherProjectSteps !== 1 ? "s" : ""} only touch other projects (project_path "*" lists every project)`);
-  }
+  const reasons = check.staleReasons.length > 0 ? check.staleReasons : [`past its freshness horizon (${snapshot.expiresAt})`];
   const staleness = stale
-    ? `STALE: past its freshness horizon (${snapshot.expiresAt}). The advisories or installs may have changed since; open the 4DA app to recompute.`
+    ? `STALE: ${reasons.join("; ")}. The advisories or installs may have changed since; open the 4DA app to recompute, or call upgrade_planner with a project's path for a plan computed from its lockfiles.`
     : null;
   if (staleness) parts.push(staleness);
 
@@ -345,11 +369,10 @@ export function formatAppPlan(
     expiresAt: snapshot.expiresAt,
     stale,
     staleness,
-    totalSteps: scoped.length,
+    totalSteps: snapshot.steps.length,
     steps: selected,
     summary: parts.join(". ") + ".",
-    projectScope: scope,
-    ...(scope ? { otherProjectSteps } : {}),
+    projectScope: null,
     snapshot: {
       schemaVersion: snapshot.schemaVersion,
       generatorVersion: snapshot.generatorVersion,
@@ -359,5 +382,6 @@ export function formatAppPlan(
       itemCount: snapshot.itemCount,
     },
     provenance: { mode: "app_plan", note: APP_PROVENANCE_NOTE },
+    app_plan_check: check.check,
   };
 }
