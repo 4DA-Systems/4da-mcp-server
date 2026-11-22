@@ -15,7 +15,7 @@ import { LOOKUPS_DISABLED, vulnerabilityCoverage } from "../live/scan-coverage.j
 import { presentedSeverity, scopeAdjustmentReason } from "../live/severity-scope.js";
 import { getLiveIntelligence } from "../live-singleton.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
-import { driftAction } from "./install-drift-notes.js";
+import { adviceFor, scanAdvice } from "./scan-advice.js";
 import { normalizeStoredPriority, type SignalPriority, type SignalType } from "./signal-classifier.js";
 import type { ScanStatus } from "./what-should-i-know.js";
 import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
@@ -349,6 +349,8 @@ export async function executeGetActionableSignals(
   const { scan: vulnResult, block: scanBlock, note: scanNote } = await projectScan(liveIntel);
   if (vulnResult && vulnResult.vulnerabilities.length > 0) {
     if (!params.signal_type || params.signal_type === "security_alert") {
+      // Each finding's instruction is the scan's for that package version (scan-advice.ts).
+      const advice = await scanAdvice(liveIntel, vulnResult);
       for (const { representative: vuln, ids } of clusterVulnerabilities(vulnResult.vulnerabilities)) {
         // The grade every surface shares (AD-046; twin of the app's
         // `osv::identity::scope_adjusted_urgency`), not the raw advisory tier:
@@ -362,14 +364,9 @@ export async function executeGetActionableSignals(
           presented === "high" ? "high" :
           presented === "low" ? "low" : "medium";
         let relevance = presented === "critical" ? 1.0 : presented === "high" ? 0.9 : presented === "low" ? 0.5 : 0.7;
-        // An installed copy the lockfile does not pin is fixed by a reinstall,
-        // not an upgrade: the lockfile is already where it should be.
-        let action = vuln.installDriftOf
-          ? driftAction(vuln)
-          : vuln.fixedVersion
-            ? // The advisory's own fix, not checked against the package's other advisories here.
-              `Upgrade ${vuln.package}: the advisory names ${vuln.fixedVersion} as its fix, NOT CHECKED against ${vuln.package}'s other advisories (run dependency_check on a release before pinning it)`
-            : `Review ${vuln.package} — no fix version published`;
+        // An installed copy the lockfile does not pin is fixed by a reinstall, not an upgrade: the
+        // lockfile is already where it should be. Every other copy: the scan's verdict for it.
+        let action = adviceFor(advice, vuln);
         const adjusted = scopeAdjustmentReason(vuln);
         if (adjusted) {
           action += ` (the advisory rates it ${vuln.severity}; graded ${presented} as a ${adjusted})`;
@@ -391,7 +388,11 @@ export async function executeGetActionableSignals(
         if (vuln.platformActive === false) {
           priority = "low";
           relevance = 0.3;
-          action = `Not built on this host — ${action}`;
+          // The scan gives no step for a copy this host never builds: none is needed here, and the
+          // checked fix for a build that compiles it is on the scan's platform_inactive_vulnerabilities row.
+          action = maintenance
+            ? `Not built on this host — ${action}`
+            : `Not built on this host${vuln.target ? ` (only for ${vuln.target})` : ""}: nothing to fix for this host. For a build that compiles it, vulnerability_scan's platform_inactive_vulnerabilities row gives the checked fix.`;
           // The title must agree with the priority: "MEDIUM: ... (glib@0.18.5)" at
           // priority low read as a medium issue on a Windows host that never builds glib.
           if (!maintenance) label = `NOT BUILT HERE (${presented})`;
@@ -401,7 +402,8 @@ export async function executeGetActionableSignals(
 
         signals.push({
           id: -1,
-          title: `${label}: ${vuln.summary} (${vuln.package}@${vuln.currentVersion})`,
+          // OSV.dev's summary is third-party text: one line, capped, never raw in the title.
+          title: `${label}: ${quoteThirdParty(vuln.summary, HEADLINE_MAX)} (${vuln.package}@${vuln.currentVersion})`,
           url: vuln.references[0] || null,
           source_type: "osv_live",
           relevance_score: relevance,

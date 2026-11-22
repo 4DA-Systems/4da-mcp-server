@@ -31,9 +31,11 @@ import { readableText } from "../live/private-guard.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { compareVersions, inEcosystemForm, maxVersion } from "../live/version-compare.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
-import { rowFix, targetCheckedAll, targetNote, verifyFixTargets, withheldText } from "../live/fix-paths.js";
+import { rowFix, targetCheckedAll } from "../live/fix-paths.js";
+import { fixTargetKey } from "./vulnerability-scan-format.js";
 import { unconfirmedTargetNote } from "./unconfirmed-targets.js";
 import { installDriftAdvisories } from "./install-drift-notes.js";
+import { adviceFor, NO_SCAN_ADVICE, scanAdvice } from "./scan-advice.js";
 import { getLiveIntelligence } from "../live-singleton.js";
 import { createRelevanceScorer } from "./recall.js";
 import { getEmbeddingConfig } from "../embeddings.js";
@@ -50,7 +52,7 @@ import {
 } from "./briefing-task-scope.js";
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
-import type { OsvEcosystem, ResolvedDependency } from "../live/types.js";
+import type { ResolvedDependency } from "../live/types.js";
 import { exclusionNotes } from "../project-tree.js";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, type NewPackageFinding } from "./briefing-new-packages.js";
@@ -445,70 +447,41 @@ export async function executeWhatShouldIKnow(
       version_confirmed: false,
     });
   }
-  // The highest per-advisory fix can itself be affected by another advisory
-  // (openssl 0.10.79): check each target against all of the package's.
-  const verified = await verifyFixTargets(
-    liveIntel?.getFixPathSources?.() ?? null,
-    taskDependencies
-      .filter((d) => d.vulnerabilities.some((v) => v.fixed_version))
-      .map((d) => ({
-        key: `${d.ecosystem}\0${d.package}`,
-        ecosystem: d.ecosystem as OsvEcosystem,
-        name: d.package,
-        fixes: d.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f)),
-        // The package's advisory list must hold every advisory the scan named (fix-paths.ts listCovers).
-        ids: d.vulnerabilities.map((v) => v.id),
-        // The installed copy: a target never brings in an advisory it does not have.
-        ...(d.installed.length === 1 ? { installed: d.installed[0] } : {}),
-      })),
-    TARGET_CHECK_BUDGET_MS,
-    undefined,
-    // npm: what a target installs at a fixed version counts too (audit 6.2.5 D-4).
-    liveIntel?.queryAdvisories ? { heldQuery: (deps) => liveIntel!.queryAdvisories!(deps) } : {},
-  );
-  // Each advisory's own fix as the registry still offers it: never a yanked or deprecated release (FX-H5).
+  // What to do about each installed copy is the scan's instruction for it (scan-advice.ts), the
+  // same words vulnerability_scan and get_actionable_signals give: one advisory, one instruction.
+  const advice = scan && taskDependencies.some((d) => d.vulnerabilities.length > 0) ? await scanAdvice(liveIntel, scan) : NO_SCAN_ADVICE;
+  // Each advisory's own fix as the scan's detailed rows show it: given as a version only when the
+  // copy's target was confirmed against every advisory of the package, never a release the
+  // registry withdrew (FX-H5), otherwise said in a NOT CHECKED note (audit 2026-11-14).
   for (const dep of taskDependencies) {
-    const clean = verified.get(`${dep.ecosystem}\0${dep.package}`);
-    for (const v of clean ? dep.vulnerabilities : []) {
+    for (const v of dep.vulnerabilities) {
+      const clean = advice.targets.get(fixTargetKey(dep.ecosystem, dep.package, v.installed));
       const fix = rowFix(v.fixed_version, clean, dep.ecosystem);
-      if (fix.withheld.length > 0) Object.assign(v, { fixed_version: fix.fixed, withheld: fix.withheld, withheld_note: fix.note });
+      if (fix.withheld.length > 0) Object.assign(v, { withheld: fix.withheld, withheld_note: fix.note });
+      const confirmed = clean !== undefined && targetCheckedAll(clean);
+      // Go module versions carry their `v`, as the installed ones do (audit 7e).
+      const fixed = inEcosystemForm(dep.ecosystem, fix.fixed);
+      Object.assign(v, confirmed || !fixed ? { fixed_version: fixed } : { fixed_version: null, fixed_version_note: unconfirmedTargetNote(dep.package, fixed, null) });
     }
   }
-  // Go module versions carry their `v`, as the installed ones do (audit 7e).
-  for (const dep of taskDependencies) for (const v of dep.vulnerabilities) v.fixed_version = inEcosystemForm(dep.ecosystem, v.fixed_version);
   for (const dep of taskDependencies) {
     if (dep.vulnerabilities.length === 0) continue;
     const rank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, unknown: 0 };
     const top = dep.vulnerabilities.reduce((a, b) => (rank[b.severity] > rank[a.severity] ? b : a));
-    const fixes = dep.vulnerabilities.map((v) => v.fixed_version).filter((f): f is string => Boolean(f));
-    const unfixed = dep.vulnerabilities.length - fixes.length;
-    const clean = verified.get(`${dep.ecosystem}\0${dep.package}`);
-    // Named as the release to write only when OSV.dev confirmed it against every advisory of the
-    // package; otherwise in a NOT CHECKED sentence, and no fixed_version carries it (audit 2026-11-14).
-    const confirmed = clean !== undefined && targetCheckedAll(clean);
-    const candidate = inEcosystemForm(dep.ecosystem, clean ? clean.target : fixes.length > 0 ? maxVersion(fixes, dep.ecosystem) : null);
-    const smallest = confirmed ? candidate : null;
-    const note = clean ? targetNote(clean, dep.ecosystem) : null;
-    if (!confirmed) for (const v of dep.vulnerabilities) if (v.fixed_version) Object.assign(v, { fixed_version: null, fixed_version_note: unconfirmedTargetNote(dep.package, v.fixed_version, null) });
-    // Every release that fixes it was withdrawn by the registry (FX-H5): never "no fixed release published".
-    const withheld = clean && !clean.target ? withheldText(clean, dep.ecosystem) : null;
+    // One instruction per installed copy with a finding (a lockfile copy, or what node_modules holds).
+    const copies = [
+      ...new Map(
+        vulns
+          .filter((v) => v.ecosystem === dep.ecosystem && v.package === dep.package && isActionableVulnerability(v))
+          .map((v) => [`${v.currentVersion}\0${v.installDriftOf ?? ""}`, v] as const),
+      ).values(),
+    ];
     const n = dep.vulnerabilities.length;
     advisories.push({
       title: `${dep.package} ${dep.installed.join("/")}: ${n} confirmed vulnerabilit${n !== 1 ? "ies" : "y"}, highest ${top.severity}`,
       signal_type: "security_alert",
       priority: top.severity,
-      action:
-        smallest && unfixed === 0
-          ? `Upgrade ${dep.package} to ${smallest} (the smallest version that fixes all ${n}${note ? `; ${note}` : ""})`
-          : smallest
-            ? `Upgrade ${dep.package} to ${smallest} fixes ${fixes.length}; Review ${dep.package}: ${unfixed} have no fixed release`
-            : !confirmed && candidate
-              ? `Review ${dep.package}: ${unconfirmedTargetNote(dep.package, candidate, note)}`
-            : withheld
-              ? `Review ${dep.package}: ${withheld}`
-              : clean && fixes.length > 0
-              ? `Review ${dep.package}: no published release from ${clean.floor} up clears every advisory (${clean.floor} is still affected by ${clean.stillAffectedBy.join(", ")})`
-              : `Review ${dep.package}: no fixed release published`,
+      action: copies.map((v) => adviceFor(advice, v)).join(" | "),
       url: null,
       scope: "task",
       version_confirmed: true,
@@ -889,7 +862,8 @@ function assessDelegation(input: {
     (p) =>
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
   )];
-  if (confirmed.some((v) => severe(v.severity) && !v.fixed_version)) {
+  // No fix at all: neither a confirmed fixed_version nor an advisory fix still NOT CHECKED (fixed_version_note).
+  if (confirmed.some((v) => severe(v.severity) && !v.fixed_version && !(v as { fixed_version_note?: string }).fixed_version_note)) {
     return { level: "human_only", reason: "A dependency this task touches has a high or critical vulnerability with no fixed release: replacing it or accepting the risk is a human call." };
   }
   if (decisionWindows.some((w) => w.urgency >= 4)) {

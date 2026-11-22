@@ -228,9 +228,9 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     expect(result.scan_status).toBe("ready");
     const named = result.advisories.filter((a) => /jsonwebtoken/i.test(`${a.title} ${a.action}`));
     expect(named.length).toBeGreaterThan(0);
-    // The per-vulnerability live signal names the advisories' fix; with no fix-path check here it is
-    // NOT CHECKED, never "Upgrade to" a release OSV.dev did not confirm (pre-publish audit 2026-11-14).
-    expect(result.advisories.some((a) => /NOT CHECKED: 10\.3\.0 was not confirmed/.test(a.action))).toBe(true);
+    // The task row's instruction is the scan's line for the copy; with no fix-path check here its
+    // target is NOT CHECKED, never "Upgrade to" a release OSV.dev did not confirm (pre-publish audit 2026-11-14).
+    expect(result.advisories.some((a) => /10\.3\.0 was NOT CHECKED against every advisory of jsonwebtoken/.test(a.action))).toBe(true);
     expect(result.advisories.some((a) => a.action.includes("Upgrade jsonwebtoken to 10.3.0"))).toBe(false);
     // A medium advisory in the very package being upgraded is not "safe".
     expect(result.delegation_assessment.level).toBe("review_needed");
@@ -395,7 +395,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
     const dbRow = result.advisories.filter((a) => a.title.includes("CRITICAL: jsonwebtoken authorization bypass"));
     expect(dbRow).toHaveLength(1);
-    const liveRow = result.advisories.filter((a) => a.action.includes("NOT CHECKED: 10.3.0"));
+    const liveRow = result.advisories.filter((a) => a.action.includes("10.3.0 was NOT CHECKED"));
     expect(liveRow).toHaveLength(1);
   });
 });
@@ -554,7 +554,10 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
       expect.arrayContaining(["GHSA-h395-gr6q-cpjc", "CVE-2026-25800", "RUSTSEC-2026-0088"]),
     );
     expect(liveRows[0].signal_priority).toBe("medium");
-    expect(liveRows[0].action).toBe("Upgrade jsonwebtoken: the advisory names 10.3.0 as its fix, NOT CHECKED against jsonwebtoken's other advisories (run dependency_check on a release before pinning it)");
+    // The scan's line for the copy (scan-advice.ts); with no fix-path check here its target is NOT CHECKED.
+    expect(liveRows[0].action).toBe(
+      "Upgrade jsonwebtoken 9.3.1 in relay [1 medium]: its advisories name 10.3.0 (a major version change: check upgrade_impact) as the fix, but 10.3.0 was NOT CHECKED against every advisory of jsonwebtoken (the check did not finish); confirm it with dependency_check before pinning it",
+    );
   });
 
   it("platform-inactive advisories drop to low with a host note", async () => {
@@ -567,7 +570,10 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("low");
-    expect(row!.action).toBe("Not built on this host — Upgrade nix: the advisory names 0.30.0 as its fix, NOT CHECKED against nix's other advisories (run dependency_check on a release before pinning it)");
+    // No step for a copy this host never builds, and no version the scan did not give.
+    expect(row!.action).toBe(
+      "Not built on this host (only for cfg(unix)): nothing to fix for this host. For a build that compiles it, vulnerability_scan's platform_inactive_vulnerabilities row gives the checked fix.",
+    );
     // The title agrees with the priority instead of shouting the advisory's own grade.
     expect(row!.title.startsWith("NOT BUILT HERE (critical):")).toBe(true);
   });
@@ -758,7 +764,7 @@ describe("the briefing and live signals grade by the shared rule and name instal
     const { signals } = await executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([drifted]) });
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row!.action).toBe(
-      "Run `pnpm install` in d:/proj/mcp-4da-server — node_modules has hono@4.13.1; the lockfile pins 4.13.5",
+      "Run `pnpm install` in d:/proj/mcp-4da-server — node_modules has hono@4.13.1; the lockfile pins 4.13.5 (the lockfile version is not affected; the reinstall is the whole fix)",
     );
   });
 
