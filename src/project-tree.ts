@@ -245,8 +245,10 @@ export interface ProjectTreeEntry {
 }
 
 /**
- * Why a lockfile the walk found was not scanned: past a bound, inside a
- * directory .gitignore excludes, or directly inside a build-output directory.
+ * Why a lockfile found was not scanned: past a bound, inside a directory
+ * .gitignore excludes, directly inside an ignored build-output directory,
+ * inside a directory excluded by its name, holding a merge conflict, behind a
+ * link that leads outside the root, or in a directory that could not be read.
  */
 export type SkipReason =
   | "depth"
