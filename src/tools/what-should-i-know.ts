@@ -46,6 +46,7 @@ import {
   detectFamilyPackages,
   detectTaskPackages,
   judgedReadingFor,
+  packageLabel,
   releasesFor,
   wantsLatest,
   type TaskPackage,
@@ -478,7 +479,7 @@ export async function executeWhatShouldIKnow(
     ];
     const n = dep.vulnerabilities.length;
     advisories.push({
-      title: `${dep.package} ${dep.installed.join("/")}: ${n} confirmed vulnerabilit${n !== 1 ? "ies" : "y"}, highest ${top.severity}`,
+      title: `${labelOf(dep, taskDependencies)} ${dep.installed.join("/")}: ${n} confirmed vulnerabilit${n !== 1 ? "ies" : "y"}, highest ${top.severity}`,
       signal_type: "security_alert",
       priority: top.severity,
       action: copies.map((v) => adviceFor(advice, v)).join(" | "),
@@ -504,7 +505,7 @@ export async function executeWhatShouldIKnow(
       version_confirmed: false,
     });
   }
-  if (scan) pushAll(advisories, projectAdvisories(scan, new Set(packages.map((p) => p.name))));
+  if (scan) pushAll(advisories, projectAdvisories(scan, new Set(packages.map((p) => `${p.ecosystem} ${p.name}`))));
 
   // ── 3. Decisions: windows, conflicts, wisdom ──────────────────────────
   const decisionWindows = getOpenDecisionWindows(db)
@@ -727,10 +728,16 @@ function describePackage(
   };
 }
 
+/** A task dependency's name as the briefing's sentences say it: with its ecosystem when another row has the same name. */
+function labelOf(d: TaskDependency, all: TaskDependency[]): string {
+  return packageLabel({ name: d.package, ecosystem: d.ecosystem }, all.map((x) => ({ name: x.package, ecosystem: x.ecosystem })));
+}
+
 /** One summary row for the project's other confirmed findings, plus running install drift. */
-function projectAdvisories(scan: VulnerabilityScanResult, taskNames: Set<string>): Advisory[] {
+function projectAdvisories(scan: VulnerabilityScanResult, taskKeys: Set<string>): Advisory[] {
   const out: Advisory[] = [];
-  const actionable = scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !taskNames.has(v.package) && !v.installDriftOf);
+  // The task's packages are keyed by ecosystem and name: npm's jsonwebtoken is not the crate.
+  const actionable = scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !taskKeys.has(`${v.ecosystem} ${v.package}`) && !v.installDriftOf);
   const packages = new Set(actionable.map((v) => v.package));
   if (packages.size > 0) {
     const severities = new Set(actionable.map((v) => presentedSeverity(v)));
@@ -884,7 +891,7 @@ function assessDelegation(input: {
   }
   if (confirmed.length > 0) reasons.push(`${confirmed.length} confirmed vulnerabilit${confirmed.length !== 1 ? "ies" : "y"} in the packages this task touches`);
   const crossing = taskDependencies.filter((d) => (d.majors_crossed ?? 0) > 0);
-  if (crossing.length > 0) reasons.push(`the upgrade crosses ${crossing.map((d) => `${d.majors_crossed} major version${d.majors_crossed !== 1 ? "s" : ""} of ${d.package}`).join(", ")} (check upgrade_impact for breaking changes)`);
+  if (crossing.length > 0) reasons.push(`the upgrade crosses ${crossing.map((d) => `${d.majors_crossed} major version${d.majors_crossed !== 1 ? "s" : ""} of ${labelOf(d, taskDependencies)}`).join(", ")} (check upgrade_impact for breaking changes)`);
   if (runningDrift.length > 0) reasons.push("node_modules runs a vulnerable copy the lockfile does not pin");
   if (relevantWisdom.length > 3) reasons.push(`${relevantWisdom.length} recorded decisions bear on this task`);
   if (reasons.length > 0) {
@@ -927,15 +934,15 @@ function summarize(
   if (unread.length > 0) parts.push(`NOT CHECKED: ${unread.join(", ")} (tied to no package)`);
   parts.push(
     deps.length > 0
-      ? `Task touches ${deps.map((d) => `${d.package}${d.installed.length ? ` ${d.installed.join("/")}` : ""}`).join(", ")}`
+      ? `Task touches ${deps.map((d) => `${labelOf(d, deps)}${d.installed.length ? ` ${d.installed.join("/")}` : ""}`).join(", ")}`
       : "No dependency of this project is named in the task",
   );
   const known = deps.filter((d) => d.latest && d.latest.on_latest_major !== null);
   if (known.length > 0) {
     const on = known.filter((d) => d.latest!.on_latest_major);
     const behind = known.filter((d) => !d.latest!.on_latest_major);
-    if (on.length > 0) parts.push(`already on the latest major: ${on.map((d) => `${d.package} (${d.latest!.latest_line}.x, latest ${d.latest!.version})`).join(", ")}`);
-    if (behind.length > 0) parts.push(`behind the latest major: ${behind.map((d) => `${d.package} ${d.latest!.installed_line}.x -> ${d.latest!.version}`).join(", ")}`);
+    if (on.length > 0) parts.push(`already on the latest major: ${on.map((d) => `${labelOf(d, deps)} (${d.latest!.latest_line}.x, latest ${d.latest!.version})`).join(", ")}`);
+    if (behind.length > 0) parts.push(`behind the latest major: ${behind.map((d) => `${labelOf(d, deps)} ${d.latest!.installed_line}.x -> ${d.latest!.version}`).join(", ")}`);
   }
   const family = deps.filter((d) => d.family).length;
   if (family > 0) parts.push(`${family} found through the package famil${new Set(deps.map((d) => d.family).filter(Boolean)).size === 1 ? "y" : "ies"} the task names`);

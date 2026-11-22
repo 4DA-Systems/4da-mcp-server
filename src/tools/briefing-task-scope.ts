@@ -99,8 +99,14 @@ export function detectTaskPackages(
       const window = [...tokens.slice(Math.max(0, i - 2), i), ...tokens.slice(i + 1, i + 3)];
       if (!window.some((w) => QUALIFIERS.test(w))) return;
     }
-    const key = `${matches[0].ecosystem}\0${matches[0].name}`;
-    if (!found.has(key)) found.set(key, { deps: matches, at: i });
+    // One package per ecosystem and name: jsonwebtoken on crates.io and jsonwebtoken on npm are two
+    // packages, each with its own copies (one row of both read `installed: ["11.1.0", "9.0.3"]`).
+    for (const dep of matches) {
+      const key = `${dep.ecosystem}\0${dep.name}`;
+      const entry = found.get(key);
+      if (!entry) found.set(key, { deps: [dep], at: i });
+      else if (entry.at === i) entry.deps.push(dep);
+    }
   });
 
   const packages = [...found.values()].map(({ deps: copies, at }) => {
@@ -118,6 +124,12 @@ export function detectTaskPackages(
   });
   packages.sort((a, b) => Number(b.direct) - Number(a.direct));
   return packages.slice(0, limit);
+}
+
+/** A package's name as a sentence says it: with its ecosystem when another ecosystem's package in `all` has the same name. */
+export function packageLabel(pkg: { name: string; ecosystem: string }, all: ReadonlyArray<{ name: string; ecosystem: string }>): string {
+  const twin = all.some((p) => p.ecosystem !== pkg.ecosystem && p.name.toLowerCase() === pkg.name.toLowerCase());
+  return twin ? `${pkg.name} (${pkg.ecosystem})` : pkg.name;
 }
 
 /** Words after a name that make it a family: "tauri plugins", "@tauri-apps packages". */
