@@ -340,7 +340,8 @@ export async function executeWhatShouldIKnow(
     if (scope.kind === "error") throw new Error(scope.error);
     liveIntel = liveIntelFor(liveIntel, db, scope) as BriefingLiveIntel | null;
   }
-  const allDeps = () => [...(liveIntel?.getResolvedDeps?.() ?? []), ...(liveIntel?.getAuditDeps?.() ?? [])];
+  // A declared range's floor is no installed version: such a dependency is named with none (`installed: []`).
+  const allDeps = () => [...(liveIntel?.getResolvedDeps?.() ?? []).map((d) => (d.declaredRange ? { ...d, version: null } : d)), ...(liveIntel?.getAuditDeps?.() ?? [])];
 
   // ── 0. The vulnerability scan — awaited, bounded, never assumed ───────
   const taskPackages = () => {
@@ -550,7 +551,7 @@ export async function executeWhatShouldIKnow(
   const notCovered = exclusionNotes(liveIntel?.getDiscovery?.() ?? null).filter((n) => n.startsWith("NOT COVERED"));
 
   const finalize = (relevantWisdom: WisdomEntry[], wisdomMode: WisdomRecallMode, wisdomNote?: string): WhatShouldIKnowResult => {
-    const delegation = assessDelegation({
+    const assessed = assessDelegation({
       notCovered,
       scanStatus,
       advisories,
@@ -564,6 +565,11 @@ export async function executeWhatShouldIKnow(
       decisionConflicts,
       relevantWisdom,
     });
+    // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
+    const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
+    const delegation: typeof assessed = noLockfile
+      ? { level: "unknown", reason: "No lockfile was read for this project: its manifests declare ranges, not installed versions, so the scan confirmed nothing this task touches. Generate a lockfile, then ask again." }
+      : assessed;
     return {
       task,
       files,

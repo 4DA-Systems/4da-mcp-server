@@ -275,7 +275,9 @@ export class LiveIntelligence {
    * project-tree.ts): each group resolves from its own directory and keeps
    * its manifest's platform targets; `root` is the reported project root.
    */
-  initFromProjectTree(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
+  initFromProjectTree(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
+    // Started in a workspace member, the walk read the workspace root: that is the project root.
+    const root = discovery?.workspace?.root ?? started;
     // A pyproject.toml in a subfolder with no lockfile is a group too (unlockedPythonGroups): its
     // index rules apply to its names and its dependencies are listed, never sent (pre-publish round 10, W4).
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
@@ -289,7 +291,8 @@ export class LiveIntelligence {
    * 150,000-entry lockfile is read (it waited 2.3 s; pre-publish round 10, W11). False, with the
    * set left to the resolution that superseded it, when a synchronous init ran meanwhile.
    */
-  async initFromProjectTreeYielding(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
+  async initFromProjectTreeYielding(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
+    const root = discovery?.workspace?.root ?? started;
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
     const run = ++this.initRun;
     const steps = this.applyGroupsSteps(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
@@ -1001,7 +1004,20 @@ export class LiveIntelligence {
     projectPath: string,
     options?: { includeDev?: boolean; forceRefresh?: boolean; deadline?: number },
   ): Promise<VulnerabilityScanResult> {
-    return this.runInContext(() => this.scanVulnerabilitiesIn(projectPath, options));
+    // Asked about the workspace member the walk was started in: the answer is about the workspace root it read.
+    const ws = this.discovery?.workspace;
+    const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const reported = ws && norm(projectPath) === norm(ws.startedIn) ? ws.root : projectPath;
+    return this.runInContext(() => this.scanVulnerabilitiesIn(reported, options));
+  }
+
+  /**
+   * Whether a lockfile (or a requirements file's exact pins) was read for this project: false when
+   * every version this layer holds is a manifest's declaration, or nothing was read. The one
+   * question dependency_health, upgrade_planner and what_should_i_know ask, so they agree.
+   */
+  wasLockfileRead(): boolean {
+    return this.groupResults.some((r) => r.sources.some((s) => s.kind === "lockfile" || s.kind === "manifest"));
   }
 
   private async scanVulnerabilitiesIn(

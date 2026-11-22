@@ -52,8 +52,10 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { IgnoreRules } from "./gitignore.js";
+import { goWorkFor } from "./live/lockfile-parsers-pygo.js";
 import { readTextFile } from "./live/text-file.js";
 import { parsePyprojectDependencies, tomlTable } from "./project-manifests.js";
 import { scanCurrentProject, type ProjectScanResult } from "./project-scanner.js";
@@ -303,6 +305,26 @@ export interface TreeDiscovery {
    * or not (live/private-packages.ts; blind audit round 4).
    */
   registryConfigDirs?: string[];
+  /** Set when the walk was asked for a workspace member and read the workspace root instead (findWorkspaceRoot). */
+  workspace?: WorkspaceRedirect;
+  /**
+   * The nearest lockfile above the root of a kind the root's manifests use, when the root has none
+   * of its own and that lockfile could not be confirmed to hold it as a workspace member: named, not
+   * read. `path` is absolute.
+   */
+  ancestorLockfile?: { path: string; kind: string };
+}
+
+/** A scan started in a workspace member, redirected to the workspace root whose lockfile pins it. */
+export interface WorkspaceRedirect {
+  /** Absolute: the workspace root that was read. */
+  root: string;
+  /** Absolute: the member the scan was started in. */
+  startedIn: string;
+  /** The file that holds the member, relative to `root`: its lockfile, or go.work. */
+  lockfile: string;
+  /** pnpm, npm, Yarn, Bun, Cargo, uv, Poetry, PDM or go.work. */
+  kind: string;
 }
 
 /** Python requirement files: requirements.txt, requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt. */
@@ -569,15 +591,160 @@ function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: 
   return out;
 }
 
+/** Levels searched above a directory for its workspace root when no git repository encloses it. */
+const MAX_WORKSPACE_PARENTS = 6;
+/** Levels searched above a directory for the `.git` of the repository that encloses it. */
+const MAX_REPOSITORY_PARENTS = 64;
+
+/** The kind of workspace a lockfile (or go.work) belongs to, as an answer names it. */
+const WORKSPACE_KIND: Record<string, string> = {
+  "npm-shrinkwrap.json": "npm",
+  "package-lock.json": "npm",
+  "pnpm-lock.yaml": "pnpm",
+  "yarn.lock": "Yarn",
+  "bun.lock": "Bun",
+  "bun.lockb": "Bun",
+  "Cargo.lock": "Cargo",
+  "uv.lock": "uv",
+  "poetry.lock": "Poetry",
+  "pdm.lock": "PDM",
+  "go.work": "go.work",
+};
+
+const caselessPaths = process.platform === "win32" || process.platform === "darwin";
+const samePath = (a: string, b: string) => (caselessPaths ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/**
+ * The directories above `dir` its workspace root may be in, nearest first: up to the root of the
+ * git repository that encloses it, and never past it; with no repository, at most
+ * MAX_WORKSPACE_PARENTS levels and never the home directory, anything above it, or a filesystem
+ * root (a stray lockfile in a home directory belongs to no project below it). None when `dir` is a
+ * repository root itself.
+ */
+function workspaceSearchDirs(dir: string): string[] {
+  if (fs.existsSync(path.join(dir, ".git"))) return [];
+  const above: string[] = [];
+  for (let at = dir, level = 0; level < MAX_REPOSITORY_PARENTS; level++) {
+    const parent = path.dirname(at);
+    if (parent === at) break;
+    above.push(parent);
+    if (fs.existsSync(path.join(parent, ".git"))) return above;
+    at = parent;
+  }
+  const home = path.resolve(os.homedir());
+  const out: string[] = [];
+  for (const candidate of above.slice(0, MAX_WORKSPACE_PARENTS)) {
+    const prefix = candidate.endsWith(path.sep) ? candidate : `${candidate}${path.sep}`;
+    if (path.dirname(candidate) === candidate || samePath(candidate, home) || (caselessPaths ? home.toLowerCase() : home).startsWith(caselessPaths ? prefix.toLowerCase() : prefix)) break;
+    out.push(candidate);
+  }
+  return out;
+}
+
+/** The `[package] name` of the Cargo.toml in `dir`, or null. */
+function crateNameIn(dir: string): string | null {
+  try {
+    return /^\s*name\s*=\s*"([^"]+)"/m.exec(tomlTable(readTextFile(path.join(dir, "Cargo.toml")), "package") ?? "")?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The project name of the pyproject.toml in `dir` (`[project]` or `[tool.poetry]`), or null. */
+function pythonProjectIn(dir: string): string | null {
+  try {
+    const content = readTextFile(path.join(dir, "pyproject.toml"));
+    return /^name\s*=\s*["']([^"']+)["']/m.exec(tomlTable(content, "project") ?? tomlTable(content, "tool.poetry") ?? "")?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a scan started in `dir` belongs when `dir` is a workspace member with no lockfile of its
+ * own: the nearest directory above it (workspaceSearchDirs) whose lockfile holds it as a member,
+ * by what that workspace declares (pnpm-workspace.yaml or `workspaces` patterns and the
+ * lockfile's own importers, a Cargo.lock local package, a uv/Poetry/PDM lock package, a go.work
+ * `use`). Failing that, the nearest lockfile above of a kind `dir`'s manifests use, unconfirmed:
+ * it is named and never read. Null when neither applies.
+ */
+export function findWorkspaceRoot(dir: string): { redirect: WorkspaceRedirect } | { unconfirmed: { path: string; kind: string } } | null {
+  const start = path.resolve(dir);
+  let names: string[];
+  try {
+    names = fs.readdirSync(start);
+  } catch {
+    return null;
+  }
+  const own = new Set(lockfilesIn(start, names).map(lockEcosystem));
+  const wantsJs = names.includes("package.json") && !own.has("npm");
+  const crate = names.includes("Cargo.toml") && !own.has("rust") ? crateNameIn(start) : null;
+  const project = names.includes("pyproject.toml") && !own.has("python") ? pythonProjectIn(start) : null;
+  // A Go module's go.mod is its own, but the go.work that uses it decides what is built.
+  const wantsGo = names.includes("go.mod") && !names.includes("go.work") && [...own].every((e) => e === "go");
+  if (!wantsJs && !crate && !project && !wantsGo) return null;
+  const work = wantsGo ? goWorkFor(start) : null;
+  let unconfirmed: { path: string; kind: string } | null = null;
+  for (const ancestor of workspaceSearchDirs(start)) {
+    const rel = path.relative(ancestor, start).replace(/\\/g, "/");
+    const locks = lockfilesIn(ancestor);
+    const cover = new LockCover(ancestor, "", locks);
+    const candidates: Array<{ lockfile: string; member: () => boolean }> = [];
+    if (wantsJs) {
+      const lockfile = ["npm-shrinkwrap.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"].find((n) => locks.includes(n));
+      if (lockfile) candidates.push({ lockfile, member: () => cover.coversPackageJson(rel) });
+    }
+    if (crate && locks.includes("Cargo.lock")) candidates.push({ lockfile: "Cargo.lock", member: () => cover.coversCrate(crate) });
+    if (project) {
+      const lockfile = ["uv.lock", "poetry.lock", "pdm.lock"].find((n) => locks.includes(n));
+      if (lockfile) candidates.push({ lockfile, member: () => cover.coversPythonProject(project) });
+    }
+    if (wantsGo && fs.existsSync(path.join(ancestor, "go.work"))) {
+      candidates.push({ lockfile: "go.work", member: () => work !== null && samePath(path.resolve(work.file), path.join(ancestor, "go.work")) });
+    }
+    for (const { lockfile, member } of candidates) {
+      if (member()) return { redirect: { root: ancestor, startedIn: start, lockfile, kind: WORKSPACE_KIND[lockfile] ?? lockfile } };
+      unconfirmed ??= { path: path.join(ancestor, lockfile), kind: WORKSPACE_KIND[lockfile] ?? lockfile };
+    }
+  }
+  return unconfirmed ? { unconfirmed } : null;
+}
+
+/** The sentence an answer leads with when the scan was started in a workspace member and read the workspace root, or null. */
+export function workspaceNote(discovery: TreeDiscovery | null): string | null {
+  const ws = discovery?.workspace;
+  if (!ws) return null;
+  const member = path.relative(ws.root, ws.startedIn).replace(/\\/g, "/") || ws.startedIn;
+  const why = ws.kind === "go.work" ? "it is built as part of that workspace's go.work" : `its dependencies are pinned in that workspace's ${ws.lockfile}`;
+  return `Started in ${member}, a member of the ${ws.kind} workspace at ${ws.root}: ${why}, so the workspace root was read (project_root).`;
+}
+
 /**
  * The root (always) and every locked project below it, each with its own
  * scan, plus everything the walk found and did not scan (see the header:
- * label, never suppress).
+ * label, never suppress). Started in a workspace member whose lockfile is in
+ * the workspace root above it, the workspace root is walked instead and
+ * `discovery.workspace` says so; a lockfile above that could not be confirmed
+ * to hold it is named (`discovery.ancestorLockfile`), never read.
  */
 export function scanProjectTree(
   root: string,
   limits: { maxDepth: number; maxProjects: number; maxExcludedDirs?: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
   options: { includeFixtures?: boolean } = {},
+): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
+  const found = findWorkspaceRoot(root);
+  if (found && "redirect" in found) {
+    const tree = walkProjectTree(found.redirect.root, limits, options);
+    return { entries: tree.entries, discovery: { ...tree.discovery, workspace: found.redirect } };
+  }
+  const tree = walkProjectTree(root, limits, options);
+  return found ? { entries: tree.entries, discovery: { ...tree.discovery, ancestorLockfile: found.unconfirmed } } : tree;
+}
+
+function walkProjectTree(
+  root: string,
+  limits: { maxDepth: number; maxProjects: number; maxExcludedDirs?: number },
+  options: { includeFixtures?: boolean },
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
   const entries: ProjectTreeEntry[] = [{ dir: root, scan: scanCurrentProject(root) }];
   const ignore = new IgnoreRules(root);
@@ -980,8 +1147,14 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
   // Files holding a merge conflict are worded with the lockfile problems (lockfileProblemNotes), once.
   const skippedCount = discovery.skippedCount - (discovery.mergeConflictCount ?? 0);
   const skipped = discovery.skipped.filter((s) => s.reason !== "merge_conflict");
-  if (skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && !discovery.excludedWalkTruncated && unlocked === 0) return null;
+  const ancestor = discovery.ancestorLockfile;
+  if (skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && !discovery.excludedWalkTruncated && unlocked === 0 && !ancestor) return null;
   const parts: string[] = [];
+  if (ancestor) {
+    parts.push(
+      `a lockfile above this directory (${ancestor.path}) was NOT read: this directory could not be confirmed as one of its workspace members, so what it pins was not taken for this project's dependencies; pass project_path=${path.dirname(ancestor.path)} if that is the project, or generate a lockfile here`,
+    );
+  }
   if (skippedCount > 0) {
     const why = SKIP_WORDING.filter(([reason]) => skipped.some((s) => s.reason === reason))
       .map(([, words]) => words(discovery))

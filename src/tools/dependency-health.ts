@@ -13,7 +13,7 @@ import type { DependencyHealthResult, InstallDriftRecord, RegistryPackageInfo, V
 import { groupAdvisories } from "../live/advisory-groups.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
-import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems } from "../project-tree.js";
+import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems, workspaceNote } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { quoteThirdParty } from "../untrusted-text.js";
@@ -225,9 +225,13 @@ export async function executeDependencyHealth(
 
   // Fetch registry health for all deps. The newest release a row offers is checked as
   // dependency_check checks one (offered-release.ts): crossenv's latest stable is the malware.
+  // A row whose version is only a declared range's floor has no installed version: it shows the
+  // range (declaredRange), never the floor as one, and nothing is measured from it.
   const registryData = await vetLatest(
     liveIntel,
-    withInstalledVersions(await liveIntel.fetchRegistryHealth(deps), liveIntel.getInstallDrift()),
+    withInstalledVersions(await liveIntel.fetchRegistryHealth(deps), liveIntel.getInstallDrift()).map((row) =>
+      row.declaredRange ? { ...row, currentVersion: null, versionsBehind: null } : row,
+    ),
   );
 
   // Merge vulnerability data. "Vulnerable" means the actionable set — built
@@ -264,7 +268,13 @@ export async function executeDependencyHealth(
   // A file holding a merge conflict was not read at all: the same gap as an unreadable one.
   const readGapNotes = [...lockfileProblemNotes(mergeConflicts), ...(unreadable.length > 0 ? [`NOT CHECKED: ${lockfileProblemNotes(unreadable).join(" ")}`] : [])];
   const readGap = readGapNotes.length > 0 ? `${readGapNotes.join(" ")} This is not a complete result.` : null;
-  const withheld = coverage !== null || readGap !== null;
+  // No lockfile was read (the live layer's one question, which upgrade_planner and the briefing ask
+  // too): the versions are declared ranges, nothing installed is known, and there is nothing to score.
+  // A lockfile that is there and could not be read says so itself (readGap).
+  const noLockfile = liveIntel.wasLockfileRead() || readGap !== null
+    ? null
+    : "NOT CHECKED: no lockfile was read for this project, so no installed version is known: what its manifests declare are ranges (declaredRange on each row), not installs, and what they install was not checked. Generate a lockfile (npm install --package-lock-only, cargo generate-lockfile, uv lock ...) and scan again.";
+  const withheld = coverage !== null || readGap !== null || noLockfile !== null;
   // Direct dependencies whose registry did not answer: their outdated and deprecated state is
   // unknown, not current. Under a registry outage the score counted them neither and the summary
   // said every one was "checked against its registry" (audit 6.2.5 B-7: 58/100, true 37).
@@ -411,7 +421,8 @@ export async function executeDependencyHealth(
     `${registryFailed.length > 0 ? `${total - registryFailed.length} of ` : ""}${plural(total, "direct dependency", "direct dependencies")} checked against ${total === 1 ? "its registry" : "their registries"}` +
       (devExcluded > 0 ? ` (${plural(devExcluded, "devDependency", "devDependencies")} left out; include_dev: true adds them)` : ""),
   );
-  if (vulnResult) {
+  // With no lockfile there is no installed tree to count over: only a finding is said, never "0 vulnerable".
+  if (vulnResult && (noLockfile === null || vulnerable > 0)) {
     const found = `${plural(vulnerable, "vulnerable package", "vulnerable packages")} in the full tree of ${treeDeps.toLocaleString("en-US")} installed (${vulnerableDirect} direct, ${vulnerable - vulnerableDirect} transitive${devScope})`;
     parts.push(withheld || scorePartial ? `at least ${found}, in the checked part` : found);
   }
@@ -435,6 +446,8 @@ export async function executeDependencyHealth(
   if (hidden > 0) {
     parts.push(`${hidden} advisor${hidden !== 1 ? "ies" : "y"} not counted (platform-inactive or maintenance notices)`);
   }
+  // Started in a workspace member: the workspace root was read, and the answer says so.
+  const startedIn = workspaceNote(liveIntel.getDiscovery());
   // "all healthy" over a partial walk must say it is partial.
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
@@ -463,7 +476,7 @@ export async function executeDependencyHealth(
     vulnerableCount: withheld ? null : vulnerable,
     advisoryCount,
     healthScore,
-    ...(withheld ? { withheldReason: coverage ? ("vulnerability_data_incomplete" as const) : ("lockfile_unreadable" as const) } : {}),
+    ...(withheld ? { withheldReason: noLockfile ? ("no_lockfile" as const) : coverage ? ("vulnerability_data_incomplete" as const) : ("lockfile_unreadable" as const) } : {}),
     ...(scorePartial ? { scoreCoverage: { complete: false as const, basis: "checked_part" as const, notes: partialNotes } } : {}),
     ...(vulnResult?.aliasSeverity ? { aliasSeverity: vulnResult.aliasSeverity } : {}),
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
@@ -472,9 +485,9 @@ export async function executeDependencyHealth(
     // By each advisory's own grade, before the transitive/dev-only discount vulnerability_scan's
     // by_severity applies; unlabelled, the two read as a contradiction (audit 6.2.5 D-8: 13 vs 1 critical).
     ...(vulnSummary ? { vulnerabilitySummaryBasis: "each advisory's own severity, before the transitive and dev-only discount vulnerability_scan's by_severity applies" } : {}),
-    summary: withheld
-      ? `${[coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
-      : `Health: ${healthScore}/100${scorePartial ? " over the checked part only (see scoreCoverage)" : ""} (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`,
+    summary: `${withheld
+      ? `${[noLockfile, coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
+      : `Health: ${healthScore}/100${scorePartial ? " over the checked part only (see scoreCoverage)" : ""} (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`}${startedIn ? ` ${startedIn}` : ""}`,
     scanDurationMs: Date.now() - start,
     cached: false,
   };
