@@ -54,6 +54,7 @@ import { registryQuote } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
+import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -844,6 +845,8 @@ async function executeStandalonePlanner(
   labelOtherTargets(limited);
   // Every command a row names, as data, from the fields its words were built from (all passes done).
   attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));
+  // A direct upgrade with nothing to run says why, and the hand step that takes it.
+  explainCommandlessRows(limited, (r) => fixPathInputs.has(r));
   // Targets that pin (or narrowly range) an affected dependency, or whose held dependencies could not be
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).

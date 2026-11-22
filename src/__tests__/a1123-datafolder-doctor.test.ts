@@ -61,10 +61,10 @@ describe("the data folder lines", () => {
     expect(checks["App database"].detail).toMatch(/none attached/);
   });
 
-  it("an own store a killed first start left with no tables is completed by the check, and passes", () => {
+  it("an own store a killed first start left with no tables is completed by the check, which says so", () => {
     fs.mkdirSync(home, { recursive: true });
     fs.writeFileSync(path.join(home, "standalone.db"), "");
-    expect(byName()["Own database"]).toMatchObject({ status: "pass" });
+    expect(byName()["Own database"]).toMatchObject({ status: "warn", detail: expect.stringMatching(/completed it in place/) });
     const raw = openDatabase(path.join(home, "standalone.db"), { readonly: true, fileMustExist: true });
     try {
       expect((raw.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table'").get() as { c: number }).c).toBeGreaterThan(20);
