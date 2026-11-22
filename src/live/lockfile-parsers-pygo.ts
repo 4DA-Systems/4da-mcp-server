@@ -21,7 +21,7 @@ import * as path from "node:path";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
 import { pyprojectRequirements, uvOverrideRequirements } from "./pyproject-requirements.js";
 import { poetryRequirements } from "./poetry-requirements.js";
-import { readTextFile } from "./text-file.js";
+import { isMergeConflictError, readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
 import { findLinksLabel, isPublicFindLinks, pipLineOptions, privateDirectReference } from "./private-configs.js";
@@ -169,6 +169,8 @@ export function resolvePython(cwd: string): VersionSource {
     }
   }
 
+  // A lockfile here holds a merge conflict: the project has a lockfile, so pyproject.toml's pins are not read in its place.
+  let conflictedLock = false;
   for (const file of PYTHON_TOML_LOCKS) {
     const lockPath = path.join(cwd, file);
     if (!fs.existsSync(lockPath)) continue;
@@ -189,7 +191,10 @@ export function resolvePython(cwd: string): VersionSource {
       sources.push(lockPath);
       lockfile = true;
       if (damage) damaged.push(partialRead(lockPath, damage.reason, damage.missing, damage.behindManifest === true));
-    } catch { /* unreadable: the next source (resolveVersionSource names this one and why) */ }
+    } catch (error) {
+      // Unreadable: the next source (resolveVersionSource names this one and why).
+      if (isMergeConflictError(error)) conflictedLock = true;
+    }
   }
 
   const pipfileLock = path.join(cwd, "Pipfile.lock");
@@ -205,7 +210,10 @@ export function resolvePython(cwd: string): VersionSource {
       }
       // Entries skipped inside a file that was otherwise read (`skipped`), or a file that gave nothing.
       if (read.problem) damaged.push({ file: pipfileLock, error: read.problem, ...(read.pins.length > 0 && read.malformed > 0 ? { skipped: read.malformed } : {}) });
-    } catch { /* unreadable or not JSON: resolveVersionSource names it and why */ }
+    } catch (error) {
+      // Unreadable or not JSON: resolveVersionSource names it and why.
+      if (isMergeConflictError(error)) conflictedLock = true;
+    }
   }
 
   const collected: LockfileProblem[] = [];
@@ -259,7 +267,7 @@ export function resolvePython(cwd: string): VersionSource {
   // With no lockfile, an exact pin pyproject.toml declares is what gets installed, as a
   // requirements pin is: checked. (A lockfile, when there is one, holds those versions itself.)
   let manifestPins = 0;
-  if (pyproject !== null && !lockfile) {
+  if (pyproject !== null && !lockfile && !conflictedLock) {
     const declared = pyprojectPins(pyproject);
     manifestPins = declared.pins.length;
     if (manifestPins > 0) {

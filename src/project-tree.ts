@@ -22,16 +22,21 @@
  *   dependencies, 0 vulnerable" while backend/package-lock.json held 750
  *   packages and 171 advisories);
  * - a dot-directory is an ordinary directory (`.github/actions/x`,
- *   `.design-system`): scanned, unless it is one of the kinds below;
+ *   `.design-system`, `.vscode/extensions/x`): scanned, unless it is one of
+ *   the kinds below; so is `build/`, `dist/` or `out/` that the repository
+ *   does not ignore (microsoft/vscode's `build/npm/gyp/`);
  * - a directory .gitignore excludes is not scanned (it is as often a scratch
  *   clone or a sibling tool as the project's own code, and its advisories
  *   would be reported as the project's), but every lockfile in it is listed
  *   by path (`discovery.skipped`, reason `gitignored_directory`);
- * - directories of installed code, build output, caches, version-control
- *   data and tool state (SKIP_DIRS) are never entered: what they hold is a
- *   copy of something else. Those of them whose name is also an ordinary
- *   folder name (`build`, `dist`, `vendor`...) get one look, and a lockfile
- *   sitting directly in one is listed (reason `output_directory`);
+ * - directories of installed code, a tool's build output or cache, and
+ *   editor or agent state (EXCLUDED_DIRS) are never scanned: what they hold
+ *   is a copy of something else. One the repository does not ignore is
+ *   searched, and every lockfile in it is listed (reason
+ *   `excluded_directory`); one it ignores is left out as it says, except that
+ *   a lockfile sitting directly in an ignored `vendor/`, `target/` or `venv/`
+ *   is listed (reason `output_directory`). Version-control data is never
+ *   entered;
  * - test-fixture directories are counted, not scanned (FIXTURE_DIRS);
  * - a manifest with no lockfile beside it, and which no lockfile above
  *   holds as a workspace member, is listed (`unlockedManifests`): its
@@ -47,8 +52,10 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { IgnoreRules } from "./gitignore.js";
+import { goWorkFor } from "./live/lockfile-parsers-pygo.js";
 import { readTextFile } from "./live/text-file.js";
 import { parsePyprojectDependencies, tomlTable } from "./project-manifests.js";
 import { scanCurrentProject, type ProjectScanResult } from "./project-scanner.js";
@@ -93,31 +100,45 @@ const LOCK_ECOSYSTEM: Record<string, string> = {
 };
 
 /**
- * Directories never entered. Each holds a copy of something that is not this
- * project's own dependency set: installed code, build output, caches,
- * version-control data, or the state of an editor or agent (extensions, and
- * worktree copies of whole repositories: 4DA's `.claude/worktrees` held 55).
+ * Directories excluded by their name: never scanned. Each holds a copy of
+ * something that is not this project's own dependency set: installed code, a
+ * tool's build output or cache, or the state of an editor or agent (worktree
+ * copies of whole repositories: 4DA's `.claude/worktrees` held 55). One the
+ * repository does not ignore is searched (bounded), and every lockfile in it
+ * is listed (reason `excluded_directory`); one it ignores is left out as it
+ * says. Names that are as often a project's own folder (`build`, `dist`,
+ * `out`, `coverage`, `.vscode`, `.idea`) are not here: microsoft/vscode keeps
+ * real projects in `build/npm/gyp/`, `build/win32/` and `.vscode/extensions/*`.
  */
-const SKIP_DIRS = new Set([
+const EXCLUDED_DIRS = new Set([
   // installed code
   "node_modules", "bower_components", "jspm_packages", "site-packages", "vendor", "Pods",
   ".venv", "venv", ".tox", ".nox", ".eggs", "__pycache__", ".bundle",
-  // build output
-  "target", "dist", "build", "out", "coverage", ".next", ".nuxt", ".output", ".svelte-kit", ".turbo",
+  // a tool's build output
+  "target", ".next", ".nuxt", ".output", ".svelte-kit", ".turbo",
   ".parcel-cache", ".angular", ".vercel", ".netlify", ".serverless", ".docusaurus", ".expo", ".dart_tool", ".gradle", ".nx",
-  // version control and caches
-  ".git", ".hg", ".svn", ".cache", ".pnpm-store", ".yarn", ".npm", ".pnpm", ".bun", ".cargo", ".rustup",
+  // caches
+  ".cache", ".pnpm-store", ".yarn", ".npm", ".pnpm", ".bun", ".cargo", ".rustup",
   ".mypy_cache", ".pytest_cache", ".ruff_cache", ".terraform",
   // editor and agent state
-  ".claude", ".codex", ".cursor", ".worktrees", ".vscode", ".vscode-test", ".vscode-server", ".idea", ".vs",
+  ".claude", ".codex", ".cursor", ".worktrees", ".vscode-test", ".vscode-server",
 ]);
 
+/** Version-control data: no working files, so never entered or searched. */
+const VCS_DIRS = new Set([".git", ".hg", ".svn"]);
+
+/** Never walked as part of the project: EXCLUDED_DIRS and VCS_DIRS. */
+const isNeverWalked = (name: string) => EXCLUDED_DIRS.has(name) || VCS_DIRS.has(name);
+
 /**
- * SKIP_DIRS names that are also ordinary folder names: microsoft/vscode keeps
- * `build/package-lock.json`, a real project. They are still not entered, but a
- * lockfile sitting directly in one is listed, not passed over.
+ * EXCLUDED_DIRS names that are also ordinary folder names. When the repository
+ * ignores one, a lockfile sitting directly in it is still listed (reason
+ * `output_directory`).
  */
-const AMBIGUOUS_OUTPUT_DIRS = new Set(["build", "dist", "out", "vendor", "coverage", "target", "venv"]);
+const AMBIGUOUS_OUTPUT_DIRS = new Set(["vendor", "target", "venv"]);
+
+/** Directories searched inside directories excluded by name, a budget of its own (node_modules alone can hold tens of thousands). */
+export const MAX_EXCLUDED_WALK_DIRS = 2_000;
 
 /**
  * Directories whose lockfiles are test data, not the project's dependencies:
@@ -129,6 +150,15 @@ const AMBIGUOUS_OUTPUT_DIRS = new Set(["build", "dist", "out", "vendor", "covera
 const FIXTURE_DIRS = new Set([
   "fixtures", "__fixtures__", "testdata", "test-data", "test-fixtures", "__tests__", "tests", "test", "conformance",
 ]);
+
+/** Whether a path is a directory (following links), false when it cannot be stat'ed. */
+function isDirectoryPath(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 /** Above this a setup.py or setup.cfg is not read to see whether it declares dependencies. */
 const MAX_SETUP_BYTES = 256 * 1024;
@@ -215,10 +245,21 @@ export interface ProjectTreeEntry {
 }
 
 /**
- * Why a lockfile the walk found was not scanned: past a bound, inside a
- * directory .gitignore excludes, or directly inside a build-output directory.
+ * Why a lockfile found was not scanned: past a bound, inside a directory
+ * .gitignore excludes, directly inside an ignored build-output directory,
+ * inside a directory excluded by its name, holding a merge conflict, behind a
+ * link that leads outside the root, or in a directory that could not be read.
  */
-export type SkipReason = "depth" | "project_limit" | "gitignored_directory" | "output_directory";
+export type SkipReason =
+  | "depth"
+  | "project_limit"
+  | "gitignored_directory"
+  | "output_directory"
+  | "excluded_directory"
+  | "merge_conflict"
+  | "symlink_outside_root"
+  /** A directory the walk could not list (its path ends in `/`): what it holds is not known. */
+  | "unreadable";
 
 /** What the walk left out, so an answer can say it is partial. */
 export interface TreeDiscovery {
@@ -230,12 +271,19 @@ export interface TreeDiscovery {
   skipped: Array<{ path: string; reason: SkipReason }>;
   /** Every lockfile found but not scanned (`skipped` may list fewer). */
   skippedCount: number;
+  /**
+   * Of `skippedCount`, the files holding a merge conflict (reason `merge_conflict`, added by the
+   * live layer: withMergeConflicts). lockfileProblemNotes words them, so discoveryNote does not.
+   */
+  mergeConflictCount?: number;
   /** True when the walk itself stopped at MAX_WALK_DIRS: lockfiles beyond it were not even counted. */
   walkTruncated: boolean;
   /** Set when the walk stopped on its time budget rather than at MAX_WALK_DIRS (walk-budget.ts). */
   walkStopped?: "time_budget";
   /** True when the search inside gitignored directories stopped at MAX_IGNORED_WALK_DIRS. */
   ignoredWalkTruncated?: boolean;
+  /** True when the search inside directories excluded by name stopped at its bound (MAX_EXCLUDED_WALK_DIRS). */
+  excludedWalkTruncated?: boolean;
   /** Manifests and lockfiles of ecosystems this server does not read (the first MAX_LISTED_NOT_COVERED), relative to the root. */
   notCovered?: Array<{ path: string; ecosystem: string }>;
   /** Every such file found (`notCovered` may list fewer). */
@@ -259,6 +307,26 @@ export interface TreeDiscovery {
    * or not (live/private-packages.ts; blind audit round 4).
    */
   registryConfigDirs?: string[];
+  /** Set when the walk was asked for a workspace member and read the workspace root instead (findWorkspaceRoot). */
+  workspace?: WorkspaceRedirect;
+  /**
+   * The nearest lockfile above the root of a kind the root's manifests use, when the root has none
+   * of its own and that lockfile could not be confirmed to hold it as a workspace member: named, not
+   * read. `path` is absolute.
+   */
+  ancestorLockfile?: { path: string; kind: string };
+}
+
+/** A scan started in a workspace member, redirected to the workspace root whose lockfile pins it. */
+export interface WorkspaceRedirect {
+  /** Absolute: the workspace root that was read. */
+  root: string;
+  /** Absolute: the member the scan was started in. */
+  startedIn: string;
+  /** The file that holds the member, relative to `root`: its lockfile, or go.work. */
+  lockfile: string;
+  /** pnpm, npm, Yarn, Bun, Cargo, uv, Poetry, PDM or go.work. */
+  kind: string;
 }
 
 /** Python requirement files: requirements.txt, requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt. */
@@ -525,15 +593,160 @@ function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: 
   return out;
 }
 
+/** Levels searched above a directory for its workspace root when no git repository encloses it. */
+const MAX_WORKSPACE_PARENTS = 6;
+/** Levels searched above a directory for the `.git` of the repository that encloses it. */
+const MAX_REPOSITORY_PARENTS = 64;
+
+/** The kind of workspace a lockfile (or go.work) belongs to, as an answer names it. */
+const WORKSPACE_KIND: Record<string, string> = {
+  "npm-shrinkwrap.json": "npm",
+  "package-lock.json": "npm",
+  "pnpm-lock.yaml": "pnpm",
+  "yarn.lock": "Yarn",
+  "bun.lock": "Bun",
+  "bun.lockb": "Bun",
+  "Cargo.lock": "Cargo",
+  "uv.lock": "uv",
+  "poetry.lock": "Poetry",
+  "pdm.lock": "PDM",
+  "go.work": "go.work",
+};
+
+const caselessPaths = process.platform === "win32" || process.platform === "darwin";
+const samePath = (a: string, b: string) => (caselessPaths ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/**
+ * The directories above `dir` its workspace root may be in, nearest first: up to the root of the
+ * git repository that encloses it, and never past it; with no repository, at most
+ * MAX_WORKSPACE_PARENTS levels and never the home directory, anything above it, or a filesystem
+ * root (a stray lockfile in a home directory belongs to no project below it). None when `dir` is a
+ * repository root itself.
+ */
+function workspaceSearchDirs(dir: string): string[] {
+  if (fs.existsSync(path.join(dir, ".git"))) return [];
+  const above: string[] = [];
+  for (let at = dir, level = 0; level < MAX_REPOSITORY_PARENTS; level++) {
+    const parent = path.dirname(at);
+    if (parent === at) break;
+    above.push(parent);
+    if (fs.existsSync(path.join(parent, ".git"))) return above;
+    at = parent;
+  }
+  const home = path.resolve(os.homedir());
+  const out: string[] = [];
+  for (const candidate of above.slice(0, MAX_WORKSPACE_PARENTS)) {
+    const prefix = candidate.endsWith(path.sep) ? candidate : `${candidate}${path.sep}`;
+    if (path.dirname(candidate) === candidate || samePath(candidate, home) || (caselessPaths ? home.toLowerCase() : home).startsWith(caselessPaths ? prefix.toLowerCase() : prefix)) break;
+    out.push(candidate);
+  }
+  return out;
+}
+
+/** The `[package] name` of the Cargo.toml in `dir`, or null. */
+function crateNameIn(dir: string): string | null {
+  try {
+    return /^\s*name\s*=\s*"([^"]+)"/m.exec(tomlTable(readTextFile(path.join(dir, "Cargo.toml")), "package") ?? "")?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The project name of the pyproject.toml in `dir` (`[project]` or `[tool.poetry]`), or null. */
+function pythonProjectIn(dir: string): string | null {
+  try {
+    const content = readTextFile(path.join(dir, "pyproject.toml"));
+    return /^name\s*=\s*["']([^"']+)["']/m.exec(tomlTable(content, "project") ?? tomlTable(content, "tool.poetry") ?? "")?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a scan started in `dir` belongs when `dir` is a workspace member with no lockfile of its
+ * own: the nearest directory above it (workspaceSearchDirs) whose lockfile holds it as a member,
+ * by what that workspace declares (pnpm-workspace.yaml or `workspaces` patterns and the
+ * lockfile's own importers, a Cargo.lock local package, a uv/Poetry/PDM lock package, a go.work
+ * `use`). Failing that, the nearest lockfile above of a kind `dir`'s manifests use, unconfirmed:
+ * it is named and never read. Null when neither applies.
+ */
+export function findWorkspaceRoot(dir: string): { redirect: WorkspaceRedirect } | { unconfirmed: { path: string; kind: string } } | null {
+  const start = path.resolve(dir);
+  let names: string[];
+  try {
+    names = fs.readdirSync(start);
+  } catch {
+    return null;
+  }
+  const own = new Set(lockfilesIn(start, names).map(lockEcosystem));
+  const wantsJs = names.includes("package.json") && !own.has("npm");
+  const crate = names.includes("Cargo.toml") && !own.has("rust") ? crateNameIn(start) : null;
+  const project = names.includes("pyproject.toml") && !own.has("python") ? pythonProjectIn(start) : null;
+  // A Go module's go.mod is its own, but the go.work that uses it decides what is built.
+  const wantsGo = names.includes("go.mod") && !names.includes("go.work") && [...own].every((e) => e === "go");
+  if (!wantsJs && !crate && !project && !wantsGo) return null;
+  const work = wantsGo ? goWorkFor(start) : null;
+  let unconfirmed: { path: string; kind: string } | null = null;
+  for (const ancestor of workspaceSearchDirs(start)) {
+    const rel = path.relative(ancestor, start).replace(/\\/g, "/");
+    const locks = lockfilesIn(ancestor);
+    const cover = new LockCover(ancestor, "", locks);
+    const candidates: Array<{ lockfile: string; member: () => boolean }> = [];
+    if (wantsJs) {
+      const lockfile = ["npm-shrinkwrap.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"].find((n) => locks.includes(n));
+      if (lockfile) candidates.push({ lockfile, member: () => cover.coversPackageJson(rel) });
+    }
+    if (crate && locks.includes("Cargo.lock")) candidates.push({ lockfile: "Cargo.lock", member: () => cover.coversCrate(crate) });
+    if (project) {
+      const lockfile = ["uv.lock", "poetry.lock", "pdm.lock"].find((n) => locks.includes(n));
+      if (lockfile) candidates.push({ lockfile, member: () => cover.coversPythonProject(project) });
+    }
+    if (wantsGo && fs.existsSync(path.join(ancestor, "go.work"))) {
+      candidates.push({ lockfile: "go.work", member: () => work !== null && samePath(path.resolve(work.file), path.join(ancestor, "go.work")) });
+    }
+    for (const { lockfile, member } of candidates) {
+      if (member()) return { redirect: { root: ancestor, startedIn: start, lockfile, kind: WORKSPACE_KIND[lockfile] ?? lockfile } };
+      unconfirmed ??= { path: path.join(ancestor, lockfile), kind: WORKSPACE_KIND[lockfile] ?? lockfile };
+    }
+  }
+  return unconfirmed ? { unconfirmed } : null;
+}
+
+/** The sentence an answer leads with when the scan was started in a workspace member and read the workspace root, or null. */
+export function workspaceNote(discovery: TreeDiscovery | null): string | null {
+  const ws = discovery?.workspace;
+  if (!ws) return null;
+  const member = path.relative(ws.root, ws.startedIn).replace(/\\/g, "/") || ws.startedIn;
+  const why = ws.kind === "go.work" ? "it is built as part of that workspace's go.work" : `its dependencies are pinned in that workspace's ${ws.lockfile}`;
+  return `Started in ${member}, a member of the ${ws.kind} workspace at ${ws.root}: ${why}, so the workspace root was read (project_root).`;
+}
+
 /**
  * The root (always) and every locked project below it, each with its own
  * scan, plus everything the walk found and did not scan (see the header:
- * label, never suppress).
+ * label, never suppress). Started in a workspace member whose lockfile is in
+ * the workspace root above it, the workspace root is walked instead and
+ * `discovery.workspace` says so; a lockfile above that could not be confirmed
+ * to hold it is named (`discovery.ancestorLockfile`), never read.
  */
 export function scanProjectTree(
   root: string,
-  limits: { maxDepth: number; maxProjects: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
+  limits: { maxDepth: number; maxProjects: number; maxExcludedDirs?: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
   options: { includeFixtures?: boolean } = {},
+): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
+  const found = findWorkspaceRoot(root);
+  if (found && "redirect" in found) {
+    const tree = walkProjectTree(found.redirect.root, limits, options);
+    return { entries: tree.entries, discovery: { ...tree.discovery, workspace: found.redirect } };
+  }
+  const tree = walkProjectTree(root, limits, options);
+  return found ? { entries: tree.entries, discovery: { ...tree.discovery, ancestorLockfile: found.unconfirmed } } : tree;
+}
+
+function walkProjectTree(
+  root: string,
+  limits: { maxDepth: number; maxProjects: number; maxExcludedDirs?: number },
+  options: { includeFixtures?: boolean },
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
   const entries: ProjectTreeEntry[] = [{ dir: root, scan: scanCurrentProject(root) }];
   const ignore = new IgnoreRules(root);
@@ -544,6 +757,9 @@ export function scanProjectTree(
   let walkTruncated = false;
   let ignoredVisited = 0;
   let ignoredWalkTruncated = false;
+  const maxExcludedDirs = limits.maxExcludedDirs ?? MAX_EXCLUDED_WALK_DIRS;
+  let excludedVisited = 0;
+  let excludedWalkTruncated = false;
   const notCovered: Array<{ path: string; ecosystem: string }> = [];
   let notCoveredCount = 0;
   const fixtures = { count: 0, dirs: [] as string[] };
@@ -579,7 +795,7 @@ export function scanProjectTree(
   // Test-fixture lockfiles: counted, never scanned (unless asked for).
   const countFixtures = (dir: string, children: fs.Dirent[]) => {
     for (const child of children) {
-      if (!child.isDirectory() || SKIP_DIRS.has(child.name)) continue;
+      if (!child.isDirectory() || isNeverWalked(child.name)) continue;
       if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
@@ -607,37 +823,117 @@ export function scanProjectTree(
     for (const name of lockfilesIn(dir, children.map((c) => c.name))) noteSkipped(`${rel}/${name}`, "gitignored_directory");
     noteRegistryConfig(dir, children.map((c) => c.name));
     for (const child of children) {
-      if (!child.isDirectory() || SKIP_DIRS.has(child.name)) continue;
+      if (!child.isDirectory() || isNeverWalked(child.name)) continue;
       listIgnored(path.join(dir, child.name), `${rel}/${child.name}`);
       if (ignoredWalkTruncated || walkTruncated) return;
     }
   };
-  // A build-output name that may be an ordinary folder: one look, no descent.
+  // An excluded name that may be an ordinary folder, which the repository ignores: one look, no descent.
   const peekOutputDir = (dir: string, rel: string) => {
     const children = listing(dir);
     if (!children) return;
     for (const name of lockfilesIn(dir, children.filter((c) => c.isFile()).map((c) => c.name))) noteSkipped(`${rel}/${name}`, "output_directory");
   };
-  // The lockfiles above a directory: a manifest below is covered only by one it is a workspace member of (LockCover).
-  const walk = (dir: string, rel: string, depth: number, children: fs.Dirent[], covers: LockCover[]) => {
+  // A directory excluded by its name that the repository does not ignore: not scanned, every lockfile in it named.
+  const listExcluded = (dir: string, rel: string) => {
+    if (budget.spent()) {
+      walkTruncated = true;
+      return;
+    }
+    if (++excludedVisited > maxExcludedDirs) {
+      excludedWalkTruncated = true;
+      return;
+    }
+    const children = listing(dir);
+    if (!children) return;
+    for (const name of lockfilesIn(dir, children.map((c) => c.name))) noteSkipped(`${rel}/${name}`, "excluded_directory");
     for (const child of children) {
-      if (!child.isDirectory()) continue;
+      if (!child.isDirectory() || VCS_DIRS.has(child.name)) continue;
+      const childRel = `${rel}/${child.name}`;
+      // Excluded by its name and by the repository: left out as both say.
+      if (ignore.ignores(childRel, true)) continue;
+      listExcluded(path.join(dir, child.name), childRel);
+      if (excludedWalkTruncated || walkTruncated) return;
+    }
+  };
+  // Real paths, so a directory reached through a junction or symbolic link is walked once and a link never loops.
+  const realKey = (p: string) => (process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p);
+  const realOf = (p: string): string | null => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return null;
+    }
+  };
+  const realRoot = realOf(root) ?? path.resolve(root);
+  const rootPrefix = realKey(realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`);
+  const inRoot = (real: string) => realKey(real) === realKey(realRoot) || realKey(real).startsWith(rootPrefix);
+  const walked = new Set<string>([realKey(realRoot)]);
+  // Behind a link that leads outside the root: not scanned, every lockfile there named. No further link is followed.
+  const listOutside = (dir: string, rel: string, real: string) => {
+    if (budget.spent()) {
+      walkTruncated = true;
+      return;
+    }
+    if (++excludedVisited > maxExcludedDirs) {
+      excludedWalkTruncated = true;
+      return;
+    }
+    const children = listing(dir);
+    if (!children) return;
+    for (const name of lockfilesIn(dir, children.map((c) => c.name))) noteSkipped(`${rel}/${name}`, "symlink_outside_root");
+    for (const child of children) {
+      // The root's own directories are walked as the root's (a link to an ancestor leads back into it).
+      if (!child.isDirectory() || isNeverWalked(child.name) || inRoot(path.join(real, child.name))) continue;
+      listOutside(path.join(dir, child.name), `${rel}/${child.name}`, path.join(real, child.name));
+      if (excludedWalkTruncated || walkTruncated) return;
+    }
+  };
+  // The lockfiles above a directory: a manifest below is covered only by one it is a workspace member of (LockCover).
+  const walk = (dir: string, rel: string, depth: number, children: fs.Dirent[], covers: LockCover[], dirReal: string) => {
+    for (const child of children) {
+      const link = child.isSymbolicLink();
+      if (!child.isDirectory() && !link) continue;
       const childRel = rel ? `${rel}/${child.name}` : child.name;
       const sub = path.join(dir, child.name);
-      if (SKIP_DIRS.has(child.name)) {
-        if (AMBIGUOUS_OUTPUT_DIRS.has(child.name)) peekOutputDir(sub, childRel);
+      if (VCS_DIRS.has(child.name)) continue;
+      if (EXCLUDED_DIRS.has(child.name)) {
+        if (!ignore.ignores(childRel, true)) listExcluded(sub, childRel);
+        else if (AMBIGUOUS_OUTPUT_DIRS.has(child.name)) peekOutputDir(sub, childRel);
+        if (walkTruncated) return;
         continue;
       }
+      let real = path.join(dirReal, child.name);
+      if (link) {
+        // A junction or symbolic link. One to a file is read as that file (lockfilesIn); one that leads nowhere holds nothing.
+        const target = realOf(sub);
+        if (target === null || !isDirectoryPath(target)) continue;
+        if (!inRoot(target)) {
+          listOutside(sub, childRel, target);
+          if (walkTruncated) return;
+          continue;
+        }
+        real = target;
+      }
+      // Walked already, through its own path or another link (and a link to an ancestor of it).
+      if (walked.has(realKey(real))) continue;
       if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
       }
       if (ignore.ignores(childRel, true)) {
+        // Listed once: a link into it later is not followed.
+        walked.add(realKey(real));
         listIgnored(sub, childRel);
         continue;
       }
       const grandchildren = listing(sub);
-      if (!grandchildren) continue;
+      if (!grandchildren) {
+        // What it holds is not known: named, never passed over as empty.
+        noteSkipped(`${childRel}/`, "unreadable");
+        continue;
+      }
+      walked.add(realKey(real));
       if (!options.includeFixtures && FIXTURE_DIRS.has(child.name.toLowerCase())) {
         const before = fixtures.count;
         fixtures.count += lockfilesIn(sub, grandchildren.map((g) => g.name)).length;
@@ -669,7 +965,7 @@ export function scanProjectTree(
           if (unlocked.length < MAX_LISTED_UNLOCKED) unlocked.push({ path: `${childRel}/${manifest.name}`, ecosystem: manifest.ecosystem, dependencies: manifest.dependencies });
         }
       }
-      walk(sub, childRel, depth + 1, grandchildren, here);
+      walk(sub, childRel, depth + 1, grandchildren, here, real);
       if (walkTruncated) return;
     }
   };
@@ -678,7 +974,7 @@ export function scanProjectTree(
   noteUnsupported(root, "", rootNames);
   const rootLocks = lockfilesIn(root, rootListing.map((d) => d.name));
   for (const name of rootLocks) if (ignore.ignores(name, false)) gitignoredScanned.push(name);
-  walk(root, "", 1, rootListing, rootLocks.length > 0 ? [new LockCover(root, "", rootLocks)] : []);
+  walk(root, "", 1, rootListing, rootLocks.length > 0 ? [new LockCover(root, "", rootLocks)] : [], realRoot);
   return {
     entries,
     discovery: {
@@ -690,6 +986,7 @@ export function scanProjectTree(
       walkTruncated,
       ...(budget.stopped ? { walkStopped: "time_budget" as const } : {}),
       ...(ignoredWalkTruncated ? { ignoredWalkTruncated } : {}),
+      ...(excludedWalkTruncated ? { excludedWalkTruncated } : {}),
       ...(notCoveredCount > 0 ? { notCovered, notCoveredCount } : {}),
       ...(fixtures.count > 0 ? { fixtures } : {}),
       ...(unlockedCount > 0 ? { unlockedManifests: unlocked, unlockedManifestsCount: unlockedCount } : {}),
@@ -719,26 +1016,44 @@ export function discoveryFor(root: string): TreeDiscovery {
 }
 
 /** A lockfile problem as the notes read it (lockfile-types.ts LockfileProblem). */
-export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true };
+export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true; mergeConflict?: true };
 
 /**
  * The kinds, kept apart: a file that could not be read (UNREADABLE), one read
  * but not all of it (PARTIAL: entries skipped, `skipped`, audit L5; or
  * truncated or damaged, `partial`), a requirements include refused because it
  * points outside the project (`refused`, B-11), a second lockfile that
- * disagrees with the one that was read (`conflict`), and one read whole but not
- * compared with the manifests that declare its dependencies (`notCrossChecked`).
+ * disagrees with the one that was read (`conflict`), one read whole but not
+ * compared with the manifests that declare its dependencies (`notCrossChecked`),
+ * and one holding git merge-conflict markers, never read (`mergeConflict`,
+ * listed as not scanned rather than as unreadable).
  */
-export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[]; uncrossed: P[] } {
+export function splitLockfileProblems<P extends LockfileProblemLike>(problems: P[]): { unreadable: P[]; partial: P[]; refused: P[]; conflicts: P[]; uncrossed: P[]; mergeConflicts: P[] } {
   const isPartial = (p: P) => Boolean(p.skipped) || p.partial === true;
-  const other = (p: P) => p.refused === true || p.conflict === true || p.notCrossChecked === true;
+  const other = (p: P) => p.refused === true || p.conflict === true || p.notCrossChecked === true || p.mergeConflict === true;
   return {
     unreadable: problems.filter((p) => !isPartial(p) && !other(p)),
     partial: problems.filter((p) => isPartial(p) && !other(p)),
-    refused: problems.filter((p) => p.refused === true),
-    conflicts: problems.filter((p) => p.conflict === true),
-    uncrossed: problems.filter((p) => p.notCrossChecked === true && !p.refused && !p.conflict),
+    refused: problems.filter((p) => p.refused === true && !p.mergeConflict),
+    conflicts: problems.filter((p) => p.conflict === true && !p.mergeConflict),
+    uncrossed: problems.filter((p) => p.notCrossChecked === true && !p.refused && !p.conflict && !p.mergeConflict),
+    mergeConflicts: problems.filter((p) => p.mergeConflict === true),
   };
+}
+
+/**
+ * The walk's report with the files the live layer found holding a merge conflict added to
+ * `skipped` (reason `merge_conflict`), paths relative to `root`: coverage lists them with the
+ * lockfiles left out, once each. A report with none is returned as it is.
+ */
+export function withMergeConflicts(discovery: TreeDiscovery | null, conflicted: LockfileProblemLike[], root: string): TreeDiscovery | null {
+  const rel = (file: string) => path.relative(root, file).replace(/\\/g, "/") || path.basename(file);
+  const known = new Set((discovery?.skipped ?? []).map((s) => s.path));
+  const added = [...new Set(conflicted.filter((p) => p.mergeConflict).map((p) => rel(p.file)))].filter((p) => !known.has(p));
+  if (added.length === 0) return discovery;
+  const base: TreeDiscovery = discovery ?? { projects: 0, maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS, skipped: [], skippedCount: 0, walkTruncated: false };
+  const skipped = [...added.map((p) => ({ path: p, reason: "merge_conflict" as const })), ...base.skipped].slice(0, Math.max(MAX_LISTED_SKIPS, added.length));
+  return { ...base, skipped, skippedCount: base.skippedCount + added.length, mergeConflictCount: (base.mergeConflictCount ?? 0) + added.length };
 }
 
 /** Whether `file` has a lockfile's name (not a manifest's, such as package.json or pyproject.toml). */
@@ -753,8 +1068,15 @@ function isLockfileName(file: string): boolean {
  */
 export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (file: string) => string = (f) => f): string[] {
   const listed = (ps: LockfileProblemLike[]) => `${ps.slice(0, 3).map((p) => `${show(p.file)} (${p.error})`).join("; ")}${ps.length > 3 ? "; ..." : ""}`;
-  const { unreadable, partial, refused, conflicts, uncrossed } = splitLockfileProblems(problems);
+  const { unreadable, partial, refused, conflicts, uncrossed, mergeConflicts } = splitLockfileProblems(problems);
   const notes: string[] = [];
+  if (mergeConflicts.length > 0) {
+    const n = mergeConflicts.length;
+    const files = `${mergeConflicts.slice(0, 3).map((p) => show(p.file)).join(", ")}${n > 3 ? ", ..." : ""}`;
+    notes.push(
+      `NOT CHECKED (merge conflict): ${n} file${n === 1 ? " holds" : "s hold"} git merge-conflict markers (${files}), so neither side was read and nothing ${n === 1 ? "it pins or declares" : "they pin or declare"} was checked: resolve the conflict (reinstall to regenerate a lockfile), then scan again.`,
+    );
+  }
   if (unreadable.length > 0) {
     // A manifest (package.json, pyproject.toml, ...) can be the file that could not be read: "lockfile" only when each one is.
     const kind = unreadable.every((p) => isLockfileName(p.file)) ? "lockfile" : "file";
@@ -815,21 +1137,33 @@ const SKIP_WORDING: Array<[SkipReason, (d: TreeDiscovery) => string]> = [
   ["project_limit", (d) => `past the ${d.maxProjects}-project limit`],
   ["gitignored_directory", () => "in a directory .gitignore excludes"],
   ["output_directory", () => "directly inside a build-output directory"],
+  ["excluded_directory", () => "inside installed code, a tool's build output or cache, or an editor's or agent's state (node_modules, target, .venv, .claude ...), which is never scanned"],
+  ["symlink_outside_root", () => "behind a link (a junction or symbolic link) that leads outside the project"],
+  ["unreadable", () => "in a directory that could not be read, so what it holds is not known"],
 ];
 
 /** One sentence for an answer, or null when nothing was left out. */
 export function discoveryNote(discovery: TreeDiscovery | null): string | null {
   if (!discovery) return null;
   const unlocked = discovery.unlockedManifestsCount ?? 0;
-  if (discovery.skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && unlocked === 0) return null;
+  // Files holding a merge conflict are worded with the lockfile problems (lockfileProblemNotes), once.
+  const skippedCount = discovery.skippedCount - (discovery.mergeConflictCount ?? 0);
+  const skipped = discovery.skipped.filter((s) => s.reason !== "merge_conflict");
+  const ancestor = discovery.ancestorLockfile;
+  if (skippedCount === 0 && !discovery.walkTruncated && !discovery.ignoredWalkTruncated && !discovery.excludedWalkTruncated && unlocked === 0 && !ancestor) return null;
   const parts: string[] = [];
-  if (discovery.skippedCount > 0) {
-    const why = SKIP_WORDING.filter(([reason]) => discovery.skipped.some((s) => s.reason === reason))
+  if (ancestor) {
+    parts.push(
+      `a lockfile above this directory (${ancestor.path}) was NOT read: this directory could not be confirmed as one of its workspace members, so what it pins was not taken for this project's dependencies; pass project_path=${path.dirname(ancestor.path)} if that is the project, or generate a lockfile here`,
+    );
+  }
+  if (skippedCount > 0) {
+    const why = SKIP_WORDING.filter(([reason]) => skipped.some((s) => s.reason === reason))
       .map(([, words]) => words(discovery))
       .join(" or ");
-    const listed = discovery.skipped.slice(0, 5).map((s) => s.path).join(", ");
+    const listed = skipped.slice(0, 5).map((s) => s.path).join(", ");
     parts.push(
-      `${discovery.skippedCount} lockfile${discovery.skippedCount === 1 ? " was" : "s were"} found but NOT scanned (${why}): ${listed}${discovery.skippedCount > 5 ? ", ..." : ""}; pass project_path to scan one of them`,
+      `${skippedCount} lockfile${skippedCount === 1 ? " was" : "s were"} found but NOT scanned (${why}): ${listed}${skippedCount > 5 ? ", ..." : ""}; pass project_path to scan one of them`,
     );
   }
   if (unlocked > 0) {
@@ -841,6 +1175,11 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
   if (discovery.walkTruncated) parts.push(discovery.walkStopped ? walkBudgetNote() : `the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
   if (discovery.ignoredWalkTruncated) {
     parts.push(`the search of gitignored directories stopped after ${MAX_IGNORED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`);
+  }
+  if (discovery.excludedWalkTruncated) {
+    parts.push(
+      `the search of directories excluded by name (node_modules, target, .venv ...) and of links that lead outside the project stopped after ${MAX_EXCLUDED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`,
+    );
   }
   return `Partial scan: ${parts.join("; ")}.`;
 }

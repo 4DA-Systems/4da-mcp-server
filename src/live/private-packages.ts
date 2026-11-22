@@ -1351,6 +1351,8 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
       const walk = (deps: Record<string, { version?: string; resolved?: string; dependencies?: unknown }> | undefined) => {
         for (const [name, entry] of Object.entries(deps ?? {})) {
           if (typeof entry?.resolved === "string") take(file, name, entry.version ?? null, entry.resolved);
+          // v1 writes a tarball dependency's URL as its version: that URL is where it is installed from (any version of the name).
+          else if (typeof entry?.version === "string" && /^https?:\/\//i.test(entry.version)) take(file, name, null, entry.version);
           walk(entry?.dependencies as typeof deps);
         }
       };

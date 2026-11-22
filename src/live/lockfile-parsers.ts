@@ -44,7 +44,7 @@ import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./
 import { runSteps, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
-import { readTextFile } from "./text-file.js";
+import { isMergeConflictError, readTextFile } from "./text-file.js";
 import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import type { OsvEcosystem } from "./types.js";
 
@@ -112,8 +112,50 @@ export function* resolveVersionSourceSteps(cwd: string, ecosystem: OsvEcosystem)
     if (file) thrown = { file, error: describeParseError(file, error) ?? "could not be parsed" };
   }
   // The reader's own problems (a refused requirements include, M4) and the lockfiles it could not read.
-  const problems = [...(read.problems ?? []), ...(thrown ? [thrown] : unreadLockfiles(cwd, ecosystem, read))];
+  // A file that holds a merge conflict is one problem of its own kind, whatever else was said of it.
+  const conflicted = conflictedInputs(cwd, ecosystem, read);
+  const problems = [
+    ...[...(read.problems ?? []), ...(thrown ? [thrown] : unreadLockfiles(cwd, ecosystem, read))].filter((p) => !conflicted.has(path.resolve(p.file))),
+    ...[...conflicted].map(mergeConflictProblem),
+  ];
   return problems.length > 0 ? { ...read, problems: problems.map((p) => ({ ...p, ecosystem })) } : read;
+}
+
+/** Why a file with a merge conflict was not read, in the problem's words. */
+export const MERGE_CONFLICT_TEXT =
+  "it holds git merge-conflict markers (<<<<<<< / ======= / >>>>>>>), so neither side was read and nothing it pins or declares was checked: resolve the conflict (reinstall to regenerate a lockfile), then scan again";
+
+function mergeConflictProblem(file: string): LockfileProblem {
+  return { file, mergeConflict: true, error: MERGE_CONFLICT_TEXT };
+}
+
+/** Files besides the lockfiles that one ecosystem's resolution reads in a directory, checked for a merge conflict too. */
+const CONFLICT_CHECKED_FILES: Partial<Record<OsvEcosystem, string[]>> = {
+  npm: ["package.json", "pnpm-workspace.yaml"],
+  "crates.io": ["Cargo.toml"],
+  PyPI: ["pyproject.toml", "Pipfile"],
+  RubyGems: ["Gemfile", "gems.rb"],
+  Packagist: ["composer.json"],
+};
+
+/**
+ * Every file this ecosystem's resolution in `cwd` reads or may read (its lockfiles, go.sum and
+ * go.work included, and its manifests) that holds a merge conflict, absolute. A file the versions
+ * were read from was read whole, so it holds none and is not opened again.
+ */
+function conflictedInputs(cwd: string, ecosystem: OsvEcosystem, read: VersionSource): Set<string> {
+  const readFiles = new Set([read.source, ...(read.extraSources ?? [])].filter((f): f is string => Boolean(f)).map((f) => path.resolve(f)));
+  const candidates = [...lockfileCandidates(cwd, ecosystem), ...(CONFLICT_CHECKED_FILES[ecosystem] ?? []).map((name) => path.join(cwd, name))];
+  const conflicted = new Set<string>();
+  for (const file of new Set(candidates.map((f) => path.resolve(f)))) {
+    if (readFiles.has(file) || !fs.existsSync(file)) continue;
+    try {
+      readTextFile(file);
+    } catch (error) {
+      if (isMergeConflictError(error)) conflicted.add(file);
+    }
+  }
+  return conflicted;
 }
 
 function* readVersionSourceSteps(cwd: string, ecosystem: OsvEcosystem): Steps<VersionSource> {
@@ -348,6 +390,7 @@ function describeParseError(file: string, error: unknown): string | null {
   try {
     content = readTextFile(file);
   } catch (readError) {
+    if (isMergeConflictError(readError)) return MERGE_CONFLICT_TEXT;
     return `could not be read (${readError instanceof Error ? readError.message : String(readError)})`;
   }
   if (CONFLICT_MARKER.test(content)) return "it contains git merge-conflict markers (<<<<<<< / >>>>>>>): resolve the conflict and reinstall to regenerate it";
@@ -528,6 +571,8 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
   const others: string[] = [];
   // Lockfiles ranked above the one read that hold no package although package.json declares some.
   const emptied: LockfileProblem[] = [];
+  // A lockfile here holds a merge conflict: the project has a lockfile, so package.json's ranges are not read in its place.
+  let conflicted = false;
   for (const reader of NPM_LOCK_READERS) {
     const file = path.join(cwd, reader.name);
     if (!fs.existsSync(file)) continue;
@@ -540,7 +585,10 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
       const read = out && isSteps(out) ? yield* out : out;
       if (read?.empty) pushAll(emptied, read.problems);
       else if (read) chosen = { name: reader.name, file, read };
-    } catch { /* unreadable: the next lockfile; unreadLockfiles names this one and why */ }
+    } catch (error) {
+      // Unreadable: the next lockfile; unreadLockfiles names this one and why.
+      if (isMergeConflictError(error)) conflicted = true;
+    }
   }
 
   if (chosen) {
@@ -567,7 +615,7 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
 
   // No lockfile: package.json declares ranges, not installed versions.
   const pkgPath = path.join(cwd, "package.json");
-  if (fs.existsSync(pkgPath)) {
+  if (!conflicted && fs.existsSync(pkgPath)) {
     const declared = new Map<string, string>();
     const uncheckable: NonRegistryEntry[] = [];
     const aliases = new Map<string, string>();
@@ -735,6 +783,20 @@ const NPM_NAME = /^(?:@[a-z0-9~][a-z0-9._~-]*\/)?[a-z0-9~][a-z0-9._~-]*$/i;
 /** v1: `"version": "npm:lodash@4.17.20"` under the alias's key. */
 const V1_ALIAS = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(\d\S*)$/;
 
+/** The version a registry tarball URL's file names for `name` (`.../-/olm-3.2.3.tgz` is olm 3.2.3), or null. */
+function tarballRelease(name: string, url: string): string | null {
+  let file: string;
+  try {
+    file = decodeURIComponent(url.split(/[?#]/)[0].split("/").pop() ?? "");
+  } catch {
+    return null;
+  }
+  const base = name.split("/").pop() ?? name;
+  if (!file.startsWith(`${base}-`) || !/\.tgz$/i.test(file)) return null;
+  const release = file.slice(base.length + 1, -".tgz".length);
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/.test(release) ? release : null;
+}
+
 /**
  * package-lock.json / npm-shrinkwrap.json, lockfile v1, v2 and v3.
  *
@@ -859,6 +921,16 @@ export function readPackageLock(lock: {
           // v1 writes a git or URL dependency's location as its version.
           const other = nonRegistrySource(version, version);
           if (other && other !== "local") uncheckable.push({ name: folder, version: null, kind: other });
+          else if (other === null) {
+            // A registry-shaped tarball URL (`/<name>/-/<name>-<v>.tgz`) on any host: the release its file
+            // names, as v2/v3 record it beside `resolved` (whose host the private rules judge). One whose
+            // file names no release of this package is not checkable, and is listed.
+            const release = tarballRelease(folder, version);
+            if (release) {
+              instances.add(folder, release, value.dev === true);
+              if (topLevel) versions.set(folder, release);
+            } else uncheckable.push({ name: folder, version: null, kind: "url" });
+          }
         }
         if (value.dependencies) walk(value.dependencies, false);
       }

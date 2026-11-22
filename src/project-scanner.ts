@@ -229,16 +229,10 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       const crateName = cargoPackageName(content);
       if (crateName) result.projectName = crateName;
 
-      // Parse [dependencies] and [dev-dependencies] sections
+      // [dependencies], [dev-dependencies], [build-dependencies] and their target forms, in every form cargo reads.
       const rustDeps: string[] = [];
       const rustDevDeps: string[] = [];
-      parseTOMLDependencies(content, "[dependencies]", rustDeps, fwSet, RUST_FRAMEWORK_MAP);
-      parseTOMLDependencies(content, "[dev-dependencies]", rustDevDeps, fwSet, RUST_FRAMEWORK_MAP);
-      // build-dependencies run at build time on every machine that builds the crate: normal, not dev (audit 6.2.5 F-3).
-      parseTOMLDependencies(content, "[build-dependencies]", rustDeps, fwSet, RUST_FRAMEWORK_MAP);
-      // Platform-gated deps: [target.'cfg(...)'.dependencies] / [target.<triple>.dependencies].
-      // Previously skipped entirely (e.g. windows-sys, winreg, libc were invisible).
-      parseTargetDependencies(content, rustDeps, rustDevDeps, result.depTargets, fwSet, RUST_FRAMEWORK_MAP);
+      parseCargoDependencies(content, rustDeps, rustDevDeps, result.depTargets, fwSet, RUST_FRAMEWORK_MAP);
       // A workspace root declares dependencies for its members; a virtual one
       // (no [package]) declares nothing else, and was scanned as empty.
       const workspace = cargoWorkspaceDeps(cwd, content);
@@ -419,45 +413,49 @@ export function cargoPackageName(content: string): string | null {
   return null;
 }
 
-/**
- * Parse a TOML section for dependency names.
- * Simple line-by-line parsing — handles `name = "version"` and `name = { ... }` forms.
- */
-function parseTOMLDependencies(
-  content: string,
-  sectionHeader: string,
-  target: string[],
-  frameworkSet: Set<string>,
-  frameworkMap: Record<string, string>,
-): void {
-  const headerIndex = content.indexOf(sectionHeader);
-  if (headerIndex === -1) return;
+/** A crate name as a Cargo.toml key or table name spells it (quoted or bare). */
+const CRATE_KEY = /^(?:"([A-Za-z0-9_-]+)"|'([A-Za-z0-9_-]+)'|([A-Za-z_][\w-]*))$/;
 
-  const afterHeader = content.substring(headerIndex + sectionHeader.length);
-  for (const line of afterHeader.split("\n")) {
-    const trimmed = line.trim();
-    // Stop at next section
-    if (trimmed.startsWith("[") && trimmed !== sectionHeader) break;
-    // Skip empty lines and comments
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    // Match dependency line: `name = ...`
-    const depMatch = trimmed.match(/^([a-zA-Z_][\w-]*)\s*=/);
-    if (depMatch) {
-      const name = depMatch[1];
-      target.push(name);
-      if (name in frameworkMap) {
-        frameworkSet.add(frameworkMap[name]);
-      }
+/**
+ * The dependency table a Cargo.toml header opens, or null for any other table: `dev` for
+ * `[dev-dependencies]` (build-dependencies run on every machine that builds the crate: normal,
+ * audit 6.2.5 F-3), `target` for a `[target.<spec>.…]` form (a cfg() predicate or a triple), and
+ * `entry` for a table of one dependency (`[dependencies.git2]`). `[package.metadata.x.dependencies]`
+ * is a tool's data and `[workspace.dependencies]` is read by cargoWorkspaceDeps.
+ */
+function cargoDependencyTable(line: string): { dev: boolean; target: string | null; entry: string | null } | null {
+  const header = /^\[([^[\]]+)\]/.exec(line)?.[1]?.trim();
+  if (!header) return null;
+  let rest = header;
+  let target: string | null = null;
+  if (rest.startsWith("target.")) {
+    const after = rest.slice("target.".length);
+    const quoted = /^(['"])(.*?)\1\s*\.(.*)$/.exec(after);
+    if (quoted) {
+      target = quoted[2];
+      rest = quoted[3];
+    } else {
+      const dot = after.indexOf(".");
+      if (dot < 0) return null;
+      target = after.slice(0, dot);
+      rest = after.slice(dot + 1);
     }
   }
+  const table = /^(dependencies|dev-dependencies|build-dependencies)(?:\s*\.\s*(.+))?$/.exec(rest.trim());
+  if (!table) return null;
+  const key = table[2] ? CRATE_KEY.exec(table[2].trim()) : null;
+  if (table[2] && !key) return null;
+  return { dev: table[1] === "dev-dependencies", target, entry: key ? (key[1] ?? key[2] ?? key[3]) : null };
 }
 
 /**
- * Parse `[target.<spec>.dependencies]` (and dev/build variants) sections, which the
- * plain section parser skips. Records each dep's target spec so the scanner can flag
- * platform relevance. `<spec>` is a cfg() predicate or an explicit target triple.
+ * Every dependency a Cargo.toml's own dependency tables declare, in each form cargo reads: inline
+ * (`name = "1"`, `name = { ... }`), dotted keys (`name.version = "1"`) and a table of its own
+ * (`[dependencies.name]`), under `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`
+ * and their `[target.<spec>.…]` forms, whose spec is recorded per dependency (`depTargets`) so
+ * advisories can be flagged platform-relevant. Each name once per list.
  */
-function parseTargetDependencies(
+function parseCargoDependencies(
   content: string,
   deps: string[],
   devDeps: string[],
@@ -465,26 +463,26 @@ function parseTargetDependencies(
   frameworkSet: Set<string>,
   frameworkMap: Record<string, string>,
 ): void {
-  const headerRegex = /^\[target\.(.+?)\.(dependencies|dev-dependencies|build-dependencies)\]\s*$/gm;
-  let m: RegExpExecArray | null;
-  while ((m = headerRegex.exec(content)) !== null) {
-    const spec = m[1].trim().replace(/^['"]|['"]$/g, ""); // strip surrounding quotes
-    const isDev = m[2] === "dev-dependencies"; // build-dependencies are normal (audit 6.2.5 F-3)
-    // Body runs from the end of this header line to the next section header.
-    const rest = content.slice(m.index + m[0].length);
-    const nextHeader = rest.search(/^\[/m);
-    const body = nextHeader === -1 ? rest : rest.slice(0, nextHeader);
-    for (const line of body.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const depMatch = trimmed.match(/^([a-zA-Z_][\w-]*)\s*=/);
-      if (depMatch) {
-        const name = depMatch[1];
-        (isDev ? devDeps : deps).push(name);
-        depTargets[name] = spec;
-        if (name in frameworkMap) frameworkSet.add(frameworkMap[name]);
-      }
+  let table: ReturnType<typeof cargoDependencyTable> = null;
+  const add = (name: string, dev: boolean, target: string | null) => {
+    const list = dev ? devDeps : deps;
+    if (!list.includes(name)) list.push(name);
+    if (target) depTargets[name] = target;
+    if (name in frameworkMap) frameworkSet.add(frameworkMap[name]);
+  };
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[")) {
+      table = cargoDependencyTable(line);
+      if (table?.entry) add(table.entry, table.dev, table.target);
+      continue;
     }
+    // Inside `[dependencies.name]` every key is a field of that one dependency.
+    if (!table || table.entry) continue;
+    const key = /^("[^"]+"|'[^']+'|[A-Za-z_][\w-]*)\s*(?:\.\s*[A-Za-z_][\w-]*\s*)?=/.exec(line)?.[1];
+    const name = key ? CRATE_KEY.exec(key) : null;
+    if (name) add(name[1] ?? name[2] ?? name[3], table.dev, table.target);
   }
 }
 
