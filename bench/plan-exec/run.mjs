@@ -28,15 +28,19 @@ import { hermeticEnv, openSession, resolveServer, rmTree } from "../lib/mcp-sess
 import {
   addedVersions,
   advisoryDelta,
+  changesFor,
+  copyInventory,
   extractSteps,
-  inventory,
+  inventoryChanged,
   lowerings,
+  movedTargets,
   mergeOverride,
   planJson,
   predictionCheck,
   prepareCommand,
-  presentAnywhere,
   shellLine,
+  stepOutcome,
+  versionsOf,
   tokenize,
   totals,
   gateFindings,
@@ -281,24 +285,27 @@ async function runProject(entry) {
     result.order_source = extracted.source;
     result.order_note = extracted.note;
     result.plan_rows = extracted.rows.length;
-    const initial = inventory(copy);
+    const initialCopies = copyInventory(copy);
+    const initial = versionsOf(initialCopies);
     const earlier = new Map();
-    let prev = initial;
+    let prevCopies = initialCopies;
     const steps = [];
-    for (const step of extracted.steps) {
+    for (const [i, step] of extracted.steps.entries()) {
       const cmds = step.actions.flatMap((a) => runAction(copy, a, entry));
-      const after = inventory(copy);
+      const afterCopies = copyInventory(copy);
+      const prev = versionsOf(prevCopies);
+      const after = versionsOf(afterCopies);
       const lowered = lowerings(prev, after, earlier, initial).filter((l) => l.set_by !== "other");
       for (const [k, vs] of addedVersions(prev, after)) for (const v of vs) (earlier.get(k) ?? earlier.set(k, new Set()).get(k)).add(v);
       const targets = step.rows.map((r) => ({ ecosystem: r.ecosystem, package: r.package, version: r.currentVersion }));
-      const gone = targets.filter((t) => !presentAnywhere(after, t.ecosystem, t.package, t.version));
+      const moved = movedTargets(prevCopies, afterCopies, targets);
+      const laterServesSame = extracted.steps.slice(i + 1).some((s) => s.fixes.some((f) => step.fixes.includes(f)));
+      const outcome = stepOutcome({ cmds, targets, moved, changed: inventoryChanged(prevCopies, afterCopies), laterServesSame });
       const ran = cmds.some((c) => c.exit !== undefined);
-      const failed = cmds.some((c) => c.exit !== undefined && c.exit !== 0);
-      const refused = cmds.some((c) => c.refused);
-      const outcome = cmds.length === 0 ? "nothing_to_run" : failed ? "failed" : refused ? "refused" : targets.length > 0 && gone.length === 0 ? "without_effect" : "worked";
-      steps.push({ n: step.n, fixes: step.fixes, targets: targets.map((t) => `${t.package}@${t.version}`), outcome, ran, lowered, cmds });
+      const versionsAround = targets.map((t) => `${t.package}@${t.version}`);
+      steps.push({ n: step.n, fixes: step.fixes, targets: versionsAround, moved: moved.map((t) => `${t.package}@${t.version}`), outcome, ran, lowered, changes: changesFor(prev, after, step), cmds });
       console.log(`  ${entry.id} step ${step.n}: ${outcome}${lowered.length ? ` LOWERED ${lowered.map((l) => `${l.key.split("|").pop()} ${l.from}->${l.to}`).join(", ")}` : ""} ${cmds.map((c) => c.refused ? `[refused: ${c.run}]` : `[${c.exit}] ${c.run}`).join(" ; ").slice(0, 300)}`);
-      prev = after;
+      prevCopies = afterCopies;
     }
     const s2 = await openSession({ server, cwd: serverCwd, env });
     let afterScan;

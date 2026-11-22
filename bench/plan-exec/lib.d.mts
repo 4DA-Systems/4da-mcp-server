@@ -2,6 +2,8 @@
 // Types for lib.mjs, so the test that imports it is type-checked.
 
 export type Inventory = Map<string, Set<string>>;
+/** `ecosystem|dir|name` -> (version -> copies). */
+export type CopyInventory = Map<string, Map<string, number>>;
 export interface PlanRow {
   package: string;
   ecosystem: string;
@@ -42,6 +44,14 @@ export function findLockfiles(root: string): string[];
 export function yarnFlavorOf(lockText: string): "classic" | "berry";
 export function lockfileVersions(base: string, text: string): Map<string, Set<string>>;
 export function inventory(root: string): Inventory;
+export function lockfileCopies(base: string, text: string): Map<string, Map<string, number>>;
+export function copyInventory(root: string): CopyInventory;
+export function versionsOf(copies: CopyInventory): Inventory;
+export function movedTargets<T extends { ecosystem: string; package: string; version: string }>(before: CopyInventory, after: CopyInventory, targets: T[]): T[];
+export function inventoryChanged(before: CopyInventory, after: CopyInventory): boolean;
+export function stepOutcome(input: { cmds: Array<{ exit?: unknown; refused?: string }>; targets: unknown[]; moved: unknown[]; changed: boolean; laterServesSame: boolean }): "nothing_to_run" | "failed" | "refused" | "without_effect" | "worked";
+export function releaseLine(version: string): string;
+export function changesFor(before: Inventory, after: Inventory, step: { fixes: string[] }): Array<{ key: string; removed: string[]; added: string[]; after: string[] }>;
 export function presentAnywhere(inv: Inventory, ecosystem: string, name: string, version: string): boolean;
 export function compareLoose(a: string, b: string): -1 | 0 | 1;
 export function lowerings(before: Inventory, after: Inventory, earlier: Inventory, initial: Inventory): Array<{ key: string; from: string; to: string; set_by: "earlier_step" | "installed" | "other" }>;

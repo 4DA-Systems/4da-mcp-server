@@ -293,11 +293,21 @@ export const yarnFlavorOf = (lockText) => (/^__metadata:/m.test(lockText) ? "ber
 
 /** name -> Set(version) from one lockfile's text. */
 export function lockfileVersions(base, text) {
+  return new Map([...lockfileCopies(base, text)].map(([n, counts]) => [n, new Set(counts.keys())]));
+}
+
+/**
+ * name -> (version -> how many copies) from one lockfile's text: one per package-lock entry, pnpm
+ * package key, yarn.lock block, Cargo/uv/Poetry `[[package]]` and go.mod requirement. A step that
+ * moves one copy of a version another copy keeps (an npm-bundled one) changes the count, not the set.
+ */
+export function lockfileCopies(base, text) {
   const m = new Map();
   const add = (n, v) => {
     if (!n || !v) return;
-    if (!m.has(n)) m.set(n, new Set());
-    m.get(n).add(String(v));
+    if (!m.has(n)) m.set(n, new Map());
+    const counts = m.get(n);
+    counts.set(String(v), (counts.get(String(v)) ?? 0) + 1);
   };
   text = text.split("\r").join("");
   if (base === "package-lock.json" || base === "npm-shrinkwrap.json") {
@@ -374,23 +384,74 @@ export function lockfileVersions(base, text) {
 
 /** `ecosystem|lockfile dir|name` -> Set(version), over every lockfile under `root`. */
 export function inventory(root) {
+  return new Map([...copyInventory(root)].map(([k, counts]) => [k, new Set(counts.keys())]));
+}
+
+/** `ecosystem|lockfile dir|name` -> (version -> copies), over every lockfile under `root`. */
+export function copyInventory(root) {
   const inv = new Map();
   for (const rel of findLockfiles(root)) {
     const base = path.posix.basename(rel);
     const dir = path.posix.dirname(rel);
-    let versions;
+    let copies;
     try {
-      versions = lockfileVersions(base, fs.readFileSync(path.join(root, rel), "utf8"));
+      copies = lockfileCopies(base, fs.readFileSync(path.join(root, rel), "utf8"));
     } catch {
       continue;
     }
-    for (const [n, vs] of versions) {
+    for (const [n, counts] of copies) {
       const k = `${LOCKFILES[base]}|${dir}|${n}`;
-      if (!inv.has(k)) inv.set(k, new Set());
-      for (const v of vs) inv.get(k).add(v);
+      if (!inv.has(k)) inv.set(k, new Map());
+      const into = inv.get(k);
+      for (const [v, c] of counts) into.set(v, (into.get(v) ?? 0) + c);
     }
   }
   return inv;
+}
+
+/** The copy inventory reduced to versions (what `lowerings` and `addedVersions` read). */
+export const versionsOf = (copies) => new Map([...copies].map(([k, counts]) => [k, new Set(counts.keys())]));
+
+/**
+ * The targets (`{ ecosystem, package, version }`) a step moved: some lockfile holds fewer copies of
+ * that version after it than before. A copy the same version keeps elsewhere (npm's bundled
+ * brace-expansion beside the hoisted one `npm update` moved) does not hide the move.
+ */
+export function movedTargets(before, after, targets) {
+  return targets.filter((t) => {
+    const want = normName(t.ecosystem, t.package);
+    for (const [k, counts] of before) {
+      const [eco, , n] = splitKey(k);
+      if (eco !== t.ecosystem || n !== want) continue;
+      const had = counts.get(String(t.version)) ?? 0;
+      if (had > 0 && (after.get(k)?.get(String(t.version)) ?? 0) < had) return true;
+    }
+    return false;
+  });
+}
+
+/** Whether two copy inventories differ at all. */
+export function inventoryChanged(before, after) {
+  if (before.size !== after.size) return true;
+  for (const [k, counts] of before) {
+    const other = after.get(k);
+    if (!other || other.size !== counts.size) return true;
+    for (const [v, c] of counts) if (other.get(v) !== c) return true;
+  }
+  return false;
+}
+
+/**
+ * A step's outcome. Without effect: it ran, named targets, moved none of them, and either changed
+ * nothing at all or is the last step serving its rows (a Cargo pre-update that frees the crates a
+ * later `--precise` moves has done its part when it changes the lockfile).
+ */
+export function stepOutcome({ cmds, targets, moved, changed, laterServesSame }) {
+  if (cmds.length === 0) return "nothing_to_run";
+  if (cmds.some((c) => c.exit !== undefined && c.exit !== 0)) return "failed";
+  if (cmds.some((c) => c.refused)) return "refused";
+  if (targets.length > 0 && moved.length === 0 && (!changed || !laterServesSame)) return "without_effect";
+  return "worked";
 }
 
 /** True when some lockfile under the project still holds `name@version` of `ecosystem`. */
@@ -431,9 +492,19 @@ export function compareLoose(a, b) {
   return x.rest < y.rest ? -1 : 1;
 }
 
+/** A version's release line: its major, or major.minor below 1.0 (where a minor bump is a major one). */
+export function releaseLine(v) {
+  const m = /^v?(\d+)(?:\.(\d+))?/.exec(String(v));
+  if (!m) return String(v);
+  return m[1] === "0" ? `0.${m[2] ?? "0"}` : m[1];
+}
+
 /**
- * The versions one step lowered: a key where the step removed a version and every version it
- * added is lower. `earlier` holds what earlier steps set, `initial` what was installed.
+ * The versions one step lowered: a key where the step removed a version, added only lower ones,
+ * and left no version at or above it on its release line. Several copies of one package on
+ * different lines (semver 5.x, 6.x and 7.x) that each move up their own line, onto versions the
+ * lockfile already held, are not a lowering. `earlier` holds what earlier steps set, `initial`
+ * what was installed.
  * @returns {Array<{ key: string, from: string, to: string, set_by: "earlier_step" | "installed" | "other" }>}
  */
 export function lowerings(before, after, earlier, initial) {
@@ -444,12 +515,29 @@ export function lowerings(before, after, earlier, initial) {
     const removed = [...b].filter((v) => !a.has(v));
     const added = [...a].filter((v) => !b.has(v));
     if (removed.length === 0 || added.length === 0) continue;
-    const top = added.slice().sort(compareLoose).at(-1);
     for (const r of removed) {
-      if (compareLoose(top, r) >= 0) continue;
+      const below = added.filter((v) => compareLoose(v, r) < 0).sort(compareLoose);
+      if (below.length === 0 || added.some((v) => compareLoose(v, r) >= 0)) continue;
+      if ([...a].some((v) => releaseLine(v) === releaseLine(r) && compareLoose(v, r) >= 0)) continue;
+      const top = below.at(-1);
       const setBy = earlier.get(k)?.has(r) ? "earlier_step" : initial.get(k)?.has(r) ? "installed" : "other";
       out.push({ key: k, from: r, to: top, set_by: setBy });
     }
+  }
+  return out;
+}
+
+/** For the packages a step serves: each lockfile key whose versions it changed, with what left and what came. */
+export function changesFor(before, after, step) {
+  const names = new Set(step.fixes.map((f) => f.slice(f.indexOf(":") + 1)));
+  const out = [];
+  for (const k of new Set([...before.keys(), ...after.keys()])) {
+    if (!names.has(splitKey(k)[2])) continue;
+    const b = before.get(k) ?? new Set();
+    const a = after.get(k) ?? new Set();
+    const removed = [...b].filter((v) => !a.has(v)).sort(compareLoose);
+    const added = [...a].filter((v) => !b.has(v)).sort(compareLoose);
+    if (removed.length > 0 || added.length > 0) out.push({ key: k, removed, added, after: [...a].sort(compareLoose) });
   }
   return out;
 }
