@@ -783,6 +783,20 @@ const NPM_NAME = /^(?:@[a-z0-9~][a-z0-9._~-]*\/)?[a-z0-9~][a-z0-9._~-]*$/i;
 /** v1: `"version": "npm:lodash@4.17.20"` under the alias's key. */
 const V1_ALIAS = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(\d\S*)$/;
 
+/** The version a registry tarball URL's file names for `name` (`.../-/olm-3.2.3.tgz` is olm 3.2.3), or null. */
+function tarballRelease(name: string, url: string): string | null {
+  let file: string;
+  try {
+    file = decodeURIComponent(url.split(/[?#]/)[0].split("/").pop() ?? "");
+  } catch {
+    return null;
+  }
+  const base = name.split("/").pop() ?? name;
+  if (!file.startsWith(`${base}-`) || !/\.tgz$/i.test(file)) return null;
+  const release = file.slice(base.length + 1, -".tgz".length);
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/.test(release) ? release : null;
+}
+
 /**
  * package-lock.json / npm-shrinkwrap.json, lockfile v1, v2 and v3.
  *
@@ -907,6 +921,16 @@ export function readPackageLock(lock: {
           // v1 writes a git or URL dependency's location as its version.
           const other = nonRegistrySource(version, version);
           if (other && other !== "local") uncheckable.push({ name: folder, version: null, kind: other });
+          else if (other === null) {
+            // A registry-shaped tarball URL (`/<name>/-/<name>-<v>.tgz`) on any host: the release its file
+            // names, as v2/v3 record it beside `resolved` (whose host the private rules judge). One whose
+            // file names no release of this package is not checkable, and is listed.
+            const release = tarballRelease(folder, version);
+            if (release) {
+              instances.add(folder, release, value.dev === true);
+              if (topLevel) versions.set(folder, release);
+            } else uncheckable.push({ name: folder, version: null, kind: "url" });
+          }
         }
         if (value.dependencies) walk(value.dependencies, false);
       }
