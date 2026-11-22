@@ -53,6 +53,7 @@ import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
+import { maxOf } from "../array-utils.js";
 import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
@@ -541,7 +542,7 @@ function ownLimitText(results: ItemResult[]): string {
   const held = results.filter((r) => r.retry_after_seconds);
   if (held.length === 0) return "";
   const registries = [...new Set(held.map((r) => LIMITED_REGISTRY[r.ecosystem] ?? r.ecosystem))].join(" and ");
-  const after = Math.max(...held.map((r) => r.retry_after_seconds!));
+  const after = maxOf(held.map((r) => r.retry_after_seconds!));
   const n = results.length;
   return `NOT CHECKED: ${held.length} of ${n} item${n === 1 ? "" : "s"} could not be checked: this server's own request limit for ${registries} was reached (the registry was not asked and is not at fault). Call dependency_check again for ${held.length === 1 ? "it" : "them"} in ${after} s (retry_after_seconds). `;
 }
