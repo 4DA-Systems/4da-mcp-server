@@ -781,23 +781,26 @@ function yarnClassicEntriesAt(lockfile: string, name: string, version: string): 
 }
 
 /**
- * Yarn classic keeps one yarn.lock entry per set of ranges, and `yarn upgrade <name>` rewrites only
- * the entry the declared range keys: zustand's `@babel/core@^7.11.6, @babel/core@^7.12.3` entry
- * stayed at the vulnerable 7.19.6 (2026-11-23). When other entries resolve to the same version, the
- * in-range refresh is the hand step that moves every entry (delete them, then `yarn install`).
+ * Yarn classic keys a yarn.lock entry by every range that resolves to it, and `yarn upgrade <name>`
+ * re-resolves only the range the manifest declares: zustand's one entry
+ * `"@babel/core@^7.11.6", "@babel/core@^7.12.3", "@babel/core@^7.19.6"` kept the vulnerable 7.19.6
+ * for the two transitive ranges after `yarn upgrade @babel/core` (yarn 1.22.22, 2026-11-23). When
+ * any other range of the package resolves to the same version, in that entry or another, the
+ * in-range refresh is the hand step that moves every one (delete them, then `yarn install`).
  */
 function yarnClassicEveryEntry(step: FixPathStep, fixes: Pick<ParentLever, "commands" | "instructions">, root: string): void {
   if (!fixes.commands || !step.currentVersion) return;
   const keep: NonNullable<ParentLever["commands"]> = [];
   for (const c of fixes.commands) {
     const entries = c.refresh && c.command === `yarn upgrade ${step.package}` ? yarnClassicEntriesAt(path.join(path.resolve(root, c.dir), "yarn.lock"), step.package, step.currentVersion) : [];
-    if (entries.length <= 1) {
+    const ranges = entries.flat().filter((spec) => spec.startsWith(`${step.package}@`));
+    if (ranges.length <= 1) {
       keep.push(c);
       continue;
     }
     const steps = manualRefreshSteps("yarn", step.package);
     fixes.instructions = [...(fixes.instructions ?? []), { dir: c.dir, instruction: steps }];
-    const why = `yarn.lock${c.dir === "." ? "" : ` in ${c.dir}`} holds ${step.package} ${step.currentVersion} under ${entries.length} entries (${entries.map((e) => `"${e.join(", ")}"`).join("; ")}), and \`yarn upgrade ${step.package}\` moves only the one its declared range keys, so the others would keep ${step.currentVersion}: ${steps}`;
+    const why = `yarn.lock${c.dir === "." ? "" : ` in ${c.dir}`} holds ${step.package} ${step.currentVersion} under ${entries.length === 1 ? `one entry keyed by ${ranges.length} ranges` : `${entries.length} entries`} (${entries.map((e) => `"${e.join(", ")}"`).join("; ")}), and \`yarn upgrade ${step.package}\` moves only the one its declared range keys, so the others would keep ${step.currentVersion}: ${steps}`;
     if (!step.reasons.includes(why)) step.reasons.push(why);
   }
   if (keep.length > 0) fixes.commands = keep;
