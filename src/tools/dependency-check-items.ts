@@ -39,10 +39,13 @@ export interface ItemResult {
   /**
    * "private": the package name is private and was never looked up (live/private-packages.ts).
    * "module_path": a Go module path the go command does not accept as written (live/go-path.ts).
+   * "input": the item was refused as written (its reason says why); the call's other items are answered.
    */
-  not_checked?: "private" | "module_path" | "time_budget";
+  not_checked?: "private" | "module_path" | "time_budget" | "input";
   /** not_checked "module_path": the path the module declares, or the one the spelling most likely means. */
   canonical_module_path?: string;
+  /** Unknown because this server's own request limit held a registry read back: seconds until asking again can read it. */
+  retry_after_seconds?: number;
 }
 
 /** A validated request item. */

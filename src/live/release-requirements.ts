@@ -181,7 +181,9 @@ export async function requirementAdvisories(
   await pooled(asked, FACTS_CONCURRENCY, deadline, async (release) => {
     const lookup = await byDeadline<RegistryLookup<ReleaseRequirements> | null>(sources.requirements(release.ecosystem, release.name, release.version), deadline, null);
     if (lookup === null) return;
-    if (lookup.status !== "ok") out.set(release.key, { status: "unchecked", reason: `its requirement list could not be read from ${REGISTRY_NAME[release.ecosystem]} (${quoteThirdParty(lookup.detail, 120)})` });
+    // This server's own request limit held the read back: the registry is not blamed for it.
+    if (lookup.status === "unreachable" && lookup.ownLimit) out.set(release.key, { status: "unchecked", reason: `its requirement list was not read: ${quoteThirdParty(lookup.detail, 160)}` });
+    else if (lookup.status !== "ok") out.set(release.key, { status: "unchecked", reason: `its requirement list could not be read from ${REGISTRY_NAME[release.ecosystem]} (${quoteThirdParty(lookup.detail, 120)})` });
     else {
       const cap = MAX_REQUIREMENTS_EXAMINED[release.ecosystem];
       // A requirement no declared Python installs is not one of this project's (PyPI markers).
