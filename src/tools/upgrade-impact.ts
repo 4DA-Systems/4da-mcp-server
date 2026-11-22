@@ -58,7 +58,7 @@ import { enrichGoVersions, goBasePath, goMajorPath, goPathMajor, goTagPrefix, go
 import { scanCallSites, type CallSiteReport } from "./upgrade-impact-callsites.js";
 import { resolveChangelog } from "./upgrade-impact-changelog.js";
 import { pythonImportNames, type PythonImportNames } from "./upgrade-impact-imports.js";
-import { projectCargoFeatures } from "./upgrade-impact-features.js";
+import { featuresMissing, projectCargoFeatures, targetCargoFeatures } from "./upgrade-impact-features.js";
 import { flagOldSyntax } from "./upgrade-impact-literals.js";
 import { shapeChangelog, summarize, upgradeType, type ResponseFormat } from "./upgrade-impact-report.js";
 import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
@@ -451,6 +451,12 @@ export async function analyzeUpgradeImpact(
 
   // Cargo features this project enables on the crate: a renamed or removed one is a breaking change symbols cannot see.
   const features = eco === "crates.io" ? projectCargoFeatures(ctx.projectRoot, index.name, ctx.installed) : [];
+  // An enabled feature the target no longer offers makes cargo refuse the upgrade: named, or null when the target's features were not read.
+  const removedFeatures = features.length > 0 ? await targetCargoFeatures(ctx.net, index.name, to).then((offered) => (offered ? featuresMissing(features, offered) : null)) : undefined;
+  const featureNote =
+    removedFeatures && removedFeatures.length > 0
+      ? `This project enables ${removedFeatures.length === 1 ? "feature" : "features"} ${removedFeatures.map((f) => `"${f}"`).join(", ")} on ${index.name}, which ${index.name} ${to} does not offer: cargo refuses the upgrade ("unrecognized feature") until the manifest's features are changed.`
+      : null;
   const shaped = shapeChangelog(range.sections, yourCode.symbols_used, params.response_format === "detailed" ? "detailed" : "concise", features);
   // Route and pattern syntax the upgrade retires, found in this project's string literals.
   const literal = await flagOldSyntax(shaped.sections, yourCode.files, ctx.projectRoot);
@@ -515,7 +521,12 @@ export async function analyzeUpgradeImpact(
     your_code: py
       ? { ...yourCode, import_names: py.names, import_name_source: py.source, import_name_note: importNameNote(py, index.name) }
       : features.length > 0
-        ? { ...yourCode, cargo_features: features }
+        ? {
+            ...yourCode,
+            cargo_features: features,
+            cargo_features_removed: removedFeatures ?? null,
+            ...(removedFeatures === null ? { cargo_features_note: `whether ${index.name} ${to} still offers these features was NOT CHECKED (the crates.io index could not be read)` } : {}),
+          }
         : yourCode,
     advisories_fixed: advisoriesFixed,
     // The package's own advisories; what the target holds is in held_dependencies_affected (W6).
@@ -528,7 +539,7 @@ export async function analyzeUpgradeImpact(
       untrusted_text: UNTRUSTED,
       ...(counted ? { classification: CLASSIFICATION } : {}),
     },
-    summary: summarize({
+    summary: `${summarize({
       pkg: index.name,
       from: semverish(from, eco),
       to: semverish(to, eco),
@@ -546,7 +557,7 @@ export async function analyzeUpgradeImpact(
       advisoriesFixed: advisoriesFixed ? advisoriesFixed.length : null,
       pathChange: pathChange ? { from: fromName, to: targetName, files: yourCode.total_files } : null,
       held: heldNote,
-    }),
+    })}${featureNote ? ` ${featureNote}` : ""}`,
   };
 }
 

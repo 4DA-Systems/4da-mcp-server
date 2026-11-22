@@ -76,6 +76,7 @@ import { withinCallBudget } from "../call-budget.js";
 import { aimAtDeclaringMembers } from "./declaring-members.js";
 import { pygoRefreshOrUpstream } from "./upgrade-planner-pygo.js";
 import { pythonParentMove } from "./upgrade-planner-pyparent.js";
+import { withCargoFeatures } from "./upgrade-planner-cargo-features.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { projectPythons } from "./dependency-check-python.js";
 
@@ -2303,6 +2304,12 @@ export async function judgeDirectRequirements(steps: FixPathStep[], liveIntel: I
 const RAISED_HOLDS_CONCURRENCY = 4;
 
 export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs = withinCallBudget(RECONCILE_BUDGET_MS, 500)): Promise<void> {
+  await reconcileTargets(steps, inputs, liveIntel, budgetMs);
+  // The releases are final here: a Cargo upgrade whose target lacks a feature the manifest enables is not a command alone.
+  await withCargoFeatures(steps, liveIntel);
+}
+
+async function reconcileTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs: number): Promise<void> {
   const deadline = Date.now() + budgetMs;
   const sources = liveIntel.getFixPathSources();
   const key = (eco: string, name: string, version: string) => `${eco}\0${name}\0${version}`;
