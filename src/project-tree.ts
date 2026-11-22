@@ -149,6 +149,15 @@ const FIXTURE_DIRS = new Set([
   "fixtures", "__fixtures__", "testdata", "test-data", "test-fixtures", "__tests__", "tests", "test", "conformance",
 ]);
 
+/** Whether a path is a directory (following links), false when it cannot be stat'ed. */
+function isDirectoryPath(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Above this a setup.py or setup.cfg is not read to see whether it declares dependencies. */
 const MAX_SETUP_BYTES = 256 * 1024;
 
@@ -237,7 +246,16 @@ export interface ProjectTreeEntry {
  * Why a lockfile the walk found was not scanned: past a bound, inside a
  * directory .gitignore excludes, or directly inside a build-output directory.
  */
-export type SkipReason = "depth" | "project_limit" | "gitignored_directory" | "output_directory" | "excluded_directory" | "merge_conflict";
+export type SkipReason =
+  | "depth"
+  | "project_limit"
+  | "gitignored_directory"
+  | "output_directory"
+  | "excluded_directory"
+  | "merge_conflict"
+  | "symlink_outside_root"
+  /** A directory the walk could not list (its path ends in `/`): what it holds is not known. */
+  | "unreadable";
 
 /** What the walk left out, so an answer can say it is partial. */
 export interface TreeDiscovery {
@@ -669,10 +687,44 @@ export function scanProjectTree(
       if (excludedWalkTruncated || walkTruncated) return;
     }
   };
-  // The lockfiles above a directory: a manifest below is covered only by one it is a workspace member of (LockCover).
-  const walk = (dir: string, rel: string, depth: number, children: fs.Dirent[], covers: LockCover[]) => {
+  // Real paths, so a directory reached through a junction or symbolic link is walked once and a link never loops.
+  const realKey = (p: string) => (process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p);
+  const realOf = (p: string): string | null => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return null;
+    }
+  };
+  const realRoot = realOf(root) ?? path.resolve(root);
+  const rootPrefix = realKey(realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`);
+  const inRoot = (real: string) => realKey(real) === realKey(realRoot) || realKey(real).startsWith(rootPrefix);
+  const walked = new Set<string>([realKey(realRoot)]);
+  // Behind a link that leads outside the root: not scanned, every lockfile there named. No further link is followed.
+  const listOutside = (dir: string, rel: string, real: string) => {
+    if (budget.spent()) {
+      walkTruncated = true;
+      return;
+    }
+    if (++excludedVisited > maxExcludedDirs) {
+      excludedWalkTruncated = true;
+      return;
+    }
+    const children = listing(dir);
+    if (!children) return;
+    for (const name of lockfilesIn(dir, children.map((c) => c.name))) noteSkipped(`${rel}/${name}`, "symlink_outside_root");
     for (const child of children) {
-      if (!child.isDirectory()) continue;
+      // The root's own directories are walked as the root's (a link to an ancestor leads back into it).
+      if (!child.isDirectory() || isNeverWalked(child.name) || inRoot(path.join(real, child.name))) continue;
+      listOutside(path.join(dir, child.name), `${rel}/${child.name}`, path.join(real, child.name));
+      if (excludedWalkTruncated || walkTruncated) return;
+    }
+  };
+  // The lockfiles above a directory: a manifest below is covered only by one it is a workspace member of (LockCover).
+  const walk = (dir: string, rel: string, depth: number, children: fs.Dirent[], covers: LockCover[], dirReal: string) => {
+    for (const child of children) {
+      const link = child.isSymbolicLink();
+      if (!child.isDirectory() && !link) continue;
       const childRel = rel ? `${rel}/${child.name}` : child.name;
       const sub = path.join(dir, child.name);
       if (VCS_DIRS.has(child.name)) continue;
@@ -682,16 +734,37 @@ export function scanProjectTree(
         if (walkTruncated) return;
         continue;
       }
+      let real = path.join(dirReal, child.name);
+      if (link) {
+        // A junction or symbolic link. One to a file is read as that file (lockfilesIn); one that leads nowhere holds nothing.
+        const target = realOf(sub);
+        if (target === null || !isDirectoryPath(target)) continue;
+        if (!inRoot(target)) {
+          listOutside(sub, childRel, target);
+          if (walkTruncated) return;
+          continue;
+        }
+        real = target;
+      }
+      // Walked already, through its own path or another link (and a link to an ancestor of it).
+      if (walked.has(realKey(real))) continue;
       if (++visited > MAX_WALK_DIRS || budget.spent()) {
         walkTruncated = true;
         return;
       }
       if (ignore.ignores(childRel, true)) {
+        // Listed once: a link into it later is not followed.
+        walked.add(realKey(real));
         listIgnored(sub, childRel);
         continue;
       }
       const grandchildren = listing(sub);
-      if (!grandchildren) continue;
+      if (!grandchildren) {
+        // What it holds is not known: named, never passed over as empty.
+        noteSkipped(`${childRel}/`, "unreadable");
+        continue;
+      }
+      walked.add(realKey(real));
       if (!options.includeFixtures && FIXTURE_DIRS.has(child.name.toLowerCase())) {
         const before = fixtures.count;
         fixtures.count += lockfilesIn(sub, grandchildren.map((g) => g.name)).length;
@@ -723,7 +796,7 @@ export function scanProjectTree(
           if (unlocked.length < MAX_LISTED_UNLOCKED) unlocked.push({ path: `${childRel}/${manifest.name}`, ecosystem: manifest.ecosystem, dependencies: manifest.dependencies });
         }
       }
-      walk(sub, childRel, depth + 1, grandchildren, here);
+      walk(sub, childRel, depth + 1, grandchildren, here, real);
       if (walkTruncated) return;
     }
   };
@@ -732,7 +805,7 @@ export function scanProjectTree(
   noteUnsupported(root, "", rootNames);
   const rootLocks = lockfilesIn(root, rootListing.map((d) => d.name));
   for (const name of rootLocks) if (ignore.ignores(name, false)) gitignoredScanned.push(name);
-  walk(root, "", 1, rootListing, rootLocks.length > 0 ? [new LockCover(root, "", rootLocks)] : []);
+  walk(root, "", 1, rootListing, rootLocks.length > 0 ? [new LockCover(root, "", rootLocks)] : [], realRoot);
   return {
     entries,
     discovery: {
@@ -896,6 +969,8 @@ const SKIP_WORDING: Array<[SkipReason, (d: TreeDiscovery) => string]> = [
   ["gitignored_directory", () => "in a directory .gitignore excludes"],
   ["output_directory", () => "directly inside a build-output directory"],
   ["excluded_directory", () => "inside installed code, a tool's build output or cache, or an editor's or agent's state (node_modules, target, .venv, .claude ...), which is never scanned"],
+  ["symlink_outside_root", () => "behind a link (a junction or symbolic link) that leads outside the project"],
+  ["unreadable", () => "in a directory that could not be read, so what it holds is not known"],
 ];
 
 /** One sentence for an answer, or null when nothing was left out. */
@@ -927,7 +1002,9 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
     parts.push(`the search of gitignored directories stopped after ${MAX_IGNORED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`);
   }
   if (discovery.excludedWalkTruncated) {
-    parts.push(`the search of directories excluded by name (node_modules, target, .venv ...) that .gitignore does not exclude stopped after ${MAX_EXCLUDED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`);
+    parts.push(
+      `the search of directories excluded by name (node_modules, target, .venv ...) and of links that lead outside the project stopped after ${MAX_EXCLUDED_WALK_DIRS} directories, so lockfiles deeper in them were not counted`,
+    );
   }
   return `Partial scan: ${parts.join("; ")}.`;
 }
