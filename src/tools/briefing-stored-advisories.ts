@@ -14,6 +14,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { isMaintenanceNotice } from "../live/maintenance.js";
 import { normalizeStoredPriority } from "./signal-classifier.js";
 import type { TaskPackage } from "./briefing-task-scope.js";
 
@@ -23,6 +24,8 @@ export interface StoredAdvisory {
   title: string;
   url: string | null;
   priority: string;
+  /** The row reads as a maintenance notice ("X is unmaintained"), not a vulnerability. */
+  maintenance: boolean;
 }
 
 const ADVISORY_SOURCES = ["cve", "osv"];
@@ -102,6 +105,7 @@ export function storedAdvisoriesFor(db: FourDADatabase, packages: TaskPackage[],
         title: row.title,
         url: row.url,
         priority: row.signal_priority ? normalizeStoredPriority(row.signal_priority) : "medium",
+        maintenance: isMaintenanceNotice({ summary: row.title }),
       });
       if (out.length >= limit) return out;
     }

@@ -15,10 +15,11 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { ResolvedDependency, VulnerabilityEntry } from "../live/types.js";
-import { isActionableVulnerability } from "../live/maintenance.js";
+import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { collapseAliases } from "./vulnerability-scan-format.js";
 import { compareVersions } from "../live/version-compare.js";
+import { quoteThirdParty } from "../untrusted-text.js";
 
 /** A dependency the task names, with every installed copy. */
 export interface TaskPackage {
@@ -246,9 +247,23 @@ export function advisoriesFor(pkg: TaskPackage, vulns: VulnerabilityEntry[]) {
       installed: v.currentVersion,
       severity: presentedSeverity(v),
       fixed_version: v.fixedVersion,
-      summary: v.summary.length > 160 ? `${v.summary.slice(0, 157)}...` : v.summary,
+      // OSV.dev's text: one line, capped.
+      summary: quoteThirdParty(v.summary, 160),
     }))
     .sort((a, b) => rank[b.severity] - rank[a.severity]);
+}
+
+/**
+ * The maintenance notices ("X is unmaintained") on the installed copies of one package that this
+ * host builds: listed apart from its vulnerabilities, as the scan lists them, never as an
+ * advisory with no fix.
+ */
+export function maintenanceNoticesFor(pkg: TaskPackage, vulns: VulnerabilityEntry[]): Array<{ id: string; installed: string; summary: string }> {
+  return collapseAliases(vulns.filter((v) => v.package === pkg.name && v.ecosystem === pkg.ecosystem && v.platformActive !== false && isMaintenanceNotice(v))).map((v) => ({
+    id: v.vulnId,
+    installed: v.currentVersion,
+    summary: quoteThirdParty(v.summary, 160),
+  }));
 }
 
 const RELEASE_SOURCES: Record<string, { source: string; prefix: string }> = {

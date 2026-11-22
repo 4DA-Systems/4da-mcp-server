@@ -593,7 +593,8 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("low");
-    expect(row!.action).toBe("Maintenance notice — no fix to apply");
+    // Worded as the scan treats it: a notice, not a vulnerability whose fix is missing.
+    expect(row!.action).toMatch(/^Maintenance notice, not a vulnerability: paste \S+\. .*maintenance_notices/);
     expect(row!.title).toContain("MAINTENANCE:");
   });
 

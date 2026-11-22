@@ -15,7 +15,7 @@ import { LOOKUPS_DISABLED, vulnerabilityCoverage } from "../live/scan-coverage.j
 import { presentedSeverity, scopeAdjustmentReason } from "../live/severity-scope.js";
 import { getLiveIntelligence } from "../live-singleton.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
-import { adviceFor, scanAdvice } from "./scan-advice.js";
+import { adviceFor, FEED_MAINTENANCE_ACTION, maintenanceAction, scanAdvice } from "./scan-advice.js";
 import { normalizeStoredPriority, type SignalPriority, type SignalType } from "./signal-classifier.js";
 import type { ScanStatus } from "./what-should-i-know.js";
 import { hoursText, type FeedWindow } from "./get-relevant-content.js";
@@ -390,6 +390,9 @@ export async function executeGetActionableSignals(
     if (storedType === "security_alert" && !advisoryRow && (priority === "critical" || priority === "high")) {
       priority = "medium";
     }
+    // An advisory record that reads as a maintenance notice is one: low, as the scan's own are.
+    const notice = advisoryRow && isMaintenanceNotice({ summary: item.title });
+    if (notice) priority = "low";
 
     // Apply filters
     if (params.priority_filter && priority !== params.priority_filter) continue;
@@ -403,7 +406,11 @@ export async function executeGetActionableSignals(
       relevance_score: item.relevance_score,
       signal_type: storedType,
       signal_priority: priority,
-      action: advisoryRow ? advisoryRowAction(scanBlock.status === "ready") : actionFor(storedType, item.source_type),
+      action: notice
+        ? `${FEED_MAINTENANCE_ACTION} ${scanBlock.status === "ready" ? "This project's vulnerability scan matched it to no installed version." : "NOT CHECKED against this project's installed versions (its vulnerability scan did not complete)."}`
+        : advisoryRow
+          ? advisoryRowAction(scanBlock.status === "ready")
+          : actionFor(storedType, item.source_type),
       triggers: [],
       // The judge's verdict when there is one; a structured row carries none.
       confidence: verdict ?? (structured ? 0.5 : 0),
@@ -448,7 +455,7 @@ export async function executeGetActionableSignals(
         if (maintenance) {
           priority = "low";
           relevance = 0.3;
-          action = "Maintenance notice — no fix to apply";
+          action = maintenanceAction(vuln.package, vuln.currentVersion);
           label = "MAINTENANCE";
         }
         if (vuln.platformActive === false) {

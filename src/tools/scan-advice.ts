@@ -50,6 +50,19 @@ export async function scanAdvice(intel: unknown, scan: VulnerabilityScanResult):
   return { lines, reinstalls, targets: verifiedTargets ?? new Map() };
 }
 
+/**
+ * A maintenance notice ("X is unmaintained") as the scan treats it: not a vulnerability, listed
+ * apart under maintenance_notices and counted in no total, with nothing to upgrade to. Never
+ * worded as an advisory whose fix is missing ("No fix is published for chrono").
+ */
+export function maintenanceAction(pkg: string, version: string): string {
+  return `Maintenance notice, not a vulnerability: ${pkg} ${version}. Nothing in it is exploitable and it calls for no upgrade: plan around it (a replacement, when the package is unmaintained). vulnerability_scan lists it under maintenance_notices and counts it in no total.`;
+}
+
+/** The same for an advisory record in the 4DA feed that reads as a maintenance notice. */
+export const FEED_MAINTENANCE_ACTION =
+  "Maintenance notice (advisory record), not a vulnerability: nothing in it is exploitable and it calls for no upgrade; plan around it.";
+
 /** No advice: every copy's line says its step was not determined. */
 export const NO_SCAN_ADVICE: ScanAdvice = { lines: new Map(), reinstalls: new Map(), targets: new Map() };
 
