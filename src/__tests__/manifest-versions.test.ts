@@ -51,8 +51,9 @@ describe("manifest versions", () => {
     ["README.md", 10],
     ["SECURITY.md", 0],
   ])("every install and run command in %s pins it", (file, moreThan) => {
-    // A command (`npx ...`, `claude mcp add ... -- npx ...`) or a config's `args` entry.
-    const uses = [...text(file).matchAll(/(?:npx (?:-y )?|"args": \["(?:-y", ")?)@4da\/mcp-server(@[^\s"`]+)?/g)];
+    // A command (`npx ...`, `claude mcp add ... -- npx ...`) or a config's `args` entry, with npx's
+    // own `-y` / `--prefer-offline` before the package or not.
+    const uses = [...text(file).matchAll(/(?:npx (?:(?:-y|--prefer-offline) )*|"args": \["(?:(?:-y|--prefer-offline)", ")*)@4da\/mcp-server(@[^\s"`]+)?/g)];
     expect(uses.length).toBeGreaterThan(moreThan);
     for (const use of uses) expect(use[1], use[0]).toBe(`@${version}`);
   });
@@ -120,6 +121,12 @@ describe("manifest versions", () => {
     it("changes nothing in the docs but the pins: a release named as history keeps its number", () => {
       for (const file of ["README.md", "SECURITY.md"]) {
         expect(after[file].replaceAll(`${PACKAGE}@${next}`, `${PACKAGE}@${version}`), file).toBe(before[file]);
+      }
+    });
+
+    it("keeps npx's own options, and their place before the package, in the manifests that run it", () => {
+      for (const file of [".claude-plugin/plugin.json", "gemini-extension.json"]) {
+        expect(JSON.parse(after[file]).mcpServers["4da"].args, file).toEqual(["-y", "--prefer-offline", `${PACKAGE}@${next}`]);
       }
     });
 

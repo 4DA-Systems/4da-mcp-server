@@ -76,14 +76,21 @@ export function readPackageVersion(moduleUrl: string = import.meta.url): string 
 
 export const PACKAGE_VERSION = readPackageVersion();
 
+/**
+ * npx's own options, before the package (after it they would reach the server, which refuses
+ * them): `-y` installs without asking, `--prefer-offline` starts a cached copy of the pinned
+ * version without asking the registry first, so an offline start takes seconds, not minutes.
+ */
+const NPX_OPTIONS = ["-y", "--prefer-offline"];
+
 /** The command every editor runs: npx with the package pinned to `version`. */
 function serverCommand(version: string): { command: string; args: string[] } {
-  return { command: "npx", args: [`${PACKAGE}@${version}`] };
+  return { command: "npx", args: [...NPX_OPTIONS, `${PACKAGE}@${version}`] };
 }
 
 /** The Claude Code command printed instead of editing `~/.claude.json`. */
 export function claudeCodeCommand(version: string): string {
-  return `claude mcp add --scope user 4da -- npx ${PACKAGE}@${version}`;
+  return `claude mcp add --scope user 4da -- npx ${NPX_OPTIONS.join(" ")} ${PACKAGE}@${version}`;
 }
 
 /** `claudeCodeCommand` for the running package. */
