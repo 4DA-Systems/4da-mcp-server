@@ -74,16 +74,16 @@ describe("Go retractions that could not be read", () => {
   it("this server's own Go request limit refusing the read: unknown in those words with retry_after_seconds, never cached, never proceed", async () => {
     const db = newDb();
     const clock = new ManualClock();
-    // One read left, the next one 15 s away (longer than a read waits in line): the version list
-    // takes it, and the go.mod of v4.1.34 is not read.
+    // One read left and the next one 15 s away: the item's three reads (version list, newest go.mod,
+    // the .info of v4.1.26) cannot all be made within the wait, so none is.
     const limiter = drained(clock);
     const live = liveWithGoLimiter(db, limiter);
     const first = (await check(live)).results[0];
     expect(first.verdict).toBe("unknown");
-    expect(first.reason).toMatch(/whether v4\.1\.26 is retracted was not checked/i);
+    expect(first.reason).toContain(`${LZ4}'s version list, retractions and release dates were not read`);
     expect(first.reason).toContain("this server's own request limit for the Go proxy");
     expect(first.reason).not.toMatch(/could not be reached|gives no publish time|concern found/);
-    expect(first.retry_after_seconds).toBe(15);
+    expect(first.retry_after_seconds).toBe(30);
     expect(net.requests.filter((r) => r.endsWith("/@v/v4.1.34.mod"))).toEqual([]);
     expect(goCacheKeys(db, "go-releases:")).toEqual([]);
 
@@ -97,9 +97,9 @@ describe("Go retractions that could not be read", () => {
   it("the concise answer carries retry_after_seconds and the summary says to call again for that item", async () => {
     const live = liveWithGoLimiter(newDb(), drained(new ManualClock()));
     const out = (await runDependencyCheck(noDb, { items: [item] }, live)) as { summary: string; results: Array<Record<string, unknown>> };
-    expect(out.results[0]).toMatchObject({ verdict: "unknown", retry_after_seconds: 15 });
+    expect(out.results[0]).toMatchObject({ verdict: "unknown", retry_after_seconds: 30 });
     expect(out.summary).toMatch(/^NOT CHECKED: 1 of 1 item could not be checked: this server's own request limit for the Go proxy was reached/);
-    expect(out.summary).toContain("Call dependency_check again for it in 15 s (retry_after_seconds)");
+    expect(out.summary).toContain("Call dependency_check again for it in 30 s (retry_after_seconds)");
   });
 });
 

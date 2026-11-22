@@ -53,32 +53,35 @@ describe("this server's own Go request limit", () => {
     expect(r.reason).toContain("this server's own request limit for the Go proxy was reached");
     expect(r.reason).toContain("the Go proxy was not asked and is not at fault");
     expect(r.reason).not.toMatch(FALSE_BLAME);
-    expect(r.retry_after_seconds).toBe(15);
+    // The item's four reads come one every 15 s.
+    expect(r.retry_after_seconds).toBe(60);
     // The reads the limit governs were never sent (the module-path check reads `to`'s go.mod first, outside it).
     expect(proxyRequests().filter((u) => /\/@v\/list$|\.info$/.test(u))).toEqual([]);
   });
 
   it("holding back a judged version's .info: the same, never 'the registry gives no publish time', and its date is not cached as missing", async () => {
+    net.go[TESTIFY].info!["v1.12.0"] = daysAgo(120);
     const db = newDb();
     const clock = new ManualClock();
-    // The list and the newest go.mod are read; neither .info is.
-    const live = liveWithGoLimiter(db, limiterWith(clock, 2));
-    const r = (await executeDependencyCheck(noDb, { items: [item] }, live, { now: NOW })).results[0];
+    const live = liveWithGoLimiter(db, limiterWith(clock, 4));
+    // The first item reads the list, the newest go.mod and its two dates, which spends the limit.
+    expect((await executeDependencyCheck(noDb, { items: [item] }, live, { now: NOW })).results[0].verdict).toBe("proceed");
+    // Another version of the same module needs only its own .info, and the limit has no read left in time.
+    const other = { ...item, to: "v1.12.0" };
+    const r = (await executeDependencyCheck(noDb, { items: [other] }, live, { now: NOW })).results[0];
     expect(r.verdict).toBe("unknown");
     expect(r.reason).toContain("this server's own request limit for the Go proxy was reached");
     expect(r.reason).not.toMatch(FALSE_BLAME);
     expect(r.signals.find((s) => s.id === "release_age")).toBeUndefined();
     expect(r.retry_after_seconds).toBe(15);
-    expect(goCacheKeys(db, "go-info:")).toEqual([]);
-    // The list itself was read whole and is kept.
-    expect(goCacheKeys(db, "go-releases:")).toEqual([`go-releases:${TESTIFY}`]);
+    expect(goCacheKeys(db, `go-info:${TESTIFY}@v1.12.0`)).toEqual([]);
 
-    // Asked again once the limit allows it: the cached list and two new reads give the real answer.
+    // Asked again once the limit allows it: the cached list and one new read give the real answer.
     clock.advance(60_000);
-    const again = (await executeDependencyCheck(noDb, { items: [item] }, live, { now: NOW })).results[0];
+    const again = (await executeDependencyCheck(noDb, { items: [other] }, live, { now: NOW })).results[0];
     expect(again.verdict).toBe("proceed");
     expect(again).not.toHaveProperty("retry_after_seconds");
-    expect(again.signals.find((s) => s.id === "release_age")).toMatchObject({ effect: "proceed", value: { published_at: daysAgo(90) } });
+    expect(again.signals.find((s) => s.id === "release_age")).toMatchObject({ effect: "proceed", value: { published_at: daysAgo(120) } });
   });
 
   it("holding back a release's own go.mod (what it requires): unknown, and the proxy is not blamed", async () => {
@@ -100,8 +103,8 @@ describe("this server's own Go request limit", () => {
     const r = (await executeDependencyCheck(noDb, { items: [item] }, live, { now: NOW })).results[0];
     expect(r.verdict).toBe("proceed");
     expect(r).not.toHaveProperty("retry_after_seconds");
-    // Four reads (version list, newest go.mod, two .info), each waiting its turn for a token (one a second), none dropped.
-    expect(clock.slept.length).toBe(4);
+    // The item's four reads (version list, newest go.mod, two .info) waited together for their four tokens, none dropped.
+    expect(clock.slept).toEqual([4000]);
     expect(proxyRequests().filter((u) => /\/@v\/list$|\.info$/.test(u))).toHaveLength(3);
   });
 

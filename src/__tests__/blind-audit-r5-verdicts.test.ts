@@ -96,6 +96,12 @@ function stub() {
       if (!name) return json({ message: "Not Found" }, 404);
       return json({ info: { name }, releases: Object.fromEntries(Object.entries(PYPI[name]).map(([v, at]) => [v, [{ upload_time_iso_8601: at, yanked: false }]])) });
     }
+    // A listed version's go.mod (where the module's retractions are read): none retracts anything.
+    const goMod = /^https:\/\/proxy\.golang\.org\/(.+?)\/@v\/([^/]+)\.mod$/.exec(url);
+    if (goMod) {
+      const mod = decodeURIComponent(goMod[1]).replace(/!([a-z])/g, (_, c: string) => c.toUpperCase());
+      return GO[mod]?.[decodeURIComponent(goMod[2])] ? new Response(`module ${mod}\n`, { status: 200 }) : new Response("not found", { status: 404 });
+    }
     const go = /^https:\/\/proxy\.golang\.org\/(.+?)\/@(v\/list|v\/([^/]+)\.info|latest)$/.exec(url);
     if (go) {
       const mod = decodeURIComponent(go[1]).replace(/!([a-z])/g, (_, c: string) => c.toUpperCase());

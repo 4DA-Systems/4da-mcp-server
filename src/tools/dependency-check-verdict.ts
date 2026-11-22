@@ -265,7 +265,8 @@ function unreachableText(item: Resolved, lookup: Extract<RegistryLookup<PackageR
     return `NOT CHECKED: ${item.package}'s retractions were not read, so whether ${item.to} is retracted was not checked: they are listed in ${lookup.withdrawalsUnread}, and ${why}. Nothing about ${item.to} was verified; this is not a clean result.${retry}`;
   }
   if (limit) {
-    return `NOT CHECKED: this server's own request limit for ${limit.registry} was reached, so its release data was not read and nothing about ${item.to} was verified (${limit.registry} was not asked and is not at fault).${retry}`;
+    const unread = item.ecosystem === "Go" ? `${item.package}'s version list, retractions and release dates were` : `${item.package}'s release data was`;
+    return `NOT CHECKED: this server's own request limit for ${limit.registry} was reached, so ${unread} not read and nothing about ${item.to} was verified (${limit.registry} was not asked and is not at fault).${retry}`;
   }
   return `Registry could not be reached (${quoteThirdParty(lookup.detail, 160)}); nothing about ${item.to} was verified.`;
 }
