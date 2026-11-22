@@ -19,6 +19,7 @@ import { compareToLowerBound, compareVersions, isComparable, maxVersion } from "
 import { collectAffectedSpans } from "./osv-ranges.js";
 import { isMaintenanceNotice, isMaintenanceRecord } from "./maintenance.js";
 import { gradeAliasGroups } from "./advisory-groups.js";
+import { inFindingOrder } from "./finding-order.js";
 import { isMalwareRecord } from "./malware.js";
 import type {
   AliasSeverityReport,
@@ -846,7 +847,8 @@ export class OsvScanner {
     // osv::matching::is_npm_security_holding), and the copy is not a clean dependency either. It
     // is listed apart (securityPlaceholders), with its records. Only a malicious-package record is
     // set aside: any other advisory on such a version is a finding like any other.
-    const found = [...cachedVulns, ...fetchedVulns];
+    // In identity order, never cached-then-fetched: which answers were cached must not change the result.
+    const found = inFindingOrder([...cachedVulns, ...fetchedVulns]);
     const securityPlaceholders = securityPlaceholdersOf(found);
     const rated = await this.rateFromAliases(found.filter((v) => !isPlaceholderMalware(v)), options.deadline);
     // One severity per advisory: every record of an alias group carries the group's most severe grade.
