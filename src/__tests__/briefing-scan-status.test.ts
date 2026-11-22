@@ -95,6 +95,8 @@ function insertItem(
     signal_type?: string | null;
     signal_priority?: string | null;
     source_type?: string;
+    /** The row's text; the title when not given. */
+    content?: string;
   },
 ): number {
   seq += 1;
@@ -109,7 +111,7 @@ function insertItem(
       `item-${seq}`,
       "https://example.com/" + seq,
       over.title,
-      over.title,
+      over.content ?? over.title,
       `hash-${seq}`,
       sqlDate(over.hoursAgo * HOURS),
       sqlDate(0),
@@ -280,7 +282,8 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
   it("security evidence already in hand still yields human_only when the scan is unavailable", async () => {
     insertItem(db, {
-      title: "CRITICAL: jsonwebtoken authorization bypass in relay auth",
+      title: "[GHSA-jwt0-auth-0001] jsonwebtoken: authorization bypass in relay auth",
+      content: "jsonwebtoken (crates.io)\nauthorization bypass in relay auth",
       hoursAgo: 2,
       signal_type: "security_alert",
       signal_priority: "critical",
@@ -308,7 +311,8 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
   it("an advisory-feed row naming a task package reaches the briefing at any age inside 90 days, marked unconfirmed", async () => {
     insertItem(db, { title: "Rust 1.99 released", hoursAgo: 3, source_type: "hackernews", relevance: 0.5 });
     insertItem(db, {
-      title: "hono 4.12.34 patches middleware bypass",
+      title: "[GHSA-hono-mwbp-0001] hono: middleware bypass, patched in 4.12.34",
+      content: "hono (npm)\nmiddleware bypass",
       hoursAgo: 10 * 24,
       signal_type: "security_alert",
       signal_priority: "medium",
@@ -316,14 +320,14 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
     // No scan: the feed row is the only evidence, and it says so.
     const unscanned = await executeWhatShouldIKnow(db, { task: "Upgrade hono in the API gateway" }, stubIntel(null));
-    const row = unscanned.advisories.find((a) => a.title.includes("hono 4.12.34"));
+    const row = unscanned.advisories.find((a) => a.title.includes("hono: middleware bypass"));
     expect(row?.version_confirmed).toBe(false);
     expect(row?.scope).toBe("task");
 
     // A ready scan that finds the installed hono clean is authoritative: the
     // unconfirmed row is not repeated as if it were a finding.
     const scanned = await executeWhatShouldIKnow(db, { task: "Upgrade hono in the API gateway" }, stubIntel(scanOf([])));
-    expect(scanned.advisories.some((a) => a.title.includes("hono 4.12.34"))).toBe(false);
+    expect(scanned.advisories.some((a) => a.title.includes("hono: middleware bypass"))).toBe(false);
     expect(scanned.delegation_assessment.level).toBe("safe_to_delegate");
   });
 
@@ -386,14 +390,15 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
   it("advisories that appear in both passes are reported once", async () => {
     insertItem(db, {
-      title: "CRITICAL: jsonwebtoken authorization bypass in relay auth",
+      title: "[GHSA-jwt0-auth-0001] jsonwebtoken: authorization bypass in relay auth",
+      content: "jsonwebtoken (crates.io)\nauthorization bypass in relay auth",
       hoursAgo: 2,
       signal_type: "security_alert",
       signal_priority: "critical",
     });
     const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(scanOf([entry()])));
 
-    const dbRow = result.advisories.filter((a) => a.title.includes("CRITICAL: jsonwebtoken authorization bypass"));
+    const dbRow = result.advisories.filter((a) => a.title.includes("jsonwebtoken: authorization bypass"));
     expect(dbRow).toHaveLength(1);
     const liveRow = result.advisories.filter((a) => a.action.includes("10.3.0 was NOT CHECKED"));
     expect(liveRow).toHaveLength(1);

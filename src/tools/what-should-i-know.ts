@@ -488,24 +488,25 @@ export async function executeWhatShouldIKnow(
       version_confirmed: true,
     });
   }
-  // Advisory-database rows (cve/osv sources) that name a task package. With a
-  // ready scan they are kept only for packages the scan confirms vulnerable;
-  // without one they are the only evidence, and say they are unconfirmed.
+  // Advisory-database rows (cve/osv sources) about a task package, by ecosystem and exact name. With
+  // a ready scan they are kept only for packages the scan confirms vulnerable; without one they are
+  // the only evidence, and say they are unconfirmed.
   const stored: StoredAdvisory[] = storedAdvisoriesFor(db, packages);
   for (const row of stored) {
-    const confirmedVulnerable = taskDependencies.some((d) => d.package === row.package && d.vulnerabilities.length > 0);
+    const dep = taskDependencies.find((d) => d.package === row.package && d.ecosystem === row.ecosystem);
+    const confirmedVulnerable = dep !== undefined && dep.vulnerabilities.length > 0;
     if (scanStatus === "ready" && !confirmedVulnerable) continue;
     advisories.push({
       title: row.title,
       signal_type: "security_alert",
       priority: row.priority,
-      action: `Advisory feed row naming ${row.package}; not matched to your installed version — run vulnerability_scan to confirm`,
+      action: `Advisory feed row about ${dep ? labelOf(dep, taskDependencies) : row.package}; not matched to your installed version — run vulnerability_scan to confirm`,
       url: row.url,
       scope: "task",
       version_confirmed: false,
     });
   }
-  if (scan) pushAll(advisories, projectAdvisories(scan, new Set(packages.map((p) => `${p.ecosystem} ${p.name}`))));
+  if (scan) pushAll(advisories, projectAdvisories(scan, new Set(packages.map((p) => `${p.ecosystem}\0${p.name}`))));
 
   // ── 3. Decisions: windows, conflicts, wisdom ──────────────────────────
   const decisionWindows = getOpenDecisionWindows(db)
@@ -737,7 +738,7 @@ function labelOf(d: TaskDependency, all: TaskDependency[]): string {
 function projectAdvisories(scan: VulnerabilityScanResult, taskKeys: Set<string>): Advisory[] {
   const out: Advisory[] = [];
   // The task's packages are keyed by ecosystem and name: npm's jsonwebtoken is not the crate.
-  const actionable = scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !taskKeys.has(`${v.ecosystem} ${v.package}`) && !v.installDriftOf);
+  const actionable = scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !taskKeys.has(`${v.ecosystem}\0${v.package}`) && !v.installDriftOf);
   const packages = new Set(actionable.map((v) => v.package));
   if (packages.size > 0) {
     const severities = new Set(actionable.map((v) => presentedSeverity(v)));
