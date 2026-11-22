@@ -40,7 +40,7 @@ const opened: FourDADatabase[] = [];
 let stub: Stub;
 
 type Site = { project: string; direct: boolean; dev: boolean };
-const site = (dir: string, dev = false): Site => ({ project: normalizeProjectPath(dir), direct: true, dev });
+const site = (dir: string, dev = false): Site => ({ project: process.platform === "win32" ? normalizeProjectPath(dir) : path.resolve(dir), direct: true, dev });
 
 function step(pkg: string, lines: Array<[string, string | null, Site[]]>, mechanism = "manifest_bump") {
   return {

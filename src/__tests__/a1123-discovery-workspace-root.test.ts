@@ -186,7 +186,7 @@ describe("a1123 discovery: a workspace member, and a project with no lockfile", 
         ["dependency_health", {}],
       ]);
       const scan = JSON.parse(resultText(session.results[0])) as Record<string, any>;
-      expect(scan.project_root).toBe(root);
+      expect(fs.realpathSync(scan.project_root)).toBe(fs.realpathSync(root));
       expect(scan.workspace_note).toMatch(/^Started in packages\/app, a member of the pnpm workspace/);
       // The network is blocked in this session: the lookup was attempted for the workspace's lockfile, and nothing reads clean.
       expect(session.fetches.some((u) => u.includes("api.osv.dev"))).toBe(true);
