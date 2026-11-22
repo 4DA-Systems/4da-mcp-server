@@ -442,6 +442,9 @@ export function presentTargets(copies, targets) {
   });
 }
 
+/** A step whose commands all edit a manifest only (`npm pkg set`): it changes no lockfile, and the install after it does. */
+export const manifestEdit = (cmds) => cmds.length > 0 && cmds.every((c) => c.exit === 0 && /^npm pkg set /.test(c.run ?? ""));
+
 /** Whether two copy inventories differ at all. */
 export function inventoryChanged(before, after) {
   if (before.size !== after.size) return true;

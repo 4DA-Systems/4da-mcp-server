@@ -11,7 +11,7 @@
  *   reported without effect because its rows' copies move in those later steps.
  */
 import { describe, expect, it } from "vitest";
-import { lockfileCopies, lowerings, movedTargets, presentTargets, releaseLine, stepOutcome, type CopyInventory, type Inventory } from "../../bench/plan-exec/lib.mjs";
+import { lockfileCopies, lowerings, manifestEdit, movedTargets, presentTargets, releaseLine, stepOutcome, type CopyInventory, type Inventory } from "../../bench/plan-exec/lib.mjs";
 
 const inv = (entries: Record<string, string[]>): Inventory => new Map(Object.entries(entries).map(([k, v]) => [k, new Set(v)]));
 const copies = (entries: Record<string, Record<string, number>>): CopyInventory => new Map(Object.entries(entries).map(([k, v]) => [k, new Map(Object.entries(v))]));
@@ -66,6 +66,14 @@ describe("a step's effect", () => {
     const target = { ecosystem: "npm", package: "@babel/helpers", version: "7.20.1" };
     expect(presentTargets(copies({ "npm|.|@babel/helpers": { "7.26.10": 1 } }), [target])).toEqual([]);
     expect(stepOutcome({ cmds: [{ exit: 0 }], targets: [target], pending: [], moved: [], changed: false, laterServesSame: false })).toBe("worked");
+  });
+
+  it("is not without effect for an override written to package.json ahead of the install that applies it", () => {
+    const cmds = [{ run: "npm pkg set overrides.form-data=2.5.6", exit: 0 }];
+    expect(manifestEdit(cmds)).toBe(true);
+    expect(manifestEdit([{ run: "npm install", exit: 0 }])).toBe(false);
+    const target = { ecosystem: "npm", package: "form-data", version: "2.3.3" };
+    expect(stepOutcome({ cmds, targets: [target], moved: [], changed: manifestEdit(cmds), laterServesSame: true })).toBe("worked");
   });
 
   it("is not without effect for a pre-update that changed the lockfile ahead of the steps that move its rows' copies", () => {

@@ -32,6 +32,7 @@ import {
   copyInventory,
   extractSteps,
   inventoryChanged,
+  manifestEdit,
   lowerings,
   movedTargets,
   presentTargets,
@@ -301,7 +302,7 @@ async function runProject(entry) {
       const targets = step.rows.map((r) => ({ ecosystem: r.ecosystem, package: r.package, version: r.currentVersion }));
       const moved = movedTargets(prevCopies, afterCopies, targets);
       const laterServesSame = extracted.steps.slice(i + 1).some((s) => s.fixes.some((f) => step.fixes.includes(f)));
-      const outcome = stepOutcome({ cmds, targets, pending: presentTargets(prevCopies, targets), moved, changed: inventoryChanged(prevCopies, afterCopies), laterServesSame });
+      const outcome = stepOutcome({ cmds, targets, pending: presentTargets(prevCopies, targets), moved, changed: inventoryChanged(prevCopies, afterCopies) || manifestEdit(cmds), laterServesSame });
       const ran = cmds.some((c) => c.exit !== undefined);
       const versionsAround = targets.map((t) => `${t.package}@${t.version}`);
       steps.push({ n: step.n, fixes: step.fixes, targets: versionsAround, moved: moved.map((t) => `${t.package}@${t.version}`), outcome, ran, lowered, changes: changesFor(prev, after, step), cmds });

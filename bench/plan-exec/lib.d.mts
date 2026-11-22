@@ -48,6 +48,7 @@ export function lockfileCopies(base: string, text: string): Map<string, Map<stri
 export function copyInventory(root: string): CopyInventory;
 export function versionsOf(copies: CopyInventory): Inventory;
 export function movedTargets<T extends { ecosystem: string; package: string; version: string }>(before: CopyInventory, after: CopyInventory, targets: T[]): T[];
+export function manifestEdit(cmds: Array<{ exit?: unknown; run?: string }>): boolean;
 export function inventoryChanged(before: CopyInventory, after: CopyInventory): boolean;
 export function presentTargets<T extends { ecosystem: string; package: string; version: string }>(copies: CopyInventory, targets: T[]): T[];
 export function stepOutcome(input: { cmds: Array<{ exit?: unknown; refused?: string }>; targets: unknown[]; pending?: unknown[]; moved: unknown[]; changed: boolean; laterServesSame: boolean }): "nothing_to_run" | "failed" | "refused" | "without_effect" | "worked";
