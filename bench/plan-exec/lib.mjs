@@ -430,6 +430,18 @@ export function movedTargets(before, after, targets) {
   });
 }
 
+/** The targets some lockfile holds a copy of. */
+export function presentTargets(copies, targets) {
+  return targets.filter((t) => {
+    const want = normName(t.ecosystem, t.package);
+    for (const [k, counts] of copies) {
+      const [eco, , n] = splitKey(k);
+      if (eco === t.ecosystem && n === want && (counts.get(String(t.version)) ?? 0) > 0) return true;
+    }
+    return false;
+  });
+}
+
 /** Whether two copy inventories differ at all. */
 export function inventoryChanged(before, after) {
   if (before.size !== after.size) return true;
@@ -442,15 +454,16 @@ export function inventoryChanged(before, after) {
 }
 
 /**
- * A step's outcome. Without effect: it ran, named targets, moved none of them, and either changed
- * nothing at all or is the last step serving its rows (a Cargo pre-update that frees the crates a
- * later `--precise` moves has done its part when it changes the lockfile).
+ * A step's outcome. Without effect: it ran, some of its targets were still there before it, it
+ * moved none of them, and either it changed nothing at all or it is the last step serving its rows
+ * (a Cargo pre-update that frees the crates a later `--precise` moves has done its part when it
+ * changes the lockfile). A step whose targets an earlier step already moved had nothing left to do.
  */
-export function stepOutcome({ cmds, targets, moved, changed, laterServesSame }) {
+export function stepOutcome({ cmds, targets, pending = targets, moved, changed, laterServesSame }) {
   if (cmds.length === 0) return "nothing_to_run";
   if (cmds.some((c) => c.exit !== undefined && c.exit !== 0)) return "failed";
   if (cmds.some((c) => c.refused)) return "refused";
-  if (targets.length > 0 && moved.length === 0 && (!changed || !laterServesSame)) return "without_effect";
+  if (pending.length > 0 && moved.length === 0 && (!changed || !laterServesSame)) return "without_effect";
   return "worked";
 }
 

@@ -11,7 +11,7 @@
  *   reported without effect because its rows' copies move in those later steps.
  */
 import { describe, expect, it } from "vitest";
-import { lockfileCopies, lowerings, movedTargets, releaseLine, stepOutcome, type CopyInventory, type Inventory } from "../../bench/plan-exec/lib.mjs";
+import { lockfileCopies, lowerings, movedTargets, presentTargets, releaseLine, stepOutcome, type CopyInventory, type Inventory } from "../../bench/plan-exec/lib.mjs";
 
 const inv = (entries: Record<string, string[]>): Inventory => new Map(Object.entries(entries).map(([k, v]) => [k, new Set(v)]));
 const copies = (entries: Record<string, Record<string, number>>): CopyInventory => new Map(Object.entries(entries).map(([k, v]) => [k, new Map(Object.entries(v))]));
@@ -60,6 +60,12 @@ describe("a step's effect", () => {
     const target = { ecosystem: "npm", package: "@babel/core", version: "7.19.6" };
     expect(stepOutcome({ cmds: [{ exit: 0 }], targets: [target], moved: [], changed: true, laterServesSame: false })).toBe("without_effect");
     expect(stepOutcome({ cmds: [{ exit: 0 }], targets: [target], moved: [], changed: false, laterServesSame: true })).toBe("without_effect");
+  });
+
+  it("is not without effect when an earlier step already moved its targets (pnpm's @babel/core refresh moved @babel/helpers)", () => {
+    const target = { ecosystem: "npm", package: "@babel/helpers", version: "7.20.1" };
+    expect(presentTargets(copies({ "npm|.|@babel/helpers": { "7.26.10": 1 } }), [target])).toEqual([]);
+    expect(stepOutcome({ cmds: [{ exit: 0 }], targets: [target], pending: [], moved: [], changed: false, laterServesSame: false })).toBe("worked");
   });
 
   it("is not without effect for a pre-update that changed the lockfile ahead of the steps that move its rows' copies", () => {

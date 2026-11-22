@@ -126,16 +126,16 @@ describe("(d) a parent upgrade comes before the refreshes of the children it car
       parentRow("minimist", "mkdirp", "0.5.1", "npm install mkdirp@0.5.5 --save-exact", ["npm update minimist"]),
       row("postcss", "lockfile_refresh", ["npm update postcss"]),
     ];
-    expect(runs(rows)).toEqual(["npm update postcss", "npm install mkdirp@0.5.5 --save-exact", "npm update minimist"]);
+    expect(runs(rows)).toEqual(["npm install mkdirp@0.5.5 --save-exact", "npm update minimist", "npm update postcss"]);
   });
 
-  it("with no tie between them, in-range refreshes run before upgrades, and a reinstall last", () => {
+  it("with no tie between them, upgrades run before in-range refreshes (a refresh never lowers what an upgrade set), and a reinstall last", () => {
     const rows = [
       row("vite", "upgrade_direct", ['npm install "vite@^6.4.5"']),
       row("hono", "reinstall", ["npm ci"]),
       row("nanoid", "lockfile_refresh", ["npm update nanoid"]),
     ];
-    expect(runs(rows)).toEqual(["npm update nanoid", 'npm install "vite@^6.4.5"', "npm ci"]);
+    expect(runs(rows)).toEqual(['npm install "vite@^6.4.5"', "npm update nanoid", "npm ci"]);
   });
 });
 
@@ -170,7 +170,7 @@ describe("(e) a target that breaks a peer range never runs alone", () => {
     for (const rows of [[vite, nanoid], [nanoid, vite]]) {
       const out = plan(rows, { peerConflict });
       expect(out.peerBlocked.size).toBe(0);
-      expect(out.run_order.map((s) => s.run)).toEqual(["pnpm update nanoid --depth Infinity", 'pnpm up "@vitest/coverage-v8@^4.1.11" "vitest@^4.1.12"']);
+      expect(out.run_order.map((s) => s.run)).toEqual(['pnpm up "@vitest/coverage-v8@^4.1.11" "vitest@^4.1.12"', "pnpm update nanoid --depth Infinity"]);
       expect(out.run_order_note).toMatch(/vitest 4\.1\.12 runs in one command with @vitest\/coverage-v8 in the project root, which the script upgrades too: installed, @vitest\/coverage-v8 1\.6\.0 declares "1\.6\.0"/);
     }
   });

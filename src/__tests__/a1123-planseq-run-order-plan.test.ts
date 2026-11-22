@@ -55,7 +55,7 @@ describe("(c) one go get per module directory", () => {
 });
 
 describe("(d) a parent upgrade before the refreshes it carries", () => {
-  it("the refresh that follows a lever's install runs after it; an unrelated refresh runs first", async () => {
+  it("the refresh that follows a lever's install runs after it; an unrelated refresh runs with the other refreshes, after the upgrades", async () => {
     h.ADVISORIES = { child: [adv("GHSA-cccc-0001", "child", fixedIn("1.0.2"))], other: [adv("GHSA-oooo-0001", "other", fixedIn("2.0.1"))] };
     h.NPM = {
       par: { latest: "1.0.1", versions: { "1.0.0": { dependencies: { child: "1.0.0" } }, "1.0.1": { dependencies: { child: "^1.0.0" } } } },
@@ -74,7 +74,7 @@ describe("(d) a parent upgrade before the refreshes it carries", () => {
       { dir: ".", run: "npm install par@1.0.1 --save-exact" },
       { dir: ".", run: "npm update child" },
     ]);
-    expect(steps(result)).toEqual(["npm update other", "npm install par@1.0.1 --save-exact", "npm update child"]);
+    expect(steps(result)).toEqual(["npm install par@1.0.1 --save-exact", "npm update child", "npm update other"]);
   });
 });
 

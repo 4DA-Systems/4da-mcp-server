@@ -1351,6 +1351,11 @@ function declaredSection(dir: string, name: string): "dependencies" | "devDepend
  * h3's lockfile, 2026-11-23). The declaring command, in each directory whose manifest declares
  * `holder` (the release that takes `pkg` as a peer), in the section `holder` is in; none outside
  * pnpm, or when `holder`'s release does not list `pkg` as a peer.
+ *
+ * pnpm 7 on eslint-config's lockfile did move it, to 8.3.8, what a fresh resolve of vitest 4.1.12's
+ * "^6.0.0 || ^7.0.0 || ^8.0.0" picks, and `pnpm add -D "vite@^6.4.5"` then lowered it to 6.4.6
+ * (2026-11-23). So `floor` is that fresh-resolve release when one is known (it is checked clean):
+ * the declaration lands where the parent upgrade can leave it, never below.
  */
 function pnpmPeerDeclare(
   ctx: MoveContext,
@@ -1372,6 +1377,11 @@ function pnpmPeerDeclare(
     out.push({ dir: relativeDir(dir, root), command: `pnpm add ${flag}"${pkg}@^${floor}"` });
   }
   return out;
+}
+
+/** The release a peer declaration names: what a fresh resolve of the parent's requirement picks, when known and not below the target. */
+function peerFloor(resolvesTo: string | null, target: string, ecosystem: string): string {
+  return resolvesTo !== null && compareVersions(resolvesTo, target, ecosystem) > 0 ? resolvesTo : target;
 }
 
 /** The words for pnpmPeerDeclare's commands. */
@@ -1869,7 +1879,7 @@ async function parentStanding(ctx: MoveContext, b: Blocking): Promise<Standing> 
       if (v !== smallestNamed) upgrade.smallest = smallestNamed;
       else delete upgrade.smallest;
       const refreshes = refreshAt(v);
-      const declares = pnpmPeerDeclare(ctx, b, history[v], parent, pkg, target, route.dirs);
+      const declares = pnpmPeerDeclare(ctx, b, history[v], parent, pkg, peerFloor(pkgAt(v)?.resolvesTo ?? null, target, ecosystem), route.dirs);
       const allRefreshes = [...also.refreshes.filter((r) => !refreshes.some((x) => x.dir === r.dir && x.command === r.command)), ...refreshes, ...declares];
       if (allRefreshes.length > 0) upgrade.refreshCommands = allRefreshes;
       else delete upgrade.refreshCommands;

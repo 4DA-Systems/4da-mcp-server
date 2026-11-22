@@ -54,6 +54,7 @@ import { registryQuote } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
+import { declaredNpmOperator } from "./upgrade-plan-runnable.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -860,6 +861,7 @@ async function executeStandalonePlanner(
     heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x)),
     goSource: liveIntel.getReleaseSources().Go,
     peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
+    declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
