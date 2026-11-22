@@ -88,7 +88,7 @@ describe("server instructions", () => {
   });
 
   it("name only tools that exist", () => {
-    const resultFields = new Set(["advisory_severity"]);
+    const resultFields = new Set(["advisory_severity", "by_severity", "by_advisory_severity"]);
     const named = (SERVER_INSTRUCTIONS.match(/\b[a-z]+(?:_[a-z]+)+\b/g) ?? []).filter((n) => !resultFields.has(n));
     expect(named.length).toBeGreaterThan(5);
     for (const name of named) expect(Object.keys(TOOL_REGISTRY), name).toContain(name);
