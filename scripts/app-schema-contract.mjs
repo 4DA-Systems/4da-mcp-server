@@ -41,12 +41,12 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /**
  * Functions that only ever run against this server's OWN standalone database
- * (created by createMinimalSchema when no desktop app is installed). Their SQL
+ * (whose schema ensureOwnSchema creates or completes). Their SQL
  * is checked by the normal test suite against that schema, not against the
  * app's.
  */
 const STANDALONE_ONLY = new Set([
-  "FourDADatabase.createMinimalSchema",
+  "ensureOwnSchema",
   "FourDADatabase.populateFromScan",
   "detectStandalone",
 ]);
