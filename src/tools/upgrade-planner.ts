@@ -163,6 +163,8 @@ interface UpgradeRecommendation {
   withheld?: string[];
   /** lockfile_refresh: the command to run, per lockfile directory. */
   refreshCommands?: Array<{ dir: string; command: string }>;
+  /** lockfile_refresh of the copies installed on their own: the copies other packages bundle, which wait on their owner (upgrade-planner-fixpaths.ts). */
+  bundledCopies?: Array<{ owner: string; ownerVersion: string | null; action: "waiting_on_upstream" }>;
   /**
    * upgrade_direct: the command that moves the declared dependency to
    * targetVersion where it is declared, per lockfile directory (npm install,
@@ -219,7 +221,7 @@ export interface UpgradePlanResult {
   waitingOnUpstream: number;
   /** Transitive steps whose fix path was not established (action `not_determined`): unread, not blocked. */
   fixPathNotDetermined: number;
-  /** Transitive steps a lockfile refresh fixes (every parent already admits a clean version). */
+  /** Transitive steps a lockfile refresh fixes (every parent already admits a clean version); a row with `bundledCopies` counts here and in waitingOnUpstream. */
   lockfileRefreshes: number;
   /** Transitive steps fixed by upgrading the parent that pins them (`parentUpgrades` names the release). */
   parentUpgradeSteps: number;
@@ -866,9 +868,13 @@ async function executeStandalonePlanner(
   const unconfirmedNewer = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && r.targetVersion === null && r.fixPathChecked === undefined && !heldUnclean(r)).length;
   const quickWins = upgrades.filter((r) => !r.breaking).length;
   const breakingChanges = upgrades.filter((r) => r.breaking).length;
-  const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length;
+  // A refresh row with a bundled copy (`bundledCopies`) is a real refresh AND leaves a vulnerable
+  // copy waiting on its owner: it counts in both, and the summary says so, never as fully fixed.
+  const partlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && (r.bundledCopies?.length ?? 0) > 0).length;
+  const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length + partlyBundled;
   const fixPathNotDetermined = limited.filter((r) => r.action === "not_determined").length;
   const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r)).length;
+  const refreshesPartlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r) && (r.bundledCopies?.length ?? 0) > 0).length;
   const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent" && !heldUnclean(r)).length;
   const devOnly = limited.filter((r) => r.isDev).length;
   const overrides = limited.filter((r) => r.action === "override_or_replace").length;
@@ -890,14 +896,18 @@ async function executeStandalonePlanner(
   );
   if (upgrades.length > 0) parts.push(`${upgrades.length} upgradable directly (${quickWins} non-breaking, ${breakingChanges} crossing a major version)`);
   if (reinstalls > 0) parts.push(`${reinstalls} need only a reinstall (node_modules behind the lockfile)`);
-  if (lockfileRefreshes > 0) parts.push(`${lockfileRefreshes} transitive, fixed by a lockfile refresh (every parent already admits a clean version)`);
+  if (lockfileRefreshes > 0) {
+    parts.push(
+      `${lockfileRefreshes} transitive, fixed by a lockfile refresh (every parent already admits a clean version)${refreshesPartlyBundled > 0 ? `, ${refreshesPartlyBundled} of them only partly: a bundled copy stays, waiting on the package that bundles it (bundledCopies), and is counted as waiting on upstream too` : ""}`,
+    );
+  }
   if (parentUpgradeSteps > 0) parts.push(`${parentUpgradeSteps} transitive, fixed by upgrading the parent that pins it (parentUpgrades names the release)`);
   if (unverifiedParents > 0) {
     parts.push(
       `${unverifiedParents} transitive, a parent release that admits a clean version exists but no release of the declared dependency that brings it in was verified (parentUpgrades says what to check; not counted as fixed)`,
     );
   }
-  if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream`);
+  if (waitingOnUpstream > 0) parts.push(`${waitingOnUpstream} transitive, waiting on upstream${partlyBundled > 0 ? ` (${partlyBundled} a bundled copy beside a refresh that fixes the copies that are not bundled)` : ""}`);
   if (fixPathNotDetermined > 0) {
     parts.push(
       `${fixPathNotDetermined} transitive, fix path not determined (the registry or the lockfile could not be read, live lookups are off, or time ran out): unread, not blocked, so ask again before deciding`,
