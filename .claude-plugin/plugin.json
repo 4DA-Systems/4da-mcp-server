@@ -21,6 +21,7 @@
       "command": "npx",
       "args": [
         "-y",
+        "--prefer-offline",
         "@4da/mcp-server@6.4.0"
       ]
     }

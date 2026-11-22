@@ -30,7 +30,9 @@ import { serverEntry } from "./helpers/stdio-session.js";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const VERSION = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version as string;
 const PINNED = `@4da/mcp-server@${VERSION}`;
-const ENTRY = { command: "npx", args: [PINNED] };
+/** npx's own options before the pinned package (setup.ts NPX_OPTIONS). */
+const NPX = ["-y", "--prefer-offline"];
+const ENTRY = { command: "npx", args: [...NPX, PINNED] };
 const VSCODE_ENTRY = { type: "stdio", ...ENTRY };
 
 /** Entries a user wrote by hand, each a different way of running the server. */
@@ -48,10 +50,10 @@ describe("the command setup writes", () => {
       const home = platform === "win32" ? "C:\\Users\\u" : "/home/u";
       for (const target of editorTargets({ platform, env: {}, home })) {
         expect(target.entry.command, target.name).toBe("npx");
-        expect(target.entry.args, target.name).toEqual([PINNED]);
+        expect(target.entry.args, target.name).toEqual([...NPX, PINNED]);
       }
     }
-    expect(CLAUDE_CODE_COMMAND).toBe(`claude mcp add --scope user 4da -- npx ${PINNED}`);
+    expect(CLAUDE_CODE_COMMAND).toBe(`claude mcp add --scope user 4da -- npx -y --prefer-offline ${PINNED}`);
   });
 
   it("pins whatever version it is given, and writes nothing when the version is unknown", () => {
@@ -68,7 +70,7 @@ describe("the command setup writes", () => {
 
       const pinned = runSetup({ version: "9.8.7" }, ctx, () => {});
       expect(pinned.exitCode).toBe(0);
-      expect(JSON.parse(readFileSync(path.join(home, ".cursor", "mcp.json"), "utf8")).mcpServers["4da"].args).toEqual(["@4da/mcp-server@9.8.7"]);
+      expect(JSON.parse(readFileSync(path.join(home, ".cursor", "mcp.json"), "utf8")).mcpServers["4da"].args).toEqual([...NPX, "@4da/mcp-server@9.8.7"]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -215,7 +217,7 @@ describe("runSetup against a temp home", () => {
     expect(result.written).toEqual([cursor, vscode]);
     expect(JSON.parse(readFileSync(cursor, "utf8"))).toEqual({ mcpServers: { "4da": ENTRY } });
     expect(JSON.parse(readFileSync(vscode, "utf8"))).toEqual({ servers: { "4da": VSCODE_ENTRY } });
-    expect(output()).toContain(`claude mcp add --scope user 4da -- npx ${PINNED}`);
+    expect(output()).toContain(`claude mcp add --scope user 4da -- npx -y --prefer-offline ${PINNED}`);
     expect(output()).toContain(`npx ${PINNED} --doctor`);
     // No command in the output is left without its version.
     expect(output()).not.toMatch(/@4da\/mcp-server(?!@\d)/);
@@ -266,7 +268,7 @@ describe("runSetup against a temp home", () => {
     expect(existsSync(`${cursor}.bak`)).toBe(false);
     expect(output()).toContain(`Would replace the 4da entry: ${cursor}`);
     expect(output()).toContain("was: npx -y @4da/mcp-server@6.2.7");
-    expect(output()).toContain(`now: npx ${PINNED}`);
+    expect(output()).toContain(`now: npx -y --prefer-offline ${PINNED}`);
 
     lines = [];
     const result = runSetup({ update: true }, ctx, log);
@@ -274,7 +276,7 @@ describe("runSetup against a temp home", () => {
     expect(result.written).toEqual([cursor]);
     expect(output()).toContain(`Replacing the 4da entry: ${cursor}`);
     expect(output()).toContain("was: npx -y @4da/mcp-server@6.2.7");
-    expect(output()).toContain(`now: npx ${PINNED}`);
+    expect(output()).toContain(`now: npx -y --prefer-offline ${PINNED}`);
     expect(output()).toContain(`Backup:  ${cursor}.bak`);
     expect(JSON.parse(readFileSync(cursor, "utf8"))).toEqual({
       mcpServers: { "4da": { ...ENTRY, env: { FOURDA_OFFLINE: "1" }, disabled: true }, github: { command: "gh-mcp" } },

@@ -16,8 +16,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 
-function run(payload: unknown): { status: number | null; stdout: string } {
-  const res = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(payload), encoding: "utf8", timeout: 20_000 });
+/** The advice after an edit (PostToolUse, FOURDA_GUARD=advise). */
+function run(payload: Record<string, unknown>): { status: number | null; stdout: string } {
+  const res = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ hook_event_name: "PostToolUse", ...payload }), encoding: "utf8", timeout: 20_000, env: { ...process.env, FOURDA_GUARD: "advise" } });
   return { status: res.status, stdout: res.stdout };
 }
 const advice = (stdout: string): string => (JSON.parse(stdout) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;

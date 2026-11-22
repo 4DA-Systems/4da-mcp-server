@@ -35,6 +35,7 @@ import { configureProxy } from "./proxy.js";
 import { checkLookupReachability } from "./doctor-network.js";
 import { pushAll } from "./array-utils.js";
 import { embeddingEndpoint, getEmbeddingConfig, isLocalProvider, isOfflineMode, modelTag } from "./embeddings.js";
+import { doctorUpdateCheck } from "./update-notice.js";
 
 interface Check {
   name: string;
@@ -248,6 +249,10 @@ export async function runDoctor(): Promise<void> {
   // 7. Lookups: OSV.dev and each registry asked once, through the proxy when one is set. A proxy
   // that parses but does not answer used to pass here (blind audit of e3aba98).
   pushAll(checks, await checkLookupReachability());
+
+  // 8. A newer release than this one, as a server session last read it (update-notice.ts; asks nothing itself).
+  const update = doctorUpdateCheck();
+  if (update) checks.push(update);
 
   // Print results
   const icons = { pass: "\u2713", warn: "!", fail: "\u2717" };

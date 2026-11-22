@@ -38,8 +38,8 @@ import {
 
 // Setup pins the version it runs as (a1119-tooling-setup.test.ts holds the pin itself).
 const PINNED = `@4da/mcp-server@${JSON.parse(readFileSync(path.resolve("package.json"), "utf8")).version}`;
-const ENTRY = { command: "npx", args: [PINNED] };
-const VSCODE_ENTRY = { type: "stdio", command: "npx", args: [PINNED] };
+const ENTRY = { command: "npx", args: ["-y", "--prefer-offline", PINNED] };
+const VSCODE_ENTRY = { type: "stdio", command: "npx", args: ["-y", "--prefer-offline", PINNED] };
 
 function byName(ctx: SetupContext): Record<string, { configPath: string; key: string; entry: Record<string, unknown> }> {
   return Object.fromEntries(editorTargets(ctx).map((t) => [t.name, t]));
