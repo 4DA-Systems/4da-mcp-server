@@ -96,9 +96,20 @@ describe("database discovery", () => {
     expect(FourDADatabase.validateDatabase().error ?? "").not.toContain(planted);
   });
 
-  it("an ABSOLUTE FOURDA_DB_PATH naming a new file in an existing directory is created as a standalone database, and says so once (the G7 harness)", () => {
+  it("an ABSOLUTE FOURDA_DB_PATH naming a missing file that is not the server's own store is refused, and nothing is created", () => {
+    const dir = path.join(base, "run", "elsewhere");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "4da.db");
+    process.env.FOURDA_DB_PATH = file;
+    expect(() => new FourDADatabase()).toThrow(/there is no database at .*Nothing was created/);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(FourDADatabase.validateDatabase(process.env.FOURDA_DB_PATH)).toMatchObject({ valid: false, standalone: false });
+  });
+
+  it("FOURDA_DB_PATH naming the server's own store is created there, and says so once (the G7 harness sets both)", () => {
     const home = path.join(base, "run", "server-home");
     fs.mkdirSync(home, { recursive: true });
+    process.env.FOURDA_MCP_HOME = home;
     const file = path.join(home, "standalone.db");
     process.env.FOURDA_DB_PATH = file;
     const v = FourDADatabase.validateDatabase(process.env.FOURDA_DB_PATH);

@@ -711,8 +711,11 @@ async function main() {
     console.error(`  Dependency tools (${[...DATABASE_FREE_TOOLS].join(", ")}) still run, without a database.`);
   }
 
-  if (validation.valid) {
-    console.error(`[4DA] Database validated — ${validation.tables?.length ?? 0} tables found`);
+  if (validation.valid && validation.standalone) {
+    // The own store's schema is completed by the first open, whatever a killed or concurrent first start left.
+    console.error(`[4DA] Standalone mode: the server's own database is ${validation.path}.`);
+  } else if (validation.valid) {
+    console.error(`[4DA] The 4DA app's database: ${validation.path} (${validation.tables?.length ?? 0} tables, read-only).`);
   } else if (validation.standalone) {
     // No existing DB — standalone mode will create one on first tool call
     console.error(`[4DA] No existing database found — standalone mode enabled.`);
