@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "about": "Public projects at old tags with many known advisories, for bench/plan-exec/run.mjs: each is cloned at its tag (the commit is checked), planned, the plan run top to bottom with package-manager scripts disabled, and rescanned. The 14 the 2026-11-23 audit executed (Track B). `dir` is the project inside the repository; `tools` replaces a package-manager command with a pinned one (a project's own pinned pnpm 7.x crashes on Node 22; yarn berry runs from corepack at the project's version, never from its checked-in release).",
+  "projects": [
+    { "id": "http-server", "repo": "https://github.com/http-party/http-server", "tag": "v14.1.1", "commit": "af0ac3e4b9bd5fff55337aee32bf37f6116c7b4f", "dir": ".", "package_manager": "npm" },
+    { "id": "nodemon", "repo": "https://github.com/remy/nodemon", "tag": "v2.0.20", "commit": "e099e91cb6ff9cbb7912af86d22b91cd855a1ad0", "dir": ".", "package_manager": "npm" },
+    { "id": "fastapi-frontend", "repo": "https://github.com/fastapi/full-stack-fastapi-template", "tag": "0.7.1", "commit": "7e5ca88dc26278289bddc0e50432c6c8e01d699e", "dir": "frontend", "package_manager": "npm" },
+    { "id": "ni", "repo": "https://github.com/antfu/ni", "tag": "v0.18.8", "commit": "769dfa34f451b761d283792155efffa21a4a3a6d", "dir": ".", "package_manager": "pnpm 7 (lockfile 5.4)", "tools": { "pnpm": ["npx", "-y", "pnpm@7.33.7"] } },
+    { "id": "eslint-config", "repo": "https://github.com/antfu/eslint-config", "tag": "v0.34.0", "commit": "a0f388b4a91df4ba8abfae799b05e49434ad1f4c", "dir": ".", "package_manager": "pnpm 7 workspace", "tools": { "pnpm": ["npx", "-y", "pnpm@7.33.7"] } },
+    { "id": "h3", "repo": "https://github.com/unjs/h3", "tag": "v1.12.0", "commit": "112fa338ef5bbde6207f3317d2ef51f0e52a59fa", "dir": ".", "package_manager": "pnpm 9 workspace", "tools": { "pnpm": ["npx", "-y", "pnpm@9.3.0"] } },
+    { "id": "zustand", "repo": "https://github.com/pmndrs/zustand", "tag": "v4.1.4", "commit": "c2248fd56ae225f80c757eb029514eddffaee2e5", "dir": ".", "package_manager": "yarn classic (2 lockfiles)", "tools": { "yarn": ["npx", "-y", "yarn@1.22.22"] } },
+    { "id": "reselect", "repo": "https://github.com/reduxjs/reselect", "tag": "v4.1.8", "commit": "afa4315a9e0d2636feff14373bbdfc5c02474c1e", "dir": ".", "package_manager": "yarn berry 3.2.4", "tools": { "yarn": ["corepack", "yarn@3.2.4"] } },
+    { "id": "fd", "repo": "https://github.com/sharkdp/fd", "tag": "v8.4.0", "commit": "c47501ef7ccb3a2f3a0e99b089d16bb3b3d94f60", "dir": ".", "package_manager": "cargo" },
+    { "id": "bat", "repo": "https://github.com/sharkdp/bat", "tag": "v0.22.1", "commit": "e5d95796141a719e208208182a5d3c2090a009c6", "dir": ".", "package_manager": "cargo" },
+    { "id": "fastapi-backend", "repo": "https://github.com/fastapi/full-stack-fastapi-template", "tag": "0.7.1", "commit": "7e5ca88dc26278289bddc0e50432c6c8e01d699e", "dir": "backend", "package_manager": "uv" },
+    { "id": "mcp-python-sdk", "repo": "https://github.com/modelcontextprotocol/python-sdk", "tag": "v1.1.0", "commit": "e4e4954b66e969ca50d5bc3f958eb2a5f5493356", "dir": ".", "package_manager": "uv workspace" },
+    { "id": "glow", "repo": "https://github.com/charmbracelet/glow", "tag": "v1.5.0", "commit": "19732a63035e316e3079d15030a573e89d7115cf", "dir": ".", "package_manager": "go" },
+    { "id": "fzf", "repo": "https://github.com/junegunn/fzf", "tag": "0.35.1", "commit": "b55f5554871e548c9c00a49df7a92f980c0191c2", "dir": ".", "package_manager": "go" }
+  ]
+}
