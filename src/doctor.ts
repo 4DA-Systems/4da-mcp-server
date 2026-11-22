@@ -29,7 +29,7 @@ import {
   standaloneDbPath,
 } from "./db.js";
 import { closeServerCacheDb, getServerCacheDb, serverCacheState } from "./live/cache.js";
-import { NODE_SQLITE_MIN, sqliteDriverStatus } from "./sqlite-driver.js";
+import { NODE_SQLITE_MIN, openDatabase, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { checkLookupReachability } from "./doctor-network.js";
@@ -109,6 +109,8 @@ function ownStoreCheck(standaloneMode: boolean): Check {
   if (!standaloneMode && !fs.existsSync(own)) {
     return { name, status: "pass", detail: `${own}: not created (the database in use is another; this one is made only for a record the app's schema cannot hold)` };
   }
+  // What was there before the open completes it: said, so a repair is never silent.
+  const before = emptyStoreState(own);
   let db: FourDADatabase | null = null;
   try {
     db = new FourDADatabase(own);
@@ -129,7 +131,41 @@ function ownStoreCheck(standaloneMode: boolean): Check {
   const deep = FourDADatabase.validateDatabase(own, { deep: true });
   if (!deep.valid) return { name, status: "fail", detail: `${own}: ${deep.error ?? "cannot be read"}` };
   const role = standaloneMode ? "" : " (beside the app's database, for records its schema cannot hold)";
-  return { name, status: "pass", detail: `${own}: ${deep.tables?.length ?? 0} tables, ready${role}` };
+  const ready = `${deep.tables?.length ?? 0} tables, ready${role}`;
+  if (before) {
+    return {
+      name,
+      status: "warn",
+      detail:
+        `${own} ${before} when this check started (a first start stopped while it created the file, or a file put there by hand); ` +
+        `this check completed it in place, as a tool call would: ${ready}. Anything that file was meant to hold is not in it.`,
+    };
+  }
+  return { name, status: "pass", detail: `${own}: ${ready}` };
+}
+
+/**
+ * "was empty (0 bytes)" or "had no tables" for an existing own store with nothing in it; null
+ * when it is missing (a first start creates it), has tables, or cannot be read (the open reports that).
+ */
+function emptyStoreState(file: string): string | null {
+  let size: number;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    return null;
+  }
+  if (size === 0) return "was empty (0 bytes)";
+  let raw: ReturnType<typeof openDatabase> | null = null;
+  try {
+    raw = openDatabase(file, { readonly: true, fileMustExist: true });
+    const row = raw.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table'").get() as { c: number | bigint } | undefined;
+    return row && Number(row.c) === 0 ? "had no tables" : null;
+  } catch {
+    return null;
+  } finally {
+    raw?.close();
+  }
 }
 
 function cacheCheck(): Check {
