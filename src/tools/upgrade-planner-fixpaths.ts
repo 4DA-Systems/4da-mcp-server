@@ -806,11 +806,20 @@ async function refreshOrUpstream(input: FixPathInput, sources: FixPathSources, l
         step.reasons.push(`${FIX_PATH_UNDETERMINED}${move.text}`);
         return true;
       }
-      step.action = "upgrade_parent";
-      step.parentUpgrades = move.upgrades;
       delete step.refreshCommands;
+      if (move.kind === "move" && move.refresh) {
+        // Every blocking parent moves by its own refresh: a lockfile refresh, never a parent upgrade (as for npm, M7).
+        step.action = "lockfile_refresh";
+        const commands: Array<{ dir: string; command: string }> = [];
+        for (const u of move.upgrades) for (const c of u.refreshCommands ?? []) if (!commands.some((x) => x.dir === c.dir && x.command === c.command)) commands.push(c);
+        step.refreshCommands = commands;
+        delete step.parentUpgrades;
+      } else {
+        step.action = move.kind === "unverified" ? "upgrade_parent_unverified" : "upgrade_parent";
+        step.parentUpgrades = move.upgrades;
+      }
       const at = step.reasons.findIndex((r) => TRANSITIVE_REASON.test(r));
-      const text = `Transitive dependency: ${move.text}`;
+      const text = `Transitive dependency${move.kind === "unverified" ? ", not verified" : ""}: ${move.text}`;
       if (at >= 0) step.reasons[at] = text;
       else step.reasons.push(text);
       return true;

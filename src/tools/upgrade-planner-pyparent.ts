@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * A PyPI transitive copy whose blocking parent is the project's own dependency.
+ * A PyPI transitive copy whose blocking parent has a release that admits the fix.
  *
  * requests 2.25.1 requires idna "<3", so no refresh reaches idna 3.15. When the project declares
  * requests itself, that is not something to wait for: a release of requests that admits the fix is
  * the step, and the refresh of idna follows it (the new requirement still admits the locked copy,
  * and a lockfile keeps a copy that satisfies it). This module finds that release.
+ *
+ * A blocking parent the project does not declare moves by its own lockfile refresh when everything
+ * that requires it admits the release a refresh resolves it to, and that release admits the fix:
+ * httpcore 1.0.5 holds h11 "<0.15", httpx 0.27.2 requires "httpcore==1.*", and httpcore 1.0.9
+ * requires h11 ">=0.16", so `uv lock --upgrade-package httpcore` moves both (uv, checked
+ * 2026-11-23). When what requires it holds it below every release that admits the fix, the release
+ * is named and the row says what holds it; no command is given.
  *
  * A parent release is named only when everything it rests on was read: the parent's release list,
  * its own advisories (confirmed by OSV.dev's batch query, as every list-based claim is), the
@@ -21,7 +28,7 @@ import type { FixPathSources } from "../live/fix-paths.js";
 import { listConfirmed } from "../live/batch-confirm.js";
 import { normalizePythonName } from "../live/lockfile-parsers-pygo.js";
 import { advisoryAffects, cleanReleases, isPrereleaseVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
-import { lowestPython, pythonRefreshCommand, pythonSpecAdmits, requirementsOnGated } from "../live/pygo-parents.js";
+import { compiledParents, lowestPython, pythonLockParents, pythonRefreshCommand, pythonSpecAdmits, requirementsOnGated } from "../live/pygo-parents.js";
 import { pypiCompileCommand } from "../live/pypi-advice.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { compareVersions } from "../live/version-compare.js";
@@ -37,12 +44,29 @@ const MAX_PROBES = 6;
 const CONFIRM_MS = 5_000;
 
 export type PyParentOutcome =
-  /** Every blocking parent is the project's own and has a release that admits the fix. */
-  | { kind: "move"; upgrades: ParentUpgrade[]; text: string }
-  /** The project's own parent blocks, and whether a release of it admits the fix could not be read. */
+  /**
+   * Every blocking parent moves to a release that admits the fix: the project's own by its upgrade,
+   * any other by its own lockfile refresh. `refresh` when every one moves by a refresh.
+   */
+  | { kind: "move"; upgrades: ParentUpgrade[]; text: string; refresh?: true }
+  /** A release of every blocking parent admits the fix, but what requires one of them holds it below that release. */
+  | { kind: "unverified"; upgrades: ParentUpgrade[]; text: string }
+  /** A parent blocks, and whether a release of it admits the fix could not be read. */
   | { kind: "undetermined"; text: string }
-  /** Not the project's to move, or no release read admits the fix: the caller's wording stands. */
+  /** No release read of a blocking parent admits the fix: the caller's wording stands. */
   | null;
+
+/** How a blocking parent the project does not declare reaches a release that admits the fix. */
+interface ParentRoute {
+  /** The commands that refresh it, per lockfile directory; absent when what requires it holds it back. */
+  refresh?: Array<{ dir: string; command: string }>;
+  /** What requires it, in words ("httpx 0.27.2 requires httpcore "==1.*""). */
+  holders: string;
+  /** True when one package requires it. */
+  one: boolean;
+  /** When it cannot move by a refresh: why. */
+  held?: string;
+}
 
 interface Picked {
   version: string;
@@ -80,11 +104,12 @@ export async function pythonParentMove(args: {
     b,
     decl: direct.find((d) => b.parentVersion !== null && normalizePythonName(d.name) === normalizePythonName(b.parent) && d.version === b.parentVersion),
   }));
-  // A parent the project does not declare is moved by whatever brings it in, which is not read here.
-  if (owned.some((o) => !o.decl)) return null;
+  // The project's own requirement is the one that excludes it: not a parent to move.
+  if (owned.some((o) => o.b.parentVersion === null)) return null;
 
   const blockedWords = `${found.blocking.slice(0, 3).map((b) => label(b, pkg)).join(", ")}${found.blocking.length > 3 ? ` and ${found.blocking.length - 3} more` : ""}, which excludes ${pkg} ${target}`;
-  const undetermined = (why: string): PyParentOutcome => ({ kind: "undetermined", text: `${blockedWords}, so a lockfile refresh cannot reach it; whether a newer release of what this project declares admits it was not established (${why})` });
+  const ofWhat = owned.every((o) => o.decl) ? "what this project declares" : "the blocking parent";
+  const undetermined = (why: string): PyParentOutcome => ({ kind: "undetermined", text: `${blockedWords}, so a lockfile refresh cannot reach it; whether a newer release of ${ofWhat} admits it was not established (${why})` });
 
   const facts = await sources.releaseFacts("PyPI", pkg).catch(() => null);
   if (!facts) return undetermined(`the registry gave no answer for the releases of ${pkg}`);
@@ -96,11 +121,20 @@ export async function pythonParentMove(args: {
   if (!onProjectPython(facts.requiresPython?.[target])) return null;
 
   const picks = new Map<PyEdge, Picked>();
+  const routes = new Map<PyEdge, ParentRoute>();
   for (const { b, decl } of owned) {
-    const picked = await admittingRelease(sources, intel, decl!.name, b.parentVersion!, pkg, target, onProjectPython);
-    if (picked === null) return null;
-    if (typeof picked === "string") return undetermined(picked);
-    picks.set(b, picked);
+    if (decl) {
+      const picked = await admittingRelease(sources, intel, decl.name, b.parentVersion!, pkg, target, onProjectPython);
+      if (picked === null) return null;
+      if (typeof picked === "string") return undetermined(picked);
+      picks.set(b, picked);
+      continue;
+    }
+    const routed = await transitiveParentRoute(sources, intel, found, b, pkg, target, onProjectPython);
+    if (routed === null) return null;
+    if (typeof routed === "string") return undetermined(routed);
+    picks.set(b, routed.picked);
+    routes.set(b, routed.route);
   }
 
   // What a refresh resolves the package to once each blocking parent holds its new requirement.
@@ -133,9 +167,26 @@ export async function pythonParentMove(args: {
   const texts: string[] = [];
   for (const { b, decl } of owned) {
     const picked = picks.get(b)!;
-    const name = decl!.name;
     const from = b.parentVersion!;
     const breaking = computeSemverDistance(from, picked.version)?.label === "major";
+    const route = routes.get(b);
+    if (!decl && route) {
+      const requirement = picked.specs.length > 0 ? picked.specs.join(" or ") : null;
+      const admits = picked.specs.length > 0 ? `whose requirement "${picked.specs.join('" or "')}" admits ${pkg} ${target}` : `that no longer requires ${pkg}`;
+      if (route.refresh) {
+        const commands = [...route.refresh, ...refreshes.filter((r) => !route.refresh!.some((x) => x.dir === r.dir && x.command === r.command))];
+        upgrades.push({ parent: b.parent, from, to: picked.version, breaking, requirement, resolvesTo, levers: [], refreshCommands: commands, refreshOnly: true });
+        texts.push(
+          `${label(b, pkg)}, which excludes ${pkg} ${target}; ${b.parent} is not declared by this project, and ${route.holders}, which ${route.one ? "admits" : "all admit"} ${b.parent} ${picked.version}, the newest ${b.parent} release ${route.one ? "it admits" : "they admit"} (clear of ${b.parent}'s own advisories), ${admits}: a lockfile refresh of ${b.parent} moves it there, and nothing this project declares has to be upgraded (${route.refresh.map((c) => `\`${c.command}\` in ${c.dir}`).join("; ")})`,
+        );
+      } else {
+        upgrades.push({ parent: b.parent, from, to: picked.version, breaking, requirement, resolvesTo, levers: [], leverUnknown: route.held ?? route.holders });
+        const which = picked.smallest ? `the smallest ${b.parent} release` : `the newest ${b.parent} release (the ones between were not all read)`;
+        texts.push(`${label(b, pkg)}, which excludes ${pkg} ${target}; ${b.parent} ${picked.version} is ${which} clear of ${b.parent}'s own advisories ${admits}, but ${route.held}`);
+      }
+      continue;
+    }
+    const name = decl!.name;
     const lever: ParentLever = { name, version: from, to: picked.version, breaking, ...args.declaredFixes(name, from, picked.version, decl!.sourceDirs ?? []) };
     upgrades.push({
       parent: name,
@@ -161,6 +212,12 @@ export async function pythonParentMove(args: {
       `${label(b, pkg)}, which excludes ${pkg} ${target}; ${name} is this project's own dependency, and ${name} ${picked.version} is ${which} clear of ${name}'s own advisories ${admits}: upgrade ${name} to ${picked.version}${breaking ? " (a major upgrade)" : ""}${how}${python}`,
     );
   }
+  const held = [...routes.values()].some((r) => !r.refresh);
+  const moveWord = held
+    ? `moving ${[...new Set(owned.map((o) => o.b.parent))].join(" and ")}`
+    : owned.some((o) => o.decl)
+      ? "the upgrade itself"
+      : "the refresh itself";
   const tail =
     after.length === 0
       ? `; nothing else requires ${pkg}, so it leaves the lockfile with that upgrade`
@@ -168,8 +225,85 @@ export async function pythonParentMove(args: {
         ? `; ${pkg} ${installed} still satisfies the new requirement, and a lockfile keeps a copy that satisfies it, so then ${
             refreshes.length > 0 ? `run ${refreshes.map((c) => `\`${c.command}\` in ${c.dir}`).join("; ")}` : `refresh the lockfile entry for ${pkg}`
           } (a refresh resolves it to ${resolvesTo})`
-        : `; the new requirement excludes ${pkg} ${installed}, so the upgrade itself moves it (a fresh resolve picks ${resolvesTo})`;
-  return { kind: "move", upgrades, text: `${texts.join("; ")}${tail}` };
+        : `; the new requirement excludes ${pkg} ${installed}, so ${moveWord} moves it (a fresh resolve picks ${resolvesTo})`;
+  const text = `${texts.join("; ")}${tail}`;
+  if (held) return { kind: "unverified", upgrades, text: `${text}. No command is named and this is not counted as fixed: check what is named above` };
+  return { kind: "move", upgrades, text, ...(routes.size === owned.length ? { refresh: true as const } : {}) };
+}
+
+/**
+ * A blocking parent the project does not declare: the release a lockfile refresh of it resolves to
+ * (the newest one, clear of its own advisories, that everything requiring it admits) when that
+ * release admits the fix; else the smallest release that admits the fix, held back by what requires
+ * the parent. Null when no release read admits the fix; a string says what could not be read.
+ */
+async function transitiveParentRoute(
+  sources: FixPathSources,
+  intel: Intel,
+  found: PyBlocked,
+  b: PyEdge,
+  pkg: string,
+  target: string,
+  onProjectPython: (requires: string | undefined) => boolean,
+): Promise<{ picked: Picked; route: ParentRoute } | string | null> {
+  const parent = b.parent;
+  const from = b.parentVersion!;
+  const smallest = await admittingRelease(sources, intel, parent, from, pkg, target, onProjectPython);
+  if (smallest === null || typeof smallest === "string") return smallest;
+
+  // What requires the parent, with the requirement each puts on it, in every lockfile.
+  const holders: PyEdge[] = [];
+  for (const { dir, parents } of found.read) {
+    const read = parents.format === "compiled" ? compiledParents(dir, parent, from) : pythonLockParents(parents.file, parent, from);
+    if (!read || read.edges.length === 0) return `the lockfile does not show what requires ${parent} ${from}`;
+    for (const e of read.edges) {
+      let specs = e.specs;
+      let gated = e.gated === true;
+      if (specs === null && e.parentVersion !== null) {
+        const dist = await sources.pypiRequiresDist(e.parent, e.parentVersion).catch(() => null);
+        if (!dist) return `the registry gave no answer for what ${e.parent} ${e.parentVersion} requires`;
+        const on = requirementsOnGated(dist, parent);
+        specs = on.specs.length > 0 ? on.specs : null;
+        gated ||= on.gated;
+      }
+      if (specs === null) return `what ${e.parent}${e.parentVersion ? ` ${e.parentVersion}` : ""} requires of ${parent} could not be read`;
+      if (!holders.some((x) => x.parent === e.parent && x.parentVersion === e.parentVersion)) holders.push({ parent: e.parent, parentVersion: e.parentVersion, specs, gated });
+    }
+  }
+  const holderWords = holders
+    .slice(0, 3)
+    .map((h) => `${h.parentVersion === null ? "the project" : `${h.parent} ${h.parentVersion}`} requires ${parent} "${h.specs.join('" or "') || "any version"}"`)
+    .join(", ");
+  const holdersText = `${holderWords}${holders.length > 3 ? ` and ${holders.length - 3} more` : ""}`;
+
+  // A refresh resolves the parent to the newest release they all admit (on the project's lowest Python).
+  const [facts, listed] = await Promise.all([sources.releaseFacts("PyPI", parent).catch(() => null), sources.packageAdvisories("PyPI", parent).catch(() => null)]);
+  if (!facts || !listed) return `the registry or OSV.dev gave no answer for ${parent}`;
+  const resolves = facts.versions
+    .filter((v) => !isPrereleaseVersion(v, "PyPI") && compareVersions(v, from, "PyPI") > 0 && holders.every((h) => edgeAdmits(h, v)) && onProjectPython(facts.requiresPython?.[v]))
+    .sort((x, y) => compareVersions(y, x, "PyPI"))[0];
+  const ownClean = cleanReleases(listed, "PyPI", facts.versions, from).clean;
+  if (resolves && ownClean(resolves)) {
+    const dist = resolves === smallest.version ? null : await sources.pypiRequiresDist(parent, resolves).catch(() => null);
+    if (resolves !== smallest.version && !dist) return `the registry gave no answer for what ${parent} ${resolves} requires`;
+    const on = dist ? requirementsOnGated(dist, pkg) : { specs: smallest.specs, gated: smallest.gated };
+    if (on.specs.length === 0 || edgeAdmits(on, target)) {
+      const root = intel.getProjectRoot() ?? process.cwd();
+      const refresh: Array<{ dir: string; command: string }> = [];
+      for (const { dir, parents } of found.read) {
+        const command = parents.format === "compiled" ? pypiCompileCommand(dir, parent, from, resolves) : pythonRefreshCommand(parents.format, parent);
+        if (!command) return `no command is named for ${parent} in ${relativeDir(dir, root)}`;
+        refresh.push({ dir: relativeDir(dir, root), command });
+      }
+      return { picked: { version: resolves, specs: on.specs, gated: on.gated, smallest: false, needsPython: null }, route: { refresh, holders: holdersText, one: holders.length === 1 } };
+    }
+  }
+  const excluding = holders.filter((h) => !edgeAdmits(h, smallest.version));
+  const held =
+    excluding.length > 0
+      ? `${excluding.slice(0, 3).map((h) => `${h.parentVersion === null ? "the project" : `${h.parent} ${h.parentVersion}`} requires ${parent} "${h.specs.join('" or "') || "any version"}"`).join(", ")}, which excludes ${parent} ${smallest.version}, so a refresh cannot move ${parent} there: ${[...new Set(excluding.map((h) => h.parent))].join(", ")} has to move first`
+      : `a refresh of ${parent} resolves it to ${resolves ?? "no newer release"}${resolves ? `, which ${ownClean(resolves) ? `does not admit ${pkg} ${target}` : `an advisory of ${parent} affects`}` : ""}, so a refresh alone does not reach the fix (${holdersText})`;
+  return { picked: smallest, route: { holders: holdersText, one: holders.length === 1, held } };
 }
 
 /**
