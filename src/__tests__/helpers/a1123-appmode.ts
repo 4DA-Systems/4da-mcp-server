@@ -20,16 +20,53 @@ export const RELEASED_V103_SCHEMA = path.join(repo, "contract", "released", "v1.
 export { serverEntry };
 
 /** A database file holding the app schema in `schemaFile`, then whatever `seed` writes. vec0 tables are plain stubs (loader). */
-export function buildAppDb(file: string, schemaFile: string, seed?: (raw: Database.Database) => void): { vecTables: string[]; schemaVersion: number | null } {
+export function buildAppDb(
+  file: string,
+  schemaFile: string,
+  seed?: (raw: Database.Database, loaded: { vecTables: string[]; schemaVersion: number | null }) => void,
+): { vecTables: string[]; schemaVersion: number | null } {
   const raw = new Database(file);
   raw.pragma("synchronous = OFF");
   let loaded: { vecTables: string[]; schemaVersion: number | null } = { vecTables: [], schemaVersion: null };
   raw.transaction(() => {
     loaded = loadAppSchema(raw, fs.readFileSync(schemaFile, "utf-8")) as typeof loaded;
-    seed?.(raw);
+    seed?.(raw, loaded);
   })();
   raw.close();
   return loaded;
+}
+
+/** A value of the column's declared type that most columns accept (as the app-schema contract test seeds). */
+function seedValue(name: string, declared: string): unknown {
+  const type = declared.toUpperCase();
+  const n = name.toLowerCase();
+  if (type.includes("INT")) return 1;
+  if (type.includes("REAL") || type.includes("FLOA") || type.includes("DOUB") || type.includes("NUM")) return 0.5;
+  if (type.includes("BLOB")) return Buffer.alloc(4);
+  if (/(_at|_date|date|time|timestamp|_until|_since)$/.test(n)) return "2026-10-01 00:00:00";
+  if (/(json|tags|ids|data|metadata|payload|evidence|items|list|details|steps|signals|topics|keywords)$/.test(n)) return "[]";
+  return "seed";
+}
+
+/** One row in every ordinary table except `skip`, so queries run past their "no rows" early returns. */
+export function seedEveryTable(db: Database.Database, skip: Set<string>): void {
+  db.pragma("foreign_keys = OFF");
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND sql NOT LIKE 'CREATE VIRTUAL%'").all() as { name: string }[];
+  for (const { name } of tables) {
+    if (skip.has(name) || name.startsWith("sqlite_")) continue;
+    const cols = db.pragma(`table_info("${name}")`) as { name: string; type: string; notnull: number; dflt_value: unknown; pk: number }[];
+    const attempt = (include: (c: (typeof cols)[number]) => boolean): boolean => {
+      const chosen = cols.filter(include);
+      try {
+        if (chosen.length === 0) db.prepare(`INSERT INTO "${name}" DEFAULT VALUES`).run();
+        else db.prepare(`INSERT INTO "${name}" (${chosen.map((c) => `"${c.name}"`).join(", ")}) VALUES (${chosen.map(() => "?").join(", ")})`).run(...chosen.map((c) => seedValue(c.name, c.type)));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (!attempt((c) => c.dflt_value === null && !(c.pk && c.type.toUpperCase() === "INTEGER"))) attempt((c) => c.notnull === 1 && c.dflt_value === null);
+  }
 }
 
 /** One `project_dependencies` row as the app writes it. */
