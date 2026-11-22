@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import { executeGetActionableSignals } from "../tools/get-actionable-signals.js";
 import { executeVulnerabilityScan } from "../tools/vulnerability-scan.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { adv, appDb, cargoLock, emptyNetwork, fixedIn, liveFor, npmProject, projectDir, stubNetwork, write, type Network } from "./helpers/a1123-advice.js";
+import { adv, appDb, emptyNetwork, fixedIn, liveFor, npmProject, projectDir, stubNetwork, zipUnderDocx, type Network } from "./helpers/a1123-advice.js";
 
 let dir: string;
 let net: Network;
@@ -27,31 +27,9 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** zip 8.6.0 held by docx-rs 0.4.22: eight advisories, seven fixed in 9.0.0 and one in 9.0.5. */
-function zipUnderDocx() {
-  net.advisories.zip = [
-    ...["GHSA-9hj8-73fh-9963", "GHSA-hjqx-j4rw-g7xv", "GHSA-q7v9-x93c-xqv3", "RUSTSEC-2026-0367", "RUSTSEC-2026-0368", "GHSA-8hxf-qr8p-62x4", "RUSTSEC-2026-0430"].map((id) =>
-      adv(id, "zip", fixedIn("9.0.0"), "crates.io", "HIGH"),
-    ),
-    adv("GHSA-m665-v7pm-7grj", "zip", fixedIn("9.0.5"), "crates.io", "CRITICAL"),
-  ];
-  net.crates.zip = [{ vers: "8.6.0" }, { vers: "9.0.0" }, { vers: "9.0.5" }, { vers: "9.5.1" }];
-  net.crates["docx-rs"] = [{ vers: "0.4.22", deps: [{ name: "zip", req: "^8.6.0" }] }];
-  write(dir, "Cargo.toml", '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\ndocx-rs = "0.4"\n');
-  write(
-    dir,
-    "Cargo.lock",
-    cargoLock([
-      { name: "app", version: "0.1.0", deps: ["docx-rs"], root: true },
-      { name: "docx-rs", version: "0.4.22", deps: ["zip"] },
-      { name: "zip", version: "8.6.0" },
-    ]),
-  );
-}
-
 describe("zip 8.6.0 under docx-rs: the signals and the briefing give the scan's instruction", () => {
   it("every zip signal carries the scan's blocked-upstream line, never the advisory's own 9.0.0", async () => {
-    zipUnderDocx();
+    zipUnderDocx(dir, net);
     stubNetwork(net);
     const li = await liveFor(dir);
 

@@ -248,9 +248,50 @@ function judgeVerdicts(db: FourDADatabase, ids: number[]): Map<number, number> {
   return out;
 }
 
+/** The advisory ids a feed row of an advisory source stands for: its source id, and the `[ID]` its title starts with. */
+function feedAdvisoryIds(item: { source_id?: string | null; title: string }): string[] {
+  const ids = [item.source_id ?? "", /^\[([^\]\s]+)\]/.exec(item.title)?.[1] ?? ""].map((id) => id.trim().toUpperCase()).filter(Boolean);
+  return [...new Set(ids)];
+}
+
+const GRADES: Record<string, SignalPriority> = { critical: "critical", high: "high", moderate: "medium", medium: "medium", low: "low" };
+
+/**
+ * The advisory's own grade in the app's copy of OSV.dev (`osv_advisories.severity_label`), the
+ * highest over its records, or null when that copy has none: then the row keeps its stored grade.
+ */
+function ownGrade(db: FourDADatabase, ids: string[]): SignalPriority | null {
+  if (ids.length === 0 || !db.hasColumn("osv_advisories", "severity_label") || !db.hasColumn("osv_advisories", "advisory_id")) return null;
+  const aliases = db.hasColumn("osv_advisories", "aliases");
+  const live = db.hasColumn("osv_advisories", "withdrawn_at") ? " AND withdrawn_at IS NULL" : "";
+  const rank: Record<SignalPriority, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+  let best: SignalPriority | null = null;
+  try {
+    const stmt = db
+      .getRawDb()
+      .prepare(`SELECT severity_label AS label FROM osv_advisories WHERE (upper(advisory_id) = ?${aliases ? " OR upper(aliases) LIKE ? ESCAPE '\\'" : ""})${live}`);
+    for (const id of ids) {
+      const rows = (aliases ? stmt.all(id, `%"${id.replace(/[\\%_]/g, "\\$&")}"%`) : stmt.all(id)) as Array<{ label: string | null }>;
+      for (const row of rows) {
+        const grade = GRADES[(row.label ?? "").toLowerCase()];
+        if (grade && (best === null || rank[grade] > rank[best])) best = grade;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return best;
+}
+
+/** What an agent can do with an advisory-source row the project's scan did not report. */
+function advisoryRowAction(scanReady: boolean): string {
+  return scanReady
+    ? "Advisory record not matched to any installed version this project's vulnerability scan read: it may concern another project the 4DA app tracks (vulnerability_scan with that project's project_path checks it)."
+    : "Advisory record, NOT CHECKED against this project's installed versions (its vulnerability scan did not complete; see note): run vulnerability_scan.";
+}
+
 /** What an agent can do with a signal of this type and source. */
 function actionFor(type: SignalType, source: string): string {
-  if (ADVISORY_SOURCES.has(source)) return "Advisory record: run vulnerability_scan to see whether your installed versions are affected.";
   if (source === "crates_io" || source === "npm_registry" || source === "pypi" || source === "go_modules") {
     return "New release of a dependency: call upgrade_impact for what changed before bumping.";
   }
@@ -303,6 +344,11 @@ export async function executeGetActionableSignals(
 
   const signals: ClassifiedSignal[] = [];
   const verdicts = judgeVerdicts(db, items.map((item) => item.id));
+  // The project's scan first: a feed row about an advisory it found is that finding, reported once
+  // below at the scan's grade with the scan's instruction.
+  const { scan: vulnResult, block: scanBlock, note: scanNote } = await projectScan(liveIntel);
+  const clusters = vulnResult ? clusterVulnerabilities(vulnResult.vulnerabilities) : [];
+  const foundIds = new Set(clusters.flatMap((c) => c.ids.map((id) => id.toUpperCase())));
 
   for (const item of items) {
     // Only the pipeline's own classifications, and only when they can be
@@ -317,10 +363,15 @@ export async function executeGetActionableSignals(
     if (verdict !== undefined ? verdict < 0.5 : !structured) continue;
 
     const storedType = item.signal_type as SignalType;
-    let priority = normalizeStoredPriority(item.signal_priority);
+    const advisoryRow = ADVISORY_SOURCES.has(item.source_type);
+    const advisoryIds = advisoryRow ? feedAdvisoryIds(item) : [];
+    if (advisoryIds.some((id) => foundIds.has(id))) continue;
+    // An advisory record is graded by the advisory's own grade where the app's copy of it knows
+    // one, not by the feed's stamp (RUSTSEC-2026-0461, CVSS 7.5, was stamped critical).
+    let priority = (advisoryRow ? ownGrade(db, advisoryIds) : null) ?? normalizeStoredPriority(item.signal_priority);
     // A headline about security is not an advisory against your versions:
     // never above medium unless it comes from an advisory database.
-    if (storedType === "security_alert" && !ADVISORY_SOURCES.has(item.source_type) && (priority === "critical" || priority === "high")) {
+    if (storedType === "security_alert" && !advisoryRow && (priority === "critical" || priority === "high")) {
       priority = "medium";
     }
 
@@ -336,7 +387,7 @@ export async function executeGetActionableSignals(
       relevance_score: item.relevance_score,
       signal_type: storedType,
       signal_priority: priority,
-      action: actionFor(storedType, item.source_type),
+      action: advisoryRow ? advisoryRowAction(scanBlock.status === "ready") : actionFor(storedType, item.source_type),
       triggers: [],
       // The judge's verdict when there is one; a structured row carries none.
       confidence: verdict ?? (structured ? 0.5 : 0),
@@ -346,12 +397,11 @@ export async function executeGetActionableSignals(
 
   // Inject live vulnerability data as security_alert signals — one per
   // vulnerability (alias clusters), not one per OSV record.
-  const { scan: vulnResult, block: scanBlock, note: scanNote } = await projectScan(liveIntel);
   if (vulnResult && vulnResult.vulnerabilities.length > 0) {
     if (!params.signal_type || params.signal_type === "security_alert") {
       // Each finding's instruction is the scan's for that package version (scan-advice.ts).
       const advice = await scanAdvice(liveIntel, vulnResult);
-      for (const { representative: vuln, ids } of clusterVulnerabilities(vulnResult.vulnerabilities)) {
+      for (const { representative: vuln, ids } of clusters) {
         // The grade every surface shares (AD-046; twin of the app's
         // `osv::identity::scope_adjusted_urgency`), not the raw advisory tier:
         // a transitive of unknown scope read "CRITICAL: Sandbox Breakout" here

@@ -149,6 +149,32 @@ export function cargoLock(packages: Array<{ name: string; version: string; deps?
   ].join("\n");
 }
 
+/**
+ * zip 8.6.0 held by docx-rs 0.4.22 (4DA's own src-tauri): seven advisories fixed in 9.0.0 and
+ * GHSA-m665-v7pm-7grj, rated critical by the advisory, fixed in 9.0.5; docx-rs's newest release
+ * requires ^8.6.0, so the scan's verdict is blocked upstream.
+ */
+export function zipUnderDocx(dir: string, net: Network): void {
+  net.advisories.zip = [
+    ...["GHSA-9hj8-73fh-9963", "GHSA-hjqx-j4rw-g7xv", "GHSA-q7v9-x93c-xqv3", "RUSTSEC-2026-0367", "RUSTSEC-2026-0368", "GHSA-8hxf-qr8p-62x4", "RUSTSEC-2026-0430"].map((id) =>
+      adv(id, "zip", fixedIn("9.0.0"), "crates.io", "HIGH"),
+    ),
+    adv("GHSA-m665-v7pm-7grj", "zip", fixedIn("9.0.5"), "crates.io", "CRITICAL", { aliases: ["CVE-2026-115905", "RUSTSEC-2026-0548"] }),
+  ];
+  net.crates.zip = [{ vers: "8.6.0" }, { vers: "9.0.0" }, { vers: "9.0.5" }, { vers: "9.5.1" }];
+  net.crates["docx-rs"] = [{ vers: "0.4.22", deps: [{ name: "zip", req: "^8.6.0" }] }];
+  write(dir, "Cargo.toml", '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\ndocx-rs = "0.4"\n');
+  write(
+    dir,
+    "Cargo.lock",
+    cargoLock([
+      { name: "app", version: "0.1.0", deps: ["docx-rs"], root: true },
+      { name: "docx-rs", version: "0.4.22", deps: ["zip"] },
+      { name: "zip", version: "8.6.0" },
+    ]),
+  );
+}
+
 /** The live layer as the server builds it for `dir`: the project tree walked, live lookups on. */
 export async function liveFor(dir: string): Promise<LiveIntelligence> {
   const prior = process.env.FOURDA_OFFLINE;
