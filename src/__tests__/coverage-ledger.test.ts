@@ -103,8 +103,8 @@ describe("coverage ledger: what was not read is always said", () => {
       expect(result.total_dependencies_scanned).toBe(2);
       expect(result.total_vulnerable_packages).toBe(1);
       expect(result.vulnerable_packages[0]).toMatchObject({ package: "lodash", current_version: "4.17.20", source_dirs: ["backend"] });
-      // Everything found was read, so nothing says "partial"; the detailed answer labels what .gitignore lists.
-      expect(result.coverage).toBeUndefined();
+      // Everything found was read, so coverage says complete; the detailed answer labels what .gitignore lists.
+      expect(result.coverage).toMatchObject({ complete: true, lockfiles_read: 2 });
       const detailed = await scan({ response_format: "detailed" });
       expect(detailed._meta.resolution.lockfiles).toEqual(
         expect.arrayContaining([

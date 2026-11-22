@@ -275,7 +275,7 @@ describe("tools over a blocked OSV.dev", () => {
     const result = (await executeVulnerabilityScan(null, { project_path: dir }, intel())) as Record<string, unknown>;
     expect(result.summary).toBeUndefined();
     expect(result.total_vulnerable_packages).toBe(1);
-    expect(result.coverage).toBeUndefined();
+    expect(result.coverage).toMatchObject({ complete: true });
   });
 });
 

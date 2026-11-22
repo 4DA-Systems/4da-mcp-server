@@ -100,8 +100,8 @@ describe("project-tree bounds are wider and never silent", () => {
     const concise = conciseScanResult(detailed);
     expect(concise.coverage).toMatchObject({ complete: false, lockfiles_not_scanned: 1 });
     expect(concise.coverage!.note).toBe(detailed.coverage!.note);
-    // A complete scan carries no coverage block at all.
-    expect(formatScanResult(scan, undefined, { resolution: null, reResolvedThisCall: false, drift: [], includeDev: false }).coverage).toBeUndefined();
+    // A complete scan says so in its coverage block.
+    expect(formatScanResult(scan, undefined, { resolution: null, reResolvedThisCall: false, drift: [], includeDev: false }).coverage).toMatchObject({ complete: true });
   });
 });
 
