@@ -29,6 +29,12 @@ describe("a lowering", () => {
     expect(lowerings(before, after, inv({ "npm|.|vite": ["8.3.8"] }), inv({ "npm|.|vite": ["3.0.4"] }))).toEqual([{ key: "npm|.|vite", from: "8.3.8", to: "6.4.6", set_by: "earlier_step" }]);
   });
 
+  it("is not a copy that left with what required it while another line moved up (esbuild 0.15.18 platform packages after unbuild 3)", () => {
+    const before = inv({ "npm|.|esbuild-linux-64": ["0.14.53", "0.15.18"] });
+    const after = inv({ "npm|.|esbuild-linux-64": ["0.14.54"] });
+    expect(lowerings(before, after, new Map(), before)).toEqual([]);
+  });
+
   it("reads 0.x minors as lines", () => {
     expect(releaseLine("0.59.0")).toBe("0.59");
     expect(releaseLine("v1.2.3")).toBe("1");

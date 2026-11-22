@@ -136,7 +136,7 @@ describe("(f) every step and snippet names its directory", () => {
       ["web", 'npm pkg set "overrides.child=1.0.2"'],
       ["web", "npm install"],
     ]);
-    expect(result.run_order_note).toMatch(/1 of them force a version with an override written by `npm pkg set` \(child 1\.0\.0\)/);
+    expect(result.run_order_note).toMatch(/1 of them force a version with an override or resolution written by `npm pkg set` \(child 1\.0\.0\)/);
     for (const s of result.run_order) expect(typeof s.dir).toBe("string");
   });
 });

@@ -34,11 +34,15 @@ function project(header: string) {
 }
 
 describe("Yarn classic: one entry keyed by the declared range and transitive ones", () => {
-  it("gives the hand step that moves every range, not `yarn upgrade`", async () => {
+  it("gives the hand step that moves every range, and the exact resolution that does it, not `yarn upgrade`", async () => {
     project('"@babel/core@^7.11.6", "@babel/core@^7.12.3", "@babel/core@^7.19.6"');
     const { result, step } = await h.plan();
     const row = step("@babel/core");
-    expect(row.commands).toEqual([]);
+    // Every copy is on the 7.x line at or below the target: an exact resolution moves them all.
+    expect(row.commands).toEqual([
+      { dir: ".", run: 'npm pkg set "resolutions.@babel/core=7.20.0"' },
+      { dir: ".", run: "yarn install" },
+    ]);
     expect(row.upgradeInstructions).toEqual([{ dir: ".", instruction: 'delete every yarn.lock entry that resolves to @babel/core (keys "@babel/core@…" and alias keys "…@npm:@babel/core@…"), then run yarn install' }]);
     expect(row.reasons.join(" ")).toMatch(/yarn\.lock holds @babel\/core 7\.19\.6 under one entry keyed by 3 ranges/);
     expect(result.run_order.map((s: { run: string }) => s.run)).not.toContain("yarn upgrade @babel/core");

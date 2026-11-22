@@ -531,13 +531,17 @@ export function lowerings(before, after, earlier, initial) {
     const removed = [...b].filter((v) => !a.has(v));
     const added = [...a].filter((v) => !b.has(v));
     if (removed.length === 0 || added.length === 0) continue;
+    // Every added version only moves up a line the lockfile already held: the removed copies left
+    // with whatever required them (esbuild 0.15.18's platform packages, once nothing needed 0.15).
+    const top = (line) => [...b].filter((v) => releaseLine(v) === line).sort(compareLoose).at(-1);
+    if (added.every((v) => top(releaseLine(v)) !== undefined && compareLoose(v, top(releaseLine(v))) >= 0)) continue;
     for (const r of removed) {
       const below = added.filter((v) => compareLoose(v, r) < 0).sort(compareLoose);
       if (below.length === 0 || added.some((v) => compareLoose(v, r) >= 0)) continue;
       if ([...a].some((v) => releaseLine(v) === releaseLine(r) && compareLoose(v, r) >= 0)) continue;
-      const top = below.at(-1);
+      const lowest = below.at(-1);
       const setBy = earlier.get(k)?.has(r) ? "earlier_step" : initial.get(k)?.has(r) ? "installed" : "other";
-      out.push({ key: k, from: r, to: top, set_by: setBy });
+      out.push({ key: k, from: r, to: lowest, set_by: setBy });
     }
   }
   return out;

@@ -25,7 +25,10 @@ import { wildcardMatch } from "../live/glob-match.js";
 import { expandWorkspaces, memberNamesOf, pnpmYamlList } from "../live/js-manifests.js";
 import { normalizePythonName } from "../live/lockfile-parsers-pygo.js";
 import { tomlHeader, tomlKeyValue, tomlLines, tomlStrings } from "../live/private-hosts.js";
+import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.js";
 import { lowestPython, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { compareVersions } from "../live/version-compare.js";
+import { overrideCommandsOf, recordOverrideCommands } from "./upgrade-plan-overrides.js";
 
 /** "^" or "~" when `dir`/package.json declares `name` with that operator on a plain version, "" for an exact pin; null otherwise. */
 export function declaredNpmOperator(root: string, dir: string, name: string): string | null {
@@ -318,4 +321,65 @@ export function staleLocksNote(files: string[]): string {
   const shown = files.slice(0, 6);
   const more = files.length > shown.length ? ` and ${files.length - shown.length} more` : "";
   return `${shown.join(", ")}${more} ${files.length === 1 ? "is" : "are"} not read by uv (a uv workspace member's own lockfile: uv reads and writes the workspace root's): no step moves the copies ${files.length === 1 ? "it lists" : "they list"}, and deleting ${files.length === 1 ? "it" : "them"} is a hand step.`;
+}
+
+/** A version's release line: its major, or `0.minor` below 1.0. */
+function lineOf(v: string): string | null {
+  const m = /^v?(\d+)\.(\d+)/.exec(v);
+  return m ? (m[1] === "0" ? `0.${m[2]}` : m[1]) : null;
+}
+
+/** Every version a Yarn classic yarn.lock holds of `name` (alias entries left out); null for a Berry lockfile or one that cannot be read. */
+function yarnClassicVersions(lockfile: string, name: string): string[] | null {
+  const content = readText(lockfile);
+  if (content === null || /^__metadata:/m.test(content)) return null;
+  const out = new Set<string>();
+  for (const block of content.split(/\r?\n(?=\S)/)) {
+    const first = block.split(/\r?\n/, 1)[0] ?? "";
+    if (first.startsWith("#") || !first.trimEnd().endsWith(":")) continue;
+    const specs = yarnHeaderSpecs(first);
+    if (specs.some((s) => s.startsWith(`${name}@npm:`) || /@npm:/.test(s.slice(name.length + 1)))) return null;
+    if (!specs.some((s) => s.startsWith(`${name}@`))) continue;
+    const v = yarnBlockVersion(block);
+    if (!v) return null;
+    out.add(v);
+  }
+  return [...out];
+}
+
+const YARN_DELETE = /^delete every yarn\.lock entry that resolves to /;
+
+/**
+ * Yarn classic has no command that refreshes one package's entries: `yarn upgrade <transitive>`
+ * changed nothing on zustand's yarn.lock ("Saved 0 new dependencies", yarn 1.22.22, 2026-11-23), and
+ * for a declared one it re-resolves only the declared range. The in-range refresh the row gives is a
+ * hand edit (delete the entries, then `yarn install`). Where the lockfile holds the package on one
+ * release line only, every copy at or below the target, and every parent admits the target (the
+ * row's own finding), an exact resolution moves every copy to the target and nothing else:
+ * `npm pkg set "resolutions.<name>=<target>"`, then `yarn install`. It stays in package.json, which
+ * the row says. Anything else (another line, a newer copy, an alias) keeps the hand step.
+ */
+export function withYarnClassicResolutions(rows: Array<RunnableRow & { action: string }>, projectRoot: string): void {
+  for (const r of rows) {
+    if (r.ecosystem !== "npm" || !r.currentVersion || !r.targetVersion) continue;
+    if (r.action !== "lockfile_refresh" && r.action !== "upgrade_direct" && r.action !== "upgrade_parent") continue;
+    const manual = [
+      ...(r.refreshCommands ?? []).filter((c) => YARN_DELETE.test(c.command)).map((c) => c.dir),
+      ...(r.upgradeInstructions ?? []).filter((i) => YARN_DELETE.test(i.instruction)).map((i) => i.dir),
+      ...(r.parentUpgrades ?? []).flatMap((u) => (u.refreshCommands ?? []).filter((c) => YARN_DELETE.test(c.command)).map((c) => c.dir)),
+    ];
+    const dirs = [...new Set(manual)];
+    if (dirs.length === 0) continue;
+    const line = lineOf(r.targetVersion);
+    const ok = dirs.every((d) => {
+      const held = yarnClassicVersions(path.join(path.resolve(projectRoot, d), "yarn.lock"), r.package);
+      return held !== null && held.length > 0 && line !== null && held.every((v) => lineOf(v) === line && compareVersions(v, r.targetVersion!, "npm") <= 0);
+    });
+    if (!ok) continue;
+    recordOverrideCommands(r, dirs.map((dir) => ({ format: "yarn" as const, dir })), projectRoot, r.package, r.targetVersion, null);
+    const cmds = overrideCommandsOf(r);
+    if (cmds.length === 0) continue;
+    const why = `Yarn classic has no command that refreshes one package's yarn.lock entries; every ${r.package} copy ${dirs.length === 1 && dirs[0] === "." ? "the lockfile" : `the lockfile in ${dirs.join(", ")}`} holds is on the ${line}.x line at or below ${r.targetVersion}, so an exact resolution moves them all there and nothing else: ${cmds.map((c) => `\`${c.command}\`${c.dir === "." ? "" : ` in ${c.dir}`}`).join(", then ")} (the resolution stays in package.json; remove it once every parent's own release holds ${r.targetVersion} or later)`;
+    if (!r.reasons.includes(why)) r.reasons.push(why);
+  }
 }

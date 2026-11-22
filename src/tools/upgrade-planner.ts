@@ -54,7 +54,7 @@ import { registryQuote } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
-import { declaredNpmOperator, staleLocksNote, uvWorkspaces, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { declaredNpmOperator, staleLocksNote, uvWorkspaces, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -849,6 +849,7 @@ async function executeStandalonePlanner(
   const uvSpaces = uvWorkspaces(root);
   const staleUvLocks = withUvWorkspaceLocks(limited, root, uvSpaces);
   withoutOwnPackageUpgrades(limited, workspaceOwnNames(root, uvSpaces));
+  withYarnClassicResolutions(limited, root);
   await withPythonSupport(limited, root, liveIntel.getFixPathSources());
   // Every command a row names, as data, from the fields its words were built from (all passes done).
   attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));

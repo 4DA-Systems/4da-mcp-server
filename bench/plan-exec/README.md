@@ -23,7 +23,9 @@ in `thresholds.json`.
   copies an earlier step already moved had nothing left to do and is not counted.
 - Lowered: the step removed a version, added only lower ones, and left no version at or above it
   on its release line (the major, or `0.minor`). Copies of one package on several lines that each
-  move up their own line onto versions the lockfile already held are not a lowering.
+  move up their own line onto versions the lockfile already held are not a lowering, nor is a step
+  whose every added version moves up a line the lockfile already held (the removed copies left with
+  what required them). The cost: a copy that drops onto the top of a line already held is not seen.
 - Each step records `moved` (its copies it moved) and `changes` (per lockfile, the versions of the
   packages it serves that went and came).
 

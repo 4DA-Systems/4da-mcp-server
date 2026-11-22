@@ -91,7 +91,7 @@ export function rowCommands(row: CommandRow, ctx: CommandContext): PlanCommand[]
   for (const u of row.parentUpgrades ?? []) for (const c of u.refreshCommands ?? []) add(c.dir, c.command);
   for (const c of row.refreshCommands ?? []) add(c.dir, c.command);
   for (const c of compiledCommands(row, ctx.root)) add(c.dir, c.command);
-  if (row.action === "override_or_replace" && row.breaking !== true) for (const c of overrideCommandsOf(row)) add(c.dir, c.command);
+  if (row.action !== "override_or_replace" || row.breaking !== true) for (const c of overrideCommandsOf(row)) add(c.dir, c.command);
   if (row.installFix) for (const dir of ctx.installDirs && ctx.installDirs.length > 0 ? ctx.installDirs : ["."]) add(dir, row.installFix);
   return out;
 }
@@ -148,8 +148,10 @@ export interface SequencedRow extends CommandRow {
 function wholeByCommand(r: SequencedRow): boolean {
   if (r.commands.length === 0) return false;
   const refreshes = [...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.refreshCommands ?? [])];
-  if (refreshes.some((c) => isManualStep(c.command))) return false;
-  if ((r.upgradeInstructions ?? []).some((i) => !r.commands.some((c) => c.dir === i.dir && i.instruction.includes(c.run)))) return false;
+  // A hand refresh is covered where the row's resolution commands run in that directory (upgrade-plan-runnable.ts).
+  const resolved = new Set(overrideCommandsOf(r).map((c) => c.dir));
+  if (refreshes.some((c) => isManualStep(c.command) && !resolved.has(c.dir))) return false;
+  if ((r.upgradeInstructions ?? []).some((i) => !resolved.has(i.dir) && !r.commands.some((c) => c.dir === i.dir && i.instruction.includes(c.run)))) return false;
   return (r.parentUpgrades ?? []).every((u) => u.levers.every((l) => l.to === null || Boolean(l.commands?.length) || l.sameCommandsAs !== undefined));
 }
 
@@ -784,8 +786,8 @@ function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlock
       : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, safe to run from the first to the last, each in the directory it names: upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
   );
   if (opts.totalRows > shown) parts.push(`it covers only the rows shown, not the other ${opts.totalRows - shown} (raise max_recommendations for them)`);
-  const forced = ran.filter((r) => r.action === "override_or_replace");
-  if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override written by \`npm pkg set\` (${named(forced)}): the override applies to every copy its key names, so re-scan after running`);
+  const forced = ran.filter((r) => overrideCommandsOf(r).length > 0);
+  if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override or resolution written by \`npm pkg set\` (${named(forced)}): it applies to every copy its key names, so re-scan after running`);
   const inScript = new Set(runnable);
   const eligible = (r: SequencedRow) => !inScript.has(r) && !opts.heldUnclean(r) && (FIX_ACTIONS.has(r.action) || r.action === "override_or_replace") && (r.action !== "upgrade_direct" || r.targetVersion !== null);
   const hand = opts.rows.filter((r) => eligible(r) && isHandEdit(r));
