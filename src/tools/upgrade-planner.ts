@@ -49,6 +49,7 @@ import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.
 import { registryQuote } from "../untrusted-text.js";
 import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
+import { attachCommands, type PlanCommand } from "./upgrade-plan-sequence.js";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -199,6 +200,8 @@ interface UpgradeRecommendation {
   declaredRange?: string;
   /** Private packages this transitive step arrives through: never looked up, so its fix path is not checked (upgrade-planner-private.ts). */
   privateParents?: Array<{ parent: string; why: string }>;
+  /** Every command this row tells the developer to run, as data (upgrade-plan-sequence.ts); empty when its reasons say why nothing is run. */
+  commands: PlanCommand[];
 }
 
 export interface UpgradePlanResult {
@@ -492,6 +495,8 @@ async function executeStandalonePlanner(
   const directPackages = new Set<string>();
   // Per vulnerable step: the per-advisory fixes and where it is pinned, for fix-path verification.
   const fixPathInputs = new Map<UpgradeRecommendation, Omit<FixPathInput, "step">>();
+  // Per reinstall row: the directories whose node_modules drifted, where its command runs.
+  const installDirsOf = new Map<UpgradeRecommendation, string[]>();
 
   for (const dep of registryData) {
     directPackages.add(instanceKey(dep.ecosystem, dep.name, dep.currentVersion));
@@ -676,8 +681,10 @@ async function executeStandalonePlanner(
       ...(action === "not_built_on_this_host" && vulns ? { appliesWhenBuiltFor: builtFor(vulns) } : {}),
       ...(installedVersion ? { installedVersion, installFix } : {}),
       ...(dep.declaredRange ? { declaredRange: dep.declaredRange } : {}),
+      commands: [],
     };
     recommendations.push(rec);
+    if (installFix) installDirsOf.set(rec, [...new Set(drifted.map((r) => relativeDir(r.dir, root)))]);
     if (fixable && !reinstallOnly && action === "upgrade_direct" && vulns) {
       // The manifest directories that declare it: where its upgrade command runs (audit E8).
       fixPathInputs.set(rec, {
@@ -752,6 +759,7 @@ async function executeStandalonePlanner(
         action: !platformActive ? "not_built_on_this_host" : target ? (declared ? "upgrade_direct" : "waiting_on_upstream") : "no_fix_available",
         platformActive,
         ...(!platformActive ? { appliesWhenBuiltFor: builtFor(entries) } : {}),
+        commands: [],
       };
       recommendations.push(rec);
       // The same input vulnerability_scan verifies for this copy (fix-verdicts.ts): one answer per finding.
@@ -811,6 +819,8 @@ async function executeStandalonePlanner(
   markUndetermined(limited);
   // A copy this host does not build: its fix is on the row, labelled with where it applies.
   labelOtherTargets(limited);
+  // Every command a row names, as data, from the fields its words were built from (all passes done).
+  attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));
   // Targets that pin (or narrowly range) an affected dependency, or whose held dependencies could not be
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
