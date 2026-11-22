@@ -666,7 +666,7 @@ describe("4DA MCP Tool Handlers", () => {
       expect(ids).toEqual([newest, middle, oldest]);
     });
 
-    it("deep-fallback actionable signals never trust stale-version stored signals", () => {
+    it("deep-fallback actionable signals never trust stale-version stored signals", async () => {
       // get_actionable_signals trusts persisted signal_type/signal_priority at
       // confidence 0.90 — on the deep fallback those columns MUST come from the
       // current pipeline only.
@@ -707,7 +707,7 @@ describe("4DA MCP Tool Handlers", () => {
         )
         .run(current);
 
-      const { signals } = executeGetActionableSignals(db, { since_hours: 24, limit: 50 });
+      const { signals } = await executeGetActionableSignals(db, { since_hours: 24, limit: 50 });
       const ids = signals.map((s) => s.id);
       expect(ids).toContain(current);
       expect(ids).not.toContain(stale);
@@ -1281,10 +1281,10 @@ describe("4DA MCP Tool Handlers", () => {
   // get_actionable_signals
   // ---------------------------------------------------------------------------
   describe("executeGetActionableSignals", () => {
-    it("returns an empty signals array on an empty database", () => {
+    it("returns an empty signals array on an empty database", async () => {
       seedUserContext(db);
 
-      const result = executeGetActionableSignals(db, {});
+      const result = await executeGetActionableSignals(db, {});
 
       expect(result).toHaveProperty("signals");
       expect(result).toHaveProperty("total");
@@ -1293,7 +1293,7 @@ describe("4DA MCP Tool Handlers", () => {
       expect(result.total).toBe(0);
     });
 
-    it("classifies a security alert correctly", () => {
+    it("classifies a security alert correctly", async () => {
       seedUserContext(db);
       seedACEContext(db);
 
@@ -1303,7 +1303,7 @@ describe("4DA MCP Tool Handlers", () => {
         source_id: "hn-cve-1",
       });
 
-      const result = executeGetActionableSignals(db, {
+      const result = await executeGetActionableSignals(db, {
         since_hours: 1,
       });
 
@@ -1318,7 +1318,7 @@ describe("4DA MCP Tool Handlers", () => {
       }
     });
 
-    it("classifies a breaking change correctly", () => {
+    it("classifies a breaking change correctly", async () => {
       seedUserContext(db);
       seedACEContext(db);
 
@@ -1328,7 +1328,7 @@ describe("4DA MCP Tool Handlers", () => {
         source_id: "hn-breaking-1",
       });
 
-      const result = executeGetActionableSignals(db, {
+      const result = await executeGetActionableSignals(db, {
         since_hours: 1,
       });
 
@@ -1340,7 +1340,7 @@ describe("4DA MCP Tool Handlers", () => {
       }
     });
 
-    it("classifies a tool discovery correctly", () => {
+    it("classifies a tool discovery correctly", async () => {
       seedUserContext(db);
       seedACEContext(db);
 
@@ -1350,7 +1350,7 @@ describe("4DA MCP Tool Handlers", () => {
         source_id: "hn-tool-1",
       });
 
-      const result = executeGetActionableSignals(db, {
+      const result = await executeGetActionableSignals(db, {
         since_hours: 1,
       });
 
@@ -1362,7 +1362,7 @@ describe("4DA MCP Tool Handlers", () => {
       }
     });
 
-    it("returns signals with the expected structure", () => {
+    it("returns signals with the expected structure", async () => {
       seedUserContext(db);
       seedACEContext(db);
 
@@ -1372,7 +1372,7 @@ describe("4DA MCP Tool Handlers", () => {
         source_id: "hn-signal-struct",
       });
 
-      const result = executeGetActionableSignals(db, {
+      const result = await executeGetActionableSignals(db, {
         since_hours: 1,
       });
 
@@ -1395,7 +1395,7 @@ describe("4DA MCP Tool Handlers", () => {
       }
     });
 
-    it("respects the priority_filter parameter", () => {
+    it("respects the priority_filter parameter", async () => {
       seedUserContext(db);
 
       // Insert several items
@@ -1405,7 +1405,7 @@ describe("4DA MCP Tool Handlers", () => {
         source_id: "hn-priority-filter-1",
       });
 
-      const result = executeGetActionableSignals(db, {
+      const result = await executeGetActionableSignals(db, {
         since_hours: 1,
         priority_filter: "critical",
       });
@@ -1415,7 +1415,7 @@ describe("4DA MCP Tool Handlers", () => {
       }
     });
 
-    it("respects the signal_type filter parameter", () => {
+    it("respects the signal_type filter parameter", async () => {
       seedUserContext(db);
 
       insertSourceItem(db, {
@@ -1429,7 +1429,7 @@ describe("4DA MCP Tool Handlers", () => {
         source_id: "hn-type-filter-2",
       });
 
-      const result = executeGetActionableSignals(db, {
+      const result = await executeGetActionableSignals(db, {
         since_hours: 1,
         signal_type: "learning",
       });
@@ -1439,7 +1439,7 @@ describe("4DA MCP Tool Handlers", () => {
       }
     });
 
-    it("respects the limit parameter", () => {
+    it("respects the limit parameter", async () => {
       seedUserContext(db);
 
       for (let i = 0; i < 10; i++) {
@@ -1450,7 +1450,7 @@ describe("4DA MCP Tool Handlers", () => {
         });
       }
 
-      const result = executeGetActionableSignals(db, {
+      const result = await executeGetActionableSignals(db, {
         since_hours: 1,
         limit: 2,
       });

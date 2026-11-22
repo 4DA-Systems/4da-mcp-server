@@ -544,9 +544,9 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     expect(clusterVulnerabilities(unrelated)).toHaveLength(2);
   });
 
-  it("emits ONE security signal for a GHSA/RUSTSEC pair, listing every id in triggers", () => {
+  it("emits ONE security signal for a GHSA/RUSTSEC pair, listing every id in triggers", async () => {
     const live = { getVulnerabilities: () => scanOf([ghsa, rustsec]) };
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, live);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, live);
 
     const liveRows = signals.filter((s) => s.source_type === "osv_live");
     expect(liveRows).toHaveLength(1);
@@ -557,13 +557,13 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     expect(liveRows[0].action).toBe("Upgrade jsonwebtoken: the advisory names 10.3.0 as its fix, NOT CHECKED against jsonwebtoken's other advisories (run dependency_check on a release before pinning it)");
   });
 
-  it("platform-inactive advisories drop to low with a host note", () => {
+  it("platform-inactive advisories drop to low with a host note", async () => {
     const live = {
       getVulnerabilities: () => scanOf([
         entry({ package: "nix", vulnId: "GHSA-inactive", aliases: [], severity: "critical", platformActive: false, target: "cfg(unix)", fixedVersion: "0.30.0" }),
       ]),
     };
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, live);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, live);
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("low");
@@ -572,13 +572,13 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     expect(row!.title.startsWith("NOT BUILT HERE (critical):")).toBe(true);
   });
 
-  it("maintenance notices drop to low with no fix to apply", () => {
+  it("maintenance notices drop to low with no fix to apply", async () => {
     const live = {
       getVulnerabilities: () => scanOf([
         entry({ package: "paste", vulnId: "RUSTSEC-2024-0436", aliases: [], severity: "unknown", summary: "paste - no longer maintained", fixedVersion: null }),
       ]),
     };
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, live);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, live);
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("low");
@@ -586,7 +586,7 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     expect(row!.title).toContain("MAINTENANCE:");
   });
 
-  it("maps the pipeline's stored priority vocabulary onto the tool's tiers", () => {
+  it("maps the pipeline's stored priority vocabulary onto the tool's tiers", async () => {
     // The desktop pipeline writes critical / alert / advisory / watch; the
     // reader cast the string through unchanged, so 92 of 93 stamped rows in
     // the live corpus carried a priority no filter or sort recognised.
@@ -601,17 +601,17 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     const advisory = insertItem(db, { title: "tokio 1.51 scheduler regression notes", hoursAgo: 2, signal_type: "breaking_change", signal_priority: "advisory" });
     const watch = insertItem(db, { title: "serde 1.0.220 minor release", hoursAgo: 2, signal_type: "tech_trend", signal_priority: "watch" });
 
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, null);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, null);
     const byId = new Map(signals.map((s) => [s.id, s.signal_priority]));
     expect(byId.get(alert)).toBe("high");
     expect(byId.get(advisory)).toBe("medium");
     expect(byId.get(watch)).toBe("low");
 
-    const highOnly = executeGetActionableSignals(db, { priority_filter: "high", limit: 50 }, null);
+    const highOnly = await executeGetActionableSignals(db, { priority_filter: "high", limit: 50 }, null);
     expect(highOnly.signals.map((s) => s.id)).toEqual([alert]);
   });
 
-  it("a signal_type filter reaches stored matches the top-200 general read would drop", () => {
+  it("a signal_type filter reaches stored matches the top-200 general read would drop", async () => {
     // Live 2026-09-07: the two in-window stored security alerts ranked 299th
     // and 582nd across all types, so a security-only pass returned nothing.
     const words = [
@@ -635,11 +635,11 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
       signal_priority: "medium",
     });
 
-    const { signals } = executeGetActionableSignals(db, { signal_type: "security_alert", since_hours: 720, limit: 50 }, null);
+    const { signals } = await executeGetActionableSignals(db, { signal_type: "security_alert", since_hours: 720, limit: 50 }, null);
     expect(signals.map((s) => s.id)).toContain(buried);
   });
 
-  it("honours a 30-day since_hours window instead of clamping it to seven days", () => {
+  it("honours a 30-day since_hours window instead of clamping it to seven days", async () => {
     insertItem(db, { title: "Rust 1.99 released", hoursAgo: 3, source_type: "hackernews", relevance: 0.5 });
     const old = insertItem(db, {
       title: "hono 4.12.34 patches middleware bypass",
@@ -648,7 +648,7 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
       signal_priority: "medium",
     });
 
-    const { signals } = executeGetActionableSignals(db, { since_hours: 720, limit: 50 }, null);
+    const { signals } = await executeGetActionableSignals(db, { since_hours: 720, limit: 50 }, null);
     expect(signals.map((s) => s.id)).toContain(old);
   });
 });
@@ -685,8 +685,8 @@ describe("the briefing and live signals grade by the shared rule and name instal
     sourceDirs: ["d:/proj/paddle-webhook"],
   });
 
-  it("get_actionable_signals presents a transitive critical of unknown scope as HIGH, and says why", () => {
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([sandbox]) });
+  it("get_actionable_signals presents a transitive critical of unknown scope as HIGH, and says why", async () => {
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([sandbox]) });
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("high");
@@ -754,8 +754,8 @@ describe("the briefing and live signals grade by the shared rule and name instal
     expect(result.delegation_assessment.level).toBe("review_needed");
   });
 
-  it("get_actionable_signals advises the reinstall, not an upgrade, for the installed copy", () => {
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([drifted]) });
+  it("get_actionable_signals advises the reinstall, not an upgrade, for the installed copy", async () => {
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([drifted]) });
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row!.action).toBe(
       "Run `pnpm install` in d:/proj/mcp-4da-server — node_modules has hono@4.13.1; the lockfile pins 4.13.5",

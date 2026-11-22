@@ -9,12 +9,15 @@
 
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
-import type { VulnerabilityEntry } from "../live/types.js";
+import type { VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { isMaintenanceNotice } from "../live/maintenance.js";
+import { LOOKUPS_DISABLED, vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { presentedSeverity, scopeAdjustmentReason } from "../live/severity-scope.js";
 import { getLiveIntelligence } from "../live-singleton.js";
+import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { driftAction } from "./install-drift-notes.js";
 import { normalizeStoredPriority, type SignalPriority, type SignalType } from "./signal-classifier.js";
+import type { ScanStatus } from "./what-should-i-know.js";
 import { HEADLINE_MAX, quoteThirdParty } from "../untrusted-text.js";
 
 // The priority vocabulary lives in signal-classifier.ts; re-exported for existing importers.
@@ -50,6 +53,11 @@ Categorizes items into signal types: security_alert, breaking_change,
 tool_discovery, tech_trend, learning, competitive_intel.
 Each signal has a priority level (critical/high/medium/low) based on
 signal type, relevance score, and tech stack match.
+
+This project's own vulnerabilities come from its vulnerability scan, which
+the call starts and waits for when none has run in this session; \`scan\`
+says whether it completed, and when it did not, \`note\` starts NOT CHECKED
+(an empty list is then not a clean result).
 
 Use this to get prioritized, actionable intelligence from 4DA's feed.`,
   inputSchema: {
@@ -89,13 +97,67 @@ export interface GetActionableSignalsParams {
   since_hours?: number;
 }
 
-/** The slice of the live layer this tool reads; a stub suffices in tests. */
-export type SignalsLiveIntel = Pick<LiveIntelligence, "getVulnerabilities">;
+/**
+ * The slice of the live layer this tool reads; a stub suffices in tests. Without
+ * `ensureVulnerabilities` the stored scan is read as it is.
+ */
+export type SignalsLiveIntel = Pick<LiveIntelligence, "getVulnerabilities"> &
+  Partial<Pick<LiveIntelligence, "ensureVulnerabilities" | "isEnabled" | "getProjectRoot" | "getAuditDeps">>;
+
+/** What backed the live findings: the scan this answer read, and whether it is a complete one. */
+export interface SignalsScan {
+  status: ScanStatus;
+  scanned_at: string | null;
+}
 
 /** Widest window a caller may ask for: 30 days. */
 const MAX_SINCE_HOURS = 720;
 /** Windows past this reach rows the current scoring pipeline may not have re-scored. */
 const DEEP_WINDOW_HOURS = 168;
+/** How long a call waits for the project's scan when none has run yet (bounded by the call's budget). */
+const SCAN_WAIT_MS = 60_000;
+/** Kept back from the call's budget for what follows the scan. */
+const SCAN_RESERVE_MS = 8_000;
+
+/**
+ * The project's vulnerability scan, started and awaited when none has run in this session: the
+ * feed rows alone are not this project's findings. `note` is set, starting NOT CHECKED, whenever
+ * the scan is missing or incomplete, so an empty list never reads as a clean project.
+ */
+async function projectScan(liveIntel: SignalsLiveIntel | null): Promise<{ scan: VulnerabilityScanResult | null; block: SignalsScan; note: string | null }> {
+  if (!liveIntel) {
+    return {
+      scan: null,
+      block: { status: "disabled", scanned_at: null },
+      note: "NOT CHECKED: no live vulnerability layer is running (FOURDA_OFFLINE, or it was not initialised), so this project's dependencies were not scanned; the absence of live findings here is not a clean result.",
+    };
+  }
+  const enabled = liveIntel.isEnabled?.() ?? true;
+  const waitMs = withinCallBudget(SCAN_WAIT_MS, SCAN_RESERVE_MS);
+  let scan: VulnerabilityScanResult | null = null;
+  if (enabled && liveIntel.ensureVulnerabilities) {
+    try {
+      scan = await liveIntel.ensureVulnerabilities(liveIntel.getProjectRoot?.() ?? process.cwd(), waitMs, { includeDev: true });
+    } catch {
+      scan = null;
+    }
+  }
+  // A scan that could not complete is still read for what it found; the note says what it is not.
+  scan = scan ?? liveIntel.getVulnerabilities();
+  const ready = scan !== null && scan.totalScanned > 0 && !scan.offline && !(scan.staleAnswers ?? 0);
+  const block: SignalsScan = { status: !enabled ? "disabled" : ready ? "ready" : "unavailable", scanned_at: scan?.scannedAt ?? null };
+  const gap = vulnerabilityCoverage(scan, {
+    enabled,
+    expectedTotal: liveIntel.getAuditDeps?.().length ?? 0,
+    notLoaded: `${scanUnfinishedText(waitMs)}, or OSV.dev was unreachable`,
+  });
+  if (gap) return { scan, block, note: gap.note };
+  if (!enabled) return { scan, block, note: `NOT CHECKED: ${LOOKUPS_DISABLED}, so this project's dependencies were not scanned; the absence of live findings here is not a clean result.` };
+  if (scan && scan.totalScanned === 0) {
+    return { scan, block, note: "NOT CHECKED: no dependency version was read for this project (no lockfile the server reads), so nothing was scanned; the absence of live findings here is not a clean result. vulnerability_scan says what was found." };
+  }
+  return { scan, block, note: null };
+}
 
 // ============================================================================
 // Alias clustering for live vulnerabilities
@@ -201,11 +263,11 @@ function actionFor(type: SignalType, source: string): string {
 // Execution
 // ============================================================================
 
-export function executeGetActionableSignals(
+export async function executeGetActionableSignals(
   db: FourDADatabase,
   params: GetActionableSignalsParams,
   liveIntel: SignalsLiveIntel | null = getLiveIntelligence(),
-): { signals: ClassifiedSignal[]; total: number; summary: Record<string, number> } {
+): Promise<{ signals: ClassifiedSignal[]; total: number; summary: Record<string, number>; scan: SignalsScan; note?: string }> {
   const limit = Math.max(1, Math.min(100, params.limit ?? 20));
   const sinceHours = Math.max(1, Math.min(MAX_SINCE_HOURS, params.since_hours ?? 48));
 
@@ -284,7 +346,7 @@ export function executeGetActionableSignals(
 
   // Inject live vulnerability data as security_alert signals — one per
   // vulnerability (alias clusters), not one per OSV record.
-  const vulnResult = liveIntel?.getVulnerabilities() ?? null;
+  const { scan: vulnResult, block: scanBlock, note: scanNote } = await projectScan(liveIntel);
   if (vulnResult && vulnResult.vulnerabilities.length > 0) {
     if (!params.signal_type || params.signal_type === "security_alert") {
       for (const { representative: vuln, ids } of clusterVulnerabilities(vulnResult.vulnerabilities)) {
@@ -368,10 +430,16 @@ export function executeGetActionableSignals(
     summary[s.signal_type] = (summary[s.signal_type] || 0) + 1;
   }
 
+  // The scan's state first: a missing or partial scan is said before anything else.
+  const notes = [
+    scanNote,
+    signals.length === 0 && items.length === 0 ? "No source items in the database. Run the 4DA desktop app to fetch content, or use vulnerability_scan to check dependencies directly." : null,
+  ].filter((n): n is string => n !== null);
   return {
     signals: signals.slice(0, limit),
     total: signals.length,
     summary,
-    ...(signals.length === 0 && items.length === 0 ? { note: "No source items in the database. Run the 4DA desktop app to fetch content, or use vulnerability_scan to check dependencies directly." } : {}),
+    scan: scanBlock,
+    ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
   };
 }
