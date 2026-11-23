@@ -57,6 +57,7 @@ import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
+import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
 import { declaredNpmOperator, staleLocksNote, uvWorkspaces, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
 
 export interface UpgradePlannerParams {
@@ -159,6 +160,8 @@ interface UpgradeRecommendation {
    * what it pins could not be checked (the reasons say which; audit 6.2.5 D-4).
    */
   fixPathChecked?: "all_advisories" | "installed_advisories_only";
+  /** crates.io: releases this row installs that need a newer Rust than the manifest's rust-version declares (upgrade-planner-rust-version.ts). */
+  needsNewerRust?: RustVersionNeed[];
   /**
    * Releases the registry withdrew (crates.io/PyPI yanked; npm deprecated with a later clean
    * release on its line) that targetVersion steps over, or, with no target, the only releases
@@ -253,6 +256,8 @@ export interface UpgradePlanResult {
 const OFFER_CHECK_BUDGET_MS = 10_000;
 /** Time run_order may spend reading the go.mod of the `go get` targets it combines. */
 const SEQUENCE_BUDGET_MS = 3_000;
+/** Time the Cargo rows may spend reading the rust-version of releases not already in the cache. */
+const RUST_VERSION_BUDGET_MS = 4_000;
 
 /** The newer release a registry row would offer (its latest stable), or null when it offers none. */
 function offeredUpgrade(dep: { ecosystem: string; currentVersion: string | null; latestStableVersion: string | null; latestVersion: string | null }): string | null {
@@ -276,7 +281,7 @@ const APP_ATTACHED_NOTE = "The 4DA app's stored plan is never used in its place;
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). The plan is computed by this server from the project's lockfiles on disk, with or without the 4DA desktop app (provenance lockfile_engine). With the app's database attached, `app_plan_check` says how the app's stored plan compares (agrees; differs, with up to 10 `differences`; not_comparable when its plan format is one this server does not read, its advisory data is more than 24 hours old, or a lockfile changed after it was generated; no_plan); the app's plan never replaces this one. The exception is project_path \"*\" with the app attached: the answer is then the app's stored plan across every project it tracks (provenance app_plan, `app_plan_check.status` unverified, not checked against the lockfiles on disk): per package the ecosystem, each installed version with its minimum clean target, upgrade type, the projects that hold it, the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update, mixed, no_fix) and `next_step` in words, `stale` when past its expiry, when its advisory data is more than 24 hours old, or when a lockfile of a project it covers changed after it. The plan: the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows the plan to one package. Privacy: the plan may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). The plan is computed by this server from the project's lockfiles on disk, with or without the 4DA desktop app (provenance lockfile_engine). With the app's database attached, `app_plan_check` says how the app's stored plan compares (agrees; differs, with up to 10 `differences`; not_comparable when its plan format is one this server does not read, its advisory data is more than 24 hours old, or a lockfile changed after it was generated; no_plan); the app's plan never replaces this one. The exception is project_path \"*\" with the app attached: the answer is then the app's stored plan across every project it tracks (provenance app_plan, `app_plan_check.status` unverified, not checked against the lockfiles on disk): per package the ecosystem, each installed version with its minimum clean target, upgrade type, the projects that hold it, the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update, mixed, no_fix) and `next_step` in words, `stale` when past its expiry, when its advisory data is more than 24 hours old, or when a lockfile of a project it covers changed after it. The plan: the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; a Cargo row whose release needs a newer Rust than the manifest's rust-version says so in `needsNewerRust` (the step stays: the build on the declared Rust is what fails); dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows the plan to one package. Privacy: the plan may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -862,6 +867,8 @@ async function executeStandalonePlanner(
   withoutOwnPackageUpgrades(limited, workspaceOwnNames(root, uvSpaces));
   withYarnClassicResolutions(limited, root);
   await withPythonSupport(limited, root, liveIntel.getFixPathSources());
+  // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
+  await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
   // Every command a row names, as data, from the fields its words were built from (all passes done).
   attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));
   // A direct upgrade with nothing to run says why, and the hand step that takes it.
@@ -966,6 +973,8 @@ async function executeStandalonePlanner(
       `${requiresUnexamined.length} target${requiresUnexamined.length !== 1 ? "s" : ""} whose own requirements were not examined${capped > 0 ? ` (${capped} past the ${MAX_REQUIRED_TARGETS} a call examines)` : ""}: not a clean fix until dependency_check examines ${requiresUnexamined.length === 1 ? "it" : "them"}`,
     );
   }
+  const newerRust = rustVersionSummary(limited);
+  if (newerRust) parts.push(newerRust);
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
   if (unknownRisk > 0) parts.push(`${unknownRisk} NOT CHECKED: OSV.dev gave no answer for ${unknownRisk === 1 ? "it" : "them"}, so ${unknownRisk === 1 ? "its" : "their"} advisories are not known (risk "unknown", not low)`);
   if (unconfirmedNewer > 0) parts.push(`${unconfirmedNewer} newer release${unconfirmedNewer !== 1 ? "s" : ""} NOT CHECKED against advisories, so no targetVersion is given (run dependency_check before writing one)`);
@@ -1028,7 +1037,9 @@ async function executeStandalonePlanner(
     vulnerabilityDataAvailable,
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
     run_order: sequence.run_order,
-    run_order_note: staleUvLocks.length > 0 ? `${sequence.run_order_note} ${staleLocksNote(staleUvLocks)}` : sequence.run_order_note,
+    run_order_note: [sequence.run_order_note, staleUvLocks.length > 0 ? staleLocksNote(staleUvLocks) : null, rustVersionRunOrderNote(limited, sequence.run_order)]
+      .filter((s): s is string => Boolean(s))
+      .join(" "),
     provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
 }
