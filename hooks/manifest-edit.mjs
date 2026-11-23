@@ -18,6 +18,12 @@
  * A command this hook does not take apart exactly (a variable, a substitution, a heredoc, a
  * custom registry or index, a git or path source), a bare `npm install` or `npm ci`, and a
  * package named without a version all go ahead without comment.
+ * In a manifest only dependency declarations count (never a comment or another string field),
+ * each section's are compared on their own, a renamed Cargo dependency is the crate `package =`
+ * names, and a dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`,
+ * `registry`; npm `file:`, `link:`, `workspace:`; a PEP 508 direct reference; [tool.uv.sources];
+ * Poetry `path`, `git`, `url`, a named source; a go.mod `replace` to a directory) goes ahead, its
+ * name never repeated. go.mod `exclude` and `retract` introduce no version.
  *
  * FOURDA_GUARD=advise: never denies; after a manifest edit (PostToolUse) the agent is told which
  * versions moved and which calls check them. FOURDA_GUARD=off: the hook does nothing.
@@ -64,12 +70,20 @@ const MAX_CALL_ITEMS = 25;
  * (pre-publish audit of 5d709ff).
  */
 const NPM_DEPENDENCY_SECTIONS = new Set(["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides", "resolutions"]);
-/** A TOML table of dependencies: [dependencies], [dev-dependencies], [target.'cfg(..)'.build-dependencies], [workspace.dependencies], [tool.poetry.group.dev.dependencies]. */
-const TOML_DEPENDENCY_TABLE = /(?:^|\.)(?:dependencies|dev-dependencies|build-dependencies)$/;
-/** `[dependencies.serde]`: the table of one dependency, whose `version` key is that dependency's. */
-const TOML_ONE_DEPENDENCY = /(?:^|\.)(?:dependencies|dev-dependencies|build-dependencies)\.["']?([\w.-]+)["']?$/;
+/** The package.json sections that map a name to the version installed (overrides and resolutions are read on their own). */
+const NPM_PLAIN_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+/** A specifier shaped like a registry version or range (not `workspace:`, `file:`, `link:`, `npm:`, git or a URL). */
+const VERSION_SHAPED = /^[~^<>=]*\s*v?\d/;
+/** Cargo's dependency tables, the last part of [dependencies], [target.'cfg(..)'.build-dependencies], [workspace.dependencies]. */
+const CARGO_DEPENDENCY_TABLES = new Set(["dependencies", "dev-dependencies", "build-dependencies"]);
+/** Cargo dependency keys that take the crate from somewhere other than crates.io: its name may be private and its version is not a crates.io release. */
+const CARGO_OTHER_SOURCE = ["path", "git", "registry", "registry-index"];
+/** Poetry dependency keys that take the package from somewhere other than PyPI. */
+const POETRY_OTHER_SOURCE = ["path", "git", "url", "file", "develop"];
 /** TOML keys that are never a dependency, wherever they stand (Poetry lists the interpreter as `python`). */
 const TOML_NOT_DEPENDENCIES = new Set(["version", "edition", "rust-version", "requires-python", "resolver", "python", "name"]);
+/** [tool.uv] arrays of requirement strings. */
+const UV_REQUIREMENT_ARRAYS = new Set(["dev-dependencies", "constraint-dependencies", "override-dependencies", "build-constraint-dependencies"]);
 /** package.json keys outside the dependency sections that hold a version. */
 const NPM_NOT_DEPENDENCIES = new Set(["version", "node", "npm", "pnpm", "yarn", "bun", "deno", "vscode", "packageManager"]);
 /** pnpm-workspace.yaml sections that set dependency versions. */
@@ -158,15 +172,17 @@ function tomlTables(text) {
   return (at) => lastBefore(headers, at)?.name ?? null;
 }
 
-/** A manifest's text as context: its JSON sections and TOML tables computed once, on demand. */
+/** A manifest's text as context: its JSON sections, TOML tables and TOML assignments computed once, on demand. */
 function fileContext(text) {
   let json;
   let toml;
+  let assignments;
   let parsed;
   return {
     text,
     json: () => (json ??= jsonSections(text)),
     toml: () => (toml ??= tomlTables(text)),
+    assignments: () => (assignments === undefined ? (assignments = tomlAssignments(text, [])) : assignments),
     parsed: () => {
       if (parsed === undefined) {
         try {
@@ -231,47 +247,394 @@ function npmDependency(section, place, name, disk) {
   return !NPM_NOT_DEPENDENCIES.has(name);
 }
 
-const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// =============================================================================
+// TOML, as far as Cargo.toml and pyproject.toml need it
+// =============================================================================
 
-/** The dependency a TOML key under `table` declares, or null. */
-function dependencyIn(table, key) {
-  const one = TOML_ONE_DEPENDENCY.exec(table);
-  if (one) return key === "version" ? one[1] : null;
-  if (!TOML_DEPENDENCY_TABLE.test(table)) return null;
-  return TOML_NOT_DEPENDENCIES.has(key.toLowerCase()) ? null : key;
-}
+/** Characters that end a TOML bare word. */
+const TOML_BREAK = new Set([" ", "\t", "\r", "\n", "#", '"', "'", "[", "]", "{", "}", "=", ",", "."]);
 
-/** Whole-file lookups one hook run may make, and the longest line looked up. */
-const MAX_LINE_LOOKUPS = 200;
-const MAX_LOOKUP_LINE = 2000;
-let lookups = 0;
-
-/**
- * The dependency a TOML `key = ...` line declares, or null: the snippet's table when it shows one,
- * else the table the edit sits under on disk, else the tables that very line stands under on disk.
- * `[dependencies.serde]` + `version = "1.0.200"` is serde's even when `[package]` has a `version`
- * line too (r8: the file's first `version =`, the package's own, decided it).
- */
-function tomlDependency(table, place, line, key, disk) {
-  if (table === null) {
-    const file = disk();
-    if (file && place >= 0) table = file.toml()(place);
-    if (table === null && file && line.length <= MAX_LOOKUP_LINE && lookups++ < MAX_LINE_LOOKUPS) {
-      // Every place this exact line stands in the file: a dependency in any of them is one.
-      // Each lookup reads the whole file, so an edit gets a bounded number of them.
-      const at = new RegExp(`^[ \\t]*${escapeRegex(line.trim())}`, "gm");
-      const tables = [...file.text.matchAll(at)].map((m) => file.toml()(m.index) ?? "");
-      if (tables.length > 0) {
-        for (const t of tables) {
-          const name = dependencyIn(t, key);
-          if (name) return name;
-        }
-        return null;
+/** A TOML string starting at `i` (quote `q`, `triple` for a multi-line one) as { value, end }, or null when it never closes. */
+function tomlString(text, i, q, triple) {
+  if (triple) {
+    for (let j = i + 3; j < text.length; j++) {
+      if (q === '"' && text[j] === "\\") j++;
+      else if (text.startsWith(q.repeat(3), j)) {
+        // Up to two quotes of the content may stand right before the closing three.
+        let close = j;
+        while (text[close + 3] === q && close - j < 2) close++;
+        return { value: text.slice(i + 3, close), end: close + 3 };
       }
     }
+    return null;
   }
-  if (table !== null) return dependencyIn(table, key);
-  return TOML_NOT_DEPENDENCIES.has(key.toLowerCase()) ? null : key;
+  let value = "";
+  for (let j = i + 1; j < text.length; j++) {
+    const c = text[j];
+    if (c === "\n") return null;
+    if (c === q) return { value, end: j + 1 };
+    if (q === '"' && c === "\\") {
+      const e = text[j + 1];
+      // `\"` and `\\` are read; any other escape is kept as written, which no package name or version holds.
+      value += e === '"' || e === "\\" ? e : c + (e ?? "");
+      j++;
+    } else value += c;
+  }
+  return null;
+}
+
+/** A TOML text as tokens (strings with their value, bare words, punctuation, line ends), comments dropped; null when a string never closes. */
+function tomlTokens(text) {
+  const out = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\n") {
+      out.push({ t: "nl" });
+      i++;
+    } else if (ch === " " || ch === "\t" || ch === "\r") {
+      i++;
+    } else if (ch === "#") {
+      const nl = text.indexOf("\n", i);
+      i = nl < 0 ? text.length : nl;
+    } else if (ch === '"' || ch === "'") {
+      const s = tomlString(text, i, ch, text.startsWith(ch.repeat(3), i));
+      if (!s) return null;
+      out.push({ t: "str", v: s.value });
+      i = s.end;
+    } else if ("[]{}=,.".includes(ch)) {
+      out.push({ t: ch });
+      i++;
+    } else {
+      let j = i + 1;
+      while (j < text.length && !TOML_BREAK.has(text[j])) j++;
+      out.push({ t: "bare", v: text.slice(i, j) });
+      i = j;
+    }
+  }
+  return out;
+}
+
+/**
+ * The assignments of a TOML text, each as { table, keys, value }: `table` the parts of the header
+ * it stands under ([] for the top of a whole file; `start` before the first header, which is null
+ * for a snippet whose table is not known), `keys` the parts of its dotted key, `value` one of
+ * { s } (a string), { a: [values] } (an array), { t: { "dotted.key": value } } (an inline table)
+ * or {} (anything else). A snippet that starts inside an array gives its strings with `keys: null`.
+ * Null when a string never closes: that text is not one a TOML reader reads.
+ */
+function tomlAssignments(text, start) {
+  const tokens = tomlTokens(text);
+  if (!tokens) return null;
+  const out = [];
+  let p = 0;
+  let table = start;
+  const kind = (at) => tokens[at]?.t;
+  /** The dotted key starting at `p` as { parts, next }, or null. */
+  const keyAt = () => {
+    const parts = [];
+    let q = p;
+    for (;;) {
+      if (kind(q) !== "bare" && kind(q) !== "str") return null;
+      parts.push(tokens[q].v);
+      q++;
+      if (kind(q) !== ".") return { parts, next: q };
+      q++;
+    }
+  };
+  const value = () => {
+    const tok = tokens[p++];
+    if (!tok) return {};
+    if (tok.t === "str") return { s: tok.v };
+    if (tok.t === "[") {
+      const a = [];
+      while (p < tokens.length && kind(p) !== "]") {
+        if (kind(p) === "str" || kind(p) === "[" || kind(p) === "{" || kind(p) === "bare") a.push(value());
+        else p++;
+      }
+      p++;
+      return { a };
+    }
+    if (tok.t === "{") {
+      const fields = Object.create(null);
+      while (p < tokens.length && kind(p) !== "}") {
+        const k = keyAt();
+        if (k && kind(k.next) === "=") {
+          p = k.next + 1;
+          fields[k.parts.join(".")] = value();
+        } else p++;
+      }
+      p++;
+      return { t: fields };
+    }
+    // A number, boolean or date: its parts after a "." (1.5) go with it.
+    while (tok.t === "bare" && kind(p) === "." && kind(p + 1) === "bare") p += 2;
+    return {};
+  };
+  /** A line that is neither a header nor an assignment (a snippet that starts inside a value): its strings, keys unknown. */
+  const strayLine = () => {
+    while (p < tokens.length && kind(p) !== "nl") {
+      if (kind(p) === "str" || kind(p) === "[") {
+        const v = value();
+        for (const s of v.a ?? [v]) if (s.s !== undefined) out.push({ table, keys: null, value: s });
+      } else if (kind(p) === "{") value();
+      else p++;
+    }
+  };
+  while (p < tokens.length) {
+    if (kind(p) === "nl") {
+      p++;
+      continue;
+    }
+    if (kind(p) === "[") {
+      const double = kind(p + 1) === "[";
+      const begin = p;
+      p += double ? 2 : 1;
+      const k = keyAt();
+      const end = k ? k.next + (double ? 2 : 1) : -1;
+      if (k && kind(k.next) === "]" && (!double || kind(k.next + 1) === "]") && (end >= tokens.length || kind(end) === "nl")) {
+        table = k.parts;
+        p = end;
+        continue;
+      }
+      p = begin;
+      strayLine();
+      continue;
+    }
+    const k = keyAt();
+    if (k && kind(k.next) === "=") {
+      p = k.next + 1;
+      out.push({ table, keys: k.parts, value: value() });
+      while (p < tokens.length && kind(p) !== "nl") p++;
+      continue;
+    }
+    strayLine();
+  }
+  return out;
+}
+
+/** A table name as tomlTables gives it (`target.'cfg(unix)'.dependencies`) as its parts, quotes removed. */
+function tomlTableParts(name) {
+  const parts = [];
+  let part = "";
+  let quote = null;
+  for (const ch of name) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else part += ch;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === ".") {
+      parts.push(part);
+      part = "";
+    } else part += ch;
+  }
+  parts.push(part);
+  return parts;
+}
+
+/**
+ * Cargo.toml: each dependency's crate and version, from the inline form, the table form
+ * ([dependencies.x]) and dotted keys (`x.version = ...`). A renamed dependency
+ * (`alias = { package = "real", ... }`) is the crate `package` names. One that takes its crate from
+ * a path, git or another registry names no crates.io release and is left out, whatever version it
+ * also gives. `section` keeps each table's dependencies apart. `more` adds, by section and name,
+ * keys a snippet does not show (the same dependency's lines in the file on disk).
+ */
+function cargoDependencies(entries, more = null) {
+  const deps = new Map();
+  const dep = (section, name) => {
+    const key = `${section}\0${name}`;
+    let d = deps.get(key);
+    if (!d) deps.set(key, (d = { section, name, fields: Object.create(null) }));
+    return d;
+  };
+  for (const { table, keys, value } of entries) {
+    if (!keys) continue;
+    if (table === null || CARGO_DEPENDENCY_TABLES.has(table.at(-1))) {
+      // An unknown table (a snippet that shows none) is read as a dependency table, as it always was.
+      const section = table === null ? "" : table.join(".");
+      if (keys.length > 1) {
+        dep(section, keys[0]).fields[keys.slice(1).join(".")] = value;
+      } else if (!TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) {
+        const d = dep(section, keys[0]);
+        if (value.t) Object.assign(d.fields, value.t);
+        else d.fields.version = value;
+      }
+    } else if (table.length >= 2 && CARGO_DEPENDENCY_TABLES.has(table.at(-2))) {
+      dep(table.slice(0, -1).join("."), table.at(-1)).fields[keys.join(".")] = value;
+    }
+  }
+  const out = [];
+  for (const d of deps.values()) {
+    const fields = { ...(more?.get(`${d.section}\0${d.name}`) ?? {}), ...d.fields };
+    const version = fields.version?.s;
+    if (typeof version !== "string" || !VERSION_SHAPED.test(version)) continue;
+    if (CARGO_OTHER_SOURCE.some((k) => k in fields)) continue;
+    if (fields.package && typeof fields.package.s !== "string") continue;
+    out.push({ name: fields.package ? fields.package.s : d.name, section: d.section, spec: version });
+  }
+  return out;
+}
+
+/** The keys of each Cargo dependency in a whole file, by section and name (for a snippet's dependencies). */
+function cargoFieldsOf(entries) {
+  const out = new Map();
+  for (const { table, keys, value } of entries ?? []) {
+    if (!keys || !table) continue;
+    let section;
+    let name;
+    let field;
+    if (CARGO_DEPENDENCY_TABLES.has(table.at(-1))) {
+      section = table.join(".");
+      name = keys[0];
+      field = keys.length > 1 ? keys.slice(1).join(".") : null;
+    } else if (table.length >= 2 && CARGO_DEPENDENCY_TABLES.has(table.at(-2))) {
+      section = table.slice(0, -1).join(".");
+      name = table.at(-1);
+      field = keys.join(".");
+    } else continue;
+    const key = `${section}\0${name}`;
+    const fields = out.get(key) ?? Object.create(null);
+    if (field === null) {
+      if (value.t) Object.assign(fields, value.t);
+    } else fields[field] = value;
+    out.set(key, fields);
+  }
+  return out;
+}
+
+/**
+ * A requirement string as pyproject arrays hold them (PEP 508): name and specifier set, or null.
+ * The whole string must be a requirement: a direct reference (`name @ url`) names no release, and
+ * a sentence that starts with a requirement is not one.
+ */
+function requirementString(text) {
+  const s = text.trim();
+  const m = PEP508_NAME.exec(s);
+  if (!m) return null;
+  let rest = s.slice(m[0].length);
+  if (rest.startsWith("@")) return null;
+  rest = rest.replace(/\s*;[\s\S]*$/, "").trim();
+  const paren = /^\(\s*([^()]*?)\s*\)$/.exec(rest);
+  if (paren) rest = paren[1];
+  const spec = PEP440_SPECIFIERS.exec(rest);
+  return spec && spec[1].length === rest.length ? { name: m[1], spec: spec[1].replace(/\s+/g, "") } : null;
+}
+
+/**
+ * The section a pyproject array of requirement strings declares, from its full key path (table
+ * parts, then key parts), or null when that array is not one: [project] dependencies and
+ * optional-dependencies, [dependency-groups], [build-system] requires, [tool.uv]'s requirement
+ * arrays, [tool.pdm.dev-dependencies], Hatch environments' dependencies.
+ */
+function pyRequirementArray(path) {
+  const p = path.join(".");
+  if (p === "project.dependencies" || p === "build-system.requires") return p;
+  if (path.length === 3 && path[0] === "project" && path[1] === "optional-dependencies") return p;
+  if (path.length === 2 && path[0] === "dependency-groups") return p;
+  if (path.length === 3 && path[0] === "tool" && path[1] === "uv" && UV_REQUIREMENT_ARRAYS.has(path[2])) return p;
+  if (path.length === 4 && p.startsWith("tool.pdm.dev-dependencies.")) return p;
+  if (path.length === 5 && p.startsWith("tool.hatch.envs.") && (path[4] === "dependencies" || path[4] === "extra-dependencies")) return p;
+  return null;
+}
+
+/** Tables in which a snippet's strings, their key not shown, may be requirement strings. */
+function pyMayHoldRequirements(table) {
+  if (table === null) return true;
+  const t = table.join(".");
+  return ["project", "build-system", "tool.uv", "project.optional-dependencies", "dependency-groups", "tool.pdm.dev-dependencies"].includes(t) || (table.length === 4 && t.startsWith("tool.hatch.envs."));
+}
+
+/** For a Poetry dependency's full key path, its section and name and the key after them, or null. */
+function poetryDependencyAt(path) {
+  if (path[0] !== "tool" || path[1] !== "poetry") return null;
+  let at;
+  if (path[2] === "dependencies" || path[2] === "dev-dependencies") at = 3;
+  else if (path[2] === "group" && path[4] === "dependencies") at = 5;
+  else return null;
+  if (path.length <= at) return null;
+  return { section: path.slice(0, at).join("."), name: path[at], field: path.slice(at + 1).join(".") };
+}
+
+/** Whether a Poetry or uv dependency's keys take it from a path, git, URL or a named source other than PyPI. */
+function pyOtherSource(fields) {
+  if (POETRY_OTHER_SOURCE.some((k) => k in fields)) return true;
+  const source = fields.source?.s;
+  return typeof source === "string" && source.toLowerCase() !== "pypi";
+}
+
+/**
+ * pyproject.toml: the requirement strings of its dependency arrays and Poetry's dependency tables,
+ * as { name, section, spec }. Comments, `description` and every other string field are not read.
+ * A name [tool.uv.sources] or Poetry takes from a path, git, URL or another index is left out
+ * (`local` adds such names from the file on disk, for a snippet).
+ */
+function pyprojectDependencies(entries, local = new Set()) {
+  const poetry = poetryDependencies(entries);
+  const others = new Set([...local, ...pyOtherSourceNames(entries, poetry)]);
+  const out = [];
+  for (const d of poetry.values()) {
+    for (const f of d.alternatives) {
+      const version = f.version?.s;
+      if (typeof version === "string" && VERSION_SHAPED.test(version)) out.push({ name: d.name, section: d.section, spec: version });
+    }
+  }
+  for (const { table, keys, value } of entries) {
+    let section = null;
+    let strings = [];
+    if (keys === null) {
+      if (pyMayHoldRequirements(table)) strings = [value];
+    } else if (table === null) {
+      // A snippet whose table is not known: its arrays may be dependency arrays, as before; a
+      // `key = "..."` line is read as a Poetry dependency only when shaped like a version.
+      if (value.a) strings = value.a;
+      else if (keys.length === 1 && value.s !== undefined && VERSION_SHAPED.test(value.s) && !TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) {
+        out.push({ name: keys[0], section: null, spec: value.s });
+      }
+    } else {
+      section = pyRequirementArray([...table, ...keys]);
+      if (section !== null && value.a) strings = value.a;
+    }
+    for (const v of strings) {
+      const r = typeof v.s === "string" ? requirementString(v.s) : null;
+      if (r) out.push({ name: r.name, section, spec: r.spec });
+    }
+  }
+  return out.filter((d) => !others.has(nameKey("PyPI", d.name)));
+}
+
+/**
+ * Poetry's dependencies, by section and name: { section, name, alternatives }, `alternatives` the
+ * keys of each of its constraints (one, or several in Poetry's list-of-tables form).
+ */
+function poetryDependencies(entries) {
+  const poetry = new Map();
+  for (const { table, keys, value } of entries) {
+    if (!keys || table === null) continue;
+    const at = poetryDependencyAt([...table, ...keys]);
+    if (!at || at.name.toLowerCase() === "python") continue;
+    const key = `${at.section}\0${at.name}`;
+    const d = poetry.get(key) ?? { section: at.section, name: at.name, fields: Object.create(null), list: null };
+    if (at.field) d.fields[at.field] = value;
+    else if (value.t) Object.assign(d.fields, value.t);
+    else if (value.a) d.list = value.a.map((v) => v.t ?? Object.create(null));
+    else d.fields.version = value;
+    poetry.set(key, d);
+  }
+  for (const d of poetry.values()) d.alternatives = d.list ?? [d.fields];
+  return poetry;
+}
+
+/** The names (PEP 503) a pyproject takes from a path, git, URL or another index: [tool.uv.sources] entries and such Poetry dependencies. */
+function pyOtherSourceNames(entries, poetry) {
+  const names = new Set();
+  for (const { table, keys } of entries) {
+    if (!keys || !table) continue;
+    const path = [...table, ...keys];
+    if (path[0] === "tool" && path[1] === "uv" && path[2] === "sources" && path.length >= 4) names.add(nameKey("PyPI", path[3]));
+  }
+  for (const d of poetry.values()) if (d.alternatives.some(pyOtherSource)) names.add(nameKey("PyPI", d.name));
+  return names;
 }
 
 /** One PEP 440 clause, and a set of them joined by commas. */
@@ -338,52 +701,166 @@ function pnpmWorkspaceVersions(text, out) {
     // An override keyed by a selector ("foo@<2", "bar>qs") is not one package's version.
     if (top === "overrides" && /.@|>/.test(key)) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
-    out.set(`${key}\0${top === "catalogs" ? `catalogs.${catalog}` : top}`, value);
+    put(out, key, top === "catalogs" ? `catalogs.${catalog}` : top, value);
   }
 }
 
 /**
- * name -> version specifier pairs a manifest snippet declares, in its dependency sections only.
- * `place` is where the snippet starts in the file on disk (-1 when unknown). A key may carry the
- * section after a NUL (pnpm catalogs) so one name in two places is two entries.
+ * The package an npm override, pnpm override or Yarn resolution key sets: pnpm's `parent>child`
+ * and Yarn's `**\/child`, `parent/child`, `parent/@scope/child` set `child`, and a version
+ * selector after the name (`semver@<7`) is not part of it. Null for a name with a glob in it.
  */
-function declaredVersions(file, text, disk = () => null, place = -1) {
+function overrideTarget(key) {
+  const parts = key.split(">").at(-1).trim().split("/");
+  let name = parts.length >= 2 && parts.at(-2).startsWith("@") ? parts.slice(-2).join("/") : parts.at(-1);
+  const at = name.indexOf("@", 1);
+  if (at > 0) name = name.slice(0, at);
+  return name && !/[*?{}!]/.test(name) ? name : null;
+}
+
+/**
+ * A whole package.json's dependency versions as { name, section, spec }, read as JSON: the four
+ * dependency sections, npm `overrides` at any depth (`"foo": { "semver": "7.6.3" }` sets semver,
+ * `"."` the parent itself), pnpm's `pnpm.overrides` and Yarn's `resolutions`. Null when the text
+ * is not a JSON object.
+ */
+function npmWholeDependencies(text) {
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!isObject(doc)) return null;
+  const out = [];
+  for (const section of NPM_PLAIN_SECTIONS) {
+    if (!isObject(doc[section])) continue;
+    for (const [name, spec] of Object.entries(doc[section])) {
+      if (typeof spec === "string" && VERSION_SHAPED.test(spec)) out.push({ name, section, spec });
+    }
+  }
+  const overrides = (obj, section, parent, depth) => {
+    for (const [key, value] of Object.entries(obj)) {
+      const name = key === "." ? parent : overrideTarget(key);
+      if (!name) continue;
+      if (typeof value === "string") {
+        if (VERSION_SHAPED.test(value)) out.push({ name, section, spec: value });
+      } else if (isObject(value) && depth < 32) overrides(value, `${section}/${key}`, name, depth + 1);
+    }
+  };
+  if (isObject(doc.overrides)) overrides(doc.overrides, "overrides", null, 0);
+  if (isObject(doc.resolutions)) overrides(doc.resolutions, "resolutions", null, 0);
+  if (isObject(doc.pnpm) && isObject(doc.pnpm.overrides)) overrides(doc.pnpm.overrides, "pnpm.overrides", null, 0);
+  return out;
+}
+
+/** A module path and version as go.mod's `require` gives them. */
+const GO_REQUIREMENT = /^([a-z0-9.-]+\.[a-z]{2,}\/\S+)\s+(v\d\S*)/;
+/** A `replace` target that is a directory on this machine, not a module: `./x`, `../x`, `/x`, `C:\x`. */
+const GO_LOCAL_PATH = /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|[A-Za-z]:[\\/])/;
+
+/**
+ * go.mod's directives, line and block form: `requires` the versions `require` sets; `local` the
+ * modules `replace` points at a local directory ({ name, version }, version null for every
+ * version); `block` the block open at the end of the text. `exclude` and `retract` name versions
+ * that are kept out, and the left side of `replace` the version replaced: none is introduced.
+ * `block` is the block the text starts in (a snippet), null at the top level; a line outside any
+ * block that is not a directive is read as a requirement, as a snippet from a require block is.
+ */
+function goDirectives(text, block = null) {
+  const requires = [];
+  const local = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\/\/.*$/, "").trim();
+    if (!line) continue;
+    if (line === ")") {
+      block = null;
+      continue;
+    }
+    const open = /^([a-z]+)\s*\($/.exec(line);
+    if (open) {
+      block = open[1];
+      continue;
+    }
+    const one = /^(require|exclude|retract|replace|module|go|toolchain|godebug|tool|ignore)\s+(.*)$/.exec(line);
+    const verb = one ? one[1] : (block ?? "require");
+    const args = one ? one[2] : line;
+    if (verb === "require") {
+      const m = GO_REQUIREMENT.exec(args);
+      if (m) requires.push({ name: m[1], spec: m[2] });
+    } else if (verb === "replace") {
+      const m = /^(\S+)(?:\s+(v\S+))?\s*=>\s*(\S+)/.exec(args);
+      if (m && GO_LOCAL_PATH.test(m[3])) local.push({ name: m[1], version: m[2] ?? null });
+    }
+  }
+  return { requires, local, block };
+}
+
+/** Adds `spec` for `name` to a declaredVersions map, under `section` when it is not null. */
+function put(out, name, section, spec) {
+  const key = section === null || section === undefined ? name : `${name}\0${section}`;
+  const list = out.get(key);
+  if (!list) out.set(key, [spec]);
+  else if (!list.includes(spec)) list.push(spec);
+}
+
+/** The TOML table a snippet starts in, from where it sits in the file on disk: its parts, [] above the first header, null when not known. */
+function snippetTable(disk, place) {
+  const file = disk();
+  if (!file || place < 0) return null;
+  const name = file.toml()(place);
+  return name === null ? [] : tomlTableParts(name);
+}
+
+/**
+ * The version specifiers a manifest text declares in its dependency declarations, as a map from
+ * key to specifiers. `whole`: the text is the whole file, so a key carries its section after a
+ * NUL, and the same name in two sections (devDependencies and peerDependencies, [dependencies] and
+ * [dev-dependencies]) is two entries, each change judged on its own. A snippet's keys are its
+ * names (pnpm catalogs keep their section either way), and `place` is where it starts in the file
+ * on disk (-1 when unknown), which says what section, table or block it sits in.
+ */
+function declaredVersions(file, text, disk = () => null, place = -1, whole = false) {
   const out = new Map();
   if (typeof text !== "string" || !text) return out;
-  const at = (index) => (place >= 0 ? place + index : -1);
+  const section = (s) => (whole ? s : null);
   if (file === "package.json") {
+    const deps = whole ? npmWholeDependencies(text) : null;
+    if (deps) {
+      for (const d of deps) put(out, d.name, d.section, d.spec);
+      return out;
+    }
+    const at = (index) => (place >= 0 ? place + index : -1);
     const sections = jsonSections(text);
     for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([~^<>=]*\s*v?\d[^"]*)"/gi)) {
-      if (npmDependency(sections(m.index), at(m.index), m[1], disk)) out.set(m[1], m[2]);
+      if (npmDependency(sections(m.index), at(m.index), m[1], disk)) put(out, m[1], null, m[2]);
     }
   } else if (file === "Cargo.toml" || file === "pyproject.toml") {
-    const python = file === "pyproject.toml";
-    const fold = (name) => (python ? name.toLowerCase() : name);
-    if (python) {
-      // A requirement string ("requests>=2.31") is a dependency wherever it is written.
-      // A name starts where no name character precedes it and is at most 100 characters (PyPI's own
-      // limit is far lower): without both, one unbroken token of 100,000 characters costs its square.
-      for (const m of text.matchAll(/(?<![A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]\n]{0,200}\])?[ \t]*((?:===?|~=|>=|<=|!=|<|>)[ \t]*[0-9][^"',;\s]{0,80}(?:[ \t]*,[ \t]*(?:===?|~=|>=|<=|!=|<|>)[ \t]*[0-9][^"',;\s]{0,80}){0,7})/g)) {
-        out.set(m[1].toLowerCase(), m[2].replace(/[ \t]+/g, ""));
-      }
-    }
-    const tables = tomlTables(text);
-    const key = python ? "[A-Za-z0-9][A-Za-z0-9._-]*" : "[A-Za-z_][\\w-]*";
-    for (const m of text.matchAll(new RegExp(`^[ \\t]*(${key})[ \\t]*=[ \\t]*"([~^<>=]*\\s*\\d[^"]*)"`, "gm"))) {
-      const name = tomlDependency(tables(m.index), at(m.index), m[0], m[1], disk);
-      if (name) out.set(fold(name), m[2]);
-    }
-    for (const m of text.matchAll(new RegExp(`^[ \\t]*(${key})[ \\t]*=[ \\t]*\\{[^}\\n]*\\bversion\\s*=\\s*"([^"]+)"`, "gm"))) {
-      const name = tomlDependency(tables(m.index), at(m.index), m[0], m[1], disk);
-      if (name) out.set(fold(name), m[2]);
+    // A text with a string that never closes is not read: silence, never a guess.
+    const entries = tomlAssignments(text, whole ? [] : snippetTable(disk, place));
+    if (!entries) return out;
+    if (file === "Cargo.toml") {
+      const more = whole ? null : cargoFieldsOf(disk()?.assignments());
+      for (const d of cargoDependencies(entries, more)) put(out, d.name, section(d.section), d.spec);
+    } else {
+      const onDiskEntries = whole ? null : disk()?.assignments();
+      const local = onDiskEntries ? pyOtherSourceNames(onDiskEntries, poetryDependencies(onDiskEntries)) : new Set();
+      for (const d of pyprojectDependencies(entries, local)) put(out, d.name.toLowerCase(), section(d.section), d.spec);
     }
   } else if (file === "requirements.txt") {
     for (const line of text.split("\n")) {
       const r = requirementLine(line);
-      if (r) out.set(r.name, r.spec);
+      if (r) put(out, r.name, null, r.spec);
     }
   } else if (file === "go.mod") {
-    for (const m of text.matchAll(/^\s*(?:require\s+)?([a-z0-9.-]+\.[a-z]{2,}\/\S+)\s+(v\d\S*)/gm)) out.set(m[1], m[2]);
+    const onDisk = whole ? null : disk();
+    const start = onDisk && place >= 0 ? goDirectives(onDisk.text.slice(0, place)).block : null;
+    const read = goDirectives(text, start);
+    const local = [...read.local, ...(onDisk ? goDirectives(onDisk.text).local : [])];
+    for (const r of read.requires) {
+      if (!local.some((l) => l.name === r.name && (l.version === null || l.version === r.spec))) put(out, r.name, null, r.spec);
+    }
   } else if (file === "pnpm-workspace.yaml") {
     pnpmWorkspaceVersions(text, out);
   }
@@ -402,12 +879,32 @@ function versionChanges(file, before, after, disk) {
   return diffVersions(old, declaredVersions(file, after, disk, place));
 }
 
-/** Changed or added entries between two declaredVersions maps. */
+/**
+ * Changed or added entries between two declaredVersions maps, each name and version once. A
+ * version the old text already declared for that name, in the same section or another, is not
+ * introduced (a dependency moved between sections). `from` is the section's old version, else the
+ * name's only old version.
+ */
 function diffVersions(old, now) {
+  const before = new Map();
+  for (const [key, specs] of old) {
+    const name = keyName(key);
+    const all = before.get(name) ?? new Set();
+    for (const spec of specs) all.add(spec);
+    before.set(name, all);
+  }
   const changes = [];
-  for (const [key, spec] of now) {
-    const prev = old.get(key);
-    if (prev !== spec) changes.push({ name: keyName(key), from: prev ?? null, to: spec });
+  const seen = new Set();
+  for (const [key, specs] of now) {
+    const name = keyName(key);
+    const prev = old.get(key) ?? [];
+    const anywhere = before.get(name) ?? new Set();
+    for (const spec of specs) {
+      if (anywhere.has(spec) || seen.has(`${name}\0${spec}`)) continue;
+      seen.add(`${name}\0${spec}`);
+      const from = prev.length === 1 ? prev[0] : prev.length === 0 && anywhere.size === 1 ? [...anywhere][0] : null;
+      changes.push({ name, from, to: spec });
+    }
   }
   return changes;
 }
@@ -416,7 +913,7 @@ function diffVersions(old, now) {
 function wholeFileChanges(file, before, after) {
   const versionsOf = (text) => {
     const context = fileContext(text);
-    return declaredVersions(file, text, () => context, 0);
+    return declaredVersions(file, text, () => context, 0, true);
   };
   return diffVersions(versionsOf(before), versionsOf(after));
 }
@@ -570,11 +1067,15 @@ function callItem(ecosystem, name, to, from) {
 // Which file is a manifest
 // =============================================================================
 
-/** The manifest kind of a path (its ECOSYSTEM key), or null: `requirements-dev.txt` and `requirements/base.txt` read as requirements.txt. */
+/**
+ * The manifest kind of a path (its ECOSYSTEM key), or null. A Python requirement file is named as
+ * the server names one (src/project-tree.ts isRequirementsFileName, mirrored here because the hook
+ * imports nothing: `requirements-dev.txt`, `dev_requirements.txt`), or is a .txt in `requirements/`.
+ */
 function manifestKind(filePath) {
   const name = basename(filePath);
   if (MANIFESTS.has(name)) return name;
-  if (/^requirements[-_.][\w.-]*\.txt$/i.test(name)) return "requirements.txt";
+  if (/requirements[\w.-]*\.txt$/i.test(name)) return "requirements.txt";
   if (/\.txt$/i.test(name) && basename(dirname(filePath)).toLowerCase() === "requirements") return "requirements.txt";
   return null;
 }
