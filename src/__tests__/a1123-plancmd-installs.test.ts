@@ -34,6 +34,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 import { readRangeCommand } from "../tools/upgrade-planner-installs.js";
+import { reconcileDirectTargets, type FixPathStep } from "../tools/upgrade-planner-fixpaths.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -209,6 +210,37 @@ describe("a Yarn project whose range npm and Yarn may resolve differently", () =
   });
 });
 
+describe("pnpm's declaration of a package a parent takes as a peer", () => {
+  it("names the declared release exactly when the range would install an affected one", async () => {
+    h.ADVISORIES = { vite: [adv("GHSA-vg6x-rcgg-rjx6", "vite", fixedIn("6.4.5")), adv("GHSA-93m4-6634-74q7", "vite", [{ introduced: "6.4.7" }])] };
+    h.NPM = {
+      vite: { latest: "6.4.7", versions: { "5.3.1": {}, "6.4.5": {}, "6.4.7": {} } },
+      vitest: { latest: "4.1.12", versions: { "1.6.0": {}, "4.1.12": {} } },
+    };
+    h.write("package.json", JSON.stringify({ name: "x", version: "1.0.0", devDependencies: { vitest: "^1.6.0" } }));
+    const declare = 'pnpm add -D "vite@^6.4.5"';
+    const row: FixPathStep = {
+      package: "vite",
+      ecosystem: "npm",
+      currentVersion: "5.3.1",
+      targetVersion: "6.4.5",
+      upgradeType: "major",
+      reasons: [`Transitive dependency: ... then declare it, \`${declare}\``],
+      breaking: true,
+      scope: "transitive",
+      action: "upgrade_parent",
+      fixPathChecked: "all_advisories",
+      parentUpgrades: [
+        { parent: "vitest", from: "1.6.0", to: "4.1.12", breaking: true, levers: [{ name: "vitest", version: "1.6.0", to: "4.1.12", breaking: true, commands: [{ dir: ".", command: "pnpm up vitest@4.1.12" }] }], refreshCommands: [{ dir: ".", command: declare }] },
+      ],
+    };
+    await reconcileDirectTargets([row], [], await h.live());
+    expect(row.parentUpgrades![0].refreshCommands).toEqual([{ dir: ".", command: "pnpm add -D vite@6.4.5" }]);
+    expect(reasonsOf(row)).toContain("then declare it, `pnpm add -D vite@6.4.5`");
+    expect(reasonsOf(row)).toContain('`pnpm add -D vite@6.4.5`, not `pnpm add -D "vite@^6.4.5"`: pnpm installs vite 6.4.7 for "^6.4.5" (it is the highest release "^6.4.5" admits), and GHSA-93m4-6634-74q7 affects 6.4.7, not 6.4.5');
+  });
+});
+
 describe("readRangeCommand", () => {
   it("reads the range forms the plan writes and gives each one's exact form", () => {
     expect(readRangeCommand('npm install "mssql@~10.0.3"')).toMatchObject({ tool: "npm", name: "mssql", spec: "~10.0.3", target: "10.0.3", exact: "npm install mssql@10.0.3 --save-exact" });
@@ -217,6 +249,7 @@ describe("readRangeCommand", () => {
     expect(readRangeCommand('yarn up "x@~1.2.3"')?.exact).toBe("yarn up x@1.2.3");
     expect(readRangeCommand('yarn add "x@~1.2.3"')?.exact).toBe("yarn add x@1.2.3");
     expect(readRangeCommand('yarn workspace api add "x@^1.2.3" --dev')?.exact).toBe("yarn workspace api add x@1.2.3 --dev");
+    expect(readRangeCommand('pnpm add -D "vite@^6.4.5"')).toMatchObject({ tool: "pnpm", exact: "pnpm add -D vite@6.4.5" });
     expect(readRangeCommand("cargo add itoa@1.0.1 --dev")).toMatchObject({ tool: "cargo", spec: "^1.0.1", exact: 'cargo add "itoa@=1.0.1" --dev' });
     expect(readRangeCommand('cargo add "itoa@~1.0.1" --target "cfg(windows)"')?.exact).toBe('cargo add "itoa@=1.0.1" --target "cfg(windows)"');
     // Exact forms and refreshes are not range commands.

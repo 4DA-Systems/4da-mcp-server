@@ -4,7 +4,8 @@
  * not the release the row checked: `npm install "mssql@~10.0.3"` installs mssql 10.0.6, whose
  * tedious "^16.4.0" does not bring in the tedious 18 the row needed, and `npm install
  * "@actions/github@~6.0.0"` installs 6.0.1, which requires undici "^5.28.5" itself. So for every
- * range command a row names (a direct upgrade, a parent upgrade's lever), the release it installs
+ * range command a row names (a direct upgrade, a parent upgrade's lever, pnpm's declaration of a
+ * package a parent takes as a peer), the release it installs
  * is worked out as the package manager picks it, and:
  * - it is the target: nothing changes;
  * - it is another release and passes every check the row made on the target (the package's
@@ -47,7 +48,7 @@ export interface RangeCommand {
   exact: string;
 }
 
-const NPM_RANGE = /^(npm install|pnpm up|yarn upgrade|yarn up|yarn add|yarn workspace \S+ add) "((?:@[^/\s"@]+\/)?[^@\s"]+)@([\^~])(\d[^"\s]*)"((?: --dev| --optional)?)$/;
+const NPM_RANGE = /^(npm install|pnpm up|pnpm add(?: -D| -O)?|yarn upgrade|yarn up|yarn add|yarn workspace \S+ add) "((?:@[^/\s"@]+\/)?[^@\s"]+)@([\^~])(\d[^"\s]*)"((?: --dev| --optional)?)$/;
 const CARGO_RANGE = /^cargo add (?:"([A-Za-z0-9_-]+)@([\^~])(\d[^"\s]*)"|([A-Za-z0-9_-]+)@(\d[^"\s]*))((?: .+)?)$/;
 
 /** The range command `command` is, in the forms live/fix-paths.ts writes; null for any other command. */
@@ -55,7 +56,7 @@ export function readRangeCommand(command: string): RangeCommand | null {
   const n = NPM_RANGE.exec(command);
   if (n) {
     const [, head, name, op, target, tail] = n;
-    const tool: Tool = head === "npm install" ? "npm" : head === "pnpm up" ? "pnpm" : "yarn";
+    const tool: Tool = head === "npm install" ? "npm" : head.startsWith("pnpm ") ? "pnpm" : "yarn";
     return { tool, name, spec: `${op}${target}`, target, exact: `${head} ${name}@${target}${tail}${tool === "npm" ? " --save-exact" : ""}` };
   }
   const c = CARGO_RANGE.exec(command);
@@ -107,6 +108,11 @@ export async function withInstalledReleases(steps: FixPathStep[], liveIntel: Int
       for (const lever of upgrade.levers) {
         if (!lever.to) continue;
         for (const entry of lever.commands ?? []) add(step.ecosystem, { step, entry, installed: lever.version, via: { lever, upgrade } }, lever.name, lever.to);
+      }
+      // pnpm: the declaration of the row's own package after a parent that takes it as a peer (`pnpm add -D "vite@^6.4.5"`).
+      for (const entry of upgrade.refreshCommands ?? []) {
+        const parsed = readRangeCommand(entry.command);
+        if (parsed?.tool === "pnpm" && parsed.name === step.package) add(step.ecosystem, { step, entry, installed: step.currentVersion }, step.package, parsed.target);
       }
     }
   }
