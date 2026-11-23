@@ -122,6 +122,28 @@ describe("a direct upgrade whose copy other packages also use on the old line", 
     ]);
   });
 
+  it("judges another package this plan upgrades at the release it moves to", async () => {
+    h.ADVISORIES = { qs: [adv("GHSA-4mjr-xmp4-gh2g", "qs", fixedIn("6.16.0"))], req: [adv("GHSA-p8p7-x288-28g6", "req", fixedIn("3.0.0"))] };
+    h.NPM.qs = { latest: "6.16.0", versions: { "6.10.4": {}, "6.10.7": {}, "6.16.0": {} } };
+    h.NPM.req = { latest: "3.0.0", versions: { "2.88.12": { dependencies: { qs: "~6.10.3" } }, "3.0.0": { dependencies: { qs: "^6.16.0" } } } };
+    h.npmProject({ qs: "~6.10.3", req: "2.88.12" }, {}, { qs: { version: "6.10.4" }, req: { version: "2.88.12", dependencies: { qs: "~6.10.3" } } });
+    const { result, step } = await h.plan();
+    // req's own row moves it to 3.0.0, which requires qs "^6.16.0": after the plan nothing keeps the old line.
+    expect(step("req")).toMatchObject({ action: "upgrade_direct", targetVersion: "3.0.0" });
+    expect(reasonsOf(step("qs"))).not.toMatch(/Other packages that use this copy/);
+    expect((result.run_order as Array<{ fixes: string[] }>).some((s) => s.fixes.includes("npm:qs"))).toBe(true);
+  });
+
+  it("does not take the move of a row whose target is not a clean fix", async () => {
+    h.ADVISORIES = { qs: [adv("GHSA-4mjr-xmp4-gh2g", "qs", fixedIn("6.16.0"))], req: [adv("GHSA-p8p7-x288-28g6", "req", fixedIn("3.0.0"))] };
+    h.NPM.qs = { latest: "6.16.0", versions: { "6.10.4": {}, "6.10.7": {}, "6.16.0": {} } };
+    // req 3.0.0 still holds qs "~6.10.3": its own row is not a clean fix, so it moves nothing here.
+    h.NPM.req = { latest: "3.0.0", versions: { "2.88.12": { dependencies: { qs: "~6.10.3" } }, "3.0.0": { dependencies: { qs: "~6.10.3" } } } };
+    h.npmProject({ qs: "~6.10.3", req: "2.88.12" }, {}, { qs: { version: "6.10.4" }, req: { version: "2.88.12", dependencies: { qs: "~6.10.3" } } });
+    const { step } = await h.plan();
+    expect(reasonsOf(step("qs"))).toContain('1 package requires qs outside 6.16.0: req 2.88.12 ("~6.10.3")');
+  });
+
   it("does not take a peer requirement for a copy of its own", async () => {
     h.NPM.plugin = { latest: "1.0.0", versions: { "1.0.0": { peerDependencies: { tar: "^6.0.0" } } } };
     const root = { name: "x", version: "1.0.0", dependencies: { tar: "~6.1.11", plugin: "^1.0.0" } };

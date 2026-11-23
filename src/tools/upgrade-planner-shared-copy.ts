@@ -19,7 +19,7 @@
  */
 
 import * as path from "node:path";
-import type { FixPathSources, PackageReleaseFacts } from "../live/fix-paths.js";
+import { HELD_UNCLEAN_REASON, type FixPathSources, type PackageReleaseFacts } from "../live/fix-paths.js";
 import { byDeadline } from "../live/held-dependencies.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { prepareLockfileParents, type LockfileFormat, type ParentEdge } from "../live/lockfile-parents.js";
@@ -52,11 +52,37 @@ interface Holder {
   requirement: string | null;
   /** The copy it keeps after the upgrade; null when that could not be established. */
   keeps: string | null;
+  /** The release this plan's own steps move it to, whose requirement is the one read. */
+  movedTo?: string;
+}
+
+/**
+ * What the plan's own steps move an installed npm package to (`name@version` -> release): a direct
+ * upgrade, a parent upgrade every lever of which has a command, and those levers. A package another
+ * step moves is judged at the release it moves to (the kuma plan's cypress upgrade replaces
+ * @cypress/request 2.88.12, which held qs "~6.10.3"). A row whose target is not a clean fix moves nothing here.
+ */
+function planMoves(steps: FixPathStep[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const s of steps) {
+    if (s.ecosystem !== "npm" || s.reasons.some((r) => HELD_UNCLEAN_REASON.test(r))) continue;
+    if (s.action === "upgrade_direct" && s.targetVersion && s.currentVersion && s.upgradeCommands?.length) out.set(`${s.package}@${s.currentVersion}`, s.targetVersion);
+    if (s.action !== "upgrade_parent") continue;
+    for (const u of s.parentUpgrades ?? []) {
+      const named = u.levers.filter((l) => l.to !== null);
+      if (named.length === 0 || named.length !== u.levers.length || named.some((l) => !l.commands?.length && l.sameCommandsAs === undefined)) continue;
+      for (const l of named) out.set(`${l.name}@${l.version}`, l.to!);
+      const brings = [...new Set(named.map((l) => l.brings ?? u.to))];
+      if (u.to && brings.length === 1 && brings[0]) out.set(`${u.parent}@${u.from}`, brings[0]);
+    }
+  }
+  return out;
 }
 
 export async function withSharedCopies(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, deadline: number): Promise<void> {
   const sources = liveIntel.getFixPathSources();
   if (!sources) return;
+  const moves = planMoves(steps);
   for (const step of steps) {
     if (step.ecosystem !== "npm" || step.scope !== "direct" || step.action !== "upgrade_direct" || !step.targetVersion || !step.currentVersion) continue;
     if (!step.upgradeCommands?.length) continue;
@@ -64,12 +90,12 @@ export async function withSharedCopies(steps: FixPathStep[], inputs: FixPathInpu
     const dirs = [...new Set(inputs.find((i) => i.step === step)?.sourceDirs ?? [])];
     for (const dir of dirs) {
       if (Date.now() >= deadline) return;
-      await sharedCopy(step, dir, sources, liveIntel, deadline).catch(() => undefined);
+      await sharedCopy(step, dir, sources, liveIntel, moves, deadline).catch(() => undefined);
     }
   }
 }
 
-async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSources, liveIntel: Intel, deadline: number): Promise<void> {
+async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSources, liveIntel: Intel, moves: Map<string, string>, deadline: number): Promise<void> {
   const name = step.package;
   const installed = step.currentVersion!;
   const target = step.targetVersion!;
@@ -93,6 +119,17 @@ async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSource
     // A peer holds no copy of its own: it is resolved from the tree (a peer range the target leaves is run_order's rule e).
     const history = await byDeadline(sources.requirementHistory("npm", e.parent, name), deadline, null);
     if (history?.[e.parentVersion!]?.peer === true) continue;
+    const movedTo = e.bundled ? undefined : moves.get(key);
+    if (movedTo !== undefined) {
+      // Another step moves it: what that release requires decides which copy it keeps.
+      const reqs = await byDeadline(sources.parentRequirements("npm", e.parent, movedTo, name), deadline, null);
+      if (reqs !== null && reqs.length === 0) continue;
+      const requirement = reqs?.length === 1 ? reqs[0] : null;
+      if (requirement !== null && npmRangeAdmits(requirement, target) === true) continue;
+      const keeps = requirement === null ? null : npmRangeAdmits(requirement, installed) === true ? keptCopy(index.format, requirement, installed, facts) : keptCopy("package-lock", requirement, installed, facts);
+      holders.push({ name: e.parent, version: e.parentVersion!, requirement, keeps, movedTo });
+      continue;
+    }
     const requirement = await requirementOf(e, name, sources, deadline);
     // A requirement that admits the target shares the upgraded copy.
     if (requirement !== null && npmRangeAdmits(requirement, target) === true) continue;
@@ -109,7 +146,9 @@ async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSource
 
   const root = liveIntel.getProjectRoot() ?? process.cwd();
   const where = relativeDir(path.dirname(lockfile), root);
-  const named = holders.slice(0, MAX_NAMED).map((h) => `${h.name} ${h.version} (${h.requirement === null ? "its requirement could not be read" : `"${h.requirement}"`})`);
+  const named = holders
+    .slice(0, MAX_NAMED)
+    .map((h) => `${h.name} ${h.version}${h.movedTo ? `, which this plan moves to ${h.movedTo},` : ""} (${h.requirement === null ? "its requirement could not be read" : `"${h.requirement}"`})`);
   const rest = holders.length - named.length + more;
   const who = `${holders.length + more} ${holders.length + more === 1 ? "package requires" : "packages require"} ${name} outside ${target}: ${named.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}`;
   const copies = kept.filter((v): v is string => v !== null).sort((a, b) => compareVersions(a, b, "npm"));
