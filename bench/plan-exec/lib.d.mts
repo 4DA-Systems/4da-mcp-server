@@ -79,7 +79,7 @@ export interface ProjectResult {
   order_source?: string;
   counts: Record<"steps" | "steps_run" | "steps_failed" | "steps_refused" | "steps_without_effect" | "steps_lowering" | "steps_lowering_earlier", number>;
   advisories: { before: number; after: number };
-  prediction: Record<"vulnerable_copies_before" | "predicted_remaining" | "remaining" | "vulnerable_copies_after", number>;
+  prediction: Record<"vulnerable_copies_before" | "predicted_remaining" | "remaining" | "vulnerable_copies_after", number> & { planned_but_remained?: string[]; new_vulnerable_copies?: number };
 }
 export function totals(projects: ProjectResult[]): Record<string, unknown> & { net_cleared_ratio: number | null; order_sources: Record<string, number> };
 export function gateFindings(t: ReturnType<typeof totals>, thresholds: Record<string, unknown>, projects?: ProjectResult[]): string[];

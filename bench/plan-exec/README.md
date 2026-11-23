@@ -103,7 +103,11 @@ version, or is refused, when the plan has no `run_order`, or when the corpus's n
 advisories cleared, `(before - after) / before`, is below `min_net_cleared_ratio` (0.75: just under what the
 6.5.0 candidate measured, 0.7595; raise it to what a release measures, in the change that records that
 run). Advisory counts drift as OSV.dev adds records for these old versions, so the gate reads a
-ratio, never a count.
+ratio, never a count. It also fails when the rescan contradicts more of the plan's claims than
+allowed, summed over the corpus: `max_planned_but_remained` (vulnerable copies a step ran for that
+were still there, `prediction.planned_but_remained`) and `max_new_vulnerable_copies` (vulnerable
+copies the run brought in). Both hold the candidate's recorded 22 and 24 until a run of the fixed
+build over the whole corpus sets them.
 
 This is not a pull-request job: it clones 13 repositories, resolves their trees against the
 live registries and takes about an hour of runner time. `.github/workflows/plan-exec.yml` runs
