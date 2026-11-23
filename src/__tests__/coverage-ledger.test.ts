@@ -259,7 +259,10 @@ describe("coverage ledger: what was not read is always said", () => {
       write("package.json", JSON.stringify({ dependencies: { next: "15.5.29", react: "19.3.1", "react-dom": "19.3.1" } }));
       const result = await scan();
       expect(result.total_dependencies_scanned).toBe(3);
-      expect(result.total_vulnerable_packages).toBe(0);
+      // No lockfile was read: the counts are withheld and the answer leads with it (the pins' own count is a lower bound).
+      expect(result.total_vulnerable_packages).toBeNull();
+      expect(result.found_in_checked_dependencies.vulnerable_packages).toBe(0);
+      expect(result.summary).toMatch(/^NOT CHECKED: no lockfile was read for this project/);
       expect(result.coverage).toMatchObject({ complete: false });
       expect(result.coverage.note).toMatch(/^NO LOCKFILE: package\.json has no lockfile, so only the 3 exact pins declared there were checked; the packages they depend on \(the transitive tree\) were not resolved and NOT checked: run npm install --package-lock-only/);
       expect(result.coverage.unresolved_manifests).toEqual([
@@ -270,7 +273,8 @@ describe("coverage ledger: what was not read is always said", () => {
     it("Cargo.toml only: the same caveat", async () => {
       write("Cargo.toml", '[package]\nname = "fx"\nversion = "0.1.0"\n\n[dependencies]\nsmallvec = "=1.6.0"\nregex = "=1.5.4"\n');
       const result = await scan();
-      expect(result.total_vulnerable_packages).toBe(1);
+      expect(result.total_vulnerable_packages).toBeNull();
+      expect(result.found_in_checked_dependencies.vulnerable_packages).toBe(1);
       expect(result.coverage.note).toMatch(/NO LOCKFILE: Cargo\.toml has no lockfile, so only the 2 exact pins declared there were checked.*run cargo generate-lockfile/);
     });
 
@@ -391,7 +395,8 @@ describe("coverage ledger: what was not read is always said", () => {
       const result = await scan();
       // `Django==3.2.0` names an exact version: it is checked, as an exact pin in package.json or Cargo.toml is.
       expect(asked.map((a) => `${a.name}@${a.version}`).sort()).toEqual(["django@3.2.0", "requests@2.25.0"]);
-      expect(result.total_vulnerable_packages).toBe(1);
+      expect(result.total_vulnerable_packages).toBeNull();
+      expect(result.found_in_checked_dependencies.vulnerable_packages).toBe(1);
       expect(result.coverage.note).toMatch(/NO LOCKFILE: pyproject\.toml has no lockfile, so only the 2 exact pins declared there were checked/);
       // `flask>=2` names no exact version: not checked, and said.
       expect(result.coverage.unpinned_requirements).toEqual([{ file: "pyproject.toml", count: 1, names: ["flask"] }]);
