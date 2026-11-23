@@ -178,3 +178,17 @@ describe("a folder with nothing this server reads", () => {
     expect(r.coverage).toMatchObject({ complete: true });
   });
 });
+
+describe("a lockfile that exists and could not be read, beside one that could", () => {
+  it("an unparseable package-lock.json beside pinned requirements: NOT CHECKED leads, the totals are a lower bound", async () => {
+    write("package.json", JSON.stringify({ dependencies: { lodash: "^4.17.20" } }));
+    write("package-lock.json", '{ "name": "x", "lockfileVersion": 3, "packages": { "": {');
+    write("requirements.txt", "requests==2.31.0\nidna==3.4\n");
+    const r = await scan();
+    expect(r.summary).toMatch(/^NOT CHECKED/);
+    expect(r.summary).toMatch(/package-lock\.json/);
+    expect(totals(r)).toEqual([null, null, null]);
+    expect(r.found_in_checked_dependencies.note).toMatch(/not read \(see coverage\); these counts cover only what was read and are a lower bound/);
+    expect(r.coverage).toMatchObject({ complete: false });
+  });
+});
