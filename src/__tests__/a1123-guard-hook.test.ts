@@ -35,6 +35,9 @@ let project: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "a1123-guard-home-"));
   project = mkdtempSync(join(tmpdir(), "a1123-guard-project-"));
+  // A server from 6.5.0 on starts the ledger when it starts, and the hook denies only where one
+  // exists (a1123-skew-guard-older-server.test.ts has the folder without one).
+  writeFileSync(join(home, LEDGER_FILE), "");
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });

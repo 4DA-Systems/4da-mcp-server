@@ -16,6 +16,8 @@
  * - Several servers may write at once: each call's entries go out in one append, and a reader
  *   skips any line that does not parse. A lost or torn line costs a repeated check, never a
  *   wrong allow.
+ * - It exists from the server's start (startLedger), empty until the first verdict: the hook
+ *   denies only where it finds one, so it never holds an edit beside a server that cannot record.
  */
 
 import { appendFile, mkdir, rename, stat, writeFile } from "node:fs/promises";
@@ -135,6 +137,30 @@ export function recordVerdicts(items: readonly CheckedItem[], options: { now?: D
   // Each append starts on a line of its own, so a line left torn by a crash never swallows it.
   const text = "\n" + entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
   queue = queue.then(() => append(dir, text)).catch(() => undefined);
+  return queue;
+}
+
+/**
+ * Start the ledger in `dir` (the data folder by default) when it has none: an empty file. The
+ * hook denies only where a ledger exists, because beside a server that records no verdict (any
+ * before 6.5.0) a denied edit could never pass; this file is how it knows one that does has run
+ * here. An existing ledger is left as it is. Called once when the server starts serving; like
+ * every write here it is not awaited and never rejects.
+ */
+export function startLedger(options: { dir?: string } = {}): Promise<void> {
+  let dir: string;
+  try {
+    dir = options.dir ?? serverDataDir();
+  } catch {
+    return queue;
+  }
+  queue = queue
+    .then(async () => {
+      await mkdir(dir, { recursive: true });
+      // Appending nothing creates the file when it is missing and changes nothing when it is there.
+      await appendFile(path.join(dir, LEDGER_FILE), "", { encoding: "utf8", mode: 0o600 });
+    })
+    .catch(() => undefined);
   return queue;
 }
 
