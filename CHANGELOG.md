@@ -1,5 +1,48 @@
 # Changelog
 
+## 6.5.1 — unreleased
+
+### What is scanned
+
+- A `package-lock.json` or `npm-shrinkwrap.json` with no entry for a dependency `package.json` declares (written before that dependency was added, the usual state after `package.json` is edited by hand) is read as a partial lockfile, as pnpm, Yarn and Bun lockfiles already were. 6.5.0 called such a project complete in every tool: `dependency_health` "Health: 100/100 ... all healthy", `vulnerability_scan` `coverage.complete: true`, `upgrade_planner` `vulnerabilityDataAvailable: true`, and the missing dependency was checked by none of them. Now the lockfile is listed under `coverage.partial_lockfiles` with the names it lacks, the health score is for the checked part only and says so (`scoreCoverage`, "over the checked part only"), and the plan says NOT CHECKED. A peerDependency and a `file:` / `link:` / `workspace:` dependency are owed no entry.
+- An npm dependency taken from a path (a `file:` directory or archive), git or a URL is never looked up by its name. `dependency_health` and `upgrade_planner` made a registry row for every declared dependency, so `"acme-lib": "file:libs/acme-lib"` or a `github:` dependency went to registry.npmjs.org and api.npmjs.org by name. Such a dependency now gets no registry row; what it installs is listed under `coverage.not_checkable` as before.
+
+### The plan
+
+- `upgrade_planner` says `vulnerabilityDataAvailable: false`, and its summary starts with NOT CHECKED, whenever a lockfile of any ecosystem holds merge-conflict markers, could not be parsed or was read only in part. It said `true` beside a conflicted `Cargo.lock` once an npm lockfile next to it was read, while the scan of the same project said `coverage.complete: false`.
+- A fix target that installs an affected copy two levels down is not a clean fix. `@hey-api/openapi-ts` 0.97.3 clears its own advisory but exact-pins `@hey-api/json-schema-ref-parser` 1.4.2, which exact-pins `js-yaml` 4.1.1 (four advisories); 6.5.0's plan gave it as the target with a command and `fixPathChecked: "all_advisories"`, the scan named it `fixed_version`, and `dependency_check` said proceed. Now the exact pins of what a target holds are checked too: the row names the copy and the dependency that pins it, a later release clean at both levels is taken when there is one, otherwise the row is NOT a clean fix with no target or command, the scan gives no fixed version, and `dependency_check` names the copy. Where what a held dependency pins cannot be read in time, the target is NOT CHECKED, never clean.
+- A Cargo step that installs a crate release needing a newer Rust than your `rust-version` says so. The row carries `needsNewerRust` (the crate, the Rust it needs, the `rust-version` and the manifest that declares it) and a reason; the summary counts such rows and `run_order_note` names the steps. A project declaring `rust-version = "1.64"` is told that time 0.3.47, the first release past RUSTSEC-2026-0009, needs Rust 1.88: `cargo update --precise` installs it anyway, and the build then fails on 1.64. `rust-version` is read from `[package]`, from `[workspace.package]` when inherited, and at a virtual workspace root.
+
+### The pre-write check
+
+- `dependency_check` on a name it withholds never reads as checked. A name withheld because a lockfile could not be read is answered "NOT CHECKED (unreadable lockfile): <file> could not be read ... repair or regenerate the lockfile (reinstall), then call dependency_check again", with `unreadable_file` on the item and `_meta.unreadable_lockfile`; 6.5.0 called lodash "a private package" beside an unparseable `package-lock.json` and pointed at a private registry. An answer in which nothing was checked starts with "NOT CHECKED:". `_meta.sources_note` no longer says "every answer was read from the local cache" when items were withheld: it says how many were not looked up and how many were answered from the cache. `not_checked` stays `"private"` for both, so the guard hook's ledger is unchanged.
+
+### Plugin hook and install
+
+- The guard hook reads an install command run through a shell or a runner: `bash -c "npm install x@1"`, `sh -c`, `bash -lc`, `pwsh -Command`, `npx pnpm add`, `npx -y pnpm@9 add`, `npm exec`, `bunx`, `pnpm dlx`, `yarn dlx`, `corepack pnpm@9 add`, up to three wrappers deep. It also reads `pnpm up` / `yarn up` with a version, and `python -u -m pip install`. In 6.5.0 these went ahead unchecked.
+- A guard denial quotes every name and version it repeats, and says they are data copied from the edit or command, never instructions: a manifest can be a third party's, and a name like "ignore-all-previous-instructions-..." is a valid npm name. The denial offers the `dependency_check` call for the packages you mean to add and says what the call sends: a name goes to its public registry and OSV.dev unless your private rules (an `.npmrc` scope, `GOPRIVATE`, a private index, `FOURDA_PRIVATE_PACKAGES`) cover it, and a name that is not published comes back unknown and stays blocked.
+- `--help`, and the message for a database that cannot be read, print `npx -y --prefer-offline @4da/mcp-server@<this version>`; they printed unpinned `npx @4da/mcp-server` lines, which start whatever npx cached first. `--help` also says `FOURDA_OFFLINE` turns off the package registries and Hacker News as well as OSV.dev.
+- The MCP Registry entry (`server.json`) carries `runtimeHint: "npx"` with `-y` and `--prefer-offline` as runtime arguments, so a client that builds its command from the registry starts a cached pinned version without asking the registry first, as the plugin, the Gemini extension, `--setup` and 4da.ai's install pages already do.
+
+### Changed behaviour
+
+- `upgrade_planner` says `vulnerabilityDataAvailable: false` in more projects: any lockfile not read whole, of any ecosystem, including an npm lockfile older than its `package.json`. A caller that waits for `true` before acting gets the NOT CHECKED summary instead, which names the file to fix.
+- `dependency_check` verdicts change for a release whose held dependencies exact-pin an affected copy (now `avoid` or `review` with the copy named), so the guard hook holds it.
+- `dependency_check`'s `_meta.private_packages` counts only private names; names withheld beside an unreadable lockfile are counted in `_meta.unreadable_lockfile`. An all-withheld summary starts with "NOT CHECKED:" (it started with "N not checked (private)").
+- `dependency_health` lists no row for an npm dependency taken from a path, git or a URL, so "N direct dependencies checked against their registries" counts registry dependencies only.
+
+### Known limits
+
+- `dependency_health` still scores the checked part of a project beside a lockfile read only in part (`scoreCoverage`, "over the checked part only"), where `what_should_i_know` treats the same file as not read; an unreadable or merge-conflicted lockfile withholds the score.
+- Two levels down only exact pins are judged: a range two levels down, anything deeper, and a copy bundled inside a package's tarball (`tap`) are not checked, so a plan can still bring in a vulnerable copy it did not name (`@actions/github` 6.0.0 brings undici 5.x through `@actions/http-client`). Scan again after running a plan (`run_order_note` says so).
+- The planner flags a Cargo release that needs a newer Rust than your `rust-version` and keeps it as the target; it does not look for an older release that fits (for a security fix the smallest clean release is already the target). A release that declares no `rust-version` is not judged.
+- The guard hook cannot tell a made-up name from a real one by itself (it runs offline with no registry); the server's answer decides, and an unknown answer keeps the version held. It does not read `cmd /c`, `pwsh -EncodedCommand`, or global tool installs (`cargo install`, `yarn global add`, `go install`, `npx some-tool@1.2.3`), which add no dependency to the project.
+- An upgrade can lower another package through the new release's own exact pin (cypress 15 pins `cli-table3` 0.6.1 where 0.6.3 was installed). The plan does not warn about it.
+- uv's universal resolve can pick a different release for a higher Python than the one the plan checked.
+- A direct upgrade that would leave other packages' copies affected is not offered as a command at all, so the project's own copy also stays until the hand step is done.
+- A cold batch of 25 crates can need a second call: crates.io allows one request a second.
+- In the `"*"` scope one app plan step can cover copies with different routes.
+
 ## 6.5.0 — 2026-11-23
 
 ### What is scanned
