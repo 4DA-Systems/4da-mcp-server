@@ -5,34 +5,112 @@ import path from "node:path";
 
 import { openDatabase, sqliteDriverStatus, type SqliteDatabase, type SqliteStatement } from "../sqlite-driver.js";
 
-import { serverCacheDbPath, standaloneDbPath } from "../db.js";
+import { isOwnStorePath, serverCacheDbPath } from "../db.js";
 
 let serverCache: SqliteDatabase | null = null;
 
+/** Which cache this process uses, for --doctor: the file on disk, or memory and why. */
+export interface ServerCacheState {
+  kind: "disk" | "memory";
+  path: string;
+  /** Opens tried; more than 1 when a lock held by another starting server was waited out. */
+  attempts: number;
+  reason?: string;
+}
+
+let cacheState: ServerCacheState | null = null;
+
+/** The cache this process opened (null before the first getServerCacheDb(), or with no SQLite driver). */
+export function serverCacheState(): ServerCacheState | null {
+  return cacheState;
+}
+
+/** Opens tried before a session caches in memory: a lock another starting server holds is gone in milliseconds. */
+const CACHE_OPEN_ATTEMPTS = 4;
+/** Pause before retry n is n times this. */
+const CACHE_RETRY_PAUSE_MS = 50;
+
+/** Whether an open failed on a lock (SQLITE_BUSY / SQLITE_LOCKED and their extended codes), which a retry can clear. */
+export function isTransientOpenError(error: unknown): boolean {
+  const code = String((error as { code?: unknown } | null)?.code ?? "");
+  if (/^SQLITE_(BUSY|LOCKED)/.test(code)) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /database (table )?is locked/i.test(message);
+}
+
+export interface CacheOpenResult {
+  db: SqliteDatabase | null;
+  attempts: number;
+  error?: unknown;
+}
+
+function pauseSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Open the cache file in WAL mode, retrying a lock up to `attempts` times; any other failure is
+ * final at once. Every connection a failed attempt opened is closed (on Windows a leaked handle
+ * keeps the file locked).
+ */
+export function openCacheFile(
+  file: string,
+  options: { open?: (file: string) => SqliteDatabase; pause?: (ms: number) => void; attempts?: number } = {},
+): CacheOpenResult {
+  const open = options.open ?? ((f: string) => openDatabase(f));
+  const pause = options.pause ?? pauseSync;
+  const attempts = Math.max(1, options.attempts ?? CACHE_OPEN_ATTEMPTS);
+  for (let attempt = 1; ; attempt++) {
+    let db: SqliteDatabase | null = null;
+    try {
+      db = open(file);
+      db.pragma("journal_mode = WAL");
+      // A cache, not a record: in WAL mode NORMAL never corrupts the file, and
+      // a crash can only lose the last few writes, which are refetched.
+      db.pragma("synchronous = NORMAL");
+      return { db, attempts: attempt };
+    } catch (error) {
+      try {
+        db?.close();
+      } catch {
+        // Nothing to close when the open itself failed.
+      }
+      if (attempt >= attempts || !isTransientOpenError(error)) return { db: null, attempts: attempt, error };
+      pause(CACHE_RETRY_PAUSE_MS * attempt);
+    }
+  }
+}
+
 /**
  * The server's own cache file (serverCacheDbPath(), `cache.db`), opened once
- * per process. Falls back to an in-memory database when the file cannot be
- * created (a read-only home directory): the server then runs uncached on disk
- * rather than failing. Null when no SQLite driver is usable at all
- * (sqlite-driver.ts); LiveCache then keeps entries in a Map for the session.
+ * per process, a lock retried (openCacheFile). Falls back to an in-memory
+ * database when the file cannot be opened (a read-only home directory, a lock
+ * that outlasts the retries): the server then runs uncached on disk rather
+ * than failing, and serverCacheState() says so. Null when no SQLite driver is
+ * usable at all (sqlite-driver.ts); LiveCache then keeps entries in a Map for
+ * the session.
  */
 export function getServerCacheDb(): SqliteDatabase | null {
   if (serverCache?.open) return serverCache;
   if (!sqliteDriverStatus().driver) return null;
   const file = serverCacheDbPath();
+  let opened: CacheOpenResult;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    serverCache = openDatabase(file);
-    serverCache.pragma("journal_mode = WAL");
-    // A cache, not a record: in WAL mode NORMAL never corrupts the file, and
-    // a crash can only lose the last few writes, which are refetched.
-    serverCache.pragma("synchronous = NORMAL");
+    opened = openCacheFile(file);
   } catch (error) {
-    console.error(
-      `[4da] cannot open the cache at ${file} (${error instanceof Error ? error.message : String(error)}); caching in memory for this session`,
-    );
-    serverCache = openDatabase(":memory:");
+    opened = { db: null, attempts: 0, error };
   }
+  if (opened.db) {
+    serverCache = opened.db;
+    cacheState = { kind: "disk", path: file, attempts: opened.attempts };
+    return serverCache;
+  }
+  const reason = opened.error instanceof Error ? opened.error.message : String(opened.error);
+  const tries = opened.attempts > 1 ? `, after ${opened.attempts} attempts` : "";
+  console.error(`[4da] cannot open the cache at ${file} (${reason}${tries}); caching in memory for this session`);
+  serverCache = openDatabase(":memory:");
+  cacheState = { kind: "memory", path: file, attempts: opened.attempts, reason };
   return serverCache;
 }
 
@@ -40,6 +118,7 @@ export function getServerCacheDb(): SqliteDatabase | null {
 export function closeServerCacheDb(): void {
   if (serverCache?.open) serverCache.close();
   serverCache = null;
+  cacheState = null;
 }
 
 /**
@@ -77,7 +156,7 @@ function inMemory(db: SqliteDatabase): boolean {
  */
 function dropLegacyCacheTable(db: SqliteDatabase): void {
   try {
-    if (path.resolve(db.name) !== path.resolve(standaloneDbPath())) return;
+    if (!isOwnStorePath(db.name)) return;
     db.exec("DROP TABLE IF EXISTS live_cache");
   } catch {
     // Locked or read-only after all: harmless, it is only unused space.

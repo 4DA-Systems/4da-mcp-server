@@ -53,13 +53,15 @@ import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
+import { maxOf } from "../array-utils.js";
 import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
+import { recordVerdicts } from "../check-ledger.js";
 import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
 import type { Verdict } from "./dependency-check-signals.js";
 import { parseTarget, rangeAdmits } from "./dependency-check-versions.js";
 import { lengthProblem } from "../tool-args.js";
-import { UNTRUSTED_TEXT_FIELDS } from "../untrusted-text.js";
+import { UNTRUSTED_TEXT_FIELDS, quoteThirdParty } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
 import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, type NpmWhy } from "./dependency-check-resolution.js";
 import { ECOSYSTEMS, head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
@@ -114,7 +116,7 @@ export const dependencyCheckTool = {
     "- publish_trust (npm, crates.io): trusted publisher / provenance dropped -> review. install_script_added (npm): new install script -> review. new_dependencies (npm, crates.io): a new runtime dependency under 30 days old -> review. Not applicable elsewhere, and said so.",
     "- upgrade_type: major (0.x minor counts) -> review: call upgrade_impact for what it breaks.",
     "",
-    "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed.",
+    "`unknown` = a lookup failed or the package is not on the public registry (private, misspelled or hallucinated name); never a silent proceed. An item with `retry_after_seconds` was held back by this server's own request limit (the registry is not at fault): ask again for it after that many seconds. An item refused as written (`not_checked: \"input\"`, its reason says why) is answered in its place and the others are checked.",
     "",
     "Privacy: registries get the package name only (Go: also the judged versions' .info and .mod, as `go get` does; PyPI: also the judged release's own metadata document when it is not the latest release, never the installed version), and the names of the packages a judged release requires; OSV.dev gets names and versions, as vulnerability_scan does. A private package (a scope your .npmrc maps to a private registry, GOPRIVATE, a private Cargo or PyPI index in the lockfile, FOURDA_PRIVATE_PACKAGES) is never looked up: `unknown` with `not_checked: \"private\"`. FOURDA_OFFLINE=true disables lookups (every item unknown).",
   ].join("\n"),
@@ -155,9 +157,15 @@ export const dependencyCheckTool = {
   },
 };
 
-/** The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`). */
+/**
+ * The tool as served: the answer in the requested form (concise unless `response_format: "detailed"`).
+ * Each final verdict also goes to the local check ledger (check-ledger.ts), unawaited: the answer
+ * never waits on it or changes with it.
+ */
 export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
-  return shapeDependencyCheck(await executeDependencyCheck(db, params, liveIntel), params.response_format);
+  const answer = await executeDependencyCheck(db, params, liveIntel);
+  void recordVerdicts(answer.results);
+  return shapeDependencyCheck(answer, params.response_format);
 }
 
 export async function executeDependencyCheck(
@@ -191,18 +199,23 @@ async function checkWithinBudget(db: FourDADatabase | null, params: DependencyCh
   const checkedAt = (opts.now ?? new Date()).toISOString();
   const shared = coalescingAdvisories(liveIntel);
   const raw = params.items as unknown[];
-  const pending = raw.map((item) => checkDependencies(db, { ...params, items: [item] }, shared, opts));
-  for (const p of pending) p.catch(() => undefined);
-  const outcome = (p: (typeof pending)[number]) => p.then((a) => ({ ok: true as const, a }), (error: unknown) => ({ ok: false as const, error }));
-  let settled: Array<Awaited<ReturnType<typeof outcome>> | null> = await Promise.all(pending.map((p) => settleWithin(outcome(p), budgetMs, () => null)));
+  // An item refused as written is answered in its place and never looked up.
+  const pending = raw.map((item, i) => (isRefused(all[i]) ? null : checkDependencies(db, { ...params, items: [item] }, shared, opts)));
+  for (const p of pending) p?.catch(() => undefined);
+  const outcome = (p: NonNullable<(typeof pending)[number]>) => p.then((a) => ({ ok: true as const, a }), (error: unknown) => ({ ok: false as const, error }));
+  let settled: Array<Awaited<ReturnType<typeof outcome>> | null> = await Promise.all(pending.map((p) => (p ? settleWithin(outcome(p), budgetMs, () => null) : null)));
   // Nothing finished: waiting on lets the dispatcher's own budget answer (every item NOT CHECKED,
   // the real time said) stand; this answer is then only what a caller with no budget gets.
-  if (settled.every((x) => x === null)) settled = await Promise.all(pending.map(outcome));
-  const results = settled.map((s, i) => (s && s.ok ? s.a.results[0] : s && !s.ok ? failedResult(all[i], s.error) : timeBudgetResult(all[i], budgetMs + ANSWER_RESERVE_MS)));
+  if (settled.every((x) => x === null)) settled = await Promise.all(pending.map((p) => (p ? outcome(p) : null)));
+  const results = all.map((v, i) => {
+    if (isRefused(v)) return refusedResult(v);
+    const s = settled[i];
+    return s && s.ok ? s.a.results[0] : s && !s.ok ? failedResult(v, s.error) : timeBudgetResult(v, budgetMs + ANSWER_RESERVE_MS);
+  });
   const answers = settled.flatMap((s) => (s && s.ok ? [s.a] : []));
   const priv = results.filter((x) => x.not_checked === "private").length;
   const notice = answers.map((a) => a._meta.registry_notice).find(Boolean);
-  const unfinished = settled.filter((x) => x === null).length;
+  const unfinished = all.filter((v, i) => !isRefused(v) && settled[i] === null).length;
   return finish(checkedAt, results, {
     ...(unfinished > 0 ? { timeBudget: { unfinished, ms: budgetMs + ANSWER_RESERVE_MS } } : {}),
     offline: answers.some((a) => a._meta.offline),
@@ -224,6 +237,17 @@ function timeBudgetResult(r: Requested, budgetMs: number): ItemResult {
     reason: `NOT CHECKED (time budget): the registry and advisory lookups for ${r.package} ${provisional(r).to} did not finish within this call's ${secondsText(budgetMs)}; they keep running and their answers are cached. Call dependency_check again for this item. This is not a clean result.`,
     signals: [],
     not_checked: "time_budget",
+  };
+}
+
+/** An item refused as written: unknown in its place, with the refusal as its reason; nothing was looked up for it. */
+function refusedResult(v: Refused): ItemResult {
+  return {
+    ...v.shown,
+    verdict: "unknown",
+    reason: `NOT CHECKED: ${v.refused}. Nothing was looked up for it: correct it and ask again. This is not a clean result.`,
+    signals: [],
+    not_checked: "input",
   };
 }
 
@@ -281,7 +305,8 @@ async function checkDependencies(
   liveIntel: LiveIntelligence | null,
   opts: { now?: Date },
 ) {
-  const asked = validateItems(params.items);
+  const validated = validateItems(params.items);
+  const asked = validated.filter((v): v is Requested => !isRefused(v));
   const plan = asked.map((r) => {
     const bare = r.ecosystem === "crates.io" && r.target.kind === "exact" ? cargoBareVersion(r.raw) : null;
     // The caret check keeps the raw `to`, so what it finds is kept under the item as asked (r7 facts).
@@ -310,9 +335,12 @@ async function checkDependencies(
     if (p.partial) merged.push(mergeCargoPartial(one, rest, p.checks[0].raw, p.partial) as ItemResult);
     else merged.push(p.bare && two ? (mergeCargoBare(one, two, p.checks[0].raw, p.bare) as ItemResult) : one);
   }
-  const priv = merged.filter((x) => x.not_checked === "private").length;
+  // The refused items in their places.
+  let k = 0;
+  const answered = validated.map((v) => (isRefused(v) ? refusedResult(v) : merged[k++]));
+  const priv = answered.filter((x) => x.not_checked === "private").length;
   const notice = first.meta.registryNotice ?? second?.meta.registryNotice;
-  return finish(first.checkedAt, merged, {
+  return finish(first.checkedAt, answered, {
     offline: first.meta.offline || Boolean(second?.meta.offline),
     osvCached: first.meta.osvCached && (second?.meta.osvCached ?? true),
     ...(priv > 0 ? { private: priv } : {}),
@@ -401,45 +429,73 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   return pass(results, { offline: batch.scan.offline, osvCached: batch.scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
 }
 
-function validateItems(raw: unknown): Requested[] {
+/** An item refused as written: why, and its fields as given (capped) for the answer in its place. */
+interface Refused {
+  refused: string;
+  shown: Pick<ItemResult, "ecosystem" | "package" | "from" | "to">;
+}
+
+function isRefused(v: Requested | Refused): v is Refused {
+  return "refused" in v;
+}
+
+/**
+ * Each item as validated, or refused with why. One refused item does not refuse the call: it is
+ * answered in its place and the others are checked. A call that is not a list of 1 to 25 items, or
+ * whose every item is refused, is refused whole (the first item's reason).
+ */
+function validateItems(raw: unknown): Array<Requested | Refused> {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_ITEMS) {
     throw new Error(`items must be an array of 1 to ${MAX_ITEMS} { ecosystem, package, to, from? } objects`);
   }
-  return raw.map((r, i) => {
-    const o = (r ?? {}) as Record<string, unknown>;
-    const where = `items[${i}]`;
-    // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
-    for (const field of ["package", "to", "from"]) {
-      const long = typeof o[field] === "string" ? lengthProblem(`${where}.${field}`, field, o[field] as string) : null;
-      if (long) throw new Error(long);
+  const out = raw.map((r, i): Requested | Refused => {
+    try {
+      return validateItem(r, i);
+    } catch (error) {
+      const o = (r ?? {}) as Record<string, unknown>;
+      const field = (v: unknown) => (typeof v === "string" ? quoteThirdParty(v, 214) : "");
+      return { refused: error instanceof Error ? error.message : String(error), shown: { ecosystem: field(o.ecosystem), package: field(o.package), from: typeof o.from === "string" && o.from ? field(o.from) : null, to: field(o.to) } };
     }
-    const ecosystem = ECOSYSTEMS.find((e) => e === o.ecosystem || (typeof o.ecosystem === "string" && e.toLowerCase() === o.ecosystem.trim().toLowerCase()));
-    if (!ecosystem) throw new Error(`${where}.ecosystem must be one of ${ECOSYSTEMS.map((e) => `"${e}"`).join(", ")}`);
-    if (typeof o.package !== "string" || !o.package.trim()) throw new Error(`${where}.package must be a non-empty string`);
-    const rawTo = typeof o.to === "string" ? o.to.trim() : "";
-    // An npm alias (`"my-lodash": "npm:lodash@4.17.20"` in package.json) installs the package it names:
-    // that package is the one judged, not the alias, which is no package on the registry.
-    const alias = ecosystem === "npm" ? /^npm:((?:@[^/@\s]+\/)?[^@\s]+)(?:@(.+))?$/.exec(rawTo) : null;
-    if (ecosystem === "npm" && rawTo.startsWith("npm:") && !alias) {
-      throw new Error(`${where}.to ${JSON.stringify(o.to)} is an npm alias that could not be read: write it as "npm:<package>@<version or range>", or pass the package it installs as \`package\` and its version as \`to\``);
-    }
-    const target = parseTarget(ecosystem, alias ? (alias[2] ?? "latest") : rawTo);
-    if (!target) {
-      throw new Error(
-        `${where}.to must be an exact version, "latest", or a ${ecosystem} version constraint such as ${EXAMPLES[ecosystem]} (got ${JSON.stringify(o.to)})`,
-      );
-    }
-    let from: string | undefined;
-    if (o.from !== undefined && o.from !== null && o.from !== "") {
-      const f = typeof o.from === "string" ? parseTarget(ecosystem, o.from) : null;
-      if (!f || f.kind !== "exact") {
-        throw new Error(`${where}.from must be an exact version, the one installed (got ${JSON.stringify(o.from)}), not a range`);
-      }
-      from = f.version;
-    }
-    // The same reading of a name every tool uses (package-name.ts): quotes around it are not part of it (r7).
-    return { ecosystem, package: alias ? alias[1] : unquotePackageName(o.package), raw: rawTo, target, ...(from ? { from } : {}) };
   });
+  const first = out.find(isRefused);
+  if (first && out.every(isRefused)) throw new Error(first.refused);
+  return out;
+}
+
+function validateItem(r: unknown, i: number): Requested {
+  const o = (r ?? {}) as Record<string, unknown>;
+  const where = `items[${i}]`;
+  // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
+  for (const field of ["package", "to", "from"]) {
+    const long = typeof o[field] === "string" ? lengthProblem(`${where}.${field}`, field, o[field] as string) : null;
+    if (long) throw new Error(long);
+  }
+  const ecosystem = ECOSYSTEMS.find((e) => e === o.ecosystem || (typeof o.ecosystem === "string" && e.toLowerCase() === o.ecosystem.trim().toLowerCase()));
+  if (!ecosystem) throw new Error(`${where}.ecosystem must be one of ${ECOSYSTEMS.map((e) => `"${e}"`).join(", ")}`);
+  if (typeof o.package !== "string" || !o.package.trim()) throw new Error(`${where}.package must be a non-empty string`);
+  const rawTo = typeof o.to === "string" ? o.to.trim() : "";
+  // An npm alias (`"my-lodash": "npm:lodash@4.17.20"` in package.json) installs the package it names:
+  // that package is the one judged, not the alias, which is no package on the registry.
+  const alias = ecosystem === "npm" ? /^npm:((?:@[^/@\s]+\/)?[^@\s]+)(?:@(.+))?$/.exec(rawTo) : null;
+  if (ecosystem === "npm" && rawTo.startsWith("npm:") && !alias) {
+    throw new Error(`${where}.to ${JSON.stringify(o.to)} is an npm alias that could not be read: write it as "npm:<package>@<version or range>", or pass the package it installs as \`package\` and its version as \`to\``);
+  }
+  const target = parseTarget(ecosystem, alias ? (alias[2] ?? "latest") : rawTo);
+  if (!target) {
+    throw new Error(
+      `${where}.to must be an exact version, "latest", or a ${ecosystem} version constraint such as ${EXAMPLES[ecosystem]} (got ${JSON.stringify(o.to)})`,
+    );
+  }
+  let from: string | undefined;
+  if (o.from !== undefined && o.from !== null && o.from !== "") {
+    const f = typeof o.from === "string" ? parseTarget(ecosystem, o.from) : null;
+    if (!f || f.kind !== "exact") {
+      throw new Error(`${where}.from must be an exact version, the one installed (got ${JSON.stringify(o.from)}), not a range`);
+    }
+    from = f.version;
+  }
+  // The same reading of a name every tool uses (package-name.ts): quotes around it are not part of it (r7).
+  return { ecosystem, package: alias ? alias[1] : unquotePackageName(o.package), raw: rawTo, target, ...(from ? { from } : {}) };
 }
 
 const EXAMPLES: Record<CheckEcosystem, string> = {
@@ -485,16 +541,39 @@ export function checkSources(): { sources: string[]; sources_note?: string } {
   return { sources: recorded };
 }
 
+/** How a registry is named where this server's own request limit for it held items back. */
+const LIMITED_REGISTRY: Record<string, string> = { Go: "the Go proxy", npm: "the npm registry", "crates.io": "crates.io", PyPI: "PyPI" };
+
+/** The summary's opening for items this server's own request limit held back (retry_after_seconds), or "". */
+function ownLimitText(results: ItemResult[]): string {
+  const held = results.filter((r) => r.retry_after_seconds);
+  if (held.length === 0) return "";
+  const registries = [...new Set(held.map((r) => LIMITED_REGISTRY[r.ecosystem] ?? r.ecosystem))].join(" and ");
+  const after = maxOf(held.map((r) => r.retry_after_seconds!));
+  const n = results.length;
+  return `NOT CHECKED: ${held.length} of ${n} item${n === 1 ? "" : "s"} could not be checked: this server's own request limit for ${registries} was reached (the registry was not asked and is not at fault). Call dependency_check again for ${held.length === 1 ? "it" : "them"} in ${after} s (retry_after_seconds). `;
+}
+
+/** The summary's opening for items refused as written (not_checked "input"), or "". */
+function refusedText(results: ItemResult[]): string {
+  const refused = results.filter((r) => r.not_checked === "input").length;
+  if (refused === 0) return "";
+  const n = results.length;
+  return `NOT CHECKED: ${refused} of ${n} item${n === 1 ? "" : "s"} ${refused === 1 ? "was" : "were"} refused as written (not_checked: "input"; each reason says why): nothing was looked up for ${refused === 1 ? "it" : "them"}. `;
+}
+
 function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string; timeBudget?: { unfinished: number; ms: number } }) {
+  // The counts are of the items looked up; the refused ones are named before them.
+  const looked = results.filter((r) => r.not_checked !== "input");
   const counts = new Map<Verdict, number>();
-  for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
+  for (const r of looked) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
   const order: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
   const parts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
   return {
     checked_at: checkedAt,
-    summary: meta.timeBudget
-      ? `NOT CHECKED: ${meta.timeBudget.unfinished} of ${results.length} item${results.length === 1 ? "" : "s"} did not finish within ${secondsText(meta.timeBudget.ms)} (not_checked: "time_budget"): call dependency_check again for ${meta.timeBudget.unfinished === 1 ? "it" : "them"}; their lookups keep running and are cached. The other verdicts are final. ${summaryLine(results, parts)}`
-      : summaryLine(results, parts),
+    summary: refusedText(results) + ownLimitText(results) + (meta.timeBudget
+      ? `NOT CHECKED: ${meta.timeBudget.unfinished} of ${results.length} item${results.length === 1 ? "" : "s"} did not finish within ${secondsText(meta.timeBudget.ms)} (not_checked: "time_budget"): call dependency_check again for ${meta.timeBudget.unfinished === 1 ? "it" : "them"}; their lookups keep running and are cached. The other verdicts are final. ${summaryLine(looked, parts)}`
+      : summaryLine(looked, parts)),
     results,
     _meta: {
       ...checkSources(),

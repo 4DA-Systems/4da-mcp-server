@@ -31,7 +31,7 @@ import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, ty
 import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
 import { normalizePythonName } from "./lockfile-parsers-pygo.js";
-import type { TreeDiscovery } from "../project-tree.js";
+import { withMergeConflicts, type TreeDiscovery } from "../project-tree.js";
 import { applyInstanceDevScope } from "./dev-scope.js";
 import { isDevOnlyCopy } from "./severity-scope.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements } from "./lockfile-types.js";
@@ -275,7 +275,9 @@ export class LiveIntelligence {
    * project-tree.ts): each group resolves from its own directory and keeps
    * its manifest's platform targets; `root` is the reported project root.
    */
-  initFromProjectTree(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
+  initFromProjectTree(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
+    // Started in a workspace member, the walk read the workspace root: that is the project root.
+    const root = discovery?.workspace?.root ?? started;
     // A pyproject.toml in a subfolder with no lockfile is a group too (unlockedPythonGroups): its
     // index rules apply to its names and its dependencies are listed, never sent (pre-publish round 10, W4).
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
@@ -289,7 +291,8 @@ export class LiveIntelligence {
    * 150,000-entry lockfile is read (it waited 2.3 s; pre-publish round 10, W11). False, with the
    * set left to the resolution that superseded it, when a synchronous init ran meanwhile.
    */
-  async initFromProjectTreeYielding(root: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
+  async initFromProjectTreeYielding(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
+    const root = discovery?.workspace?.root ?? started;
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
     const run = ++this.initRun;
     const steps = this.applyGroupsSteps(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
@@ -346,20 +349,26 @@ export class LiveIntelligence {
     return this.groupResults.flatMap((r) => r.problems ?? []).filter((p) => !seen.has(key(p)) && (seen.add(key(p)), true));
   }
 
-  /** What the project-tree walk left out (lockfiles past its bounds); null when the set did not come from a walk. */
+  /**
+   * What the project-tree walk left out (lockfiles past its bounds), with every file the resolution
+   * found holding a merge conflict (reason `merge_conflict`); null when the set did not come from a
+   * walk and no file holds one.
+   */
   getDiscovery(): TreeDiscovery | null {
-    return this.discovery;
+    const conflicted = this.getLockfileProblems().filter((p) => p.mergeConflict);
+    if (conflicted.length === 0) return this.discovery;
+    return withMergeConflicts(this.discovery, conflicted, this.projectRoot ?? commonPathRoot(this.groupResults.map((r) => r.group.dir)) ?? process.cwd());
   }
 
   /**
-   * Initialize from dependency groups that each carry their own resolution
-   * directory. Used in 4DA database mode, where dependencies span multiple
-   * manifests in different locations (Rust crates under src-tauri/, relay/,
-   * etc.; npm packages at the repo root and in sub-packages). Each group
-   * resolves versions from its own lock file, so a single global cwd no longer
-   * silently drops every dependency whose manifest lives in a subdirectory.
-   * Deduplicates by ecosystem+name+version so a crate shared across workspaces
-   * is scanned once.
+   * Test seam: initialize from dependency groups that each carry their own
+   * resolution directory, for a test that already knows its groups. No
+   * production code calls it: the server always initializes from the
+   * project-tree walk (initFromProjectTree), with or without the app's
+   * database. Each group
+   * resolves versions from its own lock file; dependencies are deduplicated by
+   * ecosystem+name+version so a crate shared across workspaces is scanned once.
+   * No walk record is kept, so coverage notes are absent.
    */
   initFromDependencyGroups(
     groups: Array<{ dir: string; language: string; deps: string[]; devDeps: string[] }>,
@@ -995,7 +1004,20 @@ export class LiveIntelligence {
     projectPath: string,
     options?: { includeDev?: boolean; forceRefresh?: boolean; deadline?: number },
   ): Promise<VulnerabilityScanResult> {
-    return this.runInContext(() => this.scanVulnerabilitiesIn(projectPath, options));
+    // Asked about the workspace member the walk was started in: the answer is about the workspace root it read.
+    const ws = this.discovery?.workspace;
+    const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const reported = ws && norm(projectPath) === norm(ws.startedIn) ? ws.root : projectPath;
+    return this.runInContext(() => this.scanVulnerabilitiesIn(reported, options));
+  }
+
+  /**
+   * Whether a lockfile (or a requirements file's exact pins) was read for this project: false when
+   * every version this layer holds is a manifest's declaration, or nothing was read. The one
+   * question dependency_health, upgrade_planner and what_should_i_know ask, so they agree.
+   */
+  wasLockfileRead(): boolean {
+    return this.groupResults.some((r) => r.sources.some((s) => s.kind === "lockfile" || s.kind === "manifest"));
   }
 
   private async scanVulnerabilitiesIn(

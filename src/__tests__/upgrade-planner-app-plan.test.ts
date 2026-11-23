@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * upgrade_planner reads the 4DA app's plan (AD-049): one brain.
+ * upgrade_planner and the 4DA app's stored plan (AD-049, DESIGN section 3).
  *
  * Fixture databases hold the `upgrade_plan_snapshot` envelope the Rust app
- * writes (`evidence::plan_snapshot::persist_upgrade_plan`, schema 4; schema 5 at the end). The tool
- * returns that plan's work order when it is current, returns it flagged stale
- * past `expires_at`, and falls back to the standalone heuristic — saying why —
- * when the snapshot is missing, from another schema, or the store is absent.
+ * writes (`evidence::plan_snapshot::persist_upgrade_plan`, schema 4; schema 5 at the end).
+ * For every project ("*", or a server started outside a project) the tool returns that plan's
+ * work order, labelled as the app's and flagged stale past `expires_at`. For one project the
+ * answer is always this server's own plan from the lockfiles on disk, and `app_plan_check` says
+ * why the app's plan could not be compared when the snapshot is missing, from another schema,
+ * or the store is absent (a1123-appmode-plan-check.test.ts covers the comparison itself).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -16,7 +18,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { FourDADatabase } from "../db.js";
 import { executeUpgradePlanner, type UpgradePlanResult } from "../tools/upgrade-planner.js";
-import { readAppPlan, APP_PLAN_SCHEMA_VERSIONS, type AppPlanResult } from "../tools/app-plan.js";
+import { readAppPlan, scopeAppPlanSteps, APP_PLAN_SCHEMA_VERSIONS, type AppPlanResult } from "../tools/app-plan.js";
 
 let root: string;
 const opened: FourDADatabase[] = [];
@@ -37,7 +39,8 @@ function envelope(overrides: Record<string, unknown> = {}): Record<string, unkno
     multi_version_coverage: true,
     dependency_inventory_hash: "abc",
     validation_drop_count: 0,
-    source_freshness: "2026-10-01 00:00:00",
+    // Advisory data synced two hours before: within the day a plan may stand on.
+    source_freshness: new Date(Date.now() - 2 * hour).toISOString().replace("T", " ").slice(0, 19),
     engine_run_id: null,
     item_count: 3,
     items: [
@@ -140,12 +143,14 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("upgrade_planner returns the app's plan when there is one", () => {
+describe("for every project, upgrade_planner returns the app's stored plan, labelled as the app's", () => {
   it("a fresh snapshot comes back as the app's work order, targets untouched", async () => {
     const db = dbWith("fresh", JSON.stringify(envelope()));
     const result = (await executeUpgradePlanner(db, {}, null)) as AppPlanResult;
 
     expect(result.provenance.mode).toBe("app_plan");
+    expect(result.provenance.note).toContain("not check it against the lockfiles on disk");
+    expect(result.app_plan_check.status).toBe("unverified");
     expect(result.stale).toBe(false);
     expect(result.staleness).toBeNull();
     expect(result.totalSteps).toBe(3);
@@ -188,7 +193,7 @@ describe("upgrade_planner returns the app's plan when there is one", () => {
     const result = (await executeUpgradePlanner(db, {}, null)) as AppPlanResult;
     expect(result.provenance.mode).toBe("app_plan");
     expect(result.steps).toEqual([]);
-    expect(result.summary).toMatch(/^0 steps from the 4DA app's plan/);
+    expect(result.summary).toMatch(/^0 steps from the 4DA app's stored plan/);
   });
 
   it("risk_threshold filters by the app's urgency and max_recommendations limits the steps", async () => {
@@ -221,40 +226,50 @@ describe("upgrade_planner returns the app's plan when there is one", () => {
   });
 });
 
-describe("upgrade_planner falls back to the standalone heuristic, and says why", () => {
+describe("without a stored plan this server can read, the answer is its own plan and app_plan_check says why", () => {
   async function fallback(db: FourDADatabase | null) {
-    const result = await executeUpgradePlanner(db as FourDADatabase, {}, null);
-    expect(result.provenance.mode).toBe("standalone_heuristic");
-    return result as { appPlanUnavailable?: string };
+    const result = (await executeUpgradePlanner(db as FourDADatabase, {}, null)) as UpgradePlanResult;
+    expect(result.provenance.mode).toBe("lockfile_engine");
+    return result;
   }
 
   it("no snapshot computed yet", async () => {
-    const result = await fallback(dbWith("missing", null));
-    expect(result.appPlanUnavailable).toContain("has not computed an upgrade plan");
+    const check = (await fallback(dbWith("missing", null))).app_plan_check;
+    expect(check?.status).toBe("no_plan");
+    expect(check?.note).toContain("has not computed an upgrade plan");
   });
 
-  it("an older schema (v3, no work order) is never read as a v4 plan", async () => {
+  it("an older schema (v3, no work order) is never read as a v4 plan: update the app", async () => {
     const v3 = envelope({ schema_version: 3 });
     delete v3.steps;
-    const result = await fallback(dbWith("v3", JSON.stringify(v3)));
-    expect(result.appPlanUnavailable).toContain("schema 3");
+    const check = (await fallback(dbWith("v3", JSON.stringify(v3)))).app_plan_check;
+    expect(check?.status).toBe("not_comparable");
+    expect(check?.note).toContain("format 3");
+    expect(check?.note).toContain("update the 4DA app");
   });
 
-  it("a newer schema is not trusted either", async () => {
+  it("a newer schema is not trusted either: update the server", async () => {
     expect(APP_PLAN_SCHEMA_VERSIONS).toEqual([4, 5]);
-    const result = await fallback(dbWith("v6", JSON.stringify(envelope({ schema_version: 6 }))));
-    expect(result.appPlanUnavailable).toContain("schema 6");
-    expect(result.appPlanUnavailable).toContain("reads schemas 4 and 5");
+    const check = (await fallback(dbWith("v6", JSON.stringify(envelope({ schema_version: 6 }))))).app_plan_check;
+    expect(check?.status).toBe("not_comparable");
+    expect(check?.note).toContain("format 6");
+    expect(check?.note).toContain("reads plan formats 4 and 5");
+    expect(check?.note).toContain("update @4da/mcp-server");
   });
 
-  it("a database without the plan store (standalone MCP database)", async () => {
-    const result = await fallback(dbWith("nostore", null, false));
-    expect(result.appPlanUnavailable).toContain("no plan store");
+  it("a database without the plan store", async () => {
+    const check = (await fallback(dbWith("nostore", null, false))).app_plan_check;
+    expect(check?.status).toBe("no_plan");
+    expect(check?.note).toContain("no plan store");
   });
 
-  it("garbage JSON and no database at all", async () => {
-    expect((await fallback(dbWith("garbage", "not json"))).appPlanUnavailable).toContain("unreadable");
-    expect((await fallback(null)).appPlanUnavailable).toContain("no 4DA database");
+  it("garbage JSON, and no database at all (no app attached: no check)", async () => {
+    const garbage = (await fallback(dbWith("garbage", "not json"))).app_plan_check;
+    expect(garbage?.status).toBe("not_comparable");
+    expect(garbage?.note).toContain("not valid JSON");
+    const none = await fallback(null);
+    expect(none.app_plan_check).toBeUndefined();
+    expect(none).not.toHaveProperty("appPlanUnavailable");
   });
 });
 
@@ -280,41 +295,28 @@ describe("readAppPlan", () => {
 /**
  * 2026-10-07 eval: called from D:\4DA, the planner's top steps were for
  * navcal, verax and 4da-ledger: the app's plan covers every project it
- * tracks. It is narrowed to one project now.
+ * tracks. One project's answer is now this server's own plan for it; the
+ * app's whole plan is the answer for "*" only.
  */
 describe("upgrade_planner project_path", () => {
-  function scopedEnvelope(web: string, navcal: string) {
-    const env = envelope();
-    const steps = env.steps as Array<{ lines: Array<{ sites: Array<{ project: string }> }> }>;
-    steps[0].lines[0].sites[0].project = navcal.split(path.sep).join("/").toLowerCase();
-    steps[1].lines[0].sites[0].project = navcal.split(path.sep).join("/").toLowerCase();
-    steps[1].lines[0].sites[1].project = web.split(path.sep).join("/").toLowerCase();
-    steps[2].lines[0].sites[0].project = `${web.split(path.sep).join("/").toLowerCase()}/relay`;
-    return env;
-  }
-
-  it("defaults to the server's project and keeps only the lines and sites in it", async () => {
+  it("one project (default or given) gets this server's plan; \"*\" gets the app's plan for every project", async () => {
     const web = path.join(root, "web");
-    const navcal = path.join(root, "navcal");
-    fs.mkdirSync(path.join(web, "relay"), { recursive: true });
-    fs.mkdirSync(navcal, { recursive: true });
+    fs.mkdirSync(web, { recursive: true });
     fs.writeFileSync(path.join(web, "package.json"), "{}");
-    const db = dbWith("scoped", JSON.stringify(scopedEnvelope(web, navcal)));
+    const db = dbWith("scoped", JSON.stringify(envelope()));
     process.env.FOURDA_PROJECT_DIR = web;
     try {
-      const result = (await executeUpgradePlanner(db, {}, null)) as AppPlanResult;
-      expect(result.provenance.mode).toBe("app_plan");
-      expect(result.projectScope).toBe(path.resolve(web));
-      // undici only touches navcal; brace-expansion keeps its web site only; rsa sits under web/relay.
-      expect(result.steps.map((s) => s.package)).toEqual(["brace-expansion", "rsa"]);
-      expect(result.steps[0].lines[0].sites).toEqual([{ project: web.split(path.sep).join("/").toLowerCase(), direct: true, dev: false }]);
-      expect(result.otherProjectSteps).toBe(1);
-      expect(result.summary).toMatch(/1 step only touch(es)? other projects/);
+      const own = (await executeUpgradePlanner(db, {}, null)) as UpgradePlanResult;
+      expect(own.provenance.mode).toBe("lockfile_engine");
+      expect(own.projectScope).toBe(path.resolve(web));
+      expect(own.app_plan_check).toBeDefined();
+      expect(own).not.toHaveProperty("steps");
 
-      const navcalOnly = (await executeUpgradePlanner(db, { project_path: navcal }, null)) as AppPlanResult;
-      expect(navcalOnly.steps.map((s) => s.package)).toEqual(["undici", "brace-expansion"]);
+      const given = (await executeUpgradePlanner(db, { project_path: web }, null)) as UpgradePlanResult;
+      expect(given.provenance.mode).toBe("lockfile_engine");
 
       const all = (await executeUpgradePlanner(db, { project_path: "*" }, null)) as AppPlanResult;
+      expect(all.provenance.mode).toBe("app_plan");
       expect(all.projectScope).toBeNull();
       expect(all.steps).toHaveLength(3);
     } finally {
@@ -324,18 +326,18 @@ describe("upgrade_planner project_path", () => {
 
   // Audit 6.2.5 D-1: a desktop-mode server started in a project the app never
   // indexed narrowed the app's plan to it and answered "0 steps" for NodeGoat
-  // (83 vulnerable packages). The plan does not cover that project at all.
-  it("plans a project the app does not track from its own files, and says so", async () => {
+  // (83 vulnerable packages). Every project is now planned from its own files.
+  it("plans a project the app does not track from its own files", async () => {
     const other = path.join(root, "untracked");
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, "package.json"), "{}");
     const db = dbWith("untracked", JSON.stringify(envelope()));
     const result = (await executeUpgradePlanner(db, { project_path: other }, null)) as UpgradePlanResult;
-    expect(result.provenance.mode).toBe("standalone_heuristic");
-    expect(result.appPlanUnavailable).toMatch(/does not track/);
+    expect(result.provenance.mode).toBe("lockfile_engine");
+    expect(result).not.toHaveProperty("appPlanUnavailable");
   });
 
-  it("an app-tracked project with nothing to do still gets the app's (empty) plan", async () => {
+  it("an app-tracked project gets this server's plan too, never the app's stored one", async () => {
     const quiet = path.join(root, "quiet");
     fs.mkdirSync(quiet, { recursive: true });
     fs.writeFileSync(path.join(quiet, "package.json"), "{}");
@@ -345,9 +347,9 @@ describe("upgrade_planner project_path", () => {
     writer.exec("CREATE TABLE project_dependencies (package_name TEXT, language TEXT, project_path TEXT, is_dev INTEGER, is_direct INTEGER)");
     writer.prepare("INSERT INTO project_dependencies VALUES (?, ?, ?, 0, 1)").run("left-pad", "npm", quiet);
     writer.close();
-    const result = (await executeUpgradePlanner(db, { project_path: quiet }, null)) as AppPlanResult;
-    expect(result.provenance.mode).toBe("app_plan");
-    expect(result.totalSteps).toBe(0);
+    const result = (await executeUpgradePlanner(db, { project_path: quiet }, null)) as UpgradePlanResult;
+    expect(result.provenance.mode).toBe("lockfile_engine");
+    expect(result.app_plan_check).toBeDefined();
   });
 
   it("rejects a project_path that is not a directory", async () => {
@@ -452,16 +454,19 @@ describe("upgrade_planner reads a schema-5 plan", () => {
     expect(cookie.next_step).toContain("Blocked upstream: cookie 0.6.0 in d:/api is held by old-server 1.0.0 (its newest release), which requires cookie 0.6.0");
   });
 
-  it("project scope keeps only the holds in that project", async () => {
+  it("narrowed to one project (for app_plan_check), a step keeps only the holds in that project", async () => {
     const web = path.join(root, "v5web");
     fs.mkdirSync(web, { recursive: true });
     const env = v5();
     const steps = env.steps as Array<{ lines: Array<{ sites: Array<{ project: string }> }> }>;
     steps[3].lines[0].sites[0].project = web.split(path.sep).join("/").toLowerCase();
-    const result = (await executeUpgradePlanner(dbWith("v5scope", JSON.stringify(env)), { project_path: web }, null)) as AppPlanResult;
-    expect(result.steps.map((s) => s.package)).toEqual(["cookie"]);
+    const read = readAppPlan(dbWith("v5scope", JSON.stringify(env)));
+    expect(read.kind).toBe("plan");
+    if (read.kind !== "plan") return;
+    const scoped = scopeAppPlanSteps(read.snapshot.steps, web);
+    expect(scoped.map((s) => s.package)).toEqual(["cookie"]);
     // The blocked copy is in d:/api, not this project.
-    expect(result.steps[0].blocked_upstream).toBeUndefined();
+    expect(scoped[0].blocked_upstream).toBeUndefined();
   });
 
   it("a schema-4 snapshot keeps the schema-4 meaning of lockfile_or_parent_update", async () => {

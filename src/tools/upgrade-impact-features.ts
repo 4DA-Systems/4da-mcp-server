@@ -15,7 +15,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { CRATES_USER_AGENT, releaseFeaturesIn, sparseIndexUrl } from "../live/crates-versions.js";
 import { wildcardMatch } from "../live/glob-match.js";
+import type { UpgradeNet } from "../live/upgrade-sources.js";
 
 /** Manifests read per call: the root, the pinning directories and workspace members. */
 const MAX_MANIFESTS = 64;
@@ -165,6 +167,54 @@ export function projectCargoFeatures(
     for (const member of workspaceMembers(dir, content)) if (!read.has(member)) queue.push(member);
   }
   return [...out].sort();
+}
+
+/**
+ * The features the manifest in `dir` enables on `crate`, with the workspace root's
+ * `[workspace.dependencies]` entry when the dependency is inherited from it (`workspace = true`).
+ * Null when the manifest cannot be read.
+ */
+export function cargoFeaturesInDir(dir: string, root: string | null, crate: string): string[] | null {
+  const content = readManifest(dir);
+  if (content === null) return null;
+  const out = new Set(cargoFeaturesInManifest(content, crate));
+  const name = escapeRegex(crate).replace(/[-_]/g, "[-_]");
+  const inherits = new RegExp(String.raw`^[ \t]*"?${name}"?[ \t]*(?:=[ \t]*\{[^}]*(?<![\w-])workspace\s*=\s*true|\.workspace\s*=\s*true)`, "m").test(content);
+  if (inherits && root && path.resolve(root) !== path.resolve(dir)) {
+    const rootContent = readManifest(root);
+    if (rootContent === null) return null;
+    for (const f of cargoFeaturesInManifest(rootContent, crate)) out.add(f);
+  }
+  return [...out].sort();
+}
+
+/** A release's feature list, once read: published releases do not change. */
+const TARGET_FEATURES_TTL = 7 * 86_400;
+
+/**
+ * The features crate release `version` offers, from the crates.io sparse index (one request, by
+ * the crate's name only); null when it could not be read.
+ */
+export async function targetCargoFeatures(net: UpgradeNet, crate: string, version: string): Promise<string[] | null> {
+  const key = `upgrade-impact:crate-features:v1:${crate.toLowerCase()}@${version}`;
+  const hit = net.cache?.get<{ offered: string[] }>(key);
+  if (hit) return hit.offered;
+  try {
+    const res = await net.fetch(sparseIndexUrl(crate), { headers: { "User-Agent": CRATES_USER_AGENT } }, FEATURES_TIMEOUT_MS);
+    if (!res.ok) return null;
+    const offered = releaseFeaturesIn(await res.text(), version);
+    if (offered) net.cache?.set(key, { offered }, "crates", TARGET_FEATURES_TTL);
+    return offered;
+  } catch {
+    return null;
+  }
+}
+
+const FEATURES_TIMEOUT_MS = 15_000;
+
+/** The enabled features a release does not offer (`default` is never one: every crate has it). */
+export function featuresMissing(enabled: string[], offered: string[]): string[] {
+  return enabled.filter((f) => f !== "default" && !offered.includes(f));
 }
 
 /**

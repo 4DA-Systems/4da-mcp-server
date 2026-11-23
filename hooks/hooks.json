@@ -1,5 +1,19 @@
 {
+  "description": "4DA guard: before an edit or an install command writes a dependency version, it needs a dependency_check verdict of proceed or review from the last 24 hours. FOURDA_GUARD=advise advises after the edit instead; FOURDA_GUARD=off turns the hook off.",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/manifest-edit.mjs\"",
+            "timeout": 10,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|MultiEdit|Write",
@@ -7,7 +21,8 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/manifest-edit.mjs\"",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "continue"
           }
         ]
       }

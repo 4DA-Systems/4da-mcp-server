@@ -108,7 +108,7 @@ describe("vulnerability_scan upgrade targets", () => {
 });
 
 describe("what_should_i_know upgrade targets", () => {
-  it("the task advisory names the target that clears every advisory", async () => {
+  it("the task advisory gives the scan's instruction, which names the target that clears every advisory", async () => {
     const dep: ResolvedDependency = { name: "openssl", version: "0.10.38", ecosystem: "crates.io", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [root] };
     const scanned: VulnerabilityScanResult = {
       scannedAt: new Date().toISOString(), projectPath: root, ecosystemsScanned: ["crates.io"], totalScanned: 5, totalVulnerable: 1,
@@ -121,18 +121,24 @@ describe("what_should_i_know upgrade targets", () => {
     const { FourDADatabase } = await import("../db.js");
     const db = Object.create(FourDADatabase.prototype) as FourDADatabase;
     (db as unknown as { db: unknown }).db = raw;
-    const intel: BriefingLiveIntel = {
-      isEnabled: () => true,
-      getProjectRoot: () => root,
-      getVulnerabilities: () => scanned,
-      ensureVulnerabilities: async () => scanned,
-      getResolvedDeps: () => [dep],
-      getFixPathSources: () => sources(),
-      // OSV.dev's batch query confirms the target (batch-confirm.ts): nothing affects 0.10.80.
-      queryAdvisories: async (deps) => ({ ...scanned, totalScanned: deps.length, totalVulnerable: 0, vulnerabilities: [], cleanCount: deps.length }),
-    };
+    // The live layer itself (the fix checks run only on it), over this scan and these fix sources.
+    const prior = process.env.FOURDA_OFFLINE;
+    delete process.env.FOURDA_OFFLINE;
+    const li = new LiveIntelligence(new Database(":memory:"));
+    if (prior !== undefined) process.env.FOURDA_OFFLINE = prior;
+    const { scanProjectTree, treeResolutionGroups } = await import("../project-tree.js");
+    const tree = scanProjectTree(root);
+    li.initFromProjectTree(root, treeResolutionGroups(tree.entries), tree.discovery);
+    vi.spyOn(li, "ensureVulnerabilities").mockResolvedValue(scanned);
+    vi.spyOn(li, "getVulnerabilities").mockReturnValue(scanned);
+    vi.spyOn(li, "getResolvedDeps").mockReturnValue([dep]);
+    vi.spyOn(li, "getFixPathSources").mockReturnValue(sources());
+    // OSV.dev's batch query confirms the target (batch-confirm.ts): nothing affects 0.10.80.
+    vi.spyOn(li, "queryAdvisories").mockImplementation(async (deps) => ({ ...scanned, totalScanned: deps.length, totalVulnerable: 0, vulnerabilities: [], cleanCount: deps.length }));
+    const intel: BriefingLiveIntel = li;
     const result = await executeWhatShouldIKnow(db, { task: "Upgrade openssl in the TLS layer" }, intel);
     const row = result.advisories.find((a) => a.title.startsWith("openssl"));
-    expect(row?.action).toMatch(/^Upgrade openssl to 0\.10\.80 \(the smallest version that fixes all 2; 0\.10\.80 is the smallest version clear of every advisory a release fixes; 0\.10\.79/);
+    expect(row?.action).toMatch(/^Upgrade openssl 0\.10\.38 → 0\.10\.80 .*— resolves 2 CVEs .*0\.10\.80 is the smallest version clear of every advisory a release fixes; 0\.10\.79/);
+    expect(row?.action).not.toMatch(/→ 0\.10\.79/);
   });
 });

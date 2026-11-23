@@ -9,6 +9,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/server";
 
 import type { FourDADatabase } from "./db.js";
+import { withAppCompatibility } from "./app-compat.js";
 import { assertToolPermission } from "./auth-context.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { cleanStrings } from "./tool-args.js";
@@ -18,7 +19,7 @@ import { withRegistryQuotes, withUntrustedTextNote } from "./untrusted-text.js";
 import { TOOL_REGISTRY } from "./schema-registry.js";
 
 import {
-  executeGetRelevantContent,
+  getRelevantContentAnswer,
   executeGetContext,
   executeRecordFeedback,
   executeGetActionableSignals,
@@ -37,6 +38,7 @@ import {
 } from "./tools/index.js";
 
 import { getLiveIntelligence } from "./live-singleton.js";
+import { noteFinishedCall, withUpdateNotice } from "./update-notice.js";
 
 /**
  * Executor signature — all tool execute functions follow this shape.
@@ -58,8 +60,8 @@ const DISPATCH_MAP: Record<string, ToolExecutor> = {
   // Intelligence
   what_should_i_know: executeWhatShouldIKnow,
   ecosystem_pulse: (db, params) => executeEcosystemPulse(db, params, getLiveIntelligence()),
-  get_context: executeGetContext,
-  get_relevant_content: executeGetRelevantContent,
+  get_context: async (db, params) => withUpdateNotice(executeGetContext(db, params), getLiveIntelligence()),
+  get_relevant_content: getRelevantContentAnswer,
   get_actionable_signals: executeGetActionableSignals,
   knowledge_gaps: (db, params) => executeKnowledgeGaps(db, params, getLiveIntelligence()),
   record_feedback: executeRecordFeedback,
@@ -76,16 +78,22 @@ const DISPATCH_MAP: Record<string, ToolExecutor> = {
 };
 
 /**
- * Tools that answer from the project's lockfiles and the registries alone, so
- * they still run when no SQLite driver is usable at all (sqlite-driver.ts:
- * Node < 22.13 with better-sqlite3 unbuilt). Their executors accept a null
- * database; every other tool needs one.
+ * Tools that answer from the project's files and the registries, so they still
+ * run when no database can be used: no SQLite driver (sqlite-driver.ts: Node <
+ * 22.13 with better-sqlite3 unbuilt), or a selected database that is missing,
+ * has no tables or cannot be opened. Their executors accept a null database:
+ * upgrade_planner then has no app plan to compare, what_should_i_know says its
+ * stored parts are absent (stored_data_note), ecosystem_pulse searches the
+ * project's own terms. Every other tool needs one.
  */
 export const DATABASE_FREE_TOOLS: ReadonlySet<string> = new Set([
   "vulnerability_scan",
   "dependency_health",
   "dependency_check",
   "upgrade_impact",
+  "upgrade_planner",
+  "what_should_i_know",
+  "ecosystem_pulse",
 ]);
 
 /**
@@ -152,6 +160,7 @@ export async function dispatchTool(
   const result = await runWithCallBudget(options.startedAt ?? Date.now(), async () => {
     const answer = await raceCallBudget(run(), (budgetMs) => lateAnswer(name, toolArgs, budgetMs));
     quotes = callQuotes();
+    noteFinishedCall();
     return answer;
   });
   // Feed freshness describes the desktop app's feed; a standalone install has
@@ -164,8 +173,11 @@ export async function dispatchTool(
   const annotated = withFreshness ? attachFreshness(db!, result) : desktopOnly ? attachDesktopAppNote(name, result) : result;
   // Every tool that returns third-party text says which fields hold it (`_meta.untrusted_text`),
   // here when the tool does not say it itself.
-  const payload = cleanStrings(
-    withRegistryQuotes(withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated), quotes),
+  // An attached app outside the supported range is said on every answer that reads its data (app-compat.ts).
+  const payload = withAppCompatibility(
+    name,
+    db,
+    cleanStrings(withRegistryQuotes(withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated), quotes)),
   );
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.

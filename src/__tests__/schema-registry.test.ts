@@ -88,7 +88,7 @@ describe("server instructions", () => {
   });
 
   it("name only tools that exist", () => {
-    const resultFields = new Set(["advisory_severity"]);
+    const resultFields = new Set(["advisory_severity", "by_severity", "by_advisory_severity"]);
     const named = (SERVER_INSTRUCTIONS.match(/\b[a-z]+(?:_[a-z]+)+\b/g) ?? []).filter((n) => !resultFields.has(n));
     expect(named.length).toBeGreaterThan(5);
     for (const name of named) expect(Object.keys(TOOL_REGISTRY), name).toContain(name);
@@ -124,9 +124,10 @@ describe("resources and the startup line say what this mode serves (L6)", () => 
     const { startupToolsLine } = await import("../schema-registry.js");
     expect(startupToolsLine({ valid: true, standalone: false }, true)).toBe("16 tools");
     expect(startupToolsLine({ valid: false, standalone: true }, true)).toBe("11 standalone tools");
-    const refused = startupToolsLine({ valid: false, standalone: false }, true);
+    // A refused database: the dependency tools still answer from the project's files.
+    const refused = startupToolsLine({ valid: false, standalone: false }, true, 4);
     expect(refused).not.toMatch(/^16 tools$/);
-    expect(refused).toMatch(/no tool can run until the database problem above is fixed/);
+    expect(refused).toMatch(/^4 dependency tools answer from the project's files; every other tool returns the database problem above/);
     expect(startupToolsLine({ valid: false, standalone: false }, false, 5)).toMatch(/^5 dependency tools run without a database/);
   });
 });

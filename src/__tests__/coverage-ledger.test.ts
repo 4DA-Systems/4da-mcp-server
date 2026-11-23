@@ -103,8 +103,8 @@ describe("coverage ledger: what was not read is always said", () => {
       expect(result.total_dependencies_scanned).toBe(2);
       expect(result.total_vulnerable_packages).toBe(1);
       expect(result.vulnerable_packages[0]).toMatchObject({ package: "lodash", current_version: "4.17.20", source_dirs: ["backend"] });
-      // Everything found was read, so nothing says "partial"; the detailed answer labels what .gitignore lists.
-      expect(result.coverage).toBeUndefined();
+      // Everything found was read, so coverage says complete; the detailed answer labels what .gitignore lists.
+      expect(result.coverage).toMatchObject({ complete: true, lockfiles_read: 2 });
       const detailed = await scan({ response_format: "detailed" });
       expect(detailed._meta.resolution.lockfiles).toEqual(
         expect.arrayContaining([
@@ -162,7 +162,9 @@ describe("coverage ledger: what was not read is always said", () => {
       expect([...new Set(asked.map((q) => q.name))]).toEqual(["left-pad"]);
     });
 
-    it("installed code and build output stay unscanned; a lockfile directly in build/ is listed, one deep in node_modules is not", async () => {
+    // A build/ the repository does not ignore is read (microsoft/vscode: a1123 A-F2); installed code and
+    // agent state stay unscanned, and what they hold is listed, unless the repository ignores them.
+    it("installed code and agent state stay unscanned and are listed; a build/ the repository does not ignore is read", async () => {
       write("package.json", JSON.stringify({ dependencies: { "left-pad": "1.3.0" } }));
       write("package-lock.json", npmLock({ "left-pad": "1.3.0" }));
       write("node_modules/x/package-lock.json", npmLock({ lodash: "4.17.20" }));
@@ -173,11 +175,26 @@ describe("coverage ledger: what was not read is always said", () => {
       write("build/package-lock.json", npmLock({ lodash: "4.17.20" }));
 
       const { entries, discovery } = scanProjectTree(dir);
-      expect(entries).toHaveLength(1);
-      expect(discovery.skipped).toEqual([{ path: "build/package-lock.json", reason: "output_directory" }]);
+      expect(entries.map((e) => path.relative(dir, e.dir) || ".")).toEqual([".", "build"]);
+      expect(discovery.skipped.map((s) => `${s.path} ${s.reason}`).sort()).toEqual([
+        ".claude/worktrees/agent-1/package-lock.json excluded_directory",
+        ".venv/lib/site-packages/y/requirements.txt excluded_directory",
+        "node_modules/x/package-lock.json excluded_directory",
+        "target/package/z/Cargo.lock excluded_directory",
+      ]);
       const result = await scan();
-      expect(result.coverage.not_scanned.lockfiles).toEqual([{ path: "build/package-lock.json", reason: "output_directory" }]);
-      expect(result.coverage.note).toMatch(/directly inside a build-output directory/);
+      expect(result.vulnerable_packages.map((p: any) => `${p.package} ${p.source_dirs.join(",")}`)).toEqual(["lodash build"]);
+      expect(result.coverage.note).toMatch(/inside installed code, a tool's build output or cache/);
+    });
+
+    it("a gitignored target/ is left out, and a lockfile sitting directly in it is still listed", () => {
+      write(".gitignore", "/target\nnode_modules/\n");
+      write("package.json", JSON.stringify({ dependencies: { "left-pad": "1.3.0" } }));
+      write("package-lock.json", npmLock({ "left-pad": "1.3.0" }));
+      write("node_modules/x/package-lock.json", npmLock({ lodash: "4.17.20" }));
+      write("target/Cargo.lock", '[[package]]\nname = "smallvec"\nversion = "1.6.0"\nsource = "registry+x"\n');
+      write("target/package/z/Cargo.lock", "");
+      expect(scanProjectTree(dir).discovery.skipped).toEqual([{ path: "target/Cargo.lock", reason: "output_directory" }]);
     });
 
     it("nothing scanned at the root and a lockfile left out below: the totals are null, never 0", async () => {

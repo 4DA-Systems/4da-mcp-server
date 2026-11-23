@@ -24,6 +24,8 @@
  *   range_check      parseTarget + checkRange (dependency_check)
  *   holding          isSecurityHoldingRelease (osv-scanner.ts): npm's `0.0.<n>-security`
  *                    placeholder, which no advisory applies to (audit L4)
+ *   malware          isMalwareRecord (malware.ts) over the line's whole record, as the
+ *                    Rust runner's record_is_malware reads it
  */
 
 import * as fs from "node:fs";
@@ -34,7 +36,7 @@ import { deriveSeverity, extractFixedVersion, isSecurityHoldingRelease } from ".
 import { gradeGroup } from "../../live/advisory-groups.js";
 import { checkHeldTarget, checkParentRelease } from "./parent-release-vectors.js";
 import { isMaintenanceRecord } from "../../live/maintenance.js";
-import { cweIdsOf } from "../../live/malware.js";
+import { cweIdsOf, isMalwareRecord } from "../../live/malware.js";
 import { cleanFixTarget, directFix, overrideReaches, refreshCommandFor, type FixPathSources, type PackageReleaseFacts } from "../../live/fix-paths.js";
 import type { OsvEcosystem } from "../../live/types.js";
 import { refreshRule, requirementAdmits, type RequirementDialect } from "../../live/refresh-rule.js";
@@ -43,7 +45,7 @@ import type { OsvVulnerability } from "../../live/types.js";
 import type { CheckEcosystem, PackageReleaseIndex } from "../../live/release-metadata.js";
 import { checkRange, parseTarget } from "../../tools/dependency-check-versions.js";
 
-export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding", "severity", "parent_release"] as const;
+export const VECTOR_FILES = ["version_order", "osv_range", "fix_target", "refresh_verdict", "fix_command", "range_check", "holding", "severity", "parent_release", "malware"] as const;
 export type VectorFile = (typeof VECTOR_FILES)[number];
 
 /** One vector line: every line has `id`, `rule` and `source`; the rest depends on the file. */
@@ -329,6 +331,12 @@ function checkSeverity(v: Vector): string | null {
   return null;
 }
 
+/** `malware.jsonl`: whether one whole OSV record is a malicious-package record. */
+function checkMalware(v: Vector): string | null {
+  const got = isMalwareRecord(v.record as Parameters<typeof isMalwareRecord>[0]);
+  return got === v.malware ? null : `malware: got ${got}, want ${v.malware}`;
+}
+
 export function checkVector(file: VectorFile, v: Vector, records: Records): string | null | Promise<string | null> {
   // parent_release lines run the whole planner (async): parent-release-vectors.ts.
   if (file === "parent_release") return checkParentRelease(v);
@@ -349,6 +357,8 @@ export function checkVector(file: VectorFile, v: Vector, records: Records): stri
         return checkHolding(v);
       case "severity":
         return checkSeverity(v);
+      case "malware":
+        return checkMalware(v);
     }
   } catch (e) {
     return `error: ${(e as Error).message}`;

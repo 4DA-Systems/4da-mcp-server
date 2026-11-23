@@ -20,6 +20,12 @@
  *     corpus, requires it, and runs `tests-ran` over its report, and ci.yml's
  *     `nightly-report` job needs every other job, so no nightly failure goes
  *     unreported.
+ *
+ *   RELEASE_HARNESSES, harnessWorkflowFindings
+ *
+ *     The harnesses under bench/ a release is measured with (plan execution, the environment
+ *     harnesses, the app-mode arm), the command for each, and a check that
+ *     .github/workflows/plan-exec.yml runs every one of them.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -123,6 +129,72 @@ export function workflowGateFindings({ ci, release, gated }) {
     for (const need of ["node scripts/fetch-conformance.mjs", 'FOURDA_REQUIRE_CONFORMANCE: "1"', "scripts/ci-gates.mjs tests-ran"]) {
       if (!verify.includes(need)) findings.push(`.github/workflows/release.yml: the verify job lacks \`${need}\`, so a release can pass with the conformance suites skipped`);
     }
+  }
+  return findings;
+}
+
+/**
+ * The harnesses a release is measured with beyond the test suite, each with the command that
+ * runs it against a built server and the job of .github/workflows/plan-exec.yml that runs it.
+ * They need the network, many processes or an hour of runner time, so they run there (weekly,
+ * and on demand: dispatch it on the commit to be released), never in ci.yml.
+ */
+export const RELEASE_HARNESSES = [
+  {
+    name: "plan execution",
+    job: "plan-exec",
+    script: "bench/plan-exec/run.mjs",
+    command: "node bench/plan-exec/run.mjs --server dist/index.js",
+    checks: "the plan's run_order run top to bottom on a pinned public corpus: no step fails or lowers a version, and the advisories cleared reach thresholds.json",
+  },
+  {
+    name: "processes on one data folder",
+    job: "env",
+    script: "bench/env/concurrency.mjs",
+    command: "node bench/env/concurrency.mjs --server dist/index.js",
+    checks: "no error, lock or wrong-project answer, and every write kept, with several servers on one data folder",
+  },
+  {
+    name: "kills during a first start",
+    job: "env",
+    script: "bench/env/firstrun-kill.mjs",
+    command: "node bench/env/firstrun-kill.mjs --server dist/index.js",
+    checks: "a hard kill at any moment of a data folder's first start leaves a folder the next session works in",
+  },
+  {
+    name: "servers started together",
+    job: "env",
+    script: "bench/env/firstrun-together.mjs",
+    command: "node bench/env/firstrun-together.mjs --server dist/index.js",
+    checks: "servers started at once on a fresh data folder each see their own project and tools",
+  },
+  {
+    name: "app mode",
+    job: "app-mode",
+    script: "bench/app-mode/run.mjs",
+    command: "node bench/app-mode/run.mjs --server dist/index.js",
+    checks: "the same dependency answers, with coverage, with no app database, a covering one and one missing a sub-project",
+  },
+];
+
+/**
+ * What plan-exec.yml is missing for RELEASE_HARNESSES to run: each harness's script in its
+ * job (directly, or as `bench/<dir>/$name.mjs` over a list naming it), and a manual trigger.
+ * @returns One line per problem.
+ */
+export function harnessWorkflowFindings(workflowText, harnesses = RELEASE_HARNESSES) {
+  const findings = [];
+  if (!/^\s{2}workflow_dispatch:/m.test(workflowText)) findings.push(".github/workflows/plan-exec.yml: no workflow_dispatch trigger, so a release commit cannot be measured on demand");
+  for (const h of harnesses) {
+    const block = jobBlock(workflowText, h.job);
+    if (block === null) {
+      findings.push(`.github/workflows/plan-exec.yml: no \`${h.job}\` job, so ${h.name} (${h.script}) runs nowhere`);
+      continue;
+    }
+    const dir = h.script.slice(0, h.script.lastIndexOf("/") + 1);
+    const stem = h.script.slice(dir.length, -".mjs".length);
+    const looped = block.includes(`${dir}$`) && new RegExp(`\\b${stem}\\b`).test(block);
+    if (!block.includes(h.script) && !looped) findings.push(`.github/workflows/plan-exec.yml: the \`${h.job}\` job does not run ${h.script} (${h.name})`);
   }
   return findings;
 }

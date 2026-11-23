@@ -14,6 +14,13 @@ and a query here cannot see each other. This folder is where they meet.
   the app repository (`src-tauri/contract/app-schema.sql`) by a Rust test that
   fails whenever a migration changes the schema without regenerating it. This
   is a copy. `pnpm run contract:sync` refreshes it.
+- **`released/<app tag>.sql`** is the same generated schema as it stood at each
+  released app tag (`released/v1.0.3.sql`: schema 124, plan format 4), copied
+  unchanged with a header naming the tag. Users keep a released app long after
+  `main` moves, so the server is tested against each of these too
+  (`src/__tests__/a1123-appmode-released-schemas.test.ts` builds a database from
+  every file here and from `app-schema.sql`, calls every app-backed tool and the
+  dependency tools, and fails on any SQL error).
 - **`allowlist.json`** (optional, absent today) lists known disagreements, each
   with a reason:
 
@@ -51,6 +58,25 @@ and a query here cannot see each other. This folder is where they meet.
 | This repo, `ci.yml` | `contract/app-schema.sql` (vendored) | every PR and push |
 | This repo, `ci.yml` | the app's `main` | every PR and push, and nightly; a failure opens an issue |
 | 4DA, `validate.yml` job `mcp-contract` | the PR's own regenerated file | every app PR that changes the schema, and every merge-queue run |
+
+## Supported app versions
+
+`src/app-compat.ts` declares the range of app versions this server supports,
+each bound naming the app release it corresponds to: today 4DA v1.0.3 (schema
+124, plan format 4) through the app's `main` (schema 131, plan format 5). The
+app records its schema version in `schema_version` and its plan format as
+`schema_version` inside the `upgrade_plan_snapshot` envelope in `kv_store`. An
+attached app outside the range is never refused: `get_context` and every answer
+that reads the app's data carry `_meta.app_compatibility` (`status`
+`app_older_than_supported` or `app_newer_than_tested`, `app_schema`,
+`supported`, and a `note` saying whether to update the app or the server).
+
+**The rule:** every app release adds its schema file to `released/` (copy
+`src-tauri/contract/app-schema.sql` at the release tag, with a header naming the
+tag), and the supported range in `src/app-compat.ts` is edited in the same
+change. The released-schemas test fails when the oldest file here is not the
+oldest supported schema, or when a file here is newer than the newest tested one.
+Dropping support for a release removes its file and moves the lower bound together.
 
 ## When it fails
 

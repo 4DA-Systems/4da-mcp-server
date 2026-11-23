@@ -375,10 +375,11 @@ export function getCategoryManifest(standaloneOnly?: boolean): {
 }
 
 /**
- * The tool count the startup line states, for what this start will serve.
- * With FOURDA_DB_PATH refused or the database unreadable, every call returns
- * that error, so "16 tools" (6.2.5) was not true (audit L6); with no SQLite
- * driver only the dependency tools run.
+ * The tool count the startup line states, for what this start will serve
+ * ("16 tools" over a refused database was not true, audit L6). With no SQLite
+ * driver, or the database refused (FOURDA_DB_PATH naming no file, a file with
+ * no tables, one that cannot be opened), the dependency tools answer from the
+ * project's files and every other tool returns the problem.
  */
 export function startupToolsLine(validation: { valid: boolean; standalone?: boolean }, hasSqliteDriver: boolean, databaseFreeTools = 0): string {
   const standalone = validation.standalone === true;
@@ -387,7 +388,7 @@ export function startupToolsLine(validation: { valid: boolean; standalone?: bool
     const count = getSlimToolList(standalone ? true : undefined).length;
     return `${count} ${standalone ? "standalone tools" : "tools"}`;
   }
-  return `no tool can run until the database problem above is fixed (${getSlimToolList().length} tools are listed; each call returns that error)`;
+  return `${databaseFreeTools} dependency tools answer from the project's files; every other tool returns the database problem above (${getSlimToolList().length} tools are listed)`;
 }
 
 /** Find tools matching any of the given tags */

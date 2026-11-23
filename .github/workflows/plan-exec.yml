@@ -1,0 +1,186 @@
+name: Plan execution and environment harnesses
+
+# The checks that need a live network, many processes or an hour of runner time, so they are
+# not pull-request jobs (bench/plan-exec/README.md, bench/env/README.md, bench/app-mode/README.md):
+#   plan-exec  the plan run top to bottom on a pinned public corpus, then rescanned
+#   env        several processes on one data folder, kills during a first start, servers
+#              started together on a fresh folder (offline)
+#   app-mode   the same project scanned and planned with no app database, with one that covers
+#              it, and with one missing a sub-project
+# Weekly against main's build, and on demand, optionally against a published version.
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "A published @4da/mcp-server version to test (e.g. 6.4.0); empty tests this commit's build"
+        required: false
+        default: ""
+      only:
+        description: "plan-exec only: comma-separated corpus ids (bench/plan-exec/corpus.json); empty runs every project"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plan-exec-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan-exec:
+    name: Plan execution (run_order top to bottom, rescanned)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      # npm and corepack come with Node; cargo and Go are on the runner image (a plan that raises
+      # the go directive has the go command fetch that toolchain); uv is installed at a pinned
+      # version. pnpm and Yarn classic run through npx at the versions corpus.json names.
+      - name: Package managers
+        run: |
+          pipx install uv==0.6.8
+          node --version; npm --version; corepack --version; cargo --version; go version; uv --version; git --version
+
+      - name: The server under test
+        id: server
+        env:
+          VERSION: ${{ inputs.server }}
+        run: |
+          if [ -n "$VERSION" ]; then
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::server must be a version such as 6.4.0 (got '$VERSION')"; exit 1; }
+            mkdir -p "$RUNNER_TEMP/pub" && cd "$RUNNER_TEMP/pub"
+            echo '{"name":"pub","private":true}' > package.json
+            npm install --no-audit --no-fund --ignore-scripts "@4da/mcp-server@$VERSION"
+            echo "entry=$RUNNER_TEMP/pub" >> "$GITHUB_OUTPUT"
+          else
+            echo "entry=$GITHUB_WORKSPACE/dist/index.js" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the corpus's plans and apply the gate
+        env:
+          SERVER: ${{ steps.server.outputs.entry }}
+          ONLY: ${{ inputs.only }}
+        run: node bench/plan-exec/run.mjs --server "$SERVER" --work "$RUNNER_TEMP/plan-exec-work" --out "$RUNNER_TEMP/plan-exec" ${ONLY:+--only "$ONLY"}
+
+      - name: Summary
+        if: always()
+        run: cat "$RUNNER_TEMP/plan-exec/plan-exec-summary.md" >> "$GITHUB_STEP_SUMMARY" || echo "no summary was written" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        if: always()
+        with:
+          name: plan-exec-results
+          path: ${{ runner.temp }}/plan-exec
+          if-no-files-found: warn
+
+  env:
+    name: Environment (processes on one data folder, first-start kills, simultaneous starts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - name: The server under test
+        id: server
+        env:
+          VERSION: ${{ inputs.server }}
+        run: |
+          if [ -n "$VERSION" ]; then
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::server must be a version such as 6.4.0 (got '$VERSION')"; exit 1; }
+            mkdir -p "$RUNNER_TEMP/pub" && cd "$RUNNER_TEMP/pub"
+            echo '{"name":"pub","private":true}' > package.json
+            npm install --no-audit --no-fund --ignore-scripts "@4da/mcp-server@$VERSION"
+            echo "entry=$RUNNER_TEMP/pub" >> "$GITHUB_OUTPUT"
+          else
+            echo "entry=$GITHUB_WORKSPACE/dist/index.js" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Every harness runs, and the job fails if any of them found a violation.
+      - name: Run the environment harnesses (offline)
+        env:
+          SERVER: ${{ steps.server.outputs.entry }}
+        run: |
+          failed=""
+          for h in concurrency firstrun-kill firstrun-together; do
+            node "bench/env/$h.mjs" --server "$SERVER" --work "$RUNNER_TEMP/env-work" --out "$RUNNER_TEMP/env" || failed="$failed $h"
+          done
+          [ -z "$failed" ] || { echo "::error::environment harnesses with violations:$failed"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        if: always()
+        with:
+          name: env-results
+          path: ${{ runner.temp }}/env
+          if-no-files-found: warn
+
+  app-mode:
+    name: App mode (no app database, a covering one, one missing a sub-project)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - name: The server under test
+        id: server
+        env:
+          VERSION: ${{ inputs.server }}
+        run: |
+          if [ -n "$VERSION" ]; then
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::server must be a version such as 6.4.0 (got '$VERSION')"; exit 1; }
+            mkdir -p "$RUNNER_TEMP/pub" && cd "$RUNNER_TEMP/pub"
+            echo '{"name":"pub","private":true}' > package.json
+            npm install --no-audit --no-fund --ignore-scripts "@4da/mcp-server@$VERSION"
+            echo "entry=$RUNNER_TEMP/pub" >> "$GITHUB_OUTPUT"
+          else
+            echo "entry=$GITHUB_WORKSPACE/dist/index.js" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Scan and plan the fixture three ways
+        env:
+          SERVER: ${{ steps.server.outputs.entry }}
+        run: node bench/app-mode/run.mjs --server "$SERVER" --work "$RUNNER_TEMP/app-mode-work" --out "$RUNNER_TEMP/app-mode"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
+        if: always()
+        with:
+          name: app-mode-results
+          path: ${{ runner.temp }}/app-mode
+          if-no-files-found: warn

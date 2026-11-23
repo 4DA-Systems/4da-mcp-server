@@ -10,7 +10,11 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { DEPENDENCY_GROUP_QUERY, FourDADatabase } from "../db.js";
+import { FourDADatabase } from "../db.js";
+
+/** Reads the `is_direct` column the current standalone schema declares, as a stored row is read. */
+const DEPENDENCY_ROWS_QUERY =
+  "SELECT DISTINCT package_name, language, project_path, is_dev, is_direct FROM project_dependencies";
 
 // =============================================================================
 // Helper: create an in-memory FourDADatabase (same pattern as tools.test.ts)
@@ -293,13 +297,9 @@ describe("FourDADatabase.queryWithRetry", () => {
 // =============================================================================
 // Standalone-schema compatibility — the is_direct regression
 //
-// 5.0.2 shipped a minimal standalone schema WITHOUT `is_direct`, while the
-// full-DB init branch queries it (DEPENDENCY_GROUP_QUERY). Session 1 of a
-// standalone install worked (fresh DB, scan path); session 2+ hit the full-DB
-// branch, threw `no such column: is_direct`, and silently disabled
-// vulnerability_scan / dependency_health / upgrade_planner. These tests run
-// the EXACT production query against both standalone shapes so the two modes
-// can never drift apart unnoticed again.
+// 5.0.2 shipped a minimal standalone schema WITHOUT `is_direct`; a store made
+// then must gain the column on open, with every existing row backfilled as
+// direct. These tests read the column from both standalone shapes.
 // =============================================================================
 
 describe("standalone schema compatibility (is_direct regression)", () => {
@@ -339,7 +339,7 @@ describe("standalone schema compatibility (is_direct regression)", () => {
     }
   }
 
-  it("fresh standalone schema satisfies the production dependency-group query", async () => {
+  it("fresh standalone schema has is_direct, defaulted to direct", async () => {
     await withTmpDb("standalone-fresh", (tmpPath) => {
       const db = new FourDADatabase(tmpPath);
       try {
@@ -351,7 +351,7 @@ describe("standalone schema compatibility (is_direct regression)", () => {
             "INSERT OR IGNORE INTO project_dependencies (project_path, manifest_type, package_name, version, is_dev, language) VALUES (?, ?, ?, ?, ?, ?)",
           )
           .run("/tmp/proj", "packagejson", "react", "19.0.0", 0, "javascript");
-        const rows = raw.prepare(DEPENDENCY_GROUP_QUERY).all() as Array<{
+        const rows = raw.prepare(DEPENDENCY_ROWS_QUERY).all() as Array<{
           package_name: string;
           is_direct: number;
         }>;
@@ -395,7 +395,7 @@ describe("standalone schema compatibility (is_direct regression)", () => {
       // Session 2: the server reopens the existing DB (full-DB branch).
       const db = new FourDADatabase(tmpPath);
       try {
-        const rows = db.getRawDb().prepare(DEPENDENCY_GROUP_QUERY).all() as Array<{
+        const rows = db.getRawDb().prepare(DEPENDENCY_ROWS_QUERY).all() as Array<{
           package_name: string;
           is_direct: number;
         }>;

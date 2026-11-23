@@ -146,6 +146,8 @@ function blockedResult(p: Plan & { blocked: string }, { extra, bad, nameCheck }:
       found.some((s) => s.effect === "avoid") ? "avoid" : negative ? "review" : "unknown",
     ),
     signals: [advisories, ...(nameCheck ? [nameCheck] : [])],
+    // Only an unknown is worth asking again for: a negative finding already stands.
+    ...(p.retryAfterSeconds && !negative ? { retry_after_seconds: p.retryAfterSeconds } : {}),
     ...extra,
     ...noticesOf(advisories),
   };
@@ -227,7 +229,7 @@ function everyRelease(list: readonly AdvisoryRanges[] | null | undefined): strin
 
 function planItem(item: Resolved, lookup: RegistryLookup<PackageReleaseIndex>) {
   if (lookup.status === "unreachable") {
-    return { item, blocked: `Registry could not be reached (${quoteThirdParty(lookup.detail, 160)}); nothing about ${item.to} was verified.`, index: null, introduced: null };
+    return { item, blocked: unreachableText(item, lookup), index: null, introduced: null, retryAfterSeconds: lookup.ownLimit?.retryAfterSeconds };
   }
   if (lookup.status === "not_found") {
     const guess = item.ecosystem === "npm" ? closestPopularNpm(item.package) : item.ecosystem === "PyPI" ? closestPopularPypi(item.package) : null;
@@ -245,6 +247,28 @@ function planItem(item: Resolved, lookup: RegistryLookup<PackageReleaseIndex>) {
     return { item, blocked: `${item.package}@${item.to} is not a published version on ${item.ecosystem}.${goMajorHint(item)}`, index, introduced: null };
   }
   return { item, blocked: null, index, introduced: introducedDependencies(to, selectBaseline(index, item).record) };
+}
+
+/**
+ * Why an item whose registry read failed was not judged. This server's own request limit is named
+ * as the cause when it was (the registry was never asked, so it is never blamed), and a release
+ * list read without the file that lists its withdrawals says that whether `to` was withdrawn was
+ * not checked.
+ */
+function unreachableText(item: Resolved, lookup: Extract<RegistryLookup<PackageReleaseIndex>, { status: "unreachable" }>): string {
+  const limit = lookup.ownLimit;
+  const retry = limit ? ` Call dependency_check again for this item in ${limit.retryAfterSeconds} s (retry_after_seconds).` : "";
+  if (lookup.withdrawalsUnread) {
+    const why = limit
+      ? `this server's own request limit for ${limit.registry} was reached before it could be read (${limit.registry} was not asked and is not at fault)`
+      : `it could not be read (${quoteThirdParty(lookup.detail, 160)})`;
+    return `NOT CHECKED: ${item.package}'s retractions were not read, so whether ${item.to} is retracted was not checked: they are listed in ${lookup.withdrawalsUnread}, and ${why}. Nothing about ${item.to} was verified; this is not a clean result.${retry}`;
+  }
+  if (limit) {
+    const unread = item.ecosystem === "Go" ? `${item.package}'s version list, retractions and release dates were` : `${item.package}'s release data was`;
+    return `NOT CHECKED: this server's own request limit for ${limit.registry} was reached, so ${unread} not read and nothing about ${item.to} was verified (${limit.registry} was not asked and is not at fault).${retry}`;
+  }
+  return `Registry could not be reached (${quoteThirdParty(lookup.detail, 160)}); nothing about ${item.to} was verified.`;
 }
 
 /** Go majors 2+ live at their own module path. */

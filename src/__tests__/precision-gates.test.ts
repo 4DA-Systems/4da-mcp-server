@@ -61,14 +61,14 @@ function item(over: { title: string; source_type: string; signal_type?: string; 
 }
 
 describe("get_actionable_signals: the judge gates prose, never invents a class", () => {
-  it("drops a judge-rejected security headline, keeps an accepted one capped at medium, keeps advisory records", () => {
+  it("drops a judge-rejected security headline, keeps an accepted one capped at medium, keeps advisory records", async () => {
     const rejected = item({ title: "OpenAI still doesn't seem to have a handle on all of its rogue AI activity", source_type: "hackernews", signal_type: "security_alert", signal_priority: "alert", verdicts: [0.7, 0.1] });
     const accepted = item({ title: "rustls advisory explained", source_type: "hackernews", signal_type: "security_alert", signal_priority: "critical", verdicts: [0.8] });
     const advisory = item({ title: "[CVE-2026-1] hono: header injection", source_type: "cve", signal_type: "security_alert", signal_priority: "critical" });
     const unjudgedProse = item({ title: "A dataset of vulnerable code", source_type: "arxiv", signal_type: "security_alert", signal_priority: "alert" });
     const unclassified = item({ title: "cve patch vulnerability rust", source_type: "hackernews", verdicts: [0.9] });
 
-    const { signals } = executeGetActionableSignals(db, { limit: 50, since_hours: 48 }, null);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50, since_hours: 48 }, null);
     const byId = new Map(signals.map((s) => [s.id, s]));
 
     expect(byId.has(rejected)).toBe(false);

@@ -70,11 +70,24 @@ export interface PackageReleaseIndex {
   latest?: string | null;
 }
 
-/** The outcome of one registry read: data, a definite "no such package", or "could not reach it". */
+/** A read this server did not make because its own request limit for that registry was reached (rate-limiter.ts). */
+export interface OwnLimitRefusal {
+  /** The registry the limit is for, as a sentence names it ("the Go proxy"). */
+  registry: string;
+  /** Whole seconds until the read could be made. */
+  retryAfterSeconds: number;
+}
+
+/**
+ * The outcome of one registry read: data, a definite "no such package", or "could not reach it".
+ * `ownLimit`: the read was never sent, this server's own limit held it back (the registry is not at
+ * fault). `withdrawalsUnread`: the release list was read but the file that lists its withdrawals
+ * (Go: the newest go.mod's `retract` directives) was not, named here; no release is judged then.
+ */
 export type RegistryLookup<T> =
   | { status: "ok"; data: T }
   | { status: "not_found"; detail: string }
-  | { status: "unreachable"; detail: string };
+  | { status: "unreachable"; detail: string; ownLimit?: OwnLimitRefusal; withdrawalsUnread?: string };
 
 /**
  * One requirement a release declares on another package of its registry: a crates.io dependency

@@ -26,7 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { APP_WRITABLE_TABLES, DEPENDENCY_GROUP_QUERY, FourDADatabase } from "../db.js";
+import { APP_WRITABLE_TABLES, FourDADatabase } from "../db.js";
 import { changedTables, snapshotDb, type DbSnapshot } from "./helpers/db-snapshot.js";
 import { LiveIntelligence } from "../live/index.js";
 import { getLiveIntelligence, setLiveIntelligence } from "../live-singleton.js";
@@ -217,11 +217,6 @@ describe.skipIf(!fs.existsSync(SCHEMA_PATH))("app-schema contract", () => {
 
   it("opens the app schema as the desktop app's database, not a standalone one", () => {
     expect(db.isStandalone).toBe(false);
-  });
-
-  it("reads the dependency groups the server loads at startup", () => {
-    // index.ts runs this before any tool, to seed live intelligence.
-    expect(() => db.getRawDb().prepare(DEPENDENCY_GROUP_QUERY).all()).not.toThrow();
   });
 
   it.each(CALLS)("%s %j runs against the app schema", async (name, args) => {

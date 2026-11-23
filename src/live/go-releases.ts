@@ -24,6 +24,7 @@
  * runs no package code at download), which dependencies a release adds.
  */
 
+import { withinCallBudget } from "../call-budget.js";
 import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -138,38 +139,88 @@ export function parseGoRequires(goMod: string): ReleaseRequirements {
   return { requirements: [...out.values()], unreadable };
 }
 
+/** A module's version list with its retractions, as cached: only a list whose retractions were read. */
 interface CachedList {
   versions: string[];
   retractions: Retraction[];
-  /** Why retractions are unknown, when they are. */
-  retractionsNote: string | null;
+  /** Set on a row that says its retractions were not read: such a row is never an answer. */
+  retractionsNote?: string | null;
 }
 
+/** How this server's own request limit is named in an answer. */
+export const GO_PROXY_NAME = "the Go proxy";
+/** The most Go proxy reads one dependency_check item makes (version list, newest go.mod, `.info` of `to` and `from`). */
+export const GO_READS_PER_ITEM = 4;
+/** The longest one Go proxy read waits in line for this server's own request limit. */
+export const GO_QUEUE_MAX_WAIT_MS = 10_000;
+/** Kept back from a call's budget when a read waits in line: the item's later reads, its OSV.dev query and the answer. */
+const GO_QUEUE_RESERVE_MS = 5_000;
+
+/** A read this server's own request limit did not let through in time: never sent, never the proxy's answer. */
+class OwnLimitReached extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super(`this server's own request limit for ${GO_PROXY_NAME} was reached, so the read was not sent (it can be made in ${retryAfterSeconds} s)`);
+  }
+}
+
+/** A read that failed, as the lookup it makes. */
+type Unreachable = Extract<RegistryLookup<never>, { status: "unreachable" }>;
+
+/** One `.info` read: the proxy's answer, a version it does not serve, or a read that failed (with why). */
+type InfoRead = { info: { Version?: string; Time?: string } } | { missing: true } | { failed: Unreachable };
+
 export class GoReleasesReader implements ReleaseMetadataSource {
+  /** Version-list reads in flight, by module: concurrent items of one module share one read. */
+  private listing = new Map<string, Promise<RegistryLookup<CachedList>>>();
+
   constructor(
     private cache: LiveCache,
     private rateLimiter: RateLimiter,
   ) {}
 
+  /**
+   * The release index, retractions applied, with the dates of the versions being judged. Unreachable
+   * when the list, the retractions or a judged version's date could not be read: no release is
+   * judged on a partial index, and the reason names what was missing (and this server's own request
+   * limit, when that is why).
+   */
   async getReleases(module: string, wanted: string[]): Promise<RegistryLookup<PackageReleaseIndex>> {
-    const list = await this.list(module);
-    if (list.status !== "ok") return list;
-    const { versions, retractions } = list.data;
-    const releases: Record<string, ReleaseRecord> = {};
-    for (const version of versions) releases[version] = record(version, null, retractions);
-
     // Dates (and existence, for a pseudo-version) of the versions being judged.
     const want = [...new Set(wanted.map(goVersion))].filter((v) => GO_VERSION.test(v)).slice(0, MAX_INFO_READS);
-    await Promise.all(
-      want.map(async (version) => {
-        const info = await this.info(module, version);
+    // Every read this call needs is taken from the limit at once: it is let through with all of them
+    // in time, or refused now with when to ask again, never cut off after spending some.
+    const credit: Credit = { left: this.readsNeeded(module, want) };
+    if (credit.left > 0 && !(await this.rateLimiter.acquire("go", this.queueDeadline(), credit.left))) {
+      return failure(new OwnLimitReached(this.rateLimiter.retryAfterSeconds("go", credit.left)));
+    }
+    try {
+      const list = await this.list(module, credit);
+      if (list.status !== "ok") return list;
+      const { versions, retractions } = list.data;
+      const releases: Record<string, ReleaseRecord> = {};
+      for (const version of versions) releases[version] = record(version, null, retractions);
+
+      const reads = await Promise.all(want.map(async (version) => ({ version, read: await this.info(module, version, credit) })));
+      const failed = reads.find((r) => "failed" in r.read);
+      if (failed && "failed" in failed.read) return failed.read.failed;
+      for (const { version, read } of reads) {
+        if (!("info" in read)) continue;
+        const { info } = read;
         // The proxy answers `v20.10.0` with the `v20.10.0+incompatible` release: file it under its own name.
-        if (info === null || (info.Version && info.Version !== version)) return;
+        if (info.Version && info.Version !== version) continue;
         const time = info.Time ?? pseudoVersionTime(version);
         releases[version] = { ...(releases[version] ?? record(version, null, retractions)), publishedAt: time ?? null };
-      }),
-    );
-    return { status: "ok", data: { ecosystem: "Go", name: module, createdAt: null, releases } };
+      }
+      return { status: "ok", data: { ecosystem: "Go", name: module, createdAt: null, releases } };
+    } finally {
+      this.rateLimiter.refund("go", credit.left);
+    }
+  }
+
+  /** The proxy reads getReleases would make now: the list and newest go.mod unless cached or in flight, and each uncached `.info`. */
+  private readsNeeded(module: string, want: string[]): number {
+    const listed = this.listing.has(module) || this.cachedList(module) !== null ? 0 : 2;
+    return listed + want.filter((v) => this.cache.get(infoKey(module, v)) === null).length;
   }
 
   async getCreatedAt(): Promise<RegistryLookup<string | null>> {
@@ -183,31 +234,47 @@ export class GoReleasesReader implements ReleaseMetadataSource {
   async getRequirements(module: string, version: string): Promise<RegistryLookup<ReleaseRequirements>> {
     const v = goVersion(version);
     if (!GO_VERSION.test(v)) return { status: "not_found", detail: `"${version.slice(0, 40)}" is not a Go version` };
-    const key = `go-mod-requires:v1:${module}@${v}`;
+    const key = requiresKey(module, v);
     const hit = this.cache.get<ReleaseRequirements>(key);
     if (hit) return { status: "ok", data: hit };
-    // The registry-CDN bucket (as fix-path lookups): a requirement read never starves the version lists.
-    if (!this.rateLimiter.consume("fixpath-registry")) return { status: "unreachable", detail: "Go module proxy rate limit reached for this minute" };
     try {
-      const res = await fetchWithTimeout(`${GO_PROXY}/${escapeGoPath(module)}/@v/${escapeGoPath(v)}.mod`, {}, TIMEOUT_MS);
+      // The registry-CDN bucket (as fix-path lookups): a requirement read never starves the version lists.
+      const res = await this.get(`${GO_PROXY}/${escapeGoPath(module)}/@v/${escapeGoPath(v)}.mod`, undefined, "fixpath-registry");
       if (res.status === 404 || res.status === 410) return { status: "not_found", detail: `the Go proxy has no go.mod for ${v}` };
       if (!res.ok) return { status: "unreachable", detail: `Go module proxy answered HTTP ${res.status}` };
       const data = parseGoRequires(await res.text());
       this.cache.set(key, data, "go", INFO_TTL);
       return { status: "ok", data };
     } catch (err) {
-      return { status: "unreachable", detail: `Go module proxy: ${err instanceof Error ? err.message : String(err)}` };
+      return failure(err);
     }
   }
 
-  private async list(module: string): Promise<RegistryLookup<CachedList>> {
-    const key = `go-releases:${module}`;
-    const hit = this.cache.get<CachedList>(key);
+  private cachedList(module: string): CachedList | null {
+    const hit = this.cache.get<CachedList>(listKey(module));
+    return hit && !hit.retractionsNote ? hit : null;
+  }
+
+  private async list(module: string, credit?: Credit): Promise<RegistryLookup<CachedList>> {
+    const hit = this.cachedList(module);
     if (hit) return { status: "ok", data: hit };
+    const running = this.listing.get(module);
+    if (running) return running;
+    const read = this.readList(module, credit).finally(() => this.listing.delete(module));
+    this.listing.set(module, read);
+    return read;
+  }
+
+  /**
+   * The version list and the retractions in the newest version's go.mod, cached only when both were
+   * read (an empty retraction list is a read one). Anything less is unreachable and cached nowhere:
+   * a list without its retractions would judge a retracted release as published and clean.
+   */
+  private async readList(module: string, credit?: Credit): Promise<RegistryLookup<CachedList>> {
     const base = `${GO_PROXY}/${escapeGoPath(module)}`;
     let versions: string[];
     try {
-      const res = await this.get(`${base}/@v/list`);
+      const res = await this.get(`${base}/@v/list`, credit);
       // The proxy answers 404 / 410 for a path it cannot resolve.
       if (res.status === 404 || res.status === 410) {
         return { status: "not_found", detail: `"${module}" is not a module the Go proxy can resolve` };
@@ -216,56 +283,96 @@ export class GoReleasesReader implements ReleaseMetadataSource {
       versions = (await res.text()).split("\n").map((v) => v.trim()).filter((v) => GO_VERSION.test(v));
       if (versions.length === 0) {
         // Untagged: the newest pseudo-version.
-        const latest = await this.get(`${base}/@latest`);
+        const latest = await this.get(`${base}/@latest`, credit);
         if (latest.ok) {
           const info = (await latest.json()) as { Version?: string; Time?: string };
           if (info.Version && GO_VERSION.test(info.Version)) {
             versions = [info.Version];
-            if (info.Time) this.cache.set(`go-info:${module}@${info.Version}`, info, "go", INFO_TTL);
+            if (info.Time) this.cache.set(infoKey(module, info.Version), info, "go", INFO_TTL);
           }
+        } else if (latest.status !== 404 && latest.status !== 410) {
+          return { status: "unreachable", detail: `Go module proxy answered HTTP ${latest.status} for the newest pseudo-version` };
         }
       }
     } catch (err) {
-      return { status: "unreachable", detail: `Go module proxy: ${err instanceof Error ? err.message : String(err)}` };
+      return failure(err);
     }
 
     // Retractions live in the newest version's go.mod.
     let retractions: Retraction[] = [];
-    let retractionsNote: string | null = null;
     const newest = versions.reduce<string | null>((max, v) => (max === null || compareVersions(v, max, "Go") > 0 ? v : max), null);
     if (newest) {
+      const where = `the go.mod of ${newest}`;
       try {
-        const res = await this.get(`${base}/@v/${escapeGoPath(newest)}.mod`);
-        if (res.ok) retractions = parseRetractions(await res.text());
-        else retractionsNote = `go.mod of ${newest}: HTTP ${res.status}`;
+        const res = await this.get(`${base}/@v/${escapeGoPath(newest)}.mod`, credit);
+        if (!res.ok) return { status: "unreachable", detail: `Go module proxy answered HTTP ${res.status} for ${where}`, withdrawalsUnread: where };
+        const goMod = await res.text();
+        retractions = parseRetractions(goMod);
+        // The same file is what the newest release requires (getRequirements).
+        this.cache.set(requiresKey(module, newest), parseGoRequires(goMod), "go", INFO_TTL);
       } catch (err) {
-        retractionsNote = `go.mod of ${newest}: ${err instanceof Error ? err.message : String(err)}`;
+        return { ...failure(err, where), withdrawalsUnread: where };
       }
     }
-    const data: CachedList = { versions, retractions, retractionsNote };
-    this.cache.set(key, data, "go", LIST_TTL);
+    const data: CachedList = { versions, retractions };
+    this.cache.set(listKey(module), data, "go", LIST_TTL);
     return { status: "ok", data };
   }
 
-  private async info(module: string, version: string): Promise<{ Version?: string; Time?: string } | null> {
-    const key = `go-info:${module}@${version}`;
+  private async info(module: string, version: string, credit?: Credit): Promise<InfoRead> {
+    const key = infoKey(module, version);
     const hit = this.cache.get<{ Version?: string; Time?: string }>(key);
-    if (hit) return hit;
+    if (hit) return { info: hit };
     try {
-      const res = await this.get(`${GO_PROXY}/${escapeGoPath(module)}/@v/${escapeGoPath(version)}.info`);
-      if (!res.ok) return null;
+      const res = await this.get(`${GO_PROXY}/${escapeGoPath(module)}/@v/${escapeGoPath(version)}.info`, credit);
+      // Not served: the version does not exist (a pseudo-version) or carries no date.
+      if (res.status === 404 || res.status === 410) return { missing: true };
+      if (!res.ok) return { failed: { status: "unreachable", detail: `Go module proxy answered HTTP ${res.status} for the .info of ${version}` } };
       const info = (await res.json()) as { Version?: string; Time?: string };
       this.cache.set(key, info, "go", INFO_TTL);
-      return info;
-    } catch {
-      return null;
+      return { info };
+    } catch (err) {
+      return { failed: failure(err, `the .info of ${version}`) };
     }
   }
 
-  private async get(url: string): Promise<Response> {
-    if (!this.rateLimiter.consume("go")) throw new Error("Go module proxy rate limit reached for this minute");
+  /** How long a read may wait in line now: what the running call can afford, never past GO_QUEUE_MAX_WAIT_MS. */
+  private queueDeadline(): number {
+    return this.rateLimiter.now() + withinCallBudget(GO_QUEUE_MAX_WAIT_MS, GO_QUEUE_RESERVE_MS);
+  }
+
+  /**
+   * One proxy request, paid from `credit` when the caller took its tokens already, else waiting in
+   * line for this server's own request limit (queueDeadline). Refused with OwnLimitReached when no
+   * token would come in time: the request is then never sent.
+   */
+  private async get(url: string, credit?: Credit, bucket: "go" | "fixpath-registry" = "go"): Promise<Response> {
+    if (credit && credit.left > 0) credit.left--;
+    else if (!(await this.rateLimiter.acquire(bucket, this.queueDeadline()))) throw new OwnLimitReached(this.rateLimiter.retryAfterSeconds(bucket));
     return fetchWithTimeout(url, {}, TIMEOUT_MS);
   }
+}
+
+/** Tokens a getReleases call took from the limit for its own reads: one spent per read, the rest refunded. */
+interface Credit {
+  left: number;
+}
+
+const listKey = (module: string) => `go-releases:${module}`;
+const infoKey = (module: string, version: string) => `go-info:${module}@${version}`;
+const requiresKey = (module: string, version: string) => `go-mod-requires:v1:${module}@${version}`;
+
+/** A failed proxy read as a lookup: this server's own limit named as such, anything else as the proxy's failure. */
+function failure(err: unknown, what?: string): Unreachable {
+  if (err instanceof OwnLimitReached) {
+    return {
+      status: "unreachable",
+      detail: what ? `${what} was not read: ${err.message}` : err.message,
+      ownLimit: { registry: GO_PROXY_NAME, retryAfterSeconds: err.retryAfterSeconds },
+    };
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return { status: "unreachable", detail: what ? `Go module proxy: ${what}: ${message}` : `Go module proxy: ${message}` };
 }
 
 function record(version: string, publishedAt: string | null, retractions: Retraction[]): ReleaseRecord {

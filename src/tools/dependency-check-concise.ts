@@ -37,6 +37,7 @@ export interface DetailedItem {
   /** "private": the package name is private and was never looked up (live/private-packages.ts). */
   not_checked?: string;
   canonical_module_path?: string;
+  retry_after_seconds?: number;
 }
 
 export interface DetailedAnswer {
@@ -85,6 +86,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
     reason: item.reason,
     ...(item.not_checked ? { not_checked: item.not_checked } : {}),
     ...(item.canonical_module_path ? { canonical_module_path: item.canonical_module_path } : {}),
+    ...(item.retry_after_seconds ? { retry_after_seconds: item.retry_after_seconds } : {}),
     ...(value?.affecting_to?.length ? { advisories: value.affecting_to } : {}),
     ...(value?.fixed_by_this_change?.length ? { fixes: value.fixed_by_this_change } : {}),
     ...(value?.malicious_package ? { malicious_package: value.malicious_package } : {}),

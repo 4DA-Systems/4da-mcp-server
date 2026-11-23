@@ -53,14 +53,13 @@ import type {
 } from "./types.js";
 
 import type { ProjectScanResult } from "./project-scanner.js";
+import { EVIDENCE_STRENGTH, groundedEvidenceClass, oneItemPerAdvisory } from "./feed-advisory-twins.js";
 import { dbRecoveryNote, readDbRecoveredMarker, readEngineBlockMarker } from "./freshness-markers.js";
 
 /**
  * Resolve the database path, in priority order:
- * 1. FOURDA_DB_PATH (relative paths resolve against cwd). A relative path
- *    must name an existing file; an absolute one may name a new file in an
- *    existing directory, which becomes a standalone database (see
- *    explicitDbPathProblem()).
+ * 1. FOURDA_DB_PATH (relative paths resolve against cwd). It must name an
+ *    existing file, or the server's own store (see explicitDbPathProblem()).
  * 2. The deployed desktop app's database (desktopAppDbPaths)
  * 3. Otherwise the standalone database (standaloneDbPath), created on first use
  *
@@ -85,37 +84,69 @@ export function getDefaultDbPath(): string {
 /**
  * Why the explicit FOURDA_DB_PATH cannot be used, or null.
  *
- * - An existing file: used.
- * - A RELATIVE path naming no file is refused. It resolves against whatever
- *   directory the host started the server in: `./data/4da.db` from 4DA's
- *   `.mcp.json` silently created a fresh standalone database named like the
- *   app's inside any repository, and every decision and memory written there
- *   was lost to the real one (audit B-5).
- * - An ABSOLUTE path naming no file, in a directory that exists, is a
- *   deliberate choice of where the standalone database lives (the G7 agent
- *   eval sets `<run>/server-home/standalone.db`): it is created, and the
- *   first tool answer says so (FourDADatabase.takeCreationNote()).
- * - An absolute path whose directory does not exist is refused: a typo there
- *   would otherwise create directories.
+ * FOURDA_DB_PATH names the desktop app's database. An existing file is used.
+ * A path naming no file is refused and nothing is created there: the
+ * dependency tools then answer from the project's files and every other tool
+ * returns this message (DatabaseUnavailableError). A database created at such
+ * a path (`./data/4da.db` from a committed `.mcp.json`, resolved in any
+ * clone) collected decisions and memories the real one never saw (audit B-5).
+ * The one path that is created is the server's own store (isOwnStorePath; the
+ * benchmark harnesses set FOURDA_MCP_HOME and FOURDA_DB_PATH to it together).
  */
 export function explicitDbPathProblem(env: NodeJS.ProcessEnv = process.env): string | null {
   const explicit = env.FOURDA_DB_PATH?.trim();
   if (!explicit) return null;
   const absolute = path.resolve(process.cwd(), explicit);
-  if (fs.existsSync(absolute)) return null;
-  if (path.isAbsolute(explicit)) {
-    if (fs.existsSync(path.dirname(absolute))) return null;
-    return (
-      `FOURDA_DB_PATH is set to "${explicit}", but its directory ${path.dirname(absolute)} does not exist. ` +
-      `Nothing was created. Create the directory to have a new standalone database made there, point ` +
-      `FOURDA_DB_PATH at an existing 4DA database, or unset it to use the desktop app's database or this server's own.`
-    );
+  if (fs.existsSync(absolute) || isOwnStorePath(absolute)) return null;
+  const remedy =
+    "Point it at the 4DA desktop app's database, or unset it to use the app's database or this server's own. " +
+    "The dependency tools still answer from the project's files.";
+  if (path.isAbsolute(explicit) && !fs.existsSync(path.dirname(absolute))) {
+    return `FOURDA_DB_PATH is set to "${explicit}", but its directory ${path.dirname(absolute)} does not exist. Nothing was created. ${remedy}`;
   }
+  const relative = path.isAbsolute(explicit) ? "" : " (relative paths resolve against the server's working directory)";
+  return `FOURDA_DB_PATH is set to "${explicit}", but there is no database at ${absolute}${relative}. Nothing was created there. ${remedy}`;
+}
+
+/**
+ * The database the server selected cannot serve tool calls: FOURDA_DB_PATH
+ * names no file, the file has no tables, or it cannot be opened. `message` is
+ * what a tool that needs the database returns. `note` is what the answer of a
+ * dependency tool carries (DATABASE_FREE_TOOLS answer from the project's files
+ * without any database).
+ */
+export class DatabaseUnavailableError extends Error {
+  readonly note: string;
+
+  constructor(message: string, note: string) {
+    super(message);
+    this.name = "DatabaseUnavailableError";
+    this.note = note;
+  }
+}
+
+const FROM_DISK_ONLY =
+  "so this answer comes from the project's files alone; the tools that need the database return that error";
+
+/** The error for a file with no tables where the app's database was expected. Nothing in it is changed. */
+export function notAppDatabaseMessage(absolutePath: string): string {
+  const named = process.env.FOURDA_DB_PATH?.trim()
+    ? "Point FOURDA_DB_PATH at the 4DA desktop app's database, or unset it to use the app's database or this server's own."
+    : "If the 4DA desktop app is starting for the first time it creates its tables shortly; otherwise start the app, which checks its database on startup.";
   return (
-    `FOURDA_DB_PATH is set to the relative path "${explicit}", but there is no database at ${absolute} ` +
-    `(relative paths resolve against the server's working directory). Nothing was created there. Point it at an ` +
-    `existing 4DA database, use an absolute path to have a new standalone database created, or unset it to use ` +
-    `the desktop app's database or this server's own.`
+    `The database at ${absolutePath} has no tables: it is not a 4DA database, so the tools that read the desktop ` +
+    `app's data cannot use it. Nothing was changed in it. ${named} The dependency tools still answer from the project's files.`
+  );
+}
+
+function notFoundError(absolutePath: string, message: string): DatabaseUnavailableError {
+  return new DatabaseUnavailableError(message, `The 4DA app database named by FOURDA_DB_PATH (${absolutePath}) was not found, ${FROM_DISK_ONLY}.`);
+}
+
+function notAppDatabaseError(absolutePath: string): DatabaseUnavailableError {
+  return new DatabaseUnavailableError(
+    notAppDatabaseMessage(absolutePath),
+    `The database at ${absolutePath} has no tables, so it is not a 4DA database, ${FROM_DISK_ONLY}.`,
   );
 }
 
@@ -163,6 +194,23 @@ export function standaloneDbPath(): string {
   return path.join(serverDataDir(), "standalone.db");
 }
 
+/** Whether two paths name the same file (case-insensitively on Windows, as its file system does). */
+function samePath(a: string, b: string): boolean {
+  const ra = path.resolve(a);
+  const rb = path.resolve(b);
+  return process.platform === "win32" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
+/**
+ * Whether `file` is the server's own store, the file at standaloneDbPath().
+ * Its path decides, never its content: a first start killed while it created
+ * the file, or another server still creating it, leaves a file with no tables,
+ * and that file is still this server's to complete (ensureOwnSchema).
+ */
+export function isOwnStorePath(file: string): boolean {
+  return samePath(file, standaloneDbPath());
+}
+
 /**
  * The directory holding every file this server writes: a per-user data
  * directory (`%LOCALAPPDATA%\4da-mcp`, `~/Library/Application Support/4da-mcp`,
@@ -207,8 +255,7 @@ export function isUnreadableDbError(error: unknown): boolean {
  */
 export function unreadableDbMessage(absolutePath: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
-  const isStandaloneFile = path.resolve(absolutePath) === path.resolve(standaloneDbPath());
-  const remedy = isStandaloneFile
+  const remedy = isOwnStorePath(absolutePath)
     ? "It is this server's standalone database: move it aside (keep it if it holds decisions or agent " +
       "memory you want) and the next call creates a new one."
     : process.env.FOURDA_DB_PATH
@@ -224,26 +271,480 @@ export function unreadableDbMessage(absolutePath: string, error: unknown): strin
 /** Marker table written into every standalone database. */
 const STANDALONE_MARKER = "mcp_standalone";
 
+/** Every table's name, sqlite_sequence included. Reading the schema makes a damaged or non-SQLite file throw. */
+function tableNames(db: SqliteDatabase): string[] {
+  return (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((t) => t.name);
+}
+
 /**
- * Whether an EXISTING database is a standalone one. The marker decides; a
- * database created before the marker existed is recognised by its minimal
- * schema (schema_version 1, a few dozen tables) — the desktop app's database
- * carries 140+ tables and a schema version past 100. Getting this wrong was a
- * bug: from the second session on, a standalone database read as the desktop
- * app's, so tools/list advertised five tools with no data behind them and the
- * project was never rescanned.
+ * Whether an EXISTING database at a path other than the own store's
+ * (isOwnStorePath) is of this server's format: an explicit path a test or tool
+ * opened, or a copy. The marker decides; a database created before the marker
+ * existed is recognised by its minimal schema (schema_version 1, a few dozen
+ * tables): the desktop app's database carries 140+ tables and a schema version
+ * past 100. A database with no tables is neither (see the constructor).
  */
 function detectStandalone(db: SqliteDatabase): boolean {
   try {
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
-      (t) => t.name,
-    );
+    const tables = tableNames(db);
     if (tables.includes(STANDALONE_MARKER)) return true;
     if (!tables.includes("schema_version") || tables.length >= 40) return false;
     const row = db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null } | undefined;
     return row?.v === 1;
   } catch {
     return false;
+  }
+}
+
+/**
+ * The schema of the server's own store, one block per table, in creation order. Mirrors the
+ * desktop app's tables, only the subset the tools query. A block runs only when its table is
+ * missing (ensureOwnSchema), so a table an older version created is never touched here.
+ */
+const OWN_SCHEMA: ReadonlyArray<{ table: string; sql: string }> = [
+  {
+    table: "schema_version",
+    sql: `
+    -- Schema version tracking
+    CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY
+    );
+    INSERT OR IGNORE INTO schema_version (version) VALUES (1);
+    `,
+  },
+  {
+    table: "source_items",
+    sql: `
+    -- Source items (content feed) — queried by get_relevant_content, source_health, daily_briefing, etc.
+    CREATE TABLE IF NOT EXISTS source_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      url TEXT,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      content_hash TEXT NOT NULL DEFAULT '',
+      embedding BLOB NOT NULL DEFAULT x'00',
+      signal_type TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(source_type, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_source_type ON source_items(source_type);
+    CREATE INDEX IF NOT EXISTS idx_source_type_created ON source_items(source_type, created_at);
+    `,
+  },
+  {
+    table: "user_identity",
+    sql: `
+    -- User identity — queried by get_context
+    CREATE TABLE IF NOT EXISTS user_identity (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      role TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "tech_stack",
+    sql: `
+    -- Tech stack (user-declared) — queried by get_context, tech_radar, developer_dna
+    CREATE TABLE IF NOT EXISTS tech_stack (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      technology TEXT NOT NULL UNIQUE,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "domains",
+    sql: `
+    -- Domains of interest — queried by get_context
+    CREATE TABLE IF NOT EXISTS domains (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL UNIQUE,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "explicit_interests",
+    sql: `
+    -- Explicit interests — queried by get_context, developer_dna
+    CREATE TABLE IF NOT EXISTS explicit_interests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic TEXT NOT NULL UNIQUE,
+      weight REAL DEFAULT 1.0,
+      embedding BLOB,
+      source TEXT DEFAULT 'explicit',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_interests_topic ON explicit_interests(topic);
+    `,
+  },
+  {
+    table: "exclusions",
+    sql: `
+    -- Exclusions — queried by get_context
+    CREATE TABLE IF NOT EXISTS exclusions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic TEXT NOT NULL UNIQUE,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "detected_tech",
+    sql: `
+    -- ACE detected tech — queried by get_context, tech_radar, developer_dna
+    CREATE TABLE IF NOT EXISTS detected_tech (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      category TEXT NOT NULL,
+      confidence REAL DEFAULT 0.5,
+      source TEXT NOT NULL DEFAULT 'project_scan',
+      evidence TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_detected_tech_name ON detected_tech(name);
+    CREATE INDEX IF NOT EXISTS idx_detected_tech_confidence ON detected_tech(confidence);
+    `,
+  },
+  {
+    table: "active_topics",
+    sql: `
+    -- Active topics — queried by get_context
+    CREATE TABLE IF NOT EXISTS active_topics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic TEXT NOT NULL UNIQUE,
+      weight REAL DEFAULT 0.5,
+      confidence REAL DEFAULT 0.5,
+      embedding BLOB,
+      source TEXT NOT NULL DEFAULT 'project_scan',
+      last_seen TEXT DEFAULT (datetime('now')),
+      decay_applied INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_active_topics_topic ON active_topics(topic);
+    `,
+  },
+  {
+    table: "interactions",
+    sql: `
+    -- topic_affinities / anti_topics are deliberately NOT created: the
+    -- implicit-capture learning system was removed product-wide (AD-029 →
+    -- v20b) and desktop schema 105 dropped both tables. Baking them into
+    -- fresh standalone installs would recreate dead tables no code reads.
+    -- Interactions — queried by record_feedback, developer_dna, knowledge_gaps
+    CREATE TABLE IF NOT EXISTS interactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_item_id INTEGER,
+      item_id INTEGER,
+      action TEXT,
+      action_type TEXT,
+      action_data TEXT,
+      item_topics TEXT,
+      item_source TEXT,
+      signal_strength REAL DEFAULT 0.5,
+      timestamp TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_interactions_timestamp ON interactions(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_interactions_item ON interactions(source_item_id);
+    `,
+  },
+  {
+    table: "feedback",
+    sql: `
+    -- Explicit relevance labels — written by record_feedback (save / mark_irrelevant);
+    -- the desktop calibration fitter reads this table as ground truth. Same DDL as desktop.
+    CREATE TABLE IF NOT EXISTS feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_item_id INTEGER NOT NULL,
+      relevant INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (source_item_id) REFERENCES source_items(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_item ON feedback(source_item_id);
+    `,
+  },
+  {
+    table: "project_dependencies",
+    sql: `
+    -- Project dependencies — queried by project_health, tech_radar, developer_dna, knowledge_gaps
+    CREATE TABLE IF NOT EXISTS project_dependencies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_path TEXT NOT NULL,
+      manifest_type TEXT NOT NULL,
+      package_name TEXT NOT NULL,
+      version TEXT,
+      is_dev INTEGER DEFAULT 0,
+      is_direct INTEGER DEFAULT 1,
+      language TEXT NOT NULL,
+      last_scanned TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_path, package_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_deps_package ON project_dependencies(package_name);
+    CREATE INDEX IF NOT EXISTS idx_deps_project ON project_dependencies(project_path);
+    `,
+  },
+  {
+    table: "developer_decisions",
+    sql: `
+    -- Developer decisions — queried by tech_radar, decision_memory
+    -- embedding/embedding_model are populated lazily ONLY when an embedding
+    -- provider is configured (optional semantic recall); null otherwise.
+    CREATE TABLE IF NOT EXISTS developer_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      decision_type TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      rationale TEXT,
+      alternatives_rejected TEXT DEFAULT '[]',
+      context_tags TEXT DEFAULT '[]',
+      confidence REAL NOT NULL DEFAULT 0.8,
+      status TEXT NOT NULL DEFAULT 'active',
+      superseded_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      embedding BLOB,
+      embedding_model TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_decisions_type ON developer_decisions(decision_type);
+    CREATE INDEX IF NOT EXISTS idx_decisions_subject ON developer_decisions(subject);
+    `,
+  },
+  {
+    table: "temporal_events",
+    sql: `
+    -- Temporal events — queried by signal_chains, semantic_shifts, trend_analysis
+    CREATE TABLE IF NOT EXISTS temporal_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      data JSON NOT NULL,
+      embedding BLOB,
+      source_item_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_temporal_type_time ON temporal_events(event_type, created_at);
+    `,
+  },
+  {
+    table: "item_relationships",
+    sql: `
+    -- Item relationships — queried by reverse_mentions, topic_connections
+    CREATE TABLE IF NOT EXISTS item_relationships (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_item_id INTEGER NOT NULL,
+      related_item_id INTEGER NOT NULL,
+      relationship_type TEXT NOT NULL,
+      strength REAL DEFAULT 1.0,
+      metadata JSON,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(source_item_id, related_item_id, relationship_type)
+    );
+    `,
+  },
+  {
+    table: "agent_memory",
+    sql: `
+    -- Agent memory — queried by agent_memory, agent_session_brief
+    -- embedding/embedding_model are populated lazily ONLY when an embedding
+    -- provider is configured (optional semantic recall); null otherwise.
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      agent_type TEXT NOT NULL,
+      memory_type TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      content TEXT NOT NULL,
+      context_tags TEXT DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT,
+      promoted_to_decision_id INTEGER,
+      embedding BLOB,
+      embedding_model TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_type ON agent_memory(memory_type);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_session ON agent_memory(session_id);
+    `,
+  },
+  {
+    table: "source_health",
+    sql: `
+    -- Source health — queried by source_health diagnostic
+    CREATE TABLE IF NOT EXISTS source_health (
+      source_type TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      last_success TEXT,
+      last_error TEXT,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      items_fetched INTEGER NOT NULL DEFAULT 0,
+      response_time_ms INTEGER NOT NULL DEFAULT 0,
+      checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "sources",
+    sql: `
+    -- Sources registry
+    CREATE TABLE IF NOT EXISTS sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_type TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      config TEXT,
+      last_fetch TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "briefings",
+    sql: `
+    -- Briefings — queried by agent_session_brief, daily_briefing
+    CREATE TABLE IF NOT EXISTS briefings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content TEXT NOT NULL,
+      model TEXT,
+      item_count INTEGER NOT NULL DEFAULT 0,
+      tokens_used INTEGER,
+      latency_ms INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "autophagy_cycles",
+    sql: `
+    -- Autophagy cycles — queried by autophagy_status
+    CREATE TABLE IF NOT EXISTS autophagy_cycles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      items_analyzed INTEGER NOT NULL DEFAULT 0,
+      items_pruned INTEGER NOT NULL DEFAULT 0,
+      calibrations_produced INTEGER NOT NULL DEFAULT 0,
+      topic_decay_rates_updated INTEGER NOT NULL DEFAULT 0,
+      source_autopsies_produced INTEGER NOT NULL DEFAULT 0,
+      anti_patterns_detected INTEGER NOT NULL DEFAULT 0,
+      db_size_before_bytes INTEGER NOT NULL DEFAULT 0,
+      db_size_after_bytes INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    `,
+  },
+  {
+    table: "digested_intelligence",
+    sql: `
+    -- Digested intelligence — queried by autophagy_status
+    CREATE TABLE IF NOT EXISTS digested_intelligence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      digest_type TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      data TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 0.5,
+      sample_size INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT,
+      superseded_by INTEGER,
+      FOREIGN KEY (superseded_by) REFERENCES digested_intelligence(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_digest_type_subject ON digested_intelligence(digest_type, subject);
+    `,
+  },
+  {
+    table: "decision_windows",
+    sql: `
+    -- Decision windows — queried by decision_windows, compound_advantage
+    CREATE TABLE IF NOT EXISTS decision_windows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      window_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      urgency REAL NOT NULL DEFAULT 0.5,
+      relevance REAL NOT NULL DEFAULT 0.5,
+      source_item_ids TEXT NOT NULL DEFAULT '[]',
+      signal_chain_id INTEGER,
+      dependency TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      opened_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT,
+      acted_at TEXT,
+      closed_at TEXT,
+      outcome TEXT,
+      lead_time_hours REAL,
+      streets_engine TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_dw_status ON decision_windows(status);
+    `,
+  },
+  {
+    table: "advantage_score",
+    sql: `
+    -- Advantage score — queried by compound_advantage
+    CREATE TABLE IF NOT EXISTS advantage_score (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      period TEXT NOT NULL,
+      score REAL NOT NULL DEFAULT 0.0,
+      items_surfaced INTEGER NOT NULL DEFAULT 0,
+      avg_lead_time_hours REAL NOT NULL DEFAULT 0.0,
+      windows_opened INTEGER NOT NULL DEFAULT 0,
+      windows_acted INTEGER NOT NULL DEFAULT 0,
+      windows_expired INTEGER NOT NULL DEFAULT 0,
+      knowledge_gaps_closed INTEGER NOT NULL DEFAULT 0,
+      calibration_accuracy REAL NOT NULL DEFAULT 0.0,
+      response_rate REAL,
+      computed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_advantage_period ON advantage_score(period, computed_at);
+    `,
+  },
+  {
+    table: STANDALONE_MARKER,
+    sql: `CREATE TABLE IF NOT EXISTS ${STANDALONE_MARKER} (created_at TEXT DEFAULT (datetime('now')))`,
+  },
+];
+
+/** Every table the own store has after an open, its marker last. */
+export const OWN_STORE_TABLES: readonly string[] = OWN_SCHEMA.map((block) => block.table);
+
+/** The own store's tables missing from `db`: empty when its schema is whole. */
+export function missingOwnTables(db: SqliteDatabase): string[] {
+  const present = new Set(tableNames(db));
+  return OWN_STORE_TABLES.filter((table) => !present.has(table));
+}
+
+/**
+ * Give a database of this server's format every table it lacks: none for a brand-new or
+ * zero-byte file, some for one a killed first start left half-made. "The file exists" never
+ * stands for "the schema exists". Idempotent, and one transaction (one commit: the ~45
+ * statements committed one by one held the first call's event loop for ~140 ms, pre-publish
+ * round 10, W9). BEGIN IMMEDIATE takes the write lock before the tables are listed again, so
+ * servers starting together on a new data folder create the schema once, and one that arrives
+ * while another is still creating it waits for that commit (busy timeout) instead of reading a
+ * half-made schema.
+ */
+function ensureOwnSchema(db: SqliteDatabase): void {
+  if (missingOwnTables(db).length === 0) return;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const present = new Set(tableNames(db));
+    for (const block of OWN_SCHEMA) {
+      if (!present.has(block.table)) db.exec(block.sql);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // SQLite already rolled back; the original error matters.
+    }
+    throw error;
   }
 }
 
@@ -255,8 +756,10 @@ export interface DatabaseValidationResult {
   valid: boolean;
   error?: string;
   tables?: string[];
-  /** True when no existing DB was found — standalone mode will create one */
+  /** True for the server's own store (its path, created or completed on first use) or a database of its format. */
   standalone?: boolean;
+  /** The file probed. */
+  path?: string;
 }
 
 /**
@@ -356,13 +859,6 @@ export function dedupeByTitle<T extends { title: string | null }>(items: T[], th
 }
 
 /**
- * The dependency-group query the server runs at init against a pre-existing
- * database (index.ts full-DB branch). Exported as a single source of truth so
- * the schema-compatibility regression test exercises the EXACT production SQL —
- * the `is_direct` standalone-schema gap slipped through precisely because the
- * two modes were only ever tested separately.
- */
-/**
  * The app-owned tables this server is designed to write when the desktop app
  * is installed: decisions (decision_memory), agent memory (agent_memory) and
  * feedback (record_feedback -> the app's calibration). Nothing else in the
@@ -380,9 +876,6 @@ export interface WriteTarget {
   target: "database" | "app" | "server_store";
   note?: string;
 }
-
-export const DEPENDENCY_GROUP_QUERY =
-  "SELECT DISTINCT package_name, language, project_path, is_dev, is_direct FROM project_dependencies";
 
 /**
  * 4DA Database accessor
@@ -402,11 +895,24 @@ export class FourDADatabase {
     return note;
   }
 
+  /**
+   * Which database a file is, decided by its path and its content, never by a
+   * marker a concurrent start can be too early to see:
+   * - the own store (isOwnStorePath) is this server's whatever it holds, and is
+   *   opened writable with its schema completed (ensureOwnSchema);
+   * - a new file at an explicit `dbPath` argument (tests, the memory store) is
+   *   made in the own store's format; FOURDA_DB_PATH never creates one
+   *   (explicitDbPathProblem);
+   * - any other existing file is of this server's format when it says so
+   *   (detectStandalone), the desktop app's (read-only) when it has tables, and
+   *   neither when it has none (DatabaseUnavailableError).
+   * Every failure to open is a DatabaseUnavailableError, so the dependency
+   * tools still answer from the project's files.
+   */
   constructor(dbPath?: string) {
-    // An explicit argument (tests, tools) may create a new file; the env var may not.
     if (!dbPath) {
       const problem = explicitDbPathProblem();
-      if (problem) throw new Error(problem);
+      if (problem) throw notFoundError(path.resolve(process.cwd(), process.env.FOURDA_DB_PATH!.trim()), problem);
     }
     const resolvedPath = dbPath || getDefaultDbPath();
 
@@ -415,40 +921,37 @@ export class FourDADatabase {
       ? resolvedPath
       : path.resolve(process.cwd(), resolvedPath);
 
-    const isNew = !fs.existsSync(absolutePath);
+    const exists = fs.existsSync(absolutePath);
+    const ownFormat = isOwnStorePath(absolutePath) || (!exists && Boolean(dbPath));
+    if (!exists && !ownFormat) throw notFoundError(absolutePath, `No database at ${absolutePath}.`);
     const envPath = process.env.FOURDA_DB_PATH?.trim();
-    if (isNew && !dbPath && envPath && path.resolve(process.cwd(), envPath) === path.resolve(absolutePath)) {
-      this.creationNote = `Created a new standalone database at ${absolutePath}: FOURDA_DB_PATH named no existing file.`;
+    if (!exists && !dbPath && envPath && samePath(path.resolve(process.cwd(), envPath), absolutePath)) {
+      this.creationNote = `Created a new standalone database at ${absolutePath}: this server's own store, which FOURDA_DB_PATH names.`;
       console.error(`[4DA] ${this.creationNote}`);
     }
 
-    // Ensure parent directory exists (standalone mode may need to create it)
-    if (isNew) {
-      const dir = path.dirname(absolutePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-    }
-
     let opened: SqliteDatabase | null = null;
-    let standalone = isNew;
+    let standalone = ownFormat;
     try {
-      if (isNew) {
+      if (ownFormat) {
+        fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
         opened = openDatabase(absolutePath, { readonly: false });
-        opened.pragma("journal_mode = WAL");
       } else {
-        // An existing file is opened read-only first. Reading the schema here
+        // Any other file is opened read-only first. Reading the schema here
         // makes a damaged or non-SQLite file fail now, with the message below.
         opened = openDatabase(absolutePath, { readonly: true, fileMustExist: true });
-        opened.prepare("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").all();
+        if (tableNames(opened).length === 0) throw notAppDatabaseError(absolutePath);
         standalone = detectStandalone(opened);
         if (standalone) {
-          // This server's own database: reopen it writable.
+          // A database of this server's format: reopen it writable.
           opened.close();
           opened = null;
           opened = openDatabase(absolutePath, { readonly: false, fileMustExist: true });
-          opened.pragma("journal_mode = WAL");
         }
+      }
+      if (standalone) {
+        opened.pragma("journal_mode = WAL");
+        ensureOwnSchema(opened);
       }
     } catch (error) {
       // Close the handle a failed pragma leaves open: every tool call retries
@@ -459,13 +962,15 @@ export class FourDADatabase {
       } catch {
         // Nothing to close when the open itself failed.
       }
-      if (error instanceof SqliteUnavailableError) throw error;
-      throw new Error(
+      if (error instanceof SqliteUnavailableError || error instanceof DatabaseUnavailableError) throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new DatabaseUnavailableError(
         isNativeBindingError(error)
           ? nativeBindingMessage(error)
           : isUnreadableDbError(error)
             ? unreadableDbMessage(absolutePath, error)
-            : `Failed to open 4DA database at ${absolutePath}: ${error instanceof Error ? error.message : String(error)}`
+            : `Failed to open 4DA database at ${absolutePath}: ${detail}`,
+        `The database at ${absolutePath} cannot be opened (${detail}), ${FROM_DISK_ONLY}.`,
       );
     }
     this.db = opened;
@@ -475,18 +980,11 @@ export class FourDADatabase {
     // The desktop app's database: read-only, and nothing below runs against it.
     if (!standalone) return;
 
-    // Standalone mode: create schema for a brand-new database, and recognise
-    // an existing standalone database as one on every later session.
-    if (isNew) this.createMinimalSchema();
-    this.db.exec(`CREATE TABLE IF NOT EXISTS ${STANDALONE_MARKER} (created_at TEXT DEFAULT (datetime('now')))`);
-
     // Schema upgrade for standalone databases created before `is_direct` was
-    // added to the minimal schema: the full-DB init branch queries that column
-    // (DEPENDENCY_GROUP_QUERY), and without it session 2+ of a standalone
-    // install throws, gets caught, and silently disables vulnerability_scan /
-    // dependency_health / upgrade_planner. Scanner-inserted manifest deps are
-    // direct by definition, so DEFAULT 1 backfills correctly. Standalone
-    // databases only: the desktop app's database is never altered.
+    // added to the minimal schema, so every standalone store has the column the
+    // current schema declares. Scanner-inserted manifest deps are direct by
+    // definition, so DEFAULT 1 backfills correctly. Standalone databases only:
+    // the desktop app's database is never altered.
     try {
       const hasDepsTable = this.db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_dependencies'")
@@ -501,10 +999,7 @@ export class FourDADatabase {
     }
   }
 
-  /**
-   * Whether this database was freshly created in standalone mode
-   * (no pre-existing 4DA desktop app database found).
-   */
+  /** Whether this is the server's own store (or a database of its format), not the desktop app's. */
   get isStandalone(): boolean {
     return this._isStandalone;
   }
@@ -560,11 +1055,8 @@ export class FourDADatabase {
   getMemoryStore(): FourDADatabase {
     if (!this.isReadOnly) return this;
     if (!this.memoryStore) {
-      const storePath = standaloneDbPath();
-      if (path.resolve(storePath) === path.resolve(this.dbPath)) {
-        throw new Error(`The server's store ${storePath} is open read-only; it cannot record.`);
-      }
-      const store = new FourDADatabase(storePath);
+      // A read-only connection is never the own store (the constructor opens that path writable).
+      const store = new FourDADatabase(standaloneDbPath());
       // Rows here reference the app's items and decisions by id; those rows
       // live in the other file, so foreign keys cannot be enforced here.
       store.db.pragma("foreign_keys = OFF");
@@ -596,12 +1088,13 @@ export class FourDADatabase {
     const absolutePath = path.isAbsolute(resolvedPath)
       ? resolvedPath
       : path.resolve(process.cwd(), resolvedPath);
+    const ownStore = isOwnStorePath(absolutePath);
 
-    // The path FOURDA_DB_PATH names is never created: report it, not standalone.
+    // The path FOURDA_DB_PATH names is never created (the own store's excepted): report it, not standalone.
     const envPath = process.env.FOURDA_DB_PATH?.trim();
-    if (envPath && path.resolve(process.cwd(), envPath) === path.resolve(absolutePath)) {
+    if (envPath && samePath(path.resolve(process.cwd(), envPath), absolutePath)) {
       const problem = explicitDbPathProblem();
-      if (problem) return { valid: false, standalone: false, error: problem };
+      if (problem) return { valid: false, standalone: false, path: absolutePath, error: problem };
     }
 
     // Check if file exists — if not, standalone mode will create it
@@ -609,6 +1102,7 @@ export class FourDADatabase {
       return {
         valid: false,
         standalone: true,
+        path: absolutePath,
         error: `No existing database at ${absolutePath}. Standalone mode will create one on startup.`,
       };
     }
@@ -625,6 +1119,7 @@ export class FourDADatabase {
         if (integrityStatus !== "ok") {
           return {
             valid: false,
+            path: absolutePath,
             // It used to say "Try deleting data/4da.db": a path that is not
             // where the app keeps its database, and advice that destroys the
             // user's only copy of it.
@@ -636,21 +1131,27 @@ export class FourDADatabase {
       // List tables. This reads the schema, so a truncated/corrupt-header file
       // (not a valid SQLite DB) throws here and is reported below — giving the
       // cheap path meaningful corruption detection without a full scan.
-      const tables = testDb
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        .all() as { name: string }[];
+      const tables = tableNames(testDb).sort();
 
-      return {
-        valid: true,
-        tables: tables.map((t) => t.name),
-        standalone: detectStandalone(testDb),
-      };
+      // The own store is known by its path; whatever tables it lacks, the open completes.
+      if (ownStore) return { valid: true, tables, standalone: true, path: absolutePath };
+      // Any other file with no tables is neither the own store nor the app's database.
+      if (tables.length === 0) {
+        return { valid: false, tables, standalone: false, path: absolutePath, error: notAppDatabaseMessage(absolutePath) };
+      }
+      return { valid: true, tables, standalone: detectStandalone(testDb), path: absolutePath };
     } catch (error) {
+      const unreadable = isUnreadableDbError(error);
+      const detail = error instanceof Error ? error.message : String(error);
+      // A read-only probe cannot roll back what a killed creator left in the own store's
+      // journal; the server's writable open does, so only damage refuses the own store.
+      if (ownStore && !unreadable) {
+        return { valid: false, standalone: true, path: absolutePath, error: `The server's own database at ${absolutePath} could not be read yet (${detail}); the first tool call opens it writable and completes it.` };
+      }
       return {
         valid: false,
-        error: isUnreadableDbError(error)
-          ? unreadableDbMessage(absolutePath, error)
-          : `Failed to open database at ${absolutePath}: ` + (error instanceof Error ? error.message : String(error)),
+        path: absolutePath,
+        error: unreadable ? unreadableDbMessage(absolutePath, error) : `Failed to open database at ${absolutePath}: ${detail}`,
       };
     } finally {
       try {
@@ -682,334 +1183,6 @@ export class FourDADatabase {
   // ===========================================================================
   // Standalone Mode — Schema & Population
   // ===========================================================================
-
-  /**
-   * Create the minimal schema required for MCP tools to function.
-   * Mirrors the desktop app's tables but only the subset that MCP tools query.
-   * Called once when creating a brand-new standalone database.
-   */
-  private createMinimalSchema(): void {
-    // One transaction, so one commit: each of the ~45 statements committed on its own, a WAL
-    // sync each, and the first tool call of a fresh install spent ~140 ms here with the event
-    // loop held (pre-publish round 10, W9). Nothing reads the file before this returns.
-    this.db.transaction(() => this.createMinimalSchemaStatements())();
-  }
-
-  private createMinimalSchemaStatements(): void {
-    this.db.exec(`
-      -- Schema version tracking
-      CREATE TABLE IF NOT EXISTS schema_version (
-        version INTEGER PRIMARY KEY
-      );
-      INSERT INTO schema_version (version) VALUES (1);
-
-      -- Source items (content feed) — queried by get_relevant_content, source_health, daily_briefing, etc.
-      CREATE TABLE IF NOT EXISTS source_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_type TEXT NOT NULL,
-        source_id TEXT NOT NULL,
-        url TEXT,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        content_hash TEXT NOT NULL DEFAULT '',
-        embedding BLOB NOT NULL DEFAULT x'00',
-        signal_type TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        last_seen TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(source_type, source_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_source_type ON source_items(source_type);
-      CREATE INDEX IF NOT EXISTS idx_source_type_created ON source_items(source_type, created_at);
-
-      -- User identity — queried by get_context
-      CREATE TABLE IF NOT EXISTS user_identity (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        role TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      -- Tech stack (user-declared) — queried by get_context, tech_radar, developer_dna
-      CREATE TABLE IF NOT EXISTS tech_stack (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        technology TEXT NOT NULL UNIQUE,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      -- Domains of interest — queried by get_context
-      CREATE TABLE IF NOT EXISTS domains (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        domain TEXT NOT NULL UNIQUE,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      -- Explicit interests — queried by get_context, developer_dna
-      CREATE TABLE IF NOT EXISTS explicit_interests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        topic TEXT NOT NULL UNIQUE,
-        weight REAL DEFAULT 1.0,
-        embedding BLOB,
-        source TEXT DEFAULT 'explicit',
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-      CREATE INDEX IF NOT EXISTS idx_interests_topic ON explicit_interests(topic);
-
-      -- Exclusions — queried by get_context
-      CREATE TABLE IF NOT EXISTS exclusions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        topic TEXT NOT NULL UNIQUE,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      -- ACE detected tech — queried by get_context, tech_radar, developer_dna
-      CREATE TABLE IF NOT EXISTS detected_tech (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        category TEXT NOT NULL,
-        confidence REAL DEFAULT 0.5,
-        source TEXT NOT NULL DEFAULT 'project_scan',
-        evidence TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-      CREATE INDEX IF NOT EXISTS idx_detected_tech_name ON detected_tech(name);
-      CREATE INDEX IF NOT EXISTS idx_detected_tech_confidence ON detected_tech(confidence);
-
-      -- Active topics — queried by get_context
-      CREATE TABLE IF NOT EXISTS active_topics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        topic TEXT NOT NULL UNIQUE,
-        weight REAL DEFAULT 0.5,
-        confidence REAL DEFAULT 0.5,
-        embedding BLOB,
-        source TEXT NOT NULL DEFAULT 'project_scan',
-        last_seen TEXT DEFAULT (datetime('now')),
-        decay_applied INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-      CREATE INDEX IF NOT EXISTS idx_active_topics_topic ON active_topics(topic);
-
-      -- topic_affinities / anti_topics are deliberately NOT created: the
-      -- implicit-capture learning system was removed product-wide (AD-029 →
-      -- v20b) and desktop schema 105 dropped both tables. Baking them into
-      -- fresh standalone installs would recreate dead tables no code reads.
-
-      -- Interactions — queried by record_feedback, developer_dna, knowledge_gaps
-      CREATE TABLE IF NOT EXISTS interactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_item_id INTEGER,
-        item_id INTEGER,
-        action TEXT,
-        action_type TEXT,
-        action_data TEXT,
-        item_topics TEXT,
-        item_source TEXT,
-        signal_strength REAL DEFAULT 0.5,
-        timestamp TEXT DEFAULT (datetime('now'))
-      );
-      CREATE INDEX IF NOT EXISTS idx_interactions_timestamp ON interactions(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_interactions_item ON interactions(source_item_id);
-
-      -- Explicit relevance labels — written by record_feedback (save / mark_irrelevant);
-      -- the desktop calibration fitter reads this table as ground truth. Same DDL as desktop.
-      CREATE TABLE IF NOT EXISTS feedback (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_item_id INTEGER NOT NULL,
-        relevant INTEGER NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (source_item_id) REFERENCES source_items(id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_feedback_item ON feedback(source_item_id);
-
-      -- Project dependencies — queried by project_health, tech_radar, developer_dna, knowledge_gaps
-      CREATE TABLE IF NOT EXISTS project_dependencies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_path TEXT NOT NULL,
-        manifest_type TEXT NOT NULL,
-        package_name TEXT NOT NULL,
-        version TEXT,
-        is_dev INTEGER DEFAULT 0,
-        is_direct INTEGER DEFAULT 1,
-        language TEXT NOT NULL,
-        last_scanned TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(project_path, package_name)
-      );
-      CREATE INDEX IF NOT EXISTS idx_deps_package ON project_dependencies(package_name);
-      CREATE INDEX IF NOT EXISTS idx_deps_project ON project_dependencies(project_path);
-
-      -- Developer decisions — queried by tech_radar, decision_memory
-      -- embedding/embedding_model are populated lazily ONLY when an embedding
-      -- provider is configured (optional semantic recall); null otherwise.
-      CREATE TABLE IF NOT EXISTS developer_decisions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        decision_type TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        decision TEXT NOT NULL,
-        rationale TEXT,
-        alternatives_rejected TEXT DEFAULT '[]',
-        context_tags TEXT DEFAULT '[]',
-        confidence REAL NOT NULL DEFAULT 0.8,
-        status TEXT NOT NULL DEFAULT 'active',
-        superseded_by INTEGER,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        embedding BLOB,
-        embedding_model TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_decisions_type ON developer_decisions(decision_type);
-      CREATE INDEX IF NOT EXISTS idx_decisions_subject ON developer_decisions(subject);
-
-      -- Temporal events — queried by signal_chains, semantic_shifts, trend_analysis
-      CREATE TABLE IF NOT EXISTS temporal_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        data JSON NOT NULL,
-        embedding BLOB,
-        source_item_id INTEGER,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        expires_at TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_temporal_type_time ON temporal_events(event_type, created_at);
-
-      -- Item relationships — queried by reverse_mentions, topic_connections
-      CREATE TABLE IF NOT EXISTS item_relationships (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_item_id INTEGER NOT NULL,
-        related_item_id INTEGER NOT NULL,
-        relationship_type TEXT NOT NULL,
-        strength REAL DEFAULT 1.0,
-        metadata JSON,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(source_item_id, related_item_id, relationship_type)
-      );
-
-      -- Agent memory — queried by agent_memory, agent_session_brief
-      -- embedding/embedding_model are populated lazily ONLY when an embedding
-      -- provider is configured (optional semantic recall); null otherwise.
-      CREATE TABLE IF NOT EXISTS agent_memory (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        agent_type TEXT NOT NULL,
-        memory_type TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        content TEXT NOT NULL,
-        context_tags TEXT DEFAULT '[]',
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        expires_at TEXT,
-        promoted_to_decision_id INTEGER,
-        embedding BLOB,
-        embedding_model TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_agent_memory_type ON agent_memory(memory_type);
-      CREATE INDEX IF NOT EXISTS idx_agent_memory_session ON agent_memory(session_id);
-
-      -- Source health — queried by source_health diagnostic
-      CREATE TABLE IF NOT EXISTS source_health (
-        source_type TEXT PRIMARY KEY,
-        status TEXT NOT NULL DEFAULT 'unknown',
-        last_success TEXT,
-        last_error TEXT,
-        error_count INTEGER NOT NULL DEFAULT 0,
-        consecutive_failures INTEGER NOT NULL DEFAULT 0,
-        items_fetched INTEGER NOT NULL DEFAULT 0,
-        response_time_ms INTEGER NOT NULL DEFAULT 0,
-        checked_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      -- Sources registry
-      CREATE TABLE IF NOT EXISTS sources (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_type TEXT NOT NULL UNIQUE,
-        name TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        config TEXT,
-        last_fetch TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      -- Briefings — queried by agent_session_brief, daily_briefing
-      CREATE TABLE IF NOT EXISTS briefings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        content TEXT NOT NULL,
-        model TEXT,
-        item_count INTEGER NOT NULL DEFAULT 0,
-        tokens_used INTEGER,
-        latency_ms INTEGER,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      -- Autophagy cycles — queried by autophagy_status
-      CREATE TABLE IF NOT EXISTS autophagy_cycles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        items_analyzed INTEGER NOT NULL DEFAULT 0,
-        items_pruned INTEGER NOT NULL DEFAULT 0,
-        calibrations_produced INTEGER NOT NULL DEFAULT 0,
-        topic_decay_rates_updated INTEGER NOT NULL DEFAULT 0,
-        source_autopsies_produced INTEGER NOT NULL DEFAULT 0,
-        anti_patterns_detected INTEGER NOT NULL DEFAULT 0,
-        db_size_before_bytes INTEGER NOT NULL DEFAULT 0,
-        db_size_after_bytes INTEGER NOT NULL DEFAULT 0,
-        duration_ms INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      -- Digested intelligence — queried by autophagy_status
-      CREATE TABLE IF NOT EXISTS digested_intelligence (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        digest_type TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        data TEXT NOT NULL,
-        confidence REAL NOT NULL DEFAULT 0.5,
-        sample_size INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        expires_at TEXT,
-        superseded_by INTEGER,
-        FOREIGN KEY (superseded_by) REFERENCES digested_intelligence(id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_digest_type_subject ON digested_intelligence(digest_type, subject);
-
-      -- Decision windows — queried by decision_windows, compound_advantage
-      CREATE TABLE IF NOT EXISTS decision_windows (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        window_type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        urgency REAL NOT NULL DEFAULT 0.5,
-        relevance REAL NOT NULL DEFAULT 0.5,
-        source_item_ids TEXT NOT NULL DEFAULT '[]',
-        signal_chain_id INTEGER,
-        dependency TEXT,
-        status TEXT NOT NULL DEFAULT 'open',
-        opened_at TEXT NOT NULL DEFAULT (datetime('now')),
-        expires_at TEXT,
-        acted_at TEXT,
-        closed_at TEXT,
-        outcome TEXT,
-        lead_time_hours REAL,
-        streets_engine TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_dw_status ON decision_windows(status);
-
-      -- Advantage score — queried by compound_advantage
-      CREATE TABLE IF NOT EXISTS advantage_score (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        period TEXT NOT NULL,
-        score REAL NOT NULL DEFAULT 0.0,
-        items_surfaced INTEGER NOT NULL DEFAULT 0,
-        avg_lead_time_hours REAL NOT NULL DEFAULT 0.0,
-        windows_opened INTEGER NOT NULL DEFAULT 0,
-        windows_acted INTEGER NOT NULL DEFAULT 0,
-        windows_expired INTEGER NOT NULL DEFAULT 0,
-        knowledge_gaps_closed INTEGER NOT NULL DEFAULT 0,
-        calibration_accuracy REAL NOT NULL DEFAULT 0.0,
-        response_rate REAL,
-        computed_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE INDEX IF NOT EXISTS idx_advantage_period ON advantage_score(period, computed_at);
-
-    `);
-  }
 
   /**
    * Populate the standalone database from a project scan result.
@@ -1437,7 +1610,8 @@ export class FourDADatabase {
 
     const stmt = this.db.prepare(query);
     const fetched = stmt.all(...params) as Array<SourceItem & { relevance_score: number; content_type: string | null; signal_type: string | null; signal_priority: string | null; dep_match_count: number }>;
-    const items = dedupeByTitle(fetched).slice(0, limit);
+    // One item per advisory (the best-grounded of its twins) before near-duplicate titles collapse by score.
+    const items = dedupeByTitle(oneItemPerAdvisory(fetched, (item) => EVIDENCE_STRENGTH[groundedEvidenceClass(item)])).slice(0, limit);
 
     const now = Date.now();
     return items.map((item) => {
@@ -1454,12 +1628,7 @@ export class FourDADatabase {
 
       // Provenance: grounded (matched one of the user's installed deps) vs
       // semantic-only. A grounded security advisory is the OSV-verified gold tier.
-      const grounded = (item.dep_match_count ?? 0) > 0;
-      const evidence_class: RelevantItem["evidence_class"] = grounded
-        ? item.content_type === "security_advisory"
-          ? "osv_verified"
-          : "dependency_grounded"
-        : "semantic_only";
+      const evidence_class: RelevantItem["evidence_class"] = groundedEvidenceClass(item);
 
       return {
         id: item.id,
@@ -1556,9 +1725,11 @@ export class FourDADatabase {
       }
     }
 
-    return scoredItems
-      .sort((a, b) => b.relevance_score - a.relevance_score)
-      .slice(0, limit);
+    // Every item here is keyword_heuristic: of an advisory's twins the higher-scored is kept.
+    return oneItemPerAdvisory(
+      scoredItems.sort((a, b) => b.relevance_score - a.relevance_score),
+      () => 0,
+    ).slice(0, limit);
   }
 
   /**
@@ -1775,10 +1946,10 @@ export class FourDADatabase {
   }
 
   /**
-   * Ensure the `feedback` table exists. The desktop app always has it; a
-   * standalone database created before record_feedback wrote labels does not
-   * (createMinimalSchema runs only for brand-new files). Same DDL as desktop,
-   * so against the desktop database this is a no-op.
+   * Ensure the `feedback` table exists on a writable connection. Every open of
+   * a database of this server's format already completes it (ensureOwnSchema);
+   * this also covers a connection handed in without that open. Same DDL as the
+   * desktop app, and never run on the app's read-only database.
    */
   private ensureFeedbackTable(): void {
     this.db.exec(`

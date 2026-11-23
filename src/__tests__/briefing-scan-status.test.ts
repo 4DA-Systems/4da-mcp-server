@@ -95,6 +95,8 @@ function insertItem(
     signal_type?: string | null;
     signal_priority?: string | null;
     source_type?: string;
+    /** The row's text; the title when not given. */
+    content?: string;
   },
 ): number {
   seq += 1;
@@ -109,7 +111,7 @@ function insertItem(
       `item-${seq}`,
       "https://example.com/" + seq,
       over.title,
-      over.title,
+      over.content ?? over.title,
       `hash-${seq}`,
       sqlDate(over.hoursAgo * HOURS),
       sqlDate(0),
@@ -228,9 +230,9 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     expect(result.scan_status).toBe("ready");
     const named = result.advisories.filter((a) => /jsonwebtoken/i.test(`${a.title} ${a.action}`));
     expect(named.length).toBeGreaterThan(0);
-    // The per-vulnerability live signal names the advisories' fix; with no fix-path check here it is
-    // NOT CHECKED, never "Upgrade to" a release OSV.dev did not confirm (pre-publish audit 2026-11-14).
-    expect(result.advisories.some((a) => /NOT CHECKED: 10\.3\.0 was not confirmed/.test(a.action))).toBe(true);
+    // The task row's instruction is the scan's line for the copy; with no fix-path check here its
+    // target is NOT CHECKED, never "Upgrade to" a release OSV.dev did not confirm (pre-publish audit 2026-11-14).
+    expect(result.advisories.some((a) => /10\.3\.0 was NOT CHECKED against every advisory of jsonwebtoken/.test(a.action))).toBe(true);
     expect(result.advisories.some((a) => a.action.includes("Upgrade jsonwebtoken to 10.3.0"))).toBe(false);
     // A medium advisory in the very package being upgraded is not "safe".
     expect(result.delegation_assessment.level).toBe("review_needed");
@@ -280,7 +282,8 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
   it("security evidence already in hand still yields human_only when the scan is unavailable", async () => {
     insertItem(db, {
-      title: "CRITICAL: jsonwebtoken authorization bypass in relay auth",
+      title: "[GHSA-jwt0-auth-0001] jsonwebtoken: authorization bypass in relay auth",
+      content: "jsonwebtoken (crates.io)\nauthorization bypass in relay auth",
       hoursAgo: 2,
       signal_type: "security_alert",
       signal_priority: "critical",
@@ -308,7 +311,8 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
   it("an advisory-feed row naming a task package reaches the briefing at any age inside 90 days, marked unconfirmed", async () => {
     insertItem(db, { title: "Rust 1.99 released", hoursAgo: 3, source_type: "hackernews", relevance: 0.5 });
     insertItem(db, {
-      title: "hono 4.12.34 patches middleware bypass",
+      title: "[GHSA-hono-mwbp-0001] hono: middleware bypass, patched in 4.12.34",
+      content: "hono (npm)\nmiddleware bypass",
       hoursAgo: 10 * 24,
       signal_type: "security_alert",
       signal_priority: "medium",
@@ -316,14 +320,14 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
     // No scan: the feed row is the only evidence, and it says so.
     const unscanned = await executeWhatShouldIKnow(db, { task: "Upgrade hono in the API gateway" }, stubIntel(null));
-    const row = unscanned.advisories.find((a) => a.title.includes("hono 4.12.34"));
+    const row = unscanned.advisories.find((a) => a.title.includes("hono: middleware bypass"));
     expect(row?.version_confirmed).toBe(false);
     expect(row?.scope).toBe("task");
 
     // A ready scan that finds the installed hono clean is authoritative: the
     // unconfirmed row is not repeated as if it were a finding.
     const scanned = await executeWhatShouldIKnow(db, { task: "Upgrade hono in the API gateway" }, stubIntel(scanOf([])));
-    expect(scanned.advisories.some((a) => a.title.includes("hono 4.12.34"))).toBe(false);
+    expect(scanned.advisories.some((a) => a.title.includes("hono: middleware bypass"))).toBe(false);
     expect(scanned.delegation_assessment.level).toBe("safe_to_delegate");
   });
 
@@ -386,16 +390,17 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
   it("advisories that appear in both passes are reported once", async () => {
     insertItem(db, {
-      title: "CRITICAL: jsonwebtoken authorization bypass in relay auth",
+      title: "[GHSA-jwt0-auth-0001] jsonwebtoken: authorization bypass in relay auth",
+      content: "jsonwebtoken (crates.io)\nauthorization bypass in relay auth",
       hoursAgo: 2,
       signal_type: "security_alert",
       signal_priority: "critical",
     });
     const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(scanOf([entry()])));
 
-    const dbRow = result.advisories.filter((a) => a.title.includes("CRITICAL: jsonwebtoken authorization bypass"));
+    const dbRow = result.advisories.filter((a) => a.title.includes("jsonwebtoken: authorization bypass"));
     expect(dbRow).toHaveLength(1);
-    const liveRow = result.advisories.filter((a) => a.action.includes("NOT CHECKED: 10.3.0"));
+    const liveRow = result.advisories.filter((a) => a.action.includes("10.3.0 was NOT CHECKED"));
     expect(liveRow).toHaveLength(1);
   });
 });
@@ -544,9 +549,9 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     expect(clusterVulnerabilities(unrelated)).toHaveLength(2);
   });
 
-  it("emits ONE security signal for a GHSA/RUSTSEC pair, listing every id in triggers", () => {
+  it("emits ONE security signal for a GHSA/RUSTSEC pair, listing every id in triggers", async () => {
     const live = { getVulnerabilities: () => scanOf([ghsa, rustsec]) };
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, live);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, live);
 
     const liveRows = signals.filter((s) => s.source_type === "osv_live");
     expect(liveRows).toHaveLength(1);
@@ -554,39 +559,46 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
       expect.arrayContaining(["GHSA-h395-gr6q-cpjc", "CVE-2026-25800", "RUSTSEC-2026-0088"]),
     );
     expect(liveRows[0].signal_priority).toBe("medium");
-    expect(liveRows[0].action).toBe("Upgrade jsonwebtoken: the advisory names 10.3.0 as its fix, NOT CHECKED against jsonwebtoken's other advisories (run dependency_check on a release before pinning it)");
+    // The scan's line for the copy (scan-advice.ts); with no fix-path check here its target is NOT CHECKED.
+    expect(liveRows[0].action).toBe(
+      "Upgrade jsonwebtoken 9.3.1 in relay [1 medium]: its advisories name 10.3.0 (a major version change: check upgrade_impact) as the fix, but 10.3.0 was NOT CHECKED against every advisory of jsonwebtoken (the check did not finish); confirm it with dependency_check before pinning it",
+    );
   });
 
-  it("platform-inactive advisories drop to low with a host note", () => {
+  it("platform-inactive advisories drop to low with a host note", async () => {
     const live = {
       getVulnerabilities: () => scanOf([
         entry({ package: "nix", vulnId: "GHSA-inactive", aliases: [], severity: "critical", platformActive: false, target: "cfg(unix)", fixedVersion: "0.30.0" }),
       ]),
     };
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, live);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, live);
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("low");
-    expect(row!.action).toBe("Not built on this host — Upgrade nix: the advisory names 0.30.0 as its fix, NOT CHECKED against nix's other advisories (run dependency_check on a release before pinning it)");
+    // No step for a copy this host never builds, and no version the scan did not give.
+    expect(row!.action).toBe(
+      "Not built on this host (only for cfg(unix)): nothing to fix for this host. For a build that compiles it, vulnerability_scan's platform_inactive_vulnerabilities row gives the checked fix.",
+    );
     // The title agrees with the priority instead of shouting the advisory's own grade.
     expect(row!.title.startsWith("NOT BUILT HERE (critical):")).toBe(true);
   });
 
-  it("maintenance notices drop to low with no fix to apply", () => {
+  it("maintenance notices drop to low with no fix to apply", async () => {
     const live = {
       getVulnerabilities: () => scanOf([
         entry({ package: "paste", vulnId: "RUSTSEC-2024-0436", aliases: [], severity: "unknown", summary: "paste - no longer maintained", fixedVersion: null }),
       ]),
     };
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, live);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, live);
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("low");
-    expect(row!.action).toBe("Maintenance notice — no fix to apply");
+    // Worded as the scan treats it: a notice, not a vulnerability whose fix is missing.
+    expect(row!.action).toMatch(/^Maintenance notice, not a vulnerability: paste \S+\. .*maintenance_notices/);
     expect(row!.title).toContain("MAINTENANCE:");
   });
 
-  it("maps the pipeline's stored priority vocabulary onto the tool's tiers", () => {
+  it("maps the pipeline's stored priority vocabulary onto the tool's tiers", async () => {
     // The desktop pipeline writes critical / alert / advisory / watch; the
     // reader cast the string through unchanged, so 92 of 93 stamped rows in
     // the live corpus carried a priority no filter or sort recognised.
@@ -601,17 +613,17 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
     const advisory = insertItem(db, { title: "tokio 1.51 scheduler regression notes", hoursAgo: 2, signal_type: "breaking_change", signal_priority: "advisory" });
     const watch = insertItem(db, { title: "serde 1.0.220 minor release", hoursAgo: 2, signal_type: "tech_trend", signal_priority: "watch" });
 
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, null);
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, null);
     const byId = new Map(signals.map((s) => [s.id, s.signal_priority]));
     expect(byId.get(alert)).toBe("high");
     expect(byId.get(advisory)).toBe("medium");
     expect(byId.get(watch)).toBe("low");
 
-    const highOnly = executeGetActionableSignals(db, { priority_filter: "high", limit: 50 }, null);
+    const highOnly = await executeGetActionableSignals(db, { priority_filter: "high", limit: 50 }, null);
     expect(highOnly.signals.map((s) => s.id)).toEqual([alert]);
   });
 
-  it("a signal_type filter reaches stored matches the top-200 general read would drop", () => {
+  it("a signal_type filter reaches stored matches the top-200 general read would drop", async () => {
     // Live 2026-09-07: the two in-window stored security alerts ranked 299th
     // and 582nd across all types, so a security-only pass returned nothing.
     const words = [
@@ -635,11 +647,11 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
       signal_priority: "medium",
     });
 
-    const { signals } = executeGetActionableSignals(db, { signal_type: "security_alert", since_hours: 720, limit: 50 }, null);
+    const { signals } = await executeGetActionableSignals(db, { signal_type: "security_alert", since_hours: 720, limit: 50 }, null);
     expect(signals.map((s) => s.id)).toContain(buried);
   });
 
-  it("honours a 30-day since_hours window instead of clamping it to seven days", () => {
+  it("honours a 30-day since_hours window instead of clamping it to seven days", async () => {
     insertItem(db, { title: "Rust 1.99 released", hoursAgo: 3, source_type: "hackernews", relevance: 0.5 });
     const old = insertItem(db, {
       title: "hono 4.12.34 patches middleware bypass",
@@ -648,7 +660,7 @@ describe("get_actionable_signals — one signal per vulnerability", () => {
       signal_priority: "medium",
     });
 
-    const { signals } = executeGetActionableSignals(db, { since_hours: 720, limit: 50 }, null);
+    const { signals } = await executeGetActionableSignals(db, { since_hours: 720, limit: 50 }, null);
     expect(signals.map((s) => s.id)).toContain(old);
   });
 });
@@ -685,8 +697,8 @@ describe("the briefing and live signals grade by the shared rule and name instal
     sourceDirs: ["d:/proj/paddle-webhook"],
   });
 
-  it("get_actionable_signals presents a transitive critical of unknown scope as HIGH, and says why", () => {
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([sandbox]) });
+  it("get_actionable_signals presents a transitive critical of unknown scope as HIGH, and says why", async () => {
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([sandbox]) });
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row).toBeDefined();
     expect(row!.signal_priority).toBe("high");
@@ -754,11 +766,11 @@ describe("the briefing and live signals grade by the shared rule and name instal
     expect(result.delegation_assessment.level).toBe("review_needed");
   });
 
-  it("get_actionable_signals advises the reinstall, not an upgrade, for the installed copy", () => {
-    const { signals } = executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([drifted]) });
+  it("get_actionable_signals advises the reinstall, not an upgrade, for the installed copy", async () => {
+    const { signals } = await executeGetActionableSignals(db, { limit: 50 }, { getVulnerabilities: () => scanOf([drifted]) });
     const row = signals.find((s) => s.source_type === "osv_live");
     expect(row!.action).toBe(
-      "Run `pnpm install` in d:/proj/mcp-4da-server — node_modules has hono@4.13.1; the lockfile pins 4.13.5",
+      "Run `pnpm install` in d:/proj/mcp-4da-server — node_modules has hono@4.13.1; the lockfile pins 4.13.5 (the lockfile version is not affected; the reinstall is the whole fix)",
     );
   });
 

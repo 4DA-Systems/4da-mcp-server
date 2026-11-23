@@ -132,6 +132,30 @@ function defaultEnabledDependencies(line: SparseLine): Set<string> {
 }
 
 /**
+ * The features one release offers, from its sparse-index line: every key of `features` and
+ * `features2`, and the implicit feature each optional dependency defines by its own name unless the
+ * release refers to it as `dep:<name>` (which removes that implicit feature). Null when the line has
+ * no `features` table to read: the index writes one, possibly empty, for every release.
+ */
+export function releaseFeatureNames(line: { features?: unknown; features2?: unknown; deps?: unknown }): string[] | null {
+  if (!line.features || typeof line.features !== "object" || Array.isArray(line.features)) return null;
+  const names = new Set<string>();
+  const values: string[] = [];
+  for (const table of [line.features, line.features2]) {
+    if (!table || typeof table !== "object" || Array.isArray(table)) continue;
+    for (const [name, list] of Object.entries(table as Record<string, unknown>)) {
+      names.add(name);
+      if (Array.isArray(list)) for (const v of list) if (typeof v === "string") values.push(v);
+    }
+  }
+  const explicit = new Set(values.filter((v) => v.startsWith("dep:")).map((v) => v.slice(4)));
+  for (const d of Array.isArray(line.deps) ? (line.deps as Array<{ name?: unknown; optional?: unknown }>) : []) {
+    if (d && d.optional === true && typeof d.name === "string" && !explicit.has(d.name)) names.add(d.name);
+  }
+  return [...names].sort();
+}
+
+/**
  * What one index line says the release requires at build time: normal and build dependencies from
  * crates.io, an optional one only when the `default` feature turns it on. Dev-dependencies are not
  * part of what a dependent builds. One entry per crate and requirement.
@@ -416,7 +440,22 @@ export function pagesSatisfy(seen: string[], wanted: string[]): boolean {
   });
 }
 
-function sparseIndexUrl(name: string): string {
+/** The features `version` offers, from a crate's sparse-index text; null when that release or its features are not in it. */
+export function releaseFeaturesIn(indexText: string, version: string): string[] | null {
+  for (const line of indexText.split("\n")) {
+    if (!line.includes(`"${version}"`)) continue;
+    try {
+      const entry = JSON.parse(line) as SparseLine;
+      if (entry.vers === version) return releaseFeatureNames(entry);
+    } catch {
+      // a malformed line
+    }
+  }
+  return null;
+}
+
+/** The sparse-index URL of a crate: the file cargo itself resolves from. */
+export function sparseIndexUrl(name: string): string {
   const n = name.toLowerCase();
   switch (n.length) {
     case 1: return `https://index.crates.io/1/${n}`;
