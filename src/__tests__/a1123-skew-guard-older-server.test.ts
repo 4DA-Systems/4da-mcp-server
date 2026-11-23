@@ -113,7 +113,7 @@ describe("a data folder with a ledger: a server that records verdicts has run th
     fs.writeFileSync(path.join(home, LEDGER_FILE), "");
     const reason = denial(hook(event("PreToolUse", "Edit", lodashEdit("4.17.20"))));
     expect(reason).toContain("call the 4da MCP tool dependency_check");
-    expect(denial(hook(event("PreToolUse", "Bash", { command: "npm install lodash@4.17.20" })))).toContain("lodash 4.17.20");
+    expect(denial(hook(event("PreToolUse", "Bash", { command: "npm install lodash@4.17.20" })))).toContain('"lodash" "4.17.20" (npm)');
     // The guard held the edit, so nothing follows it.
     expect(hook(event("PostToolUse", "Edit", lodashEdit("4.17.20")))).toEqual({ status: 0, stdout: "" });
   });
