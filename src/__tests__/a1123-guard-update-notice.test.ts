@@ -8,7 +8,7 @@
  * The cases run in order: the first one runs before any registry lookup in this session.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,11 @@ import { emptyNet, npmDoc, onlineForTests, stubNet, type Net } from "./helpers/a
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 const stubDb = { getUserContext: () => ({ role: null, tech_stack: [], domains: [], interests: [], exclusions: [] }) } as unknown as FourDADatabase;
 const SELF = "registry.npmjs.org/%404da%2Fmcp-server";
+/**
+ * The version the served tools report: package.json's, which every release moves. The served
+ * case once named 6.4.0 outright and failed the 6.5.0 release run, the first time the version moved.
+ */
+const SERVED = (JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 let net: Net;
 let home: string;
@@ -73,7 +78,7 @@ describe("the update notice, through the tools as served", () => {
 
     const context = await answer("get_context", stubDb, {});
     expect(context.update_notice).toBe(
-      "A newer @4da/mcp-server is published: 99.1.0; this server runs 6.4.0, and a pinned install never updates itself. Update the pin from @4da/mcp-server@6.4.0 to @4da/mcp-server@99.1.0 in your MCP configuration, or run: npx -y @4da/mcp-server@99.1.0 --setup --update",
+      `A newer @4da/mcp-server is published: 99.1.0; this server runs ${SERVED}, and a pinned install never updates itself. Update the pin from @4da/mcp-server@${SERVED} to @4da/mcp-server@99.1.0 in your MCP configuration, or run: npx -y @4da/mcp-server@99.1.0 --setup --update`,
     );
     expect(selfRequests()).toBe(1);
   });
