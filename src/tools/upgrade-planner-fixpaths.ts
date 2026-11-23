@@ -81,6 +81,7 @@ import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.j
 import { withCargoFeatures } from "./upgrade-planner-cargo-features.js";
 import { withLeverHolds } from "./upgrade-planner-lever-holds.js";
 import { withInstalledReleases } from "./upgrade-planner-installs.js";
+import { withSharedCopies } from "./upgrade-planner-shared-copy.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { projectPythons } from "./dependency-check-python.js";
 import { carryOverrideCommands, recordOverrideCommands } from "./upgrade-plan-overrides.js";
@@ -2456,6 +2457,8 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
   // A range command installs the release its package manager picks: that release is checked as the
   // target was, or the command names the target exactly (upgrade-planner-installs.ts).
   await withInstalledReleases(steps, liveIntel, Date.now() + withinCallBudget(INSTALLS_BUDGET_MS, 500));
+  // A direct upgrade moves only the project's own copy: copies other packages keep are said (upgrade-planner-shared-copy.ts).
+  await withSharedCopies(steps, inputs, liveIntel, Date.now() + withinCallBudget(HELD_BUDGET_MS, 500));
 }
 
 async function reconcileTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs: number): Promise<void> {

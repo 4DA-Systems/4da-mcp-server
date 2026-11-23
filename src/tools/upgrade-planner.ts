@@ -46,6 +46,7 @@ import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
 import { MAX_REQUIRED_TARGETS, REQUIRES_AFFECTED_REASON, REQUIRES_CAP_REASON, REQUIRES_UNEXAMINED_REASON } from "../live/required-targets.js";
 import { unconfirmedTargetNote, withholdUnconfirmedTargets } from "./unconfirmed-targets.js";
 import { dedupeParentCommands } from "./upgrade-planner-dedupe.js";
+import { SHARED_COPY_REASON } from "./upgrade-planner-shared-copy.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
@@ -877,7 +878,11 @@ async function executeStandalonePlanner(
     declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
-  const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
+  // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
+  const sharedLeft = (r: (typeof limited)[number]) => r.reasons.some((x) => SHARED_COPY_REASON.test(x));
+  const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
+  const upgrades = directRows.filter((r) => !sharedLeft(r));
+  const partlyDirect = directRows.length - upgrades.length;
   // Rows whose advisories OSV.dev did not answer for, or whose newer release was not confirmed (r7).
   const unknownRisk = limited.filter((r) => r.risk === "unknown").length;
   const unconfirmedNewer = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && r.targetVersion === null && r.fixPathChecked === undefined && !heldUnclean(r)).length;
@@ -910,6 +915,11 @@ async function executeStandalonePlanner(
       : `${limited.length} recommendation${limited.length !== 1 ? "s" : ""}`,
   );
   if (upgrades.length > 0) parts.push(`${upgrades.length} upgradable directly (${quickWins} non-breaking, ${breakingChanges} crossing a major version)`);
+  if (partlyDirect > 0) {
+    parts.push(
+      `${partlyDirect} direct upgrade${partlyDirect !== 1 ? "s" : ""} that move${partlyDirect === 1 ? "s" : ""} only this project's own copy: other packages keep an affected copy on the old line, moved by hand (their reasons say which; not counted as fixed, not in run_order)`,
+    );
+  }
   if (reinstalls > 0) parts.push(`${reinstalls} need only a reinstall (node_modules behind the lockfile)`);
   if (lockfileRefreshes > 0) {
     parts.push(
