@@ -7,10 +7,11 @@
  * advisories affect, while the row said `fixes: ["npm:tar"]`.
  *
  * From the lockfile's own edges, the packages whose requirement on that copy excludes the target
- * are found, with the copy each keeps: npm resolves a nested copy for them, the newest release
- * their requirement admits (npm 10.9.2 on kuma's lockfile, 2026-11-23); pnpm and Yarn keep the
- * copy their lockfile entry holds, since the upgrade re-resolves only the project's own
- * requirement. When a copy they keep is affected (or that could not be established), the row says
+ * are found, with the copy each keeps. Measured 2026-11-23 with semver 5.7.1 shared by the project
+ * ("5.7.1") and normalize-package-data 2.5.0 ("2 || 3 || 4 || 5"), the project moved to 7.5.4: npm
+ * 10.9.2 and Yarn 1.22.22 gave normalize-package-data a new copy, 5.7.3, the newest release its
+ * requirement admits (npm nests it); pnpm 9.3.0 and Yarn 4.9.1 kept 5.7.1, the copy the lockfile
+ * entry holds. When a copy they keep is affected (or that could not be established), the row says
  * which packages, their requirements and the copy, whether a release inside those requirements
  * clears it, and the hand step that moves them (upgradeInstructions). A row whose fix is partly by
  * hand is left out of run_order, which never claims to serve a row it does not finish, and the
@@ -115,8 +116,8 @@ async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSource
   const keepsWords =
     copies.length === 0
       ? "which copy they keep could not be established"
-      : index.format === "package-lock"
-        ? `npm installs ${name} ${copies.join(", ")} for them (the newest release their requirement admits)`
+      : RESOLVES_ANEW.has(index.format)
+        ? `${index.format === "package-lock" ? "npm" : "Yarn"} installs ${name} ${copies.join(", ")} for them (the newest release their requirement admits)`
         : `they keep ${name} ${copies.join(", ")}, the copy their lockfile entry holds`;
   const uniqueIds = [...new Set(affected)];
   const affectedWords = unknown && uniqueIds.length === 0
@@ -147,14 +148,24 @@ async function requirementOf(e: ParentEdge, name: string, sources: FixPathSource
   return reqs && reqs.length === 1 ? reqs[0] : null;
 }
 
-/** The copy a holder keeps: npm's pick for its requirement (package-lock), or the locked copy (pnpm, Yarn). */
+/** Lockfiles whose tool resolves a new copy for the other packages, rather than keeping the locked one. */
+const RESOLVES_ANEW = new Set<LockfileFormat>(["package-lock", "yarn"]);
+
+/**
+ * The copy a holder keeps: npm's pick for its requirement (package-lock), Yarn 1's (the highest
+ * release it admits, established only where that is npm's pick too), or the locked copy (pnpm, Yarn 4).
+ */
 function keptCopy(format: LockfileFormat, requirement: string | null, installed: string, facts: PackageReleaseFacts | null): string | null {
-  if (format !== "package-lock") return installed;
+  if (!RESOLVES_ANEW.has(format)) return installed;
   if (requirement === null || !facts) return null;
   const every = [...new Set([...facts.versions, ...facts.withdrawn])];
   const admitted = every.filter((v) => npmRangeAdmits(requirement, v) === true);
+  if (admitted.length === 0) return null;
   const deprecated = new Set([...facts.withdrawn, ...Object.keys(facts.lineNotices ?? {})]);
-  return npmPick({ latest: facts.latest, releases: Object.fromEntries(every.map((v) => [v, { deprecated: deprecated.has(v) ? "deprecated" : null }])) }, admitted)?.version ?? null;
+  const pick = npmPick({ latest: facts.latest, releases: Object.fromEntries(every.map((v) => [v, { deprecated: deprecated.has(v) ? "deprecated" : null }])) }, admitted)?.version ?? null;
+  if (format === "package-lock") return pick;
+  const highest = admitted.reduce((m, v) => (compareVersions(v, m, "npm") > 0 ? v : m));
+  return pick === highest ? pick : null;
 }
 
 /** The newest release inside every holder's requirement that no advisory affects (one per distinct requirement); null when not established. */

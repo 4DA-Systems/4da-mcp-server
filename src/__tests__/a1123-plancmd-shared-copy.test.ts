@@ -7,6 +7,11 @@
  * said `fixes: ["npm:tar"]`. The row now says which packages keep which copy, whether a release
  * inside their requirements clears it, and the hand step; it is not counted as fixed and is not in
  * run_order.
+ *
+ * Which copy they keep, measured 2026-11-23 (semver 5.7.1 shared by the project's "5.7.1" and
+ * normalize-package-data 2.5.0's "2 || 3 || 4 || 5", the project moved to 7.5.4, scripts off):
+ * npm 10.9.2 nested 5.7.3 and Yarn 1.22.22 re-resolved the range to 5.7.3 (the newest it admits);
+ * pnpm 9.3.0 and Yarn 4.9.1 kept 5.7.1 (the locked copy).
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -51,6 +56,56 @@ describe("a direct upgrade whose copy other packages also use on the old line", 
     expect(result.run_order_note).toMatch(/1 row is a hand edit and is not in this script: tar 6\.1\.15/);
     expect(result.summary).toContain("1 direct upgrade that moves only this project's own copy: other packages keep an affected copy on the old line, moved by hand");
     expect(result.summary).not.toMatch(/\d+ upgradable directly/);
+  });
+
+  it("Yarn 1: the other packages get the newest release their requirement admits", async () => {
+    h.write("package.json", JSON.stringify({ name: "x", version: "1.0.0", dependencies: { tar: "~6.1.11", cacache: "^15.3.0" } }));
+    h.write(
+      "yarn.lock",
+      '# yarn lockfile v1\n\n\ncacache@^15.3.0:\n  version "15.3.0"\n  resolved "https://registry.yarnpkg.com/cacache/-/cacache-15.3.0.tgz"\n  integrity sha512-AAAA\n  dependencies:\n    tar "^6.0.2"\n\ntar@^6.0.2, tar@~6.1.11:\n  version "6.1.15"\n  resolved "https://registry.yarnpkg.com/tar/-/tar-6.1.15.tgz"\n  integrity sha512-AAAA\n',
+    );
+    const { step } = await h.plan();
+    expect(reasonsOf(step("tar"))).toContain("1 package requires tar outside 7.5.21: cacache 15.3.0 (\"^6.0.2\"); Yarn installs tar 6.2.1 for them (the newest release their requirement admits), and 1 advisory still affects it");
+  });
+
+  it("pnpm: the other packages keep the copy their lockfile entry holds", async () => {
+    h.write("package.json", JSON.stringify({ name: "x", version: "1.0.0", dependencies: { tar: "~6.1.11", cacache: "^15.3.0" } }));
+    h.write(
+      "pnpm-lock.yaml",
+      [
+        "lockfileVersion: '9.0'",
+        "",
+        "importers:",
+        "",
+        "  .:",
+        "    dependencies:",
+        "      cacache:",
+        "        specifier: ^15.3.0",
+        "        version: 15.3.0",
+        "      tar:",
+        "        specifier: ~6.1.11",
+        "        version: 6.1.15",
+        "",
+        "packages:",
+        "",
+        "  cacache@15.3.0:",
+        "    resolution: {integrity: sha512-cacache}",
+        "",
+        "  tar@6.1.15:",
+        "    resolution: {integrity: sha512-tar}",
+        "",
+        "snapshots:",
+        "",
+        "  cacache@15.3.0:",
+        "    dependencies:",
+        "      tar: 6.1.15",
+        "",
+        "  tar@6.1.15: {}",
+        "",
+      ].join("\n"),
+    );
+    const { step } = await h.plan();
+    expect(reasonsOf(step("tar"))).toContain("1 package requires tar outside 7.5.21: cacache 15.3.0 (\"^6.0.2\"); they keep tar 6.1.15, the copy their lockfile entry holds, and 1 advisory still affects it");
   });
 
   it("calls an override inside the major one past the range they declare, not one that crosses a major", async () => {
