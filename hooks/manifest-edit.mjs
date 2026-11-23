@@ -18,6 +18,12 @@
  * A command this hook does not take apart exactly (a variable, a substitution, a heredoc, a
  * custom registry or index, a git or path source), a bare `npm install` or `npm ci`, and a
  * package named without a version all go ahead without comment.
+ * In a manifest only dependency declarations count (never a comment or another string field),
+ * each section's are compared on their own, a renamed Cargo dependency is the crate `package =`
+ * names, and a dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`,
+ * `registry`; npm `file:`, `link:`, `workspace:`; a PEP 508 direct reference; [tool.uv.sources];
+ * Poetry `path`, `git`, `url`, a named source; a go.mod `replace` to a directory) goes ahead, its
+ * name never repeated. go.mod `exclude` and `retract` introduce no version.
  *
  * FOURDA_GUARD=advise: never denies; after a manifest edit (PostToolUse) the agent is told which
  * versions moved and which calls check them. FOURDA_GUARD=off: the hook does nothing.
