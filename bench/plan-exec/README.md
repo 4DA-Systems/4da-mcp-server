@@ -109,7 +109,7 @@ were still there, `prediction.planned_but_remained`) and `max_new_vulnerable_cop
 copies the run brought in). Both hold the candidate's recorded 22 and 24 until a run of the fixed
 build over the whole corpus sets them.
 
-This is not a pull-request job: it clones 13 repositories, resolves their trees against the
+This is not a pull-request job: it clones 14 repositories, resolves their trees against the
 live registries and takes about an hour of runner time. `.github/workflows/plan-exec.yml` runs
 it weekly and on demand (`workflow_dispatch`, optionally for a published version).
 
