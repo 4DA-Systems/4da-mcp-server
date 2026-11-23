@@ -335,3 +335,28 @@ describe("what_should_i_know is never safe_to_delegate over a lockfile it did no
     }
   }
 });
+
+describe("a lockfile with merge-conflict markers: the briefing says NOT CHECKED (merge conflict) and which file, as every tool does", () => {
+  const conflicted = (ours: string, theirs: string) => `<<<<<<< HEAD\n${ours}\n=======\n${theirs}\n>>>>>>> feature\n`;
+  const CASES: Array<{ name: string; files: Record<string, string>; lock: string }> = [
+    { name: "npm only", files: { "package.json": PKG_JSON, "package-lock.json": conflicted(NPM_LOCK, NPM_LOCK) }, lock: "package-lock.json" },
+    { name: "npm beside requirements.txt", files: { "package.json": PKG_JSON, "package-lock.json": conflicted(NPM_LOCK, NPM_LOCK), "requirements.txt": REQUIREMENTS }, lock: "package-lock.json" },
+    { name: "yarn.lock beside requirements.txt", files: { "package.json": PKG_JSON, "yarn.lock": conflicted(YARN_LOCK, YARN_LOCK), "requirements.txt": REQUIREMENTS }, lock: "yarn.lock" },
+    { name: "Cargo.lock beside requirements.txt", files: { "Cargo.toml": CARGO_TOML, "Cargo.lock": conflicted(CARGO_LOCK, CARGO_LOCK), "requirements.txt": REQUIREMENTS }, lock: "Cargo.lock" },
+  ];
+  for (const { name, files, lock } of CASES) {
+    it(`${name}: unknown, the summary and the reason lead with the merge-conflict note naming ${lock}`, async () => {
+      liveFor(files);
+      const brief = await call("what_should_i_know", TASK);
+      expect(brief.delegation_assessment.level).toBe("unknown");
+      const note = `NOT CHECKED (merge conflict): 1 file holds git merge-conflict markers (${lock})`;
+      expect(brief.summary.startsWith(note)).toBe(true);
+      expect(brief.delegation_assessment.reason.startsWith(note)).toBe(true);
+      expect(brief.lockfiles_not_read).toEqual([{ path: lock, reason: "merge_conflict", error: expect.any(String) }]);
+      // dependency_health says the same of the same file.
+      const health = await call("dependency_health", {});
+      expect(health.summary).toContain("NOT CHECKED (merge conflict): 1 file holds git merge-conflict markers");
+      expect(health.summary).toContain(lock);
+    });
+  }
+});
