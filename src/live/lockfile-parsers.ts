@@ -559,11 +559,30 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
   },
 ];
 
-function readNpmLockFile(file: string): NpmLockRead | null {
-  const read = readPackageLock(JSON.parse(readTextFile(file)));
+function readNpmLockFile(file: string, cwd: string): NpmLockRead | null {
+  const lock: unknown = JSON.parse(readTextFile(file));
+  const read = readPackageLock(lock as Parameters<typeof readPackageLock>[0]);
   if (read.instances.size === 0 && read.uncheckable.length === 0) return null;
+  // npm writes an entry for every dependency package.json declares (a link entry for local code):
+  // a declared name with none means the file was written before it was added, and what npm would
+  // install for it was never checked. pnpm, yarn and bun lockfiles were cross-checked this way; npm's
+  // was not, and a package-lock.json that lacked a declared dependency read as complete (6.5.0).
+  const undeclared = declaredWithoutEntry(cwd, (name) => npmLockHasEntry(lock, name), { skipLocal: true });
+  const problem = incompleteProblem(file, null, undeclared);
   // npm writes `dev` on every entry only devDependencies reach: the lockfile's own grading.
-  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [], declared: read.declared, scopeGraded: true };
+  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: problem ? [problem] : [], declared: read.declared, scopeGraded: true };
+}
+
+/**
+ * Whether an npm lockfile holds an entry for a dependency the project's own package.json declares:
+ * `packages["node_modules/<name>"]` (lockfileVersion 2 and 3, a link entry included), else the
+ * top-level `dependencies[<name>]` (lockfileVersion 1).
+ */
+function npmLockHasEntry(lock: unknown, name: string): boolean {
+  if (!lock || typeof lock !== "object") return false;
+  const { packages, dependencies } = lock as { packages?: unknown; dependencies?: unknown };
+  if (packages && typeof packages === "object") return Object.hasOwn(packages, `node_modules/${name}`);
+  return Boolean(dependencies && typeof dependencies === "object" && Object.hasOwn(dependencies, name));
 }
 
 function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
