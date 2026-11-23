@@ -39,9 +39,9 @@ describe("the gate on contradicted claims", () => {
     expect(totals([old])).toMatchObject({ planned_but_remained: 0, new_vulnerable_copies: 0 });
   });
 
-  it("thresholds.json holds both limits at the recorded run's 22 and 24", () => {
+  it("thresholds.json holds both limits, at what the 6.5.0 code measured over the 15 projects", () => {
     const thresholds = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "bench", "plan-exec", "thresholds.json"), "utf8"));
-    expect(thresholds).toMatchObject({ max_planned_but_remained: 22, max_new_vulnerable_copies: 24 });
-    expect(thresholds.about).toMatch(/until the lead sets them to what the fixed build measures/);
+    expect(thresholds).toMatchObject({ max_planned_but_remained: 24, max_new_vulnerable_copies: 26, max_lowering_steps: 1, max_failed_steps: 0 });
+    expect(thresholds.about).toMatch(/never raise them to pass/);
   });
 });

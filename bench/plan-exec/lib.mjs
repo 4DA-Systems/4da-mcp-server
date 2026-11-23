@@ -650,7 +650,10 @@ export function scanComplete(scan) {
   if ((coverage.unchecked_dependencies ?? 0) > 0) return false;
   if (!/^\s*(NOT CHECKED|STALE)/.test(summary)) return true;
   const said = `${summary}\n${coverage.note ?? ""}`;
-  return (coverage.private_dependencies ?? 0) > 0 && (coverage.lockfiles_not_scanned ?? 0) === 0 && !/\bSTALE\b/.test(said) && !/NOT CHECKED(?! \(private\))/.test(said);
+  // The same holds for a file the server cannot read at all (a binary bun.lockb in a docs folder):
+  // it is named on every attempt, and the counts are evidence for what was read.
+  const byRule = (coverage.private_dependencies ?? 0) > 0 || (coverage.unreadable_lockfiles ?? []).length > 0;
+  return byRule && (coverage.lockfiles_not_scanned ?? 0) === 0 && !/\bSTALE\b/.test(said) && !/NOT CHECKED(?! \(private\)|: UNREADABLE| \(unreadable lockfile\))/.test(said);
 }
 
 /** Totals over per-project results (run.mjs writes one per project). */
