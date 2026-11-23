@@ -235,7 +235,12 @@ export interface VulnerabilityScanResult {
    * Dependencies left out because their names are private (private-packages.ts): never sent, so
    * nothing is known about them. `dependencies` lists at most 50, each with why.
    */
-  privateExcluded?: { count: number; dependencies: PrivateDependency[] };
+  privateExcluded?: {
+    count: number;
+    dependencies: PrivateDependency[];
+    /** Of `count`, those withheld only because a lockfile or manifest could not be read: how many, the first names, and the files (project-relative). */
+    unreadable?: { count: number; names: string[]; files: string[] };
+  };
   /** The project's own packages recognised (workspace members, local packages inside it): not dependencies, so in no count. */
   ownPackages?: number;
   /** An `.npmrc` default registry that is not public: unscoped names are still looked up publicly (private-packages.ts). */

@@ -1141,6 +1141,8 @@ export function parseRequirements(content: string): Array<{ name: string; versio
 
 /** A full Go module version: release, prerelease, pseudo-version, `+incompatible`. */
 const GO_VERSION = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+/** One go.sum line: module, version (`/go.mod` for the go.mod hash), and its `h1:` hash. */
+const GO_SUM_LINE = /^\S+\s+v\d+\.\d+\.\d+\S*\s+h\d+:[A-Za-z0-9+/=]+$/;
 
 export function resolveGo(cwd: string): VersionSource {
   const goModPath = path.join(cwd, "go.mod");
@@ -1171,9 +1173,17 @@ export function resolveGo(cwd: string): VersionSource {
     const goSumPath = path.join(cwd, "go.sum");
     if (fs.existsSync(goSumPath)) {
       try {
-        for (const [module, version] of selectedFromGoSum(readTextFile(goSumPath))) {
+        const sum = readTextFile(goSumPath);
+        for (const [module, version] of selectedFromGoSum(sum)) {
           if (!selected.has(module)) selected.set(module, version);
         }
+        // Every go.sum line is `<module> <version>[/go.mod] h1:<hash>`: a line that is not, or a file
+        // with none, is damage, and the modules recorded only there were not all read.
+        const lines = sum.split(/\r?\n/).filter((l) => l.trim() !== "");
+        const damaged = lines.filter((l) => !GO_SUM_LINE.test(l.trim())).length;
+        const why = "and before go 1.17 the modules go.mod does not list are recorded there only, so they were not checked";
+        if (lines.length > 0 && damaged === lines.length) problems.push({ file: goSumPath, error: `it holds no \`module version h1:hash\` line: it is damaged or not a go.sum, ${why}` });
+        else if (damaged > 0) problems.push(partialRead(goSumPath, `it is truncated or damaged: ${damaged} line${damaged === 1 ? " is" : "s are"} not go.sum syntax, ${why} all`));
       } catch (error) {
         // Before go 1.17 the modules go.mod does not list are recorded in go.sum only.
         problems.push({ file: goSumPath, error: `${unreadableReason(error)}, and before go 1.17 the modules go.mod does not list are recorded there only, so they were not checked` });

@@ -55,7 +55,8 @@ import {
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { exclusionNotes } from "../project-tree.js";
+import { exclusionNotes, lockfileProblemNotes, splitLockfileProblems } from "../project-tree.js";
+import * as path from "node:path";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, type NewPackageFinding } from "./briefing-new-packages.js";
 import {
@@ -211,6 +212,11 @@ export interface WhatShouldIKnowResult {
   wisdom_recall_note?: string;
   /** Present only when no database is open: which parts of the briefing are absent for that reason. */
   stored_data_note?: string;
+  /**
+   * Lockfiles (or manifests) found and not read, or not read whole: what they pin was checked
+   * nowhere, so the briefing never clears the task over them. Absent when every one was read.
+   */
+  lockfiles_not_read?: Array<{ path: string; reason: "merge_conflict" | "unreadable" | "partial" | "refused"; error: string }>;
   _meta: { untrusted_text: string };
 }
 
@@ -246,6 +252,7 @@ export type BriefingLiveIntel = Pick<LiveIntelligence, "ensureVulnerabilities" |
       | "getPrivateDependencies"
       | "privateReason"
       | "lookupPrivateReason"
+      | "getLockfileProblems"
     >
   >;
 
@@ -460,7 +467,9 @@ export async function executeWhatShouldIKnow(
       title: privateAdvisoryText(privateTask),
       signal_type: "security_alert",
       priority: "medium",
-      action: "Check it with your private registry's own tooling before changing its version: this server never sends a private name anywhere.",
+      action: privateTask.every((p) => p.unreadable_file)
+        ? "Repair or regenerate the lockfile that could not be read (reinstall), then ask again: until it is read, where these packages come from is not known and this server sends none of their names."
+        : "Check it with your private registry's own tooling before changing its version: this server never sends a private name anywhere.",
       url: null,
       scope: "task",
       version_confirmed: false,
@@ -546,6 +555,7 @@ export async function executeWhatShouldIKnow(
   // scan's word (audit 6.2.5 D-5: an upgrade of jackson-databind in WebGoat's pom.xml
   // came back safe_to_delegate).
   const notCovered = exclusionNotes(liveIntel?.getDiscovery?.() ?? null).filter((n) => n.startsWith("NOT COVERED"));
+  const notRead = lockfilesNotRead(liveIntel);
 
   const finalize = (relevantWisdom: WisdomEntry[], wisdomMode: WisdomRecallMode, wisdomNote?: string): WhatShouldIKnowResult => {
     const assessed = assessDelegation({
@@ -564,9 +574,12 @@ export async function executeWhatShouldIKnow(
     });
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
-    const delegation: typeof assessed = noLockfile
-      ? { level: "unknown", reason: "No lockfile was read for this project: its manifests declare ranges, not installed versions, so the scan confirmed nothing this task touches. Generate a lockfile, then ask again." }
-      : assessed;
+    const delegation = withReadGaps(
+      noLockfile
+        ? { level: "unknown", reason: "No lockfile was read for this project: its manifests declare ranges, not installed versions, so the scan confirmed nothing this task touches. Generate a lockfile, then ask again." }
+        : assessed,
+      notRead.notes,
+    );
     return {
       task,
       files,
@@ -583,7 +596,8 @@ export async function executeWhatShouldIKnow(
       delegation_assessment: delegation,
       scan_status: scanStatus,
       scan: scanBlock,
-      summary: `${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -833,6 +847,45 @@ function sayNewPackage(p: NewPackageFinding): string {
   return `${p.name}${p.version ? ` ${p.version}` : ""} (${p.malicious ? malware : p.verdict}${guess})`;
 }
 
+/**
+ * The lockfiles (and manifests) of this project that are there and were not read, or not read whole:
+ * a merge conflict, a file that is not valid JSON or is truncated or garbage, entries skipped, a
+ * requirements include refused. Each with the note every tool words it in (lockfileProblemNotes),
+ * paths relative to the project.
+ */
+function lockfilesNotRead(liveIntel: BriefingLiveIntel | null): { notes: string[]; files: NonNullable<WhatShouldIKnowResult["lockfiles_not_read"]> } {
+  let problems: ReturnType<NonNullable<BriefingLiveIntel["getLockfileProblems"]>> = [];
+  try {
+    problems = liveIntel?.getLockfileProblems?.() ?? [];
+  } catch {
+    problems = [];
+  }
+  const { unreadable, partial, refused, mergeConflicts } = splitLockfileProblems(problems);
+  const root = liveIntel?.getProjectRoot?.() ?? null;
+  const show = (file: string) => (root ? path.relative(root, file).replace(/\\/g, "/") || path.basename(file) : file);
+  const gaps = [...mergeConflicts, ...unreadable, ...partial, ...refused];
+  const reasonOf = (p: (typeof gaps)[number]) => (mergeConflicts.includes(p) ? "merge_conflict" : unreadable.includes(p) ? "unreadable" : partial.includes(p) ? "partial" : "refused") as "merge_conflict" | "unreadable" | "partial" | "refused";
+  return {
+    notes: lockfileProblemNotes(gaps, show),
+    files: gaps.map((p) => ({ path: show(p.file), reason: reasonOf(p), error: p.error })),
+  };
+}
+
+/**
+ * A delegation verdict over lockfiles that were not read: never safe_to_delegate, since what they pin
+ * was checked nowhere (unknown, naming each file and why); any other verdict keeps its level and
+ * says the files too.
+ */
+function withReadGaps(verdict: { level: DelegationLevel; reason: string }, notes: string[]): { level: DelegationLevel; reason: string } {
+  if (notes.length === 0) return verdict;
+  const said = notes.join(" ");
+  if (verdict.level === "safe_to_delegate") {
+    return { level: "unknown", reason: `${said} This briefing cannot clear the task while what that pins is unchecked: fix the file, then ask again.` };
+  }
+  if (verdict.level === "unknown") return { level: "unknown", reason: `${said} ${verdict.reason}` };
+  return { level: verdict.level, reason: `${verdict.reason} ${said}` };
+}
+
 function assessDelegation(input: {
   notCovered: string[];
   scanStatus: ScanStatus;
@@ -885,8 +938,10 @@ function assessDelegation(input: {
   // Anything else dependency_check did not clear: a near-miss name, an advisory or a withdrawal on
   // the newest release, a name the registry does not have, or a check that could not run.
   const unclear = input.newPackages.filter((p) => p.verdict !== "proceed" && p.verdict !== "wait");
-  const privateReasons = (input.privateTask ?? []).map(
-    (p) => `${p.package} is private (${p.why}) and was not checked: confirm its version and advisories with your private registry`,
+  const privateReasons = (input.privateTask ?? []).map((p) =>
+    p.unreadable_file
+      ? `${p.package} was not checked: ${p.unreadable_file} could not be read, so where it is installed from is not known (${p.why})`
+      : `${p.package} is private (${p.why}) and was not checked: confirm its version and advisories with your private registry`,
   );
   // A version the task names that dependency_check does not clear: never safe to delegate.
   const versionReasons = (input.requestedVersions ?? [])

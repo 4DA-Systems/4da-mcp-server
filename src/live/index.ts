@@ -10,6 +10,7 @@
  * index, FOURDA_PRIVATE_PACKAGES). Set FOURDA_OFFLINE=true to disable all network calls.
  */
 
+import * as path from "node:path";
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import { LiveCache } from "./cache.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
@@ -155,6 +156,8 @@ export class LiveIntelligence {
   private registryWide = new Map<string, string>();
   /** groupRegistryReason for each group's installed packages, computed once per dependency set (privateReasonIn runs per dependency). */
   private groupWide = new Map<GroupResolution, string>();
+  /** For a group whose groupWide reason is a lockfile or manifest that could not be read: that file. */
+  private groupUnread = new Map<GroupResolution, string>();
   /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
@@ -446,13 +449,16 @@ export class LiveIntelligence {
     this.wideNames = new Map();
     this.registryWide = new Map();
     this.groupWide = new Map();
+    this.groupUnread = new Map();
     for (const r of this.groupResults) {
       const ecosystem = mapEcosystem(r.group.language);
-      const forNew = this.groupRegistryReason(r, false);
+      const forNew = this.groupRegistryReason(r, false)?.why;
       if (forNew && !this.registryWide.has(ecosystem)) this.registryWide.set(ecosystem, forNew);
-      const why = this.groupRegistryReason(r, Boolean(r.indexRecorded));
-      if (!why) continue;
+      const found = this.groupRegistryReason(r, Boolean(r.indexRecorded));
+      if (!found) continue;
+      const why = found.why;
       this.groupWide.set(r, why);
+      if (found.unreadFile) this.groupUnread.set(r, found.unreadFile);
       const names = [
         ...r.group.deps,
         ...r.group.devDeps,
@@ -468,7 +474,7 @@ export class LiveIntelligence {
       yield;
     }
     const key = (dep: { ecosystem: string; name: string; version: string | null }) => `${dep.ecosystem}\0${dep.name}\0${dep.version ?? ""}`;
-    const privateWhy = new Map<string, { why: string; kind: PrivateKind }>();
+    const privateWhy = new Map<string, { why: string; kind: PrivateKind; unreadable_file?: string }>();
     const isPublic = (r: GroupResolution, dep: ResolvedDependency) => {
       const found = this.privateReasonIn(r, dep.ecosystem, dep.name, dep.version);
       if (found && !privateWhy.has(key(dep))) privateWhy.set(key(dep), found);
@@ -503,6 +509,7 @@ export class LiveIntelligence {
       version: dep.version,
       why: privateWhy.get(key(dep))?.why ?? "private",
       kind: privateWhy.get(key(dep))?.kind ?? "name",
+      ...(privateWhy.get(key(dep))?.unreadable_file ? { unreadable_file: privateWhy.get(key(dep))!.unreadable_file } : {}),
     }));
     // Private for the rest of the process, for every project (private-guard.ts, blind audit round 5, 4).
     for (const p of this.privateDeps) rememberPrivateName(p.ecosystem, p.name, p.why);
@@ -560,7 +567,7 @@ export class LiveIntelligence {
    * Why a dependency of this group is private, and the kind of reason, or null: its lockfile's
    * source, then a source that serves any name, then the name rules.
    */
-  private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): { why: string; kind: PrivateKind } | null {
+  private privateReasonIn(r: GroupResolution, ecosystem: string, name: string, version: string | null): { why: string; kind: PrivateKind; unreadable_file?: string } | null {
     const fromLock = this.lockPrivateIndex(r, ecosystem)
       .get(normName(ecosystem, name))
       // A local entry a manifest names (no version) says nothing about a registry copy a lockfile
@@ -573,7 +580,10 @@ export class LiveIntelligence {
     const wide = mapEcosystem(r.group.language) === ecosystem ? (this.groupWide.get(r) ?? null) : null;
     if (fromLock?.wide) return { why: requirementsWideReason(fromLock.file, fromLock.wide, fromLock.registry), kind: "registry" };
     if (fromLock) return { why: lockEntryReason(fromLock), kind: wide && !fromLock.local ? "registry" : "name" };
-    if (wide) return { why: wide, kind: "registry" };
+    if (wide) {
+      const unread = this.groupUnread.get(r);
+      return unread ? { why: wide, kind: "registry", unreadable_file: unread } : { why: wide, kind: "registry" };
+    }
     const byName = this.privateRules.reasonFor(ecosystem, name);
     return byName ? { why: byName, kind: "name" } : null;
   }
@@ -586,13 +596,13 @@ export class LiveIntelligence {
    * makes a name not installed yet private; a scope, GOPRIVATE or a per-package index does not
    * (a project whose only npm packages are `@acme/*` checked no new name at all: pre-publish round 10, W4).
    */
-  private groupRegistryReason(r: GroupResolution, indexRecorded: boolean): string | null {
+  private groupRegistryReason(r: GroupResolution, indexRecorded: boolean): { why: string; unreadFile?: string } | null {
     const ecosystem = mapEcosystem(r.group.language);
     const config = this.privateRules.ecosystemWide(ecosystem, r.group.dir, indexRecorded);
-    if (config) return config;
+    if (config) return { why: config };
     const mirrors = this.privateRules.publicMirrors;
     const option = (r.registryWide ?? []).find((w) => !declaredMirror(w.registry.replace(/^[a-z]+\+/i, ""), mirrors));
-    if (option) return requirementsWideReason(option.file, option.setting, option.registry);
+    if (option) return { why: requirementsWideReason(option.file, option.setting, option.registry) };
     // A manifest that could not be read matters when no lockfile records where each package comes from.
     const unreadManifest = r.source?.kind === "lockfile" ? [] : (this.manifestPrivate.get(r) ?? []).filter((p) => p.unread !== undefined);
     // A go.work that could not be read: which modules the workspace builds is not known.
@@ -600,12 +610,17 @@ export class LiveIntelligence {
     const fromLockfile = [...(r.privateIndex ?? []), ...(this.npmLockPrivate.get(r) ?? []), ...unreadManifest, ...unreadLocal].filter((p) => mirrors.size === 0 || !declaredMirror(p.registry.replace(/^[a-z]+\+/i, ""), mirrors));
     if (fromLockfile.length === 0) return null;
     const pinned = new Set((this.manifestPrivate.get(r) ?? []).map((p) => normName(ecosystem, p.name)));
-    return lockfileRegistryWide(
+    const why = lockfileRegistryWide(
       ecosystem,
       fromLockfile,
       r.audit.filter((d) => d.ecosystem === ecosystem).map((d) => d.name),
       (n) => pinned.has(normName(ecosystem, n)) || this.privateRules.reasonFor(ecosystem, n) !== null,
     );
+    // lockfileRegistryWide gives a file that could not be read as the reason before any other; one
+    // whose text names a source that is not public makes the names private, not merely unread.
+    const unread = fromLockfile.find((p) => p.unread !== undefined);
+    const seen = fromLockfile.some((p) => p.privateSeen);
+    return why === null ? null : unread && !seen ? { why, unreadFile: unread.file } : { why };
   }
 
   /**
@@ -886,6 +901,12 @@ export class LiveIntelligence {
     const inScope = includeDev ? scoped : scoped.filter((d) => !isDevOnlyCopy(d));
     if (inScope.length === 0) return result;
     const why = new Map(this.privateDeps.map((p) => [`${p.ecosystem}\0${p.name}\0${p.version ?? ""}`, p]));
+    const of = (d: ResolvedDependency) => why.get(`${d.ecosystem}\0${d.name}\0${d.version ?? ""}`);
+    // Withheld only because a lockfile or manifest could not be read: counted and named apart, so
+    // the answer says the file is unreadable instead of calling public names private.
+    const unread = inScope.filter((d) => of(d)?.unreadable_file);
+    const root = this.projectRoot;
+    const shown = (file: string) => (root && insideDir(root, file) ? path.relative(root, file).replace(/\\/g, "/") || path.basename(file) : file);
     return {
       ...result,
       privateExcluded: {
@@ -894,9 +915,13 @@ export class LiveIntelligence {
           ecosystem: d.ecosystem,
           name: d.name,
           version: d.version,
-          why: why.get(`${d.ecosystem}\0${d.name}\0${d.version ?? ""}`)?.why ?? "private",
-          kind: why.get(`${d.ecosystem}\0${d.name}\0${d.version ?? ""}`)?.kind ?? "name",
+          why: of(d)?.why ?? "private",
+          kind: of(d)?.kind ?? "name",
+          ...(of(d)?.unreadable_file ? { unreadable_file: shown(of(d)!.unreadable_file!) } : {}),
         })),
+        ...(unread.length > 0
+          ? { unreadable: { count: unread.length, names: unread.slice(0, 5).map((d) => d.name), files: [...new Set(unread.map((d) => shown(of(d)!.unreadable_file!)))] } }
+          : {}),
       },
     };
   }
