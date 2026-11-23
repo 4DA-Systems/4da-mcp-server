@@ -55,7 +55,7 @@ const NPM_WHY: Record<NpmWhy, string> = {
  * admits, prereleases only as npm's own range check admits them): the `latest` dist-tag when it is
  * among them and not deprecated, else the highest non-deprecated one, else the highest.
  */
-export function npmPick(index: PackageReleaseIndex, admitted: readonly string[]): { version: string; why: NpmWhy } | null {
+export function npmPick(index: Pick<PackageReleaseIndex, "latest"> & { releases: Readonly<Record<string, { deprecated: string | null }>> }, admitted: readonly string[]): { version: string; why: NpmWhy } | null {
   if (admitted.length === 0) return null;
   const latest = index.latest ?? null;
   if (latest && admitted.includes(latest) && !index.releases[latest]?.deprecated) return { version: latest, why: "latest" };

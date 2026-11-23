@@ -80,6 +80,7 @@ import { isShellSafeName, isShellSafeVersion } from "../live/shell-safe.js";
 import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.js";
 import { withCargoFeatures } from "./upgrade-planner-cargo-features.js";
 import { withLeverHolds } from "./upgrade-planner-lever-holds.js";
+import { withInstalledReleases } from "./upgrade-planner-installs.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { projectPythons } from "./dependency-check-python.js";
 import { carryOverrideCommands, recordOverrideCommands } from "./upgrade-plan-overrides.js";
@@ -92,8 +93,12 @@ export interface ParentLever {
   to: string | null;
   /** True when `to` crosses a major version (a 0.x minor counts). */
   breaking: boolean;
-  /** The command that moves it to `to`, per declaring project directory (the declared operator kept). */
-  commands?: Array<{ dir: string; command: string; refresh?: true }>;
+  /**
+   * The command that moves it to `to`, per declaring project directory (the declared operator kept).
+   * `installs`: the release a range command installs when it is not `to`, checked as `to` was
+   * (upgrade-planner-installs.ts).
+   */
+  commands?: Array<{ dir: string; command: string; refresh?: true; installs?: string }>;
   /** A manifest edit, where no single verified command makes it (a workspace-inherited crate, a requirements pin). */
   instructions?: Array<{ dir: string; instruction: string }>;
   /** Set only when `to` was lifted above it (one release per dependency): the lever's OWN smallest release that brings the fix in. */
@@ -196,8 +201,8 @@ export interface FixPathStep {
    * packages ship bundled, which the refresh does not move, each waiting on its owner's release.
    */
   bundledCopies?: Array<{ owner: string; ownerVersion: string | null; action: "waiting_on_upstream" }>;
-  /** upgrade_direct: the command that moves the declared dependency to targetVersion, per declaring project directory. */
-  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true }>;
+  /** upgrade_direct: the command that moves the declared dependency to targetVersion, per declaring project directory (`installs`: ParentLever.commands). */
+  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true; installs?: string }>;
   /** upgrade_direct: a manifest edit where no single verified command makes it. */
   upgradeInstructions?: Array<{ dir: string; instruction: string }>;
   /** upgrade_parent / override_or_replace: the releases of the blocking parents that admit a clean version. */
@@ -235,6 +240,8 @@ type Intel = Pick<LiveIntelligence, "getFixPathSources" | "lockfileFor" | "getPr
 const LIST_CONFIRM_MS = 5_000;
 /** Time one npm step may spend judging what its target holds at a fixed version (audit 6.2.5 D-4). */
 const HELD_BUDGET_MS = 5_000;
+/** Time the plan's range commands may spend having the release each installs checked. */
+const INSTALLS_BUDGET_MS = 8_000;
 
 /**
  * Total time the plan spends verifying fix paths before answering with what it has; less when the
@@ -2446,6 +2453,9 @@ export async function reconcileDirectTargets(steps: FixPathStep[], inputs: FixPa
   // upgrade whose target lacks a feature the manifest enables is not a command alone.
   await withLeverHolds(steps, liveIntel, Date.now() + withinCallBudget(HELD_BUDGET_MS, 500));
   await withCargoFeatures(steps, liveIntel);
+  // A range command installs the release its package manager picks: that release is checked as the
+  // target was, or the command names the target exactly (upgrade-planner-installs.ts).
+  await withInstalledReleases(steps, liveIntel, Date.now() + withinCallBudget(INSTALLS_BUDGET_MS, 500));
 }
 
 async function reconcileTargets(steps: FixPathStep[], inputs: FixPathInput[], liveIntel: Intel, budgetMs: number): Promise<void> {
@@ -2697,6 +2707,23 @@ function overrideScope(liveIntel: Intel, verdicts: Array<{ lockfile: string }>, 
 export function leverBringsAt(lever: ParentLever, version: string): boolean | null {
   const admits = LEVER_ADMITS.get(lever);
   return admits ? admits(version) !== null : null;
+}
+
+/** What release `version` of a lever brings in, as the move worked it out; undefined when not known for this lever, null when it does not bring the fix in. */
+export interface LeverBrings {
+  /** Through a transitive parent: the parent release it brings in (null: it no longer brings the parent in). */
+  brings?: string | null;
+  /** Through a transitive parent: its requirement still admits the installed parent, which an install keeps. */
+  keepsParent?: boolean;
+  /** The parent itself: its requirement on the package (null: it no longer depends on it). */
+  requirement?: string | null;
+  resolvesTo?: string | null;
+  /** The parent itself: its requirement still admits the installed copy, which an install keeps. */
+  keepsInstalled?: boolean;
+}
+export function leverAt(lever: ParentLever, version: string): LeverBrings | null | undefined {
+  const admits = LEVER_ADMITS.get(lever);
+  return admits ? ((admits(version) as LeverBrings | null) ?? null) : undefined;
 }
 
 /**

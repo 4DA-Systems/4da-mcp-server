@@ -171,9 +171,11 @@ interface UpgradeRecommendation {
    * upgrade_direct: the command that moves the declared dependency to
    * targetVersion where it is declared, per lockfile directory (npm install,
    * pnpm up, yarn upgrade / yarn up, cargo add with --dev for a
-   * dev-dependency). Absent for tools no command is named for.
+   * dev-dependency). Absent for tools no command is named for. `installs`: the release a command
+   * written with a range installs, when that is not targetVersion; it was checked as the target was
+   * (a command whose release could not be checked names the target exactly instead).
    */
-  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true }>;
+  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true; installs?: string }>;
   /**
    * upgrade_direct: a manifest edit where no single verified command makes it (a workspace-inherited
    * crate, a requirements.txt pin). Also on a PyPI row, direct or transitive, whose pin sits in a

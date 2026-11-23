@@ -479,8 +479,9 @@ describe("readiness review 2026-10-17: parent-upgrade advice", () => {
     expressProject();
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "x", dependencies: { express: "~4.16.4" } }));
     const { step } = await plan();
-    expect(step("express").upgradeCommands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"' }]);
-    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"' }]);
+    // "~4.22.0" installs 4.22.3, which clears what 4.22.0 does and still brings the fix in: the range stays, saying so.
+    expect(step("express").upgradeCommands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"', installs: "4.22.3" }]);
+    expect(step("path-to-regexp").parentUpgrades[0].levers[0].commands).toEqual([{ dir: ".", command: 'npm install "express@~4.22.0"', installs: "4.22.3" }]);
   });
 
   it("4: a spec whose operator cannot be carried names no bump, and an unbounded range that admits the target is not refreshed (>=, fc-059)", async () => {
