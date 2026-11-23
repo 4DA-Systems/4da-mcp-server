@@ -325,14 +325,15 @@ describe("dependency_health — an unreadable lockfile withholds the score (M5)"
   };
 
   // A lockfile that does not parse and is not a whole merge conflict may hide where any npm package
-  // comes from: its names are not sent (NOT CHECKED (private)), so nothing is checked or scored.
+  // comes from: its names are not sent (NOT CHECKED (unreadable lockfile), never called private), so nothing is checked or scored.
   it("invalid JSON: no score, no counts, the names are not sent and the lockfile is named", async () => {
     const result = await executeDependencyHealth(noDb, {}, conflicted("{\n  not json\n"));
     expect(result.healthScore).toBeNull();
     expect(result.vulnerableCount).toBeNull();
     expect(result.vulnerabilitySummary).toBeNull();
     expect(result.withheldReason).toBe("nothing_checked");
-    expect(result.summary).toMatch(/^Nothing was checked, so there is no health score; this is not a healthy result\. NOT CHECKED \(private\): 1 dependency is private .*lodash \(.*package-lock\.json is not valid JSON/);
+    expect(result.summary).toMatch(/^Nothing was checked, so there is no health score; this is not a healthy result\. NOT CHECKED \(unreadable lockfile\): .*package-lock\.json could not be read, so where 1 dependency \(lodash\) is installed from is not known/);
+    expect(result.summary).not.toMatch(/is private/);
     expect(result.summary).toMatch(/UNREADABLE: 1 lockfile could not be read.*invalid JSON/);
   });
 

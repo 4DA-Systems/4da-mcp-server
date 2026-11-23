@@ -167,7 +167,8 @@ describe("project scans say what they did not cover", () => {
     expect(result.total_dependencies_scanned).toBe(1);
     expect(result.coverage.not_scanned).toEqual({ test_fixture_lockfiles: 2, dirs: ["test", "tests"].sort() });
     const withFixtures = await scan({ include_test_fixtures: true });
-    expect(withFixtures.total_vulnerable_packages).toBe(1);
+    // One of the fixture lockfiles is unreadable on purpose: with it in scope the counts are a lower bound.
+    expect(withFixtures.total_vulnerable_packages ?? withFixtures.found_in_checked_dependencies.vulnerable_packages).toBe(1);
     expect(withFixtures.coverage?.not_scanned).toBeUndefined();
   });
 

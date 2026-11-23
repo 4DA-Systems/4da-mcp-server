@@ -7,8 +7,10 @@
  * The bounds below are the app releases this server is tested against: every app release adds its
  * schema file to `contract/released/` and moves these bounds in the same change
  * (contract/README.md), and `a1123-appmode-released-schemas.test.ts` runs every tool against each
- * released schema. Outside the bounds nothing fails: the app-backed answers carry
- * `_meta.app_compatibility`, which says in plain words which side to update.
+ * released schema. Outside the bounds the app-backed answers carry `_meta.app_compatibility`,
+ * which says in plain words which side to update; an answer that cannot be served because the
+ * app's tables are not the ones this server reads is an error that carries the same note
+ * (appCompatibilityError), never the bare SQLite text.
  *
  * The app records its schema version in `schema_version` (one row per applied version; the
  * highest is current) and its plan format as `schema_version` inside the `upgrade_plan_snapshot`
@@ -129,6 +131,38 @@ export const APP_COMPATIBILITY_TOOLS: ReadonlySet<string> = new Set([
   "agent_memory",
 ]);
 
+/** What an attached app outside the supported range is said as, in `_meta.app_compatibility`. */
+function compatibilityMeta(compat: AppCompatibility) {
+  return { status: compat.status, app_schema: compat.app_schema, app_plan_format: compat.app_plan_format, supported: compat.supported, note: compat.note };
+}
+
+/** A SQLite error that says the database's tables are not the ones a query reads. */
+const SCHEMA_MISMATCH = /\bno such (?:table|column)\b|\bhas no column named\b/i;
+
+/**
+ * The error answer for a tool that read an attached app outside the supported range and failed
+ * because the app's tables are not the ones this server reads (a table or column it lacks): the
+ * failure, with `_meta.app_compatibility` and its note saying which side to update. Null when no
+ * app is attached, the app is supported, the tool does not read the app's data, or the error is of
+ * another kind (that one is answered as it is).
+ */
+export function appCompatibilityError(name: string, db: FourDADatabase | null, error: unknown): { error: string; _meta: { app_compatibility: ReturnType<typeof compatibilityMeta> } } | null {
+  if (!APP_COMPATIBILITY_TOOLS.has(name)) return null;
+  const message = error instanceof Error ? error.message : String(error);
+  if (!SCHEMA_MISMATCH.test(message)) return null;
+  let compat: AppCompatibility | null;
+  try {
+    compat = appCompatibilityFor(db);
+  } catch {
+    return null;
+  }
+  if (!compat || compat.status === "supported") return null;
+  return {
+    error: `${name} could not read the 4DA app's database (${message.slice(0, 200)}): ${compat.note}`,
+    _meta: { app_compatibility: compatibilityMeta(compat) },
+  };
+}
+
 /**
  * `payload` with `_meta.app_compatibility` when the attached app is outside the supported range and
  * `name` reads or writes its database; otherwise `payload` unchanged. Never throws: a failed read
@@ -143,7 +177,7 @@ export function withAppCompatibility(name: string, db: FourDADatabase | null, pa
     return payload;
   }
   if (!compat || compat.status === "supported") return payload;
-  const app_compatibility = { status: compat.status, app_schema: compat.app_schema, app_plan_format: compat.app_plan_format, supported: compat.supported, note: compat.note };
+  const app_compatibility = compatibilityMeta(compat);
   if (Array.isArray(payload)) return { item_count: payload.length, items: payload, _meta: { app_compatibility } };
   if (payload && typeof payload === "object") {
     const p = payload as Record<string, unknown>;

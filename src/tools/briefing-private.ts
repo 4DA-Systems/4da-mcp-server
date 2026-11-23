@@ -18,12 +18,14 @@ export interface PrivateTaskPackage {
   installed: string[];
   /** Which file or setting makes it private. */
   why: string;
+  /** Set when it is withheld only because this lockfile or manifest could not be read (PrivateDependency.unreadable_file). */
+  unreadable_file?: string;
 }
 
 export interface PrivateLookup {
   getPrivateAuditDeps?(): ResolvedDependency[];
   getAuditDeps?(): ResolvedDependency[];
-  getPrivateDependencies?(): Array<{ ecosystem: string; name: string; version: string | null; why: string }>;
+  getPrivateDependencies?(): Array<{ ecosystem: string; name: string; version: string | null; why: string; unreadable_file?: string }>;
   privateReason?(ecosystem: string, name: string): string | null;
   /** privateReason with the ecosystem whose rule makes the name private. */
   privateMatch?(ecosystem: string, name: string): { ecosystem: string; why: string } | null;
@@ -38,6 +40,11 @@ export function privateTaskPackages(task: string, files: string[], live: Private
   if (!live) return [];
   const out = new Map<string, PrivateTaskPackage>();
   const why = new Map((live.getPrivateDependencies?.() ?? []).map((p) => [`${p.ecosystem}\0${p.name}`, p.why]));
+  const unread = new Map((live.getPrivateDependencies?.() ?? []).filter((p) => p.unreadable_file).map((p) => [`${p.ecosystem}\0${p.name}`, p.unreadable_file!]));
+  const unreadOf = (ecosystem: string, name: string) => {
+    const file = unread.get(`${ecosystem}\0${name}`);
+    return file ? { unreadable_file: file } : {};
+  };
   const installed = live.getPrivateAuditDeps?.() ?? [];
   for (const pkg of detectTaskPackages(task, files, installed, 20)) {
     const copies = installed.filter((d) => d.ecosystem === pkg.ecosystem && d.name === pkg.name);
@@ -46,6 +53,7 @@ export function privateTaskPackages(task: string, files: string[], live: Private
       ecosystem: pkg.ecosystem,
       installed: [...new Set(copies.map((d) => d.version).filter((v): v is string => Boolean(v)))],
       why: why.get(`${pkg.ecosystem}\0${pkg.name}`) ?? "private",
+      ...unreadOf(pkg.ecosystem, pkg.name),
     });
   }
   // A private dependency named by its short name: "upgrade telemetry-x to 3.1" for @sigma/telemetry-x,
@@ -64,6 +72,7 @@ export function privateTaskPackages(task: string, files: string[], live: Private
       ecosystem: p.ecosystem,
       installed: [...new Set(copies.map((d) => d.version).filter((v): v is string => Boolean(v)))],
       why: p.why,
+      ...unreadOf(p.ecosystem, p.name),
     });
   }
   if (live.privateReason) {
@@ -107,6 +116,22 @@ export function privateAnywhere(live: PrivateLookup | null, name: string): strin
 
 /** The advisory row the briefing leads with. */
 export function privateAdvisoryText(found: PrivateTaskPackage[]): string {
-  const names = found.map((p) => `${p.package}${p.installed.length ? ` ${p.installed.join("/")}` : ""}`).join(", ");
-  return `NOT CHECKED (private): the task touches ${names}, ${found.length === 1 ? "a private package" : "private packages"}: nothing about ${found.length === 1 ? "it" : "them"} was looked up (no advisories, no releases, no breaking changes), so this briefing says nothing about ${found.length === 1 ? "it" : "them"}`;
+  const label = (p: PrivateTaskPackage) => `${p.package}${p.installed.length ? ` ${p.installed.join("/")}` : ""}`;
+  const unread = found.filter((p) => p.unreadable_file);
+  const priv = found.filter((p) => !p.unreadable_file);
+  const parts: string[] = [];
+  if (unread.length > 0) {
+    const one = unread.length === 1;
+    const files = [...new Set(unread.map((p) => p.unreadable_file!))].join(", ");
+    parts.push(
+      `NOT CHECKED (unreadable lockfile): the task touches ${unread.map(label).join(", ")}, and ${files} could not be read, so where ${one ? "it is" : "they are"} installed from is not known: nothing about ${one ? "it" : "them"} was looked up (no advisories, no releases, no breaking changes), so this briefing says nothing about ${one ? "it" : "them"}`,
+    );
+  }
+  if (priv.length > 0) {
+    const one = priv.length === 1;
+    parts.push(
+      `NOT CHECKED (private): the task touches ${priv.map(label).join(", ")}, ${one ? "a private package" : "private packages"}: nothing about ${one ? "it" : "them"} was looked up (no advisories, no releases, no breaking changes), so this briefing says nothing about ${one ? "it" : "them"}`,
+    );
+  }
+  return parts.join(". ");
 }
