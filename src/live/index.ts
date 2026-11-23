@@ -158,6 +158,8 @@ export class LiveIntelligence {
   private groupWide = new Map<GroupResolution, string>();
   /** For a group whose groupWide reason is a lockfile or manifest that could not be read: that file. */
   private groupUnread = new Map<GroupResolution, string>();
+  /** A private reason that stems only from a file that could not be read -> that file (withheldUnreadableFile). */
+  private unreadReasons = new Map<string, string>();
   /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
@@ -450,15 +452,21 @@ export class LiveIntelligence {
     this.registryWide = new Map();
     this.groupWide = new Map();
     this.groupUnread = new Map();
+    this.unreadReasons = new Map();
     for (const r of this.groupResults) {
       const ecosystem = mapEcosystem(r.group.language);
-      const forNew = this.groupRegistryReason(r, false)?.why;
+      const forNewFound = this.groupRegistryReason(r, false);
+      const forNew = forNewFound?.why;
       if (forNew && !this.registryWide.has(ecosystem)) this.registryWide.set(ecosystem, forNew);
+      if (forNewFound?.unreadFile) this.unreadReasons.set(forNewFound.why, forNewFound.unreadFile);
       const found = this.groupRegistryReason(r, Boolean(r.indexRecorded));
       if (!found) continue;
       const why = found.why;
       this.groupWide.set(r, why);
-      if (found.unreadFile) this.groupUnread.set(r, found.unreadFile);
+      if (found.unreadFile) {
+        this.groupUnread.set(r, found.unreadFile);
+        this.unreadReasons.set(why, found.unreadFile);
+      }
       const names = [
         ...r.group.deps,
         ...r.group.devDeps,
@@ -741,6 +749,16 @@ export class LiveIntelligence {
    */
   lookupPrivateReason(ecosystem: string, name: string): string | null {
     return this.privateReason(ecosystem, name) ?? this.ecosystemPrivate(ecosystem, name);
+  }
+
+  /**
+   * The lockfile (or manifest) that could not be read when it is the whole of a private reason
+   * this project gave (`why`, as lookupPrivateReason returned it), else null. Such a name is
+   * withheld because where it is installed from is not known, not because it is private: the
+   * answer says to repair the file, not to ask a private registry (the scan says it so since 6.5.0).
+   */
+  withheldUnreadableFile(why: string): string | null {
+    return this.unreadReasons.get(why) ?? null;
   }
 
   /**

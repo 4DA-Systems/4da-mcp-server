@@ -42,6 +42,11 @@ export interface ItemResult {
    * "input": the item was refused as written (its reason says why); the call's other items are answered.
    */
   not_checked?: "private" | "module_path" | "time_budget" | "input";
+  /**
+   * not_checked "private" because this lockfile (or manifest) could not be read: where the package
+   * would be installed from is not known, so it was withheld. Repairing the file is the remedy.
+   */
+  unreadable_file?: string;
   /** not_checked "module_path": the path the module declares, or the one the spelling most likely means. */
   canonical_module_path?: string;
   /** Unknown because this server's own request limit held a registry read back: seconds until asking again can read it. */

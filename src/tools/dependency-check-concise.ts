@@ -36,6 +36,8 @@ export interface DetailedItem {
   maintenance_notices?: string[];
   /** "private": the package name is private and was never looked up (live/private-packages.ts). */
   not_checked?: string;
+  /** not_checked "private" only because this lockfile (or manifest) could not be read. */
+  unreadable_file?: string;
   canonical_module_path?: string;
   retry_after_seconds?: number;
 }
@@ -85,6 +87,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
     verdict: item.verdict,
     reason: item.reason,
     ...(item.not_checked ? { not_checked: item.not_checked } : {}),
+    ...(item.unreadable_file ? { unreadable_file: item.unreadable_file } : {}),
     ...(item.canonical_module_path ? { canonical_module_path: item.canonical_module_path } : {}),
     ...(item.retry_after_seconds ? { retry_after_seconds: item.retry_after_seconds } : {}),
     ...(value?.affecting_to?.length ? { advisories: value.affecting_to } : {}),
@@ -118,6 +121,7 @@ export function shapeDependencyCheck(answer: DetailedAnswer, format: DependencyC
       offline: meta.offline,
       osv_cached: meta.osv_cached,
       ...(meta.private_packages ? { private_packages: meta.private_packages } : {}),
+      ...(meta.unreadable_lockfile ? { unreadable_lockfile: meta.unreadable_lockfile } : {}),
       ...(meta.registry_notice ? { registry_notice: meta.registry_notice } : {}),
     },
   };

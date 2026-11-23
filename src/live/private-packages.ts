@@ -2067,6 +2067,11 @@ export function withheldLine(excluded: { count: number; dependencies: ReadonlyAr
   return `${line} ${privateLine(rest, excluded.dependencies.filter((d) => !d.unreadable_file).map((d) => d.name))}`;
 }
 
+/** "lockfile" for a lockfile's path, else "file" (a manifest or a rule file). */
+export function unreadFileKind(file: string): "lockfile" | "file" {
+  return LOCKFILE_NAME.test(file) ? "lockfile" : "file";
+}
+
 /** A lockfile's name at the end of a path (not a manifest's, such as package.json or Cargo.toml). */
 const LOCKFILE_NAME = /(?:^|[\\/])(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|poetry\.lock|uv\.lock|pdm\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|gems\.locked|composer\.lock)$/;
 
