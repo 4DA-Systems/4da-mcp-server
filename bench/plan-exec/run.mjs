@@ -40,6 +40,7 @@ import {
   planJson,
   predictionCheck,
   prepareCommand,
+  scanComplete,
   shellLine,
   stepOutcome,
   versionsOf,
@@ -191,9 +192,8 @@ async function fullScan(session, project) {
       if (typeof next !== "number" || next <= offset) break;
       offset = next;
     }
-    const unchecked = first.coverage?.unchecked_dependencies ?? 0;
-    const notChecked = /^\s*(NOT CHECKED|STALE)/.test(String(first.summary ?? ""));
-    last = { json: first, rows, complete: unchecked === 0 && !notChecked, attempts: attempt };
+    // Complete when every dependency the server may look up was looked up (lib.mjs scanComplete).
+    last = { json: first, rows, complete: scanComplete(first), attempts: attempt };
     if (last.complete) return last;
   }
   return last;
@@ -318,6 +318,8 @@ async function runProject(entry) {
     }
     save("after.scan", afterScan.json);
     result.scan_incomplete = !before.complete || !afterScan.complete;
+    // Never looked up, by rule: a lockfile takes them from a private index. Said in the summary.
+    result.private_dependencies = Math.max(before.json.coverage?.private_dependencies ?? 0, afterScan.json.coverage?.private_dependencies ?? 0);
     const delta = advisoryDelta(before.rows, afterScan.rows);
     result.advisories = { before: before.rows.length, after: afterScan.rows.length, cleared: delta.cleared.length, introduced: delta.introduced.length, introduced_list: delta.introduced };
     result.prediction = predictionCheck({ beforeRows: before.rows, afterRows: afterScan.rows, steps: extracted.steps });
@@ -363,6 +365,10 @@ function summaryMarkdown(results, t, findings, thresholds) {
     lines.push(`| ${r.id} @ ${r.tag} | ${r.package_manager} | ${r.order_source} | ${c.steps} | ${c.steps_run} | ${c.steps_failed} | ${c.steps_refused} | ${c.steps_without_effect} | ${c.steps_lowering} | ${r.advisories.before} -> ${r.advisories.after} | ${r.prediction.predicted_remaining} / ${r.prediction.remaining} / ${r.prediction.new_vulnerable_copies} |`);
   }
   lines.push(`| **total** | | | ${t.steps} | ${t.steps_run} | ${t.steps_failed} | ${t.steps_refused} | ${t.steps_without_effect} | ${t.steps_lowering} | ${t.advisories_before} -> ${t.advisories_after} (${t.net_cleared_ratio ?? "n/a"} cleared) | ${t.predicted_remaining} / ${t.remaining} / ${t.vulnerable_copies_after - (t.remaining)} |`, "");
+  const withPrivate = results.filter((r) => !r.error && r.private_dependencies > 0);
+  if (withPrivate.length) {
+    lines.push(`Not looked up, by the server's privacy rule (a lockfile takes them from a private index): ${withPrivate.map((r) => `${r.id} ${r.private_dependencies}`).join(", ")}. The counts above are for every other dependency.`, "");
+  }
   const bad = results.flatMap((r) => (r.steps ?? []).filter((s) => s.outcome !== "worked" && s.outcome !== "nothing_to_run" || s.lowered.length > 0).map((s) => ({ id: r.id, s })));
   if (bad.length) {
     lines.push("## Steps that did not simply work", "");

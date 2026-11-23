@@ -69,10 +69,13 @@ export function predictionCheck(input: { beforeRows: ScanRow[]; afterRows: ScanR
   planned_but_remained: string[];
   not_planned_but_cleared: string[];
 };
+export function scanComplete(scan: unknown): boolean;
 export interface ProjectResult {
   id: string;
   error?: string;
   scan_incomplete?: boolean;
+  /** Dependencies the scans never looked up because a lockfile takes them from a private index. */
+  private_dependencies?: number;
   order_source?: string;
   counts: Record<"steps" | "steps_run" | "steps_failed" | "steps_refused" | "steps_without_effect" | "steps_lowering" | "steps_lowering_earlier", number>;
   advisories: { before: number; after: number };

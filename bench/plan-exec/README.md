@@ -93,6 +93,11 @@ else it scores; baseline mode exists so the same harness measures 6.4.0.
 
 ## The gate (`thresholds.json`)
 
+A scan whose only gap is private dependencies counts as complete (`scanComplete` in `lib.mjs`):
+the server never looks up a dependency a lockfile takes from a private index, on any attempt, so
+there is nothing a retry could add. The corpus has one such project (an example lockfile of
+mcp-python-sdk names an internal index for three packages); the summary names it and the number.
+
 Fails when a project cannot be run or a scan stays NOT CHECKED, when any step fails, lowers a
 version, or is refused, when the plan has no `run_order`, or when the corpus's net share of
 advisories cleared, `(before - after) / before`, is below `min_net_cleared_ratio` (0.75: just under what the
