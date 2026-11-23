@@ -98,6 +98,12 @@ export interface PrivateDependency {
    * Carried as data so no caller reads it back out of `why` (pre-publish round 10, W4).
    */
   kind: PrivateKind;
+  /**
+   * Set when the only reason is a lockfile or manifest of its folder that is there and could not be
+   * read (not valid JSON, truncated, too large): where the name is installed from is not known, so
+   * it is withheld as possibly private. The file's path.
+   */
+  unreadable_file?: string;
 }
 
 /** What makes a name private: a source that serves any name (`registry`), or a rule for the name (`name`). */
@@ -141,6 +147,8 @@ export interface PrivateIndexEntry {
    * readable file happened to list.
    */
   unread?: string;
+  /** On an `unread` entry: the file was not parsed, but its text names a source that is not public. */
+  privateSeen?: true;
 }
 
 /** The entry that stands for a lockfile or manifest that could not be read (PrivateIndexEntry.unread). */
@@ -1327,6 +1335,11 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
       const found = [...text.matchAll(values)].map((m) => jsonString(m[1]));
       const complete = keys === null || [...text.matchAll(keys)].length === found.length;
       if (complete && !found.some((value) => value === null || privateLocation(value))) return;
+      // Its text names a source that is not public: the reason is that source, not the file being unread.
+      if (complete && found.some((value) => value !== null && privateLocation(value))) {
+        out.push({ ...unreadEntry(file, NOT_JSON), privateSeen: true });
+        return;
+      }
     }
     out.push(unreadEntry(file, NOT_JSON));
   };
@@ -2030,6 +2043,32 @@ export function requirementsWideReason(file: string, setting: string, registry: 
 export function unreadRuleReason(file: string, reason: string, ecosystem: string): string {
   return `${file} ${reason}: it may name a private registry or source for any ${ecosystem} package here, so none is treated as public`;
 }
+
+/**
+ * What a scan says about the dependencies it did not send: those withheld only because a lockfile
+ * or manifest could not be read are said as that (the file is unreadable, where they come from is
+ * not known), never called private; the rest as privateLine says them.
+ */
+export function withheldLine(excluded: { count: number; dependencies: ReadonlyArray<{ name: string; unreadable_file?: string }>; unreadable?: { count: number; names: string[]; files: string[] } }): string {
+  const unread = excluded.unreadable;
+  if (!unread || unread.count <= 0) return privateLine(excluded.count, excluded.dependencies.map((d) => d.name));
+  const n = unread.count;
+  const one = n === 1;
+  const files = `${unread.files.slice(0, 3).join(", ")}${unread.files.length > 3 ? ", ..." : ""}`;
+  const kind = unread.files.every((f) => LOCKFILE_NAME.test(f)) ? "lockfile" : "file";
+  const plural = unread.files.length > 1;
+  const listed = `${unread.names.join(", ")}${n > unread.names.length ? ", ..." : ""}`;
+  const line =
+    `NOT CHECKED (unreadable ${kind}): ${files} could not be read, so where ${one ? "1 dependency" : `${n.toLocaleString("en-US")} dependencies`} (${listed}) ${one ? "is" : "are"} installed from is not known. ` +
+    `${one ? "It was" : "They were"} withheld as possibly private, never sent to OSV.dev or a registry, so nothing is known about ${one ? "its" : "their"} advisories: this is not a clean result. ` +
+    `Repair or regenerate the ${kind}${plural ? "s" : ""} (reinstall), then scan again. See coverage.unreadable_lockfiles.`;
+  const rest = excluded.count - n;
+  if (rest <= 0) return line;
+  return `${line} ${privateLine(rest, excluded.dependencies.filter((d) => !d.unreadable_file).map((d) => d.name))}`;
+}
+
+/** A lockfile's name at the end of a path (not a manifest's, such as package.json or Cargo.toml). */
+const LOCKFILE_NAME = /(?:^|[\\/])(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|poetry\.lock|uv\.lock|pdm\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|gems\.locked|composer\.lock)$/;
 
 /** The sentence a private item or coverage line says. */
 export function privateLine(count: number, names: string[]): string {

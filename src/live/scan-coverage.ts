@@ -11,7 +11,7 @@
  * answer with what was not checked.
  */
 
-import { privateLine } from "./private-packages.js";
+import { withheldLine } from "./private-packages.js";
 import type { VulnerabilityCoverage, VulnerabilityScanResult } from "./types.js";
 
 /** The reason given when live lookups are switched off. */
@@ -33,13 +33,16 @@ export function vulnerabilityCoverage(
   if (!priv || priv.count <= 0) return coverage;
   // Private names were never sent (private-packages.ts): not checked, never clean. Counted apart
   // from the OSV answer, so an incomplete answer here does not read as an OSV.dev outage.
-  const line = privateLine(priv.count, priv.dependencies.map((d) => d.name));
+  const line = withheldLine(priv);
   const base: VulnerabilityCoverage = coverage ?? {
     complete: false,
     total_dependencies: result!.totalScanned,
     checked_dependencies: result!.totalScanned,
     unchecked_dependencies: 0,
-    reason: "private dependencies were not sent",
+    reason:
+      (priv.unreadable?.count ?? 0) >= priv.count
+        ? "dependencies under a lockfile or manifest that could not be read were not sent"
+        : "private dependencies were not sent",
     note: line,
   };
   return {

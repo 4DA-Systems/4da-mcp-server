@@ -57,6 +57,22 @@ function tokenize(text: string): string[] {
   return (text.match(/[@A-Za-z0-9][\w./@*-]*/g) ?? []).map((t) => t.replace(/[.,;:)]+$/, "").toLowerCase());
 }
 
+/**
+ * For each token of tokenize(text): whether a clause ends after it (a comma, semicolon or full
+ * stop follows it). A version is read only from its package's own clause.
+ */
+function clauseBreaks(text: string): boolean[] {
+  const found = [...text.matchAll(/[@A-Za-z0-9][\w./@*-]*/g)];
+  return found.map((m, i) => {
+    const end = (m.index ?? 0) + m[0].length;
+    const gap = text.slice(end, i + 1 < found.length ? (found[i + 1].index ?? end) : text.length);
+    return /[.,;:]$/.test(m[0]) || /[,;]|\.(?:\s|$)/.test(gap);
+  });
+}
+
+/** Words that start another clause or action: the versions after one belong to it, not to the package before. */
+const CLAUSE_WORDS = /^(?:and|then|also|plus|but|while|after|before|or|&|add|adding|install|installing|upgrade|upgrading|bump|bumping|update|updating|remove|removing|uninstall|drop|pin|pinning|downgrade|downgrading|replace|replacing|migrate|migrating|swap|set|use|require)$/;
+
 /** Spellings a token may name a dependency by. */
 function nameKeys(dep: ResolvedDependency): string[] {
   const name = dep.name.toLowerCase();
@@ -110,8 +126,23 @@ export function detectTaskPackages(
     }
   });
 
+  // The versions after a name, up to the end of its clause: another verb, a joiner ("and", "then"),
+  // another dependency's name or punctuation ends it. "upgrade minimist to 1.2.8 and install react
+  // 18.3.1" gave minimist from 1.2.8 to 18.3.1.
+  const breaks = clauseBreaks(`${task} ${files.join(" ")}`);
+  const clauseVersions = (at: number): string[] => {
+    const out: string[] = [];
+    if (breaks[at]) return out;
+    for (let j = at + 1; j < Math.min(tokens.length, at + 8); j++) {
+      const t = tokens[j];
+      if (CLAUSE_WORDS.test(t) || byKey.has(t)) break;
+      if (VERSION_TOKEN.test(t)) out.push(t);
+      if (breaks[j]) break;
+    }
+    return out;
+  };
   const packages = [...found.values()].map(({ deps: copies, at }) => {
-    const versions = tokens.slice(at + 1, at + 8).filter((t) => VERSION_TOKEN.test(t));
+    const versions = clauseVersions(at);
     const first = copies[0];
     return {
       name: first.name,

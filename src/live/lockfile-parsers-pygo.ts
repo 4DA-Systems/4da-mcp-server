@@ -38,6 +38,19 @@ export function normalizePythonName(name: string): string {
 /** The TOML lockfiles: arrays of [[package]] tables. */
 const PYTHON_TOML_LOCKS = ["poetry.lock", "uv.lock", "pdm.lock"];
 
+/** A Sublime Text syntax test file, by the name that convention requires. */
+const isSyntaxTestName = (name: string): boolean => /^syntax_test_/i.test(name);
+
+/**
+ * Python requirement files by name: requirements.txt, requirements-dev.txt, dev_requirements.txt,
+ * _test_minimum_requirements.txt. Never a Sublime Text syntax test: every such file is named
+ * `syntax_test_*`, and its lines exercise a highlighter and pin nothing (bat keeps
+ * `syntax_test_requirements.txt`, whose `gopher://` index line read as a private package).
+ */
+export function isRequirementsFileName(name: string): boolean {
+  return /requirements[\w.-]*\.txt$/i.test(name) && !isSyntaxTestName(name);
+}
+
 /**
  * Requirement files in a project directory: `*requirements*.txt` beside it
  * (requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt)
@@ -48,14 +61,14 @@ export function requirementFiles(cwd: string): string[] {
   const out: string[] = [];
   try {
     for (const name of fs.readdirSync(cwd).sort()) {
-      if (/requirements[\w.-]*\.txt$/i.test(name) || includesRequirements(path.join(cwd, name))) out.push(path.join(cwd, name));
+      if (isRequirementsFileName(name) || includesRequirements(path.join(cwd, name))) out.push(path.join(cwd, name));
     }
   } catch {
     return out;
   }
   try {
     for (const name of fs.readdirSync(path.join(cwd, "requirements")).sort()) {
-      if (/\.txt$/i.test(name)) out.push(path.join(cwd, "requirements", name));
+      if (/\.txt$/i.test(name) && !isSyntaxTestName(name)) out.push(path.join(cwd, "requirements", name));
     }
   } catch {
     // no requirements/ folder
@@ -75,7 +88,7 @@ const MAX_SNIFF_BYTES = 256 * 1024;
  * then pytest==5.4.2 and 21 more pins, 6 advisories pip-audit reports).
  */
 function includesRequirements(file: string): boolean {
-  if (!/\.txt$/i.test(file) || /requirements[\w.-]*\.txt$/i.test(file)) return false;
+  if (!/\.txt$/i.test(file) || /requirements[\w.-]*\.txt$/i.test(file) || isSyntaxTestName(path.basename(file))) return false;
   try {
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > MAX_SNIFF_BYTES) return false;
@@ -1141,6 +1154,8 @@ export function parseRequirements(content: string): Array<{ name: string; versio
 
 /** A full Go module version: release, prerelease, pseudo-version, `+incompatible`. */
 const GO_VERSION = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+/** One go.sum line: module, version (`/go.mod` for the go.mod hash), and its `h1:` hash. */
+const GO_SUM_LINE = /^\S+\s+v\d+\.\d+\.\d+\S*\s+h\d+:[A-Za-z0-9+/=]+$/;
 
 export function resolveGo(cwd: string): VersionSource {
   const goModPath = path.join(cwd, "go.mod");
@@ -1171,9 +1186,17 @@ export function resolveGo(cwd: string): VersionSource {
     const goSumPath = path.join(cwd, "go.sum");
     if (fs.existsSync(goSumPath)) {
       try {
-        for (const [module, version] of selectedFromGoSum(readTextFile(goSumPath))) {
+        const sum = readTextFile(goSumPath);
+        for (const [module, version] of selectedFromGoSum(sum)) {
           if (!selected.has(module)) selected.set(module, version);
         }
+        // Every go.sum line is `<module> <version>[/go.mod] h1:<hash>`: a line that is not, or a file
+        // with none, is damage, and the modules recorded only there were not all read.
+        const lines = sum.split(/\r?\n/).filter((l) => l.trim() !== "");
+        const damaged = lines.filter((l) => !GO_SUM_LINE.test(l.trim())).length;
+        const why = "and before go 1.17 the modules go.mod does not list are recorded there only, so they were not checked";
+        if (lines.length > 0 && damaged === lines.length) problems.push({ file: goSumPath, error: `it holds no \`module version h1:hash\` line: it is damaged or not a go.sum, ${why}` });
+        else if (damaged > 0) problems.push(partialRead(goSumPath, `it is truncated or damaged: ${damaged} line${damaged === 1 ? " is" : "s are"} not go.sum syntax, ${why} all`));
       } catch (error) {
         // Before go 1.17 the modules go.mod does not list are recorded in go.sum only.
         problems.push({ file: goSumPath, error: `${unreadableReason(error)}, and before go 1.17 the modules go.mod does not list are recorded there only, so they were not checked` });

@@ -9,7 +9,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/server";
 
 import type { FourDADatabase } from "./db.js";
-import { withAppCompatibility } from "./app-compat.js";
+import { appCompatibilityError, withAppCompatibility } from "./app-compat.js";
 import { assertToolPermission } from "./auth-context.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { cleanStrings } from "./tool-args.js";
@@ -157,12 +157,20 @@ export async function dispatchTool(
   // NOT CHECKED in the tool's place, never left to hang and never answered as clean.
   // The registry's own words a result's sentences point to are read before the call's context ends (r7).
   let quotes: Record<string, string> | null = null;
-  const result = await runWithCallBudget(options.startedAt ?? Date.now(), async () => {
-    const answer = await raceCallBudget(run(), (budgetMs) => lateAnswer(name, toolArgs, budgetMs));
-    quotes = callQuotes();
-    noteFinishedCall();
-    return answer;
-  });
+  let result: unknown;
+  try {
+    result = await runWithCallBudget(options.startedAt ?? Date.now(), async () => {
+      const answer = await raceCallBudget(run(), (budgetMs) => lateAnswer(name, toolArgs, budgetMs));
+      quotes = callQuotes();
+      noteFinishedCall();
+      return answer;
+    });
+  } catch (error: unknown) {
+    // An app outside the supported range whose tables this tool cannot read: the error says which side to update.
+    const incompatible = appCompatibilityError(name, db, error);
+    if (!incompatible) throw error;
+    return { content: [{ type: "text", text: JSON.stringify(incompatible) }], structuredContent: incompatible, isError: true };
+  }
   // Feed freshness describes the desktop app's feed; a standalone install has
   // none, and telling it to "run fourda-engine" is noise.
   const withFreshness = db !== null && FRESHNESS_TOOLS.has(name) && !db.isStandalone;

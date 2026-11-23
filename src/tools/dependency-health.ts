@@ -15,6 +15,7 @@ import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
 import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems, workspaceNote } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
+import { withheldLine } from "../live/private-packages.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
@@ -153,8 +154,12 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
   // answer said "No manifest or lockfile of a supported ecosystem was found" beside a requirements.txt
   // it had read, and named neither the setting nor the FOURDA_PUBLIC_MIRRORS escape (pre-publish round 10, W4).
   const priv = (liveIntel?.getPrivateDependencies?.() ?? []).filter((p) => !only || p.ecosystem === only.ecosystem);
+  // Withheld only because a lockfile or manifest could not be read: said as that file, not as private.
+  const unreadPriv = priv.filter((p) => p.unreadable_file);
   const privateNote =
-    priv.length > 0
+    priv.length > 0 && unreadPriv.length === priv.length
+      ? withheldLine({ count: priv.length, dependencies: priv, unreadable: { count: priv.length, names: priv.slice(0, 5).map((p) => p.name), files: [...new Set(unreadPriv.map((p) => p.unreadable_file!))] } })
+      : priv.length > 0
       ? `NOT CHECKED (private): ${priv.length === 1 ? "1 dependency is" : `${priv.length.toLocaleString("en-US")} dependencies are`} private and ${priv.length === 1 ? "was" : "were"} never sent to OSV.dev or a registry: ${priv
           .slice(0, 3)
           .map((p) => `${p.name} (${p.why})`)
