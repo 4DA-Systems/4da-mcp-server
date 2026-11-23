@@ -634,6 +634,25 @@ export function predictionCheck({ beforeRows, afterRows, steps }) {
 // Totals and the gate.
 // ============================================================================
 
+/**
+ * Whether a scan's advisory counts are evidence: every dependency the server may look up was
+ * looked up, from data that is not stale.
+ *
+ * A dependency a lockfile takes from a private index is never looked up, on any attempt and by
+ * any release, so a scan whose only gap is those ("NOT CHECKED (private)") is as complete as it
+ * can be: its counts are evidence for everything else. The corpus has one: an example lockfile of
+ * mcp-python-sdk names an internal index for three packages, and the first run on GitHub failed
+ * the gate on it with every step working.
+ */
+export function scanComplete(scan) {
+  const coverage = scan?.coverage ?? {};
+  const summary = String(scan?.summary ?? "");
+  if ((coverage.unchecked_dependencies ?? 0) > 0) return false;
+  if (!/^\s*(NOT CHECKED|STALE)/.test(summary)) return true;
+  const said = `${summary}\n${coverage.note ?? ""}`;
+  return (coverage.private_dependencies ?? 0) > 0 && (coverage.lockfiles_not_scanned ?? 0) === 0 && !/\bSTALE\b/.test(said) && !/NOT CHECKED(?! \(private\))/.test(said);
+}
+
 /** Totals over per-project results (run.mjs writes one per project). */
 export function totals(projects) {
   const t = { projects: projects.length, errored: 0, steps: 0, steps_run: 0, steps_failed: 0, steps_refused: 0, steps_without_effect: 0, steps_lowering: 0, steps_lowering_earlier: 0, advisories_before: 0, advisories_after: 0, vulnerable_copies_before: 0, predicted_remaining: 0, remaining: 0, vulnerable_copies_after: 0, order_sources: {} };
