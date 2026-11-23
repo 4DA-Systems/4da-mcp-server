@@ -28,6 +28,7 @@
  */
 
 import { markPrivateParents } from "./upgrade-planner-private.js";
+import { pushAll } from "../array-utils.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
@@ -999,8 +1000,11 @@ async function executeStandalonePlanner(
   // whose vulnerability data is not complete says so first, never after its counts.
   if (!vulnerabilityDataAvailable && !INCOMPLETE.test(parts[0] ?? "")) {
     const said = parts.filter((p) => INCOMPLETE.test(p));
-    if (said.length > 0) parts.splice(0, parts.length, ...said, ...parts.filter((p) => !INCOMPLETE.test(p)));
-    else parts.unshift(notCheckedLead(liveIntel.wasLockfileRead(), nothingReadable));
+    const rest = parts.filter((p) => !INCOMPLETE.test(p));
+    parts.length = 0;
+    if (said.length === 0) parts.push(notCheckedLead(liveIntel.wasLockfileRead(), nothingReadable));
+    pushAll(parts, said);
+    pushAll(parts, rest);
   }
 
   return {
