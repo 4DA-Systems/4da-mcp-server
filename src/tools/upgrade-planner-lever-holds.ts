@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
  * npm: the release a parent upgrade names for what the project declares (the lever) is judged by
- * what it holds, as the planner's direct targets and dependency_check are (held-dependencies.ts):
+ * what it holds, one and two levels down, as the planner's direct targets and dependency_check are
+ * (held-dependencies.ts, held-second-level.ts):
  * nyc 18.0.0 brings istanbul-lib-processinfo's uuid fix in, and also requires glob "^13.0.6",
  * every 13.x of which an advisory affects. A lever release that holds an affected dependency the
  * installed release does not is not named as the fix silently:
@@ -56,7 +57,10 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
       const specs = facts?.heldSpecs?.[v];
       if (facts && !specs) return { status: "checked", affected: [] };
       if (!specs || Date.now() >= deadline) return undefined;
-      return (await heldAdvisories(sources, query, [{ key: v, specs }], deadline).catch(() => null))?.get(v);
+      // Two levels down too (held-second-level.ts), as a direct target is judged: a lever release is
+      // installed by the step as a target is. The installed release is judged the same way, so what it
+      // already holds there is carried over, not brought in.
+      return (await heldAdvisories(sources, query, [{ key: v, specs }], deadline, { secondLevel: true }).catch(() => null))?.get(v);
     };
     const at = facts ? await judge(to) : undefined;
     if (!at || at.status === "unchecked") {
