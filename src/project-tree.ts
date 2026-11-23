@@ -55,7 +55,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { IgnoreRules } from "./gitignore.js";
-import { goWorkFor } from "./live/lockfile-parsers-pygo.js";
+import { goWorkFor, isRequirementsFileName } from "./live/lockfile-parsers-pygo.js";
 import { readTextFile } from "./live/text-file.js";
 import { parsePyprojectDependencies, tomlTable } from "./project-manifests.js";
 import { scanCurrentProject, type ProjectScanResult } from "./project-scanner.js";
@@ -329,10 +329,7 @@ export interface WorkspaceRedirect {
   kind: string;
 }
 
-/** Python requirement files: requirements.txt, requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt. */
-export function isRequirementsFileName(name: string): boolean {
-  return /requirements[\w.-]*\.txt$/i.test(name);
-}
+export { isRequirementsFileName };
 
 /** The lockfiles (and exact-pin files) that make a directory a project, by name. */
 export function lockfilesIn(dir: string, listing?: string[]): string[] {
@@ -346,7 +343,7 @@ export function lockfilesIn(dir: string, listing?: string[]): string[] {
   // pip-compile-multi and similar keep the pins in a requirements/ folder (superset: requirements/base.txt).
   if (names.includes("requirements")) {
     try {
-      for (const n of fs.readdirSync(path.join(dir, "requirements"))) if (/\.txt$/i.test(n)) found.push(`requirements/${n}`);
+      for (const n of fs.readdirSync(path.join(dir, "requirements"))) if (/\.txt$/i.test(n) && !/^syntax_test_/i.test(n)) found.push(`requirements/${n}`);
     } catch {
       // a file named "requirements"
     }
