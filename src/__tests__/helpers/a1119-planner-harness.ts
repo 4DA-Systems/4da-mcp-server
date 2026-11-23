@@ -44,7 +44,7 @@ export interface Harness {
   dir: string;
   ADVISORIES: Record<string, OsvVulnerability[]>;
   NPM: Record<string, { versions: Record<string, NpmVersion>; latest: string }>;
-  CRATES: Record<string, Array<{ vers: string; yanked?: boolean; deps?: Array<{ name: string; req: string; kind?: string; target?: string }> }>>;
+  CRATES: Record<string, Array<{ vers: string; yanked?: boolean; deps?: Array<{ name: string; req: string; kind?: string; target?: string }>; rust_version?: string }>>;
   PYPI: Record<string, Record<string, { requiresPython?: string; requiresDist?: string[]; yanked?: boolean }>>;
   GO: Record<string, string[]>;
   /** "module@vX" -> the go directive of that version's go.mod ("" for a go.mod that declares none; absent: not served). */
@@ -153,7 +153,7 @@ export function createHarness(): Harness {
     if (crate) {
       const name = Object.keys(h.CRATES).find((n) => sparsePath(n) === crate[1]);
       if (!name) return new Response("not found", { status: 404 });
-      return new Response(h.CRATES[name].map((l) => JSON.stringify({ name, vers: l.vers, deps: (l.deps ?? []).map((d) => ({ kind: "normal", optional: false, ...d })), yanked: l.yanked === true })).join("\n"), { status: 200 });
+      return new Response(h.CRATES[name].map((l) => JSON.stringify({ name, vers: l.vers, deps: (l.deps ?? []).map((d) => ({ kind: "normal", optional: false, ...d })), yanked: l.yanked === true, ...(l.rust_version ? { rust_version: l.rust_version } : {}) })).join("\n"), { status: 200 });
     }
     const pypiOne = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/([^/]+)\/json$/.exec(url);
     if (pypiOne) {
