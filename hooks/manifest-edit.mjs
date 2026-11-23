@@ -1061,11 +1061,15 @@ function callItem(ecosystem, name, to, from) {
 // Which file is a manifest
 // =============================================================================
 
-/** The manifest kind of a path (its ECOSYSTEM key), or null: `requirements-dev.txt` and `requirements/base.txt` read as requirements.txt. */
+/**
+ * The manifest kind of a path (its ECOSYSTEM key), or null. A Python requirement file is named as
+ * the server names one (src/project-tree.ts isRequirementsFileName, mirrored here because the hook
+ * imports nothing: `requirements-dev.txt`, `dev_requirements.txt`), or is a .txt in `requirements/`.
+ */
 function manifestKind(filePath) {
   const name = basename(filePath);
   if (MANIFESTS.has(name)) return name;
-  if (/^requirements[-_.][\w.-]*\.txt$/i.test(name)) return "requirements.txt";
+  if (/requirements[\w.-]*\.txt$/i.test(name)) return "requirements.txt";
   if (/\.txt$/i.test(name) && basename(dirname(filePath)).toLowerCase() === "requirements") return "requirements.txt";
   return null;
 }
