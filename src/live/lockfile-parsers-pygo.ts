@@ -38,6 +38,19 @@ export function normalizePythonName(name: string): string {
 /** The TOML lockfiles: arrays of [[package]] tables. */
 const PYTHON_TOML_LOCKS = ["poetry.lock", "uv.lock", "pdm.lock"];
 
+/** A Sublime Text syntax test file, by the name that convention requires. */
+const isSyntaxTestName = (name: string): boolean => /^syntax_test_/i.test(name);
+
+/**
+ * Python requirement files by name: requirements.txt, requirements-dev.txt, dev_requirements.txt,
+ * _test_minimum_requirements.txt. Never a Sublime Text syntax test: every such file is named
+ * `syntax_test_*`, and its lines exercise a highlighter and pin nothing (bat keeps
+ * `syntax_test_requirements.txt`, whose `gopher://` index line read as a private package).
+ */
+export function isRequirementsFileName(name: string): boolean {
+  return /requirements[\w.-]*\.txt$/i.test(name) && !isSyntaxTestName(name);
+}
+
 /**
  * Requirement files in a project directory: `*requirements*.txt` beside it
  * (requirements-dev.txt, dev_requirements.txt, _test_minimum_requirements.txt)
@@ -48,14 +61,14 @@ export function requirementFiles(cwd: string): string[] {
   const out: string[] = [];
   try {
     for (const name of fs.readdirSync(cwd).sort()) {
-      if (/requirements[\w.-]*\.txt$/i.test(name) || includesRequirements(path.join(cwd, name))) out.push(path.join(cwd, name));
+      if (isRequirementsFileName(name) || includesRequirements(path.join(cwd, name))) out.push(path.join(cwd, name));
     }
   } catch {
     return out;
   }
   try {
     for (const name of fs.readdirSync(path.join(cwd, "requirements")).sort()) {
-      if (/\.txt$/i.test(name)) out.push(path.join(cwd, "requirements", name));
+      if (/\.txt$/i.test(name) && !isSyntaxTestName(name)) out.push(path.join(cwd, "requirements", name));
     }
   } catch {
     // no requirements/ folder
@@ -75,7 +88,7 @@ const MAX_SNIFF_BYTES = 256 * 1024;
  * then pytest==5.4.2 and 21 more pins, 6 advisories pip-audit reports).
  */
 function includesRequirements(file: string): boolean {
-  if (!/\.txt$/i.test(file) || /requirements[\w.-]*\.txt$/i.test(file)) return false;
+  if (!/\.txt$/i.test(file) || /requirements[\w.-]*\.txt$/i.test(file) || isSyntaxTestName(path.basename(file))) return false;
   try {
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > MAX_SNIFF_BYTES) return false;
