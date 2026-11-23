@@ -32,6 +32,7 @@ import {
   type SqliteDatabase,
 } from "./sqlite-driver.js";
 import { isNativeBindingError, nativeBindingMessage } from "./native-bindings.js";
+import { pinnedNpx, RUNNING_VERSION } from "./usage.js";
 
 /**
  * Null when a SQLite driver (node:sqlite, or better-sqlite3 with a working
@@ -264,7 +265,7 @@ export function unreadableDbMessage(absolutePath: string, error: unknown): strin
         "Do not delete it: it may be your only copy of the app's data.";
   return (
     `The 4DA database at ${absolutePath} cannot be read (${detail}): the file is damaged or is not ` +
-    `a SQLite database. ${remedy} Run \`npx @4da/mcp-server --doctor\` for details.`
+    `a SQLite database. ${remedy} Run \`${pinnedNpx(RUNNING_VERSION)} --doctor\` for details.`
   );
 }
 
