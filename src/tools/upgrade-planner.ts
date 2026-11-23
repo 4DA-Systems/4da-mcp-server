@@ -995,6 +995,13 @@ async function executeStandalonePlanner(
   for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...unreadableNotes(liveIntel.getLockfileProblems())]) parts.push(note.replace(/[.]$/, ""));
   const nothing = vulnerabilityDataAvailable ? "nothing to upgrade (no known vulnerability, deprecation, or newer release of a direct dependency)" : "no vulnerability data to plan from";
   if (only && limited.length === 0) parts.push(emptyAnswerNote(only, liveIntel, includeDev, nothing));
+  // An answer that starts with NOT CHECKED or STALE is incomplete (the server's instructions): a plan
+  // whose vulnerability data is not complete says so first, never after its counts.
+  if (!vulnerabilityDataAvailable && !INCOMPLETE.test(parts[0] ?? "")) {
+    const said = parts.filter((p) => INCOMPLETE.test(p));
+    if (said.length > 0) parts.splice(0, parts.length, ...said, ...parts.filter((p) => !INCOMPLETE.test(p)));
+    else parts.unshift(notCheckedLead(liveIntel.wasLockfileRead(), nothingReadable));
+  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1014,6 +1021,18 @@ async function executeStandalonePlanner(
     run_order_note: staleUvLocks.length > 0 ? `${sequence.run_order_note} ${staleLocksNote(staleUvLocks)}` : sequence.run_order_note,
     provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
+}
+
+/** A summary sentence that marks the answer incomplete. */
+const INCOMPLETE = /^(?:NOT CHECKED|STALE)\b/;
+
+/** The first sentence of a plan whose vulnerability data is not complete, when no other part already says why. */
+function notCheckedLead(lockfileRead: boolean, nothingReadable: boolean): string {
+  if (!lockfileRead) {
+    return "NOT CHECKED: no lockfile was read, so no installed version is known and none was checked for advisories (a declared range is not an install); generate the lockfile, then plan again";
+  }
+  if (nothingReadable) return "NOT CHECKED: nothing found here could be read as a dependency this server checks (the notes below say why)";
+  return "NOT CHECKED: this plan's vulnerability data is not complete, so a missing row or a low risk is not a clean result";
 }
 
 /** Where a copy this host does not build IS built, in words: its declared target spec, or any target but this host's. */
