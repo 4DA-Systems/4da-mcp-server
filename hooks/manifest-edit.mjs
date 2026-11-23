@@ -22,6 +22,11 @@
  * FOURDA_GUARD=advise: never denies; after a manifest edit (PostToolUse) the agent is told which
  * versions moved and which calls check them. FOURDA_GUARD=off: the hook does nothing.
  *
+ * It denies only where a ledger exists. A server from 6.5.0 on starts one when it starts; a
+ * server before 6.5.0 records no verdict, so beside one a denied call could never pass. With no
+ * ledger file in the data folder the hook works as it did before 6.5.0: nothing is denied, and
+ * the advice follows a manifest edit.
+ *
  * It fails open: an error of its own, a payload it does not understand, a data folder that does
  * not exist, or its own time limit ends it with exit 0 and no output. No network, no
  * dependencies, plain Node.
@@ -918,11 +923,22 @@ export function dataDir(env = process.env, platform = process.platform, home = h
 }
 
 /**
- * The ledger entries of the last 24 hours in `dir`, oldest first; null when the folder does not
- * exist (the server has never run with this data folder, so there is nothing to hold an edit to).
+ * Whether `dir` holds a ledger file, of any size or content. A server from 6.5.0 on starts one when
+ * it starts (src/check-ledger.ts startLedger); a folder without one has only had servers that
+ * record no verdict, or none at all.
+ */
+function ledgerStarted(dir) {
+  return LEDGER_FILES.some((file) => existsSync(join(dir, file)));
+}
+
+/**
+ * The ledger entries of the last 24 hours in `dir`, oldest first; null when there is no ledger to
+ * hold an edit to: the folder does not exist (no server has run with this data folder), or it
+ * holds no ledger file (the servers that ran there are older than 6.5.0 and record no verdict, so
+ * a call stopped here could never pass).
  */
 function readLedger(dir, now) {
-  if (!existsSync(dir)) return null;
+  if (!existsSync(dir) || !ledgerStarted(dir)) return null;
   const entries = [];
   for (const file of LEDGER_FILES) {
     let text;
@@ -1055,9 +1071,12 @@ function denialFor(introduced, ledger, dir, what) {
     lines.push(
       `- ${named}: no dependency_check verdict in the last 24 hours; call the 4da MCP tool dependency_check ${JSON.stringify({ items })}${batches}, and this ${what} will pass once that call answers proceed.`,
     );
-    if (ledger.length === 0) {
+    // A call that was made and left nothing behind would be stopped here for ever: say what that
+    // means, once, where a version has no entry at all (an `unknown` answer is named above).
+    if (unchecked.some(({ last }) => !last)) {
+      const none = ledger.length === 0 ? `No dependency_check verdict at all is recorded in ${dir} for the last 24 hours. ` : "";
       lines.push(
-        `(No dependency_check verdict at all is recorded in ${dir} for the last 24 hours. If dependency_check did answer, the 4da server keeps its data folder elsewhere: Claude Code's environment needs the same FOURDA_MCP_HOME as the server, or FOURDA_GUARD=advise makes this hook advise instead of block.)`,
+        `(${none}If this stops again after dependency_check has answered for it, do not retry: the 4da server that answered left no verdict in ${dir}. Either it is older than 6.5.0, which keeps no record (update it), or it keeps its data folder elsewhere (Claude Code's environment needs the same FOURDA_MCP_HOME as the server). FOURDA_GUARD=advise makes this hook advise instead of block.)`,
       );
     }
   }
@@ -1142,7 +1161,9 @@ export function respond(input, env = process.env, now = Date.now()) {
   const mode = guardMode(env.FOURDA_GUARD);
   if (mode === "off") return "";
   if (input.hook_event_name === "PreToolUse") return mode === "block" ? preToolUse(input, env, now) : "";
-  if (input.hook_event_name === "PostToolUse") return mode === "advise" ? postToolUse(input) : "";
+  // Where nothing held the edit before it ran (FOURDA_GUARD=advise, or no ledger: an older server
+  // or none), the advice follows it, as it did before 6.5.0.
+  if (input.hook_event_name === "PostToolUse") return mode === "advise" || !ledgerStarted(dataDir(env)) ? postToolUse(input) : "";
   return "";
 }
 

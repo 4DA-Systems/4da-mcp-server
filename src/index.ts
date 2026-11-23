@@ -72,7 +72,7 @@ import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { shutdown } from "./shutdown.js";
 import { closeServerCacheDb } from "./live/cache.js";
-import { ledgerWritesSettled } from "./check-ledger.js";
+import { ledgerWritesSettled, startLedger } from "./check-ledger.js";
 import { systemDirectoryProblem } from "./tools/project-scope.js";
 import { MAX_DEPTH, MAX_PROJECTS } from "./project-tree.js";
 
@@ -618,6 +618,9 @@ async function main() {
   // HTTPS_PROXY / HTTP_PROXY: every lookup goes through it (live/http-utils.ts); said here (proxy.ts).
   const proxy = configureProxy();
   if (proxy.note) console.error(`[4DA] ${proxy.note}`);
+
+  // The guard hook denies only where a ledger exists (check-ledger.ts): this server keeps one.
+  void startLedger();
 
   // HTTP transport mode
   if (command.kind === "http") {
