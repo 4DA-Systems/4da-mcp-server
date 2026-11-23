@@ -146,7 +146,7 @@ describe("a lever whose range admits a release that brings in a new vulnerable c
     expect(lever).toMatchObject({ name: "@actions/github", to: "6.0.0" });
     expect(lever.commands).toEqual([{ dir: ".", command: "npm install @actions/github@6.0.0 --save-exact" }]);
     expect(reasonsOf(row)).toContain(
-      '`npm install @actions/github@6.0.0 --save-exact`, not `npm install "@actions/github@~6.0.0"`: npm installs @actions/github 6.0.1 for "~6.0.0" (it is the highest release "~6.0.0" admits that is not deprecated), and @actions/github 6.0.1 requires undici "^5.28.5", whose newest admitted release 5.29.0 is affected (GHSA-c76h-2ccp-4975), which 6.0.0 does not bring',
+      '`npm install @actions/github@6.0.0 --save-exact`, not `npm install "@actions/github@~6.0.0"`: npm installs @actions/github 6.0.1 for "~6.0.0" (it is the highest release "~6.0.0" admits that is not deprecated), and @actions/github 6.0.1 requires undici "^5.28.5", whose newest admitted release 5.29.0 is affected (GHSA-c76h-2ccp-4975), which 6.0.0 does not hold itself',
     );
     // A pinned command is still a fix of the row: the release it installs is the one checked.
     expect(result.parentUpgradeSteps).toBe(1);

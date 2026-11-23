@@ -270,7 +270,7 @@ async function decide(group: Group, sources: FixPathSources, liveIntel: Intel, d
       // A lever's own installed release carries what it holds already; a direct target clears what it does not hold.
       const base = [...affectedOf(held.get(target)), ...(use.via && use.installed ? affectedOf(held.get(use.installed)) : [])];
       const brought = atInstalls.affected.filter((d) => !sameCopy(base, d));
-      if (brought.length > 0) return pin(`${name} ${heldText(installs, brought)}, which ${target} does not bring`);
+      if (brought.length > 0) return pin(`${name} ${heldText(installs, brought)}, which ${target} does not hold itself`);
     }
     return { kind: "keep", installs, head: pick.why, checks: `${ownWords}, and it holds no affected dependency ${target} does not` };
   }
