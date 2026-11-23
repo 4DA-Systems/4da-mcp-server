@@ -39,6 +39,7 @@ import { SEVERITY_RANK } from "./severity-scope.js";
 import { compareVersions } from "./version-compare.js";
 import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "./types.js";
 import { isNpmPackageName, isReadableNpmSpec } from "../untrusted-text.js";
+import { readFirstLevelFacts, secondLevelPins, secondLevelUnreadText, type SecondLevelPin } from "./held-second-level.js";
 
 /** The registry facts this module reads (fix-paths.ts PackageReleaseFacts; a type only, no import cycle). */
 export interface HeldFacts {
@@ -78,6 +79,11 @@ export interface HeldDependency {
   selected?: true;
   /** Go: the line is `// indirect` in the release's go.mod. */
   indirect?: true;
+  /**
+   * npm, two levels down (held-second-level.ts): the release does not hold this copy itself; `via`,
+   * a dependency it holds, exact-pins it. `spec` is that pin.
+   */
+  via?: SecondLevelPin["via"];
   /** Go: the smallest release that clears `ids`, confirmed with OSV.dev; null when none was found. */
   fixedIn?: string | null;
   /** Go, with `fixedIn` null: why the clearing release was not established (not looked up in this call, a lookup that failed); absent when it was looked up and none clears them. */
@@ -224,6 +230,12 @@ export async function heldAdvisories(
   query: AdvisoryQuery,
   releases: Array<{ key: string; specs: Record<string, string> }>,
   deadline: number,
+  /**
+   * `secondLevel`: also judge the exact pins of what each release holds (held-second-level.ts), for
+   * a release about to be installed as a fix target; a release whose second level could not be read
+   * is then `unchecked`, unless something it installs is already affected.
+   */
+  options: { secondLevel?: boolean } = {},
 ): Promise<Map<string, HeldCheck>> {
   const out = new Map<string, HeldCheck>();
   const ranged = [...new Set(releases.flatMap((r) => Object.entries(r.specs).filter(([, s]) => exactPinVersion(s) === null).map(([n]) => n)))];
@@ -241,8 +253,15 @@ export async function heldAdvisories(
     key: r.key,
     deps: Object.entries(r.specs).map(([name, spec]) => ({ name, spec, exact: exactPinVersion(spec) !== null, version: resolveSpec(spec, facts.get(name)) })),
   }));
+  // Two levels down: the exact pins of every resolved dependency's own release.
+  const second = new Map<string, { pins: SecondLevelPin[]; unread: string[] }>();
+  if (options.secondLevel) {
+    await readFirstLevelFacts(sources, resolved.flatMap((r) => r.deps.filter((d) => d.version).map((d) => d.name)), facts, deadline);
+    for (const r of resolved) second.set(r.key, secondLevelPins(r.deps, facts));
+  }
   const wanted = new Map<string, ResolvedDependency>();
   for (const r of resolved) for (const d of r.deps) if (d.version) wanted.set(`${d.name}@${d.version}`, lookupDep(d.name, d.version));
+  for (const s of second.values()) for (const p of s.pins) wanted.set(`${p.name}@${p.version}`, lookupDep(p.name, p.version));
 
   let answer: VulnerabilityScanResult | null = null;
   let failure: string | null = null;
@@ -256,10 +275,16 @@ export async function heldAdvisories(
       const hit = d.version ? hits.get(`${d.name}@${d.version}`) : undefined;
       return hit ? [{ name: d.name, spec: d.spec, exact: d.exact, version: d.version!, ids: hit.ids, severity: hit.severity, ...(hit.unread ? { unread: true as const } : {}) }] : [];
     });
+    const deeper = second.get(r.key);
+    for (const p of deeper?.pins ?? []) {
+      const hit = hits.get(`${p.name}@${p.version}`);
+      if (hit) affected.push({ name: p.name, spec: p.spec, exact: true, version: p.version, ids: hit.ids, severity: hit.severity, via: p.via, ...(hit.unread ? { unread: true as const } : {}) });
+    }
     const unread = r.deps.filter((d) => !d.version).map((d) => `${d.name} "${d.spec}"`);
     if (affected.length > 0) out.set(r.key, { status: "checked", affected });
     else if (unread.length > 0) out.set(r.key, { status: "unchecked", reason: `the releases ${unread.slice(0, 3).join(", ")}${unread.length > 3 ? ` and ${unread.length - 3} more` : ""} admit could not be read from the npm registry` });
     else if (failure && r.deps.length > 0) out.set(r.key, { status: "unchecked", reason: failure });
+    else if (deeper && deeper.unread.length > 0) out.set(r.key, { status: "unchecked", reason: secondLevelUnreadText(deeper.unread) });
     else out.set(r.key, { status: "checked", affected: [] });
   }
   return out;
@@ -276,6 +301,7 @@ export function andList(parts: string[]): string {
  * old "exact-pins or narrowly ranges" misdescribed mocha 12.x's glob "^13.0.0" (pre-publish round 10, W16).
  */
 export function heldVerb(affected: HeldDependency[]): string {
+  if (affected.length > 0 && affected.every((d) => d.via)) return "installs, two levels down, an exact pin with a known advisory";
   const exact = affected.some((d) => d.exact);
   const ranged = affected.some((d) => !d.exact);
   if (exact && !ranged) return "exact-pins a dependency with a known advisory";
@@ -291,15 +317,22 @@ export function heldVerb(affected: HeldDependency[]): string {
 export function heldText(release: string, affected: HeldDependency[]): string {
   const shown = affected.slice(0, 3);
   const and = andList;
-  const exact = shown.filter((d) => d.exact).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})${conditionText(d)}`);
+  const exact = shown.filter((d) => d.exact && !d.via).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})${conditionText(d)}`);
+  // Two levels down: the dependency the release holds, then its own exact pin.
+  const deep = shown.flatMap((d) => (d.via ? [`${viaText(d.via)}, which exact-pins ${d.name} ${d.version} (${d.ids.join(", ")})`] : []));
   const ranged = shown
-    .filter((d) => !d.exact)
+    .filter((d) => !d.exact && !d.via)
     // PyPI: a requirement with no specifier admits every release.
     .map((d) => `${d.name} ${d.spec === "" ? "(any release)" : `"${d.spec}"`}, whose newest admitted release ${d.version} is affected (${d.ids.join(", ")})${conditionText(d)}`);
-  const clauses = [...(exact.length > 0 ? [`exact-pins ${and(exact)}`] : []), ...(ranged.length > 0 ? [`requires ${and(ranged)}`] : [])];
+  const clauses = [...(exact.length > 0 ? [`exact-pins ${and(exact)}`] : []), ...(ranged.length > 0 ? [`requires ${and(ranged)}`] : []), ...(deep.length > 0 ? [`installs, two levels down, ${and(deep)}`] : [])];
   const rest = affected.length - shown.length;
   const more = rest > 0 ? `, and ${rest} more affected dependenc${rest === 1 ? "y" : "ies"}` : "";
   return `${release} ${clauses.join("; it also ")}${more}`;
+}
+
+/** "@hey-api/json-schema-ref-parser 1.4.2, which it exact-pins" / "x "^1.4.0" (its newest admitted release 1.4.2)". */
+function viaText(via: NonNullable<HeldDependency["via"]>): string {
+  return via.exact ? `${via.name} ${via.version} (its exact pin)` : `${via.name} "${via.spec}" (its newest admitted release ${via.version})`;
 }
 
 /**

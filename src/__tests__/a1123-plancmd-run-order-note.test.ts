@@ -26,13 +26,15 @@ describe("run_order_note", () => {
     expect(out.run_order_note).toMatch(
       /^run_order is 1 step for 1 of the 1 row shown, in an order that is safe to run from the first step to the last \(no step lowers a version that is installed or that an earlier step sets\), each in the directory it names: /,
     );
-    expect(out.run_order_note).toContain(". An upgraded package's own dependencies below the first level are not checked, so run vulnerability_scan again after running it.");
+    expect(out.run_order_note).toContain(
+      ". An upgraded package's own dependencies are checked one level down, and on npm their exact pins two levels down; a range at that level, anything deeper and a copy bundled inside a package are not, so run vulnerability_scan again after running it.",
+    );
     expect(out.run_order_note).not.toContain("\n");
   });
 
   it("an empty script names no scan to follow it", () => {
     const out = buildRunOrder({ rows: [row("a", "waiting_on_upstream", [])], totalRows: 1, heldUnclean: () => false });
     expect(out.run_order_note).toMatch(/^run_order is empty/);
-    expect(out.run_order_note).not.toContain("below the first level");
+    expect(out.run_order_note).not.toContain("run vulnerability_scan again");
   });
 });
