@@ -23,6 +23,8 @@ import * as path from "node:path";
 import { oversize, tooLargeText } from "./bounded-read.js";
 import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
 import { checkInstallState } from "./install-state.js";
+import { nonRegistrySource } from "./js-lockfile-readers.js";
+import { readManifestDeclarations } from "./js-manifests.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
@@ -75,6 +77,16 @@ export interface GroupResolution {
   problems: LockfileProblem[];
   signatures: Map<string, FileSignature>;
   resolvedAt: string;
+}
+
+/**
+ * The names this directory's package.json declares from a path, git or a URL (nonRegistrySource),
+ * in any dependency section; an empty set when it declares none or cannot be read. An npm alias
+ * (`npm:pkg@1`) is a registry package and is not among them.
+ */
+function nonRegistryDeclared(dir: string): Set<string> {
+  const manifest = readManifestDeclarations(path.join(dir, "package.json"));
+  return new Set((manifest?.declared ?? []).filter((d) => nonRegistrySource(d.spec, d.spec) !== null).map((d) => d.name));
 }
 
 export function resolveGroup(group: ResolutionGroup): GroupResolution {
@@ -135,8 +147,15 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   const fromLock = group.deps.length === 0 && group.devDeps.length === 0 && read.direct;
   // An npm alias is declared under the folder name it installs into; the dependency is the package behind it.
   const real = (names: string[]) => (read.aliases ? [...new Set(names.map((name) => read.aliases?.get(name) ?? name))] : names);
-  const deps = real(fromLock ? fromLock.deps : group.deps);
-  const devDeps = real(fromLock ? fromLock.devDeps : group.devDeps);
+  // npm: a dependency package.json takes from a path (a `file:` directory or archive), git or a URL
+  // is not the registry package of its name, and the name may be private: it gets no direct row, so
+  // no registry lookup is made by its name. 6.5.0 sent `"acme-lib": "file:libs/acme-lib"` to
+  // registry.npmjs.org and api.npmjs.org from dependency_health and upgrade_planner. What such a
+  // dependency installs is listed under coverage.not_checkable as before.
+  const elsewhere = ecosystem === "npm" ? nonRegistryDeclared(group.dir) : null;
+  const registryOnly = (names: string[]) => (elsewhere && elsewhere.size > 0 ? names.filter((name) => !elsewhere.has(name)) : names);
+  const deps = real(registryOnly(fromLock ? fromLock.deps : group.deps));
+  const devDeps = real(registryOnly(fromLock ? fromLock.devDeps : group.devDeps));
   const lockScope = lockScopeOf(read);
   let resolved = resolveVersionsFrom(group.dir, deps, devDeps, ecosystem, read.versions, group.targets, lockScope);
   // No lockfile: a ranged dependency's version is the range's floor, a label.
