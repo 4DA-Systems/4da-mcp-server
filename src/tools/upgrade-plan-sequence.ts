@@ -783,8 +783,10 @@ function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlock
   parts.push(
     steps === 0
       ? `run_order is empty: none of the ${shown} row${shown === 1 ? "" : "s"} shown is fixed on this host by a command`
-      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, safe to run from the first to the last, each in the directory it names: upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
+      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, in an order that is safe to run from the first step to the last (no step lowers a version that is installed or that an earlier step sets), each in the directory it names: upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
   );
+  // The order is checked, and each upgraded release's first-level dependencies; nothing deeper.
+  if (steps > 0) parts.push("An upgraded package's own dependencies below the first level are not checked, so run vulnerability_scan again after running it");
   if (opts.totalRows > shown) parts.push(`it covers only the rows shown, not the other ${opts.totalRows - shown} (raise max_recommendations for them)`);
   const forced = ran.filter((r) => overrideCommandsOf(r).length > 0);
   if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override or resolution written by \`npm pkg set\` (${named(forced)}): it applies to every copy its key names, so re-scan after running`);

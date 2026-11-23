@@ -28,6 +28,7 @@
  */
 
 import { markPrivateParents } from "./upgrade-planner-private.js";
+import { pushAll } from "../array-utils.js";
 import type { FourDADatabase } from "../db.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintenance.js";
@@ -46,6 +47,7 @@ import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
 import { MAX_REQUIRED_TARGETS, REQUIRES_AFFECTED_REASON, REQUIRES_CAP_REASON, REQUIRES_UNEXAMINED_REASON } from "../live/required-targets.js";
 import { unconfirmedTargetNote, withholdUnconfirmedTargets } from "./unconfirmed-targets.js";
 import { dedupeParentCommands } from "./upgrade-planner-dedupe.js";
+import { SHARED_COPY_REASON } from "./upgrade-planner-shared-copy.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
 import { discoveryNote, exclusionNotes, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
@@ -171,9 +173,11 @@ interface UpgradeRecommendation {
    * upgrade_direct: the command that moves the declared dependency to
    * targetVersion where it is declared, per lockfile directory (npm install,
    * pnpm up, yarn upgrade / yarn up, cargo add with --dev for a
-   * dev-dependency). Absent for tools no command is named for.
+   * dev-dependency). Absent for tools no command is named for. `installs`: the release a command
+   * written with a range installs, when that is not targetVersion; it was checked as the target was
+   * (a command whose release could not be checked names the target exactly instead).
    */
-  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true }>;
+  upgradeCommands?: Array<{ dir: string; command: string; refresh?: true; installs?: string }>;
   /**
    * upgrade_direct: a manifest edit where no single verified command makes it (a workspace-inherited
    * crate, a requirements.txt pin). Also on a PyPI row, direct or transitive, whose pin sits in a
@@ -875,7 +879,11 @@ async function executeStandalonePlanner(
     declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
-  const upgrades = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
+  // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
+  const sharedLeft = (r: (typeof limited)[number]) => r.reasons.some((x) => SHARED_COPY_REASON.test(x));
+  const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
+  const upgrades = directRows.filter((r) => !sharedLeft(r));
+  const partlyDirect = directRows.length - upgrades.length;
   // Rows whose advisories OSV.dev did not answer for, or whose newer release was not confirmed (r7).
   const unknownRisk = limited.filter((r) => r.risk === "unknown").length;
   const unconfirmedNewer = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && r.targetVersion === null && r.fixPathChecked === undefined && !heldUnclean(r)).length;
@@ -908,6 +916,11 @@ async function executeStandalonePlanner(
       : `${limited.length} recommendation${limited.length !== 1 ? "s" : ""}`,
   );
   if (upgrades.length > 0) parts.push(`${upgrades.length} upgradable directly (${quickWins} non-breaking, ${breakingChanges} crossing a major version)`);
+  if (partlyDirect > 0) {
+    parts.push(
+      `${partlyDirect} direct upgrade${partlyDirect !== 1 ? "s" : ""} that move${partlyDirect === 1 ? "s" : ""} only this project's own copy: other packages keep an affected copy on the old line, moved by hand (their reasons say which; not counted as fixed, not in run_order)`,
+    );
+  }
   if (reinstalls > 0) parts.push(`${reinstalls} need only a reinstall (node_modules behind the lockfile)`);
   if (lockfileRefreshes > 0) {
     parts.push(
@@ -983,6 +996,16 @@ async function executeStandalonePlanner(
   for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...unreadableNotes(liveIntel.getLockfileProblems())]) parts.push(note.replace(/[.]$/, ""));
   const nothing = vulnerabilityDataAvailable ? "nothing to upgrade (no known vulnerability, deprecation, or newer release of a direct dependency)" : "no vulnerability data to plan from";
   if (only && limited.length === 0) parts.push(emptyAnswerNote(only, liveIntel, includeDev, nothing));
+  // An answer that starts with NOT CHECKED or STALE is incomplete (the server's instructions): a plan
+  // whose vulnerability data is not complete says so first, never after its counts.
+  if (!vulnerabilityDataAvailable && !INCOMPLETE.test(parts[0] ?? "")) {
+    const said = parts.filter((p) => INCOMPLETE.test(p));
+    const rest = parts.filter((p) => !INCOMPLETE.test(p));
+    parts.length = 0;
+    if (said.length === 0) parts.push(notCheckedLead(liveIntel.wasLockfileRead(), nothingReadable));
+    pushAll(parts, said);
+    pushAll(parts, rest);
+  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1002,6 +1025,18 @@ async function executeStandalonePlanner(
     run_order_note: staleUvLocks.length > 0 ? `${sequence.run_order_note} ${staleLocksNote(staleUvLocks)}` : sequence.run_order_note,
     provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
+}
+
+/** A summary sentence that marks the answer incomplete. */
+const INCOMPLETE = /^(?:NOT CHECKED|STALE)\b/;
+
+/** The first sentence of a plan whose vulnerability data is not complete, when no other part already says why. */
+function notCheckedLead(lockfileRead: boolean, nothingReadable: boolean): string {
+  if (!lockfileRead) {
+    return "NOT CHECKED: no lockfile was read, so no installed version is known and none was checked for advisories (a declared range is not an install); generate the lockfile, then plan again";
+  }
+  if (nothingReadable) return "NOT CHECKED: nothing found here could be read as a dependency this server checks (the notes below say why)";
+  return "NOT CHECKED: this plan's vulnerability data is not complete, so a missing row or a low risk is not a clean result";
 }
 
 /** Where a copy this host does not build IS built, in words: its declared target spec, or any target but this host's. */

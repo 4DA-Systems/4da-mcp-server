@@ -650,12 +650,15 @@ export function scanComplete(scan) {
   if ((coverage.unchecked_dependencies ?? 0) > 0) return false;
   if (!/^\s*(NOT CHECKED|STALE)/.test(summary)) return true;
   const said = `${summary}\n${coverage.note ?? ""}`;
-  return (coverage.private_dependencies ?? 0) > 0 && (coverage.lockfiles_not_scanned ?? 0) === 0 && !/\bSTALE\b/.test(said) && !/NOT CHECKED(?! \(private\))/.test(said);
+  // The same holds for a file the server cannot read at all (a binary bun.lockb in a docs folder):
+  // it is named on every attempt, and the counts are evidence for what was read.
+  const byRule = (coverage.private_dependencies ?? 0) > 0 || (coverage.unreadable_lockfiles ?? []).length > 0;
+  return byRule && (coverage.lockfiles_not_scanned ?? 0) === 0 && !/\bSTALE\b/.test(said) && !/NOT CHECKED(?! \(private\)|: UNREADABLE| \(unreadable lockfile\))/.test(said);
 }
 
 /** Totals over per-project results (run.mjs writes one per project). */
 export function totals(projects) {
-  const t = { projects: projects.length, errored: 0, steps: 0, steps_run: 0, steps_failed: 0, steps_refused: 0, steps_without_effect: 0, steps_lowering: 0, steps_lowering_earlier: 0, advisories_before: 0, advisories_after: 0, vulnerable_copies_before: 0, predicted_remaining: 0, remaining: 0, vulnerable_copies_after: 0, order_sources: {} };
+  const t = { projects: projects.length, errored: 0, steps: 0, steps_run: 0, steps_failed: 0, steps_refused: 0, steps_without_effect: 0, steps_lowering: 0, steps_lowering_earlier: 0, advisories_before: 0, advisories_after: 0, vulnerable_copies_before: 0, predicted_remaining: 0, remaining: 0, vulnerable_copies_after: 0, planned_but_remained: 0, new_vulnerable_copies: 0, order_sources: {} };
   for (const p of projects) {
     if (p.error) {
       t.errored++;
@@ -666,6 +669,9 @@ export function totals(projects) {
     t.advisories_before += p.advisories.before;
     t.advisories_after += p.advisories.after;
     for (const k of ["vulnerable_copies_before", "predicted_remaining", "remaining", "vulnerable_copies_after"]) t[k] += p.prediction[k];
+    // The plan's claims the rescan contradicts: copies a step was for that stayed, and copies the run brought in.
+    t.planned_but_remained += p.prediction.planned_but_remained?.length ?? 0;
+    t.new_vulnerable_copies += p.prediction.new_vulnerable_copies ?? 0;
   }
   t.net_cleared_ratio = t.advisories_before > 0 ? Math.trunc(((t.advisories_before - t.advisories_after) / t.advisories_before) * 10_000) / 10_000 : null;
   return t;
@@ -682,6 +688,8 @@ export function gateFindings(t, thresholds, projects = []) {
   max("max_failed_steps", t.steps_failed, "step(s) failed");
   max("max_lowering_steps", t.steps_lowering, "step(s) lowered a version that was installed or that an earlier step set");
   max("max_refused_steps", t.steps_refused, "step(s) named a command this harness does not run");
+  max("max_planned_but_remained", t.planned_but_remained, "vulnerable copies a step ran for were still there after the run");
+  max("max_new_vulnerable_copies", t.new_vulnerable_copies, "vulnerable copies the run brought in that were not there before");
   if (typeof thresholds.min_net_cleared_ratio === "number" && (t.net_cleared_ratio ?? 0) < thresholds.min_net_cleared_ratio) {
     f.push(`advisories ${t.advisories_before} -> ${t.advisories_after}: ${t.net_cleared_ratio} cleared, below ${thresholds.min_net_cleared_ratio}`);
   }
