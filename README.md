@@ -27,10 +27,10 @@ One command to install. No API keys. No accounts. Your code never leaves your ma
 
 Requires Node.js 22 or later. CI runs the suite on Node 22 (the newest 22.x on Linux, Windows and macOS, and 22.12, where the server falls back to `better-sqlite3`) and on Node 24 (Linux); other versions are not tested.
 
-The server uses Node's built-in `node:sqlite` (Node 22.13 and later), so it needs no install script and works with npm 12's default of blocking them. On Node 22.0-22.12 it uses the optional `better-sqlite3`, whose native module npm 10 and 11 build on install. `npx @4da/mcp-server@6.4.0 --doctor` shows which one is in use.
+The server uses Node's built-in `node:sqlite` (Node 22.13 and later), so it needs no install script and works with npm 12's default of blocking them. On Node 22.0-22.12 it uses the optional `better-sqlite3`, whose native module npm 10 and 11 build on install. `npx @4da/mcp-server@6.5.0 --doctor` shows which one is in use.
 
 ```bash
-claude mcp add --scope user 4da -- npx -y --prefer-offline @4da/mcp-server@6.4.0
+claude mcp add --scope user 4da -- npx -y --prefer-offline @4da/mcp-server@6.5.0
 ```
 
 Every command and config on this page pins the version, and so do the plugin, the Gemini extension and the entry `--setup` writes, so what runs changes only when you change it. Each configuration starts the server with `npx -y --prefer-offline`: with `--prefer-offline` a cached copy of the pinned version starts without asking the registry first, which matters behind a slow or dead proxy. npx's own options go before the package name; written after it they are passed to the server, which exits with `unknown argument`. Without a version, npx runs whatever it has cached or the newest release, which you did not review.
@@ -55,7 +55,7 @@ Add to `~/.cursor/mcp.json` (Cursor), `~/.codeium/windsurf/mcp_config.json` (Win
   "mcpServers": {
     "4da": {
       "command": "npx",
-      "args": ["-y", "--prefer-offline", "@4da/mcp-server@6.4.0"]
+      "args": ["-y", "--prefer-offline", "@4da/mcp-server@6.5.0"]
     }
   }
 }
@@ -72,7 +72,7 @@ Run **MCP: Open User Configuration** and add the entry, or edit the file directl
     "4da": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "--prefer-offline", "@4da/mcp-server@6.4.0"]
+      "args": ["-y", "--prefer-offline", "@4da/mcp-server@6.5.0"]
     }
   }
 }
@@ -88,7 +88,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "4da": {
       "command": "npx",
-      "args": ["-y", "--prefer-offline", "@4da/mcp-server@6.4.0"]
+      "args": ["-y", "--prefer-offline", "@4da/mcp-server@6.5.0"]
     }
   }
 }
@@ -99,9 +99,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 <summary><b>Auto-setup</b> (detects all installed editors)</summary>
 
 ```bash
-npx @4da/mcp-server@6.4.0 --setup --dry-run   # show each file and entry, write nothing
-npx @4da/mcp-server@6.4.0 --setup
-npx @4da/mcp-server@6.4.0 --setup --update    # also replace a 4da entry that is already there
+npx @4da/mcp-server@6.5.0 --setup --dry-run   # show each file and entry, write nothing
+npx @4da/mcp-server@6.5.0 --setup
+npx @4da/mcp-server@6.5.0 --setup --update    # also replace a 4da entry that is already there
 ```
 
 Writes the entry, pinned to the version you ran it from, into the Cursor, VS Code (and Insiders), Windsurf, Devin Desktop and Claude Desktop configs it finds, merging into what is there: other servers, settings and comments are kept, and a backup (`.bak`) is written first. A `4da` entry that is already there and differs (another version, a local build, a wrapper command) is kept and reported; `--update` replaces its command and keeps its `env` and other fields. A file it cannot read exactly (invalid JSON, not UTF-8, the same key twice) is left untouched with the entry to add by hand, and the exit code is then 1. For Claude Code it prints the `claude mcp add` command instead of editing `~/.claude.json`.
@@ -260,12 +260,12 @@ The MCP server works without the desktop app. It keeps a small local database in
 
 **stdio** (default) -- works with all MCP hosts:
 ```bash
-npx @4da/mcp-server@6.4.0
+npx @4da/mcp-server@6.5.0
 ```
 
 **Streamable HTTP** -- for remote or multi-client setups:
 ```bash
-npx @4da/mcp-server@6.4.0 --http --port 4840
+npx @4da/mcp-server@6.5.0 --http --port 4840
 ```
 
 The HTTP transport binds to `127.0.0.1` by default and applies a `Host`-header
@@ -275,7 +275,7 @@ a shared secret:
 ```bash
 MCP_AUTH_SECRET=<same value as the relay's JWT_SECRET> \
 MCP_ALLOWED_HOSTS=mcp.internal \
-  npx @4da/mcp-server@6.4.0 --http --host 0.0.0.0
+  npx @4da/mcp-server@6.5.0 --http --host 0.0.0.0
 ```
 
 Without `MCP_AUTH_SECRET` a non-loopback bind is refused at startup. With it,
@@ -298,11 +298,11 @@ trust boundary), and only behind clients you would give that access.
 ## CLI Reference
 
 ```
-npx @4da/mcp-server@6.4.0              # Start server (stdio)
-npx @4da/mcp-server@6.4.0 --http       # Start server (Streamable HTTP)
-npx @4da/mcp-server@6.4.0 --setup      # Auto-configure your editors
-npx @4da/mcp-server@6.4.0 --doctor     # Check the install (exit code 1 when a check fails)
-npx @4da/mcp-server@6.4.0 --version    # Print version
+npx @4da/mcp-server@6.5.0              # Start server (stdio)
+npx @4da/mcp-server@6.5.0 --http       # Start server (Streamable HTTP)
+npx @4da/mcp-server@6.5.0 --setup      # Auto-configure your editors
+npx @4da/mcp-server@6.5.0 --doctor     # Check the install (exit code 1 when a check fails)
+npx @4da/mcp-server@6.5.0 --version    # Print version
 ```
 
 `--doctor` prints one line per check: the Node.js version, the SQLite driver, the data folder, the server's own database, the cache (on disk or in memory, and why) and the app database, each with its path and state; build freshness in a repository checkout; the semantic recall provider; the proxy when one is set; whether OSV.dev and each registry answer; and a "Server version" warning when a session has seen a newer release. When it finds the server's own database empty (0 bytes) or without tables, it completes it in place, as a tool call would, and says so as a warning: anything that file was meant to hold is not in it. It exits 1 when any check fails, among them a server's own database it cannot open or complete, and a `FOURDA_DB_PATH` that names no file or a file with no tables. The app database is only read.
@@ -346,7 +346,7 @@ The server reads repositories it did not write, so everything it reads is bounde
 
 Set `HTTPS_PROXY` (and `HTTP_PROXY`, `NO_PROXY`, in upper or lower case) in the server's environment (the `env` block of the MCP server entry) and every OSV.dev, registry and search lookup goes through that proxy, on every supported Node; nothing else to set. Hosts `NO_PROXY` names are reached directly. A proxy that cannot be reached, or refuses a request, makes the lookup fail, and the answer says NOT CHECKED: nothing is ever retried around the proxy. The server uses undici's `EnvHttpProxyAgent` for this (`undici`, MIT, pinned). An embedding provider you configure is the exception: it uses Node's own `fetch`, which honours the proxy on Node 24.14+, or on 22.21+ started with `NODE_USE_ENV_PROXY=1`.
 
-The first lines of the server's stderr, and `npx @4da/mcp-server@6.4.0 --doctor`, say so whenever a proxy variable is set.
+The first lines of the server's stderr, and `npx @4da/mcp-server@6.5.0 --doctor`, say so whenever a proxy variable is set.
 
 ## FAQ
 
