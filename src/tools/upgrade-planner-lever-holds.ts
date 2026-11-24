@@ -62,6 +62,12 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
         delete u.lever.instructions;
         delete u.lever.sameCommandsAs;
         if (u.step.fixPathChecked === "all_advisories") u.step.fixPathChecked = "installed_advisories_only";
+        // No field names the rejected release as the one to move to, and no reason carries its install
+        // command (re-check 2026-11-24, twolevel85: the reason still read "upgrade @hey-api/openapi-ts
+        // to 0.97.3 (`npm install @hey-api/openapi-ts@0.97.3 --save-exact`)" and parentUpgrades `to: "0.97.3"`).
+        u.lever.to = null;
+        if (u.upgrade.levers.every((l) => l.to === null)) u.upgrade.to = null;
+        u.step.reasons = u.step.reasons.map((r) => (r === text || !r.includes(`${name}@${to}`) && !r.includes(`upgrade ${name} to ${to}`) ? r : withoutCommand(r, name, to)));
       }
     };
     const facts = await sources.releaseFacts("npm", name).catch(() => null);
@@ -130,4 +136,10 @@ async function liftedRelease(
     if (check.affected.every((d) => installed?.status === "checked" && sameCopy(installed.affected, d))) return v;
   }
   return null;
+}
+
+/** A reason with the rejected lever release's install command taken out and its advice turned into a warning. */
+function withoutCommand(reason: string, name: string, to: string): string {
+  const quoted = reason.replace(/\s*\(`[^`]*`\)/g, (m) => (m.includes(`${name}@${to}`) ? "" : m));
+  return quoted.replace(/ \(a major upgrade\)/, "").replace(`upgrade ${name} to ${to}`, `upgrading ${name} to ${to} would drop it, but ${to} is NOT a clean fix (see below), so no command is given`);
 }

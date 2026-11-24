@@ -43,6 +43,11 @@ export function explainCommandlessRows<R extends CommandlessRow>(rows: R[], vuln
   for (const r of rows) {
     if (r.commands.length > 0) continue;
     if (r.reasons.some((x) => x.startsWith(NO_COMMAND_REASON_START))) continue;
+    if (HAND_FIRST_ACTIONS.has(r.action) && r.reasons.some((x) => x.includes("is NOT a clean fix"))) {
+      // The release that would move the copy installs an affected dependency: there is no step to take yet.
+      r.reasons.push(`${NO_COMMAND_REASON_START}: the release that would fix ${r.package} is NOT a clean fix (the reasons above say why), so no step is given and it is not in run_order.`);
+      continue;
+    }
     if (HAND_FIRST_ACTIONS.has(r.action)) {
       // A step the plan gives for this copy whose first move is not a command (a requirement or
       // override edit, a release the project cannot take yet).

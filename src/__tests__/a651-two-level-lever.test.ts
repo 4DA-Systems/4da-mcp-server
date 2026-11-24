@@ -70,6 +70,10 @@ describe("a parent upgrade whose lever pins an affected copy two levels down", (
     expect(JSON.stringify(row.commands ?? [])).not.toContain(`${OPENAPI}@`);
     expect(JSON.stringify(row.parentUpgrades ?? [])).not.toContain(`${OPENAPI}@0.97.3`);
     expect(row.fixPathChecked).not.toBe("all_advisories");
+    // Nor in a reason, nor as the release parentUpgrades moves to (re-check 2026-11-24).
+    expect(row.reasons.join(" ")).not.toContain(`${OPENAPI}@0.97.3`);
+    expect(row.parentUpgrades.map((u: { to: string | null }) => u.to)).toEqual([null]);
+    expect(row.parentUpgrades[0].levers.map((l: { to: string | null }) => l.to)).toEqual([null]);
   });
 
   it("control: a lever whose second level is clean is named and run as before", async () => {
