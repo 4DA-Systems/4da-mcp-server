@@ -11,14 +11,14 @@ importers:
   packages/api:
     dependencies:
       minimist:
-        specifier: 0.0.8
-        version: 0.0.8
+        specifier: 1.2.6
+        version: 1.2.6
 
 packages:
 
-  minimist@0.0.8:
-    resolution: {integrity: sha512-miQKw5Hv4NS1Psg2517mV4e4dYNaO3++hjAvLOAzKqZ61rH8NS1SK+vbfBWZ5PY/Me/bEWhUwqMghEW5Fb9T7Q==}
+  minimist@1.2.6:
+    resolution: {integrity: sha512-Jsjnk4bw3YJqYzbdyBiNsPWHPfO++UGG749Cxs6peCu5Xg4nrena6OVxOYxrQTqww0Jmwt+Ref8rggumkTLz9Q==}
 
 snapshots:
 
-  minimist@0.0.8: {}
+  minimist@1.2.6: {}
