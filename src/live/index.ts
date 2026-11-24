@@ -440,6 +440,13 @@ export class LiveIntelligence {
         .map((r): [GroupResolution, PrivateIndexEntry[]] => [r, [...manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language)), ...npmNotRegistry(r)]])
         .filter(([, list]) => list.length > 0),
     );
+    // Withheld for the rest of the process, for every project, as lockfile-private names are: a name
+    // one project takes from a path, git, a URL or its workspace is that project's own, and asking
+    // about it from another project sent it (privacy review 2026-11-24, cross-lock3). A project that
+    // installs the same name from the public registry still asks (rememberedPrivate's exemption).
+    for (const [r, list] of this.manifestPrivate) {
+      for (const p of list) if (p.name && !p.unread) rememberPrivateName(mapEcosystem(r.group.language), p.name, p.registry);
+    }
     // go.work modules (never sent: the workspace's copy is built) and Python local packages, with
     // where each is, read inside the project only.
     this.localPackages = new Map(
@@ -451,6 +458,9 @@ export class LiveIntelligence {
         })
         .filter(([, list]) => list.length > 0),
     );
+    for (const [r, list] of this.localPackages) {
+      for (const p of list) if (p.name && !p.unread) rememberPrivateName(mapEcosystem(r.group.language), p.name, p.registry);
+    }
     yield;
     // A registry, index or proxy that is not public and is consulted for any name: every name the
     // group knows, ranged and unpinned ones included, so no tool sends one (R7, 2). A requirements
