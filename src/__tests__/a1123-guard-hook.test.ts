@@ -168,13 +168,12 @@ describe("an exact version, by what the ledger holds", () => {
     expect(callIn(reason).items).toHaveLength(1);
   });
 
-  it("a package the server recorded as private for this project goes ahead (it is never looked up); without a project it is held", () => {
-    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private", project }]);
-    allowed(hook(lodashEdit("4.17.20")));
-    // A server before 6.5.1 records no project: its private answer lets nothing through
-    // (a651-hook-private-scope.test.ts has the other projects and the unreadable lockfile).
+  it("a package a private-registry rule covers goes ahead (it is never looked up), as in 6.5.0; one a project takes from elsewhere is held", () => {
     ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private" }]);
-    expect(denied(hook(lodashEdit("4.17.20")))).toContain("does not record the project");
+    allowed(hook(lodashEdit("4.17.20")));
+    // A git, path, workspace or alias source does not apply to the registry release (a651-hook-withheld.test.ts).
+    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "local_source" }]);
+    expect(denied(hook(lodashEdit("4.17.20")))).toContain("from the public registry, which was not checked");
   });
 
   it("another version's verdict does not count for this one", () => {
