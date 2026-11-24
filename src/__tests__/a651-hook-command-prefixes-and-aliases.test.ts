@@ -128,8 +128,8 @@ describe("left unread on purpose", () => {
     // A registry other than the public one: the package is not the public one the hook can name.
     "npm i lodash@4.17.20 --registry=https://npm.internal.example/",
     "npx --registry https://npm.internal.example pnpm add lodash@4.17.20",
-    // An npm: alias install (blind check 2's table keeps it allowed: CMD-FB-09).
-    "npm install my-lodash@npm:lodash@4.17.20",
+    // An npm: alias with no version (an alias with one is read as its target: a651-hook-cheap-forms).
+    "npm install my-lodash@npm:lodash",
     // What xargs reads from its input is not on the command line.
     "echo lodash@4.17.20 | xargs npm i",
   ])("%s", (command) => {

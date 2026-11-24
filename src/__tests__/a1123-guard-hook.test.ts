@@ -168,9 +168,13 @@ describe("an exact version, by what the ledger holds", () => {
     expect(callIn(reason).items).toHaveLength(1);
   });
 
-  it("a package the server recorded as private goes ahead (it is never looked up)", () => {
-    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private" }]);
+  it("a package the server recorded as private for this project goes ahead (it is never looked up); without a project it is held", () => {
+    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private", project }]);
     allowed(hook(lodashEdit("4.17.20")));
+    // A server before 6.5.1 records no project: its private answer lets nothing through
+    // (a651-hook-private-scope.test.ts has the other projects and the unreadable lockfile).
+    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private" }]);
+    expect(denied(hook(lodashEdit("4.17.20")))).toContain("does not record the project");
   });
 
   it("another version's verdict does not count for this one", () => {
@@ -191,8 +195,10 @@ describe("a range or constraint", () => {
     expect(callIn(reason).items[0]).toEqual({ ecosystem: "npm", package: "lodash", to: "^4.17.0", from: "4.17.21" });
   });
 
-  it("goes ahead when the package has any verdict in the last 24 hours (the server resolves ranges)", () => {
+  it("goes ahead on a proceed for that same constraint, not on one for another (a651-hook-ranges.test.ts)", () => {
     ledger([{ package: "lodash", version: "4.18.1", verdict: "proceed", requested: "^4.18.0" }]);
+    expect(callIn(denied(hook(lodashEdit("^4.17.0")))).items[0].to).toBe("^4.17.0");
+    ledger([{ package: "lodash", version: "4.18.1", verdict: "proceed", requested: "^4.17.0" }]);
     allowed(hook(lodashEdit("^4.17.0")));
   });
 
@@ -210,7 +216,7 @@ describe("modes", () => {
     const after = hook({ ...payload, hook_event_name: "PostToolUse" }, { FOURDA_GUARD: "advise" });
     const out = JSON.parse(after.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
-    expect(out.hookSpecificOutput.additionalContext).toContain("lodash: 4.17.21 -> 4.17.20");
+    expect(out.hookSpecificOutput.additionalContext).toContain("\"lodash\": \"4.17.21\" -> \"4.17.20\"");
   });
 
   it("FOURDA_GUARD=off does nothing, before or after", () => {
@@ -410,8 +416,10 @@ describe("install commands", () => {
 
   it("the PowerShell tool is read the same way", () => {
     expect(callIn(denied(hook(pre("PowerShell", { command: "npm.cmd install lodash@4.17.20; cargo add serde@1.0.200" })))).items.map((i) => i.package)).toEqual(["lodash", "serde"]);
-    // An unquoted `@scope/pkg` is splatting in PowerShell: not read.
-    expect(installsIn("npm install @types/node@20.11.0", "powershell")).toEqual([]);
+    // PowerShell passes an unquoted `@scope/pkg@1` as written (only a bare `@name` splats): read
+    // (a651-hook-powershell-scoped.test.ts).
+    expect(installsIn("npm install @types/node@20.11.0", "powershell")).toEqual([{ ecosystem: "npm", name: "@types/node", spec: "20.11.0" }]);
+    expect(installsIn("npm install @splat", "powershell")).toEqual([]);
     expect(installsIn("npm install '@types/node@20.11.0'", "powershell")).toEqual([{ ecosystem: "npm", name: "@types/node", spec: "20.11.0" }]);
   });
 
@@ -429,7 +437,7 @@ describe("install commands", () => {
     "npm install lodash@next",
     "npm install github:lodash/lodash",
     "npm install ./local-pkg",
-    "npm install my-lodash@npm:lodash@4.17.20",
+    "npm install my-lodash@npm:lodash",
     "npm install --registry https://npm.example.com lodash@4.17.20",
     "npm install $PKG",
     "npm install lodash@$(cat version)",
