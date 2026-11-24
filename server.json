@@ -12,6 +12,17 @@
       "registryType": "npm",
       "identifier": "@4da/mcp-server",
       "version": "6.5.0",
+      "runtimeHint": "npx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "-y"
+        },
+        {
+          "type": "positional",
+          "value": "--prefer-offline"
+        }
+      ],
       "transport": {
         "type": "stdio"
       }

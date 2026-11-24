@@ -51,39 +51,21 @@ import jsonc from "jsonc-parser";
 import type { JSONPath, Node, ParseError } from "jsonc-parser";
 
 import { parseSetupArgs } from "./cli-args.js";
-
-const PACKAGE = "@4da/mcp-server";
+import { NPX_OPTIONS, PACKAGE, pinnedNpx, readPackageVersion } from "./usage.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
- * The version of the package this module ships in, from the package.json beside
- * `dist/` (or `src/`). Null when it cannot be read: setup then writes nothing,
- * because the only command it could write would be an unpinned one.
+ * The version of the package this module ships in (usage.ts, the one reader). Null when it cannot
+ * be read: setup then writes nothing, because the only command it could write would be an unpinned one.
  */
-export function readPackageVersion(moduleUrl: string = import.meta.url): string | null {
-  try {
-    const manifest = path.join(path.dirname(fileURLToPath(moduleUrl)), "..", "package.json");
-    const pkg: unknown = JSON.parse(readFileSync(manifest, "utf-8"));
-    if (!isPlainObject(pkg) || pkg.name !== PACKAGE || typeof pkg.version !== "string") return null;
-    return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version) ? pkg.version : null;
-  } catch {
-    return null;
-  }
-}
+export { readPackageVersion };
 
 export const PACKAGE_VERSION = readPackageVersion();
 
-/**
- * npx's own options, before the package (after it they would reach the server, which refuses
- * them): `-y` installs without asking, `--prefer-offline` starts a cached copy of the pinned
- * version without asking the registry first, so an offline start takes seconds, not minutes.
- */
-const NPX_OPTIONS = ["-y", "--prefer-offline"];
-
-/** The command every editor runs: npx with the package pinned to `version`. */
+/** The command every editor runs: npx with the package pinned to `version` (NPX_OPTIONS: usage.ts). */
 function serverCommand(version: string): { command: string; args: string[] } {
   return { command: "npx", args: [...NPX_OPTIONS, `${PACKAGE}@${version}`] };
 }
@@ -645,7 +627,7 @@ export function runSetup(options: boolean | SetupOptions = {}, ctx: SetupContext
   log("  also reads the app's scored feed:");
   log("    https://github.com/4DA-Systems/4DA/releases/latest");
   log("");
-  log(`  Run: npx ${PACKAGE}@${version} --doctor  to verify everything works.\n`);
+  log(`  Run: ${pinnedNpx(version)} --doctor  to verify everything works.\n`);
   return result;
 }
 

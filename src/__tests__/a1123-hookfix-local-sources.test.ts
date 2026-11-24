@@ -57,9 +57,14 @@ describe("Cargo: path, git and another registry", () => {
 });
 
 describe("npm: file, link, workspace, git and URL specifiers", () => {
-  it.each([["file:../my-lib"], ["link:../my-lib"], ["workspace:^1.0.0"], ["workspace:*"], ["git+https://github.com/acme/my-lib.git#1.0.0"], ["github:acme/my-lib#semver:^1.0.0"], ["https://example.com/my-lib-1.0.0.tgz"], ["npm:other@1.0.0"], ["catalog:"]])("%s", (spec) => {
+  it.each([["file:../my-lib"], ["link:../my-lib"], ["workspace:^1.0.0"], ["workspace:*"], ["git+https://github.com/acme/my-lib.git#1.0.0"], ["github:acme/my-lib#semver:^1.0.0"], ["https://example.com/my-lib-1.0.0.tgz"], ["catalog:"]])("%s", (spec) => {
     const file = s.file("package.json", PKG);
     onlyReal(s.edit(file, '"react": "18.3.1"', `"react": "18.3.1",\n    "my-lib": "${spec}"`), "my-lib");
+  });
+
+  it("npm:other@1.0.0 installs the registry's other 1.0.0: that is held, the alias name never repeated (a651-hook-cheap-forms)", () => {
+    const file = s.file("package.json", PKG);
+    onlyReal(s.edit(file, '"react": "18.3.1"', `"react": "18.3.1",\n    "my-lib": "npm:other@1.0.0"`), "my-lib", "other");
   });
 });
 

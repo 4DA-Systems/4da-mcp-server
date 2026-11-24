@@ -7,8 +7,10 @@ export interface Install {
   spec: string;
 }
 
-export function respond(input: unknown, env?: Record<string, string | undefined>, now?: number): string;
-export function installsIn(command: string, dialect: "bash" | "powershell"): Install[];
+/** `readBudgetMs`: how long reading a call may take before it is held as not read in time (tests make it 0). */
+export function respond(input: unknown, env?: Record<string, string | undefined>, now?: number, readBudgetMs?: number): string;
+/** `depth`: the wrappers (a shell's `-c`, a runner) the command was found inside; 0 for a command line as typed. */
+export function installsIn(command: string, dialect: "bash" | "powershell", depth?: number): Install[];
 export function simpleCommands(line: string, dialect: "bash" | "powershell"): string[][] | null;
 export function dataDir(env?: Record<string, string | undefined>, platform?: string, home?: string): string;
 export function poetryToPep440(spec: string): string;

@@ -25,7 +25,7 @@ export function normPath(p: string): string {
 
 /**
  * Repo roots with git activity in the last `days` days, normalized. The
- * `git_signals.repo_path` column is stored raw ("D:\4DA"). Empty when the
+ * `git_signals.repo_path` column is stored raw (a Windows path with its drive letter). Empty when the
  * table is absent or silent, which every caller reads as "unscoped".
  */
 function activeRoots(db: FourDADatabase, days: number, requireCommit: boolean): string[] {
@@ -46,9 +46,9 @@ function activeRoots(db: FourDADatabase, days: number, requireCommit: boolean): 
 }
 
 /**
- * Path-BOUNDARY match in either direction: `d:/4da` covers `d:/4da/src-tauri`
+ * Path-BOUNDARY match in either direction: `<repo>` covers `<repo>/src-tauri`
  * (and a manifest recorded above its repo root still counts), but never
- * `d:/4da-experiments` (`temporal::dep_within_active_root`).
+ * `<repo>-experiments` (`temporal::dep_within_active_root`).
  */
 export function withinRoots(path: string, roots: readonly string[]): boolean {
   const p = normPath(path);
@@ -77,7 +77,7 @@ export function loadActiveScope(db: FourDADatabase): ActiveScope {
  * The project rows the app's dependency funnel keeps before knowledge decay
  * ever sees them (`temporal::get_all_dependencies`): rows inside an active repo
  * root. Without it a gap for a dependency the active repo shares with a
- * dormant one is judged on the dormant copy too — vitest in `d:/4da` (4.1.11)
+ * dormant one is judged on the dormant copy too — vitest in the 4DA app repository (4.1.11)
  * beside navcal's untouched 3.2.4 would name navcal under a critical the app
  * never shows. No recorded git activity means unscoped, and a scope that
  * matches no row at all keeps every row rather than blanking the tool.

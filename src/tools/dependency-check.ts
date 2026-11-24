@@ -65,9 +65,11 @@ import { UNTRUSTED_TEXT_FIELDS, quoteThirdParty } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
 import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, type NpmWhy } from "./dependency-check-resolution.js";
 import { ECOSYSTEMS, head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
+import { unreadFileKind } from "../live/private-packages.js";
 import { offlineResults, screenItems } from "./dependency-check-screen.js";
 import { itemResults, nameCrateSpellings, readFirstPublished } from "./dependency-check-verdict.js";
 import { gatherFindings } from "./dependency-check-findings.js";
+import { noteNewerRust } from "./dependency-check-rust-version.js";
 import { adviseNpmNoSafeRelease, caveatGoPicks, checkSameLines, findAffectedExact, offerCleanOutsideRanges } from "./dependency-check-alternatives.js";
 import { advisoryFacts, dropIncompleteLists, findContradictions, markBatchUnread, queryBatch, readDeclaredNotices } from "./dependency-check-batch.js";
 import { judgeReleaseContents, redateGoTargets, resolveItems } from "./dependency-check-resolve.js";
@@ -164,7 +166,9 @@ export const dependencyCheckTool = {
  */
 export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
   const answer = await executeDependencyCheck(db, params, liveIntel);
-  void recordVerdicts(answer.results);
+  // A withheld name is recorded as "private" only when a private-registry rule covers it, asked of the
+  // rules themselves (check-ledger.ts withheldKind); otherwise "local_source", which the hook holds.
+  void recordVerdicts(answer.results, { privateRule: liveIntel?.privateRegistryRuleCovers ? (eco, name) => liveIntel.privateRegistryRuleCovers(eco, name) : null });
   return shapeDependencyCheck(answer, params.response_format);
 }
 
@@ -426,6 +430,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   const { plans, created } = await readFirstPublished(ctx, lookups, items);
   const results = itemResults(plans, { ctx, lookups, advisoriesFor, findings, created });
   nameCrateSpellings(results, items);
+  await noteNewerRust(results, liveIntel.getProjectRoot(), ctx.fixSources);
   return pass(results, { offline: batch.scan.offline, osvCached: batch.scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
 }
 
@@ -517,8 +522,26 @@ function summaryLine(results: ItemResult[], parts: string[]): string {
       ? 'Write only "proceed" versions.'
       : 'Write only "proceed" versions; no other item names a safe version to write instead: report the evidence.';
   if (privateCount === 0) return `${results.length} checked: ${parts.join(", ")}. ${advice}`;
-  const notChecked = `${privateCount} not checked (private): never looked up, verdict unknown`;
-  if (checked === 0) return `${notChecked}. Nothing was sent; check ${privateCount === 1 ? "it" : "them"} with your private registry's own tooling.`;
+  // Withheld only because a lockfile could not be read: not private, and the remedy is the file.
+  const unread = results.filter((r) => r.not_checked === "private" && r.unreadable_file);
+  // Not a registry release (a path, git, a URL, a workspace member, an alias key): not private either.
+  const local = results.filter((r) => r.not_checked === "private" && !r.unreadable_file && /^NOT CHECKED \((?:not a registry release|catalog not read|ambiguous npm: spec)\)/.test(r.reason)).length;
+  const priv = privateCount - unread.length - local;
+  const files = [...new Set(unread.map((r) => r.unreadable_file!))];
+  const withheld = [
+    ...(priv > 0 ? [`${priv} not checked (private): never looked up, verdict unknown`] : []),
+    ...(local > 0 ? [`${local} not checked (not a registry release): never looked up, verdict unknown`] : []),
+    ...(unread.length > 0 ? [`${unread.length} not checked (unreadable ${files.every((f) => unreadFileKind(f) === "lockfile") ? "lockfile" : "file"}): withheld, never looked up, verdict unknown`] : []),
+  ];
+  const notChecked = withheld.join("; ");
+  if (checked === 0) {
+    const remedies = [
+      ...(priv > 0 ? [`check ${priv === 1 ? "the private one" : "the private ones"} with your private registry's own tooling`] : []),
+      ...(local > 0 ? [`review the code ${local === 1 ? "the other one comes" : "the others come"} from, or ask about the registry package ${local === 1 ? "it installs" : "they install"}`] : []),
+      ...(unread.length > 0 ? [`repair or regenerate ${files.slice(0, 3).join(", ")}${files.length > 3 ? ", ..." : ""} (reinstall), then ask again`] : []),
+    ];
+    return `NOT CHECKED: ${notChecked}. Nothing was sent: ${remedies.join("; ")}. This is not a clean result.`;
+  }
   const counts = new Map<string, number>();
   for (const r of results) if (r.not_checked !== "private") counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
   const order = ["avoid", "review", "unknown", "wait", "proceed"];
@@ -534,10 +557,23 @@ const CHECK_HOSTS = ["registry.npmjs.org", "api.npmjs.org", "crates.io", "index.
  * included; call-budget.ts recordedCallHosts), and when there were none, a note that nothing was
  * sent. Outside one, every host the tool may ask.
  */
-export function checkSources(): { sources: string[]; sources_note?: string } {
+export function checkSources(results: readonly ItemResult[] = []): { sources: string[]; sources_note?: string } {
   const recorded = recordedCallHosts();
   if (!recorded) return { sources: CHECK_HOSTS };
-  if (recorded.length === 0) return { sources: [], sources_note: "Nothing was sent in this call: every answer was read from the local cache." };
+  if (recorded.length === 0) {
+    // An item never looked up (private, withheld, refused as written) was not "read from the cache":
+    // 6.5.0 said "every answer was read from the local cache" when every item was withheld, which
+    // reads as checked.
+    const notLooked = results.filter((r) => r.not_checked === "private" || r.not_checked === "input" || r.not_checked === "module_path").length;
+    const fromCache = results.length - notLooked;
+    if (notLooked === 0) return { sources: [], sources_note: "Nothing was sent in this call: every answer was read from the local cache." };
+    const why = "(not_checked; each reason says why)";
+    const said =
+      fromCache === 0
+        ? `${notLooked === 1 ? "the item was not looked up" : `none of the ${notLooked} items was looked up`} ${why}, so nothing about ${notLooked === 1 ? "it" : "them"} is known`
+        : `${notLooked} item${notLooked === 1 ? " was" : "s were"} not looked up ${why}; the other ${fromCache === 1 ? "one was" : `${fromCache} were`} answered from the local cache`;
+    return { sources: [], sources_note: `Nothing was sent in this call: ${said}.` };
+  }
   return { sources: recorded };
 }
 
@@ -569,6 +605,9 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
   for (const r of looked) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
   const order: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
   const parts = order.filter((v) => counts.has(v)).map((v) => `${counts.get(v)} ${v}`);
+  // Of the items never looked up as private, those withheld only because a lockfile could not be read.
+  const unread = results.filter((r) => r.not_checked === "private" && r.unreadable_file).length;
+  const priv = (meta.private ?? 0) - unread;
   return {
     checked_at: checkedAt,
     summary: refusedText(results) + ownLimitText(results) + (meta.timeBudget
@@ -576,7 +615,7 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       : summaryLine(looked, parts)),
     results,
     _meta: {
-      ...checkSources(),
+      ...checkSources(results),
       verdict_rule: VERDICT_RULE,
       untrusted_text: UNTRUSTED_TEXT_FIELDS.dependency_check,
       privacy: PRIVACY_NOTE,
@@ -584,8 +623,13 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       osv_cached: meta.osvCached,
       ...(meta.timeBudget ? { call_budget_exceeded: true, unfinished_items: meta.timeBudget.unfinished } : {}),
       ...(meta.registryNotice ? { registry_notice: meta.registryNotice } : {}),
-      ...(meta.private
-        ? { private_packages: `${meta.private} item${meta.private === 1 ? " names a private package" : "s name private packages"}: not looked up anywhere, verdict unknown (not_checked: "private").` }
+      ...(priv > 0
+        ? { private_packages: `${priv} item${priv === 1 ? " names a private package" : "s name private packages"}: not looked up anywhere, verdict unknown (not_checked: "private").` }
+        : {}),
+      ...(unread > 0
+        ? {
+            unreadable_lockfile: `${unread} item${unread === 1 ? " was" : "s were"} withheld because a lockfile or manifest of this project could not be read (unreadable_file on each), so where ${unread === 1 ? "it" : "they"} would be installed from is not known: not looked up anywhere, verdict unknown (not_checked: "private"). Repair or regenerate the file, then ask again.`,
+          }
         : {}),
       provenance: {
         mode: "live_registry_check",

@@ -218,7 +218,7 @@ describe("runSetup against a temp home", () => {
     expect(JSON.parse(readFileSync(cursor, "utf8"))).toEqual({ mcpServers: { "4da": ENTRY } });
     expect(JSON.parse(readFileSync(vscode, "utf8"))).toEqual({ servers: { "4da": VSCODE_ENTRY } });
     expect(output()).toContain(`claude mcp add --scope user 4da -- npx -y --prefer-offline ${PINNED}`);
-    expect(output()).toContain(`npx ${PINNED} --doctor`);
+    expect(output()).toContain(`npx -y --prefer-offline ${PINNED} --doctor`);
     // No command in the output is left without its version.
     expect(output()).not.toMatch(/@4da\/mcp-server(?!@\d)/);
     expect(output()).toContain("Done. Restart your editor to activate 4DA.");

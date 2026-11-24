@@ -129,6 +129,12 @@ export interface CratesSparse {
   reqs: Record<string, Record<string, CrateDepReq[]>>;
   /** version -> the features that release offers (crates-versions.ts releaseFeatureNames); absent when not read. */
   features?: Record<string, string[]>;
+  /**
+   * version -> the Rust that release declares it needs (its `rust-version`, the index's
+   * `rust_version`); a release that declares none is absent. The whole field is absent on a record
+   * cached before it was read: such a record is read again (upgrade-planner-rust-version.ts).
+   */
+  rustVersions?: Record<string, string>;
 }
 
 /** npm's abbreviated document: per version, the fields fix paths read. */
@@ -464,7 +470,7 @@ export class FixPathSources {
     try {
       const res = await fetchWithTimeout(sparseIndexUrl(name), { headers: { "User-Agent": CRATES_USER_AGENT } }, TIMEOUT_MS);
       if (!res.ok) return null;
-      const out: CratesSparse = { versions: [], yanked: [], reqs: {} };
+      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {} };
       for (const line of (await res.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -474,11 +480,14 @@ export class FixPathSources {
             deps?: Array<{ name: string; req: string; kind?: string | null; package?: string; optional?: boolean }>;
             features?: unknown;
             features2?: unknown;
+            rust_version?: unknown;
           };
           if (!entry.yanked) out.versions.push(entry.vers);
           else out.yanked!.push(entry.vers);
           const offered = releaseFeatureNames(entry);
           if (offered) (out.features ??= {})[entry.vers] = offered;
+          // A Rust version as Cargo writes one ("1.64", "1.67.1"); anything else is not kept.
+          if (typeof entry.rust_version === "string" && /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(entry.rust_version.trim())) out.rustVersions![entry.vers] = entry.rust_version.trim();
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
@@ -945,8 +954,21 @@ export function deadLineText(installed: string, clean: FixTargetResult): string 
   if (!clean.lineDead || !clean.target) return null;
   const line = lineLabel(installed);
   if (!line) return null;
-  const newest = clean.newestSafe ? `; ${clean.newestSafe} is the newest safe release` : `; it is also the newest safe release`;
+  // "Safe" only for what was judged at every level (targetCheckedAll): the newest release is judged by
+  // its own advisories only, and a target that installs an affected copy is not safe (re-check
+  // 2026-11-24: openapi-ts 0.97.3 "the smallest safe release", 0.99.0 "the newest safe release",
+  // while dependency_check answered avoid for both, js-yaml two levels down).
+  const judged = targetCheckedAll(clean);
+  const newest = clean.newestSafe
+    ? `; ${clean.newestSafe} is the newest release its own advisories leave clean (what it installs was not judged)`
+    : judged
+      ? `; it is also the newest safe release`
+      : `; it is also the newest release its own advisories leave clean`;
   const down = clean.lineDowngrade;
+  if (!judged) {
+    const after = !down ? `no ${line} release clears every advisory` : clean.lineHasLater ? `no ${line} release after ${installed} clears every advisory` : `no ${line} release after ${installed} exists`;
+    return `${after}: ${clean.target} is the smallest release its own advisories leave clean, on the nearest later line that has one, but it is NOT a clean fix, or was not checked whole (see the other reasons)${newest}`;
+  }
   if (!down) return `no ${line} release clears every advisory: ${clean.target} is the smallest safe release, on the nearest later line that has one${newest}`;
   const after = clean.lineHasLater ? `no ${line} release after ${installed} clears every advisory` : `no ${line} release after ${installed} exists`;
   // Unconfirmed: neither named clean nor denied.

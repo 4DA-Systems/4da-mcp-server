@@ -2,7 +2,7 @@
 /**
  * Which project a planning or briefing answer is about.
  *
- * Measured 2026-10-07: upgrade_planner called from D:\4DA returned the 4DA
+ * Measured 2026-10-07: upgrade_planner called from the 4DA app repository returned the 4DA
  * app's cross-project plan, and its top steps were for navcal, verax and
  * 4da-ledger. upgrade_planner and what_should_i_know now take `project_path`:
  * omitted, it is the project the server was started for (FOURDA_PROJECT_DIR,
@@ -16,7 +16,7 @@ import * as path from "node:path";
 import type { FourDADatabase } from "../db.js";
 import { getServerCacheDb } from "../live/cache.js";
 import { LiveIntelligence } from "../live/index.js";
-import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
+import { nearestProjectAbove, scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 
 /** Files that make a directory a project (manifests and lockfiles of the supported ecosystems). */
 const PROJECT_MARKERS = [
@@ -270,6 +270,9 @@ export function resolveProjectScope(projectPath: string | undefined): ProjectSco
   }
   const own = serverProjectDir();
   if (isProjectDir(own)) return { kind: "project", path: path.resolve(own), source: "server_project" };
+  // Started below a project's own folder (src/lib): that project.
+  const above = nearestProjectAbove(own);
+  if (above) return { kind: "project", path: above, source: "server_project" };
   return { kind: "all", reason: `the server's directory ${own} is not a project (no manifest or lockfile)` };
 }
 

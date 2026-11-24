@@ -28,7 +28,7 @@ import { FixPathSources } from "./fix-paths.js";
 import type { CheckEcosystem, ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
 import { commonPathRoot, dedupeDependencies, dedupeDependenciesSteps, emptyVulnResult } from "./dependency-set.js";
-import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
+import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, withDeclaredNames, type GroupResolution, type ResolutionGroup } from "./resolution.js";
 import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
 import { normalizePythonName } from "./lockfile-parsers-pygo.js";
@@ -53,7 +53,7 @@ import {
 } from "./private-packages.js";
 import { declaredMirror } from "./private-configs.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
-import { nameForms, privateShortIndex, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
+import { nameForms, NOT_REGISTRY_MARK, nonRegistryElsewhere, privateShortIndex, unreadFileElsewhere, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, setNonRegistryNames, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -158,6 +158,8 @@ export class LiveIntelligence {
   private groupWide = new Map<GroupResolution, string>();
   /** For a group whose groupWide reason is a lockfile or manifest that could not be read: that file. */
   private groupUnread = new Map<GroupResolution, string>();
+  /** A private reason that stems only from a file that could not be read -> that file (withheldUnreadableFile). */
+  private unreadReasons = new Map<string, string>();
   /** privateReason's indexes (lockPrivateIndex); reset by rebuildDependencySet. */
   private lockPrivateIndexes = new WeakMap<GroupResolution, Map<string, Map<string, PrivateIndexEntry[]>>>();
   private publicNames: Set<string> | null = null;
@@ -279,8 +281,9 @@ export class LiveIntelligence {
    * its manifest's platform targets; `root` is the reported project root.
    */
   initFromProjectTree(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
-    // Started in a workspace member, the walk read the workspace root: that is the project root.
-    const root = discovery?.workspace?.root ?? started;
+    // Started in a workspace member, the walk read the workspace root: that is the project root; started
+    // below a project's own folder, that project.
+    const root = discovery?.workspace?.root ?? discovery?.projectAbove?.root ?? started;
     // A pyproject.toml in a subfolder with no lockfile is a group too (unlockedPythonGroups): its
     // index rules apply to its names and its dependencies are listed, never sent (pre-publish round 10, W4).
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
@@ -295,7 +298,7 @@ export class LiveIntelligence {
    * set left to the resolution that superseded it, when a synchronous init ran meanwhile.
    */
   async initFromProjectTreeYielding(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
-    const root = discovery?.workspace?.root ?? started;
+    const root = discovery?.workspace?.root ?? discovery?.projectAbove?.root ?? started;
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
     const run = ++this.initRun;
     const steps = this.applyGroupsSteps(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
@@ -427,8 +430,16 @@ export class LiveIntelligence {
     yield;
     // A private registry or index the manifest itself names (Cargo `registry =`, uv `index =`,
     // Poetry `source =`): private with no lockfile too (blind audit round 4).
+    // npm: a dependency package.json (or the lockfile) takes from a path, git, a URL or a link is no
+    // registry release, and its name may be the company's own: withheld from dependency_check,
+    // upgrade_impact, the briefing and the pulse as Cargo `path`/`git` crates are, as local code, so
+    // a registry copy of the same name elsewhere in the tree is still checked (review 2026-11-24).
+    const npmNotRegistry = (r: GroupResolution): PrivateIndexEntry[] =>
+      (r.notRegistry ?? []).map((d) => ({ name: d.name, version: null, registry: d.from, file: d.file, local: true as const, ...(d.at ? { at: d.at } : {}), ...(d.aliasKey ? { aliasKey: true as const } : {}), ...(d.unknownSource ? { unknownSource: true as const } : {}) }));
     this.manifestPrivate = new Map(
-      this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
+      this.groupResults
+        .map((r): [GroupResolution, PrivateIndexEntry[]] => [r, [...manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language)), ...npmNotRegistry(r)]])
+        .filter(([, list]) => list.length > 0),
     );
     // go.work modules (never sent: the workspace's copy is built) and Python local packages, with
     // where each is, read inside the project only.
@@ -441,6 +452,27 @@ export class LiveIntelligence {
         })
         .filter(([, list]) => list.length > 0),
     );
+    // A name this project takes from a path, git, a URL or its workspace is withheld when another
+    // project is asked about it (a briefing for project B named it: privacy review 2026-11-24,
+    // cross-lock3), while this project still declares it so: the list is replaced on every rebuild.
+    // Alias keys stay inside this project (private-guard.ts nonRegistryElsewhere).
+    const nonRegistryRoot = this.projectRoot ?? this.groupResults[0]?.group.dir ?? null;
+    const nonRegistryEntries: Array<{ ecosystem: string; name: string; why: string; unreadFile?: string }> = [];
+    if (nonRegistryRoot) {
+      for (const [r, list] of [...this.manifestPrivate, ...this.localPackages]) {
+        for (const p of list) {
+          // A name whose source could not be determined (a catalog that could not be read) is withheld
+          // in other projects too (check of round 2: it was left out and a briefing for B sent it).
+          if (!p.name || p.unread || p.aliasKey) continue;
+          nonRegistryEntries.push({
+            ecosystem: mapEcosystem(r.group.language),
+            name: p.name,
+            // A catalog that could not be read is not a non-registry source: say what it is (final check).
+            why: p.unknownSource ? `in ${nonRegistryRoot}, ${p.name} is ${p.registry}, so it was not looked up` : `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name} comes from ${p.registry}, so it was not looked up`,
+          });
+        }
+      }
+    }
     yield;
     // A registry, index or proxy that is not public and is consulted for any name: every name the
     // group knows, ranged and unpinned ones included, so no tool sends one (R7, 2). A requirements
@@ -450,15 +482,21 @@ export class LiveIntelligence {
     this.registryWide = new Map();
     this.groupWide = new Map();
     this.groupUnread = new Map();
+    this.unreadReasons = new Map();
     for (const r of this.groupResults) {
       const ecosystem = mapEcosystem(r.group.language);
-      const forNew = this.groupRegistryReason(r, false)?.why;
+      const forNewFound = this.groupRegistryReason(r, false);
+      const forNew = forNewFound?.why;
       if (forNew && !this.registryWide.has(ecosystem)) this.registryWide.set(ecosystem, forNew);
+      if (forNewFound?.unreadFile) this.unreadReasons.set(forNewFound.why, forNewFound.unreadFile);
       const found = this.groupRegistryReason(r, Boolean(r.indexRecorded));
       if (!found) continue;
       const why = found.why;
       this.groupWide.set(r, why);
-      if (found.unreadFile) this.groupUnread.set(r, found.unreadFile);
+      if (found.unreadFile) {
+        this.groupUnread.set(r, found.unreadFile);
+        this.unreadReasons.set(why, found.unreadFile);
+      }
       const names = [
         ...r.group.deps,
         ...r.group.devDeps,
@@ -512,7 +550,20 @@ export class LiveIntelligence {
       ...(privateWhy.get(key(dep))?.unreadable_file ? { unreadable_file: privateWhy.get(key(dep))!.unreadable_file } : {}),
     }));
     // Private for the rest of the process, for every project (private-guard.ts, blind audit round 5, 4).
-    for (const p of this.privateDeps) rememberPrivateName(p.ecosystem, p.name, p.why);
+    // A private-registry name is private for the rest of the process; a name the lockfile installs from
+    // a path, git or a URL joins this project's non-registry list instead (replaced on every rebuild).
+    for (const p of this.privateDeps) {
+      if (p.why.includes(NOT_REGISTRY_MARK)) nonRegistryEntries.push({ ecosystem: p.ecosystem, name: p.name, why: `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name}: ${p.why}` });
+      else rememberPrivateName(p.ecosystem, p.name, p.why);
+    }
+    // A name withheld because a lockfile beside it could not be read is withheld in other projects
+    // too, with the same file named (check of round 2).
+    for (const [k, why] of this.wideNames) {
+      const file = this.unreadReasons.get(why);
+      const [ecosystem, name] = k.split("\0");
+      if (file && name) nonRegistryEntries.push({ ecosystem, name, why, unreadFile: file });
+    }
+    if (nonRegistryRoot) setNonRegistryNames(nonRegistryRoot, nonRegistryEntries);
     this.resolvedAt = new Date().toISOString();
   }
 
@@ -658,7 +709,9 @@ export class LiveIntelligence {
     const short = this.privateShortName(forms);
     if (short) return short;
     // Found private by any scan in this process, for any project (blind audit round 5, 4).
-    return rememberedPrivate(name, (eco, n) => this.installsPublicly(eco, n));
+    const remembered = rememberedPrivate(name, (eco, n) => this.installsPublicly(eco, n));
+    if (remembered) return remembered;
+    return nonRegistryElsewhere(name, this.projectRoot, (eco, n) => this.declaresFromRegistry(eco, n));
   }
 
   /**
@@ -694,6 +747,18 @@ export class LiveIntelligence {
       if (hit) return { ecosystem: hit.ecosystem, why: `the short name of the private package ${hit.name} (${hit.why})` };
     }
     return null;
+  }
+
+  /**
+   * Whether this project declares `name` (normalised for `ecosystem`) as a registry dependency: installed
+   * from the public registry, a direct row (a declared range with no lockfile included), or an
+   * unpinned requirement.
+   */
+  declaresFromRegistry(ecosystem: string, name: string): boolean {
+    if (this.installsPublicly(ecosystem, name)) return true;
+    const n = normName(ecosystem, name);
+    if (this.resolvedDeps.some((d) => d.ecosystem === ecosystem && normName(ecosystem, d.name) === n)) return true;
+    return this.groupResults.some((r) => mapEcosystem(r.group.language) === ecosystem && (r.unpinned ?? []).some((u) => u.names.some((x) => normName(ecosystem, x) === n)));
   }
 
   /** Whether this project installs `name` (normalised for `ecosystem`) from the public registry. */
@@ -739,8 +804,51 @@ export class LiveIntelligence {
    * (ecosystemPrivate). Not for a guessed ecosystem: the briefing's and HN's terms are judged by
    * privateReason alone, or every word of a task would be private.
    */
+  /**
+   * Whether a private-registry rule covers this name, decided from the rules themselves (the kind
+   * the check ledger records, check-ledger.ts withheldKind): a FOURDA_PRIVATE_PACKAGES pattern, an
+   * npm scope mapped to a private registry, a GOPRIVATE / GONOPROXY / GONOSUMDB pattern, a Pipfile
+   * [[source]], a configured registry, index or proxy that is not public, or a requirements file's
+   * `--index-url` / extra index. Not: a git, path, file:, tarball, link:, workspace, alias or catalog
+   * source, a Cargo named registry or `[patch]`, a lockfile that installs from another host, a file
+   * that could not be read. Never decided from a reason's text, which quotes repository text (round
+   * 3 of the hook review, item 2: a spec `"file:./FOURDA_PRIVATE_PACKAGES lists x"` made the
+   * server record "private").
+   */
+  privateRegistryRuleCovers(ecosystem: string, name: string): boolean {
+    if (!ALL_PRIVATE_ECOSYSTEMS.includes(ecosystem)) return false;
+    const dirs = [this.projectRoot, ...this.groupResults.filter((r) => mapEcosystem(r.group.language) === ecosystem).map((r) => r.group.dir)];
+    if (dirs.some((d) => this.privateRules.registryConfigured(ecosystem, d))) return true;
+    // A requirements file of the project that sets an index or find-links: the same fact that
+    // withholds a name it does not list yet (registryPrivate), so recorded private, as 6.5.0 did
+    // (final check: such a name was recorded local_source, which the hook holds for ever).
+    const wide = this.registryWide.get(ecosystem);
+    if (wide && !this.unreadReasons.has(wide)) return true;
+    for (const eco of [ecosystem, ...ALL_PRIVATE_ECOSYSTEMS.filter((e) => e !== ecosystem)]) {
+      for (const form of nameForms(name)) {
+        if (this.privateRules.registryRuleCovers(eco, form)) return true;
+        const n = normName(eco, form);
+        for (const r of this.groupResults) {
+          if (mapEcosystem(r.group.language) !== eco) continue;
+          if (this.lockPrivateIndex(r, eco).get(n)?.some((h) => h.wide !== undefined)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   lookupPrivateReason(ecosystem: string, name: string): string | null {
     return this.privateReason(ecosystem, name) ?? this.ecosystemPrivate(ecosystem, name);
+  }
+
+  /**
+   * The lockfile (or manifest) that could not be read when it is the whole of a private reason
+   * this project gave (`why`, as lookupPrivateReason returned it), else null. Such a name is
+   * withheld because where it is installed from is not known, not because it is private: the
+   * answer says to repair the file, not to ask a private registry (the scan says it so since 6.5.0).
+   */
+  withheldUnreadableFile(why: string): string | null {
+    return this.unreadReasons.get(why) ?? unreadFileElsewhere(why);
   }
 
   /**
@@ -935,6 +1043,11 @@ export class LiveIntelligence {
    * tool call. A process that started before a `git pull` no longer answers
    * for the dependency set it saw at startup.
    */
+  /** Bumped by every re-resolution: a caller that read the set before an await can tell whether it moved since. */
+  getGeneration(): number {
+    return this.generation;
+  }
+
   refreshIfLockfilesChanged(): boolean {
     const rulesChanged = this.refreshPrivateRules();
     if (!this.initialized || this.groupResults.length === 0) return rulesChanged;
@@ -942,7 +1055,8 @@ export class LiveIntelligence {
     this.groupResults = this.groupResults.map((result) => {
       if (!groupIsStale(result)) return result;
       changed = true;
-      return resolveGroup(result.group);
+      // With the names the manifest declares now: a dependency added or removed is a row or is gone.
+      return resolveGroup(withDeclaredNames(result.group));
     });
     if (!changed) return rulesChanged;
     this.rebuildDependencySet();

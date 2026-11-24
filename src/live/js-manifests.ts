@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
-import { readTextFile } from "./text-file.js";
+import { readManifestText } from "./text-file.js";
 
 export const DEPENDENCY_SECTIONS = ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"] as const;
 export type DependencySection = (typeof DEPENDENCY_SECTIONS)[number];
@@ -52,7 +52,7 @@ const MAX_DECLARED = 20_000;
 export function readManifestDeclarations(file: string): ManifestDeclarations | null {
   let pkg: unknown;
   try {
-    pkg = JSON.parse(readTextFile(file));
+    pkg = JSON.parse(readManifestText(file));
   } catch {
     return null;
   }
@@ -235,9 +235,18 @@ export function expandWorkspaces(cwd: string, patterns: string[]): WorkspaceMemb
       return [];
     }
     try {
+      // A symlink or junction to a directory is a member too, as npm and pnpm read it (re-check
+      // 2026-11-24: `packages/sym` pointing at a member was not one, and its name was sent).
+      const linkedDir = (name: string) => {
+        try {
+          return fs.statSync(path.join(cwd, rel, name)).isDirectory();
+        } catch {
+          return false;
+        }
+      };
       return fs
         .readdirSync(path.join(cwd, rel), { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !NEVER_MEMBERS.has(d.name))
+        .filter((d) => (d.isDirectory() || (d.isSymbolicLink() && linkedDir(d.name))) && !NEVER_MEMBERS.has(d.name))
         .map((d) => d.name);
     } catch {
       return [];
