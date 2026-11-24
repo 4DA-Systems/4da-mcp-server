@@ -182,10 +182,10 @@ describe("an exact version, by what the ledger holds", () => {
     expect(callIn(denied(hook(lodashEdit("4.17.20")))).items[0].to).toBe("4.17.20");
   });
 
-  it("an empty ledger says where it looked and how to make the hook advise instead", () => {
+  it("an empty ledger says where it looked, and that FOURDA_GUARD is the user's setting, not the agent's", () => {
     const reason = denied(hook(lodashEdit("4.17.20")));
     expect(reason).toContain(home);
-    expect(reason).toContain("FOURDA_GUARD=advise");
+    expect(reason).toContain("FOURDA_GUARD (advise, off) is the user's setting: tell the user, and do not change it yourself");
   });
 });
 
