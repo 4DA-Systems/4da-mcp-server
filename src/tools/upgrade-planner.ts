@@ -49,7 +49,7 @@ import { unconfirmedTargetNote, withholdUnconfirmedTargets } from "./unconfirmed
 import { dedupeParentCommands } from "./upgrade-planner-dedupe.js";
 import { SHARED_COPY_REASON } from "./upgrade-planner-shared-copy.js";
 import { isDevOnlyCopy, rankedSeverity } from "../live/severity-scope.js";
-import { discoveryNote, exclusionNotes, splitLockfileProblems, unreadableNotes } from "../project-tree.js";
+import { discoveryNote, exclusionNotes, incompleteLockfiles, unreadableNotes } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { registryQuote } from "../untrusted-text.js";
@@ -492,12 +492,12 @@ async function executeStandalonePlanner(
   // (an unparseable package.json, a damaged lockfile), has no data at all (audit 6.2.5 A-6).
   const nothingReadable =
     (vulnResult?.totalScanned ?? 0) === 0 && ((liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0 || liveIntel.getLockfileProblems().length > 0);
-  // A lockfile that holds merge-conflict markers, could not be parsed, or was read only in part,
-  // whatever ecosystem it is: what it pins was not (all) checked, so the plan is no CVE-aware one,
-  // as vulnerability_scan's coverage.complete is false beside it. 6.5.0 said true beside a
-  // conflicted Cargo.lock once an npm lockfile next to it was read. (A go.sum is left out, as the
-  // scan leaves it out: from go 1.17 the versions are go.mod's.)
-  const lockfilesNotRead = lockfilesNotFullyRead(liveIntel.getLockfileProblems());
+  // Any lockfile problem that makes vulnerability_scan's coverage.complete false (a merge conflict,
+  // a file that could not be parsed or was read in part, a refused include, a second lockfile that
+  // disagrees, one not cross-checked; go.sum included), whatever ecosystem it is: the plan is no
+  // CVE-aware one either. One source for both (incompleteLockfiles): 6.5.0 said true beside a
+  // conflicted Cargo.lock, and the 6.5.1 candidate beside a conflicted go.sum (review 2026-11-24).
+  const lockfilesNotRead = incompleteLockfiles(liveIntel.getLockfileProblems()).length;
   // No lockfile read: declared ranges are not installs, so there is no vulnerability data to plan by.
   const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable && liveIntel.wasLockfileRead() && lockfilesNotRead === 0;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
@@ -1046,17 +1046,6 @@ async function executeStandalonePlanner(
 
 /** A summary sentence that marks the answer incomplete. */
 const INCOMPLETE = /^(?:NOT CHECKED|STALE)\b/;
-
-/**
- * How many lockfiles were not read whole: merge-conflicted, unparseable, or read only in part (the
- * kinds vulnerability_scan's coverage counts as not read). Not a refused include, a stale twin of a
- * lockfile that was read, or one not cross-checked against its manifests: those leave nothing
- * unread. A go.sum is not counted (from go 1.17 the versions are go.mod's).
- */
-function lockfilesNotFullyRead(problems: Parameters<typeof splitLockfileProblems>[0]): number {
-  const { mergeConflicts, unreadable, partial } = splitLockfileProblems(problems);
-  return new Set([...mergeConflicts, ...unreadable, ...partial].filter((p) => !/(?:^|[\\/])go\.sum$/.test(p.file)).map((p) => p.file)).size;
-}
 
 /** The first sentence of a plan whose vulnerability data is not complete, when no other part already says why. */
 function notCheckedLead(lockfileRead: boolean, nothingReadable: boolean): string {

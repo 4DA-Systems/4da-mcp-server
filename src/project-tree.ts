@@ -1103,6 +1103,17 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
   return notes;
 }
 
+/**
+ * The files whose problems make a scan's coverage incomplete: every problem lockfileProblemNotes
+ * words, and vulnerability_scan's coverage puts every one of those notes in and says `complete:
+ * false`. upgrade_planner's `vulnerabilityDataAvailable` reads the same list, so the two answers
+ * cannot disagree about a lockfile (they did for a conflicted go.sum: review of 6.5.1, 2026-11-24).
+ */
+export function incompleteLockfiles(problems: LockfileProblemLike[]): string[] {
+  if (lockfileProblemNotes(problems).length === 0) return [];
+  return [...new Set(problems.map((p) => p.file))];
+}
+
 /** Kept for its importers (upgrade_planner): lockfileProblemNotes. */
 export function unreadableNotes(problems: LockfileProblemLike[]): string[] {
   return lockfileProblemNotes(problems);
