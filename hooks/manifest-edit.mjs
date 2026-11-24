@@ -1252,8 +1252,10 @@ export function simpleCommands(line, dialect) {
       i++;
     } else if ("$`(){}".includes(ch)) {
       return null;
-    } else if (dialect === "powershell" && ((ch === "@" && word === null) || ch === "," || (ch === "-" && word === null && line.startsWith("--%", i)))) {
-      // PowerShell reads an unquoted `@name` as splatting and `a,b` as an array.
+    } else if (dialect === "powershell" && ((ch === "@" && word === null && !SCOPED_WORD.test(line.slice(i, i + 216))) || ch === "," || (ch === "-" && word === null && line.startsWith("--%", i)))) {
+      // PowerShell reads an unquoted `@name` as splatting, `@(`, `@{`, `@'` and `@"` as an array,
+      // a hashtable or a here-string, and `a,b` as an array. A scoped package (`@types/node@20.0.0`)
+      // is passed as written (PowerShell 7.5.1 and 5.1: `Write-Output @h/x` prints `@h/x`).
       return null;
     } else {
       word = (word ?? "") + ch;
@@ -1263,6 +1265,9 @@ export function simpleCommands(line, dialect) {
   if (parens !== 0 || braces !== 0) return null;
   return commands;
 }
+
+/** A word PowerShell passes as written although it starts with `@`: an npm scope, `/`, then more. */
+const SCOPED_WORD = /^@[a-z0-9][a-z0-9._~-]*\/[^\s;&|,()'"{}$`@]/i;
 
 /** A program's name as typed: its last path part, lower case, without .exe / .cmd / .bat / .ps1. */
 function programName(word) {
