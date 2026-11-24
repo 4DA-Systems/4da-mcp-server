@@ -1868,6 +1868,9 @@ function serverText(text, max = 400) {
   return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
 }
 
+/** `text` closed as a sentence: a period added only where it does not end one already (the stored reasons usually do). */
+const sentence = (text) => (/[.!?]$/.test(text) ? text : `${text}.`);
+
 /** "2026-11-23 10:21 UTC" for an entry's time. */
 const when = (entry) => `${new Date(Date.parse(entry.t)).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
@@ -1905,7 +1908,7 @@ function denialFor(introduced, ledger, dir, what) {
   if (held.length === 0 && unchecked.length === 0) return null;
   const lines = [`4DA guard: this ${what} was stopped before it ran.`];
   for (const { c, entry } of held.slice(0, 10)) {
-    lines.push(`- ${quotedChange(c)}: dependency_check answered ${entry.verdict} at ${when(entry)}: ${serverText(entry.reason) || "no reason recorded"}. Write a version it answers proceed for.`);
+    lines.push(`- ${quotedChange(c)}: dependency_check answered ${entry.verdict} at ${when(entry)}: ${sentence(serverText(entry.reason) || "no reason recorded")} Write a version it answers proceed for.`);
   }
   if (held.length > 10) lines.push(`- ...and ${held.length - 10} more with an avoid or wait verdict.`);
   for (const { c, last } of unchecked.slice(0, 10)) {
