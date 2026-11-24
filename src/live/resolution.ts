@@ -188,6 +188,8 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
       // Where local source code is (never for `workspace:`, which names a member, or `exec:`).
       const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test((spec.catalogSpec ?? d.spec).trim()) && where !== "" ? path.resolve(m.base, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
       add({ name: d.name, file: m.file, from: specWords(spec.kind, d.spec.trim(), spec.catalogSpec), ...(at ? { at } : {}) });
+      const target = refusedAliasTarget(d.spec);
+      if (target) add({ name: target, file: m.file, from: `named in an npm: alias npm refuses to install (${d.spec.trim().slice(0, 120)})` });
     }
   }
   if (members.length > 0) {
@@ -218,7 +220,15 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
     }
     for (const o of allOverrideSpecs(manifest, yaml)) {
       const spec = classifyNpmSpec(o.name, o.spec, catalogsFor(dir));
-      if (spec.kind === "registry") continue;
+      const file = o.where.includes("pnpm-workspace.yaml") ? yamlFile : manifestFile;
+      if (spec.kind === "registry") {
+        // `"x": "npm:ms@2.1.3"` in an override: x is replaced by ms, so the name x installs nothing of
+        // its own here, and asked about directly it is withheld, as an alias key is (re-check 2026-11-24).
+        if (spec.name.toLowerCase() !== o.name.toLowerCase()) add({ name: o.name, file, from: `replaced by ${spec.name} through ${o.where} (${o.spec.trim().slice(0, 120)}), so ask about ${spec.name}` });
+        continue;
+      }
+      const target = refusedAliasTarget(o.spec);
+      if (target) add({ name: target, file, from: `named in an npm: alias npm refuses to install, in ${o.where}` });
       const raw = (spec.catalogSpec ?? o.spec).trim();
       const where = raw.replace(/^(?:file|link|portal):/i, "");
       const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test(raw) && where !== "" ? path.resolve(dir, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
@@ -244,6 +254,19 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
     if (got?.file) watched.add(got.file);
   }
   return [...out.values()];
+}
+
+/**
+ * The target named by an `npm:` alias that npm refuses (an alias of an alias, a target with a URL or
+ * path behind it): nothing installs it, and it was written by the project, so it is withheld too.
+ */
+function refusedAliasTarget(rawSpec: string): string | null {
+  const spec = rawSpec.trim();
+  if (!/^npm:/i.test(spec)) return null;
+  const rest = spec.slice(4);
+  const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
+  const target = at > 0 ? rest.slice(0, at) : null;
+  return target && /^(?:@[a-z0-9~][a-z0-9._~-]*\/)?[a-z0-9~][a-z0-9._~-]*$/i.test(target) ? target : null;
 }
 
 /** A version source with nothing read: the enclosing workspace root's manifests are read, not its lockfile. */

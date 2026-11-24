@@ -103,8 +103,27 @@ export function classifyNpmSpec(name: string, rawSpec: string, catalogs?: NpmCat
   return registry(name, spec);
 }
 
-/** A version, a range or the `*` of a semver range: what Yarn's `npm:<range>` holds (never a package name). */
-const VERSION_OR_RANGE = /^(?:[\^~<>=]|v?\d|\*|[xX](?:$|[\s.])|.*\|\||.*\s-\s)/;
+/** One numeric or wildcard part of a semver partial: `0`, `12`, `x`, `X`, `*`. */
+const XR = /(?:0|[1-9]\d*|[xX*])/.source;
+/** A prerelease or build identifier list. */
+const IDS = /[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*/.source;
+/** node-semver's partial: `1`, `1.x`, `1.2.3-rc.1+b`, with an optional leading `v`. */
+const PARTIAL = `v?${XR}(?:\\.${XR}(?:\\.${XR}(?:-${IDS})?(?:\\+${IDS})?)?)?`;
+/** One comparator: a partial with an operator, `~`, `~>` or `^`. */
+const COMPARATOR = `(?:<=|>=|<|>|=|~>?|\\^)?\\s*${PARTIAL}`;
+/** One range: a hyphen range, or comparators separated by spaces. */
+const ONE_RANGE = `(?:${PARTIAL}\\s+-\\s+${PARTIAL}|${COMPARATOR}(?:\\s+${COMPARATOR})*)`;
+/** The whole string is a node-semver range set (`||`-separated; an empty side is `*`). */
+const SEMVER_RANGE = new RegExp(`^\\s*(?:${ONE_RANGE})?\\s*(?:\\|\\|\\s*(?:${ONE_RANGE})?\\s*)*$`);
+/** A full version: `1.2.3`, `1.2.3-rc.1+b`. */
+const FULL_VERSION = new RegExp(`^v?(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-${IDS})?(?:\\+${IDS})?$`);
+/** Dist-tags in common use: in npm `npm:latest` aliases a package called `latest`, in Yarn it is the key's own tag. */
+const COMMON_TAGS = new Set(["latest", "next", "beta", "alpha", "canary", "rc", "dev", "nightly", "experimental", "stable", "insiders", "preview", "legacy"]);
+
+/** Whether the whole of `text` is a semver version or range, by node-semver's grammar. */
+export function isSemverRange(text: string): boolean {
+  return text.length <= 256 && SEMVER_RANGE.test(text);
+}
 
 /** A plain version, range or dist-tag: a registry spec with no protocol of its own. */
 function plainRange(name: string, range: string): NpmRegistrySpec | null {
@@ -117,26 +136,39 @@ function plainRange(name: string, range: string): NpmRegistrySpec | null {
 /**
  * `npm:<target>@<range>`, `npm:<target>`, or Yarn berry's `npm:<range>` for the key's own name.
  * npm-package-arg refuses an alias whose subspec is not a plain registry spec (a URL, git, a path,
- * another protocol, an alias of an alias) and an empty one: what npm refuses to install is withheld.
+ * another protocol, an alias of an alias), an empty one, and a target that is a tarball file name:
+ * what npm refuses to install is withheld.
+ *
+ * With no `@<range>`, `npm:<x>` means a package named x to npm and the key's own release x to Yarn.
+ * The rule (review 2026-11-24; a prefix test read `npm:v8-compile-cache` and `npm:7zip-bin` as
+ * ranges and sent the KEY):
+ * - the whole of x is a semver range that no package could be named (`^1.2.0`, `>=1 <2`,
+ *   `^1 || ^2`, `*`), or a full version (`2.1.3`, `1.2.3-rc.1`): the key's own release, as Yarn reads it;
+ * - x is a package name and no range (`v8-compile-cache`, `7zip-bin`, `x.js`): an alias to x, as
+ *   npm reads it;
+ * - x is both (`1`, `1.x`, `2048`, `x`) or a common dist-tag (`latest`, `next`): which one is meant
+ *   depends on the package manager, so it is withheld (nothing is sent);
+ * - inside Yarn's `patch:` (`yarn` true) Yarn's reading is certain: a range or tag is the key's own.
  */
-function aliasSpec(name: string, rest: string): NpmSpecClass {
+function aliasSpec(name: string, rest: string, yarn = false): NpmSpecClass {
   if (rest.trim() === "" || rest !== rest.trim() || /^npm:/i.test(rest)) return { kind: "url" };
   const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
-  const target = at > 0 ? rest.slice(0, at) : rest;
-  // Yarn: `npm:4.17.21`, `npm:^1.2.0` is that release of the key's own package, not a package named `4.17.21`.
-  if (at < 0 && VERSION_OR_RANGE.test(rest)) {
-    const own = plainRange(name, rest);
-    return own ? registry(name, own.range) : { kind: "url" };
+  if (at < 0) {
+    const range = isSemverRange(rest);
+    // A name a package could be published under now (no `~`, which only legacy names hold).
+    const named = PACKAGE_NAME.test(rest) && !rest.includes("~") && !TARBALL_FILE.test(rest);
+    if (yarn && (range || /^[a-z][a-z0-9._-]*$/i.test(rest))) return registry(name, rest);
+    if (range && (!named || FULL_VERSION.test(rest))) return registry(name, rest);
+    if (named && !range && !COMMON_TAGS.has(rest.toLowerCase())) return registry(rest, "*");
+    return { kind: "url" };
   }
-  if (PACKAGE_NAME.test(target)) {
-    const range = at > 0 ? rest.slice(at + 1) : "*";
-    const inner = plainRange(target, range);
-    if (inner) return registry(target, inner.range);
-    const what = classifyNpmSpec(target, range);
-    return what.kind === "registry" ? { kind: "url" } : what;
-  }
-  const own = plainRange(name, rest);
-  return own ? registry(name, own.range) : { kind: "url" };
+  const target = rest.slice(0, at);
+  if (!PACKAGE_NAME.test(target) || TARBALL_FILE.test(target)) return { kind: "url" };
+  const range = rest.slice(at + 1);
+  const inner = plainRange(target, range);
+  if (inner) return registry(target, inner.range);
+  const what = classifyNpmSpec(target, range);
+  return what.kind === "registry" ? { kind: "url" } : what;
 }
 
 /**
@@ -157,7 +189,7 @@ function patchSpec(name: string, spec: string): NpmSpecClass {
   const target = inner.slice(0, at);
   const range = inner.slice(at + 1);
   if (!PACKAGE_NAME.test(target)) return { kind: "url" };
-  const read = /^npm:/i.test(range) ? aliasSpec(target, range.slice(4)) : classifyNpmSpec(target, range);
+  const read = /^npm:/i.test(range) ? aliasSpec(target, range.slice(4), true) : classifyNpmSpec(target, range);
   return read.kind === "registry" ? registry(read.name, read.range) : read;
 }
 
