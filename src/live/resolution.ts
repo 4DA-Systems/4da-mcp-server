@@ -105,6 +105,8 @@ export interface NotRegistryDependency {
   from: string;
   /** Local code: the directory it is in, when the spec or the workspace says. */
   at?: string;
+  /** An alias key, or a key an override replaces with an alias: private only inside this project. */
+  aliasKey?: true;
 }
 
 /** Workspace member directories under `dir` (package.json `workspaces`, pnpm-workspace.yaml `packages`), relative. */
@@ -176,7 +178,7 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
         // installs the target, which is what is checked; the key itself is withheld, with the target named.
         if (spec.name.toLowerCase() !== d.name.toLowerCase()) {
           if (!aliases.has(d.name)) aliases.set(d.name, spec.name);
-          add({ name: d.name, file: m.file, from: `an npm: alias of ${spec.name} (${d.spec.trim().slice(0, 120)}): it installs ${spec.name}, so ask about ${spec.name}` });
+          add({ name: d.name, file: m.file, from: `an npm: alias of ${spec.name} (${d.spec.trim().slice(0, 120)}): it installs ${spec.name}, so ask about ${spec.name}`, aliasKey: true });
         }
         continue;
       }
@@ -224,7 +226,7 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
       if (spec.kind === "registry") {
         // `"x": "npm:ms@2.1.3"` in an override: x is replaced by ms, so the name x installs nothing of
         // its own here, and asked about directly it is withheld, as an alias key is (re-check 2026-11-24).
-        if (spec.name.toLowerCase() !== o.name.toLowerCase()) add({ name: o.name, file, from: `replaced by ${spec.name} through ${o.where} (${o.spec.trim().slice(0, 120)}), so ask about ${spec.name}` });
+        if (spec.name.toLowerCase() !== o.name.toLowerCase()) add({ name: o.name, file, from: `replaced by ${spec.name} through ${o.where} (${o.spec.trim().slice(0, 120)}), so ask about ${spec.name}`, aliasKey: true });
         continue;
       }
       const target = refusedAliasTarget(o.spec);

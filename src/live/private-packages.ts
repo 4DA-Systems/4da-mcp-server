@@ -112,6 +112,12 @@ export interface PrivateDependency {
 export type PrivateKind = "registry" | "name";
 
 /** Said with every registry-kind reason: how to have a host that only mirrors the public registry checked. */
+/**
+ * The words that mark a reason as "not a registry release" (a path, git, a URL, a workspace member,
+ * an alias key): such a name is not a private package, and the answer says what it is instead.
+ */
+export const NOT_REGISTRY_MARK = "not a registry release";
+
 export const PUBLIC_MIRRORS_HINT = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
 
 /** A lockfile entry installed from a registry that is not the public one (or from git). */
@@ -134,6 +140,8 @@ export interface PrivateIndexEntry {
    * project is the project's own package, not a dependency (LiveIntelligence.getOwnPackageCount).
    */
   at?: string;
+  /** An npm alias key (or a key an override replaces with an alias): private only inside its own project. */
+  aliasKey?: true;
   /** A `go.work` workspace module: the workspace's copy is built whatever version a go.mod requires. */
   workspace?: true;
   /**
@@ -1716,10 +1724,10 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
  * With no lockfile, `omega-quant==2.0.0` and `omega-risk = "1.4.0"` were sent to OSV.dev and PyPI
  * (blind audit round 4). Returns each such name with the index or location it names.
  */
-export function pyprojectManifestPrivate(content: string): Array<{ name: string; registry: string }> {
+export function pyprojectManifestPrivate(content: string): Array<{ name: string; registry: string; local?: true }> {
   const indexes = new Map<string, string>();
   const wanted: Array<{ name: string; index: string; kind: "uv" | "poetry" }> = [];
-  const direct: Array<{ name: string; registry: string }> = [];
+  const direct: Array<{ name: string; registry: string; local?: true }> = [];
   let table = "";
   let block: { kind: "uv" | "poetry"; name: string | null; url: string | null } | null = null;
   const endBlock = () => {
@@ -1732,7 +1740,10 @@ export function pyprojectManifestPrivate(content: string): Array<{ name: string;
     const location = inlineKey(table, "git") ?? inlineKey(table, "url") ?? inlineKey(table, "path") ?? inlineKey(table, "file");
     if (!location) return;
     const local = inlineKey(table, "path") !== null || inlineKey(table, "file") !== null;
-    if (local || privateDirectReference(location)) direct.push({ name, registry: local ? `the local path ${location}` : sourceLabel(location.replace(/^git\+/i, "")) });
+    const git = inlineKey(table, "git") !== null;
+    // A path or a git checkout is not a registry release (local): withheld, and not called private.
+    if (local || git) direct.push({ name, registry: local ? `the local path ${location}` : `git (${sourceLabel(location.replace(/^git\+/i, ""))})`, local: true });
+    else if (privateDirectReference(location)) direct.push({ name, registry: sourceLabel(location.replace(/^git\+/i, "")) });
   };
   for (const line of tomlLines(content)) {
     const header = tomlHeader(line);
@@ -2049,6 +2060,8 @@ export function lockfileRegistryWide(
  * declared there is checked again, and the answer never said so (pre-publish round 10, W4).
  */
 export function lockEntryReason(entry: PrivateIndexEntry): string {
+  // Local code, a workspace member, git or an alias key: not a private package, and not looked up.
+  if (entry.local || /^(?:git\b|git\+|git:|ssh:)|\.git(?:[#?/@]|$)/i.test(entry.registry)) return `${entry.file} installs it from ${entry.registry}: ${NOT_REGISTRY_MARK}, so it was not looked up`;
   const base = `${entry.file} installs it from ${entry.registry}, not the public registry`;
   const registry = !entry.local && hostOf(entry.registry.replace(/^[a-z]+\+/i, "")) !== null && !/^(?:git\+|git:|ssh:)|\.git(?:[#?/]|$)/i.test(entry.registry);
   return registry ? `${base}; ${PUBLIC_MIRRORS_HINT}` : base;

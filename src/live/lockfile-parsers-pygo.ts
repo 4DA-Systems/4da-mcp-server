@@ -563,7 +563,8 @@ export function readRequirementsFile(
     for (const name of listed.names) extras.unpinned.push({ file: path.resolve(file), name });
     for (const other of listed.direct) extras.uncheckable.push({ ...other, version: null, file: path.resolve(file) });
     for (const ref of listed.references) {
-      if (privateDirectReference(ref.location)) extras.directPrivate.push({ name: ref.name, version: null, registry: /^file:/i.test(ref.location) ? "a local file" : sourceLabel(ref.location.replace(/^git\+/i, "")), file: path.resolve(file) });
+      // A git checkout or a local path is not a registry release (local); an archive on another host may be a private index's.
+      if (privateDirectReference(ref.location)) extras.directPrivate.push({ name: ref.name, version: null, registry: /^file:/i.test(ref.location) ? `the local path ${ref.location.replace(/^file:/i, "")}` : /^git\+|\.git(?:[@#]|$)/i.test(ref.location) ? `git (${sourceLabel(ref.location.replace(/^git\+/i, ""))})` : sourceLabel(ref.location.replace(/^git\+/i, "")), file: path.resolve(file), ...(/^file:|^git\+|\.git(?:[@#]|$)/i.test(ref.location) ? { local: true as const } : {}) });
     }
   }
   const overlong = overlongRequirementLines(content);
@@ -1032,6 +1033,8 @@ export function readTomlPackageLock(content: string): {
       if (origin !== "local") uncheckable.push({ name: normalized, version, kind: origin });
       const location = originLocation(block, body);
       if (origin === "local" || origin === "file") privateIndex.push({ name: normalized, version, registry: `local code${location ? ` (${location})` : ""}`, local: true });
+      // A git checkout is not a registry release (local: withheld, not called private).
+      else if (origin === "git" && location) privateIndex.push({ name: normalized, version, registry: `git (${directLabel(location)})`, local: true });
       else if (location && privateDirectReference(location)) privateIndex.push({ name: normalized, version, registry: directLabel(location) });
       continue;
     }
