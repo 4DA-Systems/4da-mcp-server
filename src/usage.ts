@@ -39,15 +39,19 @@ export const RUNNING_VERSION = readPackageVersion();
 /** npx's options, in the order every surface writes them. */
 export const NPX_OPTIONS: readonly string[] = ["-y", "--prefer-offline"];
 
-/** `npx -y --prefer-offline @4da/mcp-server@<version>`; `<version>` when the version is not known. */
-export function pinnedNpx(version: string | null): string {
-  return `npx ${NPX_OPTIONS.join(" ")} ${PACKAGE}@${version ?? "<version>"}`;
+/**
+ * `npx -y --prefer-offline @4da/mcp-server@<version>`; `<version>` when the version is not known.
+ * `extra`: further npx options, written after these and before the package (`--allow-scripts=...`).
+ */
+export function pinnedNpx(version: string | null, extra: readonly string[] = []): string {
+  return `npx ${[...NPX_OPTIONS, ...extra].join(" ")} ${PACKAGE}@${version ?? "<version>"}`;
 }
 
 /** --help, and the text an unknown argument exits with (cli-args.ts), for the running version. */
 export function serverUsage(version: string | null): string {
   const npx = pinnedNpx(version);
-  const pad = (s: string) => s.padEnd(npx.length + 11);
+  // The longest row is `<npx> --version` (10 characters after npx); two spaces after it.
+  const pad = (s: string) => s.padEnd(npx.length + 12);
   return `
   ${PACKAGE} — Dependency intelligence for AI coding agents
 

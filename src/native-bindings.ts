@@ -15,10 +15,16 @@
  * better-sqlite3 is the one driver.
  */
 
-// Each remedy measured on npm 12.2.0 (node:24-bookworm-slim), 2026-10-03.
+import { pinnedNpx, RUNNING_VERSION } from "./usage.js";
+
+// Each remedy measured on npm 12.2.0 (node:24-bookworm-slim), 2026-10-03. The npx line is pinned to
+// the running version, as every printed command is (usage.ts): unpinned, npx starts whatever it cached
+// first or the newest release (review of 6.5.1, 2026-11-24).
 export const NATIVE_BINDING_FIX =
   "npm 12+ blocks dependency install scripts unless allowed. With npx: allow it once with " +
-  "`npm config set allow-scripts=better-sqlite3 --location=user` (or run `npx --allow-scripts=better-sqlite3 @4da/mcp-server`), " +
+  "`npm config set allow-scripts=better-sqlite3 --location=user` (or run `" +
+  pinnedNpx(RUNNING_VERSION, ["--allow-scripts=better-sqlite3"]) +
+  "`), " +
   "then clear the npx cache (`npx clear-npx-cache`, or delete the _npx folder in your npm cache). " +
   "In an npm install: `npm install-scripts approve better-sqlite3`, then `npm rebuild better-sqlite3`. " +
   "Without a prebuilt binary for your platform the rebuild needs a C++ toolchain " +

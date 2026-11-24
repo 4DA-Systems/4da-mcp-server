@@ -318,8 +318,17 @@ export function heldText(release: string, affected: HeldDependency[]): string {
   const shown = affected.slice(0, 3);
   const and = andList;
   const exact = shown.filter((d) => d.exact && !d.via).map((d) => `${d.name} ${d.version} (${d.ids.join(", ")})${conditionText(d)}`);
-  // Two levels down: the dependency the release holds, then its own exact pin.
-  const deep = shown.flatMap((d) => (d.via ? [`${viaText(d.via)}, which exact-pins ${d.name} ${d.version} (${d.ids.join(", ")})`] : []));
+  // Two levels down: the dependency the release holds, then its own exact pins, grouped under it
+  // (the 6.5.1 candidate repeated the via clause once per pin: review 2026-11-24).
+  const byVia = new Map<string, { via: NonNullable<HeldDependency["via"]>; pins: string[] }>();
+  for (const d of shown) {
+    if (!d.via) continue;
+    const key = `${d.via.name} ${d.via.version} ${d.via.spec} ${d.via.exact}`;
+    const group = byVia.get(key) ?? { via: d.via, pins: [] };
+    group.pins.push(`${d.name} ${d.version} (${d.ids.join(", ")})`);
+    byVia.set(key, group);
+  }
+  const deep = [...byVia.values()].map((g) => `${viaText(g.via)}, which exact-pins ${and(g.pins)}`);
   const ranged = shown
     .filter((d) => !d.exact && !d.via)
     // PyPI: a requirement with no specifier admits every release.
