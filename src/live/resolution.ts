@@ -22,7 +22,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { oversize, tooLargeText } from "./bounded-read.js";
-import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
+import { anySignatureChanged, fileSignature, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
+import { requirementFiles } from "./lockfile-parsers-pygo.js";
 import { checkInstallState } from "./install-state.js";
 import { expandWorkspaces, memberNamesOf, pnpmYamlList, readManifestDeclarations } from "./js-manifests.js";
 import { lazyNpmCatalogs } from "./npm-catalog.js";
@@ -86,6 +87,12 @@ export interface GroupResolution {
    */
   notRegistry?: NotRegistryDependency[];
   signatures: Map<string, FileSignature>;
+  /**
+   * Inputs whose signature may move without what the resolution read from them changing (a script
+   * edited in package.json, an editor's temporary file beside a requirements file): what was read,
+   * as a digest. When only these moved and the digest holds, the group is not re-resolved.
+   */
+  digests?: Array<{ file: string; digest: string }>;
   resolvedAt: string;
 }
 
@@ -275,10 +282,15 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   const resolvedAt = new Date().toISOString();
   const ecosystem = mapEcosystem(group.language);
   const manifest = manifestCandidate(group.dir, ecosystem);
+  // Python: the directory (and requirements/) too, so a requirements file created later is seen.
+  const listings = ecosystem === "PyPI" ? [group.dir, path.join(group.dir, "requirements")] : [];
   const signatures = signatureMap([
     ...lockfileCandidates(group.dir, ecosystem),
     ...(manifest ? [manifest] : []),
+    ...listings,
   ]);
+  // Taken after the signatures, so an edit that lands in between reads as a change.
+  const digests = [...(manifest ? [manifest] : []), ...listings].map((file) => ({ file, digest: inputDigest(file, group.dir) }));
 
   // A lockfile or manifest over the size cap is not read (bounded-read.ts): the group resolves to
   // nothing and says why, so its dependencies are reported as not checked. Its signature is kept,
@@ -311,11 +323,11 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   const read = yield* resolveVersionSourceSteps(group.dir, ecosystem);
   yield;
   const readFiles = read.source ? [read.source, ...(read.extraSources ?? [])] : [];
-  // The manifest only matters when the resolver fell back to it; editing a
-  // script in package.json must not throw away a scan of an unchanged lockfile.
-  // One reported unreadable is watched, so fixing it re-resolves the group.
-  const manifestProblem = manifest !== null && (read.problems ?? []).some((p) => p.file === manifest);
-  if (manifest && !readFiles.includes(manifest) && !manifestProblem) signatures.delete(manifest);
+  // The manifest is watched whether or not a lockfile was read: a dependency added to or removed
+  // from it is a direct row, or is gone, on the next call, and decides whether the lockfile is
+  // older than it (review 2026-11-24: beside a read lockfile the manifest was dropped from the
+  // signatures, so such an edit went unseen until a restart). Editing a script changes nothing the
+  // resolution read (inputDigest), so it re-resolves nothing (groupIsStale).
 
   // Ruby and PHP: the lockfile (and composer.json) name the direct dependencies; the project scanner does not.
   const fromLock = group.deps.length === 0 && group.devDeps.length === 0 && read.direct;
@@ -404,8 +416,41 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
     problems: read.problems ?? [],
     ...(notRegistry.length > 0 ? { notRegistry } : {}),
     signatures,
+    digests,
     resolvedAt,
   };
+}
+
+/** The package.json fields a resolution reads; any other field (scripts, metadata) can change freely. */
+const MANIFEST_FIELDS = ["name", "dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "bundleDependencies", "bundledDependencies", "workspaces", "overrides", "resolutions", "pnpm", "catalog", "catalogs", "packageManager"];
+
+/**
+ * What a resolution read from `file`, as a string that changes when that does: the dependency fields
+ * of a package.json, the whole text of any other manifest, and for a directory the requirements files
+ * it holds. "unreadable" or "absent" when it cannot be read.
+ */
+function inputDigest(file: string, groupDir: string): string {
+  try {
+    const st = fs.statSync(file);
+    if (st.isDirectory()) return `dir:${requirementFiles(groupDir).join("|")}`;
+  } catch {
+    return "absent";
+  }
+  let text: string;
+  try {
+    text = readTextFile(file);
+  } catch {
+    return "unreadable";
+  }
+  if (path.basename(file) !== "package.json") return `text:${text}`;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return `text:${text}`;
+    const record = parsed as Record<string, unknown>;
+    return `json:${JSON.stringify(MANIFEST_FIELDS.map((k) => record[k] ?? null))}`;
+  } catch {
+    return `text:${text}`;
+  }
 }
 
 /** Parent directories searched for a Python lockfile that covers a workspace member. */
@@ -468,7 +513,15 @@ export function unlockedPythonGroups(root: string, manifests: ReadonlyArray<{ pa
 
 /** True when any file the resolution depended on changed, appeared, or vanished. */
 export function groupIsStale(result: GroupResolution): boolean {
-  return anySignatureChanged(result.signatures);
+  if (!anySignatureChanged(result.signatures)) return false;
+  const digests = new Map((result.digests ?? []).map((d) => [d.file, d.digest]));
+  const moved: string[] = [];
+  for (const [file, recorded] of result.signatures) if (fileSignature(file) !== recorded) moved.push(file);
+  // Only inputs with a digest moved, and what was read from them is the same: take the new
+  // signatures and keep the resolution (a script edited in package.json, a temporary file).
+  if (moved.length === 0 || moved.some((file) => !digests.has(file) || inputDigest(file, result.group.dir) !== digests.get(file))) return moved.length > 0;
+  for (const file of moved) result.signatures.set(file, fileSignature(file));
+  return false;
 }
 
 /**
