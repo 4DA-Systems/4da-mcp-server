@@ -464,7 +464,12 @@ export class LiveIntelligence {
           // A name whose source could not be determined (a catalog that could not be read) is withheld
           // in other projects too (check of round 2: it was left out and a briefing for B sent it).
           if (!p.name || p.unread || p.aliasKey) continue;
-          nonRegistryEntries.push({ ecosystem: mapEcosystem(r.group.language), name: p.name, why: `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name} comes from ${p.registry}, so it was not looked up` });
+          nonRegistryEntries.push({
+            ecosystem: mapEcosystem(r.group.language),
+            name: p.name,
+            // A catalog that could not be read is not a non-registry source: say what it is (final check).
+            why: p.unknownSource ? `in ${nonRegistryRoot}, ${p.name} is ${p.registry}, so it was not looked up` : `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name} comes from ${p.registry}, so it was not looked up`,
+          });
         }
       }
     }

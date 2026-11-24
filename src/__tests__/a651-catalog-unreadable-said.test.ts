@@ -51,7 +51,12 @@ describe("YAML anchors and repeated keys in a catalog", () => {
     h.write("pnpm-workspace.yaml", "catalog:\n  react-dom: *react\n  react: &react ^18.2.0\n");
     expect(npmCatalogsFor(h.dir).error).toBeTruthy();
     h.write("pnpm-workspace.yaml", "catalog:\n  react: &v ^18.2.0\n  vue: &v ^3.0.0\n  react-dom: *v\n");
-    expect(npmCatalogsFor(h.dir).error).toMatch(/anchor twice/);
+    expect(npmCatalogsFor(h.dir).error).toBeTruthy();
+    // An anchor defined twice that no catalog entry uses: pnpm reads the file, and so does the reader
+    // (final check: unit/catalog-forms7 anchorTwiceUnused).
+    h.write("pnpm-workspace.yaml", "a: &v 1\nb: &v 2\ncatalog:\n  react: ^18.2.0\n");
+    expect(npmCatalogsFor(h.dir).error).toBeUndefined();
+    expect(npmCatalogsFor(h.dir).lookup("default", "react")).toBe("^18.2.0");
     h.write("pnpm-workspace.yaml", "catalog:\n  react: ^18.2.0\ncatalogs:\n  default:\n    vue: ^3.0.0\n");
     expect(npmCatalogsFor(h.dir).error).toMatch(/catalogs\.default/);
   });

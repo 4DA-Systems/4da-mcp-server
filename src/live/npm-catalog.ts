@@ -76,6 +76,9 @@ const unquote = (v: string): string => {
 /** YAML anchors (`&name value`) seen so far, for aliases (`*name`); a scalar anchor only. */
 type Anchors = Map<string, string>;
 
+/** Marks an anchor defined more than once: a catalog alias to it is refused, an unused one is harmless. */
+const ANCHOR_TWICE = "\u0000defined-twice";
+
 /**
  * A catalog value: a plain or quoted scalar, an anchored scalar (`&react ^18.2.0`, recorded) or an
  * alias of one (`*react`); null for anything else (a nested block, a tag, an unclosed quote, an alias
@@ -84,13 +87,16 @@ type Anchors = Map<string, string>;
 function scalar(value: string, anchors: Anchors = new Map()): string | null {
   let t = value.trim();
   const alias = /^\*([^\s,[\]{}]+)$/.exec(t);
-  if (alias) return anchors.get(alias[1]) ?? null;
+  if (alias) {
+    const v = anchors.get(alias[1]);
+    return v === undefined || v === ANCHOR_TWICE ? null : v;
+  }
   const anchor = /^&([^\s,[\]{}]+)\s+(.+)$/.exec(t);
   if (anchor) t = anchor[2].trim();
   if (t === "" || /^[{[|>&*!]/.test(t)) return null;
   if (/^['"]/.test(t) && (t.length < 2 || t[t.length - 1] !== t[0])) return null;
   const out = unquote(t);
-  if (anchor) anchors.set(anchor[1], out);
+  if (anchor && anchors.get(anchor[1]) !== ANCHOR_TWICE) anchors.set(anchor[1], out);
   return out;
 }
 
@@ -160,9 +166,13 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
     const indent = text.length - text.trimStart().length;
     const anchored = /^\s*[^:]+:\s+&([^\s,[\]{}]+)\s/.exec(text);
     if (anchored) {
-      if (anchors.has(anchored[1])) return fail(i + 1, "defines a YAML anchor twice, which this reader does not follow");
-      const kvAnchor = keyValue(text);
-      if (kvAnchor) scalar(kvAnchor.value, anchors);
+      // Defined twice: only a catalog entry that aliases it is refused (final check: an unused anchor
+      // defined twice made a plain catalog unreadable, though pnpm reads the file).
+      if (anchors.has(anchored[1])) anchors.set(anchored[1], ANCHOR_TWICE);
+      else {
+        const kvAnchor = keyValue(text);
+        if (kvAnchor) scalar(kvAnchor.value, anchors);
+      }
     }
     if (indent === 0) {
       section = null;

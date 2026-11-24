@@ -63,6 +63,10 @@ describe("withheld in another project too", () => {
     h.write("a/pnpm-workspace.yaml", "packages:\n  - '.'\ncatalog:\n  acme-tag: !!str link:../acme-tag\n");
     await askFromB(["acme-tag"]);
     expect(leaked()).toEqual([]);
+    // Worded as what it is in the other project (final check: "comes from declared through ...").
+    const r = (await executeDependencyCheck(null, { items: [{ ecosystem: "npm", package: "acme-tag", to: "1.0.1" }] }, liveIn(path.join(h.dir, "b")))) as { results: Array<{ reason: string }> };
+    expect(r.results[0].reason).toContain(`in ${path.join(h.dir, "a")}, acme-tag is declared through a catalog that could not be read (`);
+    expect(r.results[0].reason).not.toMatch(/comes from declared|not a registry release/);
   });
 
   it("every name of a catalog that repeats a key", async () => {
