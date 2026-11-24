@@ -51,7 +51,7 @@ import jsonc from "jsonc-parser";
 import type { JSONPath, Node, ParseError } from "jsonc-parser";
 
 import { parseSetupArgs } from "./cli-args.js";
-import { NPX_OPTIONS, PACKAGE, readPackageVersion } from "./usage.js";
+import { NPX_OPTIONS, PACKAGE, pinnedNpx, readPackageVersion } from "./usage.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -627,7 +627,7 @@ export function runSetup(options: boolean | SetupOptions = {}, ctx: SetupContext
   log("  also reads the app's scored feed:");
   log("    https://github.com/4DA-Systems/4DA/releases/latest");
   log("");
-  log(`  Run: npx ${PACKAGE}@${version} --doctor  to verify everything works.\n`);
+  log(`  Run: ${pinnedNpx(version)} --doctor  to verify everything works.\n`);
   return result;
 }
 

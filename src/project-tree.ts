@@ -143,7 +143,7 @@ export const MAX_EXCLUDED_WALK_DIRS = 2_000;
 
 /**
  * Directories whose lockfiles are test data, not the project's dependencies:
- * a scan of D:\4DA\src-tauri read the 4DA conformance corpus
+ * a scan of the 4DA app repository's Rust tree read the 4DA conformance corpus
  * (tests/conformance/cases, 10,000+ vendored packages) as the app's own
  * (audit A3, 2026-10-12). Left out by default, counted and named in the
  * answer (`not_scanned`), and scanned on request (include_test_fixtures).

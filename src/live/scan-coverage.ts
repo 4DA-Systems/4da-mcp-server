@@ -6,7 +6,7 @@
  * limit turned a scan into `total_vulnerable_packages: 0`, flagged only by
  * `_meta.offline` at the end of the answer, and dependency_health and
  * upgrade_planner then scored and ranked that as a clean project (10,568
- * dependencies of D:\4DA\src-tauri, 0 vulnerable, 2026-10-12). Every scan
+ * dependencies of the 4DA app repository's Rust tree, 0 vulnerable, 2026-10-12). Every scan
  * consumer now asks this module first, and an incomplete scan leads its
  * answer with what was not checked.
  */

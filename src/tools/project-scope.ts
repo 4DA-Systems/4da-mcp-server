@@ -2,7 +2,7 @@
 /**
  * Which project a planning or briefing answer is about.
  *
- * Measured 2026-10-07: upgrade_planner called from D:\4DA returned the 4DA
+ * Measured 2026-10-07: upgrade_planner called from the 4DA app repository returned the 4DA
  * app's cross-project plan, and its top steps were for navcal, verax and
  * 4da-ledger. upgrade_planner and what_should_i_know now take `project_path`:
  * omitted, it is the project the server was started for (FOURDA_PROJECT_DIR,
