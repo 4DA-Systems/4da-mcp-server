@@ -118,6 +118,9 @@ export type PrivateKind = "registry" | "name";
  */
 export const NOT_REGISTRY_MARK = "not a registry release";
 
+/** The words that mark a name declared through a catalog that could not be read: not private, not known. */
+export const UNREAD_CATALOG_MARK = "declared through a catalog that could not be read";
+
 export const PUBLIC_MIRRORS_HINT = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
 
 /** A lockfile entry installed from a registry that is not the public one (or from git). */
@@ -142,6 +145,8 @@ export interface PrivateIndexEntry {
   at?: string;
   /** An npm alias key (or a key an override replaces with an alias): private only inside its own project. */
   aliasKey?: true;
+  /** Declared through a catalog that could not be read: where it comes from is not known. */
+  unknownSource?: true;
   /** A `go.work` workspace module: the workspace's copy is built whatever version a go.mod requires. */
   workspace?: true;
   /**
@@ -2060,6 +2065,7 @@ export function lockfileRegistryWide(
  * declared there is checked again, and the answer never said so (pre-publish round 10, W4).
  */
 export function lockEntryReason(entry: PrivateIndexEntry): string {
+  if (entry.unknownSource) return `${entry.file}: ${entry.name} is ${entry.registry}, so where it comes from is not known and it was not looked up`;
   // Local code, a workspace member, git or an alias key: not a private package, and not looked up.
   if (entry.local || /^(?:git\b|git\+|git:|ssh:)|\.git(?:[#?/@]|$)/i.test(entry.registry)) return `${entry.file} installs it from ${entry.registry}: ${NOT_REGISTRY_MARK}, so it was not looked up`;
   const base = `${entry.file} installs it from ${entry.registry}, not the public registry`;

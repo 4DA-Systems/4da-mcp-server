@@ -8,7 +8,7 @@
  * never safe to delegate on the scan's word.
  */
 
-import { NOT_REGISTRY_MARK } from "../live/private-packages.js";
+import { NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { detectTaskPackages } from "./briefing-task-scope.js";
 
@@ -119,8 +119,9 @@ export function privateAnywhere(live: PrivateLookup | null, name: string): strin
 export function privateAdvisoryText(found: PrivateTaskPackage[]): string {
   const label = (p: PrivateTaskPackage) => `${p.package}${p.installed.length ? ` ${p.installed.join("/")}` : ""}`;
   const unread = found.filter((p) => p.unreadable_file);
-  const local = found.filter((p) => !p.unreadable_file && p.why.includes(NOT_REGISTRY_MARK));
-  const priv = found.filter((p) => !p.unreadable_file && !p.why.includes(NOT_REGISTRY_MARK));
+  const notRegistry = (p: PrivateTaskPackage) => p.why.includes(NOT_REGISTRY_MARK) || p.why.includes(UNREAD_CATALOG_MARK);
+  const local = found.filter((p) => !p.unreadable_file && notRegistry(p));
+  const priv = found.filter((p) => !p.unreadable_file && !notRegistry(p));
   const parts: string[] = [];
   if (unread.length > 0) {
     const one = unread.length === 1;
@@ -138,7 +139,7 @@ export function privateAdvisoryText(found: PrivateTaskPackage[]): string {
   if (local.length > 0) {
     const one = local.length === 1;
     parts.push(
-      `NOT CHECKED (not a registry release): the task touches ${local.map(label).join(", ")}, which ${one ? "comes" : "come"} from a path, git, a URL, a workspace or an alias, not a registry (${local.map((p) => p.why).join("; ")}): nothing about ${one ? "it" : "them"} was looked up, so this briefing says nothing about ${one ? "it" : "them"}`,
+      `NOT CHECKED: the task touches ${local.map(label).join(", ")}, which this server does not look up by name here (${local.map((p) => p.why).join("; ")}): nothing about ${one ? "it" : "them"} was looked up, so this briefing says nothing about ${one ? "it" : "them"}`,
     );
   }
   return parts.join(". ");

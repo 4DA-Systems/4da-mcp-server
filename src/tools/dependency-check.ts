@@ -524,7 +524,7 @@ function summaryLine(results: ItemResult[], parts: string[]): string {
   // Withheld only because a lockfile could not be read: not private, and the remedy is the file.
   const unread = results.filter((r) => r.not_checked === "private" && r.unreadable_file);
   // Not a registry release (a path, git, a URL, a workspace member, an alias key): not private either.
-  const local = results.filter((r) => r.not_checked === "private" && !r.unreadable_file && r.reason.startsWith("NOT CHECKED (not a registry release)")).length;
+  const local = results.filter((r) => r.not_checked === "private" && !r.unreadable_file && /^NOT CHECKED \((?:not a registry release|catalog not read)\)/.test(r.reason)).length;
   const priv = privateCount - unread.length - local;
   const files = [...new Set(unread.map((r) => r.unreadable_file!))];
   const withheld = [

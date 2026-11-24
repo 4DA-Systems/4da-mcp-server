@@ -434,7 +434,7 @@ export class LiveIntelligence {
     // upgrade_impact, the briefing and the pulse as Cargo `path`/`git` crates are, as local code, so
     // a registry copy of the same name elsewhere in the tree is still checked (review 2026-11-24).
     const npmNotRegistry = (r: GroupResolution): PrivateIndexEntry[] =>
-      (r.notRegistry ?? []).map((d) => ({ name: d.name, version: null, registry: d.from, file: d.file, local: true as const, ...(d.at ? { at: d.at } : {}), ...(d.aliasKey ? { aliasKey: true as const } : {}) }));
+      (r.notRegistry ?? []).map((d) => ({ name: d.name, version: null, registry: d.from, file: d.file, local: true as const, ...(d.at ? { at: d.at } : {}), ...(d.aliasKey ? { aliasKey: true as const } : {}), ...(d.unknownSource ? { unknownSource: true as const } : {}) }));
     this.manifestPrivate = new Map(
       this.groupResults
         .map((r): [GroupResolution, PrivateIndexEntry[]] => [r, [...manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language)), ...npmNotRegistry(r)]])
@@ -460,7 +460,7 @@ export class LiveIntelligence {
     if (nonRegistryRoot) {
       for (const [r, list] of [...this.manifestPrivate, ...this.localPackages]) {
         for (const p of list) {
-          if (!p.name || p.unread || p.aliasKey) continue;
+          if (!p.name || p.unread || p.aliasKey || p.unknownSource) continue;
           nonRegistryEntries.push({ ecosystem: mapEcosystem(r.group.language), name: p.name, why: `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name} comes from ${p.registry}, so it was not looked up` });
         }
       }
