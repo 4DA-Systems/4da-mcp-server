@@ -1708,7 +1708,9 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
       if (sub && !header.array) single = { key: sub[2], pkg: null, registry: null, git: null, local: null };
       continue;
     }
-    const kv = tomlKeyValue(line);
+    // `"name".path = "..."`: a quoted crate name with a dotted key (tomlKeyValue reads no dot after a quote).
+    const quotedDotted = /^("[^"]+"|'[^']+')\s*\.\s*([A-Za-z0-9_-]+)\s*=\s*(.+)$/.exec(line);
+    const kv = quotedDotted ? { key: `${quotedDotted[1]}.${quotedDotted[2]}`, value: quotedDotted[3].trim() } : tomlKeyValue(line);
     if (!kv) continue;
     if (single) {
       if (kv.key === "registry" || kv.key === "registry-index") single.registry = tomlString(kv.value);

@@ -46,7 +46,7 @@ function tomlKeys(body: string | null): string[] {
   for (const line of body.split(/\r?\n/)) {
     // `name.workspace = true`, `name.version = "1"`: the crate is `name` (dotted keys spell an inline table).
     // A quoted key keeps its dots (`"zope.interface" = "^5"`).
-    const m = /^\s*(?:"([A-Za-z0-9_.-]+)"|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_-]+)(?:\s*\.\s*[A-Za-z0-9_-]+)?)\s*=/.exec(line);
+    const m = /^\s*(?:"([A-Za-z0-9_.-]+)"|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_-]+))(?:\s*\.\s*[A-Za-z0-9_-]+)?\s*=/.exec(line);
     if (m && !line.trim().startsWith("#")) keys.push(m[1] ?? m[2] ?? m[3]);
   }
   return keys;

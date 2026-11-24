@@ -54,6 +54,12 @@ describe("Cargo dotted keys are the inline table form", () => {
     const names = cargoManifestPrivate('[dependencies]\nacme-p.path = "../p"\nacme-g.git = "https://git.acme.example/g"\nacme-r.version = "1"\nacme-r.registry = "acme"\nacme-k.package = "acme-real"\nacme-k.path = "../k"\nserde.version = "1"\n').map((p) => p.name).sort();
     expect(names).toEqual(["acme-g", "acme-k", "acme-p", "acme-r", "acme-real"]);
   });
+  it("a quoted crate name with a dotted key (check of round 2, shapes/cdot)", () => {
+    expect(cargoManifestPrivate('[dependencies]\n"acme-quoted".path = "../q"\n').map((p) => p.name)).toEqual(["acme-quoted"]);
+    h.write("Cargo.toml", '[workspace]\nmembers = ["crates/*"]\n');
+    h.write("crates/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n\n[dependencies]\n"acme-quoted".path = "../q"\n');
+    expect(cargoWorkspaceDeps(h.dir, fs.readFileSync(path.join(h.dir, "Cargo.toml"), "utf8")).deps).toEqual(["acme-quoted"]);
+  });
   it("a workspace root's member that inherits with name.workspace = true names the crate, not name.workspace", () => {
     h.write("Cargo.toml", '[workspace]\nmembers = ["crates/*"]\n\n[workspace.dependencies]\nsmallvec = "1.13"\n');
     h.write("crates/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n\n[dependencies]\nsmallvec.workspace = true\n"zope.like" = "1"\n');
