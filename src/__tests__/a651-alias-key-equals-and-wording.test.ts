@@ -30,6 +30,12 @@ describe("npm:<x> under the key x", () => {
     expect(classifyNpmSpec("rc", "npm:rc")).toEqual({ kind: "registry", name: "rc", range: "*" });
     expect(classifyNpmSpec("x", "npm:x")).toEqual({ kind: "registry", name: "x", range: "*" });
   });
+  it("only when the key is exactly x: JSONStream is not jsonstream, Next is not next", () => {
+    // Final check: a case-insensitive compare made "JSONStream": "npm:jsonstream" check JSONStream, a
+    // different real package, and "Next": "npm:next" check "Next".
+    expect(classifyNpmSpec("JSONStream", "npm:jsonstream")).toEqual({ kind: "registry", name: "jsonstream", range: "*" });
+    expect(classifyNpmSpec("Next", "npm:next").kind).not.toBe("registry");
+  });
 });
 
 describe("an ambiguous npm:<x> that stays withheld says what it is", () => {

@@ -155,7 +155,7 @@ function aliasSpec(name: string, rest: string, yarn = false): NpmSpecClass {
   const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
   if (at < 0) {
     // `"next": "npm:next"`: npm and Yarn agree, it is that package from the registry.
-    if (rest.toLowerCase() === name.toLowerCase() && PACKAGE_NAME.test(rest)) return registry(name, "*");
+    if (rest === name && PACKAGE_NAME.test(rest)) return registry(name, "*");
     const range = isSemverRange(rest);
     // A name a package could be published under now (no `~`, which only legacy names hold).
     const named = PACKAGE_NAME.test(rest) && !rest.includes("~") && !TARBALL_FILE.test(rest);
