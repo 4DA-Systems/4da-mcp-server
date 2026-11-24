@@ -323,7 +323,7 @@ export function heldText(release: string, affected: HeldDependency[]): string {
   const byVia = new Map<string, { via: NonNullable<HeldDependency["via"]>; pins: string[] }>();
   for (const d of shown) {
     if (!d.via) continue;
-    const key = `${d.via.name} ${d.via.version} ${d.via.spec} ${d.via.exact}`;
+    const key = `${d.via.name}\u0000${d.via.version}\u0000${d.via.spec}\u0000${d.via.exact}`;
     const group = byVia.get(key) ?? { via: d.via, pins: [] };
     group.pins.push(`${d.name} ${d.version} (${d.ids.join(", ")})`);
     byVia.set(key, group);
