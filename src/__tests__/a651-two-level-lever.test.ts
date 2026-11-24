@@ -91,6 +91,23 @@ describe("a parent upgrade whose lever pins an affected copy two levels down", (
     expect(runText(result)).not.toContain(`${OPENAPI}@0.97.3`);
   });
 
+  it("when what the lever release installs two levels down was NOT CHECKED, the own row says so, not 'affected'", async () => {
+    // Final check (t2fail): a failed second-level lookup made the own row say "is NOT a clean fix (what
+    // it installs two levels down is affected ...)", which nothing had found.
+    h.ADVISORIES[OPENAPI] = [adv("GHSA-hhx9-57xq-r5rw", OPENAPI, fixedIn("0.50.0"))];
+    h.NPM[OPENAPI].versions["0.50.0"] = { dependencies: { handlebars: "4.7.8", [REF]: "1.4.0" } };
+    delete h.NPM[REF];
+    const { result, step } = await h.plan();
+    const own = step(OPENAPI);
+    const lever = step("handlebars");
+    expect(lever.reasons.join(" "), JSON.stringify(lever.reasons)).toMatch(/NOT CHECKED/);
+    expect(own.targetVersion).toBeNull();
+    expect(runText(result)).not.toContain(`${OPENAPI}@0.97.3`);
+    const text = own.reasons.join(" ");
+    expect(text).not.toContain("NOT a clean fix (what it installs two levels down is affected");
+    expect(text).toMatch(/0\.97\.3: whether what it installs two levels down is affected was NOT CHECKED/);
+  });
+
   it("control: a lever whose second level is clean is named and run as before", async () => {
     h.NPM[REF].versions["1.4.2"] = { dependencies: { "js-yaml": "4.3.2" } };
     const { result, step } = await h.plan();

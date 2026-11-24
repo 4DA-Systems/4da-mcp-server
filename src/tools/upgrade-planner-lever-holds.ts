@@ -47,7 +47,8 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
     }
   }
   // Releases judged NOT a clean fix here: one judgement for the whole plan (below).
-  const rejected = new Set<string>();
+  // The cause, when what the release installs two levels down was only NOT CHECKED; null when it is affected.
+  const rejected = new Map<string, string | null>();
   for (const uses of groups.values()) {
     const { name, version } = uses[0].lever;
     const to = uses[0].lever.to!;
@@ -57,9 +58,9 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
     // A release the plan calls NOT a clean fix, or whose holds were NOT CHECKED, gets no command and
     // no all_advisories claim, on the lever or on the row (claims review 2026-11-24, twolevel85: the
     // handlebars row kept `npm install @hey-api/openapi-ts@0.97.3` and fixPathChecked all_advisories).
-    const withhold = (text: string) => {
+    const withhold = (text: string, unchecked: string | null = null) => {
       say(text);
-      rejected.add(`${name}\0${to}`);
+      rejected.set(`${name}\0${to}`, unchecked);
       for (const u of uses) {
         delete u.lever.commands;
         delete u.lever.instructions;
@@ -86,7 +87,7 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
     const at = facts ? await judge(to) : undefined;
     if (!at || at.status === "unchecked") {
       const why = at?.status === "unchecked" ? at.reason : facts ? "the planner's time budget ran out before it finished" : `the registry gave no answer for the releases of ${name}`;
-      withhold(`whether the dependencies ${name} ${to} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`);
+      withhold(`whether the dependencies ${name} ${to} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`, why);
       continue;
     }
     if (at.affected.length === 0) continue;
@@ -111,11 +112,16 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
   for (const step of steps) {
     if (step.ecosystem !== "npm" || step.scope !== "direct" || !step.targetVersion || !rejected.has(`${step.package}\0${step.targetVersion}`)) continue;
     const release = step.targetVersion;
+    const unchecked = rejected.get(`${step.package}\0${release}`);
     step.targetVersion = null;
     delete step.upgradeCommands;
     delete step.upgradeInstructions;
     if (step.fixPathChecked === "all_advisories") step.fixPathChecked = "installed_advisories_only";
-    step.reasons.push(`${step.package} ${release} is NOT a clean fix (what it installs two levels down is affected: see the rows that name it), so no target or command is given`);
+    step.reasons.push(
+      unchecked
+        ? `${step.package} ${release}: whether what it installs two levels down is affected was NOT CHECKED (${unchecked}), so no target or command is given`
+        : `${step.package} ${release} is NOT a clean fix (what it installs two levels down is affected: see the rows that name it), so no target or command is given`,
+    );
   }
 }
 
