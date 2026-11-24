@@ -73,12 +73,25 @@ const unquote = (v: string): string => {
   return t;
 };
 
-/** A catalog value: a plain or quoted scalar; null for anything else (a nested block, an anchor, an unclosed quote). */
-function scalar(value: string): string | null {
-  const t = value.trim();
+/** YAML anchors (`&name value`) seen so far, for aliases (`*name`); a scalar anchor only. */
+type Anchors = Map<string, string>;
+
+/**
+ * A catalog value: a plain or quoted scalar, an anchored scalar (`&react ^18.2.0`, recorded) or an
+ * alias of one (`*react`); null for anything else (a nested block, a tag, an unclosed quote, an alias
+ * of an anchor not defined above it), which makes the file unreadable rather than guessed at.
+ */
+function scalar(value: string, anchors: Anchors = new Map()): string | null {
+  let t = value.trim();
+  const alias = /^\*([^\s,[\]{}]+)$/.exec(t);
+  if (alias) return anchors.get(alias[1]) ?? null;
+  const anchor = /^&([^\s,[\]{}]+)\s+(.+)$/.exec(t);
+  if (anchor) t = anchor[2].trim();
   if (t === "" || /^[{[|>&*!]/.test(t)) return null;
   if (/^['"]/.test(t) && (t.length < 2 || t[t.length - 1] !== t[0])) return null;
-  return unquote(t);
+  const out = unquote(t);
+  if (anchor) anchors.set(anchor[1], out);
+  return out;
 }
 
 /** A comment starts at `#` after whitespace (a `#` inside a spec, `org/repo#ref`, is not one). */
@@ -102,7 +115,7 @@ function keyValue(text: string): { key: string; value: string } | null {
 }
 
 /** `{ a: b, 'c': "d" }` on one line; null when it is not a flat flow mapping. */
-function flowMapping(text: string): Catalog | null {
+function flowMapping(text: string, anchors: Anchors = new Map()): Catalog | null {
   const t = text.trim();
   if (!t.startsWith("{") || !t.endsWith("}")) return null;
   const inner = t.slice(1, -1).trim();
@@ -111,8 +124,8 @@ function flowMapping(text: string): Catalog | null {
   for (const part of inner.split(",")) {
     if (part.trim() === "") continue;
     const kv = keyValue(part);
-    const value = kv ? scalar(kv.value) : null;
-    if (!kv || value === null) return null;
+    const value = kv ? scalar(kv.value, anchors) : null;
+    if (!kv || value === null || out.has(kv.key)) return null;
     out.set(kv.key, value);
   }
   return out;
@@ -127,7 +140,15 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
     return none(file, `it could not be read (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`);
   }
   const byName = new Map<string, Catalog>();
-  const fail = (line: number) => none(file, `its catalog could not be parsed (line ${line})`);
+  const fail = (line: number, why = "could not be parsed") => none(file, `its catalog ${why} (line ${line})`);
+  // pnpm refuses a mapping that repeats a key; taking the last would guess (re-check 2026-11-24).
+  const duplicate = (line: number) => fail(line, "repeats a key, which pnpm refuses");
+  const anchors: Anchors = new Map();
+  // Anchors defined anywhere in the file (above the catalog) are what an alias in it refers to.
+  for (const raw of content.split(/\r?\n/)) {
+    const kv = keyValue(stripComment(raw).replace(/\s+$/, ""));
+    if (kv && /^&/.test(kv.value.trim())) scalar(kv.value, anchors);
+  }
   const lines = content.split(/\r?\n/);
   let section: "catalog" | "catalogs" | null = null;
   let sectionIndent = -1;
@@ -147,7 +168,7 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
       sectionIndent = -1;
       currentIndent = -1;
       if (kv.value !== "") {
-        const flow = flowMapping(kv.value);
+        const flow = flowMapping(kv.value, anchors);
         if (flow === null) return fail(i + 1);
         if (section === "catalog") byName.set("default", flow);
         else if (flow.size > 0) return fail(i + 1);
@@ -164,26 +185,30 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
     if (!kv) return fail(i + 1);
     if (section === "catalog") {
       if (sectionIndent < 0) sectionIndent = indent;
-      const value = scalar(kv.value);
+      const value = scalar(kv.value, anchors);
       if (indent !== sectionIndent || value === null) return fail(i + 1);
+      if (current?.has(kv.key)) return duplicate(i + 1);
       current?.set(kv.key, value);
     } else {
       if (sectionIndent < 0) sectionIndent = indent;
       if (indent === sectionIndent) {
         if (kv.value === "") {
+          if (byName.has(kv.key) && kv.key !== "default") return duplicate(i + 1);
           current = byName.get(kv.key) ?? new Map();
           byName.set(kv.key, current);
           currentIndent = -1;
         } else {
-          const flow = flowMapping(kv.value);
+          const flow = flowMapping(kv.value, anchors);
           if (flow === null) return fail(i + 1);
+          if (byName.has(kv.key)) return duplicate(i + 1);
           byName.set(kv.key, flow);
           current = null;
         }
       } else if (indent > sectionIndent && current) {
         if (currentIndent < 0) currentIndent = indent;
-        const value = scalar(kv.value);
+        const value = scalar(kv.value, anchors);
         if (indent !== currentIndent || value === null) return fail(i + 1);
+        if (current.has(kv.key)) return duplicate(i + 1);
         current.set(kv.key, value);
       } else return fail(i + 1);
     }

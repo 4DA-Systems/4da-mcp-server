@@ -372,13 +372,13 @@ describe("4. a dead installed line names the smallest safe release on a later li
     const { step } = await plan();
     const jwt = step("jsonwebtoken");
     expect(jwt).toMatchObject({ targetVersion: "9.0.0", latestVersion: "9.0.3", breaking: true });
-    expect(jwt.reasons).toContain("No 8.x release clears every advisory: 9.0.0 is the smallest safe release, on the nearest later line that has one; 9.0.3 is the newest safe release");
+    expect(jwt.reasons).toContain("No 8.x release clears every advisory: 9.0.0 is the smallest safe release, on the nearest later line that has one; 9.0.3 is the newest release its own advisories leave clean (what it installs was not judged)");
   });
 
   it("vulnerability_scan: the same words, and fix_targets carries newest_safe", async () => {
     jwtProject();
     const detailed = await scan("detailed");
-    expect(lineFor(detailed, "jsonwebtoken", "8.5.1")).toMatch(/no 8\.x release clears every advisory: 9\.0\.0 is the smallest safe release, on the nearest later line that has one; 9\.0\.3 is the newest safe release/);
+    expect(lineFor(detailed, "jsonwebtoken", "8.5.1")).toMatch(/no 8\.x release clears every advisory: 9\.0\.0 is the smallest safe release, on the nearest later line that has one; 9\.0\.3 is the newest release its own advisories leave clean \(what it installs was not judged\)/);
     expect(detailed.fix_targets["jsonwebtoken@8.5.1"]).toMatchObject({ target: "9.0.0", newest_safe: "9.0.3" });
   });
 
@@ -402,7 +402,7 @@ describe("4b. a dead line above the installed release is not a dead line below i
     NPM.through = { latest: "2.3.8", versions: { "2.3.1": {}, "2.3.8": {} } };
     npmProject({ "event-stream": "3.3.6" }, { "event-stream": { version: "3.3.6" } });
   }
-  const WORDS = "o 3.x release after 3.3.6 exists; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release";
+  const WORDS = "o 3.x release after 3.3.6 exists; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest release its own advisories leave clean (what it installs was not judged)";
 
   it("upgrade_planner and vulnerability_scan: no later 3.x exists, 3.3.5 (a downgrade) is clean, 4.0.0 the smallest clean upgrade", async () => {
     eventStream();
@@ -420,7 +420,7 @@ describe("4b. a dead line above the installed release is not a dead line below i
     eventStream({ "3.3.7": {} });
     const { step } = await plan();
     expect(step("event-stream").reasons).toContain(
-      "No 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release",
+      "No 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest release its own advisories leave clean (what it installs was not judged)",
     );
   });
 
@@ -429,7 +429,7 @@ describe("4b. a dead line above the installed release is not a dead line below i
     ADVISORIES.through = [adv("GHSA-thru-0000-0001", "through", fixedIn("2.4.0"))];
     const { step } = await plan();
     const reasons = step("event-stream").reasons.join(" | ");
-    expect(reasons).toContain("No 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    expect(reasons).toContain("No 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest release its own advisories leave clean (what it installs was not judged)");
     expect(reasons).not.toMatch(/3\.3\.5|no 3\.x release clears every advisory/i);
   });
 });
@@ -437,13 +437,13 @@ describe("4b. a dead line above the installed release is not a dead line below i
 describe("deadLineText: a downgrade is named only once checked (pre-publish round 10, W6)", () => {
   const base = { target: "4.0.0", basis: "advisory_fixes" as const, floor: "4.0.0", floorAffectedBy: [], stillAffectedBy: [], unfixable: [], withheld: [], lineDead: true as const, newestSafe: "4.0.1" };
   it("whole line affected: the original words; a downgrade unconfirmed: neither named nor denied", () => {
-    expect(deadLineText("8.5.1", base)).toBe("no 8.x release clears every advisory: 4.0.0 is the smallest safe release, on the nearest later line that has one; 4.0.1 is the newest safe release");
+    expect(deadLineText("8.5.1", base)).toBe("no 8.x release clears every advisory: 4.0.0 is the smallest safe release, on the nearest later line that has one; 4.0.1 is the newest release its own advisories leave clean (what it installs was not judged)");
     for (const down of [{ confirmed: false, heldClean: true }, { confirmed: true, heldClean: false }]) {
       const text = deadLineText("3.3.6", { ...base, lineDowngrade: { version: "3.3.5", ...down } });
-      expect(text).toBe("no 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release");
+      expect(text).toBe("no 3.x release after 3.3.6 exists; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest release its own advisories leave clean (what it installs was not judged)");
     }
     expect(deadLineText("3.3.6", { ...base, lineHasLater: true, lineDowngrade: { version: "3.3.5", confirmed: true, heldClean: true } })).toBe(
-      "no 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest safe release",
+      "no 3.x release after 3.3.6 clears every advisory; 3.3.5 (a downgrade) is clean; 4.0.0 is the smallest safe upgrade, on the nearest later line that has one; 4.0.1 is the newest release its own advisories leave clean (what it installs was not judged)",
     );
   });
 });

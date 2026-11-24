@@ -28,6 +28,7 @@ import { checkInstallState } from "./install-state.js";
 import { expandWorkspaces, memberNamesOf, pnpmYamlList, readManifestDeclarations } from "./js-manifests.js";
 import { lazyNpmCatalogs } from "./npm-catalog.js";
 import { classifyNpmSpec } from "./npm-spec.js";
+import { UNREAD_CATALOG_MARK } from "./private-packages.js";
 import { allOverrideSpecs } from "./overrides.js";
 import { lockfileCandidates, manifestCandidate, manifestProblemText, manifestSyntaxProblem, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
@@ -105,6 +106,10 @@ export interface NotRegistryDependency {
   from: string;
   /** Local code: the directory it is in, when the spec or the workspace says. */
   at?: string;
+  /** An alias key, or a key an override replaces with an alias: private only inside this project. */
+  aliasKey?: true;
+  /** Declared through a catalog that could not be read: where it comes from is not known. */
+  unknownSource?: true;
 }
 
 /** Workspace member directories under `dir` (package.json `workspaces`, pnpm-workspace.yaml `packages`), relative. */
@@ -147,7 +152,7 @@ function specWords(kind: "git" | "url" | "file" | "local" | "catalog", spec: str
  * `"vendor/x-1.0.0.tgz"` and a workspace member declared `^1.0.0` reached registry.npmjs.org,
  * api.npmjs.org and hn.algolia.com by name (review 2026-11-24).
  */
-function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string>, aliases: Map<string, string>): NotRegistryDependency[] {
+function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string>, aliases: Map<string, string>, catalogProblems: Array<{ file: string; why: string; names: string[] }> = []): NotRegistryDependency[] {
   const out = new Map<string, NotRegistryDependency>();
   const catalogsByDir = new Map<string, ReturnType<typeof lazyNpmCatalogs>>();
   const catalogsFor = (base: string) => {
@@ -176,18 +181,29 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
         // installs the target, which is what is checked; the key itself is withheld, with the target named.
         if (spec.name.toLowerCase() !== d.name.toLowerCase()) {
           if (!aliases.has(d.name)) aliases.set(d.name, spec.name);
-          add({ name: d.name, file: m.file, from: `an npm: alias of ${spec.name} (${d.spec.trim().slice(0, 120)}): it installs ${spec.name}, so ask about ${spec.name}` });
+          add({ name: d.name, file: m.file, from: `an npm: alias of ${spec.name} (${d.spec.trim().slice(0, 120)}): it installs ${spec.name}, so ask about ${spec.name}`, aliasKey: true });
         }
         continue;
       }
       if (spec.kind === "catalog") {
-        add({ name: d.name, file: m.file, from: specWords("catalog", d.spec.trim(), spec.catalogSpec) });
+        // Not known where it comes from: withheld, named with the catalog file and why, and the group's
+        // scan is incomplete (re-check 2026-11-24: an anchored catalog read as unreadable left the
+        // project "complete" with no word of the file).
+        const cat = catalogsFor(m.base);
+        const catFile = cat.file ?? m.file;
+        const why = spec.catalogSpec !== undefined ? `its entry for ${d.name} is itself a catalog: spec` : cat.error ? cat.error : cat.file ? `it has no entry for ${d.name} in ${d.spec.trim() === "catalog:" ? "the default catalog" : d.spec.trim()}` : "no pnpm-workspace.yaml or Bun catalog was found above it";
+        add({ name: d.name, file: catFile, from: `${UNREAD_CATALOG_MARK} (${catFile}: ${why})`, unknownSource: true });
+        const known = catalogProblems.find((p) => p.file === catFile);
+        if (known) known.names.push(d.name);
+        else catalogProblems.push({ file: catFile, why, names: [d.name] });
         continue;
       }
       const where = (spec.catalogSpec ?? d.spec).trim().replace(/^(?:file|link|portal):/i, "");
       // Where local source code is (never for `workspace:`, which names a member, or `exec:`).
       const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test((spec.catalogSpec ?? d.spec).trim()) && where !== "" ? path.resolve(m.base, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
       add({ name: d.name, file: m.file, from: specWords(spec.kind, d.spec.trim(), spec.catalogSpec), ...(at ? { at } : {}) });
+      const target = refusedAliasTarget(d.spec);
+      if (target) add({ name: target, file: m.file, from: `named in an npm: alias npm refuses to install (${d.spec.trim().slice(0, 120)})` });
     }
   }
   if (members.length > 0) {
@@ -218,7 +234,15 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
     }
     for (const o of allOverrideSpecs(manifest, yaml)) {
       const spec = classifyNpmSpec(o.name, o.spec, catalogsFor(dir));
-      if (spec.kind === "registry") continue;
+      const file = o.where.includes("pnpm-workspace.yaml") ? yamlFile : manifestFile;
+      if (spec.kind === "registry") {
+        // `"x": "npm:ms@2.1.3"` in an override: x is replaced by ms, so the name x installs nothing of
+        // its own here, and asked about directly it is withheld, as an alias key is (re-check 2026-11-24).
+        if (spec.name.toLowerCase() !== o.name.toLowerCase()) add({ name: o.name, file, from: `replaced by ${spec.name} through ${o.where} (${o.spec.trim().slice(0, 120)}), so ask about ${spec.name}`, aliasKey: true });
+        continue;
+      }
+      const target = refusedAliasTarget(o.spec);
+      if (target) add({ name: target, file, from: `named in an npm: alias npm refuses to install, in ${o.where}` });
       const raw = (spec.catalogSpec ?? o.spec).trim();
       const where = raw.replace(/^(?:file|link|portal):/i, "");
       const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test(raw) && where !== "" ? path.resolve(dir, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
@@ -244,6 +268,19 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
     if (got?.file) watched.add(got.file);
   }
   return [...out.values()];
+}
+
+/**
+ * The target named by an `npm:` alias that npm refuses (an alias of an alias, a target with a URL or
+ * path behind it): nothing installs it, and it was written by the project, so it is withheld too.
+ */
+function refusedAliasTarget(rawSpec: string): string | null {
+  const spec = rawSpec.trim();
+  if (!/^npm:/i.test(spec)) return null;
+  const rest = spec.slice(4);
+  const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
+  const target = at > 0 ? rest.slice(0, at) : null;
+  return target && /^(?:@[a-z0-9~][a-z0-9._~-]*\/)?[a-z0-9~][a-z0-9._~-]*$/i.test(target) ? target : null;
 }
 
 /** A version source with nothing read: the enclosing workspace root's manifests are read, not its lockfile. */
@@ -347,7 +384,8 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   // npm: every alias key, from the lockfile reader (package-lock) and from the manifests themselves
   // (the pnpm, Yarn and Bun readers record none: review 2026-11-24, the key went to the registry).
   const manifestAliases = new Map<string, string>();
-  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read, watched, manifestAliases) : [];
+  const catalogProblems: Array<{ file: string; why: string; names: string[] }> = [];
+  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read, watched, manifestAliases, catalogProblems) : [];
   const aliasOf = (name: string) => read.aliases?.get(name) ?? manifestAliases.get(name) ?? name;
   const real = (names: string[]) => (read.aliases || manifestAliases.size > 0 ? [...new Set(names.map(aliasOf))] : names);
   for (const file of watched) if (!signatures.has(file)) signatures.set(file, signatureMap([file]).get(file) ?? "absent");
@@ -418,7 +456,11 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
     registryWide: read.registryWide ?? [],
     ...(read.indexRecorded ? { indexRecorded: true as const } : {}),
     unpinned,
-    problems: [...(read.problems ?? []), ...manifestProblems],
+    problems: [
+      ...(read.problems ?? []),
+      ...manifestProblems,
+      ...catalogProblems.map((c) => ({ file: c.file, ecosystem, error: `${c.why}, so ${c.names.slice(0, 5).join(", ")}${c.names.length > 5 ? ", ..." : ""}, declared through it, ${c.names.length === 1 ? "was" : "were"} not resolved and NOT checked: fix the catalog, then scan again` })),
+    ],
     ...(notRegistry.length > 0 ? { notRegistry } : {}),
     signatures,
     digests,

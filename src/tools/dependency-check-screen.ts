@@ -9,7 +9,7 @@
 import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { isNpmPackageName, quoteThirdParty } from "../untrusted-text.js";
-import { unreadFileKind } from "../live/private-packages.js";
+import { NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK, unreadFileKind } from "../live/private-packages.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
 import { head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
 
@@ -140,6 +140,26 @@ function privateResult(r: Requested, why: string, unreadFile: string | null): It
       signals: [],
       not_checked: "private",
       unreadable_file: unreadFile,
+    };
+  }
+  // A name withheld because a project takes it from a path, git, a URL, its workspace or an alias is
+  // not a private package, and private-registry tooling is no help with it (re-check 2026-11-24).
+  if (why.includes(UNREAD_CATALOG_MARK)) {
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (catalog not read): ${r.package}: ${why}. Nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: fix the catalog, then call dependency_check again.`,
+      signals: [],
+      not_checked: "private",
+    };
+  }
+  if (why.includes(NOT_REGISTRY_MARK)) {
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (not a registry release): ${r.package}: ${why}. Nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: review the code it comes from, or ask about the registry package it installs.`,
+      signals: [],
+      not_checked: "private",
     };
   }
   return {

@@ -206,7 +206,11 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
       const npmDevDeps = (pkg.devDependencies && typeof pkg.devDependencies === "object")
         ? Object.keys(pkg.devDependencies).filter(d => !NODE_BUILTINS.has(d))
         : [];
-      if (npmDeps.length > 0 || npmDevDeps.length > 0) {
+      // A workspace root with no dependencies of its own is still the group its members' names and
+      // local dependencies are read from (re-check 2026-11-24: with no lockfile, a member's own name
+      // asked about at the root was sent).
+      const workspaceRoot = Boolean(pkg.workspaces) || fs.existsSync(path.join(cwd, "pnpm-workspace.yaml"));
+      if (npmDeps.length > 0 || npmDevDeps.length > 0 || workspaceRoot) {
         result.depsByEcosystem["npm"] = { deps: npmDeps, devDeps: npmDevDeps };
       }
     } catch {

@@ -119,6 +119,59 @@ export function rememberPrivateName(ecosystem: string, name: string, why: string
   if (scope && !rememberedScopes.has(scope[1].toLowerCase())) rememberedScopes.set(scope[1].toLowerCase(), `@${scope[1].toLowerCase()}/* holds a private package (${why})`);
 }
 
+/**
+ * The words that mark a reason as "not a registry release" (a path, git, a URL, a workspace member,
+ * an alias key): such a name is not a private package, and the answer says what it is instead.
+ */
+export { NOT_REGISTRY_MARK } from "./private-packages.js";
+
+/**
+ * Names each scanned project takes from a source other than a registry (a path, git, a URL, its
+ * workspace), by project root, replaced whole every time that project's dependency set is built.
+ * A name in another project's list is withheld while that project still declares it so, unless the
+ * project being asked about itself declares the name as a registry dependency (re-check 2026-11-24:
+ * remembered forever and for every project, a removed alias key, a catalog entry changed to a
+ * range, and public names such as requests or lodash stayed "private" for the whole session).
+ * Alias keys are never listed here: an alias key is private only inside the project that aliases it.
+ */
+const nonRegistryByProject = new Map<string, Map<string, { ecosystem: string; why: string }>>();
+
+/** Replace the list of names `root` takes from a non-registry source. */
+export function setNonRegistryNames(root: string, entries: Array<{ ecosystem: string; name: string; why: string }>): void {
+  const map = new Map<string, { ecosystem: string; why: string }>();
+  for (const e of entries) {
+    const key = `${e.ecosystem}\0${normName(e.ecosystem, foldName(e.name))}`;
+    if (!map.has(key)) map.set(key, { ecosystem: e.ecosystem, why: e.why });
+  }
+  if (map.size === 0) nonRegistryByProject.delete(root);
+  else nonRegistryByProject.set(root, map);
+}
+
+/**
+ * Why `name` is withheld because another scanned project (not `ownRoot`) takes it from a
+ * non-registry source, or null. `declaresFromRegistry(eco, n)` exempts a name the project being asked
+ * about declares as a registry dependency, with or without a lockfile.
+ */
+export function nonRegistryElsewhere(
+  name: string,
+  ownRoot: string | null,
+  declaresFromRegistry?: (ecosystem: string, name: string) => boolean,
+): { ecosystem: string; why: string } | null {
+  if (nonRegistryByProject.size === 0) return null;
+  const forms = nameForms(name);
+  for (const [root, map] of nonRegistryByProject) {
+    if (root === ownRoot) continue;
+    for (const eco of ALL_ECOSYSTEMS) {
+      for (const form of forms) {
+        const n = normName(eco, form);
+        const hit = map.get(`${eco}\0${n}`);
+        if (hit && !declaresFromRegistry?.(eco, n)) return { ecosystem: eco, why: hit.why };
+      }
+    }
+  }
+  return null;
+}
+
 /** How many names are remembered private in this process. */
 export function rememberedPrivateCount(): number {
   return remembered.size;
@@ -167,6 +220,7 @@ export function resetPrivateGuard(): void {
   sources.clear();
   remembered.clear();
   rememberedScopes.clear();
+  nonRegistryByProject.clear();
 }
 
 function* liveSources(): Generator<PrivateNameSource> {

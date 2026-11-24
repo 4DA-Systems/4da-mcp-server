@@ -37,6 +37,7 @@ import { anySignatureChanged, signatureMap, type FileSignature } from "./file-si
 import { pushAll } from "../array-utils.js";
 import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, textLines } from "./js-lockfile-readers.js";
 import { readRuleFile } from "./text-file.js";
+import { tomlTable } from "../project-manifests.js";
 import { workspaceSearchDirs } from "../project-tree.js";
 import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 import {
@@ -112,6 +113,15 @@ export interface PrivateDependency {
 export type PrivateKind = "registry" | "name";
 
 /** Said with every registry-kind reason: how to have a host that only mirrors the public registry checked. */
+/**
+ * The words that mark a reason as "not a registry release" (a path, git, a URL, a workspace member,
+ * an alias key): such a name is not a private package, and the answer says what it is instead.
+ */
+export const NOT_REGISTRY_MARK = "not a registry release";
+
+/** The words that mark a name declared through a catalog that could not be read: not private, not known. */
+export const UNREAD_CATALOG_MARK = "declared through a catalog that could not be read";
+
 export const PUBLIC_MIRRORS_HINT = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
 
 /** A lockfile entry installed from a registry that is not the public one (or from git). */
@@ -134,6 +144,10 @@ export interface PrivateIndexEntry {
    * project is the project's own package, not a dependency (LiveIntelligence.getOwnPackageCount).
    */
   at?: string;
+  /** An npm alias key (or a key an override replaces with an alias): private only inside its own project. */
+  aliasKey?: true;
+  /** Declared through a catalog that could not be read: where it comes from is not known. */
+  unknownSource?: true;
   /** A `go.work` workspace module: the workspace's copy is built whatever version a go.mod requires. */
   workspace?: true;
   /**
@@ -1673,6 +1687,7 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
   };
   let table = "";
   let single: { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null } | null = null;
+  const dottedEntries = new Map<string, { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null }>();
   const flush = () => {
     const where = single ? fromElsewhere(single.registry, single.git, single.local) : null;
     // A `package =` rename installs under its key: both names are the project's (privacy review 2026-11-24).
@@ -1697,11 +1712,32 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
       if (kv.key === "package") single.pkg = tomlString(kv.value);
       continue;
     }
-    if (!isDepTable(table) || !kv.value.startsWith("{")) continue;
+    if (!isDepTable(table)) continue;
+    // Dotted keys are the inline table spelled over lines: `name.path = "..."`, `name.git = "..."`,
+    // `name.registry = "..."`, `name.package = "real"` (re-check 2026-11-24: `x.workspace = true`
+    // was read as a crate named `x.workspace`, and `x.path` was not read at all).
+    const dotted = /^("[^"]+"|'[^']+'|[A-Za-z0-9_-]+)\s*\.\s*([A-Za-z0-9_-]+)$/.exec(kv.key);
+    if (dotted) {
+      const name = dotted[1].replace(/^["']|["']$/g, "");
+      const k = `${table}\0${name}`;
+      const d = dottedEntries.get(k) ?? { key: name, pkg: null, registry: null, git: null, local: null };
+      const v = tomlString(kv.value);
+      if (dotted[2] === "registry" || dotted[2] === "registry-index") d.registry = v;
+      if (dotted[2] === "git") d.git = v;
+      if (dotted[2] === "path") d.local = v;
+      if (dotted[2] === "package") d.pkg = v;
+      dottedEntries.set(k, d);
+      continue;
+    }
+    if (!kv.value.startsWith("{")) continue;
     const where = fromElsewhere(inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index"), inlineKey(kv.value, "git"), inlineKey(kv.value, "path"));
     if (where) for (const name of new Set([kv.key, inlineKey(kv.value, "package") ?? kv.key])) out.push({ name, registry: where, ...localPath(inlineKey(kv.value, "git"), inlineKey(kv.value, "path")) });
   }
   flush();
+  for (const d of dottedEntries.values()) {
+    single = d;
+    flush();
+  }
   return out;
 }
 
@@ -1716,10 +1752,10 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
  * With no lockfile, `omega-quant==2.0.0` and `omega-risk = "1.4.0"` were sent to OSV.dev and PyPI
  * (blind audit round 4). Returns each such name with the index or location it names.
  */
-export function pyprojectManifestPrivate(content: string): Array<{ name: string; registry: string }> {
+export function pyprojectManifestPrivate(content: string): Array<{ name: string; registry: string; local?: true }> {
   const indexes = new Map<string, string>();
   const wanted: Array<{ name: string; index: string; kind: "uv" | "poetry" }> = [];
-  const direct: Array<{ name: string; registry: string }> = [];
+  const direct: Array<{ name: string; registry: string; local?: true }> = [];
   let table = "";
   let block: { kind: "uv" | "poetry"; name: string | null; url: string | null } | null = null;
   const endBlock = () => {
@@ -1729,10 +1765,18 @@ export function pyprojectManifestPrivate(content: string): Array<{ name: string;
   const isPoetryDeps = (name: string) => /^tool\.poetry\.(?:dependencies|dev-dependencies|group\.[^.]+\.dependencies)$/.test(name);
   /** A `{ git = ..., url = ..., path = ... }` source: private unless its location is public. */
   const directSource = (name: string, table: string) => {
+    // `{ workspace = true }`: a uv workspace member, local code (re-check 2026-11-24: sent to pypi.org).
+    if (/(?:^|[{,\s])workspace\s*=\s*true\b/.test(table)) {
+      direct.push({ name, registry: "a uv workspace member (local code)", local: true });
+      return;
+    }
     const location = inlineKey(table, "git") ?? inlineKey(table, "url") ?? inlineKey(table, "path") ?? inlineKey(table, "file");
     if (!location) return;
     const local = inlineKey(table, "path") !== null || inlineKey(table, "file") !== null;
-    if (local || privateDirectReference(location)) direct.push({ name, registry: local ? `the local path ${location}` : sourceLabel(location.replace(/^git\+/i, "")) });
+    const git = inlineKey(table, "git") !== null;
+    // A path or a git checkout is not a registry release (local): withheld, and not called private.
+    if (local || git) direct.push({ name, registry: local ? `the local path ${location}` : `git (${sourceLabel(location.replace(/^git\+/i, ""))})`, local: true });
+    else if (privateDirectReference(location)) direct.push({ name, registry: sourceLabel(location.replace(/^git\+/i, "")) });
   };
   for (const line of tomlLines(content)) {
     const header = tomlHeader(line);
@@ -1761,7 +1805,7 @@ export function pyprojectManifestPrivate(content: string): Array<{ name: string;
       if (kv.key === "index") {
         const index = tomlString(kv.value);
         if (index) wanted.push({ name, index, kind: "uv" });
-      } else if (["git", "url", "path"].includes(kv.key)) directSource(name, `{ ${kv.key} = ${kv.value} }`);
+      } else if (["git", "url", "path", "workspace"].includes(kv.key)) directSource(name, `{ ${kv.key} = ${kv.value} }`);
     } else if (isPoetryDeps(table) && kv.value.startsWith("{")) {
       const source = inlineKey(kv.value, "source");
       if (source) wanted.push({ name: kv.key, index: source, kind: "poetry" });
@@ -1861,7 +1905,14 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
   }
   if (ecosystem === "PyPI") {
     const file = path.join(dir, "pyproject.toml");
-    return [...read(file, textOf(file), pyprojectManifestPrivate), ...unread];
+    // The project's own name (`[project].name`, `[tool.poetry].name`) is local code, as a Cargo
+    // workspace's crates are (re-check 2026-11-24: asked about directly, it was sent to pypi.org).
+    const ownProject = (text: string) => {
+      const name = /^name\s*=\s*["']([^"']+)["']/m.exec(tomlTable(text, "project") ?? tomlTable(text, "tool.poetry") ?? "")?.[1];
+      return name ? [{ name, registry: "this project's own package (pyproject.toml)", local: true as const, path: "." }] : [];
+    };
+    const text = textOf(file);
+    return [...read(file, text, pyprojectManifestPrivate), ...read(file, text, ownProject), ...unread];
   }
   return [];
 }
@@ -2049,6 +2100,9 @@ export function lockfileRegistryWide(
  * declared there is checked again, and the answer never said so (pre-publish round 10, W4).
  */
 export function lockEntryReason(entry: PrivateIndexEntry): string {
+  if (entry.unknownSource) return `${entry.file}: ${entry.name} is ${entry.registry}, so where it comes from is not known and it was not looked up`;
+  // Local code, a workspace member, git or an alias key: not a private package, and not looked up.
+  if (entry.local || /^(?:git\b|git\+|git:|ssh:)|\.git(?:[#?/@]|$)/i.test(entry.registry)) return `${entry.file} installs it from ${entry.registry}: ${NOT_REGISTRY_MARK}, so it was not looked up`;
   const base = `${entry.file} installs it from ${entry.registry}, not the public registry`;
   const registry = !entry.local && hostOf(entry.registry.replace(/^[a-z]+\+/i, "")) !== null && !/^(?:git\+|git:|ssh:)|\.git(?:[#?/]|$)/i.test(entry.registry);
   return registry ? `${base}; ${PUBLIC_MIRRORS_HINT}` : base;

@@ -50,7 +50,9 @@ describe("a bare npm:<version-or-range> is the key's own package", () => {
     expect(classifyNpmSpec("left-pad", "npm:1.3.0")).toEqual({ kind: "registry", name: "left-pad", range: "1.3.0" });
     expect(classifyNpmSpec("ms", "npm:^2.1.0")).toEqual({ kind: "registry", name: "ms", range: "^2.1.0" });
     expect(classifyNpmSpec("ms", "npm:~2.1.0")).toEqual({ kind: "registry", name: "ms", range: "~2.1.0" });
-    expect(classifyNpmSpec("ms", "npm:2.x")).toEqual({ kind: "registry", name: "ms", range: "2.x" });
+    // `2.x` is both a range and a valid package name: npm and Yarn disagree, so it is withheld
+    // (a651-npm-alias-no-version.test.ts states the rule).
+    expect(classifyNpmSpec("ms", "npm:2.x").kind).not.toBe("registry");
     // Still an alias when it names a package.
     expect(classifyNpmSpec("sw", "npm:string-width@^4.2.0")).toEqual({ kind: "registry", name: "string-width", range: "^4.2.0" });
     expect(classifyNpmSpec("sw", "npm:string-width")).toEqual({ kind: "registry", name: "string-width", range: "*" });

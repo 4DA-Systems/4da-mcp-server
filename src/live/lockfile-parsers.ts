@@ -1327,6 +1327,29 @@ const TOML_HEADER = /^\s*\[\[?\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:
  * table never closed, a string left open at the end of its line, a line that is neither a header nor
  * `key = value`), which is what made a project read as having no dependencies (review 2026-11-24).
  */
+/**
+ * Where a multi-line string that is open at `from` closes on `line` (the index just past its
+ * delimiter), or -1. TOML 1.0: in a basic string (`"""`) a backslash escapes the next character
+ * (`\"""` is not a close), and one or two quotes right before the closing three belong to the
+ * string (`"""He said "hi""""`, `""""" `): the close is the last three of a run of up to five
+ * (re-check 2026-11-24: both were called "not closed", a valid Cargo.toml then UNREADABLE).
+ */
+function multilineClose(line: string, from: number, triple: string): number {
+  const quote = triple[0];
+  for (let i = from; i < line.length; i++) {
+    if (quote === '"' && line[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (line.startsWith(triple, i)) {
+      let end = i + 3;
+      while (end < line.length && line[end] === quote && end - i < 5) end++;
+      return end;
+    }
+  }
+  return -1;
+}
+
 export function tomlSyntaxProblem(content: string): string | null {
   let depth = 0;
   let multiline: string | null = null;
@@ -1334,9 +1357,9 @@ export function tomlSyntaxProblem(content: string): string | null {
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
     if (multiline) {
-      const end = line.indexOf(multiline);
+      const end = multilineClose(line, 0, multiline);
       if (end < 0) continue;
-      line = line.slice(end + 3);
+      line = line.slice(end);
       multiline = null;
     } else if (depth === 0) {
       const t = line.trim();
@@ -1356,12 +1379,12 @@ export function tomlSyntaxProblem(content: string): string | null {
       if (ch === '"' || ch === "'") {
         const triple = line.slice(j, j + 3);
         if (triple === '"""' || triple === "'''") {
-          const end = line.indexOf(triple, j + 3);
+          const end = multilineClose(line, j + 3, triple);
           if (end < 0) {
             multiline = triple;
             break;
           }
-          j = end + 2;
+          j = end - 1;
           continue;
         }
         let k = j + 1;

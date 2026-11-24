@@ -523,16 +523,20 @@ function summaryLine(results: ItemResult[], parts: string[]): string {
   if (privateCount === 0) return `${results.length} checked: ${parts.join(", ")}. ${advice}`;
   // Withheld only because a lockfile could not be read: not private, and the remedy is the file.
   const unread = results.filter((r) => r.not_checked === "private" && r.unreadable_file);
-  const priv = privateCount - unread.length;
+  // Not a registry release (a path, git, a URL, a workspace member, an alias key): not private either.
+  const local = results.filter((r) => r.not_checked === "private" && !r.unreadable_file && /^NOT CHECKED \((?:not a registry release|catalog not read)\)/.test(r.reason)).length;
+  const priv = privateCount - unread.length - local;
   const files = [...new Set(unread.map((r) => r.unreadable_file!))];
   const withheld = [
     ...(priv > 0 ? [`${priv} not checked (private): never looked up, verdict unknown`] : []),
+    ...(local > 0 ? [`${local} not checked (not a registry release): never looked up, verdict unknown`] : []),
     ...(unread.length > 0 ? [`${unread.length} not checked (unreadable ${files.every((f) => unreadFileKind(f) === "lockfile") ? "lockfile" : "file"}): withheld, never looked up, verdict unknown`] : []),
   ];
   const notChecked = withheld.join("; ");
   if (checked === 0) {
     const remedies = [
       ...(priv > 0 ? [`check ${priv === 1 ? "the private one" : "the private ones"} with your private registry's own tooling`] : []),
+      ...(local > 0 ? [`review the code ${local === 1 ? "the other one comes" : "the others come"} from, or ask about the registry package ${local === 1 ? "it installs" : "they install"}`] : []),
       ...(unread.length > 0 ? [`repair or regenerate ${files.slice(0, 3).join(", ")}${files.length > 3 ? ", ..." : ""} (reinstall), then ask again`] : []),
     ];
     return `NOT CHECKED: ${notChecked}. Nothing was sent: ${remedies.join("; ")}. This is not a clean result.`;

@@ -954,8 +954,21 @@ export function deadLineText(installed: string, clean: FixTargetResult): string 
   if (!clean.lineDead || !clean.target) return null;
   const line = lineLabel(installed);
   if (!line) return null;
-  const newest = clean.newestSafe ? `; ${clean.newestSafe} is the newest safe release` : `; it is also the newest safe release`;
+  // "Safe" only for what was judged at every level (targetCheckedAll): the newest release is judged by
+  // its own advisories only, and a target that installs an affected copy is not safe (re-check
+  // 2026-11-24: openapi-ts 0.97.3 "the smallest safe release", 0.99.0 "the newest safe release",
+  // while dependency_check answered avoid for both, js-yaml two levels down).
+  const judged = targetCheckedAll(clean);
+  const newest = clean.newestSafe
+    ? `; ${clean.newestSafe} is the newest release its own advisories leave clean (what it installs was not judged)`
+    : judged
+      ? `; it is also the newest safe release`
+      : `; it is also the newest release its own advisories leave clean`;
   const down = clean.lineDowngrade;
+  if (!judged) {
+    const after = !down ? `no ${line} release clears every advisory` : clean.lineHasLater ? `no ${line} release after ${installed} clears every advisory` : `no ${line} release after ${installed} exists`;
+    return `${after}: ${clean.target} is the smallest release its own advisories leave clean, on the nearest later line that has one, but it is NOT a clean fix, or was not checked whole (see the other reasons)${newest}`;
+  }
   if (!down) return `no ${line} release clears every advisory: ${clean.target} is the smallest safe release, on the nearest later line that has one${newest}`;
   const after = clean.lineHasLater ? `no ${line} release after ${installed} clears every advisory` : `no ${line} release after ${installed} exists`;
   // Unconfirmed: neither named clean nor denied.

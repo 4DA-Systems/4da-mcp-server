@@ -53,7 +53,7 @@ import {
 } from "./private-packages.js";
 import { declaredMirror } from "./private-configs.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
-import { nameForms, privateShortIndex, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
+import { nameForms, NOT_REGISTRY_MARK, nonRegistryElsewhere, privateShortIndex, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, setNonRegistryNames, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -281,8 +281,9 @@ export class LiveIntelligence {
    * its manifest's platform targets; `root` is the reported project root.
    */
   initFromProjectTree(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
-    // Started in a workspace member, the walk read the workspace root: that is the project root.
-    const root = discovery?.workspace?.root ?? started;
+    // Started in a workspace member, the walk read the workspace root: that is the project root; started
+    // below a project's own folder, that project.
+    const root = discovery?.workspace?.root ?? discovery?.projectAbove?.root ?? started;
     // A pyproject.toml in a subfolder with no lockfile is a group too (unlockedPythonGroups): its
     // index rules apply to its names and its dependencies are listed, never sent (pre-publish round 10, W4).
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
@@ -297,7 +298,7 @@ export class LiveIntelligence {
    * set left to the resolution that superseded it, when a synchronous init ran meanwhile.
    */
   async initFromProjectTreeYielding(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
-    const root = discovery?.workspace?.root ?? started;
+    const root = discovery?.workspace?.root ?? discovery?.projectAbove?.root ?? started;
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
     const run = ++this.initRun;
     const steps = this.applyGroupsSteps(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
@@ -434,19 +435,12 @@ export class LiveIntelligence {
     // upgrade_impact, the briefing and the pulse as Cargo `path`/`git` crates are, as local code, so
     // a registry copy of the same name elsewhere in the tree is still checked (review 2026-11-24).
     const npmNotRegistry = (r: GroupResolution): PrivateIndexEntry[] =>
-      (r.notRegistry ?? []).map((d) => ({ name: d.name, version: null, registry: d.from, file: d.file, local: true as const, ...(d.at ? { at: d.at } : {}) }));
+      (r.notRegistry ?? []).map((d) => ({ name: d.name, version: null, registry: d.from, file: d.file, local: true as const, ...(d.at ? { at: d.at } : {}), ...(d.aliasKey ? { aliasKey: true as const } : {}), ...(d.unknownSource ? { unknownSource: true as const } : {}) }));
     this.manifestPrivate = new Map(
       this.groupResults
         .map((r): [GroupResolution, PrivateIndexEntry[]] => [r, [...manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language)), ...npmNotRegistry(r)]])
         .filter(([, list]) => list.length > 0),
     );
-    // Withheld for the rest of the process, for every project, as lockfile-private names are: a name
-    // one project takes from a path, git, a URL or its workspace is that project's own, and asking
-    // about it from another project sent it (privacy review 2026-11-24, cross-lock3). A project that
-    // installs the same name from the public registry still asks (rememberedPrivate's exemption).
-    for (const [r, list] of this.manifestPrivate) {
-      for (const p of list) if (p.name && !p.unread) rememberPrivateName(mapEcosystem(r.group.language), p.name, p.registry);
-    }
     // go.work modules (never sent: the workspace's copy is built) and Python local packages, with
     // where each is, read inside the project only.
     this.localPackages = new Map(
@@ -458,8 +452,19 @@ export class LiveIntelligence {
         })
         .filter(([, list]) => list.length > 0),
     );
-    for (const [r, list] of this.localPackages) {
-      for (const p of list) if (p.name && !p.unread) rememberPrivateName(mapEcosystem(r.group.language), p.name, p.registry);
+    // A name this project takes from a path, git, a URL or its workspace is withheld when another
+    // project is asked about it (a briefing for project B named it: privacy review 2026-11-24,
+    // cross-lock3), while this project still declares it so: the list is replaced on every rebuild.
+    // Alias keys stay inside this project (private-guard.ts nonRegistryElsewhere).
+    const nonRegistryRoot = this.projectRoot ?? this.groupResults[0]?.group.dir ?? null;
+    const nonRegistryEntries: Array<{ ecosystem: string; name: string; why: string }> = [];
+    if (nonRegistryRoot) {
+      for (const [r, list] of [...this.manifestPrivate, ...this.localPackages]) {
+        for (const p of list) {
+          if (!p.name || p.unread || p.aliasKey || p.unknownSource) continue;
+          nonRegistryEntries.push({ ecosystem: mapEcosystem(r.group.language), name: p.name, why: `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name} comes from ${p.registry}, so it was not looked up` });
+        }
+      }
     }
     yield;
     // A registry, index or proxy that is not public and is consulted for any name: every name the
@@ -538,7 +543,13 @@ export class LiveIntelligence {
       ...(privateWhy.get(key(dep))?.unreadable_file ? { unreadable_file: privateWhy.get(key(dep))!.unreadable_file } : {}),
     }));
     // Private for the rest of the process, for every project (private-guard.ts, blind audit round 5, 4).
-    for (const p of this.privateDeps) rememberPrivateName(p.ecosystem, p.name, p.why);
+    // A private-registry name is private for the rest of the process; a name the lockfile installs from
+    // a path, git or a URL joins this project's non-registry list instead (replaced on every rebuild).
+    for (const p of this.privateDeps) {
+      if (p.why.includes(NOT_REGISTRY_MARK)) nonRegistryEntries.push({ ecosystem: p.ecosystem, name: p.name, why: `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name}: ${p.why}` });
+      else rememberPrivateName(p.ecosystem, p.name, p.why);
+    }
+    if (nonRegistryRoot) setNonRegistryNames(nonRegistryRoot, nonRegistryEntries);
     this.resolvedAt = new Date().toISOString();
   }
 
@@ -684,7 +695,9 @@ export class LiveIntelligence {
     const short = this.privateShortName(forms);
     if (short) return short;
     // Found private by any scan in this process, for any project (blind audit round 5, 4).
-    return rememberedPrivate(name, (eco, n) => this.installsPublicly(eco, n));
+    const remembered = rememberedPrivate(name, (eco, n) => this.installsPublicly(eco, n));
+    if (remembered) return remembered;
+    return nonRegistryElsewhere(name, this.projectRoot, (eco, n) => this.declaresFromRegistry(eco, n));
   }
 
   /**
@@ -720,6 +733,18 @@ export class LiveIntelligence {
       if (hit) return { ecosystem: hit.ecosystem, why: `the short name of the private package ${hit.name} (${hit.why})` };
     }
     return null;
+  }
+
+  /**
+   * Whether this project declares `name` (normalised for `ecosystem`) as a registry dependency: installed
+   * from the public registry, a direct row (a declared range with no lockfile included), or an
+   * unpinned requirement.
+   */
+  declaresFromRegistry(ecosystem: string, name: string): boolean {
+    if (this.installsPublicly(ecosystem, name)) return true;
+    const n = normName(ecosystem, name);
+    if (this.resolvedDeps.some((d) => d.ecosystem === ecosystem && normName(ecosystem, d.name) === n)) return true;
+    return this.groupResults.some((r) => mapEcosystem(r.group.language) === ecosystem && (r.unpinned ?? []).some((u) => u.names.some((x) => normName(ecosystem, x) === n)));
   }
 
   /** Whether this project installs `name` (normalised for `ecosystem`) from the public registry. */
