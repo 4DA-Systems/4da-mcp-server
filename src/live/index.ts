@@ -814,6 +814,11 @@ export class LiveIntelligence {
     if (!ALL_PRIVATE_ECOSYSTEMS.includes(ecosystem)) return false;
     const dirs = [this.projectRoot, ...this.groupResults.filter((r) => mapEcosystem(r.group.language) === ecosystem).map((r) => r.group.dir)];
     if (dirs.some((d) => this.privateRules.registryConfigured(ecosystem, d))) return true;
+    // A requirements file of the project that sets an index or find-links: the same fact that
+    // withholds a name it does not list yet (registryPrivate), so recorded private, as 6.5.0 did
+    // (final check: such a name was recorded local_source, which the hook holds for ever).
+    const wide = this.registryWide.get(ecosystem);
+    if (wide && !this.unreadReasons.has(wide)) return true;
     for (const eco of [ecosystem, ...ALL_PRIVATE_ECOSYSTEMS.filter((e) => e !== ecosystem)]) {
       for (const form of nameForms(name)) {
         if (this.privateRules.registryRuleCovers(eco, form)) return true;
