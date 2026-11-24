@@ -23,6 +23,11 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// No real cargo: whether a crate builds on this host is beside the point here, and `cargo tree`
+// under a scratch HOME is slow and machine-dependent (the Cargo case ran past the hook timeout on
+// macOS CI). Unknown (null) is what the server uses when cargo is absent.
+vi.mock("../live/cargo-platform.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../live/cargo-platform.js")>()), activeCratesForHost: () => null }));
+
 import { LEDGER_FILE, ledgerEntries, recordVerdicts, type LedgerEntry } from "../check-ledger.js";
 import { FourDADatabase } from "../db.js";
 import { LiveIntelligence } from "../live/index.js";
