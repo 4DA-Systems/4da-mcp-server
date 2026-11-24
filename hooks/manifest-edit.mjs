@@ -2143,9 +2143,11 @@ function rangeCeiling(eco, spec) {
 }
 
 /** A ledger entry for a name the server never looked up: private, or withheld because a lockfile could not be read. */
-const isWithheld = (e) => e.not_checked === "private" || e.not_checked === "unreadable_lockfile";
+/** A private answer: "private" (a rule 6.5.0 also had) or "local_source" (a git, path, file:, workspace ... source, 6.5.1). */
+const isPrivate = (e) => e.not_checked === "private" || e.not_checked === "local_source";
+const isWithheld = (e) => isPrivate(e) || e.not_checked === "unreadable_lockfile";
 /** A withheld entry whose cause is a file that could not be read (6.5.0 recorded it as private with `unreadable_file`). */
-const isUnreadable = (e) => e.not_checked === "unreadable_lockfile" || (e.not_checked === "private" && typeof e.unreadable_file === "string" && e.unreadable_file !== "");
+const isUnreadable = (e) => e.not_checked === "unreadable_lockfile" || (isPrivate(e) && typeof e.unreadable_file === "string" && e.unreadable_file !== "");
 
 /** A folder as compared here: absolute, one separator, case folded where the file system folds it. */
 function folderKey(folder) {
@@ -2200,7 +2202,7 @@ function judge(index, c, here) {
   // A withheld answer given for this folder's project, newer than any other answer for this version.
   const local = forPackage.filter((e) => isWithheld(e) && insideProject(here, e.project)).at(-1);
   if (local && (!last || forPackage.indexOf(local) > forPackage.indexOf(last))) return isUnreadable(local) ? { unreadable: local } : "allow";
-  const elsewhere = forPackage.filter((e) => e.not_checked === "private" && !isUnreadable(e)).at(-1);
+  const elsewhere = forPackage.filter((e) => isPrivate(e) && !isUnreadable(e)).at(-1);
   return { check: last ?? null, ...(elsewhere ? { elsewhere } : {}) };
 }
 
