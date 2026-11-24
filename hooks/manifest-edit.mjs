@@ -61,6 +61,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod", "pnpm-workspace.yaml"]);
 /** The largest hook payload read (characters). */
@@ -528,6 +529,7 @@ function cargoFieldsOf(entries) {
  */
 function requirementString(text) {
   const s = text.trim();
+  if (s.length > MAX_REQUIREMENT_CHARS) return null;
   const m = PEP508_NAME.exec(s);
   if (!m) return null;
   let rest = s.slice(m[0].length);
@@ -664,6 +666,7 @@ const PEP440_SPECIFIERS = new RegExp(String.raw`^(${PEP440_CLAUSE}(?:\s*,\s*${PE
  * (`-r`, `-e`, `--hash`), direct references (`name @ url`) and paths name no version.
  */
 function requirementLine(line) {
+  if (line.length > MAX_LINE_CHARS) return null;
   const text = line.replace(/(^|\s)#.*$/, "").trim();
   if (!text || text.startsWith("-")) return null;
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]\n]{0,200}\])?\s*\(?\s*/.exec(text);
@@ -675,7 +678,7 @@ function requirementLine(line) {
 
 /** A YAML plain or quoted scalar on one line, its comment dropped; null when empty or not a scalar. */
 function yamlScalar(raw) {
-  if (raw === undefined) return null;
+  if (raw === undefined || raw.length > MAX_REQUIREMENT_CHARS) return null;
   let v = raw.trim();
   if (v.startsWith("'") || v.startsWith('"')) {
     const q = v[0];
@@ -697,6 +700,7 @@ function pnpmWorkspaceVersions(text, out) {
   let catalog = null;
   let catalogIndent = -1;
   for (const raw of text.split("\n")) {
+    if (raw.length > MAX_LINE_CHARS) continue;
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -807,6 +811,7 @@ function goDirectives(text, block = null) {
   const requires = [];
   const local = [];
   for (const raw of text.split("\n")) {
+    if (raw.length > MAX_LINE_CHARS) continue;
     const line = raw.replace(/\/\/.*$/, "").trim();
     if (!line) continue;
     if (line === ")") {
@@ -968,11 +973,72 @@ const ECOSYSTEM = {
 /** A full semver version, optionally spelled `=1.2.3` or `v1.2.3` (npm and Cargo read both as that release). */
 const FULL_SEMVER = /^(?:={1,2}\s*)?v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
 /**
- * A bare PEP 440 release (Poetry and dependency_check read it as that one release), with the
- * spellings PEP 440 normalises (`5.0.0-rc1`, `1.0.post1`, `2.0-alpha.2`) and a local label
- * (`2.0.0+cpu`).
+ * Bounds on what one token may be. Longer text is no requirement, version or manifest line any
+ * package manager writes, and reading it costs time a hook does not have (several patterns below
+ * scan a run of blanks once per position: 30 KB of them took 1.5 s). Such a token is not read:
+ * the rest of the call is.
  */
-const PEP440_RELEASE = /^v?(\d+(?:\.\d+)*(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview|post|rev|r|dev)[-_.]?\d*)*(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?)$/i;
+const MAX_REQUIREMENT_CHARS = 400;
+/** The longest manifest line read (a requirements line with its hashes stays well under it). */
+const MAX_LINE_CHARS = 4000;
+/** The longest version this hook reads; a longer one is no release of any registry. */
+const MAX_VERSION_CHARS = 80;
+/** The longest `npm pkg set` key read: a section, nested override parents and a 214-character name. */
+const MAX_KEY_CHARS = 600;
+/** PEP 440 pre-, post- and dev-release tags, longest first (read greedily: `rc` before `r`). */
+const PEP440_TAGS = ["preview", "alpha", "beta", "post", "pre", "rev", "dev", "rc", "a", "b", "c", "r"];
+
+/**
+ * A bare PEP 440 release (Poetry and dependency_check read it as that one release), with an
+ * epoch (`1!2.0`), the spellings PEP 440 normalises (`5.0.0-rc1`, `1.0.post1`, `2.0-alpha.2`) and
+ * a local label (`2.0.0+cpu`); the text without a leading `v`, or null. Read by hand, one pass:
+ * the regular expression it replaces backtracked exponentially on `1rcrc...rcx` (16 to 21 s for 26
+ * to 29 "rc", past Claude Code's hook timeout; independent re-check of 0d30b40, B1).
+ */
+function pep440Release(text) {
+  const s = String(text);
+  if (s.length === 0 || s.length > MAX_VERSION_CHARS) return null;
+  let i = s[0] === "v" || s[0] === "V" ? 1 : 0;
+  const start = i;
+  const digits = () => {
+    const from = i;
+    while (i < s.length && s[i] >= "0" && s[i] <= "9") i++;
+    return i > from;
+  };
+  if (!digits()) return null;
+  // An epoch: `1!2.0`.
+  if (s[i] === "!") {
+    i++;
+    if (!digits()) return null;
+  }
+  while (s[i] === "." && s[i + 1] >= "0" && s[i + 1] <= "9") {
+    i++;
+    digits();
+  }
+  const sep = (c) => c === "-" || c === "_" || c === ".";
+  for (;;) {
+    let j = i;
+    if (sep(s[j])) j++;
+    const lower = s.slice(j, j + 7).toLowerCase();
+    const tag = PEP440_TAGS.find((t) => lower.startsWith(t));
+    if (!tag) break;
+    j += tag.length;
+    if (sep(s[j]) && s[j + 1] >= "0" && s[j + 1] <= "9") j++;
+    i = j;
+    digits();
+  }
+  if (s[i] === "+") {
+    i++;
+    const alnum = (c) => c !== undefined && /[a-z0-9]/i.test(c);
+    if (!alnum(s[i])) return null;
+    while (i < s.length) {
+      if (alnum(s[i])) i++;
+      else if (sep(s[i]) && alnum(s[i + 1])) i += 2;
+      else break;
+    }
+  }
+  return i === s.length ? s.slice(start) : null;
+}
 /** A full Go version: release, prerelease or pseudo-version, `+incompatible` allowed. */
 const GO_EXACT = /^(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+incompatible)?)$/;
 
@@ -984,8 +1050,9 @@ const GO_EXACT = /^(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+incompatible)?)$/;
 function exactFor(ecosystem, spec) {
   const s = String(spec).trim();
   if (ecosystem === "PyPI") {
-    const m = /^={2,3}\s*([^,*\s]+)$/.exec(s) ?? PEP440_RELEASE.exec(s);
-    return m && PEP440_RELEASE.test(m[1]) ? m[1].replace(/^v/i, "") : null;
+    if (s.length > MAX_VERSION_CHARS + 3) return null;
+    const pinned = /^={2,3}\s*([^,*\s]+)$/.exec(s);
+    return pep440Release(pinned ? pinned[1] : s);
   }
   if (ecosystem === "Go") return GO_EXACT.exec(s)?.[1] ?? null;
   return FULL_SEMVER.exec(s)?.[1] ?? null;
@@ -1447,6 +1514,7 @@ const PEP508_NAME = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\
 
 /** `name==1.2`, `name>=2,<3`, `name[extra]~=1.4` as name and specifier set; null without a specifier, or for a direct reference. */
 function pep508(word) {
+  if (word.length > MAX_REQUIREMENT_CHARS) return null;
   if (word.includes("@") || word.includes("://")) return null;
   const m = PEP508_NAME.exec(word);
   if (!m) return null;
@@ -1460,6 +1528,7 @@ function pep508(word) {
 
 /** Poetry's `name@^1.2` / `name@1.2.3` / `name==1.2.3` / `"name>=1.2"`; null for `@latest`, git, URL or path sources. */
 function poetrySpec(word) {
+  if (word.length > MAX_REQUIREMENT_CHARS) return null;
   const at = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?@(.+)$/.exec(word);
   if (at) {
     const v = at[2].trim();
@@ -1798,7 +1867,9 @@ function npmPkgSet(words, json) {
   const out = [];
   for (const w of words) {
     const eq = w.indexOf("=");
-    if (eq <= 0) continue;
+    // A key longer than a section and a package name is no dependency path (and `[` without `]`
+    // over 60 KB made the key reader quadratic: 2.6 s, independent re-check of 0d30b40).
+    if (eq <= 0 || eq > MAX_KEY_CHARS) continue;
     const parts = [...w.slice(0, eq).matchAll(/\[([^\]]*)\]|([^.[\]]+)/g)].map((m) => m[1] ?? m[2]);
     let value = w.slice(eq + 1);
     if (json && /^"[^"]*"$/.test(value)) value = value.slice(1, -1);
@@ -2266,17 +2337,36 @@ const LEAVES_FOLDER = /(?:^|[\s;&|(){}'"`])(?:cd|pushd|popd|chdir|set-location|p
 const LEAVES_FOLDER_OPTION = /(?:^|[\s'"])(?:--prefix|--cwd|--dir|--directory|--project|--manifest-path|-C|-modfile|--target|-t|-g|--global|--location(?:=|\s+)global)(?=$|[\s='"])/;
 
 /** PreToolUse: the denial JSON, or "" to let the call go ahead. */
-function preToolUse(input, env, now) {
+function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
+  const started = performance.now();
   const found = introducedBy(input);
   if (!found) return "";
   const changes = found.changes.filter((c) => NAME_TEXT.test(c.name) && specText(c.spec) === String(c.spec).trim());
-  if (changes.length === 0) return "";
+  // Reading the call took too long: whatever it holds was not read in time, and a call this hook
+  // could not read in time is held, never let through for being slow (B1 of the re-check of 0d30b40).
+  const slow = performance.now() - started > readBudgetMs && mayInstall(input);
+  if (changes.length === 0 && !slow) return "";
   const dir = dataDir(env);
   const ledger = readLedger(dir, now);
   if (ledger === null) return "";
-  const reason = denialFor(changes, ledger, dir, found.what, found.here);
+  const reason = slow ? tooSlowDenial(found.what) : denialFor(changes, ledger, dir, found.what, found.here);
   if (!reason) return "";
   return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+}
+
+/** How long reading one call may take before it is held as not read in time (Claude Code's own limit is 10 s). */
+const READ_BUDGET_MS = 2000;
+
+/** Whether a call may install or write a dependency: a manifest edit, or a command that names a package manager (a cheap test, made only on a slow read). */
+function mayInstall(input) {
+  if (input.tool_name !== "Bash" && input.tool_name !== "PowerShell") return true;
+  const command = String(input.tool_input?.command ?? "");
+  return /(?:^|[^A-Za-z0-9_-])(?:npm|pnpm|pnpx|yarn|bun|bunx|npx|corepack|cargo|pip\d*(?:\.\d+)?|pip-compile|python\d*(?:\.\d+)?|py|uv|uvx|poetry|go)(?:\.exe|\.cmd)?(?=$|[^A-Za-z0-9_-])/i.test(command.slice(0, MAX_COMMAND_CHARS));
+}
+
+/** The denial for a call that could not be read within READ_BUDGET_MS. */
+function tooSlowDenial(what) {
+  return `4DA guard: this ${what} was stopped before it ran: it could not be read in time (over ${READ_BUDGET_MS / 1000} s), so whether it adds a dependency version is not known. Split it into plain commands or smaller edits, each naming the versions it installs, and call the 4da MCP tool dependency_check for each version first.`;
 }
 
 /** PostToolUse (FOURDA_GUARD=advise): the advice after a manifest edit, or "". */
@@ -2311,11 +2401,11 @@ function postToolUse(input) {
  * The hook's whole answer to one payload: the JSON to print, or "" for none. Pure apart from
  * reading the manifest and the ledger.
  */
-export function respond(input, env = process.env, now = Date.now()) {
+export function respond(input, env = process.env, now = Date.now(), readBudgetMs = READ_BUDGET_MS) {
   if (!input || typeof input !== "object") return "";
   const mode = guardMode(env.FOURDA_GUARD);
   if (mode === "off") return "";
-  if (input.hook_event_name === "PreToolUse") return mode === "block" ? preToolUse(input, env, now) : "";
+  if (input.hook_event_name === "PreToolUse") return mode === "block" ? preToolUse(input, env, now, readBudgetMs) : "";
   // Where nothing held the edit before it ran (FOURDA_GUARD=advise, or no ledger: an older server
   // or none), the advice follows it, as it did before 6.5.0.
   if (input.hook_event_name === "PostToolUse") return mode === "advise" || !ledgerStarted(dataDir(env)) ? postToolUse(input) : "";
