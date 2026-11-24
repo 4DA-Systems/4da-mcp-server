@@ -53,6 +53,15 @@ describe("held: an install in a command too big to read (item 2)", () => {
     // A package manager run as a script (8e17992 held it; the command-position rule must too).
     `node pnpm.cjs add lodash@3.10.1; echo ${PAD(70_000)}`,
     `node ./node_modules/npm/bin/npm-cli.js install lodash@3.10.1; echo ${PAD(70_000)}`,
+    // The confirmation pass on round 4: an apostrophe in a comment opened a quote that hid the install, and `pnpm@9` was not read as pnpm.
+    `# don't forget the lockfile
+npm i lodash@3.10.1
+echo ${PAD(70_000)}`,
+    `echo ${PAD(70_000)}
+# it's here
+npm i lodash@3.10.1`,
+    `npx -y pnpm@9 add lodash@3.10.1; echo ${PAD(70_000)}`,
+    `corepack pnpm@9 add lodash@3.10.1; echo ${PAD(70_000)}`,
   ])("%#", (command) => {
     expect(decide(command)).toBe("deny");
   });
@@ -93,6 +102,8 @@ describe("a payload over 8 MB is judged from its parsed fields (item 2)", { time
     ["Write, a 70 KB transcript_path first", { ...base, transcript_path: "C:/" + PAD(70_000), tool_name: "Write", tool_input: { file_path: pj, content } }],
     ["Bash: a newline before npm i", { ...base, tool_name: "Bash", tool_input: { command: `true\nnpm i lodash@3.10.1\n#${big}` } }],
     ["Bash: a 70 KB description before the command", { ...base, tool_name: "Bash", tool_input: { description: PAD(70_000), command: `npm i lodash@3.10.1 #${big}` } }],
+    // 24 MB of two-character segments: the pre-check is timed, so the hook answers (held) instead of running past Claude Code's 10 s.
+    ["Bash: npm i before 12 million short segments", { ...base, tool_name: "Bash", tool_input: { command: `npm i lodash@3.10.1${";a".repeat(12_000_000)}` } }],
     ["Bash: npm i after 70 KB", { ...base, tool_name: "Bash", tool_input: { command: `echo ${PAD(70_000)}; npm i lodash@3.10.1 #${big}` } }],
     ["Edit package.json, old/new before file_path", { ...base, tool_name: "Edit", tool_input: { old_string: '"dependencies":{}', new_string: `"dependencies":{"lodash":"3.10.1"},"pad":"${big}"`, file_path: pj } }],
   ])("held: %s", (_label, payload) => {

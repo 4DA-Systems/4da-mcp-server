@@ -58,10 +58,11 @@ describe("a local-source answer holds a registry install of that name, in any pr
     const r = decide(command);
     expect(r.decision).toBe("deny");
     expect(r.text).toMatch(/from the public registry, which was not checked/);
-    // The way that works (round 4 of the hook review, item 5): remove or replace the non-registry
-    // spec first (that edit goes ahead), or repair an unreadable catalog; then dependency_check
-    // looks the name up and this call is judged on its verdict. No "ask the user" dead end.
-    expect(r.text).toMatch(/remove or replace that non-registry spec in the manifest that declares it \(that edit goes ahead\)/);
+    // The way that works (round 4 of the hook review, item 5): remove the non-registry spec first
+    // (that edit goes ahead; putting a registry version in its place is held like the command), or
+    // repair an unreadable catalog; then dependency_check looks the name up and this call is judged
+    // on its verdict. No "ask the user" dead end.
+    expect(r.text).toMatch(/remove that non-registry spec from the manifest that declares it \(that edit goes ahead; one that puts a registry version in its place is held like this command\)/);
     expect(r.text).toMatch(/if the recorded reason says a catalog could not be read, repair the catalog/);
     expect(r.text).toMatch(/then call dependency_check for this version: this command passes once it answers proceed/);
     expect(r.text).toMatch(/FOURDA_GUARD is the user's setting, not yours to change/);
