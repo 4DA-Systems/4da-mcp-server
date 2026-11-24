@@ -136,10 +136,19 @@ export { NOT_REGISTRY_MARK } from "./private-packages.js";
  */
 const nonRegistryByProject = new Map<string, Map<string, { ecosystem: string; why: string }>>();
 
+/** The unreadable file a withheld reason names, by reason, so another project's answer says to repair it. */
+const unreadFileByWhy = new Map<string, string>();
+
+/** The unreadable file behind a reason registered by another project, or null. */
+export function unreadFileElsewhere(why: string): string | null {
+  return unreadFileByWhy.get(why) ?? null;
+}
+
 /** Replace the list of names `root` takes from a non-registry source. */
-export function setNonRegistryNames(root: string, entries: Array<{ ecosystem: string; name: string; why: string }>): void {
+export function setNonRegistryNames(root: string, entries: Array<{ ecosystem: string; name: string; why: string; unreadFile?: string }>): void {
   const map = new Map<string, { ecosystem: string; why: string }>();
   for (const e of entries) {
+    if (e.unreadFile) unreadFileByWhy.set(e.why, e.unreadFile);
     const key = `${e.ecosystem}\0${normName(e.ecosystem, foldName(e.name))}`;
     if (!map.has(key)) map.set(key, { ecosystem: e.ecosystem, why: e.why });
   }
@@ -221,6 +230,7 @@ export function resetPrivateGuard(): void {
   remembered.clear();
   rememberedScopes.clear();
   nonRegistryByProject.clear();
+  unreadFileByWhy.clear();
 }
 
 function* liveSources(): Generator<PrivateNameSource> {

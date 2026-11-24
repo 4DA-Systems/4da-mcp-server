@@ -53,7 +53,7 @@ import {
 } from "./private-packages.js";
 import { declaredMirror } from "./private-configs.js";
 import { PrivateAwareFixPathSources } from "./private-fix-sources.js";
-import { nameForms, NOT_REGISTRY_MARK, nonRegistryElsewhere, privateShortIndex, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, setNonRegistryNames, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
+import { nameForms, NOT_REGISTRY_MARK, nonRegistryElsewhere, privateShortIndex, unreadFileElsewhere, registerPrivateNames, rememberedPrivate, rememberedPrivateCount, rememberPrivateName, setNonRegistryNames, shortKey, unregisterPrivateNames, withPrivateContext } from "./private-guard.js";
 import type {
   InstallDriftRecord,
   ResolutionProvenance,
@@ -457,11 +457,13 @@ export class LiveIntelligence {
     // cross-lock3), while this project still declares it so: the list is replaced on every rebuild.
     // Alias keys stay inside this project (private-guard.ts nonRegistryElsewhere).
     const nonRegistryRoot = this.projectRoot ?? this.groupResults[0]?.group.dir ?? null;
-    const nonRegistryEntries: Array<{ ecosystem: string; name: string; why: string }> = [];
+    const nonRegistryEntries: Array<{ ecosystem: string; name: string; why: string; unreadFile?: string }> = [];
     if (nonRegistryRoot) {
       for (const [r, list] of [...this.manifestPrivate, ...this.localPackages]) {
         for (const p of list) {
-          if (!p.name || p.unread || p.aliasKey || p.unknownSource) continue;
+          // A name whose source could not be determined (a catalog that could not be read) is withheld
+          // in other projects too (check of round 2: it was left out and a briefing for B sent it).
+          if (!p.name || p.unread || p.aliasKey) continue;
           nonRegistryEntries.push({ ecosystem: mapEcosystem(r.group.language), name: p.name, why: `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name} comes from ${p.registry}, so it was not looked up` });
         }
       }
@@ -548,6 +550,13 @@ export class LiveIntelligence {
     for (const p of this.privateDeps) {
       if (p.why.includes(NOT_REGISTRY_MARK)) nonRegistryEntries.push({ ecosystem: p.ecosystem, name: p.name, why: `${NOT_REGISTRY_MARK}: in ${nonRegistryRoot}, ${p.name}: ${p.why}` });
       else rememberPrivateName(p.ecosystem, p.name, p.why);
+    }
+    // A name withheld because a lockfile beside it could not be read is withheld in other projects
+    // too, with the same file named (check of round 2).
+    for (const [k, why] of this.wideNames) {
+      const file = this.unreadReasons.get(why);
+      const [ecosystem, name] = k.split("\0");
+      if (file && name) nonRegistryEntries.push({ ecosystem, name, why, unreadFile: file });
     }
     if (nonRegistryRoot) setNonRegistryNames(nonRegistryRoot, nonRegistryEntries);
     this.resolvedAt = new Date().toISOString();
@@ -801,7 +810,7 @@ export class LiveIntelligence {
    * answer says to repair the file, not to ask a private registry (the scan says it so since 6.5.0).
    */
   withheldUnreadableFile(why: string): string | null {
-    return this.unreadReasons.get(why) ?? null;
+    return this.unreadReasons.get(why) ?? unreadFileElsewhere(why);
   }
 
   /**
