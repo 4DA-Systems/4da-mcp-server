@@ -1512,6 +1512,7 @@ function jsInstalls(manager, args) {
   // Yarn: `yarn workspace <name> add x@1` and berry's `yarn workspaces foreach [options] add x@1`.
   if (all && manager === "yarn" && all[0] === "workspace") all = all.slice(2);
   else if (all && manager === "yarn" && all[0] === "workspaces" && all[1] === "foreach") all = all.slice(2);
+  if (all && manager === "npm" && npmCommand(all[0]) === "pkg" && all[1] === "set") return npmPkgSet(all.slice(2), args.includes("--json"));
   if (!all || all.length === 0 || !isInstallCommand(manager, all[0])) return [];
   const out = [];
   for (const word of all.slice(1)) {
@@ -1636,6 +1637,113 @@ function subcommandAt(args, values) {
   return -1;
 }
 
+/** An option's value at args[i]: `--opt=value` or `--opt value`, with how many words it took; null when `a` is not one of `names`. */
+function optionValue(args, i, names) {
+  const a = args[i];
+  for (const n of names) {
+    if (a === n) return { value: args[i + 1] ?? null, taken: 2 };
+    if (a.startsWith(`${n}=`)) return { value: a.slice(n.length + 1), taken: 1 };
+  }
+  return null;
+}
+
+/**
+ * `cargo update -p time@0.3.17 --precise 0.3.20` (the planner's form), `cargo update time --precise
+ * 0.3.20` (cargo 1.80's positional spec), `--package=time`: each crate named moves to the
+ * `--precise` version. Without `--precise` cargo picks the version, and nothing is read.
+ */
+function cargoUpdate(args) {
+  let precise = null;
+  const names = [];
+  let seenUpdate = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const p = optionValue(args, i, ["--precise"]);
+    const pkg = optionValue(args, i, ["-p", "--package"]);
+    if (p || pkg) {
+      if (p) precise = p.value;
+      else if (pkg.value) names.push(pkg.value);
+      i += (p ?? pkg).taken - 1;
+    } else if (a.startsWith("-")) {
+      if (!a.includes("=") && CARGO_VALUES.has(a)) i++;
+    } else if (!seenUpdate && a === "update") seenUpdate = true;
+    else names.push(a);
+  }
+  if (typeof precise !== "string" || !exactFor("crates.io", precise) || specText(precise) !== precise) return [];
+  return names.flatMap((n) => {
+    const name = n.replace(/@.*$/, "");
+    return /^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(name) ? [{ ecosystem: "crates.io", name, spec: precise }] : [];
+  });
+}
+
+/**
+ * The versions `--upgrade-package "x==v"` / `-P x==v` name (uv lock, uv sync, uv add, uv pip
+ * compile, pip-compile): the resolver moves each package to exactly that release. A package named
+ * without a version is the resolver's pick, and nothing is read; a custom index makes nothing read.
+ */
+function upgradePackages(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") break;
+    const flag = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (PY_INDEX.has(flag)) return [];
+    const v = optionValue(args, i, ["--upgrade-package", "-P"]);
+    if (!v) continue;
+    i += v.taken - 1;
+    const r = typeof v.value === "string" ? pep508(v.value) : null;
+    if (r) out.push({ ecosystem: "PyPI", name: r.name, spec: r.spec });
+  }
+  return out;
+}
+
+/**
+ * `go mod edit -replace=old[@v]=new@v` (the planner's form for a module go.mod replaces) and
+ * `-require=mod@v`: the module after `=` (or required) at that version is what gets built. A
+ * replacement by a directory names no release.
+ */
+function goModEdit(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const r = optionValue(args, i, ["-replace", "--replace"]);
+    const q = r ? null : optionValue(args, i, ["-require", "--require"]);
+    if (!r && !q) continue;
+    i += (r ?? q).taken - 1;
+    const value = (r ?? q).value;
+    if (typeof value !== "string") continue;
+    if (r && !value.includes("=")) continue;
+    const target = r ? value.slice(value.lastIndexOf("=") + 1) : value;
+    const m = GO_SPEC.exec(target);
+    if (m && GO_EXACT.test(m[2]) && !m[1].includes("...")) out.push({ ecosystem: "Go", name: m[1], spec: m[2] });
+  }
+  return out;
+}
+
+/** package.json keys under which `npm pkg set <key>.<name>=<version>` sets a dependency's version. */
+const NPM_PKG_SECTIONS = new Set([...NPM_DEPENDENCY_SECTIONS]);
+
+/**
+ * `npm pkg set "overrides.lodash=4.17.20" dependencies.x=1.2.3 "dependencies[lodash.merge]=4.6.2"`:
+ * each key under a dependency section (or `pnpm.overrides`) whose value is a version sets that
+ * package's version (the last part of the key). With `--json` a value is read without its quotes.
+ */
+function npmPkgSet(words, json) {
+  const out = [];
+  for (const w of words) {
+    const eq = w.indexOf("=");
+    if (eq <= 0) continue;
+    const parts = [...w.slice(0, eq).matchAll(/\[([^\]]*)\]|([^.[\]]+)/g)].map((m) => m[1] ?? m[2]);
+    let value = w.slice(eq + 1);
+    if (json && /^"[^"]*"$/.test(value)) value = value.slice(1, -1);
+    const under = parts[0] === "pnpm" && parts[1] === "overrides" ? 2 : NPM_PKG_SECTIONS.has(parts[0]) ? 1 : -1;
+    if (under < 0 || parts.length <= under) continue;
+    const name = parts.at(-1);
+    const version = jsVersion(value);
+    if (version && NAME_TEXT.test(name)) out.push({ ecosystem: "npm", name, spec: version });
+  }
+  return out;
+}
+
 /** The dependency versions one simple command installs by name, or [] when it names none this hook reads. */
 function commandInstalls(words, depth = 0, dialect = "bash") {
   if (depth > MAX_WRAPS) return [];
@@ -1672,7 +1780,9 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
   }
   if (program === "cargo") {
     // `cargo +nightly add ...`: a toolchain named first.
-    const all = operands(args[0]?.startsWith("+") ? args.slice(1) : args, { values: CARGO_VALUES, refuse: CARGO_REFUSE });
+    const rest = args[0]?.startsWith("+") ? args.slice(1) : args;
+    const all = operands(rest, { values: CARGO_VALUES, refuse: CARGO_REFUSE });
+    if (all && all[0] === "update") return cargoUpdate(rest);
     if (!all || all[0] !== "add") return [];
     return all.slice(1).flatMap((w) => {
       const m = CARGO_SPEC.exec(w);
@@ -1693,14 +1803,21 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return [];
   }
   if (program === "uv") {
-    if (args[0] === "pip") return pipInstalls(args.slice(1));
+    if (args[0] === "pip") return args[1] === "compile" ? upgradePackages(args.slice(2)) : pipInstalls(args.slice(1));
     const all = operands(args, { values: UV_ADD_VALUES, refuse: PY_INDEX });
-    if (!all || all[0] !== "add") return [];
-    return all.slice(1).flatMap((w) => {
-      const r = pep508(w);
-      return r ? [{ ecosystem: "PyPI", name: r.name, spec: r.spec }] : [];
-    });
+    if (!all) return [];
+    // `uv lock` / `uv sync` / `uv add` move a package to the version `--upgrade-package x==v` names.
+    const upgrades = upgradePackages(args);
+    if (all[0] !== "add") return upgrades;
+    return [
+      ...upgrades,
+      ...all.slice(1).flatMap((w) => {
+        const r = pep508(w);
+        return r ? [{ ecosystem: "PyPI", name: r.name, spec: r.spec }] : [];
+      }),
+    ];
   }
+  if (program === "pip-compile") return upgradePackages(args);
   if (program === "poetry") {
     const all = operands(args, { values: POETRY_VALUES, refuse: new Set(["--source"]) });
     if (!all || all[0] !== "add") return [];
@@ -1711,6 +1828,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
   }
   if (program === "go") {
     const all = operands(args, { values: GO_VALUES });
+    if (all && all[0] === "mod" && all[1] === "edit") return goModEdit(args);
     if (!all || all[0] !== "get") return [];
     return all.slice(1).flatMap((w) => {
       const m = GO_SPEC.exec(w);
