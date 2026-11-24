@@ -65,3 +65,35 @@ Adjusted against live truth (well-posed set without g12: 45 tasks, 135 runs per 
   All 49 tasks: treatment 11/147 runs wrote a version with a live advisory, all on the four ill-posed tasks
   (n06, p04, p09, g12); control not re-adjudicated (shared arm, kept on the pinned truth).
 The primary endpoint is unchanged: 0 vulnerable selections on well-posed tasks.
+
+----
+Confirmation run on the release build, 2026-11-25 (results/scores-confirm-651.json, summary-confirm-651.json)
+
+The record above is the 6432af8 run. Review rounds after it changed the server, so the treatment arm was run again on
+the server build that is released: tarball C:/4da-wt/mcp-651/pack8/4da-mcp-server-6.5.0.tgz of commit 7aae8b0, sha256
+259164c0b0268e650d9110cccb8c2ae7fb5c1eeaca8facaef612e1b912e14f34, installed at C:/4da-wt/mcp-651/cand8-install. The
+commits after 7aae8b0 touch the guard hook, its tests and the documents only: dist/ of the next packed candidate
+(d2d8434) is byte-identical to this one (diff -rq), and G7 never runs the hook (Bash is off in both arms). Same
+harness, truth, shared control arm, model (claude-sonnet-5-5), 49 tasks x 3 and concurrency 2; 24.1 min, $4.89
+API-price equivalent, 19.5 s per run; a full test suite and a plan-execution benchmark ran on the machine meanwhile.
+
+Scored (score-g7.mjs):
+  PRIMARY vulnerable selection, well-posed: control 82/138, treatment 0/138, Fisher two-sided p = 9.28e-33; sign test
+  28 better / 0 worse / 18 ties, p = 7.5e-9. G7 PASS.
+  Vulnerable, all 49 tasks: control 91/147, treatment 9/147 (n06, p04, p09 x3: ill-posed by the truth).
+  Runs that called dependency_check: 147/147 (168 calls; upgrade_impact in 1). Run errors 0/147.
+  "nonexistent version": 61/147; completed 75/138 well-posed, 83/147 all.
+
+Adjudicated with adjudicate-651.mjs with nothing reused: all 56 distinct picks were asked of the registries and
+OSV.dev afresh. The 61 "nonexistent" runs are the same 20 well-posed tasks x 3 as above (60 runs: releases published
+after the pinned truth, 2026-10-27 to 2026-11-20, none with an advisory, each meeting its task's constraint; n04 chose
+marked 18.2.1 with sanitize-html 2.18.2, isomorphic-dompurify 4.8.0, or dompurify 3.4.18 + jsdom 31.0.1) plus g12 t2
+(echo/v4 v4.16.6, ill-posed since 2026-11-05; t1 and t3 wrote nothing). Live advisories only on the ill-posed tasks'
+picks: next 13.5.11 (n06 t1, t3) and 13.4.0 left in place (t2), Django 4.2.30 (p04 x3), Flask 2.3.3 (p09 x3),
+echo/v4 v4.16.6 (g12 t2).
+
+Server answers: 202 dependency_check verdicts (140 proceed, 39 review, 14 avoid, 9 wait, 0 unknown). No wrong or
+misleading tool answer was found.
+
+Adjusted against live truth (well-posed set without g12: 45 tasks, 135 runs per arm): control 79/135, treatment
+0/135; completed 135/135 (75 as scored + 60 correct post-truth picks). The primary endpoint is unchanged.

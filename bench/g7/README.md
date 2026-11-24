@@ -103,7 +103,7 @@ added by hand from the adjudication; the rest of the file is the scorer's output
 | `PREREGISTRATION.txt` | the analysis plan, 2026-10-11 |
 | `ADJUDICATION-626.txt` | the 6.2.6 runs and every scored miss, adjudicated against live OSV |
 | `ADJUDICATION-627.txt` | the same for the 6.2.7 runs |
-| `ADJUDICATION-651.txt` | the same for the 6.5.1 runs, with the build that was measured |
+| `ADJUDICATION-651.txt` | the same for the 6.5.1 runs, with the build that was measured, and a confirmation run on the released server build (`results/*-confirm-651.json`: 0/138 again) |
 | `gen-tasks.mjs` | writes `tasks/<id>/` and `tasks.json` (deterministic) |
 | `tasks.json` | the 49 task definitions |
 | `lib-truth.mjs`, `build-truth.mjs` | pin registry versions and OSV advisories into `truth/` |
