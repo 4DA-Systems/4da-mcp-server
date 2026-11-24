@@ -1208,6 +1208,28 @@ export class PrivatePackageRules {
     return new PrivatePackageRules(this.dirs, env, this.memberDirs);
   }
 
+  /**
+   * Whether a private-registry rule names this package: a FOURDA_PRIVATE_PACKAGES pattern, an npm
+   * scope mapped to a private registry, a Go GOPRIVATE / GONOPROXY / GONOSUMDB pattern, or a
+   * Pipfile [[source]] index (the rules 6.5.0 had). A Cargo `[patch]` (local code or another
+   * source) is not one. Decided from the rules themselves, never from reason text: a reason quotes
+   * repository text (a spec, a folder name) that can spell any rule's wording (round 3 of the hook
+   * review, item 2).
+   */
+  registryRuleCovers(ecosystem: string, name: string): boolean {
+    for (const l of this.listed) {
+      if (l.ecosystem !== null && l.ecosystem !== ecosystem) continue;
+      const hit = ecosystem === "PyPI" ? l.rePypi.test(pep503(name)) : ecosystem === "crates.io" ? l.reCrates.test(normName("crates.io", name)) : l.re.test(name);
+      if (hit) return true;
+    }
+    if (ecosystem === "npm" && name.startsWith("@")) {
+      const scope = name.slice(0, name.indexOf("/") > 0 ? name.indexOf("/") : undefined).toLowerCase();
+      if (this.npmScopes.has(scope)) return true;
+    }
+    if (ecosystem === "Go" && this.goPatterns.some((g) => goPrivateMatch(g.value, name))) return true;
+    return ecosystem === "PyPI" && this.pipfileNames.has(pep503(name));
+  }
+
   /** Why this name is private, or null when nothing says it is. */
   reasonFor(ecosystem: string, name: string): string | null {
     for (const l of this.listed) {
@@ -1267,6 +1289,20 @@ export class PrivatePackageRules {
    * poetry.lock and Pipfile.lock record each package's index. pdm.lock records none, and a
    * `[[tool.pdm.source]]` with a pdm.lock sent every private name (R8, B4).
    */
+  /**
+   * Whether a configured registry, index or proxy that is not public serves every name of
+   * `ecosystem` for `dir` (ecosystemWide's settings, not its "rule file could not be read" case):
+   * an npm registry, GOPROXY, a Cargo source replacement, a pip index or extra index, uv's, Poetry's,
+   * PDM's or pipenv's index. A private-registry rule as 6.5.0 had it (round 3 of the hook review, item 2).
+   */
+  registryConfigured(ecosystem: string, dir: string | null): boolean {
+    if (ecosystem === "npm") return this.npmRegistryFor(dir) !== null;
+    if (ecosystem === "Go") return Boolean(this.goProxy);
+    if (ecosystem === "crates.io") return this.cargoMirrorFor(dir) !== null;
+    if (ecosystem === "PyPI") return Boolean(this.pipIndex || this.pipExtraFrom || this.pythonIndexFor(dir));
+    return false;
+  }
+
   ecosystemWide(ecosystem: string, dir: string | null, indexRecorded: boolean): string | null {
     const hint = PUBLIC_MIRRORS_HINT;
     const npm = ecosystem === "npm" ? this.npmRegistryFor(dir) : null;

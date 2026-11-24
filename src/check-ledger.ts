@@ -83,26 +83,24 @@ function pathField(value: unknown): string | null {
   return typeof value === "string" && value !== "" && value.length <= MAX_PATH && !/[\u0000-\u001f\u007f-\u009f]/.test(value) ? value : null;
 }
 
-/**
- * The reasons that make a name private as 6.5.0 called it: a FOURDA_PRIVATE_PACKAGES pattern, an
- * npm scope mapped to a private registry, a Go GOPRIVATE / GONOPROXY / GONOSUMDB pattern, or a
- * registry, index or proxy that is not public (every such reason ends with the FOURDA_PUBLIC_MIRRORS
- * hint, live/private-packages.ts PUBLIC_MIRRORS_HINT). Read from the answer's reason, which states
- * the rule (dependency-check-screen.ts privateResult).
- */
-const PRIVATE_AS_IN_650 = [/FOURDA_PRIVATE_PACKAGES lists /, / is mapped to a private registry in /, /\bGO(?:PRIVATE|NOPROXY|NOSUMDB) \([^)]*\) matches /, /set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry/];
+/** Whether a private-registry rule covers a name (LiveIntelligence.privateRegistryRuleCovers), asked at the ledger line. */
+export type PrivateRule = (ecosystem: string, name: string) => boolean;
 
 /**
- * The ledger's word for a name the server withheld as private: "private" only on positive evidence
- * of a rule 6.5.0 also called private; "local_source" for everything else 6.5.1 withholds (a git,
- * path, file:, tarball, link: or workspace source, a patched crate, a reason not recognised here).
- * A 6.5.0 hook lets a "private" name through at any version in every project and holds any other
- * value, so a name 6.5.0 did not withhold must not be recorded as "private" (re-check of 0d30b40,
- * S4: `"lodash": "github:me/lodash"` was held by 6.5.0 and let through by a 6.5.0 hook beside a
- * 6.5.1 server). The 6.5.1 hook holds "local_source" too.
+ * The ledger's word for a name the server withheld: "private" only when the code that knows the
+ * rules says a private-registry rule covers it (`privateRule`: the rules 6.5.0 had); "local_source"
+ * for everything else, and whenever that cannot be asked. Never decided from the answer's reason,
+ * which quotes repository text: a dependency spec `"file:./FOURDA_PRIVATE_PACKAGES lists x"`, a
+ * workspace folder or a project folder named after a rule made the round-2 text match record
+ * "private", which a 6.5.0 hook lets through at any version in every project (round 3 of the hook
+ * review, item 2). The hook holds "local_source".
  */
-export function withheldKind(reason: unknown): "private" | "local_source" {
-  return typeof reason === "string" && PRIVATE_AS_IN_650.some((re) => re.test(reason)) ? "private" : "local_source";
+export function withheldKind(item: { ecosystem: string; package: string }, privateRule: PrivateRule | null): "private" | "local_source" {
+  try {
+    return privateRule !== null && privateRule(item.ecosystem, item.package) === true ? "private" : "local_source";
+  } catch {
+    return "local_source";
+  }
 }
 
 /** One line of server text: control characters and runs of blanks become one space, capped. */
@@ -113,7 +111,7 @@ function oneLine(text: string, max: number): string {
 }
 
 /** The ledger lines for one answer's items. Items without a name, version or verdict are left out. */
-export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date()): LedgerEntry[] {
+export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date(), privateRule: PrivateRule | null = null): LedgerEntry[] {
   const t = at.toISOString();
   const out: LedgerEntry[] = [];
   for (const item of items) {
@@ -122,7 +120,7 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
     const version = oneLine(item.to, MAX_FIELD);
     if (!pkg || !version) continue;
     const unread = item.not_checked === "private" ? pathField(item.unreadable_file) : null;
-    const withheld = item.not_checked === "private" && !unread ? withheldKind(item.reason) : null;
+    const withheld = item.not_checked === "private" && !unread ? withheldKind(item, privateRule) : null;
     out.push({
       t,
       ecosystem: oneLine(item.ecosystem, 40),
@@ -175,11 +173,11 @@ let queue: Promise<void> = Promise.resolve();
  * Record each item's final verdict in the ledger of `dir` (the data folder by default). The
  * returned promise never rejects: a ledger that cannot be written is skipped.
  */
-export function recordVerdicts(items: readonly CheckedItem[], options: { now?: Date; dir?: string } = {}): Promise<void> {
+export function recordVerdicts(items: readonly CheckedItem[], options: { now?: Date; dir?: string; privateRule?: PrivateRule | null } = {}): Promise<void> {
   let entries: LedgerEntry[];
   let dir: string;
   try {
-    entries = ledgerEntries(items, options.now);
+    entries = ledgerEntries(items, options.now, options.privateRule ?? null);
     dir = options.dir ?? serverDataDir();
   } catch {
     return queue;

@@ -799,6 +799,34 @@ export class LiveIntelligence {
    * (ecosystemPrivate). Not for a guessed ecosystem: the briefing's and HN's terms are judged by
    * privateReason alone, or every word of a task would be private.
    */
+  /**
+   * Whether a private-registry rule covers this name, decided from the rules themselves (the kind
+   * the check ledger records, check-ledger.ts withheldKind): a FOURDA_PRIVATE_PACKAGES pattern, an
+   * npm scope mapped to a private registry, a GOPRIVATE / GONOPROXY / GONOSUMDB pattern, a Pipfile
+   * [[source]], a configured registry, index or proxy that is not public, or a requirements file's
+   * `--index-url` / extra index. Not: a git, path, file:, tarball, link:, workspace, alias or catalog
+   * source, a Cargo named registry or `[patch]`, a lockfile that installs from another host, a file
+   * that could not be read. Never decided from a reason's text, which quotes repository text (round
+   * 3 of the hook review, item 2: a spec `"file:./FOURDA_PRIVATE_PACKAGES lists x"` made the
+   * server record "private").
+   */
+  privateRegistryRuleCovers(ecosystem: string, name: string): boolean {
+    if (!ALL_PRIVATE_ECOSYSTEMS.includes(ecosystem)) return false;
+    const dirs = [this.projectRoot, ...this.groupResults.filter((r) => mapEcosystem(r.group.language) === ecosystem).map((r) => r.group.dir)];
+    if (dirs.some((d) => this.privateRules.registryConfigured(ecosystem, d))) return true;
+    for (const eco of [ecosystem, ...ALL_PRIVATE_ECOSYSTEMS.filter((e) => e !== ecosystem)]) {
+      for (const form of nameForms(name)) {
+        if (this.privateRules.registryRuleCovers(eco, form)) return true;
+        const n = normName(eco, form);
+        for (const r of this.groupResults) {
+          if (mapEcosystem(r.group.language) !== eco) continue;
+          if (this.lockPrivateIndex(r, eco).get(n)?.some((h) => h.wide !== undefined)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   lookupPrivateReason(ecosystem: string, name: string): string | null {
     return this.privateReason(ecosystem, name) ?? this.ecosystemPrivate(ecosystem, name);
   }

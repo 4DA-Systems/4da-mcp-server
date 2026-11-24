@@ -166,7 +166,9 @@ export const dependencyCheckTool = {
  */
 export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
   const answer = await executeDependencyCheck(db, params, liveIntel);
-  void recordVerdicts(answer.results);
+  // A withheld name is recorded as "private" only when a private-registry rule covers it, asked of the
+  // rules themselves (check-ledger.ts withheldKind); otherwise "local_source", which the hook holds.
+  void recordVerdicts(answer.results, { privateRule: liveIntel?.privateRegistryRuleCovers ? (eco, name) => liveIntel.privateRegistryRuleCovers(eco, name) : null });
   return shapeDependencyCheck(answer, params.response_format);
 }
 
