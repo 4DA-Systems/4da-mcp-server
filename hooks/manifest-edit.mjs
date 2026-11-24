@@ -2749,6 +2749,9 @@ function mayInstall(input) {
  * on purpose: it only decides whether a command it cannot read names an install.
  */
 let precheckStopAt = Infinity;
+/** Characters plainSegments gives no meaning to, outside quotes and inside them. */
+const PLAIN_RUN = /[^@#'"\\<\n;&|(){}\r \t]+/y;
+const QUOTED_RUN = /[^'"\\`]+/y;
 function plainSegments(text, dialect) {
   const segments = [];
   let words = [];
@@ -2764,9 +2767,20 @@ function plainSegments(text, dialect) {
     if (words.length > 0) segments.push(words);
     words = [];
   };
+  let steps = 0;
   for (let i = 0; i < text.length; i++) {
     // Timed where the caller set a limit (a payload over MAX_INPUT_CHARS: tens of megabytes of segments ran past Claude Code's 10 s).
-    if ((i & 0xffff) === 0 && performance.now() > precheckStopAt) throw TOO_SLOW;
+    if ((steps++ & 0x3fff) === 0 && performance.now() > precheckStopAt) throw TOO_SLOW;
+    // A run of characters that mean nothing here is taken in one step (megabytes of padding, one
+    // character at a time, took an 8.5 MB `echo` past the limit on a loaded machine).
+    const run = quote !== null ? QUOTED_RUN : PLAIN_RUN;
+    run.lastIndex = i;
+    const plain = run.exec(text);
+    if (plain) {
+      word += plain[0];
+      i += plain[0].length - 1;
+      continue;
+    }
     const ch = text[i];
     if (quote !== null) {
       if (dialect === "bash" && quote === '"' && ch === "\\") i++;
