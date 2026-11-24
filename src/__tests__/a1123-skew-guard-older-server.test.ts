@@ -130,7 +130,8 @@ describe("a data folder with a ledger: a server that records verdicts has run th
     expect(reason).toContain("If this stops again after dependency_check has answered for it, do not retry");
     expect(reason).toContain("older than 6.5.0");
     expect(reason).toContain("FOURDA_MCP_HOME");
-    expect(reason).toContain("FOURDA_GUARD=advise");
+    // FOURDA_GUARD is the user's setting, not the agent's (re-check of 0d30b40, S8).
+    expect(reason).toContain("FOURDA_GUARD (advise, off) is the user's setting: tell the user, and do not change it yourself");
   });
 
   it("other verdicts on record, none for this version: the same note, without the empty-ledger sentence", () => {
