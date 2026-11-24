@@ -208,7 +208,7 @@ describe("the server: each ledger entry records the project it answered for", ()
   it("ledgerEntries: project kept; a name withheld for an unreadable file is unreadable_lockfile, not private", () => {
     const entries = ledgerEntries(
       [
-        { ecosystem: "npm", package: "a", to: "1.0.0", verdict: "unknown", not_checked: "private" },
+        { ecosystem: "npm", package: "a", to: "1.0.0", verdict: "unknown", not_checked: "private", reason: "NOT CHECKED (private): a is a private package (FOURDA_PRIVATE_PACKAGES lists npm:a)" },
         { ecosystem: "npm", package: "b", to: "1.0.0", verdict: "unknown", not_checked: "private", unreadable_file: "/p/package-lock.json" },
         { ecosystem: "npm", package: "c", to: "1.0.0", verdict: "proceed" },
       ],
@@ -273,7 +273,8 @@ describe("the server: each ledger entry records the project it answered for", ()
 
     it("a git shorthand dependency: private, for project A; the hook then allows in A and holds in B", async () => {
       const entries = await answerIn(projectA, { "package.json": JSON.stringify({ name: "a", version: "1.0.0", dependencies: { lodash: "lodash/lodash#4.17.20" } }) });
-      expect(entries.at(-1)).toMatchObject({ package: "lodash", not_checked: "private", project: path.resolve(projectA) });
+      // A git source is recorded as local_source, held by a 6.5.0 hook (a651-ledger-local-source.test.ts).
+      expect(entries.at(-1)).toMatchObject({ package: "lodash", not_checked: "local_source", project: path.resolve(projectA) });
       allows(bash(projectA, "npm i lodash@3.10.1"));
       denies(bash(projectB, "npm i lodash@3.10.1"));
     });

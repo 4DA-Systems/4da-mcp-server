@@ -26,10 +26,15 @@ describe("PowerShell: a scoped package spec is read", () => {
     expect(names(command)).toEqual(expected);
   });
 
-  it("splatting, arrays, hashtables and here-strings still leave the command unread", () => {
-    for (const command of ["npm i @args", "npm @splat i lodash@4.17.20", "npm i @(1,2)", "npm i @{a=1}", "npm i @'x'@"]) {
+  it("arrays, hashtables and here-strings still leave the command unread", () => {
+    for (const command of ["npm i @(1,2)", "npm i @{a=1}", "npm i @'x'@"]) {
       expect(simpleCommands(command, "powershell"), command).toBeNull();
     }
+  });
+
+  it("a splatted variable is kept as a word no reader takes, so the rest is read (re-check of 0d30b40, S7)", () => {
+    expect(simpleCommands("npm i @args", "powershell")).toEqual([["npm", "i", "@args"]]);
+    expect(installsIn("npm i lodash@4.17.20 @args", "powershell").map((r) => r.name)).toEqual(["lodash"]);
   });
 
   it("bash reads the same words as it always did", () => {

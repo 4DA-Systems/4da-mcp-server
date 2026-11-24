@@ -82,6 +82,17 @@ describe("a range needs an answer that covers it", () => {
     expect(decide("pip install 'django==3.2.*'")).toBe("deny");
   });
 
+  it("a clause that can exclude the ceiling (`!=`) leaves the range needing its own answer (re-check of 0d30b40, S3)", () => {
+    ledger([
+      { ecosystem: "PyPI", package: "requests", version: "2.0.0", verdict: "proceed" },
+      { ecosystem: "PyPI", package: "requests", version: "1.9.0", verdict: "avoid" },
+    ]);
+    expect(decide("pip install 'requests<=2.0.0,!=2.0.0'")).toBe("deny");
+    expect(decide("pip install 'requests<=2.0,!=2.0.0'")).toBe("deny");
+    expect(decide("pip install 'requests>=1.0,!=1.5.0,<=2.0.0'")).toBe("deny");
+    expect(decide("pip install 'requests>=1.0,<=2.0.0'")).toBe("allow");
+  });
+
   it("an unknown answer for the same constraint is no answer", () => {
     ledger([{ package: "lodash", version: "^4.17.0", verdict: "unknown", reason: "NOT CHECKED (time budget)" }]);
     expect(decide("npm i 'lodash@^4.17.0'")).toBe("deny");

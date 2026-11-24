@@ -29,6 +29,7 @@ import { appendFile, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { serverDataDir } from "./db.js";
+import { systemDirectoryProblem } from "./tools/project-scope.js";
 
 export const LEDGER_FILE = "check-ledger.jsonl";
 export const LEDGER_PREVIOUS_FILE = "check-ledger.1.jsonl";
@@ -84,6 +85,28 @@ function pathField(value: unknown): string | null {
   return typeof value === "string" && value !== "" && value.length <= MAX_PATH && !/[\u0000-\u001f\u007f-\u009f]/.test(value) ? value : null;
 }
 
+/**
+ * The reasons that make a name private as 6.5.0 called it: a FOURDA_PRIVATE_PACKAGES pattern, an
+ * npm scope mapped to a private registry, a Go GOPRIVATE / GONOPROXY / GONOSUMDB pattern, or a
+ * registry, index or proxy that is not public (every such reason ends with the FOURDA_PUBLIC_MIRRORS
+ * hint, live/private-packages.ts PUBLIC_MIRRORS_HINT). Read from the answer's reason, which states
+ * the rule (dependency-check-screen.ts privateResult).
+ */
+const PRIVATE_AS_IN_650 = [/FOURDA_PRIVATE_PACKAGES lists /, / is mapped to a private registry in /, /\bGO(?:PRIVATE|NOPROXY|NOSUMDB) \([^)]*\) matches /, /set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry/];
+
+/**
+ * The ledger's word for a name the server withheld as private: "private" only on positive evidence
+ * of a rule 6.5.0 also called private; "local_source" for everything else 6.5.1 withholds (a git,
+ * path, file:, tarball, link: or workspace source, a patched crate, a reason not recognised here).
+ * A 6.5.0 hook lets a "private" name through at any version in every project and holds any other
+ * value, so a name 6.5.0 did not withhold must not be recorded as "private" (re-check of 0d30b40,
+ * S4: `"lodash": "github:me/lodash"` was held by 6.5.0 and let through by a 6.5.0 hook beside a
+ * 6.5.1 server). The 6.5.1 hook treats both alike, within the answer's project.
+ */
+export function withheldKind(reason: unknown): "private" | "local_source" {
+  return typeof reason === "string" && PRIVATE_AS_IN_650.some((re) => re.test(reason)) ? "private" : "local_source";
+}
+
 /** One line of server text: control characters and runs of blanks become one space, capped. */
 function oneLine(text: string, max: number): string {
   // eslint-disable-next-line no-control-regex -- replaces control characters on purpose: an entry is one line
@@ -105,6 +128,7 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
     const version = oneLine(item.to, MAX_FIELD);
     if (!pkg || !version) continue;
     const unread = item.not_checked === "private" ? pathField(item.unreadable_file) : null;
+    const withheld = item.not_checked === "private" && !unread ? withheldKind(item.reason) : null;
     out.push({
       t,
       ecosystem: oneLine(item.ecosystem, 40),
@@ -113,7 +137,13 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
       verdict: oneLine(item.verdict, 20),
       ...(typeof item.to_requested === "string" && item.to_requested ? { requested: oneLine(item.to_requested, MAX_FIELD) } : {}),
       ...(typeof item.reason === "string" && item.reason ? { reason: oneLine(item.reason, MAX_REASON) } : {}),
-      ...(unread ? { not_checked: "unreadable_lockfile", unreadable_file: unread } : typeof item.not_checked === "string" ? { not_checked: oneLine(item.not_checked, 40) } : {}),
+      ...(unread
+        ? { not_checked: "unreadable_lockfile", unreadable_file: unread }
+        : withheld
+          ? { not_checked: withheld }
+          : typeof item.not_checked === "string"
+            ? { not_checked: oneLine(item.not_checked, 40) }
+            : {}),
       ...(folder ? { project: folder } : {}),
     });
   }
@@ -150,11 +180,15 @@ let queue: Promise<void> = Promise.resolve();
 
 /**
  * The project folder an answer is given for: the root the server resolved its dependency set from
- * (LiveIntelligence.getProjectRoot), else the folder it was started in, absolute.
+ * (LiveIntelligence.getProjectRoot), else the folder it was started in, absolute. Null for a
+ * folder the server refuses to scan as a project (a drive or filesystem root, an operating-system
+ * folder, the home folder: tools/project-scope.ts systemDirectoryProblem), so its private answers
+ * count nowhere (re-check of 0d30b40, S5: `project: "C:\\"` let installs through anywhere on C:).
  */
 export function answeredFor(projectRoot: string | null | undefined): string | null {
   try {
-    return path.resolve(projectRoot ?? process.cwd());
+    const folder = path.resolve(projectRoot ?? process.cwd());
+    return systemDirectoryProblem(folder) === null ? folder : null;
   } catch {
     return null;
   }
