@@ -11,9 +11,10 @@
  * - One with an `avoid` or `wait` verdict is denied with that verdict's reason.
  * - One with no verdict, or only an `unknown` one, is denied with the `dependency_check` call to
  *   make; the call goes through once it answers proceed.
- * - A range or constraint is denied only when the ledger has no verdict for the package at all
- *   (the server resolves a constraint to exact releases; this hook does not), or when its own last
- *   verdict for that same constraint was `avoid` or `wait`.
+ * - A range or constraint goes ahead on a `proceed` or `review` answered for that same constraint
+ *   (the server resolves it; this hook does not), or, without one, on a `proceed` or `review` for
+ *   exactly the release its inclusive ceiling names (`<=V`, `A - V`: the release a resolver picks
+ *   from it); an `avoid` or `wait` for either holds it, and anything else is denied with the call.
  * - A package the server recorded as private (never looked up) goes ahead in the project it
  *   answered for (the entry's `project` folder, or a folder inside it) and nowhere else; not when
  *   the command changes folder or installs globally, not over an avoid or wait for the exact
@@ -943,8 +944,12 @@ const ECOSYSTEM = {
 
 /** A full semver version, optionally spelled `=1.2.3` or `v1.2.3` (npm and Cargo read both as that release). */
 const FULL_SEMVER = /^(?:={1,2}\s*)?v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
-/** A bare PEP 440 release (Poetry and dependency_check read it as that one release). */
-const PEP440_RELEASE = /^v?(\d+(?:\.\d+)*(?:(?:a|b|rc|\.post|\.dev|post|dev)\d+)*)$/i;
+/**
+ * A bare PEP 440 release (Poetry and dependency_check read it as that one release), with the
+ * spellings PEP 440 normalises (`5.0.0-rc1`, `1.0.post1`, `2.0-alpha.2`) and a local label
+ * (`2.0.0+cpu`).
+ */
+const PEP440_RELEASE = /^v?(\d+(?:\.\d+)*(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview|post|rev|r|dev)[-_.]?\d*)*(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?)$/i;
 /** A full Go version: release, prerelease or pseudo-version, `+incompatible` allowed. */
 const GO_EXACT = /^(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+incompatible)?)$/;
 
@@ -1376,10 +1381,12 @@ function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = 
 }
 
 /** A version or range after `@` in a JS package manager's spec, or null for a tag, alias, git or URL source. */
-function jsVersion(text) {
+function jsVersion(raw) {
+  // npm reads `lodash@ ^4.17.0` as the range after the blank.
+  const text = typeof raw === "string" ? raw.trim() : "";
   if (!text || /[/:]/.test(text) || text.startsWith("npm:")) return null;
   if (exactFor("npm", text)) return text;
-  return specText(text) === text.trim() && /^[~^<>=*\dvxX]/.test(text) ? text : null;
+  return specText(text) === text && /^[~^<>=*\dvxX]/.test(text) ? text : null;
 }
 
 const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9._~][a-z0-9._~-]*)@(.+)$/i;
@@ -1937,12 +1944,21 @@ function versionKey(ecosystem, version) {
   v = v.replace(/^={1,3}\s*/, "").replace(/^v(?=\d)/i, "");
   if (ecosystem === "PyPI") {
     v = v.toLowerCase();
+    const plus = v.indexOf("+");
+    const local = plus >= 0 ? `+${v.slice(plus + 1).replace(/[-_]/g, ".")}` : "";
+    if (plus >= 0) v = v.slice(0, plus);
     const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(v);
     if (m) {
       const release = m[1].split(".").map(Number);
       while (release.length > 1 && release[release.length - 1] === 0) release.pop();
-      v = release.join(".") + m[2];
+      // PEP 440 normal form of the rest: `-rc1`/`.rc.1`/`c1` -> rc1, alpha -> a, beta -> b, `-1`/`.post1`/`r1` -> .post1, `-dev` -> .dev0.
+      const rest = m[2]
+        .replace(/[-_.]?(alpha|beta|preview|pre|rc|c|a|b)[-_.]?(\d*)/g, (_, tag, n) => `${{ alpha: "a", beta: "b", preview: "rc", pre: "rc", c: "rc" }[tag] ?? tag}${n || 0}`)
+        .replace(/[-_.]?(post|rev|r)[-_.]?(\d*)/g, (_, _tag, n) => `.post${n || 0}`)
+        .replace(/[-_.]?dev[-_.]?(\d*)/g, (_, n) => `.dev${n || 0}`);
+      v = release.join(".") + rest;
     }
+    v += local;
   }
   return v;
 }
@@ -1962,6 +1978,31 @@ function byPackage(ledger) {
     else index.set(key, [e]);
   }
   return index;
+}
+
+/**
+ * The release a range's inclusive ceiling names, the one a resolver picks from it when it is
+ * published: `<=V` (with lower bounds beside it), npm's `A - V`, PEP 440's `<=V` clause; null for
+ * any other range (`<V`, `^1.2`, `~=1.4`, a union with `||`, a partial V), whose pick this hook
+ * cannot know.
+ */
+function rangeCeiling(eco, spec) {
+  const s = String(spec).trim();
+  if (s.includes("||")) return null;
+  if (eco === "PyPI") {
+    const clauses = s.split(",").map((x) => x.trim());
+    const le = clauses.filter((x) => x.startsWith("<="));
+    if (le.length !== 1 || clauses.some((x) => !x.startsWith("<=") && !/^(?:>=|>|!=)/.test(x))) return null;
+    return exactFor("PyPI", `==${le[0].slice(2).trim()}`);
+  }
+  if (eco !== "npm" && eco !== "crates.io") return null;
+  const hyphen = eco === "npm" ? /^\S+\s+-\s+(\S+)$/.exec(s) : null;
+  if (hyphen) return exactFor(eco, hyphen[1]);
+  const parts = s.replace(/([<>=]+)\s+/g, "$1").split(/[\s,]+/).filter(Boolean);
+  const le = parts.filter((p) => p.startsWith("<="));
+  if (le.length !== 1 || parts.some((p) => !p.startsWith("<=") && !/^>=?/.test(p))) return null;
+  const v = le[0].slice(2);
+  return /^v?\d+\.\d+\.\d+/.test(v) ? exactFor(eco, v) : null;
 }
 
 /** A ledger entry for a name the server never looked up: private, or withheld because a lockfile could not be read. */
@@ -2001,14 +2042,24 @@ function judge(index, c, here) {
   const exactVersion = exactFor(eco, c.spec);
   const constraint = exactVersion ? null : callTarget(eco, c.spec).replace(/\s+/g, "");
   const want = exactVersion ? versionKey(eco, exactVersion) : null;
-  const answers = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? versionKey(eco, e.version) === want : typeof e.requested === "string" && e.requested.replace(/\s+/g, "") === constraint));
+  // An answer for a constraint records it as `requested` (its pick as `version`); one that could
+  // not resolve it records the constraint itself as `version`, with no pick.
+  const askedFor = (e) => (typeof e.requested === "string" ? e.requested : e.verdict === "unknown" ? e.version : "").replace(/\s+/g, "");
+  const answers = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? versionKey(eco, e.version) === want : askedFor(e) === constraint));
   const last = answers.at(-1);
   if (last && HOLDS.has(last.verdict)) return { deny: last };
   if (last && PASSES.has(last.verdict)) return "allow";
+  // A range with no answer of its own: the verdict for the release its inclusive ceiling names.
+  const top = exactVersion ? null : rangeCeiling(eco, c.spec);
+  if (top) {
+    const k = versionKey(eco, top);
+    const atTop = forPackage.filter((e) => !isWithheld(e) && versionKey(eco, e.version) === k && e.verdict !== "unknown").at(-1);
+    if (atTop && HOLDS.has(atTop.verdict)) return { deny: atTop };
+    if (atTop && PASSES.has(atTop.verdict)) return "allow";
+  }
   // A withheld answer given for this folder's project, newer than any other answer for this version.
   const local = forPackage.filter((e) => isWithheld(e) && insideProject(here, e.project)).at(-1);
   if (local && (!last || forPackage.indexOf(local) > forPackage.indexOf(last))) return isUnreadable(local) ? { unreadable: local } : "allow";
-  if (!exactVersion && !last && forPackage.some((e) => !isWithheld(e) && e.verdict !== "unknown")) return "allow";
   const elsewhere = forPackage.filter((e) => e.not_checked === "private" && !isUnreadable(e)).at(-1);
   return { check: last ?? null, ...(elsewhere ? { elsewhere } : {}) };
 }

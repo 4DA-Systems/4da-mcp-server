@@ -195,8 +195,10 @@ describe("a range or constraint", () => {
     expect(callIn(reason).items[0]).toEqual({ ecosystem: "npm", package: "lodash", to: "^4.17.0", from: "4.17.21" });
   });
 
-  it("goes ahead when the package has any verdict in the last 24 hours (the server resolves ranges)", () => {
+  it("goes ahead on a proceed for that same constraint, not on one for another (a651-hook-ranges.test.ts)", () => {
     ledger([{ package: "lodash", version: "4.18.1", verdict: "proceed", requested: "^4.18.0" }]);
+    expect(callIn(denied(hook(lodashEdit("^4.17.0")))).items[0].to).toBe("^4.17.0");
+    ledger([{ package: "lodash", version: "4.18.1", verdict: "proceed", requested: "^4.17.0" }]);
     allowed(hook(lodashEdit("^4.17.0")));
   });
 
