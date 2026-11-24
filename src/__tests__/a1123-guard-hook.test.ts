@@ -414,8 +414,10 @@ describe("install commands", () => {
 
   it("the PowerShell tool is read the same way", () => {
     expect(callIn(denied(hook(pre("PowerShell", { command: "npm.cmd install lodash@4.17.20; cargo add serde@1.0.200" })))).items.map((i) => i.package)).toEqual(["lodash", "serde"]);
-    // An unquoted `@scope/pkg` is splatting in PowerShell: not read.
-    expect(installsIn("npm install @types/node@20.11.0", "powershell")).toEqual([]);
+    // PowerShell passes an unquoted `@scope/pkg@1` as written (only a bare `@name` splats): read
+    // (a651-hook-powershell-scoped.test.ts).
+    expect(installsIn("npm install @types/node@20.11.0", "powershell")).toEqual([{ ecosystem: "npm", name: "@types/node", spec: "20.11.0" }]);
+    expect(installsIn("npm install @splat", "powershell")).toEqual([]);
     expect(installsIn("npm install '@types/node@20.11.0'", "powershell")).toEqual([{ ecosystem: "npm", name: "@types/node", spec: "20.11.0" }]);
   });
 
