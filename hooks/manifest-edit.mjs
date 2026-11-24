@@ -2716,11 +2716,139 @@ function mayInstall(input) {
     const file = input.tool_input?.file_path;
     return typeof file === "string" && manifestKind(file) !== null;
   }
-  const command = String(input.tool_input?.command ?? "").slice(0, 2 * MAX_COMMAND_CHARS);
-  return INSTALLER_WORD.test(command) && INSTALL_WORD.test(command);
+  return namesInstall(String(input.tool_input?.command ?? ""), input.tool_name === "PowerShell" ? "powershell" : "bash");
 }
-const INSTALLER_WORD = /(?:^|[^A-Za-z0-9_-])(?:npm|pnpm|pnpx|yarn|bun|bunx|npx|corepack|cargo|pip\d*(?:\.\d+)?|pip-compile|piptools|python\d*(?:\.\d+)?|py|uv|uvx|poetry|go)(?:\.exe|\.cmd)?(?=$|[^A-Za-z0-9_-])/i;
-const INSTALL_WORD = /(?:^|[^A-Za-z0-9_-])(?:i|in|ins|inst|insta|instal|install|isntall|it|add|a|up|update|upgrade|get|lock|sync|compile|pkg|edit|exec|dlx|x|-m)(?=$|[^A-Za-z0-9_-])/i;
+
+/**
+ * The simple commands of a command line as plain words, for the pre-check of a call too big to read
+ * (mayInstall): one linear pass that keeps quoted text inside its word (so prose in a quoted
+ * argument is never a command), drops quote characters (`np''m` and `'npm'` are `npm`), splits at
+ * `;`, `&`, `|`, a newline, `(`, `)`, `{`, `}` outside quotes, and skips a heredoc body (bash
+ * `<<WORD` to the line holding WORD) and a PowerShell here-string (`@'...'@`, `@"..."@`). Coarse
+ * on purpose: it only decides whether a command it cannot read names an install.
+ */
+function plainSegments(text, dialect) {
+  const segments = [];
+  let words = [];
+  let word = "";
+  let quote = null;
+  let heredoc = null;
+  const endWord = () => {
+    if (word !== "") words.push(word);
+    word = "";
+  };
+  const endSegment = () => {
+    endWord();
+    if (words.length > 0) segments.push(words);
+    words = [];
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote !== null) {
+      if (dialect === "bash" && quote === '"' && ch === "\\") i++;
+      else if (dialect === "powershell" && ch === "`") i++;
+      else if (ch === quote) quote = null;
+      else word += ch;
+      continue;
+    }
+    if (dialect === "powershell" && ch === "@" && (text[i + 1] === "'" || text[i + 1] === '"') && text[i + 2] === "\n") {
+      // A here-string: its body ends at a line starting with the quote and `@`.
+      const end = text.indexOf(`\n${text[i + 1]}@`, i + 2);
+      i = end < 0 ? text.length : end + 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (dialect === "bash" && ch === "\\") i++;
+    else if (dialect === "bash" && ch === "<" && text[i + 1] === "<" && text[i + 2] !== "<") {
+      // A heredoc: the delimiter word after `<<` / `<<-`, quotes dropped; the body is skipped at the next newline.
+      const m = /^<<-?\s*(['"]?)([A-Za-z0-9_.-]+)\1/.exec(text.slice(i, i + 300));
+      if (m) {
+        heredoc = m[2];
+        i += m[0].length - 1;
+      }
+      endWord();
+    } else if (ch === "\n") {
+      endSegment();
+      if (heredoc !== null) {
+        // The body: lines up to one that is the delimiter.
+        let at = i + 1;
+        for (;;) {
+          const nl = text.indexOf("\n", at);
+          const line = text.slice(at, nl < 0 ? text.length : nl).replace(/\r$/, "").replace(/^\t+/, "");
+          if (line === heredoc || nl < 0) {
+            i = nl < 0 ? text.length : nl;
+            break;
+          }
+          at = nl + 1;
+        }
+        heredoc = null;
+      }
+    } else if (";&|(){}\r".includes(ch)) endSegment();
+    else if (ch === " " || ch === "\t") endWord();
+    else word += ch;
+  }
+  endSegment();
+  return segments;
+}
+
+/** Words that run the command after them (with their options and numbers skipped), before a package manager's name. */
+const RUN_PREFIXES = new Set(["sudo", "doas", "env", "time", "nohup", "command", "exec", "nice", "timeout", "xargs", "wsl", "busybox", "npx", "pnpx", "bunx", "corepack", "stdbuf", "ionice", "builtin", "then", "do", "else", "!", "&"]);
+
+/** Per package manager, whether a word is one of its install, add or update subcommands. */
+const INSTALLS_BY_TOOL = {
+  npm: (w) => isInstallCommand("npm", w) || ["update", "pkg"].includes(npmCommand(w) ?? ""),
+  pnpm: (w) => ["add", "install", "i", "up", "update", "upgrade"].includes(w),
+  yarn: (w) => ["add", "up", "upgrade", "install", "workspace", "workspaces"].includes(w),
+  bun: (w) => ["add", "a", "install", "i", "update"].includes(w),
+  cargo: (w) => ["add", "update", "install"].includes(w),
+  pip: (w) => w === "install",
+  uv: (w) => ["add", "pip", "lock", "sync"].includes(w),
+  uvx: (w) => w === "pip-compile",
+  poetry: (w) => ["add", "update", "install", "lock"].includes(w),
+  go: (w) => ["get", "mod", "work", "install"].includes(w),
+  "pip-compile": () => true,
+};
+
+/** A program word as the pre-check compares it: its last path part, lower case, without .exe/.cmd/.bat/.ps1, `pip3.12` as `pip`, `yarnpkg` as `yarn`. */
+function toolName(word) {
+  const p = programName(word);
+  if (/^pip\d+(?:\.\d+)*$/.test(p)) return "pip";
+  if (/^python\d*(?:\.\d+)*$/.test(p) || p === "py") return "python";
+  return p === "yarnpkg" ? "yarn" : p;
+}
+
+/**
+ * Whether a command line names an install: in some simple command, a package manager's name in
+ * command position (first, after `VAR=value` words, or after a prefix that runs the command after
+ * it), followed in that same simple command by one of THAT tool's install, add or update words
+ * (`python -m pip install`, `python -m piptools compile`). Asked only of a command too big to read
+ * whole; read over the whole text (linear), so an install after 128 KB counts, and prose in a
+ * heredoc body or a quoted argument does not (round 4 of the hook review: any long command with
+ * "go" and "a" in it was held).
+ */
+function namesInstall(command, dialect) {
+  for (const words of plainSegments(command, dialect)) {
+    let k = 0;
+    for (;;) {
+      while (k < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k])) k++;
+      if (k >= words.length || !RUN_PREFIXES.has(toolName(words[k]))) break;
+      k++;
+      while (k < words.length && (words[k].startsWith("-") || /^\d+(?:\.\d+)?[smhd]?$/.test(words[k]))) k++;
+    }
+    if (k >= words.length) continue;
+    const tool = toolName(words[k]);
+    const rest = words.slice(k + 1, k + 40);
+    if (tool === "python") {
+      const m = rest.indexOf("-m");
+      if (m >= 0 && /^pip\d*$/.test(rest[m + 1] ?? "") && rest.slice(m + 2).includes("install")) return true;
+      if (m >= 0 && rest[m + 1] === "piptools" && rest.slice(m + 2).includes("compile")) return true;
+      continue;
+    }
+    const installs = Object.hasOwn(INSTALLS_BY_TOOL, tool) ? INSTALLS_BY_TOOL[tool] : null;
+    if (installs && (tool === "pip-compile" || rest.some((w) => !w.startsWith("-") && installs(w)))) return true;
+  }
+  return false;
+}
 
 /** The denial for a call that could not be read whole: which part, and what to do. */
 function notReadDenial(what, part) {
@@ -2780,9 +2908,8 @@ async function main() {
   let raw = "";
   for await (const chunk of process.stdin) {
     raw += chunk;
-    // A hook payload is kilobytes. One far beyond that is not read: held when it is a manifest
-    // write or a package-manager command, as its first part shows; let through otherwise.
-    if (raw.length > MAX_INPUT_CHARS) {
+    // Past what the hook will even parse: judged from the first part's text alone.
+    if (raw.length > MAX_PARSE_CHARS) {
       const out = oversized(raw.slice(0, 64 * 1024));
       if (out) process.stdout.write(out);
       process.exit(0);
@@ -2792,16 +2919,35 @@ async function main() {
   try {
     input = JSON.parse(raw);
   } catch {
+    // Not JSON: an oversized payload is judged from its first part's text; any other goes ahead.
+    const out = raw.length > MAX_INPUT_CHARS ? oversized(raw.slice(0, 64 * 1024)) : "";
+    if (out) process.stdout.write(out);
     return;
   }
-  const out = respond(input);
+  // A hook payload is kilobytes. One over MAX_INPUT_CHARS is not read: held when its parsed fields
+  // show a manifest write or edit, or a command that names an install (round 4 of the hook review:
+  // judged from the first 64 KB of escaped text, it missed `\n` before npm, a long description
+  // before the command, content before file_path); let through otherwise.
+  const out = raw.length > MAX_INPUT_CHARS ? oversizedParsed(input) : respond(input);
   if (out) process.stdout.write(out);
 }
 
+/** The largest payload the hook parses to judge it (past MAX_INPUT_CHARS it is judged, never read). */
+const MAX_PARSE_CHARS = 64 * 1024 * 1024;
+
+/** The answer to a parsed payload over MAX_INPUT_CHARS: held when it is a manifest write or an install command (mayInstall), "" otherwise. */
+function oversizedParsed(input) {
+  if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || !input.tool_input || typeof input.tool_input !== "object") return "";
+  if (guardMode(process.env.FOURDA_GUARD) !== "block" || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
+  return denyJson(notReadDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
+}
+
 /**
- * The answer to a payload over MAX_INPUT_CHARS, from its first part: a PreToolUse write or edit of
- * a manifest, or a command that names a package manager, is held as not read (round 2 let an 8 MB
- * payload through unread). Anything else goes ahead. FOURDA_GUARD and the ledger are honoured.
+ * The answer to a payload over MAX_INPUT_CHARS that cannot be parsed (not JSON, or over
+ * MAX_PARSE_CHARS), from its first 64 KB of text as it arrives (JSON-escaped): a PreToolUse write
+ * or edit of a manifest, or a command that names an install, is held as not read. A field that
+ * comes after those 64 KB, or text the escaping hides, is not seen: such a payload goes ahead (a
+ * known limit). FOURDA_GUARD and the ledger are honoured.
  */
 function oversized(head) {
   const mode = guardMode(process.env.FOURDA_GUARD);
