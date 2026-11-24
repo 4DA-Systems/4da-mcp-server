@@ -499,7 +499,11 @@ async function executeStandalonePlanner(
   // conflicted Cargo.lock, and the 6.5.1 candidate beside a conflicted go.sum (review 2026-11-24).
   const lockfilesNotRead = incompleteLockfiles(liveIntel.getLockfileProblems()).length;
   // No lockfile read: declared ranges are not installs, so there is no vulnerability data to plan by.
-  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable && liveIntel.wasLockfileRead() && lockfilesNotRead === 0;
+  // A manifest below the root with no lockfile (manifests_without_lockfile): what it declares was
+  // never resolved or checked, so the scan says coverage.complete false and the plan must not say
+  // CVE-aware either (review 2026-11-24: a subdirectory package.json with no lockfile).
+  const manifestsUnlocked = liveIntel.getDiscovery()?.unlockedManifestsCount ?? 0;
+  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable && liveIntel.wasLockfileRead() && lockfilesNotRead === 0 && manifestsUnlocked === 0;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
   // charged with RUSTSEC-2026-0190 (fixed in 1.0.103 — it isn't affected) while
