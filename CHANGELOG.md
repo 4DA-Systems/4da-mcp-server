@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.5.1 — unreleased
+## 6.5.1 — 2026-11-24
 
 ### What is scanned
 
