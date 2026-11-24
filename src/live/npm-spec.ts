@@ -78,7 +78,9 @@ export function classifyNpmSpec(name: string, rawSpec: string, catalogs?: NpmCat
   const spec = rawSpec.trim();
   // npm reads "" as `*` (the latest release): a registry spec.
   if (spec === "") return registry(name, "*");
-  if (/^npm:/i.test(spec)) return aliasSpec(name, spec.slice(4).trim());
+  // A protocol with whitespace around it is not that protocol to npm (npm-package-arg does not trim).
+  if (spec !== rawSpec && SCHEME.test(spec) && !/^[a-z]:[\\/]/i.test(spec)) return { kind: "url" };
+  if (/^npm:/i.test(spec)) return aliasSpec(name, spec.slice(4));
   if (/^catalog:/i.test(spec)) return catalogSpec(name, spec, catalogs);
   if (/^patch:/i.test(spec)) return patchSpec(name, spec);
   if (/^file:/i.test(spec)) return { kind: TARBALL_FILE.test(spec.split(/[?#]/)[0]) ? "file" : "local" };
@@ -101,22 +103,48 @@ export function classifyNpmSpec(name: string, rawSpec: string, catalogs?: NpmCat
   return registry(name, spec);
 }
 
-/** `npm:<target>@<range>`, `npm:<target>`, or Yarn berry's `npm:<range>` for the key's own name. */
-function aliasSpec(name: string, rest: string): NpmSpecClass {
-  const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
-  const target = at > 0 ? rest.slice(0, at) : rest;
-  if (PACKAGE_NAME.test(target)) {
-    const range = at > 0 ? rest.slice(at + 1) : "*";
-    // npm-package-arg refuses an alias whose subspec is not a registry spec (and an alias of an alias).
-    if (/^npm:/i.test(range.trim())) return { kind: "url" };
-    const inner = classifyNpmSpec(target, range);
-    return inner.kind === "registry" ? registry(target, inner.range) : inner;
-  }
-  const own = classifyNpmSpec(name, rest);
-  return own.kind === "registry" && !/^(?:catalog|patch):/i.test(rest) ? own : { kind: "url" };
+/** A version, a range or the `*` of a semver range: what Yarn's `npm:<range>` holds (never a package name). */
+const VERSION_OR_RANGE = /^(?:[\^~<>=]|v?\d|\*|[xX](?:$|[\s.])|.*\|\||.*\s-\s)/;
+
+/** A plain version, range or dist-tag: a registry spec with no protocol of its own. */
+function plainRange(name: string, range: string): NpmRegistrySpec | null {
+  const r = range.trim();
+  if (SCHEME.test(r)) return null;
+  const read = classifyNpmSpec(name, r);
+  return read.kind === "registry" ? read : null;
 }
 
-/** Yarn berry's `patch:<name>@<encoded inner spec>#<patch file>`: the inner spec says where the code is from. */
+/**
+ * `npm:<target>@<range>`, `npm:<target>`, or Yarn berry's `npm:<range>` for the key's own name.
+ * npm-package-arg refuses an alias whose subspec is not a plain registry spec (a URL, git, a path,
+ * another protocol, an alias of an alias) and an empty one: what npm refuses to install is withheld.
+ */
+function aliasSpec(name: string, rest: string): NpmSpecClass {
+  if (rest.trim() === "" || rest !== rest.trim() || /^npm:/i.test(rest)) return { kind: "url" };
+  const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
+  const target = at > 0 ? rest.slice(0, at) : rest;
+  // Yarn: `npm:4.17.21`, `npm:^1.2.0` is that release of the key's own package, not a package named `4.17.21`.
+  if (at < 0 && VERSION_OR_RANGE.test(rest)) {
+    const own = plainRange(name, rest);
+    return own ? registry(name, own.range) : { kind: "url" };
+  }
+  if (PACKAGE_NAME.test(target)) {
+    const range = at > 0 ? rest.slice(at + 1) : "*";
+    const inner = plainRange(target, range);
+    if (inner) return registry(target, inner.range);
+    const what = classifyNpmSpec(target, range);
+    return what.kind === "registry" ? { kind: "url" } : what;
+  }
+  const own = plainRange(name, rest);
+  return own ? registry(name, own.range) : { kind: "url" };
+}
+
+/**
+ * Yarn berry's `patch:<name>@<encoded inner spec>#<patch file>`: the inner spec says where the code
+ * is from. Inside it Yarn's own rule applies: `npm:<version-or-range>` is that release of the SAME
+ * package (`patch:lodash@npm%3A4.17.21#...` patches lodash 4.17.21), `npm:other@1` is other's. A
+ * patch of a non-registry source is withheld, as that source is.
+ */
 function patchSpec(name: string, spec: string): NpmSpecClass {
   let inner: string;
   try {
@@ -130,7 +158,7 @@ function patchSpec(name: string, spec: string): NpmSpecClass {
   const range = inner.slice(at + 1);
   if (!PACKAGE_NAME.test(target)) return { kind: "url" };
   const read = /^npm:/i.test(range) ? aliasSpec(target, range.slice(4)) : classifyNpmSpec(target, range);
-  return read.kind === "registry" ? registry(read.name === target ? target : read.name, read.range) : read;
+  return read.kind === "registry" ? registry(read.name, read.range) : read;
 }
 
 /** pnpm's and Bun's `catalog:` / `catalog:<name>`: the catalog entry, classified by the same rules. */
