@@ -439,6 +439,14 @@ async function executeStandalonePlanner(
   if (!includeDev) deps = deps.filter((d) => !d.isDev);
   const drift = liveIntel.getInstallDrift();
   const root = liveIntel.getProjectRoot() ?? process.cwd();
+  // One snapshot of the set per call, read with the rows: a plan in flight while another call
+  // re-resolved the set answered with rows from the old set and lockfile problems from the new one
+  // (review 2026-11-24, p-race.mjs). A set that moves during the call is said, never mixed.
+  const startGeneration = liveIntel.getGeneration();
+  const problemsAtStart = liveIntel.getLockfileProblems();
+  const discoveryAtStart = liveIntel.getDiscovery();
+  const lockfileReadAtStart = liveIntel.wasLockfileRead();
+  const auditAtStart = liveIntel.getAuditDeps();
 
   // Vulnerability data at the plan's scope, loaded here (bounded) when no scan
   // has run. Telling the agent to "run vulnerability_scan first" made the first
@@ -482,7 +490,7 @@ async function executeStandalonePlanner(
   // rate limited for some dependencies) ranks what it found and says the rest
   // is unchecked; it never claims the plan is CVE-aware (6.2.4 said
   // vulnerabilityDataAvailable: true over 10,568 unchecked dependencies).
-  const scopeTotal = liveIntel.getAuditDeps().filter((d) => includeDev || !isDevOnlyCopy(d)).length;
+  const scopeTotal = auditAtStart.filter((d) => includeDev || !isDevOnlyCopy(d)).length;
   const coverage = vulnerabilityCoverage(vulnResult, {
     enabled: liveIntel.isEnabled(),
     expectedTotal: scopeTotal,
@@ -491,19 +499,20 @@ async function executeStandalonePlanner(
   // A project whose only manifests are ones this server does not read (pom.xml), or could not read
   // (an unparseable package.json, a damaged lockfile), has no data at all (audit 6.2.5 A-6).
   const nothingReadable =
-    (vulnResult?.totalScanned ?? 0) === 0 && ((liveIntel.getDiscovery()?.notCoveredCount ?? 0) > 0 || liveIntel.getLockfileProblems().length > 0);
+    (vulnResult?.totalScanned ?? 0) === 0 && ((discoveryAtStart?.notCoveredCount ?? 0) > 0 || problemsAtStart.length > 0);
   // Any lockfile problem that makes vulnerability_scan's coverage.complete false (a merge conflict,
   // a file that could not be parsed or was read in part, a refused include, a second lockfile that
   // disagrees, one not cross-checked; go.sum included), whatever ecosystem it is: the plan is no
   // CVE-aware one either. One source for both (incompleteLockfiles): 6.5.0 said true beside a
   // conflicted Cargo.lock, and the 6.5.1 candidate beside a conflicted go.sum (review 2026-11-24).
-  const lockfilesNotRead = incompleteLockfiles(liveIntel.getLockfileProblems()).length;
+  const lockfilesNotRead = incompleteLockfiles(problemsAtStart).length;
   // No lockfile read: declared ranges are not installs, so there is no vulnerability data to plan by.
   // A manifest below the root with no lockfile (manifests_without_lockfile): what it declares was
   // never resolved or checked, so the scan says coverage.complete false and the plan must not say
   // CVE-aware either (review 2026-11-24: a subdirectory package.json with no lockfile).
-  const manifestsUnlocked = liveIntel.getDiscovery()?.unlockedManifestsCount ?? 0;
-  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable && liveIntel.wasLockfileRead() && lockfilesNotRead === 0 && manifestsUnlocked === 0;
+  const manifestsUnlocked = discoveryAtStart?.unlockedManifestsCount ?? 0;
+  const setMoved = liveIntel.getGeneration() !== startGeneration;
+  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable && lockfileReadAtStart && lockfilesNotRead === 0 && manifestsUnlocked === 0 && !setMoved;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
   // charged with RUSTSEC-2026-0190 (fixed in 1.0.103 — it isn't affected) while
@@ -991,7 +1000,7 @@ async function executeStandalonePlanner(
   if (criticalCount > 0) parts.push(`${criticalCount} critical`);
   if (devOnly > 0) parts.push(`${devOnly} dev-only (isDev)`);
   // The population, worded as dependency_health and vulnerability_scan word it (finding 6).
-  if (vulnResult) parts.push(populationNote(vulnResult.vulnerabilities, liveIntel.getAuditDeps(), includeDev, named));
+  if (vulnResult) parts.push(populationNote(vulnResult.vulnerabilities, auditAtStart, includeDev, named));
   // A workspace member's vulnerable devDependency is one too.
   const devDeclaredLeftOut = devDirectLeftOut + devDeclaredSkipped.size;
   if (devDeclaredLeftOut + devTransitiveLeftOut + devDirectUnchecked > 0) {
@@ -1009,10 +1018,11 @@ async function executeStandalonePlanner(
   if (maintenanceNotices.size > 0) {
     parts.push(`${maintenanceNotices.size} unmaintained-package notice${maintenanceNotices.size !== 1 ? "s" : ""} not ranked (no fix exists; see vulnerability_scan maintenance_notices)`);
   }
-  const partial = discoveryNote(liveIntel.getDiscovery());
+  const partial = discoveryNote(discoveryAtStart);
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
-  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...unreadableNotes(liveIntel.getLockfileProblems())]) parts.push(note.replace(/[.]$/, ""));
+  for (const note of [...exclusionNotes(discoveryAtStart), ...unreadableNotes(problemsAtStart)]) parts.push(note.replace(/[.]$/, ""));
+  if (setMoved) parts.unshift("NOT CHECKED: the dependency set changed while this plan was computed (a lockfile or manifest changed), so its rows and its notes may describe different files; plan again");
   const nothing = vulnerabilityDataAvailable ? "nothing to upgrade (no known vulnerability, deprecation, or newer release of a direct dependency)" : "no vulnerability data to plan from";
   if (only && limited.length === 0) parts.push(emptyAnswerNote(only, liveIntel, includeDev, nothing));
   // An answer that starts with NOT CHECKED or STALE is incomplete (the server's instructions): a plan
@@ -1021,7 +1031,7 @@ async function executeStandalonePlanner(
     const said = parts.filter((p) => INCOMPLETE.test(p));
     const rest = parts.filter((p) => !INCOMPLETE.test(p));
     parts.length = 0;
-    if (said.length === 0) parts.push(notCheckedLead(liveIntel.wasLockfileRead(), nothingReadable));
+    if (said.length === 0) parts.push(notCheckedLead(lockfileReadAtStart, nothingReadable));
     pushAll(parts, said);
     pushAll(parts, rest);
   }

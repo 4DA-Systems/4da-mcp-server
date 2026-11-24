@@ -971,6 +971,11 @@ export class LiveIntelligence {
    * tool call. A process that started before a `git pull` no longer answers
    * for the dependency set it saw at startup.
    */
+  /** Bumped by every re-resolution: a caller that read the set before an await can tell whether it moved since. */
+  getGeneration(): number {
+    return this.generation;
+  }
+
   refreshIfLockfilesChanged(): boolean {
     const rulesChanged = this.refreshPrivateRules();
     if (!this.initialized || this.groupResults.length === 0) return rulesChanged;
