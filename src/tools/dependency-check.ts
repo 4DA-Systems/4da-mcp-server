@@ -55,7 +55,7 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { maxOf } from "../array-utils.js";
 import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
-import { recordVerdicts } from "../check-ledger.js";
+import { answeredFor, recordVerdicts } from "../check-ledger.js";
 import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
 import type { Verdict } from "./dependency-check-signals.js";
@@ -165,7 +165,8 @@ export const dependencyCheckTool = {
  */
 export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
   const answer = await executeDependencyCheck(db, params, liveIntel);
-  void recordVerdicts(answer.results);
+  // Each entry names the project the answer was given for: a private answer counts only there (the hook).
+  void recordVerdicts(answer.results, { project: answeredFor(liveIntel?.getProjectRoot?.()) });
   return shapeDependencyCheck(answer, params.response_format);
 }
 

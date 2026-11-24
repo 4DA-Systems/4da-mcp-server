@@ -14,7 +14,11 @@
  * - A range or constraint is denied only when the ledger has no verdict for the package at all
  *   (the server resolves a constraint to exact releases; this hook does not), or when its own last
  *   verdict for that same constraint was `avoid` or `wait`.
- * - A package the server recorded as private (never looked up) goes ahead.
+ * - A package the server recorded as private (never looked up) goes ahead in the project it
+ *   answered for (the entry's `project` folder, or a folder inside it) and nowhere else; not when
+ *   the command changes folder or installs globally, not over an avoid or wait for the exact
+ *   version, and not for an entry without a project (a server before 6.5.1). A name withheld
+ *   because a lockfile could not be read (`unreadable_lockfile`) is held, with the file to repair.
  * A command run through a shell's `-c`, `eval`, `pwsh -Command` / `-CommandWithArgs`,
  * `Invoke-Expression`, npx, bunx, pnpx, `npm exec`, `pnpm dlx`, `pnpm -c exec`, `yarn dlx` or
  * corepack is read as the command it runs, at most MAX_WRAPS wrappers deep; so is one after a
@@ -53,7 +57,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod", "pnpm-workspace.yaml"]);
 /** The largest hook payload read (characters). */
@@ -1837,28 +1841,53 @@ function byPackage(ledger) {
   return index;
 }
 
+/** A ledger entry for a name the server never looked up: private, or withheld because a lockfile could not be read. */
+const isWithheld = (e) => e.not_checked === "private" || e.not_checked === "unreadable_lockfile";
+/** A withheld entry whose cause is a file that could not be read (6.5.0 recorded it as private with `unreadable_file`). */
+const isUnreadable = (e) => e.not_checked === "unreadable_lockfile" || (e.not_checked === "private" && typeof e.unreadable_file === "string" && e.unreadable_file !== "");
+
+/** A folder as compared here: absolute, one separator, case folded where the file system folds it. */
+function folderKey(folder) {
+  const abs = resolve(folder).replace(/[\\/]+/g, "/").replace(/\/$/, "");
+  return process.platform === "win32" || process.platform === "darwin" ? abs.toLowerCase() : abs;
+}
+
+/** Whether folder `here` is `project` or inside it (a folder that only starts with its name is not). */
+function insideProject(here, project) {
+  if (typeof here !== "string" || typeof project !== "string" || project === "") return false;
+  const h = folderKey(here);
+  const p = folderKey(project);
+  return h === p || h.startsWith(`${p}/`);
+}
+
 /**
- * What the ledger says about one introduced version: "allow", { deny: entry } (an avoid or wait
- * verdict), or { check: lastUnknownOrNull } (no verdict to go on).
+ * What the ledger says about one introduced version, in the folder `here` (null when the call may
+ * run outside any one project): "allow", { deny: entry } (an avoid or wait verdict),
+ * { unreadable: entry } (withheld because a lockfile could not be read), or
+ * { check: lastUnknownOrNull, elsewhere?: privateEntry } (no verdict to go on; `elsewhere` a
+ * private answer given for another project, or by a server that does not record one).
+ *
+ * A private answer is about one project's own sources (a git, path or workspace dependency, a
+ * private registry rule): it lets the version through only in that project's folder or a folder
+ * inside it, and only while no later answer for the same version or constraint says otherwise;
+ * an avoid or wait for the exact version holds over it, whenever it was given.
  */
-function judge(index, c) {
+function judge(index, c, here) {
   const eco = c.ecosystem;
   const forPackage = index.get(`${eco}\0${nameKey(eco, c.name)}`) ?? [];
-  // The server never looks a private name up: nothing will ever be recorded but this.
-  if (forPackage.some((e) => e.not_checked === "private")) return "allow";
   const exactVersion = exactFor(eco, c.spec);
-  if (exactVersion) {
-    const want = versionKey(eco, exactVersion);
-    const last = forPackage.filter((e) => versionKey(eco, e.version) === want).at(-1);
-    if (last && PASSES.has(last.verdict)) return "allow";
-    if (last && HOLDS.has(last.verdict)) return { deny: last };
-    return { check: last ?? null };
-  }
-  const constraint = callTarget(eco, c.spec).replace(/\s+/g, "");
-  const same = forPackage.filter((e) => typeof e.requested === "string" && e.requested.replace(/\s+/g, "") === constraint).at(-1);
-  if (same && HOLDS.has(same.verdict)) return { deny: same };
-  if (forPackage.some((e) => e.verdict !== "unknown")) return "allow";
-  return { check: forPackage.at(-1) ?? null };
+  const constraint = exactVersion ? null : callTarget(eco, c.spec).replace(/\s+/g, "");
+  const want = exactVersion ? versionKey(eco, exactVersion) : null;
+  const answers = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? versionKey(eco, e.version) === want : typeof e.requested === "string" && e.requested.replace(/\s+/g, "") === constraint));
+  const last = answers.at(-1);
+  if (last && HOLDS.has(last.verdict)) return { deny: last };
+  if (last && PASSES.has(last.verdict)) return "allow";
+  // A withheld answer given for this folder's project, newer than any other answer for this version.
+  const local = forPackage.filter((e) => isWithheld(e) && insideProject(here, e.project)).at(-1);
+  if (local && (!last || forPackage.indexOf(local) > forPackage.indexOf(last))) return isUnreadable(local) ? { unreadable: local } : "allow";
+  if (!exactVersion && !last && forPackage.some((e) => !isWithheld(e) && e.verdict !== "unknown")) return "allow";
+  const elsewhere = forPackage.filter((e) => e.not_checked === "private" && !isUnreadable(e)).at(-1);
+  return { check: last ?? null, ...(elsewhere ? { elsewhere } : {}) };
 }
 
 /** Server text repeated in a denial: one line, capped. */
@@ -1895,24 +1924,39 @@ const quotedChange = (c) => `${quoted(c.name)} ${quoted(c.spec)} (${c.ecosystem}
  * The denial for the versions a call introduces, or null when every one may go ahead. `what` is
  * "edit" or "command".
  */
-function denialFor(introduced, ledger, dir, what) {
+function denialFor(introduced, ledger, dir, what, here) {
   const held = [];
+  const unreadable = [];
   const unchecked = [];
   const index = byPackage(ledger);
   for (const c of introduced) {
-    const verdict = judge(index, c);
+    const verdict = judge(index, c, here);
     if (verdict === "allow") continue;
     if (verdict.deny) held.push({ c, entry: verdict.deny });
-    else unchecked.push({ c, last: verdict.check });
+    else if (verdict.unreadable) unreadable.push({ c, entry: verdict.unreadable });
+    else unchecked.push({ c, last: verdict.check, elsewhere: verdict.elsewhere ?? null });
   }
-  if (held.length === 0 && unchecked.length === 0) return null;
+  if (held.length === 0 && unreadable.length === 0 && unchecked.length === 0) return null;
   const lines = [`4DA guard: this ${what} was stopped before it ran.`];
   for (const { c, entry } of held.slice(0, 10)) {
     lines.push(`- ${quotedChange(c)}: dependency_check answered ${entry.verdict} at ${when(entry)}: ${sentence(serverText(entry.reason) || "no reason recorded")} Write a version it answers proceed for.`);
   }
   if (held.length > 10) lines.push(`- ...and ${held.length - 10} more with an avoid or wait verdict.`);
-  for (const { c, last } of unchecked.slice(0, 10)) {
+  for (const { c, entry } of unreadable.slice(0, 10)) {
+    const file = typeof entry.unreadable_file === "string" && entry.unreadable_file ? ` (${quoted(entry.unreadable_file, 200)})` : "";
+    lines.push(
+      `- ${quotedChange(c)}: dependency_check could not check it at ${when(entry)}: a lockfile or manifest of this project could not be read${file}, so where it would be installed from is not known. Repair or regenerate that file (reinstall), then call dependency_check again; until it answers proceed, this ${what} stays stopped.`,
+    );
+  }
+  for (const { c, last, elsewhere } of unchecked.slice(0, 10)) {
     if (last) lines.push(`- ${quotedChange(c)}: the last dependency_check answer was unknown at ${when(last)}: ${serverText(last.reason, 240) || "no reason recorded"}`);
+    if (elsewhere) {
+      const where =
+        typeof elsewhere.project === "string" && elsewhere.project
+          ? `for the project in ${quoted(elsewhere.project, 200)}; it lets a version through only in that folder and the folders inside it, and ${here === null ? `this ${what} may run elsewhere (it changes folder, names another one, or installs globally)` : `this ${what} runs in ${quoted(here, 200)}`}.`
+          : "by a server that does not record the project it answered for (older than 6.5.1): such an answer lets nothing through. Update the 4da server.";
+      lines.push(`- ${quotedChange(c)}: dependency_check answered it as private (never looked up) at ${when(elsewhere)}, ${where}`);
+    }
   }
   // The names are the agent's to judge before anything is sent: the hook has no registry and no
   // private rules to tell a real package from a made-up or private one, so the call is offered for
@@ -1958,17 +2002,29 @@ function introducedBy(input) {
   const toolName = input.tool_name;
   const toolInput = input.tool_input;
   if (!toolInput || typeof toolInput !== "object") return null;
+  const cwd = typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd();
   if (toolName === "Bash" || toolName === "PowerShell") {
     const found = installsIn(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash");
-    return { what: "command", changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null })) };
+    const here = typeof toolInput.command === "string" && !LEAVES_FOLDER.test(toolInput.command) && !LEAVES_FOLDER_OPTION.test(toolInput.command) ? resolve(cwd) : null;
+    return { what: "command", here, changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null })) };
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
   if (typeof toolInput.file_path !== "string") return null;
   const kind = manifestKind(toolInput.file_path);
   if (!kind) return null;
   const changes = repeatable(introducedByEdit(kind, toolName, toolInput, toolInput.file_path));
-  return { what: "edit", changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from })) };
+  return { what: "edit", here: resolve(cwd, dirname(toolInput.file_path)), changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from })) };
 }
+
+/**
+ * A command that may install outside the folder it starts in: it changes folder (`cd`, `pushd`,
+ * `Set-Location` and its aliases), names another one (`--prefix`, `-C`, `--cwd`, `--dir`,
+ * `--directory`, `--project`, `--manifest-path`, `-modfile`, pip's `--target` / `-t`), or installs
+ * globally. A private answer, which counts only in its own project, then counts nowhere. Read on
+ * the whole command line, wrappers included: a false match only keeps a private name held.
+ */
+const LEAVES_FOLDER = /(?:^|[\s;&|(){}'"`])(?:cd|pushd|popd|chdir|set-location|push-location|pop-location|sl)(?=$|[\s;&|(){}'"`])/i;
+const LEAVES_FOLDER_OPTION = /(?:^|[\s'"])(?:--prefix|--cwd|--dir|--directory|--project|--manifest-path|-C|-modfile|--target|-t|-g|--global|--location(?:=|\s+)global)(?=$|[\s='"])/;
 
 /** PreToolUse: the denial JSON, or "" to let the call go ahead. */
 function preToolUse(input, env, now) {
@@ -1979,7 +2035,7 @@ function preToolUse(input, env, now) {
   const dir = dataDir(env);
   const ledger = readLedger(dir, now);
   if (ledger === null) return "";
-  const reason = denialFor(changes, ledger, dir, found.what);
+  const reason = denialFor(changes, ledger, dir, found.what, found.here);
   if (!reason) return "";
   return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
 }
