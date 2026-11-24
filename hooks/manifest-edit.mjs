@@ -127,6 +127,7 @@ function jsonSections(text) {
   let keyBeforeColon = null;
   let seenNonSpace = false;
   for (let i = 0; i < text.length; i++) {
+    tick();
     const ch = text[i];
     if (inString) {
       if (ch === "\\") i++;
@@ -185,6 +186,7 @@ function tomlTables(text) {
   const headers = [];
   let index = 0;
   for (const line of text.split("\n")) {
+    tick();
     const t = line.trim();
     if (t.startsWith("[") && t.endsWith("]")) {
       const inner = t.replace(/^\[{1,2}/, "").replace(/\]{1,2}$/, "");
@@ -222,7 +224,8 @@ function fileContext(text) {
 /** A manifest's text from disk, or null when it is missing, unreadable or far larger than a manifest. */
 function readManifest(path) {
   try {
-    if (statSync(path).size > MAX_MANIFEST_BYTES) return null;
+    // One past the bound is not read, and an edit of it is held (refuse), never judged as if empty.
+    if (statSync(path).size > MAX_MANIFEST_BYTES) return refuse(`the manifest on disk is over ${MAX_MANIFEST_BYTES / 1024 / 1024} MB`);
     return readFileSync(path, "utf8");
   } catch {
     return null;
@@ -281,6 +284,7 @@ const TOML_BREAK = new Set([" ", "\t", "\r", "\n", "#", '"', "'", "[", "]", "{",
 function tomlString(text, i, q, triple) {
   if (triple) {
     for (let j = i + 3; j < text.length; j++) {
+      tick();
       if (q === '"' && text[j] === "\\") j++;
       else if (text.startsWith(q.repeat(3), j)) {
         // Up to two quotes of the content may stand right before the closing three.
@@ -293,6 +297,7 @@ function tomlString(text, i, q, triple) {
   }
   let value = "";
   for (let j = i + 1; j < text.length; j++) {
+    tick();
     const c = text[j];
     if (c === "\n") return null;
     if (c === q) return { value, end: j + 1 };
@@ -311,6 +316,7 @@ function tomlTokens(text) {
   const out = [];
   let i = 0;
   while (i < text.length) {
+    tick();
     const ch = text[i];
     if (ch === "\n") {
       out.push({ t: "nl" });
@@ -426,6 +432,7 @@ function tomlAssignmentsOf(text, start) {
     }
   };
   while (p < tokens.length) {
+    tick();
     if (kind(p) === "nl") {
       p++;
       continue;
@@ -754,6 +761,7 @@ function pnpmWorkspaceVersions(text, out) {
   let catalog = null;
   let catalogIndent = -1;
   for (const raw of text.split("\n")) {
+    tick();
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -870,6 +878,7 @@ function goDirectives(text, block = null) {
   const requires = [];
   const local = [];
   for (const raw of text.split("\n")) {
+    tick();
     // go.mod allows a module path or version in double quotes (`replace x => "github.com/fork/x" v1.0.0`).
     // The comment is dropped first; a line still over the bound is refused, not skipped.
     const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").trim();
@@ -940,6 +949,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     const at = (index) => (place >= 0 ? place + index : -1);
     const sections = jsonSections(text);
     for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([^"\n]{1,300})"/gi)) {
+      tick();
       const d = npmDeclared(m[1], m[2]);
       if (d && npmDependency(sections(m.index), at(m.index), m[1], disk)) put(out, d.name, null, d.spec);
     }
@@ -957,6 +967,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     }
   } else if (file === "requirements.txt") {
     for (const line of text.split("\n")) {
+      tick();
       const r = requirementLine(line);
       if (r) put(out, r.name, null, r.spec);
     }
@@ -1015,6 +1026,7 @@ function specKey(file) {
 function diffVersions(old, now, same = (spec) => spec) {
   const before = new Map();
   for (const [key, specs] of old) {
+    tick();
     const name = keyName(key);
     const all = before.get(name) ?? new Set();
     for (const spec of specs) all.add(same(spec));
@@ -1023,6 +1035,7 @@ function diffVersions(old, now, same = (spec) => spec) {
   const changes = [];
   const seen = new Set();
   for (const [key, specs] of now) {
+    tick();
     const name = keyName(key);
     const prev = old.get(key) ?? [];
     const anywhere = before.get(name) ?? new Set();
@@ -1088,6 +1101,23 @@ let deadline = Infinity;
 function refuse(part) {
   if (unreadPart === null) unreadPart = part;
   return null;
+}
+
+/** Thrown out of a reader's loop once the call is past its time budget (preToolUse holds it). */
+const TOO_SLOW = new Error("over the time budget");
+let ticks = 0;
+
+/**
+ * Called once per step of a reader's long loops (TOML tokens and assignments, JSON sections, the
+ * line readers, the version diff): every 1,024 steps it checks the budget, and past it stops the
+ * read, so a slow read is held at about the budget wherever the time goes (round 4 of the hook
+ * review: the budget was checked only between edits).
+ */
+function tick() {
+  if ((++ticks & 1023) === 0 && performance.now() > deadline) {
+    refuse(`reading it took over ${READ_BUDGET_MS / 1000} s`);
+    throw TOO_SLOW;
+  }
 }
 
 /** Whether this call's reading is past its time budget; marks it so when it is. */
@@ -1327,6 +1357,24 @@ function applyEdit(text, oldString, newString, replaceAll) {
   return text.slice(0, first) + newString + text.slice(first + oldString.length);
 }
 
+/**
+ * The length `text` would have after edit `e`, counted without building it: the old text's
+ * occurrences, found by a plain indexOf loop that stops once the result is past
+ * MAX_MANIFEST_BYTES (so the count itself stays cheap). An edit that would not apply counts as
+ * `text`'s own length.
+ */
+function projectedSize(text, e) {
+  if (typeof e.old_string !== "string" || typeof e.new_string !== "string" || e.old_string === "") return text.length;
+  const grow = e.new_string.length - e.old_string.length;
+  if (e.replace_all !== true) return text.length + Math.max(grow, 0);
+  let size = text.length;
+  for (let at = text.indexOf(e.old_string); at >= 0; at = text.indexOf(e.old_string, at + e.old_string.length)) {
+    size += grow;
+    if (size > MAX_MANIFEST_BYTES) return size;
+  }
+  return size;
+}
+
 /** The edits of an Edit or MultiEdit payload, or null when it holds none in a shape this reads. */
 function editsOf(toolName, toolInput) {
   if (toolName === "Edit") return [{ old_string: toolInput.old_string, new_string: toolInput.new_string, replace_all: toolInput.replace_all }];
@@ -1357,6 +1405,10 @@ function introducedByEdit(kind, toolName, toolInput, path) {
     let text = base;
     for (const e of edits) {
       if (overBudget()) return [];
+      // The manifest this edit makes, sized before it is built: one `replace_all` whose old text
+      // occurs thousands of times made hundreds of MB (12,000 hits took 10.7 s, 20,000 ran out of
+      // memory; round 4 of the hook review).
+      if (text !== null && projectedSize(text, e) > MAX_MANIFEST_BYTES) return refuse(`an edit that would make the manifest over ${MAX_MANIFEST_BYTES / 1024 / 1024} MB`) ?? [];
       text = text === null ? null : applyEdit(text, e.old_string, e.new_string, e.replace_all);
     }
     if (text !== null) return wholeFileChanges(kind, base, text);
@@ -1365,8 +1417,10 @@ function introducedByEdit(kind, toolName, toolInput, path) {
   for (const e of edits) {
     try {
       for (const c of versionChanges(kind, e.old_string ?? "", e.new_string ?? "", () => null)) changes.push(c);
-    } catch {
-      // This edit is not one the hook can read; the others still count.
+    } catch (error) {
+      // Past the time budget the whole read stops (preToolUse holds the call).
+      if (error === TOO_SLOW) throw error;
+      // Otherwise this edit is not one the hook can read; the others still count.
     }
   }
   return changes;
