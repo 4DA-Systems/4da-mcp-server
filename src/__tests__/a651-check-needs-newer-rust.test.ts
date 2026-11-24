@@ -21,14 +21,14 @@ afterEach(() => h.dispose());
 
 describe("a crate release that needs a newer Rust than rust-version", () => {
   it("is answered with the caveat", async () => {
-    const r = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "time", to: "0.3.47", from: "0.3.36" }], format: "detailed" }, await h.live())) as { results: Array<Record<string, any>> };
+    const r = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "time", to: "0.3.47", from: "0.3.36" }] }, await h.live())) as { results: Array<Record<string, any>> };
     const item = r.results[0];
     expect(item.needs_newer_rust).toEqual({ needs: "1.88", declared: "1.64", manifest: expect.stringContaining("Cargo.toml") });
     expect(item.reason).toMatch(/needs Rust 1\.88 .* rust-version 1\.64/);
   });
 
   it("control: a release that declares an older Rust carries none", async () => {
-    const r = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "time", to: "0.3.36" }], format: "detailed" }, await h.live())) as { results: Array<Record<string, any>> };
+    const r = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "time", to: "0.3.36" }] }, await h.live())) as { results: Array<Record<string, any>> };
     expect(r.results[0].needs_newer_rust).toBeUndefined();
   });
 });
