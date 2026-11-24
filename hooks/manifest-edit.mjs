@@ -2598,7 +2598,7 @@ function denialFor(introduced, ledger, dir, what) {
   }
   for (const { c, entry } of local.slice(0, 10)) {
     lines.push(
-      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove or replace that non-registry spec in the manifest that declares it (that edit goes ahead), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. FOURDA_GUARD is the user's setting, not yours to change.`,
+      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove that non-registry spec from the manifest that declares it (that edit goes ahead; one that puts a registry version in its place is held like this command), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. FOURDA_GUARD is the user's setting, not yours to change.`,
     );
   }
   for (const { c, last } of unchecked.slice(0, 10)) {
@@ -2748,6 +2748,7 @@ function mayInstall(input) {
  * `<<WORD` to the line holding WORD) and a PowerShell here-string (`@'...'@`, `@"..."@`). Coarse
  * on purpose: it only decides whether a command it cannot read names an install.
  */
+let precheckStopAt = Infinity;
 function plainSegments(text, dialect) {
   const segments = [];
   let words = [];
@@ -2764,6 +2765,8 @@ function plainSegments(text, dialect) {
     words = [];
   };
   for (let i = 0; i < text.length; i++) {
+    // Timed where the caller set a limit (a payload over MAX_INPUT_CHARS: tens of megabytes of segments ran past Claude Code's 10 s).
+    if ((i & 0xffff) === 0 && performance.now() > precheckStopAt) throw TOO_SLOW;
     const ch = text[i];
     if (quote !== null) {
       if (dialect === "bash" && quote === '"' && ch === "\\") i++;
@@ -2776,6 +2779,12 @@ function plainSegments(text, dialect) {
       // A here-string: its body ends at a line starting with the quote and `@`.
       const end = text.indexOf(`\n${text[i + 1]}@`, i + 2);
       i = end < 0 ? text.length : end + 2;
+      continue;
+    }
+    if (ch === "#" && (i === 0 || " \t\n".includes(text[i - 1]))) {
+      // A comment (a `#` at the start or after a blank) runs to the end of its line: an apostrophe in one opens no quote.
+      const nl = text.indexOf("\n", i);
+      i = (nl < 0 ? text.length : nl) - 1;
       continue;
     }
     if (ch === "'" || ch === '"') quote = ch;
@@ -2830,9 +2839,9 @@ const INSTALLS_BY_TOOL = {
   "pip-compile": () => true,
 };
 
-/** A program word as the pre-check compares it: its last path part, lower case, without .exe/.cmd/.bat/.ps1, `pip3.12` as `pip`, `yarnpkg` as `yarn`. */
+/** A program word as the pre-check compares it: its last path part, lower case, without .exe/.cmd/.bat/.ps1 or a version after `@` (`pnpm@9`), `pip3.12` as `pip`, `yarnpkg` as `yarn`. */
 function toolName(word) {
-  const p = programName(word);
+  const p = programName(word).replace(/(?<=.)@[^@/]*$/, "");
   if (/^pip\d+(?:\.\d+)*$/.test(p)) return "pip";
   if (/^python\d*(?:\.\d+)*$/.test(p) || p === "py") return "python";
   return p === "yarnpkg" ? "yarn" : p;
@@ -2968,7 +2977,18 @@ const MAX_PARSE_CHARS = 64 * 1024 * 1024;
 /** The answer to a parsed payload over MAX_INPUT_CHARS: held when it is a manifest write or an install command (mayInstall), "" otherwise. */
 function oversizedParsed(input) {
   if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || !input.tool_input || typeof input.tool_input !== "object") return "";
-  if (guardMode(process.env.FOURDA_GUARD) !== "block" || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
+  if (guardMode(process.env.FOURDA_GUARD) !== "block") return "";
+  // The pre-check of a command this size is timed: one it cannot finish inside the budget is held.
+  let may = true;
+  precheckStopAt = (mainStartedAt ?? performance.now()) + READ_BUDGET_MS + 500;
+  try {
+    may = mayInstall(input);
+  } catch (e) {
+    if (e !== TOO_SLOW) throw e;
+  } finally {
+    precheckStopAt = Infinity;
+  }
+  if (!may || !readLedgerExists(dataDir(process.env))) return "";
   return denyJson(notReadDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
 }
 
