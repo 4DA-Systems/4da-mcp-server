@@ -814,7 +814,8 @@ function goDirectives(text, block = null) {
   const local = [];
   for (const raw of text.split("\n")) {
     if (raw.length > MAX_LINE_CHARS) continue;
-    const line = raw.replace(/\/\/.*$/, "").trim();
+    // go.mod allows a module path or version in double quotes (`replace x => "github.com/fork/x" v1.0.0`).
+    const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").trim();
     if (!line) continue;
     if (line === ")") {
       block = null;
@@ -1106,7 +1107,8 @@ const NAME_TEXT = /^[@A-Za-z0-9][\w.\-/~@]{0,213}$/;
  * dangling before it ("4.17.21 <", "1.2 ||") goes with it. At most SPEC_MAX characters are kept,
  * in whole clauses.
  */
-const SPEC_CLAUSE = /(?:[~^<>=!]{1,3}\s*)?(?:v?\d[0-9A-Za-z.+_*-]*|\*)/y;
+// `!` inside a version is a PEP 440 epoch (`1!2.0`).
+const SPEC_CLAUSE = /(?:[~^<>=!]{1,3}\s*)?(?:v?\d[0-9A-Za-z.+_*!-]*|\*)/y;
 const SPEC_JOINER = /\s*\|\|\s*|\s*,\s*|\s+-\s+|\s+/y;
 const SPEC_MAX = 80;
 const specText = (spec) => {
@@ -1360,10 +1362,17 @@ export function simpleCommands(line, dialect) {
       i++;
     } else if ("$`(){}".includes(ch)) {
       return null;
+    } else if (dialect === "powershell" && ch === "@" && word === null && /^@[A-Za-z_][A-Za-z0-9_]*(?=$|[\s;|&])/.test(line.slice(i, i + 216))) {
+      // A splatted variable `@x`: its arguments are not known (an undefined one passes nothing,
+      // so `npm i x@1 @rest` still installs x@1). Kept as a word no reader takes for a package or
+      // an option, so the rest of the command is read and the command is never a plain install.
+      const m = /^@[A-Za-z_][A-Za-z0-9_]*/.exec(line.slice(i, i + 216));
+      word = m[0];
+      i += m[0].length - 1;
     } else if (dialect === "powershell" && ((ch === "@" && word === null && !SCOPED_WORD.test(line.slice(i, i + 216))) || ch === "," || (ch === "-" && word === null && line.startsWith("--%", i)))) {
-      // PowerShell reads an unquoted `@name` as splatting, `@(`, `@{`, `@'` and `@"` as an array,
-      // a hashtable or a here-string, and `a,b` as an array. A scoped package (`@types/node@20.0.0`)
-      // is passed as written (PowerShell 7.5.1 and 5.1: `Write-Output @h/x` prints `@h/x`).
+      // PowerShell reads `@(`, `@{`, `@'` and `@"` as an array, a hashtable or a here-string, and
+      // `a,b` as an array. A scoped package (`@types/node@20.0.0`) is passed as written
+      // (PowerShell 7.5.1 and 5.1: `Write-Output @h/x` prints `@h/x`).
       return null;
     } else {
       word = (word ?? "") + ch;
@@ -1827,6 +1836,7 @@ function wrappedInstalls(words, depth) {
 
 /** Where a package manager's subcommand is in its arguments (its global options skipped), or -1. */
 function subcommandAt(args, values, manager = null) {
+  let unknown = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--") return -1;
@@ -1838,8 +1848,18 @@ function subcommandAt(args, values, manager = null) {
         continue;
       }
       // npm: its own option table, abbreviations included (an option it does not know takes no word here).
-      if (manager === "npm" ? npmOption(a, args[i + 1]) === "value" : !a.includes("=") && values.has(a)) i++;
+      if (manager === "npm") {
+        const how = npmOption(a, args[i + 1]);
+        if (how === "unknown") unknown = true;
+        if (how === "value") i++;
+      } else if (!a.includes("=") && values.has(a)) i++;
       continue;
+    }
+    // After an npm option it does not know, the word here may be that option's value: an install
+    // subcommand later on is the subcommand (npmOperands reads the same way).
+    if (unknown && !isInstallCommand("npm", args[i])) {
+      const later = args.findIndex((w, k) => k > i && isInstallCommand("npm", w));
+      if (later > i) return later;
     }
     return i;
   }
@@ -1868,7 +1888,8 @@ function cargoUpdate(args) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     const p = optionValue(args, i, ["--precise"]);
-    const pkg = optionValue(args, i, ["-p", "--package"]);
+    // `-ptime`: a short option with its value attached.
+    const pkg = optionValue(args, i, ["-p", "--package"]) ?? (/^-p[^-]/.test(a) ? { value: a.slice(2), taken: 1 } : null);
     if (p || pkg) {
       if (p) precise = p.value;
       else if (pkg.value) names.push(pkg.value);
@@ -1880,9 +1901,26 @@ function cargoUpdate(args) {
   }
   if (typeof precise !== "string" || !exactFor("crates.io", precise) || specText(precise) !== precise) return [];
   return names.flatMap((n) => {
-    const name = n.replace(/@.*$/, "");
-    return /^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(name) ? [{ ecosystem: "crates.io", name, spec: precise }] : [];
+    const name = cargoPkgidName(n);
+    return name ? [{ ecosystem: "crates.io", name, spec: precise }] : [];
   });
+}
+
+/**
+ * The crate a Cargo package id names: `time`, `time@0.3.17`, `time:0.3.17` (the older form), a
+ * source URL with the crate after `#` (`https://github.com/rust-lang/crates.io-index#time@0.3.17`,
+ * `registry+https://...#time@0.3.17`), or with only a version after `#`, the URL's last part. Null
+ * for anything else.
+ */
+function cargoPkgidName(id) {
+  let s = String(id);
+  const hash = s.lastIndexOf("#");
+  if (hash >= 0) {
+    const after = s.slice(hash + 1);
+    s = /^[A-Za-z_]/.test(after) ? after : s.slice(0, hash).split(/[\\/]/).pop() ?? "";
+  }
+  const name = s.replace(/[@:].*$/, "");
+  return /^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(name) ? name : null;
 }
 
 /**
@@ -1952,9 +1990,12 @@ function npmPkgSet(words, json) {
     if (json && /^"[^"]*"$/.test(value)) value = value.slice(1, -1);
     const under = parts[0] === "pnpm" && parts[1] === "overrides" ? 2 : NPM_PKG_SECTIONS.has(parts[0]) ? 1 : -1;
     if (under < 0 || parts.length <= under) continue;
-    const name = parts.at(-1);
-    const version = jsVersion(value);
-    if (version && NAME_TEXT.test(name)) out.push({ ecosystem: "npm", name, spec: version });
+    // An override or resolution key names its package as package.json does (`**/qs`, `express>qs`).
+    const override = under === 2 || parts[0] === "overrides" || parts[0] === "resolutions";
+    const name = override ? overrideTarget(parts.at(-1)) : parts.at(-1);
+    // The value as package.json reads it: a version or range, `latest`, an alias (`npm:lodash@4.17.20`).
+    const d = name ? npmDeclared(name, value) : null;
+    if (d && NAME_TEXT.test(d.name)) out.push({ ecosystem: "npm", name: d.name, spec: d.spec });
   }
   return out;
 }
@@ -2011,6 +2052,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     // `py -3.12 -m pip`); `-c` code, a script or stdin is not read.
     for (let j = 0; j < args.length; j++) {
       const a = args[j];
+      // `python -m piptools compile ... --upgrade-package "x==v"` is pip-compile.
+      if (a === "-m" && args[j + 1] === "piptools") return args[j + 2] === "compile" ? upgradePackages(args.slice(j + 3)) : [];
       if (a === "-m") return /^pip(?:\d+(?:\.\d+)*)?$/.test(args[j + 1] ?? "") ? pipInstalls(args.slice(j + 2)) : [];
       if (a === "-c" || a === "-" || !a.startsWith("-")) return [];
       if (a === "-X" || a === "-W" || a === "--check-hash-based-pycs") j++;
@@ -2033,6 +2076,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     ];
   }
   if (program === "pip-compile") return upgradePackages(args);
+  // `uvx pip-compile ...`: uv runs the pip-tools command named first.
+  if (program === "uvx" && args[0] === "pip-compile") return upgradePackages(args.slice(1));
   if (program === "poetry") {
     const all = operands(args, { values: POETRY_VALUES, refuse: new Set(["--source"]) });
     if (!all || all[0] !== "add") return [];
@@ -2043,7 +2088,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
   }
   if (program === "go") {
     const all = operands(args, { values: GO_VALUES });
-    if (all && all[0] === "mod" && all[1] === "edit") return goModEdit(args);
+    // `go work edit -replace=a=b@v` replaces a module for the whole workspace, as go.mod's does.
+    if (all && (all[0] === "mod" || all[0] === "work") && all[1] === "edit") return goModEdit(args);
     if (!all || all[0] !== "get") return [];
     return all.slice(1).flatMap((w) => {
       const m = GO_SPEC.exec(w);

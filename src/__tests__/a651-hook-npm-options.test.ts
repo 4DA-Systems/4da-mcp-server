@@ -67,6 +67,8 @@ describe("npm options that take a value, before the subcommand", () => {
   it("an option npm does not know is not guessed at: the install after it is still read", () => {
     expect(read("npm --no-such-option whatever install lodash@4.17.20")).toEqual(["lodash@4.17.20"]);
     expect(read("npm --no-such-option install lodash@4.17.20")).toEqual(["lodash@4.17.20"]);
+    // `x` is npm's alias for exec: after an unknown option it may be that option's value.
+    expect(read("npm --node-gyp x install lodash@4.17.20")).toEqual(["lodash@4.17.20"]);
   });
 
   it("switches stay switches", () => {
