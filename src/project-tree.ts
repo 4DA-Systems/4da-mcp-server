@@ -809,7 +809,13 @@ export function nearestProjectAbove(dir: string): string | null {
   if (holdsProject(start) || foreignProject(start) || projectBelow(start)) return null;
   // At most a few levels (`src/lib`, `src/bin`), and never past a folder that is a project of an
   // ecosystem this server does not read (a Maven or Gradle project is its own project).
-  for (const ancestor of workspaceSearchDirs(start).slice(0, MAX_CLIMB)) {
+  // Only inside a git repository, and never above its root: workspaceSearchDirs ends at the folder
+  // holding `.git` when there is one; without one nothing above the start is read (check of round 2,
+  // b-nogit: a parent outside any repository became the project).
+  const above = workspaceSearchDirs(start);
+  const repoRoot = above[above.length - 1];
+  if (!repoRoot || !fs.existsSync(path.join(repoRoot, ".git"))) return null;
+  for (const ancestor of above.slice(0, MAX_CLIMB)) {
     if (holdsProject(ancestor)) return ancestor;
     if (foreignProject(ancestor)) return null;
   }
