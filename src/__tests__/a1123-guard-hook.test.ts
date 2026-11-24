@@ -449,7 +449,7 @@ describe("install commands", () => {
     "go install golang.org/x/tools/gopls@v0.16.2",
     "cat <<EOF > package.json",
     "echo npm install lodash@4.17.20",
-    "(npm install lodash@4.17.20)",
+    // A subshell `(npm install lodash@4.17.20)` is read since 6.5.1 (a651-hook-command-prefixes-and-aliases).
     "npm update lodash",
   ])("not read, so allowed without comment: %s", (command) => {
     expect(installsIn(command, "bash")).toEqual([]);

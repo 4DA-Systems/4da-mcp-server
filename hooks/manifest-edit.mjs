@@ -15,12 +15,19 @@
  *   (the server resolves a constraint to exact releases; this hook does not), or when its own last
  *   verdict for that same constraint was `avoid` or `wait`.
  * - A package the server recorded as private (never looked up) goes ahead.
- * A command run through a shell's `-c`, `pwsh -Command`, npx, bunx, `npm exec`, `pnpm dlx`,
- * `yarn dlx` or corepack is read as the command it runs, at most MAX_WRAPS wrappers deep.
+ * A command run through a shell's `-c`, `eval`, `pwsh -Command` / `-CommandWithArgs`,
+ * `Invoke-Expression`, npx, bunx, pnpx, `npm exec`, `pnpm dlx`, `pnpm -c exec`, `yarn dlx` or
+ * corepack is read as the command it runs, at most MAX_WRAPS wrappers deep; so is one after a
+ * prefix (sudo, env, timeout, nice, nohup, time, command, exec, xargs, busybox, wsl), a shell
+ * keyword (`!`, `if`, `then`, `do` ...), or inside a subshell, group or script block. npm's
+ * subcommand is resolved as npm resolves it (aliases, typos, unique prefixes: npmCommand).
+ * A global install that names its version (`npm i -g x@1`, `pnpm add -g`, `bun add -g`) is read
+ * and checked like any other.
  * A command this hook does not take apart exactly (a variable, a substitution, a heredoc, a
- * custom registry or index, a git or path source), a bare `npm install` or `npm ci`, a global
- * tool install (`cargo install`, `yarn global add`, `go install`), and a package named without a
- * version all go ahead without comment.
+ * registry or index other than the public one, a git or path source), a bare `npm install` or
+ * `npm ci`, a global tool install that is not a package manager's add (`cargo install`,
+ * `yarn global add`, `go install`), an `npm:` alias spec, and a package named without a version
+ * all go ahead without comment.
  * In a manifest only dependency declarations count (never a comment or another string field),
  * each section's are compared on their own, a renamed Cargo dependency is the crate `package =`
  * names, and a dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`,
@@ -1147,9 +1154,12 @@ function introducedByEdit(kind, toolName, toolInput, path) {
 
 /**
  * The simple commands of a command line, each as its words, or null when the line holds anything
- * this reader does not take apart exactly: a variable or command substitution, a subshell or
- * group, a heredoc, an escape it does not know, an unclosed quote. Redirections (`2>&1`,
- * `> out.txt`) are read and dropped. `dialect` is "bash" or "powershell".
+ * this reader does not take apart exactly: a variable or command substitution, a heredoc, an
+ * escape it does not know, an unclosed quote, a parenthesis or brace anywhere but where a subshell
+ * `( ... )`, a group `{ ...; }` or (PowerShell) a script block `& { ... }` opens and closes.
+ * Those three only separate commands here: what runs inside them is read like any other command
+ * (the 6.5.1 candidate returned null for them, so `(cd app && npm i x@1)` went ahead unread).
+ * Redirections (`2>&1`, `> out.txt`) are read and dropped. `dialect` is "bash" or "powershell".
  */
 export function simpleCommands(line, dialect) {
   if (typeof line !== "string" || line.length > MAX_COMMAND_CHARS) return null;
@@ -1165,6 +1175,11 @@ export function simpleCommands(line, dialect) {
     if (words.length > 0) commands.push(words);
     words = [];
   };
+  // Subshells (bash) and groups or script blocks open and not yet closed.
+  let parens = 0;
+  let braces = 0;
+  /** True when a `}` at `i` stands alone: what follows it ends a word. */
+  const closesAt = (i) => i + 1 >= line.length || /[\s;&|)}]/.test(line[i + 1]);
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (ch === "'") {
@@ -1176,7 +1191,10 @@ export function simpleCommands(line, dialect) {
       const end = line.indexOf('"', i + 1);
       if (end < 0) return null;
       const inner = line.slice(i + 1, end);
-      if (/[$`\\]/.test(inner)) return null;
+      // Bash expands `$`, a backquote and a backslash inside double quotes; PowerShell expands `$`
+      // and its backtick escape, and a backslash is an ordinary character there
+      // (`& "C:\Program Files\nodejs\npm.cmd" i x@1` went ahead unread in the 6.5.1 candidate).
+      if (dialect === "powershell" ? /[$`]/.test(inner) : /[$`\\]/.test(inner)) return null;
       word = (word ?? "") + inner;
       i = end;
     } else if (ch === " " || ch === "\t") {
@@ -1211,6 +1229,23 @@ export function simpleCommands(line, dialect) {
       if (line[i + 1] === "\n") i++;
       else if (line[i + 1] === "\r" && line[i + 2] === "\n") i += 2;
       else return null;
+    } else if (ch === "(" && dialect === "bash" && word === null && words.length === 0 && line[i + 1] !== "(") {
+      // A subshell opens where a command starts (never `((` arithmetic, `a=(...)` or `f()`).
+      parens++;
+    } else if (ch === ")" && parens > 0 && line[i - 1] !== "(") {
+      endCommand();
+      parens--;
+    } else if (ch === "{" && word === null && words.length === 0 && (dialect === "powershell" || /\s/.test(line[i + 1] ?? ""))) {
+      // A group `{ cmd; }` (in bash `{` is a word of its own) or a PowerShell script block.
+      braces++;
+    } else if (ch === "}" && braces > 0 && closesAt(i) && (dialect === "powershell" || (word === null && words.length === 0))) {
+      // Bash closes a group only after `;` or a newline; PowerShell's `{npm i x@1}` closes on the `}`.
+      endCommand();
+      braces--;
+    } else if (ch === "{" && word !== null && line[i + 1] === "}") {
+      // `{}` inside a word (`xargs -I{}`): no shell expands empty braces.
+      word += "{}";
+      i++;
     } else if ("$`(){}".includes(ch)) {
       return null;
     } else if (dialect === "powershell" && ((ch === "@" && word === null) || ch === "," || (ch === "-" && word === null && line.startsWith("--%", i)))) {
@@ -1221,6 +1256,7 @@ export function simpleCommands(line, dialect) {
     }
   }
   endCommand();
+  if (parens !== 0 || braces !== 0) return null;
   return commands;
 }
 
@@ -1229,15 +1265,82 @@ function programName(word) {
   return word.split(/[\\/]/).pop().toLowerCase().replace(/\.(?:exe|cmd|bat|ps1)$/, "");
 }
 
-/** Words that run the command after them unchanged. */
-const WRAPPERS = new Set(["sudo", "env", "time", "command", "nohup", "corepack"]);
+/** Shell keywords that come before the command they run (`if npm i x@1`, `then`, `do`, `! cmd`). */
+const KEYWORDS = new Set(["!", "if", "then", "else", "elif", "do", "while", "until"]);
+/** Shell keywords after which no command this reader reads follows in the same simple command. */
+const NO_COMMAND = new Set(["fi", "done", "esac", "for", "case", "select", "function", "in", "}"]);
+
+/**
+ * Programs that run the command after them unchanged, with the options each takes: `values` take
+ * the next word, `switches` take none (or carry their value), and `operands` words come before the
+ * command (timeout's duration). An option a prefix is not known to take means the command is not
+ * read further, as before. The 6.5.1 candidate read only option-less `sudo`, `env`, `time`,
+ * `command`, `nohup` and `corepack`: `timeout 600 npm install x@1`, `nice -n 5 ...`, `exec npm i`,
+ * `env -i`, `sudo -E` and `xargs -n1 npm i x@1` went ahead unread (review 2026-11-24).
+ */
+const PREFIXES = {
+  sudo: { values: /^-[CDghpRrTtUu]$/, switches: /^-[AbEHiKknPSs]+$|^--(?:preserve-env(?:=.*)?|login|shell|non-interactive|set-home|background|stdin)$|^--(?:user|group|chdir|close-from|host|prompt|role|type|command-timeout|other-user)=/ },
+  env: { values: /^-[uC]$|^--(?:unset|chdir)$/, switches: /^-[0iv]+$|^--(?:ignore-environment|null|debug)$|^--(?:unset|chdir)=/ },
+  nice: { values: /^-n$|^--adjustment$/, switches: /^-\d+$|^-n-?\d+$|^--adjustment=/ },
+  timeout: { values: /^-[ks]$|^--(?:kill-after|signal)$/, switches: /^-v$|^--(?:foreground|preserve-status|verbose)$|^--(?:kill-after|signal)=/, operands: /^\d+(?:\.\d+)?[smhd]?$/ },
+  nohup: {},
+  time: { values: /^-[fo]$|^--(?:format|output)$/, switches: /^-[pav]+$|^--(?:portability|append|verbose)$|^--(?:format|output)=/ },
+  command: { switches: /^-p$/ },
+  exec: { values: /^-a$/, switches: /^-[cl]+$/ },
+  // What xargs reads from its input is not on the command line: only what is, is read.
+  xargs: {
+    values: /^-[adEILnPs]$|^--(?:arg-file|delimiter|max-args|max-procs|max-chars|max-lines|process-slot-var|replace|eof)$/,
+    switches: /^-[0prtxo]+$|^-[adEeIiLlnPs].+|^--(?:null|no-run-if-empty|verbose|interactive|exit|open-tty|show-limits)$|^--[a-z-]+=/,
+  },
+  corepack: {},
+  // `busybox sh -c ...`: busybox runs the applet named next.
+  busybox: {},
+  // `wsl npm i x@1`, `wsl -d Ubuntu -e bash -c '...'`: the command runs in the project's folder, in Linux.
+  wsl: { values: /^-[du]$|^--(?:distribution|user|cd|shell-type)$/, switches: /^-e$|^--exec$|^--(?:distribution|user|cd|shell-type)=/ },
+};
+
+/**
+ * Where the command proper starts in a simple command: after `VAR=value` assignments, shell
+ * keywords and the prefixes that run what follows them. -1 when a prefix has an option this reader
+ * does not know, or a keyword starts something that is not a command (`for x in ...`).
+ */
+function commandStart(words) {
+  let i = 0;
+  for (;;) {
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    if (i >= words.length) return i;
+    if (KEYWORDS.has(words[i])) {
+      i++;
+      continue;
+    }
+    if (NO_COMMAND.has(words[i])) return -1;
+    const name = programName(words[i]);
+    const prefix = Object.hasOwn(PREFIXES, name) ? PREFIXES[name] : null;
+    if (!prefix) return i;
+    i++;
+    while (i < words.length && words[i].startsWith("-") && words[i].length > 1) {
+      const a = words[i];
+      if (a === "--") {
+        i++;
+        break;
+      }
+      if (prefix.values?.test(a)) i += 2;
+      else if (prefix.switches?.test(a)) i++;
+      else return -1;
+    }
+    if (prefix.operands) {
+      if (!prefix.operands.test(words[i] ?? "")) return -1;
+      i++;
+    }
+  }
+}
 
 /**
  * The operands of a command's arguments, or null when one of `refuse` is given (a custom
  * registry or index, a git or path source: the package is not the public one this hook can name).
  * `values`: options that take the next word as their value.
  */
-function operands(args, { values = new Set(), refuse = new Set() }) {
+function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = false }) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1247,6 +1350,13 @@ function operands(args, { values = new Set(), refuse = new Set() }) {
     }
     if (a.startsWith("-") && a.length > 1) {
       const flag = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+      // npm, pnpm, Yarn and Bun: `--registry` naming the public registry installs the public package.
+      if (npmRegistry && flag === "--registry") {
+        const taken = publicRegistryOption(args, i);
+        if (taken === 0) return null;
+        i += taken - 1;
+        continue;
+      }
       if (refuse.has(flag) || flag.startsWith("--@")) return null;
       if (!a.includes("=") && values.has(flag)) i++;
       continue;
@@ -1294,20 +1404,83 @@ function poetrySpec(word) {
 const JS_VALUES = {
   npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C"]),
   pnpm: new Set(["--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
-  yarn: new Set(["--cwd", "--network-timeout", "--mutex", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder", "--use-yarnrc"]),
+  // The last five are `yarn workspaces foreach`'s (berry).
+  yarn: new Set(["--cwd", "--network-timeout", "--mutex", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder", "--use-yarnrc", "-j", "--jobs", "--include", "--exclude", "--from"]),
   bun: new Set(["--cwd", "--config", "-c", "--backend", "--cache-dir", "--network-concurrency", "--concurrent-scripts"]),
 };
 // `pnpm up|update|upgrade x@1` and `yarn up|upgrade x@1` write the version named (without one they
-// change no manifest version this hook can name, and are read as nothing).
-const JS_SUBCOMMANDS = { npm: new Set(["install", "i", "add", "in"]), pnpm: new Set(["add", "install", "i", "up", "update", "upgrade"]), yarn: new Set(["add", "up", "upgrade"]), bun: new Set(["add"]) };
+// change no manifest version this hook can name, and are read as nothing). npm's are resolved with
+// npm's own table (npmCommand); bun's from `bun --help`: `install` (alias `i`) with a package adds
+// it, as `add` (alias `a`) does.
+const JS_SUBCOMMANDS = { npm: new Set(["install", "install-test"]), pnpm: new Set(["add", "install", "i", "up", "update", "upgrade"]), yarn: new Set(["add", "up", "upgrade"]), bun: new Set(["add", "a", "install", "i"]) };
 /** Package-manager subcommands that run another command or package: what they run is read as a command. */
-const JS_RUNNERS = { npm: new Set(["exec", "x"]), pnpm: new Set(["dlx", "exec"]), yarn: new Set(["dlx", "exec"]), bun: new Set(["x"]) };
+const JS_RUNNERS = { npm: new Set(["exec"]), pnpm: new Set(["dlx", "exec"]), yarn: new Set(["dlx", "exec"]), bun: new Set(["x"]) };
 /** The package managers whose installs this hook reads. */
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
-/** Programs that run a package's binary (npx, bunx): what they run is read as a command. */
-const PACKAGE_RUNNERS = new Set(["npx", "bunx"]);
+/** Programs that run a package's binary (npx, bunx, pnpx = `pnpm dlx`): what they run is read as a command. */
+const PACKAGE_RUNNERS = new Set(["npx", "bunx", "pnpx"]);
+
+/**
+ * npm's commands and aliases, as npm 10.9's lib/utils/cmd-list.js lists them. npm accepts an alias
+ * (`isntall`, `it`), any unique prefix of a command or alias (`install-t`), and camelCase
+ * (`installTest`); `install-ci-test` (`cit`, `sit`) is `ci` then `test` and installs no name given
+ * on the command line. The 6.5.1 candidate knew `install`, `i`, `add` and `in` only.
+ */
+const NPM_COMMANDS = ["access", "adduser", "audit", "bugs", "cache", "ci", "completion", "config", "dedupe", "deprecate", "diff", "dist-tag", "docs", "doctor", "edit", "exec", "explain", "explore", "find-dupes", "fund", "get", "help", "help-search", "hook", "init", "install", "install-ci-test", "install-test", "link", "ll", "login", "logout", "ls", "org", "outdated", "owner", "pack", "ping", "pkg", "prefix", "profile", "prune", "publish", "query", "rebuild", "repo", "restart", "root", "run-script", "sbom", "search", "set", "shrinkwrap", "star", "stars", "start", "stop", "team", "test", "token", "uninstall", "unpublish", "unstar", "update", "version", "view", "whoami"];
+const NPM_ALIASES = {
+  author: "owner", home: "docs", issues: "bugs", info: "view", show: "view", find: "search", add: "install", unlink: "uninstall", remove: "uninstall", rm: "uninstall", r: "uninstall",
+  un: "uninstall", rb: "rebuild", list: "ls", ln: "link", create: "init", i: "install", it: "install-test", cit: "install-ci-test", up: "update", c: "config", s: "search", se: "search",
+  tst: "test", t: "test", ddp: "dedupe", v: "view", run: "run-script", "clean-install": "ci", "clean-install-test": "install-ci-test", x: "exec", why: "explain", la: "ll", verison: "version",
+  ic: "ci", innit: "init", in: "install", ins: "install", inst: "install", insta: "install", instal: "install", isnt: "install", isnta: "install", isntal: "install", isntall: "install",
+  "install-clean": "ci", "isntall-clean": "ci", hlep: "help", "dist-tags": "dist-tag", upgrade: "update", udpate: "update", rum: "run-script", sit: "install-ci-test", urn: "run-script", ogr: "org", "add-user": "adduser",
+};
+
+/** The npm command a word names, as npm's `deref` resolves it (exact, alias, unique prefix, camelCase), or null. */
+function npmCommand(word) {
+  if (!word) return null;
+  const c = /[A-Z]/.test(word) ? word.replace(/([A-Z])/g, (m) => "-" + m.toLowerCase()) : word;
+  if (NPM_COMMANDS.includes(c)) return c;
+  if (Object.hasOwn(NPM_ALIASES, c)) return NPM_ALIASES[c];
+  const all = [...NPM_COMMANDS, ...Object.keys(NPM_ALIASES)];
+  const matches = all.filter((w) => w.startsWith(c));
+  let a = matches.length === 1 ? matches[0] : null;
+  while (a !== null && Object.hasOwn(NPM_ALIASES, a)) a = NPM_ALIASES[a];
+  return a;
+}
+
+/** Whether `word` is an install subcommand of `manager` (npm: by npm's own resolution). */
+function isInstallCommand(manager, word) {
+  return manager === "npm" ? JS_SUBCOMMANDS.npm.has(npmCommand(word) ?? "") : JS_SUBCOMMANDS[manager].has(word);
+}
+
+/** Whether `word` is a subcommand of `manager` that runs another command or package. */
+function isRunnerCommand(manager, word) {
+  return manager === "npm" ? JS_RUNNERS.npm.has(npmCommand(word) ?? "") : JS_RUNNERS[manager].has(word);
+}
+
+/** The public npm registry and its public mirrors (src/live/private-hosts.ts PUBLIC_NPM_HOSTS). */
+const PUBLIC_NPM_HOSTS = new Set(["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com"]);
+
+/** Whether a `--registry` value names the public registry: installing from it is installing the public package. */
+function publicRegistry(value) {
+  try {
+    return typeof value === "string" && PUBLIC_NPM_HOSTS.has(new URL(value).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A JS `--registry` option at args[i]: how many words it takes when it names the public registry
+ * (1 for `--registry=URL`, 2 for `--registry URL`), or 0 when it names another registry, whose
+ * packages are not the public ones this hook can name.
+ */
+function publicRegistryOption(args, i) {
+  const a = args[i];
+  return a.includes("=") ? (publicRegistry(a.slice(a.indexOf("=") + 1)) ? 1 : 0) : publicRegistry(args[i + 1]) ? 2 : 0;
+}
 /** Shells whose `-c` string is read as a command line. */
-const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 /** Wrappers read before this hook reads a command no further (`bash -c "npx pnpm add x@1"` is two). */
 const MAX_WRAPS = 3;
 /** Options of npx, `npm exec`, `pnpm dlx`, `yarn dlx` and bunx that take the next word as their value. */
@@ -1316,7 +1489,6 @@ const RUNNER_VALUES = new Set(["-p", "--package", "--cache", "--userconfig", "-w
 const RUNNER_SHELL = new Set(["-c", "--call", "--shell-mode"]);
 /** PowerShell options that take the next word as their value (any spelling PowerShell accepts for them). */
 const PWSH_VALUES = /^-(?:executionpolicy|ep|ex|windowstyle|w|workingdirectory|wd|outputformat|of|inputformat|inp|if|configurationname|config|settingsfile|custompipename)$/i;
-const REGISTRY = new Set(["--registry"]);
 const CARGO_VALUES = new Set(["-F", "--features", "--rename", "-p", "--package", "--manifest-path", "--target", "--config", "-Z", "--color", "--lockfile-path"]);
 const CARGO_REFUSE = new Set(["--git", "--path", "--registry", "--branch", "--tag", "--rev", "--index"]);
 const PY_INDEX = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links"]);
@@ -1327,8 +1499,11 @@ const GO_VALUES = new Set(["-C", "-tags", "-modfile", "-ldflags", "-gcflags", "-
 
 /** A JS package manager's `add`/`install`: its global options, the subcommand, then the specs. */
 function jsInstalls(manager, args) {
-  const all = operands(args, { values: JS_VALUES[manager], refuse: REGISTRY });
-  if (!all || all.length === 0 || !JS_SUBCOMMANDS[manager].has(all[0])) return [];
+  let all = operands(args, { values: JS_VALUES[manager], npmRegistry: true });
+  // Yarn: `yarn workspace <name> add x@1` and berry's `yarn workspaces foreach [options] add x@1`.
+  if (all && manager === "yarn" && all[0] === "workspace") all = all.slice(2);
+  else if (all && manager === "yarn" && all[0] === "workspaces" && all[1] === "foreach") all = all.slice(2);
+  if (!all || all.length === 0 || !isInstallCommand(manager, all[0])) return [];
   const out = [];
   for (const word of all.slice(1)) {
     const m = NPM_SPEC.exec(word);
@@ -1376,6 +1551,8 @@ function shellCommandString(args) {
 function powershellCommandString(args) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    // `-CommandWithArgs '<line>' arg ...` (`-cwa`, PowerShell 7.4): the line runs, the words after it are its $args.
+    if (/^-(?:cwa|commandwithargs)$/i.test(a)) return typeof args[i + 1] === "string" && args[i + 1] !== "" ? args[i + 1] : null;
     if (/^-(?:c|com|comm|comma|comman|command)$/i.test(a)) {
       const rest = args.slice(i + 1);
       return rest.length > 0 && rest[0] !== "-" ? rest.join(" ") : null;
@@ -1402,7 +1579,14 @@ function runnerInstalls(args, depth) {
     if (a === "--") return wrappedInstalls(args.slice(i + 1), depth);
     if (a.startsWith("-") && a.length > 1) {
       const flag = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
-      if (REGISTRY.has(flag)) return [];
+      if (flag === "--registry") {
+        // The runner fetches the package it runs from there, and passes the setting on to what it
+        // runs: the public registry changes nothing this hook reads, another one makes it unreadable.
+        const taken = publicRegistryOption(args, i);
+        if (taken === 0) return [];
+        i += taken - 1;
+        continue;
+      }
       if (RUNNER_SHELL.has(flag)) {
         const line = a.includes("=") ? a.slice(a.indexOf("=") + 1) : args[i + 1];
         return typeof line === "string" ? installsIn(line, "bash", depth + 1) : [];
@@ -1429,7 +1613,12 @@ function subcommandAt(args, values) {
     const a = args[i];
     if (a === "--") return -1;
     if (a.startsWith("-") && a.length > 1) {
-      if (REGISTRY.has(a.includes("=") ? a.slice(0, a.indexOf("=")) : a)) return -1;
+      if ((a.includes("=") ? a.slice(0, a.indexOf("=")) : a) === "--registry") {
+        const taken = publicRegistryOption(args, i);
+        if (taken === 0) return -1;
+        i += taken - 1;
+        continue;
+      }
       if (!a.includes("=") && values.has(a)) i++;
       continue;
     }
@@ -1439,24 +1628,21 @@ function subcommandAt(args, values) {
 }
 
 /** The dependency versions one simple command installs by name, or [] when it names none this hook reads. */
-function commandInstalls(words, depth = 0) {
+function commandInstalls(words, depth = 0, dialect = "bash") {
   if (depth > MAX_WRAPS) return [];
-  let i = 0;
-  for (;;) {
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
-    if (i < words.length && WRAPPERS.has(programName(words[i]))) {
-      i++;
-      // A wrapper given options of its own (`sudo -u x`) is not read further.
-      if (i < words.length && words[i].startsWith("-")) return [];
-      continue;
-    }
-    break;
-  }
-  if (i >= words.length) return [];
+  const i = commandStart(words);
+  if (i < 0 || i >= words.length) return [];
   let program = programName(words[i]);
   // `corepack pnpm@9.15.0 add ...`: a package manager named with its version.
   if (PACKAGE_MANAGERS.has(program.replace(/@[^@]*$/, ""))) program = program.replace(/@[^@]*$/, "");
   const args = words.slice(i + 1);
+  // `eval 'npm i x@1'` runs its words joined by spaces as a command line, as `bash -c` does;
+  // PowerShell's `Invoke-Expression` (`iex`) runs its string the same way.
+  if (program === "eval") return args.length > 0 ? installsIn(args.join(" "), "bash", depth + 1) : [];
+  if (dialect === "powershell" && (program === "invoke-expression" || program === "iex")) {
+    const rest = /^-(?:c|co|com|comm|comma|comman|command)$/i.test(args[0] ?? "") ? args.slice(1) : args;
+    return rest.length > 0 && !rest[0].startsWith("-") ? installsIn(rest.join(" "), "powershell", depth + 1) : [];
+  }
   if (SHELLS.has(program)) {
     const line = shellCommandString(args);
     return line === null ? [] : installsIn(line, "bash", depth + 1);
@@ -1468,11 +1654,16 @@ function commandInstalls(words, depth = 0) {
   if (PACKAGE_RUNNERS.has(program)) return runnerInstalls(args, depth);
   if (PACKAGE_MANAGERS.has(program)) {
     const at = subcommandAt(args, JS_VALUES[program]);
-    if (at >= 0 && JS_RUNNERS[program].has(args[at])) return runnerInstalls(args.slice(at + 1), depth);
+    // `pnpm -c exec '<line>'` / `pnpm --shell-mode exec '<line>'`: the line is a shell command line.
+    if (program === "pnpm" && at >= 0 && args[at] === "exec" && args.slice(0, at).some((a) => a === "-c" || a === "--shell-mode")) {
+      return runnerInstalls(["--shell-mode", ...args.slice(at + 1)], depth);
+    }
+    if (at >= 0 && isRunnerCommand(program, args[at])) return runnerInstalls(args.slice(at + 1), depth);
     return jsInstalls(program, args);
   }
   if (program === "cargo") {
-    const all = operands(args, { values: CARGO_VALUES, refuse: CARGO_REFUSE });
+    // `cargo +nightly add ...`: a toolchain named first.
+    const all = operands(args[0]?.startsWith("+") ? args.slice(1) : args, { values: CARGO_VALUES, refuse: CARGO_REFUSE });
     if (!all || all[0] !== "add") return [];
     return all.slice(1).flatMap((w) => {
       const m = CARGO_SPEC.exec(w);
@@ -1533,7 +1724,7 @@ export function installsIn(command, dialect, depth = 0) {
   const seen = new Set();
   const out = [];
   for (const words of commands) {
-    for (const r of commandInstalls(words, depth)) {
+    for (const r of commandInstalls(words, depth, dialect)) {
       const key = `${r.ecosystem}\0${r.name}\0${r.spec}`;
       if (!seen.has(key)) {
         seen.add(key);
