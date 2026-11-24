@@ -1630,7 +1630,7 @@ const RUNNER_VALUES = new Set(["-p", "--package", "--cache", "--userconfig", "-w
 const RUNNER_SHELL = new Set(["-c", "--call", "--shell-mode"]);
 /** PowerShell options that take the next word as their value (any spelling PowerShell accepts for them). */
 const PWSH_VALUES = /^-(?:executionpolicy|ep|ex|windowstyle|w|workingdirectory|wd|outputformat|of|inputformat|inp|if|configurationname|config|settingsfile|custompipename)$/i;
-const CARGO_VALUES = new Set(["-F", "--features", "--rename", "-p", "--package", "--manifest-path", "--target", "--config", "-Z", "--color", "--lockfile-path"]);
+const CARGO_VALUES = new Set(["-C", "-F", "--features", "--rename", "-p", "--package", "--manifest-path", "--target", "--config", "-Z", "--color", "--lockfile-path"]);
 const CARGO_REFUSE = new Set(["--git", "--path", "--registry", "--branch", "--tag", "--rev", "--index"]);
 const PY_INDEX = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links"]);
 const PIP_VALUES = new Set(["-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
@@ -1638,9 +1638,83 @@ const UV_ADD_VALUES = new Set(["--group", "--optional", "--extra", "--package", 
 const POETRY_VALUES = new Set(["--group", "-G", "--extras", "-E", "--python", "--platform", "--markers", "--directory", "-C", "--project", "-P", "--optional"]);
 const GO_VALUES = new Set(["-C", "-tags", "-modfile", "-ldflags", "-gcflags", "-asmflags", "-mod", "-o", "-p", "-pkgdir", "-toolexec"]);
 
+/**
+ * npm 10.9's options that take the next word as their value, its whole option list (for the
+ * unique abbreviations npm accepts: `--prefi` is `--prefix`) and its one-letter options that take
+ * a value: asked of npm's own parser (nopt with @npmcli/config's types and shorthands; an option
+ * takes a value when `npm --<opt> X install` leaves `install` as the command). Re-check of
+ * 0d30b40, S6: 31 of these were read as switches, so `npm --proxy http://p:8080 install x@1` was
+ * read as the command `http://p:8080` and went ahead.
+ */
+const NPM_VALUE_OPTIONS = new Set(["_auth", "access", "also", "audit-level", "auth-type", "before", "browser", "ca", "cache", "cache-max", "cache-min", "cafile", "call", "cert", "cidr", "cpu", "depth", "diff", "diff-dst-prefix", "diff-src-prefix", "diff-unified", "editor", "expect-result-count", "fetch-retries", "fetch-retry-factor", "fetch-retry-maxtimeout", "fetch-retry-mintimeout", "fetch-timeout", "git", "globalconfig", "heading", "https-proxy", "include", "init-author-email", "init-author-name", "init-author-url", "init-license", "init-module", "init-version", "init.author.email", "init.author.name", "init.author.url", "init.license", "init.module", "init.version", "install-strategy", "key", "libc", "local-address", "location", "lockfile-version", "loglevel", "logs-dir", "logs-max", "maxsockets", "message", "node-options", "noproxy", "omit", "only", "os", "otp", "pack-destination", "package", "prefix", "preid", "provenance-file", "proxy", "registry", "replace-registry-host", "save-prefix", "sbom-format", "sbom-type", "scope", "script-shell", "searchexclude", "searchlimit", "searchopts", "searchstaleness", "shell", "tag", "tag-version-prefix", "umask", "user-agent", "userconfig", "viewer", "which", "workspace"]);
+const NPM_OPTIONS = ["_auth", "access", "all", "allow-same-version", "also", "audit", "audit-level", "auth-type", "before", "bin-links", "browser", "ca", "cache", "cache-max", "cache-min", "cafile", "call", "cert", "cidr", "color", "commit-hooks", "cpu", "depth", "description", "dev", "diff", "diff-dst-prefix", "diff-ignore-all-space", "diff-name-only", "diff-no-prefix", "diff-src-prefix", "diff-text", "diff-unified", "dry-run", "editor", "engine-strict", "expect-result-count", "expect-results", "fetch-retries", "fetch-retry-factor", "fetch-retry-maxtimeout", "fetch-retry-mintimeout", "fetch-timeout", "force", "foreground-scripts", "format-package-lock", "fund", "git", "git-tag-version", "global", "global-style", "globalconfig", "heading", "https-proxy", "if-present", "ignore-scripts", "include", "include-staged", "include-workspace-root", "init-author-email", "init-author-name", "init-author-url", "init-license", "init-module", "init-version", "init.author.email", "init.author.name", "init.author.url", "init.license", "init.module", "init.version", "install-links", "install-strategy", "json", "key", "legacy-bundling", "legacy-peer-deps", "libc", "link", "local-address", "location", "lockfile-version", "loglevel", "logs-dir", "logs-max", "long", "maxsockets", "message", "node-options", "noproxy", "offline", "omit", "omit-lockfile-registry-resolved", "only", "optional", "os", "otp", "pack-destination", "package", "package-lock", "package-lock-only", "parseable", "prefer-dedupe", "prefer-offline", "prefer-online", "prefix", "preid", "production", "progress", "provenance", "provenance-file", "proxy", "read-only", "rebuild-bundle", "registry", "replace-registry-host", "save", "save-bundle", "save-dev", "save-exact", "save-optional", "save-peer", "save-prefix", "save-prod", "sbom-format", "sbom-type", "scope", "script-shell", "searchexclude", "searchlimit", "searchopts", "searchstaleness", "shell", "shrinkwrap", "sign-git-commit", "sign-git-tag", "strict-peer-deps", "strict-ssl", "tag", "tag-version-prefix", "timing", "umask", "unicode", "update-notifier", "usage", "user-agent", "userconfig", "version", "versions", "viewer", "which", "workspace", "workspaces", "workspaces-update", "yes"];
+const NPM_SHORT_VALUE = new Set(["C", "L", "c", "m", "w"]);
+
+/**
+ * How npm reads option `a` (with `next`, the word after it): "value" when it takes the next word,
+ * "switch" when it takes none (or carries its value after `=`), "unknown" when npm has no such
+ * option or the abbreviation is ambiguous. `--color always` takes `always` (its type is Boolean or
+ * "always").
+ */
+function npmOption(a, next) {
+  if (a.includes("=")) return "switch";
+  if (/^-[^-]/.test(a)) return a.length === 2 && NPM_SHORT_VALUE.has(a[1]) ? "value" : "switch";
+  if (a.slice(2).startsWith("no-") && NPM_OPTIONS.includes(a.slice(5))) return "switch";
+  const name = npmOptionName(a.slice(2));
+  if (name === null) return "unknown";
+  if (name === "color") return next === "always" ? "value" : "switch";
+  return NPM_VALUE_OPTIONS.has(name) ? "value" : "switch";
+}
+
+/** The npm option a long name (without `--`) names: itself, or the one option it is a unique prefix of; null otherwise. */
+function npmOptionName(name) {
+  if (NPM_OPTIONS.includes(name)) return name;
+  const matches = NPM_OPTIONS.filter((k) => k.startsWith(name));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/** npm's arguments as operands (its options and their values removed), and whether an option before the first operand was one npm does not know. */
+function npmOperands(args) {
+  const out = [];
+  let unknown = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") {
+      out.push(...args.slice(i + 1));
+      break;
+    }
+    if (!a.startsWith("-") || a.length === 1) {
+      out.push(a);
+      continue;
+    }
+    const flag = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (flag.startsWith("--") && npmOptionName(flag.slice(2)) === "registry") {
+      const taken = publicRegistryOption(args, i);
+      if (taken === 0) return null;
+      i += taken - 1;
+      continue;
+    }
+    if (flag.startsWith("--@")) return null;
+    const how = npmOption(a, args[i + 1]);
+    if (how === "unknown" && out.length === 0) unknown = true;
+    if (how === "value") i++;
+  }
+  return { all: out, unknown };
+}
+
 /** A JS package manager's `add`/`install`: its global options, the subcommand, then the specs. */
 function jsInstalls(manager, args) {
-  let all = operands(args, { values: JS_VALUES[manager], npmRegistry: true });
+  let all;
+  if (manager === "npm") {
+    const read = npmOperands(args);
+    all = read ? read.all : null;
+    // An option npm does not know stands before the subcommand: its value, if it takes one, is not
+    // known, so the install is looked for in the words after it rather than guessed away.
+    if (read && read.unknown && all.length > 0 && !isInstallCommand("npm", all[0]) && npmCommand(all[0]) !== "pkg") {
+      const at = all.findIndex((w) => isInstallCommand("npm", w));
+      if (at > 0) all = all.slice(at);
+    }
+  } else all = operands(args, { values: JS_VALUES[manager], npmRegistry: true });
   // Yarn: `yarn workspace <name> add x@1` and berry's `yarn workspaces foreach [options] add x@1`.
   if (all && manager === "yarn" && all[0] === "workspace") all = all.slice(2);
   else if (all && manager === "yarn" && all[0] === "workspaces" && all[1] === "foreach") all = all.slice(2);
@@ -1752,7 +1826,7 @@ function wrappedInstalls(words, depth) {
 }
 
 /** Where a package manager's subcommand is in its arguments (its global options skipped), or -1. */
-function subcommandAt(args, values) {
+function subcommandAt(args, values, manager = null) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--") return -1;
@@ -1763,7 +1837,8 @@ function subcommandAt(args, values) {
         i += taken - 1;
         continue;
       }
-      if (!a.includes("=") && values.has(a)) i++;
+      // npm: its own option table, abbreviations included (an option it does not know takes no word here).
+      if (manager === "npm" ? npmOption(a, args[i + 1]) === "value" : !a.includes("=") && values.has(a)) i++;
       continue;
     }
     return i;
@@ -1910,7 +1985,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
   }
   if (PACKAGE_RUNNERS.has(program)) return runnerInstalls(args, depth);
   if (PACKAGE_MANAGERS.has(program)) {
-    const at = subcommandAt(args, JS_VALUES[program]);
+    const at = subcommandAt(args, JS_VALUES[program], program);
     // `pnpm -c exec '<line>'` / `pnpm --shell-mode exec '<line>'`: the line is a shell command line.
     if (program === "pnpm" && at >= 0 && args[at] === "exec" && args.slice(0, at).some((a) => a === "-c" || a === "--shell-mode")) {
       return runnerInstalls(["--shell-mode", ...args.slice(at + 1)], depth);
