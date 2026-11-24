@@ -309,6 +309,8 @@ export interface TreeDiscovery {
    * or not (live/private-packages.ts; blind audit round 4).
    */
   registryConfigDirs?: string[];
+  /** Set when the walk was started in a folder with no manifest and read the nearest project above it (nearestProjectAbove). */
+  projectAbove?: { root: string; startedIn: string };
   /** Set when the walk was asked for a workspace member and read the workspace root instead (findWorkspaceRoot). */
   workspace?: WorkspaceRedirect;
   /**
@@ -722,6 +724,8 @@ export function findWorkspaceRoot(dir: string): { redirect: WorkspaceRedirect } 
 /** The sentence an answer leads with when the scan was started in a workspace member and read the workspace root, or null. */
 export function workspaceNote(discovery: TreeDiscovery | null): string | null {
   const ws = discovery?.workspace;
+  const above = discovery?.projectAbove;
+  if (!ws && above) return `Started in ${path.relative(above.root, above.startedIn).replace(/\\/g, "/") || above.startedIn}, a folder with no manifest inside the project at ${above.root}: that project was read (project_root).`;
   if (!ws) return null;
   const member = path.relative(ws.root, ws.startedIn).replace(/\\/g, "/") || ws.startedIn;
   const why = ws.kind === "go.work" ? "it is built as part of that workspace's go.work" : `its dependencies are pinned in that workspace's ${ws.lockfile}`;
@@ -736,11 +740,92 @@ export function workspaceNote(discovery: TreeDiscovery | null): string | null {
  * `discovery.workspace` says so; a lockfile above that could not be confirmed
  * to hold it is named (`discovery.ancestorLockfile`), never read.
  */
+/** A manifest or lockfile of a supported ecosystem, by file name. */
+const PROJECT_FILES = ["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "Pipfile", "setup.py", "go.mod", "Gemfile", "gems.rb", "composer.json"];
+
+function holdsProject(dir: string): boolean {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return names.some((n) => PROJECT_FILES.includes(n)) || lockfilesIn(dir, names).length > 0;
+}
+
+/** Levels nearestProjectAbove climbs at most. */
+const MAX_CLIMB = 3;
+
+/** A project of an ecosystem this server does not read: it is a project of its own, never the inside of one above. */
+function foreignProject(dir: string): boolean {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return names.some((n) => /^(?:pom\.xml|build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?|build\.sbt|mix\.exs|Package\.swift|pubspec\.yaml|CMakeLists\.txt|deno\.jsonc?|.+\.(?:csproj|fsproj|vbproj|sln))$/i.test(n));
+}
+
+/**
+ * Whether a folder below `dir` (a few levels, a bounded number of folders) holds a manifest or
+ * lockfile: then `dir` is a folder of projects, scanned as it is, never the inside of one. Past the
+ * bound the answer is yes (do not climb).
+ */
+function projectBelow(dir: string): boolean {
+  let queue = [dir];
+  let seen = 0;
+  for (let depth = 0; depth < 4 && queue.length > 0; depth++) {
+    const next: string[] = [];
+    for (const d of queue) {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(d, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name === "node_modules" || e.name.startsWith(".")) continue;
+        if (++seen > 400) return true;
+        const sub = path.join(d, e.name);
+        if (holdsProject(sub)) return true;
+        next.push(sub);
+      }
+    }
+    queue = next;
+  }
+  return false;
+}
+
+/**
+ * The nearest directory above `dir` that holds a manifest or lockfile, when `dir` holds none:
+ * started in `packages/a/src/lib` or `crates/a/src/bin`, the project is the folder above it, and
+ * nothing was known there (re-check 2026-11-24: siblings and path crates asked about were sent).
+ * Within workspaceSearchDirs's bounds (inside the git repository, never at or above home). Null
+ * when `dir` is a project itself or nothing above it is.
+ */
+export function nearestProjectAbove(dir: string): string | null {
+  const start = path.resolve(dir);
+  if (holdsProject(start) || foreignProject(start) || projectBelow(start)) return null;
+  // At most a few levels (`src/lib`, `src/bin`), and never past a folder that is a project of an
+  // ecosystem this server does not read (a Maven or Gradle project is its own project).
+  for (const ancestor of workspaceSearchDirs(start).slice(0, MAX_CLIMB)) {
+    if (holdsProject(ancestor)) return ancestor;
+    if (foreignProject(ancestor)) return null;
+  }
+  return null;
+}
+
 export function scanProjectTree(
   root: string,
   limits: { maxDepth: number; maxProjects: number; maxExcludedDirs?: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
   options: { includeFixtures?: boolean } = {},
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
+  const above = nearestProjectAbove(root);
+  if (above) {
+    const inner = scanProjectTree(above, limits, options);
+    return inner.discovery.workspace ? inner : { entries: inner.entries, discovery: { ...inner.discovery, projectAbove: { root: above, startedIn: path.resolve(root) } } };
+  }
   const found = findWorkspaceRoot(root);
   if (found && "redirect" in found) {
     const tree = walkProjectTree(found.redirect.root, limits, options);

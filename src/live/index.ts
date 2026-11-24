@@ -281,8 +281,9 @@ export class LiveIntelligence {
    * its manifest's platform targets; `root` is the reported project root.
    */
   initFromProjectTree(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): void {
-    // Started in a workspace member, the walk read the workspace root: that is the project root.
-    const root = discovery?.workspace?.root ?? started;
+    // Started in a workspace member, the walk read the workspace root: that is the project root; started
+    // below a project's own folder, that project.
+    const root = discovery?.workspace?.root ?? discovery?.projectAbove?.root ?? started;
     // A pyproject.toml in a subfolder with no lockfile is a group too (unlockedPythonGroups): its
     // index rules apply to its names and its dependencies are listed, never sent (pre-publish round 10, W4).
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
@@ -297,7 +298,7 @@ export class LiveIntelligence {
    * set left to the resolution that superseded it, when a synchronous init ran meanwhile.
    */
   async initFromProjectTreeYielding(started: string, groups: ResolutionGroup[], discovery: TreeDiscovery | null = null): Promise<boolean> {
-    const root = discovery?.workspace?.root ?? started;
+    const root = discovery?.workspace?.root ?? discovery?.projectAbove?.root ?? started;
     const unlocked = unlockedPythonGroups(root, discovery?.unlockedManifests ?? [], groups);
     const run = ++this.initRun;
     const steps = this.applyGroupsSteps(unlocked.length > 0 ? [...groups, ...unlocked] : groups, root, discovery?.registryConfigDirs ?? []);
