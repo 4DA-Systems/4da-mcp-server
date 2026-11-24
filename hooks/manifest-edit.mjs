@@ -2598,7 +2598,7 @@ function denialFor(introduced, ledger, dir, what) {
   }
   for (const { c, entry } of local.slice(0, 10)) {
     lines.push(
-      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If installing it from the public registry is intended, that is the user's decision: ask the user.`,
+      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove or replace that non-registry spec in the manifest that declares it (that edit goes ahead), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. FOURDA_GUARD is the user's setting, not yours to change.`,
     );
   }
   for (const { c, last } of unchecked.slice(0, 10)) {
