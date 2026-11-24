@@ -437,7 +437,7 @@ describe("install commands", () => {
     "npm install lodash@next",
     "npm install github:lodash/lodash",
     "npm install ./local-pkg",
-    "npm install my-lodash@npm:lodash@4.17.20",
+    "npm install my-lodash@npm:lodash",
     "npm install --registry https://npm.example.com lodash@4.17.20",
     "npm install $PKG",
     "npm install lodash@$(cat version)",

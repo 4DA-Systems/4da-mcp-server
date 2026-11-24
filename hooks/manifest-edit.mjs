@@ -31,8 +31,10 @@
  * A command this hook does not take apart exactly (a variable, a substitution, a heredoc, a
  * registry or index other than the public one, a git or path source), a bare `npm install` or
  * `npm ci`, a global tool install that is not a package manager's add (`cargo install`,
- * `yarn global add`, `go install`), an `npm:` alias spec, and a package named without a version
- * all go ahead without comment.
+ * `yarn global add`, `go install`), an `npm:` alias without a version, and a package named
+ * without a version all go ahead without comment. An `npm:` alias with a version (on the command
+ * line or in package.json) is read as the package it installs; the public index or registry named
+ * explicitly (`-i https://pypi.org/simple`, `--registry crates-io`) is the public one.
  * In a manifest only dependency declarations count (never a comment or another string field),
  * each section's are compared on their own, a renamed Cargo dependency is the crate `package =`
  * names, and a dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`,
@@ -667,7 +669,7 @@ function requirementLine(line) {
   if (!m) return null;
   const rest = text.slice(m[0].length);
   const spec = PEP440_SPECIFIERS.exec(rest);
-  return spec ? { name: m[1].toLowerCase(), spec: spec[1].replace(/\s+/g, "") } : null;
+  return spec ? { name: nameKey("PyPI", m[1]), spec: spec[1].replace(/\s+/g, "") } : null;
 }
 
 /** A YAML plain or quoted scalar on one line, its comment dropped; null when empty or not a scalar. */
@@ -752,7 +754,8 @@ function npmWholeDependencies(text) {
   for (const section of NPM_PLAIN_SECTIONS) {
     if (!isObject(doc[section])) continue;
     for (const [name, spec] of Object.entries(doc[section])) {
-      if (typeof spec === "string" && VERSION_SHAPED.test(spec)) out.push({ name, section, spec });
+      const d = typeof spec === "string" ? npmDeclared(name, spec) : null;
+      if (d) out.push({ name: d.name, section, spec: d.spec });
     }
   }
   const overrides = (obj, section, parent, depth) => {
@@ -760,7 +763,8 @@ function npmWholeDependencies(text) {
       const name = key === "." ? parent : overrideTarget(key);
       if (!name) continue;
       if (typeof value === "string") {
-        if (VERSION_SHAPED.test(value)) out.push({ name, section, spec: value });
+        const d = npmDeclared(name, value);
+        if (d) out.push({ name: d.name, section, spec: d.spec });
       } else if (isObject(value) && depth < 32) overrides(value, `${section}/${key}`, name, depth + 1);
     }
   };
@@ -768,6 +772,21 @@ function npmWholeDependencies(text) {
   if (isObject(doc.resolutions)) overrides(doc.resolutions, "resolutions", null, 0);
   if (isObject(doc.pnpm) && isObject(doc.pnpm.overrides)) overrides(doc.pnpm.overrides, "pnpm.overrides", null, 0);
   return out;
+}
+
+/**
+ * What a package.json dependency value installs, as { name, spec }, or null: a registry version or
+ * range as it is, the `latest` tag (dependency_check reads it), and an npm alias
+ * (`"npm:minimist@1.2.6"`) as the package and version it names. Other tags, git, file and URL
+ * sources name no release.
+ */
+function npmDeclared(name, value) {
+  const v = value.trim();
+  if (VERSION_SHAPED.test(v)) return { name, spec: value };
+  if (v === "latest") return { name, spec: v };
+  const alias = v.startsWith("npm:") ? NPM_SPEC.exec(v.slice(4)) : null;
+  const version = alias ? (alias[2] === "latest" ? "latest" : jsVersion(alias[2])) : null;
+  return version ? { name: alias[1], spec: version } : null;
 }
 
 /** A module path and version as go.mod's `require` gives them. */
@@ -850,8 +869,9 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     }
     const at = (index) => (place >= 0 ? place + index : -1);
     const sections = jsonSections(text);
-    for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([~^<>=]*\s*v?\d[^"]*)"/gi)) {
-      if (npmDependency(sections(m.index), at(m.index), m[1], disk)) put(out, m[1], null, m[2]);
+    for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([^"\n]{1,300})"/gi)) {
+      const d = npmDeclared(m[1], m[2]);
+      if (d && npmDependency(sections(m.index), at(m.index), m[1], disk)) put(out, d.name, null, d.spec);
     }
   } else if (file === "Cargo.toml" || file === "pyproject.toml") {
     // A text with a string that never closes is not read: silence, never a guess.
@@ -863,7 +883,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     } else {
       const onDiskEntries = whole ? null : disk()?.assignments();
       const local = onDiskEntries ? pyOtherSourceNames(onDiskEntries, poetryDependencies(onDiskEntries)) : new Set();
-      for (const d of pyprojectDependencies(entries, local)) put(out, d.name.toLowerCase(), section(d.section), d.spec);
+      for (const d of pyprojectDependencies(entries, local)) put(out, nameKey("PyPI", d.name), section(d.section), d.spec);
     }
   } else if (file === "requirements.txt") {
     for (const line of text.split("\n")) {
@@ -1021,6 +1041,8 @@ const SPEC_JOINER = /\s*\|\|\s*|\s*,\s*|\s+-\s+|\s+/y;
 const SPEC_MAX = 80;
 const specText = (spec) => {
   if (typeof spec !== "string") return "";
+  // The one tag dependency_check reads (a package.json "latest").
+  if (spec.trim() === "latest") return "latest";
   const s = spec.trim().slice(0, SPEC_MAX * 2);
   let kept = "";
   let at = 0;
@@ -1097,6 +1119,8 @@ function callItem(ecosystem, name, to, from) {
 function manifestKind(filePath) {
   const name = basename(filePath);
   if (MANIFESTS.has(name)) return name;
+  // The server reads no `syntax_test_*` file (an editor grammar's fixture: isSyntaxTestName).
+  if (/^syntax_test_/i.test(name)) return null;
   if (/requirements[\w.-]*\.txt$/i.test(name)) return "requirements.txt";
   if (/\.txt$/i.test(name) && basename(dirname(filePath)).toLowerCase() === "requirements") return "requirements.txt";
   return null;
@@ -1220,6 +1244,12 @@ export function simpleCommands(line, dialect) {
       const nl = line.indexOf("\n", i);
       if (nl < 0) break;
       i = nl - 1;
+    } else if (dialect === "powershell" && ch === "<" && line[i + 1] === "#") {
+      // A block comment `<# ... #>`: nothing in it runs.
+      const end = line.indexOf("#>", i + 2);
+      if (end < 0) return null;
+      endWord();
+      i = end + 1;
     } else if (ch === ">" || ch === "<") {
       // A redirection: an fd number before it ("2>") belongs to it, and so does its target.
       if (ch === "<" && line[i + 1] === "<") return null;
@@ -1374,6 +1404,10 @@ function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = 
         i += taken - 1;
         continue;
       }
+      if (refuse.has(flag) && publicSource(flag, a.includes("=") ? a.slice(a.indexOf("=") + 1) : args[i + 1])) {
+        if (!a.includes("=")) i++;
+        continue;
+      }
       if (refuse.has(flag) || flag.startsWith("--@")) return null;
       if (!a.includes("=") && values.has(flag)) i++;
       continue;
@@ -1381,6 +1415,19 @@ function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = 
     out.push(a);
   }
   return out;
+}
+
+/**
+ * Whether a source option names the public index or registry itself, so what it installs is the
+ * public package: pip's and uv's `-i` / `--index-url` / `--index` / `--default-index` /
+ * `--extra-index-url` as https://pypi.org/simple, Cargo's `--registry crates-io`. A find-links
+ * location, a git source or any other index is never public here.
+ */
+function publicSource(flag, value) {
+  if (typeof value !== "string") return false;
+  if (["-i", "--index-url", "--index", "--default-index", "--extra-index-url"].includes(flag)) return /^https:\/\/pypi\.org\/simple\/?$/i.test(value);
+  if (flag === "--registry") return value === "crates-io";
+  return false;
 }
 
 /** A version or range after `@` in a JS package manager's spec, or null for a tag, alias, git or URL source. */
@@ -1402,7 +1449,10 @@ function pep508(word) {
   if (word.includes("@") || word.includes("://")) return null;
   const m = PEP508_NAME.exec(word);
   if (!m) return null;
-  const rest = word.slice(m[0].length).replace(/\s*;.*$/, "");
+  let rest = word.slice(m[0].length).replace(/\s*;.*$/, "").trim();
+  // `requests (==2.25.0)`: PEP 508 allows the specifier set in parentheses.
+  const paren = /^\(\s*([^()]*?)\s*\)$/.exec(rest);
+  if (paren) rest = paren[1];
   const spec = PEP440_SPECIFIERS.exec(rest);
   return spec && spec[1].length === rest.trim().length ? { name: m[1], spec: spec[1].replace(/\s+/g, "") } : null;
 }
@@ -1421,7 +1471,7 @@ function poetrySpec(word) {
 }
 
 const JS_VALUES = {
-  npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C"]),
+  npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C", "--location"]),
   pnpm: new Set(["--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
   // The last five are `yarn workspaces foreach`'s (berry).
   yarn: new Set(["--cwd", "--network-timeout", "--mutex", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder", "--use-yarnrc", "-j", "--jobs", "--include", "--exclude", "--from"]),
@@ -1527,8 +1577,10 @@ function jsInstalls(manager, args) {
   const out = [];
   for (const word of all.slice(1)) {
     const m = NPM_SPEC.exec(word);
-    const version = m ? jsVersion(m[2]) : null;
-    if (version) out.push({ ecosystem: "npm", name: m[1], spec: version });
+    // `alias@npm:target@1.2.3` installs target 1.2.3.
+    const target = m && m[2].startsWith("npm:") ? NPM_SPEC.exec(m[2].slice(4)) : m;
+    const version = target ? jsVersion(target[2]) : null;
+    if (version) out.push({ ecosystem: "npm", name: target[1], spec: version });
   }
   return out;
 }
@@ -1697,7 +1749,11 @@ function upgradePackages(args) {
     const a = args[i];
     if (a === "--") break;
     const flag = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
-    if (PY_INDEX.has(flag)) return [];
+    if (PY_INDEX.has(flag)) {
+      if (!publicSource(flag, a.includes("=") ? a.slice(a.indexOf("=") + 1) : args[i + 1])) return [];
+      if (!a.includes("=")) i++;
+      continue;
+    }
     const v = optionValue(args, i, ["--upgrade-package", "-P"]);
     if (!v) continue;
     i += v.taken - 1;
