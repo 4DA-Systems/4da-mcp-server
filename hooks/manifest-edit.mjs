@@ -1083,6 +1083,22 @@ const MAX_REQUIREMENT_CHARS = 65_536;
 const MAX_LINE_CHARS = 65_536;
 /** The longest version read; a longer one is held (it is no release any registry serves). */
 const MAX_VERSION_CHARS = 80;
+/**
+ * The longest range or constraint read (`^3.0.0 || ^4.0.0 || ... || ^10.0.0-0` is 81 characters and
+ * real; round 3 held every specifier over 80 as unreadable, for ever: round 4 of the hook review, item 4).
+ */
+const MAX_CONSTRAINT_CHARS = 1000;
+
+/**
+ * Why a version specifier is too long to read, or null: a single version (no operator but `==` /
+ * `===` / `=` / `v`, no blank or joiner) over MAX_VERSION_CHARS, or any range or constraint over
+ * MAX_CONSTRAINT_CHARS.
+ */
+function specTooLong(spec) {
+  const s = String(spec).trim();
+  if (/^(?:={1,3}\s*|v)?[0-9A-Za-z.+!_-]+$/.test(s) && s.replace(/^={1,3}\s*/, "").length > MAX_VERSION_CHARS) return `a version over ${MAX_VERSION_CHARS} characters`;
+  return s.length > MAX_CONSTRAINT_CHARS ? `a constraint over ${MAX_CONSTRAINT_CHARS} characters` : null;
+}
 /** The longest `npm pkg set` key read: a section, nested override parents and a 214-character name. */
 const MAX_KEY_CHARS = 600;
 /** The deepest TOML or JSON nesting read. */
@@ -1248,7 +1264,7 @@ const NAME_TEXT = /^[@A-Za-z0-9][\w.\-/~@]{0,213}$/;
 // `!` inside a version is a PEP 440 epoch (`1!2.0`).
 const SPEC_CLAUSE = /(?:[~^<>=!]{1,3}\s*)?(?:v?\d[0-9A-Za-z.+_*!-]*|\*)/y;
 const SPEC_JOINER = /\s*\|\|\s*|\s*,\s*|\s+-\s+|\s+/y;
-const SPEC_MAX = 80;
+const SPEC_MAX = MAX_CONSTRAINT_CHARS;
 const specText = (spec) => {
   if (typeof spec !== "string") return "";
   // The one tag dependency_check reads (a package.json "latest").
@@ -1281,7 +1297,11 @@ function repeatable(changes) {
     if (typeof c?.name === "string" && c.name.length > 214) refuse("a package name over 214 characters");
     if (typeof c?.name !== "string" || !NAME_TEXT.test(c.name)) continue;
     // A version past the bound is held as not read, never dropped (round 3 of the hook review).
-    if (typeof c.to === "string" && c.to.trim().length > MAX_VERSION_CHARS) refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+    const long = typeof c.to === "string" ? specTooLong(c.to) : null;
+    if (long) {
+      refuse(long);
+      continue;
+    }
     const to = specText(c.to);
     if (!to) continue;
     const from = c.from == null ? null : specText(c.from) || null;
@@ -1685,7 +1705,8 @@ function jsVersion(raw) {
   // npm reads `lodash@ ^4.17.0` as the range after the blank.
   const text = typeof raw === "string" ? raw.trim() : "";
   if (!text || /[/:]/.test(text) || text.startsWith("npm:")) return null;
-  if (text.length > MAX_VERSION_CHARS && /^[~^<>=*\dvxX]/.test(text)) return refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+  const long = /^[~^<>=*\dvxX]/.test(text) ? specTooLong(text) : null;
+  if (long) return refuse(long);
   if (exactFor("npm", text)) return text;
   return specText(text) === text && /^[~^<>=*\dvxX]/.test(text) ? text : null;
 }
@@ -1717,7 +1738,7 @@ function poetrySpec(word) {
   if (at) {
     const v = at[2].trim();
     if (v.toLowerCase() === "latest" || /[/:]/.test(v)) return null;
-    if (v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+    if (specTooLong(v)) return refuse(specTooLong(v));
     if (exactFor("PyPI", v) || /^[~^]\s*\d/.test(v)) return { name: at[1], spec: v };
     const set = PEP440_SPECIFIERS.exec(v);
     return set && set[1].length === v.length ? { name: at[1], spec: v } : null;
@@ -2218,7 +2239,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return all.slice(1).flatMap((w) => {
       const m = CARGO_SPEC.exec(w);
       const v = m ? m[2].trim() : null;
-      if (v && v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`) ?? [];
+      if (v && specTooLong(v)) return refuse(specTooLong(v)) ?? [];
       return v && (exactFor("crates.io", v) || specText(v) === v) ? [{ ecosystem: "crates.io", name: m[1], spec: v }] : [];
     });
   }
@@ -2271,7 +2292,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       const m = GO_SPEC.exec(w);
       if (!m || m[1].includes("...")) return [];
       const v = m[2];
-      if (v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`) ?? [];
+      if (specTooLong(v)) return refuse(specTooLong(v)) ?? [];
       return GO_EXACT.test(v) || /^v\d+(?:\.\d+)?$/.test(v) ? [{ ecosystem: "Go", name: m[1], spec: v }] : [];
     });
   }
@@ -2679,9 +2700,9 @@ function judgeCall(input, env, now) {
   const changes = [];
   for (const c of found.changes) {
     const spec = String(c.spec).trim();
-    if (NAME_TEXT.test(c.name) && specText(c.spec) === spec) changes.push(c);
-    // A version or name past the bound is held as not read, never dropped (it was in round 2).
-    else if (spec.length > MAX_VERSION_CHARS) refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+    // A version or constraint past its bound is held as not read, never dropped (it was in round 2).
+    if (specTooLong(spec)) refuse(specTooLong(spec));
+    else if (NAME_TEXT.test(c.name) && specText(c.spec) === spec) changes.push(c);
     else if (String(c.name).length > 214) refuse("a package name over 214 characters");
   }
   overBudget();
