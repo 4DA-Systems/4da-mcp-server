@@ -210,3 +210,42 @@ describe("the checker's slow rows are fast denials (round 3 of the hook review)"
     expect(r.ms).toBeLessThan(2 * LIMIT_MS);
   });
 });
+
+/**
+ * One small Edit with `replace_all` whose old text occurs thousands of times builds a manifest of
+ * hundreds of MB: pyproject.toml with 12,000 hits took 10.7 s (Claude Code stops the hook at 10 s
+ * and the edit, which adds `urllib3==1.0.0`, goes ahead), 20,000 hits ran V8 out of memory after
+ * 38 s, Cargo.toml with 25,000 hits 12.8 s; the same in 6.5.0 (round 4 of the hook review, item 1).
+ * The hits are now counted before the edit is applied, and an edit whose result would pass the
+ * manifest bound is held; the readers also check the time budget as they go.
+ */
+describe("a replace_all edit that would build a huge manifest is held fast (round 4)", { timeout: 60_000 }, () => {
+  function replaceAll(file: string, disk: string, newString: string) {
+    const sub = mkdtempSync(join(dir, "blocker5-"));
+    const path = join(sub, file);
+    writeFileSync(path, disk);
+    return { hook_event_name: "PreToolUse", tool_name: "Edit", cwd: sub, tool_input: { file_path: path, old_string: "Q", new_string: newString, replace_all: true } };
+  }
+  const best = (payload: unknown) => {
+    let r = run(payload);
+    for (let tries = 1; tries < 3 && r.ms >= LIMIT_MS; tries++) {
+      const again = run(payload);
+      if (again.ms < r.ms) r = again;
+    }
+    return r;
+  };
+  it.each([
+    ["pyproject.toml, 12,000 hits", "pyproject.toml", `[project]\nname = "x"\nversion = "0.1.0"\ndependencies = ["requests==2.31.0"${"Q".repeat(12_000)}]\n`, `, "urllib3==1.0.0"` + ", 1".repeat(1500)],
+    ["pyproject.toml, 20,000 hits", "pyproject.toml", `[project]\nname = "x"\nversion = "0.1.0"\ndependencies = ["requests==2.31.0"${"Q".repeat(20_000)}]\n`, `, "urllib3==1.0.0"` + ", 1".repeat(1500)],
+    ["Cargo.toml, 25,000 hits", "Cargo.toml", `[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1.0.0"\n${"Q".repeat(25_000)}\n`, `\ntime = "0.3.17"` + `\nk = 1`.repeat(300)],
+    ["requirements.txt, 20,000 hits", "requirements.txt", `requests==2.31.0\n${"Q".repeat(20_000)}\n`, `\nurllib3==1.0.0` + `\n# x`.repeat(1000)],
+    ["package.json array, 20,000 hits", "package.json", `{"name":"x","dependencies":{"lodash":"4.17.21"},"files":["${"Q".repeat(20_000)}"]}`, `","a`.repeat(1000) + `"],"devDependencies":{"left-pad":"1.3.0"},"x":["`],
+    ["pnpm-workspace.yaml, 20,000 hits", "pnpm-workspace.yaml", `catalog:\n  react: 18.2.0\n${"Q".repeat(20_000)}\n`, `\n  lodash: 4.17.20` + `\n# x`.repeat(1000)],
+    ["go.mod, 20,000 hits", "go.mod", `module m\n\ngo 1.22\n\nrequire github.com/pkg/errors v0.9.1\n${"Q".repeat(20_000)}\n`, `\nrequire golang.org/x/net v0.17.0` + `\n// x`.repeat(1000)],
+  ])("%s", (_label, file, disk, newString) => {
+    const r = best(replaceAll(file, disk, newString));
+    expect(r.status).toBe(0);
+    expect(r.decision).toBe("deny");
+    expect(r.ms).toBeLessThan(LIMIT_MS);
+  });
+});

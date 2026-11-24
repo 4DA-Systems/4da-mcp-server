@@ -127,6 +127,7 @@ function jsonSections(text) {
   let keyBeforeColon = null;
   let seenNonSpace = false;
   for (let i = 0; i < text.length; i++) {
+    tick();
     const ch = text[i];
     if (inString) {
       if (ch === "\\") i++;
@@ -185,6 +186,7 @@ function tomlTables(text) {
   const headers = [];
   let index = 0;
   for (const line of text.split("\n")) {
+    tick();
     const t = line.trim();
     if (t.startsWith("[") && t.endsWith("]")) {
       const inner = t.replace(/^\[{1,2}/, "").replace(/\]{1,2}$/, "");
@@ -222,7 +224,8 @@ function fileContext(text) {
 /** A manifest's text from disk, or null when it is missing, unreadable or far larger than a manifest. */
 function readManifest(path) {
   try {
-    if (statSync(path).size > MAX_MANIFEST_BYTES) return null;
+    // One past the bound is not read, and an edit of it is held (refuse), never judged as if empty.
+    if (statSync(path).size > MAX_MANIFEST_BYTES) return refuse(`the manifest on disk is over ${MAX_MANIFEST_BYTES / 1024 / 1024} MB`);
     return readFileSync(path, "utf8");
   } catch {
     return null;
@@ -281,6 +284,7 @@ const TOML_BREAK = new Set([" ", "\t", "\r", "\n", "#", '"', "'", "[", "]", "{",
 function tomlString(text, i, q, triple) {
   if (triple) {
     for (let j = i + 3; j < text.length; j++) {
+      tick();
       if (q === '"' && text[j] === "\\") j++;
       else if (text.startsWith(q.repeat(3), j)) {
         // Up to two quotes of the content may stand right before the closing three.
@@ -293,6 +297,7 @@ function tomlString(text, i, q, triple) {
   }
   let value = "";
   for (let j = i + 1; j < text.length; j++) {
+    tick();
     const c = text[j];
     if (c === "\n") return null;
     if (c === q) return { value, end: j + 1 };
@@ -311,6 +316,7 @@ function tomlTokens(text) {
   const out = [];
   let i = 0;
   while (i < text.length) {
+    tick();
     const ch = text[i];
     if (ch === "\n") {
       out.push({ t: "nl" });
@@ -426,6 +432,7 @@ function tomlAssignmentsOf(text, start) {
     }
   };
   while (p < tokens.length) {
+    tick();
     if (kind(p) === "nl") {
       p++;
       continue;
@@ -754,6 +761,7 @@ function pnpmWorkspaceVersions(text, out) {
   let catalog = null;
   let catalogIndent = -1;
   for (const raw of text.split("\n")) {
+    tick();
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -870,6 +878,7 @@ function goDirectives(text, block = null) {
   const requires = [];
   const local = [];
   for (const raw of text.split("\n")) {
+    tick();
     // go.mod allows a module path or version in double quotes (`replace x => "github.com/fork/x" v1.0.0`).
     // The comment is dropped first; a line still over the bound is refused, not skipped.
     const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").trim();
@@ -940,6 +949,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     const at = (index) => (place >= 0 ? place + index : -1);
     const sections = jsonSections(text);
     for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([^"\n]{1,300})"/gi)) {
+      tick();
       const d = npmDeclared(m[1], m[2]);
       if (d && npmDependency(sections(m.index), at(m.index), m[1], disk)) put(out, d.name, null, d.spec);
     }
@@ -957,6 +967,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     }
   } else if (file === "requirements.txt") {
     for (const line of text.split("\n")) {
+      tick();
       const r = requirementLine(line);
       if (r) put(out, r.name, null, r.spec);
     }
@@ -1015,6 +1026,7 @@ function specKey(file) {
 function diffVersions(old, now, same = (spec) => spec) {
   const before = new Map();
   for (const [key, specs] of old) {
+    tick();
     const name = keyName(key);
     const all = before.get(name) ?? new Set();
     for (const spec of specs) all.add(same(spec));
@@ -1023,6 +1035,7 @@ function diffVersions(old, now, same = (spec) => spec) {
   const changes = [];
   const seen = new Set();
   for (const [key, specs] of now) {
+    tick();
     const name = keyName(key);
     const prev = old.get(key) ?? [];
     const anywhere = before.get(name) ?? new Set();
@@ -1070,6 +1083,22 @@ const MAX_REQUIREMENT_CHARS = 65_536;
 const MAX_LINE_CHARS = 65_536;
 /** The longest version read; a longer one is held (it is no release any registry serves). */
 const MAX_VERSION_CHARS = 80;
+/**
+ * The longest range or constraint read (`^3.0.0 || ^4.0.0 || ... || ^10.0.0-0` is 81 characters and
+ * real; round 3 held every specifier over 80 as unreadable, for ever: round 4 of the hook review, item 4).
+ */
+const MAX_CONSTRAINT_CHARS = 1000;
+
+/**
+ * Why a version specifier is too long to read, or null: a single version (no operator but `==` /
+ * `===` / `=` / `v`, no blank or joiner) over MAX_VERSION_CHARS, or any range or constraint over
+ * MAX_CONSTRAINT_CHARS.
+ */
+function specTooLong(spec) {
+  const s = String(spec).trim();
+  if (/^(?:={1,3}\s*|v)?[0-9A-Za-z.+!_-]+$/.test(s) && s.replace(/^={1,3}\s*/, "").length > MAX_VERSION_CHARS) return `a version over ${MAX_VERSION_CHARS} characters`;
+  return s.length > MAX_CONSTRAINT_CHARS ? `a constraint over ${MAX_CONSTRAINT_CHARS} characters` : null;
+}
 /** The longest `npm pkg set` key read: a section, nested override parents and a 214-character name. */
 const MAX_KEY_CHARS = 600;
 /** The deepest TOML or JSON nesting read. */
@@ -1088,6 +1117,23 @@ let deadline = Infinity;
 function refuse(part) {
   if (unreadPart === null) unreadPart = part;
   return null;
+}
+
+/** Thrown out of a reader's loop once the call is past its time budget (preToolUse holds it). */
+const TOO_SLOW = new Error("over the time budget");
+let ticks = 0;
+
+/**
+ * Called once per step of a reader's long loops (TOML tokens and assignments, JSON sections, the
+ * line readers, the version diff): every 1,024 steps it checks the budget, and past it stops the
+ * read, so a slow read is held at about the budget wherever the time goes (round 4 of the hook
+ * review: the budget was checked only between edits).
+ */
+function tick() {
+  if ((++ticks & 1023) === 0 && performance.now() > deadline) {
+    refuse(`reading it took over ${READ_BUDGET_MS / 1000} s`);
+    throw TOO_SLOW;
+  }
 }
 
 /** Whether this call's reading is past its time budget; marks it so when it is. */
@@ -1218,7 +1264,7 @@ const NAME_TEXT = /^[@A-Za-z0-9][\w.\-/~@]{0,213}$/;
 // `!` inside a version is a PEP 440 epoch (`1!2.0`).
 const SPEC_CLAUSE = /(?:[~^<>=!]{1,3}\s*)?(?:v?\d[0-9A-Za-z.+_*!-]*|\*)/y;
 const SPEC_JOINER = /\s*\|\|\s*|\s*,\s*|\s+-\s+|\s+/y;
-const SPEC_MAX = 80;
+const SPEC_MAX = MAX_CONSTRAINT_CHARS;
 const specText = (spec) => {
   if (typeof spec !== "string") return "";
   // The one tag dependency_check reads (a package.json "latest").
@@ -1251,7 +1297,11 @@ function repeatable(changes) {
     if (typeof c?.name === "string" && c.name.length > 214) refuse("a package name over 214 characters");
     if (typeof c?.name !== "string" || !NAME_TEXT.test(c.name)) continue;
     // A version past the bound is held as not read, never dropped (round 3 of the hook review).
-    if (typeof c.to === "string" && c.to.trim().length > MAX_VERSION_CHARS) refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+    const long = typeof c.to === "string" ? specTooLong(c.to) : null;
+    if (long) {
+      refuse(long);
+      continue;
+    }
     const to = specText(c.to);
     if (!to) continue;
     const from = c.from == null ? null : specText(c.from) || null;
@@ -1327,6 +1377,24 @@ function applyEdit(text, oldString, newString, replaceAll) {
   return text.slice(0, first) + newString + text.slice(first + oldString.length);
 }
 
+/**
+ * The length `text` would have after edit `e`, counted without building it: the old text's
+ * occurrences, found by a plain indexOf loop that stops once the result is past
+ * MAX_MANIFEST_BYTES (so the count itself stays cheap). An edit that would not apply counts as
+ * `text`'s own length.
+ */
+function projectedSize(text, e) {
+  if (typeof e.old_string !== "string" || typeof e.new_string !== "string" || e.old_string === "") return text.length;
+  const grow = e.new_string.length - e.old_string.length;
+  if (e.replace_all !== true) return text.length + Math.max(grow, 0);
+  let size = text.length;
+  for (let at = text.indexOf(e.old_string); at >= 0; at = text.indexOf(e.old_string, at + e.old_string.length)) {
+    size += grow;
+    if (size > MAX_MANIFEST_BYTES) return size;
+  }
+  return size;
+}
+
 /** The edits of an Edit or MultiEdit payload, or null when it holds none in a shape this reads. */
 function editsOf(toolName, toolInput) {
   if (toolName === "Edit") return [{ old_string: toolInput.old_string, new_string: toolInput.new_string, replace_all: toolInput.replace_all }];
@@ -1357,6 +1425,10 @@ function introducedByEdit(kind, toolName, toolInput, path) {
     let text = base;
     for (const e of edits) {
       if (overBudget()) return [];
+      // The manifest this edit makes, sized before it is built: one `replace_all` whose old text
+      // occurs thousands of times made hundreds of MB (12,000 hits took 10.7 s, 20,000 ran out of
+      // memory; round 4 of the hook review).
+      if (text !== null && projectedSize(text, e) > MAX_MANIFEST_BYTES) return refuse(`an edit that would make the manifest over ${MAX_MANIFEST_BYTES / 1024 / 1024} MB`) ?? [];
       text = text === null ? null : applyEdit(text, e.old_string, e.new_string, e.replace_all);
     }
     if (text !== null) return wholeFileChanges(kind, base, text);
@@ -1365,8 +1437,10 @@ function introducedByEdit(kind, toolName, toolInput, path) {
   for (const e of edits) {
     try {
       for (const c of versionChanges(kind, e.old_string ?? "", e.new_string ?? "", () => null)) changes.push(c);
-    } catch {
-      // This edit is not one the hook can read; the others still count.
+    } catch (error) {
+      // Past the time budget the whole read stops (preToolUse holds the call).
+      if (error === TOO_SLOW) throw error;
+      // Otherwise this edit is not one the hook can read; the others still count.
     }
   }
   return changes;
@@ -1631,7 +1705,8 @@ function jsVersion(raw) {
   // npm reads `lodash@ ^4.17.0` as the range after the blank.
   const text = typeof raw === "string" ? raw.trim() : "";
   if (!text || /[/:]/.test(text) || text.startsWith("npm:")) return null;
-  if (text.length > MAX_VERSION_CHARS && /^[~^<>=*\dvxX]/.test(text)) return refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+  const long = /^[~^<>=*\dvxX]/.test(text) ? specTooLong(text) : null;
+  if (long) return refuse(long);
   if (exactFor("npm", text)) return text;
   return specText(text) === text && /^[~^<>=*\dvxX]/.test(text) ? text : null;
 }
@@ -1663,7 +1738,7 @@ function poetrySpec(word) {
   if (at) {
     const v = at[2].trim();
     if (v.toLowerCase() === "latest" || /[/:]/.test(v)) return null;
-    if (v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+    if (specTooLong(v)) return refuse(specTooLong(v));
     if (exactFor("PyPI", v) || /^[~^]\s*\d/.test(v)) return { name: at[1], spec: v };
     const set = PEP440_SPECIFIERS.exec(v);
     return set && set[1].length === v.length ? { name: at[1], spec: v } : null;
@@ -2164,7 +2239,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return all.slice(1).flatMap((w) => {
       const m = CARGO_SPEC.exec(w);
       const v = m ? m[2].trim() : null;
-      if (v && v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`) ?? [];
+      if (v && specTooLong(v)) return refuse(specTooLong(v)) ?? [];
       return v && (exactFor("crates.io", v) || specText(v) === v) ? [{ ecosystem: "crates.io", name: m[1], spec: v }] : [];
     });
   }
@@ -2217,7 +2292,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       const m = GO_SPEC.exec(w);
       if (!m || m[1].includes("...")) return [];
       const v = m[2];
-      if (v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`) ?? [];
+      if (specTooLong(v)) return refuse(specTooLong(v)) ?? [];
       return GO_EXACT.test(v) || /^v\d+(?:\.\d+)?$/.test(v) ? [{ ecosystem: "Go", name: m[1], spec: v }] : [];
     });
   }
@@ -2523,7 +2598,7 @@ function denialFor(introduced, ledger, dir, what) {
   }
   for (const { c, entry } of local.slice(0, 10)) {
     lines.push(
-      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If installing it from the public registry is intended, that is the user's decision: ask the user.`,
+      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove or replace that non-registry spec in the manifest that declares it (that edit goes ahead), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. FOURDA_GUARD is the user's setting, not yours to change.`,
     );
   }
   for (const { c, last } of unchecked.slice(0, 10)) {
@@ -2625,9 +2700,9 @@ function judgeCall(input, env, now) {
   const changes = [];
   for (const c of found.changes) {
     const spec = String(c.spec).trim();
-    if (NAME_TEXT.test(c.name) && specText(c.spec) === spec) changes.push(c);
-    // A version or name past the bound is held as not read, never dropped (it was in round 2).
-    else if (spec.length > MAX_VERSION_CHARS) refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+    // A version or constraint past its bound is held as not read, never dropped (it was in round 2).
+    if (specTooLong(spec)) refuse(specTooLong(spec));
+    else if (NAME_TEXT.test(c.name) && specText(c.spec) === spec) changes.push(c);
     else if (String(c.name).length > 214) refuse("a package name over 214 characters");
   }
   overBudget();
@@ -2662,11 +2737,148 @@ function mayInstall(input) {
     const file = input.tool_input?.file_path;
     return typeof file === "string" && manifestKind(file) !== null;
   }
-  const command = String(input.tool_input?.command ?? "").slice(0, 2 * MAX_COMMAND_CHARS);
-  return INSTALLER_WORD.test(command) && INSTALL_WORD.test(command);
+  return namesInstall(String(input.tool_input?.command ?? ""), input.tool_name === "PowerShell" ? "powershell" : "bash");
 }
-const INSTALLER_WORD = /(?:^|[^A-Za-z0-9_-])(?:npm|pnpm|pnpx|yarn|bun|bunx|npx|corepack|cargo|pip\d*(?:\.\d+)?|pip-compile|piptools|python\d*(?:\.\d+)?|py|uv|uvx|poetry|go)(?:\.exe|\.cmd)?(?=$|[^A-Za-z0-9_-])/i;
-const INSTALL_WORD = /(?:^|[^A-Za-z0-9_-])(?:i|in|ins|inst|insta|instal|install|isntall|it|add|a|up|update|upgrade|get|lock|sync|compile|pkg|edit|exec|dlx|x|-m)(?=$|[^A-Za-z0-9_-])/i;
+
+/**
+ * The simple commands of a command line as plain words, for the pre-check of a call too big to read
+ * (mayInstall): one linear pass that keeps quoted text inside its word (so prose in a quoted
+ * argument is never a command), drops quote characters (`np''m` and `'npm'` are `npm`), splits at
+ * `;`, `&`, `|`, a newline, `(`, `)`, `{`, `}` outside quotes, and skips a heredoc body (bash
+ * `<<WORD` to the line holding WORD) and a PowerShell here-string (`@'...'@`, `@"..."@`). Coarse
+ * on purpose: it only decides whether a command it cannot read names an install.
+ */
+function plainSegments(text, dialect) {
+  const segments = [];
+  let words = [];
+  let word = "";
+  let quote = null;
+  let heredoc = null;
+  const endWord = () => {
+    if (word !== "") words.push(word);
+    word = "";
+  };
+  const endSegment = () => {
+    endWord();
+    if (words.length > 0) segments.push(words);
+    words = [];
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote !== null) {
+      if (dialect === "bash" && quote === '"' && ch === "\\") i++;
+      else if (dialect === "powershell" && ch === "`") i++;
+      else if (ch === quote) quote = null;
+      else word += ch;
+      continue;
+    }
+    if (dialect === "powershell" && ch === "@" && (text[i + 1] === "'" || text[i + 1] === '"') && text[i + 2] === "\n") {
+      // A here-string: its body ends at a line starting with the quote and `@`.
+      const end = text.indexOf(`\n${text[i + 1]}@`, i + 2);
+      i = end < 0 ? text.length : end + 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (dialect === "bash" && ch === "\\") i++;
+    else if (dialect === "bash" && ch === "<" && text[i + 1] === "<" && text[i + 2] !== "<") {
+      // A heredoc: the delimiter word after `<<` / `<<-`, quotes dropped; the body is skipped at the next newline.
+      const m = /^<<-?\s*(['"]?)([A-Za-z0-9_.-]+)\1/.exec(text.slice(i, i + 300));
+      if (m) {
+        heredoc = m[2];
+        i += m[0].length - 1;
+      }
+      endWord();
+    } else if (ch === "\n") {
+      endSegment();
+      if (heredoc !== null) {
+        // The body: lines up to one that is the delimiter.
+        let at = i + 1;
+        for (;;) {
+          const nl = text.indexOf("\n", at);
+          const line = text.slice(at, nl < 0 ? text.length : nl).replace(/\r$/, "").replace(/^\t+/, "");
+          if (line === heredoc || nl < 0) {
+            i = nl < 0 ? text.length : nl;
+            break;
+          }
+          at = nl + 1;
+        }
+        heredoc = null;
+      }
+    } else if (";&|(){}\r".includes(ch)) endSegment();
+    else if (ch === " " || ch === "\t") endWord();
+    else word += ch;
+  }
+  endSegment();
+  return segments;
+}
+
+/** Words that run the command after them (with their options and numbers skipped), before a package manager's name. */
+const RUN_PREFIXES = new Set(["sudo", "doas", "env", "time", "nohup", "command", "exec", "nice", "timeout", "xargs", "wsl", "busybox", "npx", "pnpx", "bunx", "corepack", "stdbuf", "ionice", "builtin", "then", "do", "else", "!", "&"]);
+
+/** Per package manager, whether a word is one of its install, add or update subcommands. */
+const INSTALLS_BY_TOOL = {
+  npm: (w) => isInstallCommand("npm", w) || ["update", "pkg"].includes(npmCommand(w) ?? ""),
+  pnpm: (w) => ["add", "install", "i", "up", "update", "upgrade"].includes(w),
+  yarn: (w) => ["add", "up", "upgrade", "install", "workspace", "workspaces"].includes(w),
+  bun: (w) => ["add", "a", "install", "i", "update"].includes(w),
+  cargo: (w) => ["add", "update", "install"].includes(w),
+  pip: (w) => w === "install",
+  uv: (w) => ["add", "pip", "lock", "sync"].includes(w),
+  uvx: (w) => w === "pip-compile",
+  poetry: (w) => ["add", "update", "install", "lock"].includes(w),
+  go: (w) => ["get", "mod", "work", "install"].includes(w),
+  "pip-compile": () => true,
+};
+
+/** A program word as the pre-check compares it: its last path part, lower case, without .exe/.cmd/.bat/.ps1, `pip3.12` as `pip`, `yarnpkg` as `yarn`. */
+function toolName(word) {
+  const p = programName(word);
+  if (/^pip\d+(?:\.\d+)*$/.test(p)) return "pip";
+  if (/^python\d*(?:\.\d+)*$/.test(p) || p === "py") return "python";
+  return p === "yarnpkg" ? "yarn" : p;
+}
+
+/**
+ * Whether a command line names an install: in some simple command, a package manager's name in
+ * command position (first, after `VAR=value` words, or after a prefix that runs the command after
+ * it), followed in that same simple command by one of THAT tool's install, add or update words
+ * (`python -m pip install`, `python -m piptools compile`). Asked only of a command too big to read
+ * whole; read over the whole text (linear), so an install after 128 KB counts, and prose in a
+ * heredoc body or a quoted argument does not (round 4 of the hook review: any long command with
+ * "go" and "a" in it was held).
+ */
+function namesInstall(command, dialect) {
+  for (const words of plainSegments(command, dialect)) {
+    let k = 0;
+    for (;;) {
+      while (k < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k])) k++;
+      if (k >= words.length || !RUN_PREFIXES.has(toolName(words[k]))) break;
+      k++;
+      while (k < words.length && (words[k].startsWith("-") || /^\d+(?:\.\d+)?[smhd]?$/.test(words[k]))) k++;
+    }
+    if (k >= words.length) continue;
+    let tool = toolName(words[k]);
+    // A package manager run as a script: `node pnpm.cjs add`, `node .../npm/bin/npm-cli.js install`.
+    if (tool === "node" || tool === "bun" || tool === "deno") {
+      const script = words.slice(k + 1).findIndex((w) => !w.startsWith("-"));
+      const name = script < 0 ? "" : toolName(words[k + 1 + script]).replace(/\.[cm]?js$/, "").replace(/-cli$/, "");
+      if (Object.hasOwn(INSTALLS_BY_TOOL, name)) {
+        k += 1 + script;
+        tool = name;
+      }
+    }
+    const rest = words.slice(k + 1, k + 40);
+    if (tool === "python") {
+      const m = rest.indexOf("-m");
+      if (m >= 0 && /^pip\d*$/.test(rest[m + 1] ?? "") && rest.slice(m + 2).includes("install")) return true;
+      if (m >= 0 && rest[m + 1] === "piptools" && rest.slice(m + 2).includes("compile")) return true;
+      continue;
+    }
+    const installs = Object.hasOwn(INSTALLS_BY_TOOL, tool) ? INSTALLS_BY_TOOL[tool] : null;
+    if (installs && (tool === "pip-compile" || rest.some((w) => !w.startsWith("-") && installs(w)))) return true;
+  }
+  return false;
+}
 
 /** The denial for a call that could not be read whole: which part, and what to do. */
 function notReadDenial(what, part) {
@@ -2726,9 +2938,8 @@ async function main() {
   let raw = "";
   for await (const chunk of process.stdin) {
     raw += chunk;
-    // A hook payload is kilobytes. One far beyond that is not read: held when it is a manifest
-    // write or a package-manager command, as its first part shows; let through otherwise.
-    if (raw.length > MAX_INPUT_CHARS) {
+    // Past what the hook will even parse: judged from the first part's text alone.
+    if (raw.length > MAX_PARSE_CHARS) {
       const out = oversized(raw.slice(0, 64 * 1024));
       if (out) process.stdout.write(out);
       process.exit(0);
@@ -2738,16 +2949,35 @@ async function main() {
   try {
     input = JSON.parse(raw);
   } catch {
+    // Not JSON: an oversized payload is judged from its first part's text; any other goes ahead.
+    const out = raw.length > MAX_INPUT_CHARS ? oversized(raw.slice(0, 64 * 1024)) : "";
+    if (out) process.stdout.write(out);
     return;
   }
-  const out = respond(input);
+  // A hook payload is kilobytes. One over MAX_INPUT_CHARS is not read: held when its parsed fields
+  // show a manifest write or edit, or a command that names an install (round 4 of the hook review:
+  // judged from the first 64 KB of escaped text, it missed `\n` before npm, a long description
+  // before the command, content before file_path); let through otherwise.
+  const out = raw.length > MAX_INPUT_CHARS ? oversizedParsed(input) : respond(input);
   if (out) process.stdout.write(out);
 }
 
+/** The largest payload the hook parses to judge it (past MAX_INPUT_CHARS it is judged, never read). */
+const MAX_PARSE_CHARS = 64 * 1024 * 1024;
+
+/** The answer to a parsed payload over MAX_INPUT_CHARS: held when it is a manifest write or an install command (mayInstall), "" otherwise. */
+function oversizedParsed(input) {
+  if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || !input.tool_input || typeof input.tool_input !== "object") return "";
+  if (guardMode(process.env.FOURDA_GUARD) !== "block" || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
+  return denyJson(notReadDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
+}
+
 /**
- * The answer to a payload over MAX_INPUT_CHARS, from its first part: a PreToolUse write or edit of
- * a manifest, or a command that names a package manager, is held as not read (round 2 let an 8 MB
- * payload through unread). Anything else goes ahead. FOURDA_GUARD and the ledger are honoured.
+ * The answer to a payload over MAX_INPUT_CHARS that cannot be parsed (not JSON, or over
+ * MAX_PARSE_CHARS), from its first 64 KB of text as it arrives (JSON-escaped): a PreToolUse write
+ * or edit of a manifest, or a command that names an install, is held as not read. A field that
+ * comes after those 64 KB, or text the escaping hides, is not seen: such a payload goes ahead (a
+ * known limit). FOURDA_GUARD and the ledger are honoured.
  */
 function oversized(head) {
   const mode = guardMode(process.env.FOURDA_GUARD);
