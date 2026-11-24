@@ -1,5 +1,16 @@
 # Changelog
 
+## 6.5.2 — unreleased
+
+### Data folder
+
+- `agent_memory` `store` asks a busy database once more before it answers "Failed to store memory: database is locked". The tool answers its own errors, so the server's one retry of a busy database, which acts on an error a tool throws, never saw a lock here: one such answer in 17,595 calls of the 6.5.1 concurrency run on a loaded machine. The quota count and the insert are one statement each, so a write that met a lock stored nothing and is safe to run again. A database still busy on the second try answers as before.
+
+### Tests and gates
+
+- A CI run whose only failures are jobs that never got a runner (cancelled with no runner and no step, in practice macOS install smokes: three times on 2026-11-24) is run again by `rerun-unstarted.yml`, at most twice; a job that ran a step and failed is left for a person. The release workflow's "CI passed on the tagged commit" check now looks again for two minutes before it believes a failure, so such a re-run no longer stops a release.
+- The guard hook's timing rows allow for the machine's load at that moment (the hook answering a trivial call, against 60 ms, up to four times the bound). The flat bound failed once on a loaded CI runner at 1,095 ms against 1,000 with nothing wrong in the hook; under twice as many busy processes as cores the old rows fail at about 1.8 s against 500 ms and the new ones pass. The inputs these rows were written for took 3 to 21 s.
+
 ## 6.5.1 — 2026-11-24
 
 ### What is scanned
