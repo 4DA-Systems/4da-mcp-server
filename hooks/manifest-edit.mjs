@@ -2055,10 +2055,12 @@ function readLedger(dir, now) {
       if (!e || typeof e !== "object" || typeof e.package !== "string" || typeof e.version !== "string" || typeof e.verdict !== "string" || typeof e.ecosystem !== "string") continue;
       const t = Date.parse(e.t);
       if (!Number.isFinite(t) || t < now - LEDGER_WINDOW_MS || t > now + 5 * 60 * 1000) continue;
-      entries.push(e);
+      entries.push({ ...e, at: t });
     }
   }
-  return entries;
+  // Oldest first by the time each answer was given: several servers append to one ledger, and the
+  // previous file can hold newer lines than the current one's first. Equal times keep file order.
+  return entries.sort((a, b) => a.at - b.at);
 }
 
 /** A package name as its registry compares it: PEP 503 for PyPI; case and "-"/"_" folded for crates.io. */
@@ -2178,8 +2180,11 @@ function judge(index, c, here) {
   const askedFor = (e) => (typeof e.requested === "string" ? e.requested : e.verdict === "unknown" ? e.version : "").replace(/\s+/g, "");
   const answers = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? versionKey(eco, e.version) === want : askedFor(e) === constraint));
   const last = answers.at(-1);
-  if (last && HOLDS.has(last.verdict)) return { deny: last };
-  if (last && PASSES.has(last.verdict)) return "allow";
+  // The last decisive answer decides, whatever unknown answers came after it: an avoid or wait
+  // holds until a later proceed or review (re-check of 0d30b40, S2: avoid, unknown, private went ahead).
+  const decisive = answers.filter((e) => HOLDS.has(e.verdict) || PASSES.has(e.verdict)).at(-1);
+  if (decisive && HOLDS.has(decisive.verdict)) return { deny: decisive };
+  if (decisive && PASSES.has(decisive.verdict)) return "allow";
   // A range with no answer of its own: the verdict for the release its inclusive ceiling names.
   const top = exactVersion ? null : rangeCeiling(eco, c.spec);
   if (top) {
