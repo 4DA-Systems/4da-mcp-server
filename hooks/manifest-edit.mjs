@@ -2857,7 +2857,16 @@ function namesInstall(command, dialect) {
       while (k < words.length && (words[k].startsWith("-") || /^\d+(?:\.\d+)?[smhd]?$/.test(words[k]))) k++;
     }
     if (k >= words.length) continue;
-    const tool = toolName(words[k]);
+    let tool = toolName(words[k]);
+    // A package manager run as a script: `node pnpm.cjs add`, `node .../npm/bin/npm-cli.js install`.
+    if (tool === "node" || tool === "bun" || tool === "deno") {
+      const script = words.slice(k + 1).findIndex((w) => !w.startsWith("-"));
+      const name = script < 0 ? "" : toolName(words[k + 1 + script]).replace(/\.[cm]?js$/, "").replace(/-cli$/, "");
+      if (Object.hasOwn(INSTALLS_BY_TOOL, name)) {
+        k += 1 + script;
+        tool = name;
+      }
+    }
     const rest = words.slice(k + 1, k + 40);
     if (tool === "python") {
       const m = rest.indexOf("-m");

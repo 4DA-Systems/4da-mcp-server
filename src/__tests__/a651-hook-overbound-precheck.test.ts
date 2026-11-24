@@ -50,6 +50,9 @@ describe("held: an install in a command too big to read (item 2)", () => {
     `yarnpkg add lodash@3.10.1; echo ${PAD(70_000)}`,
     `sudo -E npm i lodash@3.10.1; echo ${PAD(70_000)}`,
     `cd app && npx pnpm add lodash@3.10.1 && echo ${PAD(70_000)}`,
+    // A package manager run as a script (8e17992 held it; the command-position rule must too).
+    `node pnpm.cjs add lodash@3.10.1; echo ${PAD(70_000)}`,
+    `node ./node_modules/npm/bin/npm-cli.js install lodash@3.10.1; echo ${PAD(70_000)}`,
   ])("%#", (command) => {
     expect(decide(command)).toBe("deny");
   });
