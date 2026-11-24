@@ -8,7 +8,7 @@
  * never safe to delegate on the scan's word.
  */
 
-import { NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
+import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { detectTaskPackages } from "./briefing-task-scope.js";
 
@@ -119,7 +119,7 @@ export function privateAnywhere(live: PrivateLookup | null, name: string): strin
 export function privateAdvisoryText(found: PrivateTaskPackage[]): string {
   const label = (p: PrivateTaskPackage) => `${p.package}${p.installed.length ? ` ${p.installed.join("/")}` : ""}`;
   const unread = found.filter((p) => p.unreadable_file);
-  const notRegistry = (p: PrivateTaskPackage) => p.why.includes(NOT_REGISTRY_MARK) || p.why.includes(UNREAD_CATALOG_MARK);
+  const notRegistry = (p: PrivateTaskPackage) => p.why.includes(NOT_REGISTRY_MARK) || p.why.includes(UNREAD_CATALOG_MARK) || p.why.includes(AMBIGUOUS_SPEC_MARK);
   const local = found.filter((p) => !p.unreadable_file && notRegistry(p));
   const priv = found.filter((p) => !p.unreadable_file && !notRegistry(p));
   const parts: string[] = [];

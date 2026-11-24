@@ -9,7 +9,7 @@
 import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { isNpmPackageName, quoteThirdParty } from "../untrusted-text.js";
-import { NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK, unreadFileKind } from "../live/private-packages.js";
+import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK, unreadFileKind } from "../live/private-packages.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
 import { head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
 
@@ -144,6 +144,15 @@ function privateResult(r: Requested, why: string, unreadFile: string | null): It
   }
   // A name withheld because a project takes it from a path, git, a URL, its workspace or an alias is
   // not a private package, and private-registry tooling is no help with it (re-check 2026-11-24).
+  if (why.includes(AMBIGUOUS_SPEC_MARK)) {
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (ambiguous npm: spec): ${r.package}: ${why}. Nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: write the spec as npm:<package>@<range>, or check the package it installs.`,
+      signals: [],
+      not_checked: "private",
+    };
+  }
   if (why.includes(UNREAD_CATALOG_MARK)) {
     return {
       ...head(provisional(r)),

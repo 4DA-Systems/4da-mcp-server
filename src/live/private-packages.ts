@@ -122,6 +122,11 @@ export const NOT_REGISTRY_MARK = "not a registry release";
 /** The words that mark a name declared through a catalog that could not be read: not private, not known. */
 export const UNREAD_CATALOG_MARK = "declared through a catalog that could not be read";
 
+/** How the words for an `npm:<x>` that npm and Yarn read differently start (resolution.ts specWords). */
+export const AMBIGUOUS_SPEC_START = "the spec npm:";
+/** The words that mark such a reason. */
+export const AMBIGUOUS_SPEC_MARK = "so neither was looked up";
+
 export const PUBLIC_MIRRORS_HINT = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
 
 /** A lockfile entry installed from a registry that is not the public one (or from git). */
@@ -2101,6 +2106,8 @@ export function lockfileRegistryWide(
  */
 export function lockEntryReason(entry: PrivateIndexEntry): string {
   if (entry.unknownSource) return `${entry.file}: ${entry.name} is ${entry.registry}, so where it comes from is not known and it was not looked up`;
+  // An `npm:<x>` npm and Yarn read differently: neither reading was looked up (it may be a registry release).
+  if (entry.registry.startsWith(AMBIGUOUS_SPEC_START)) return `${entry.file} declares it with ${entry.registry}`;
   // Local code, a workspace member, git or an alias key: not a private package, and not looked up.
   if (entry.local || /^(?:git\b|git\+|git:|ssh:)|\.git(?:[#?/@]|$)/i.test(entry.registry)) return `${entry.file} installs it from ${entry.registry}: ${NOT_REGISTRY_MARK}, so it was not looked up`;
   const base = `${entry.file} installs it from ${entry.registry}, not the public registry`;

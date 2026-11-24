@@ -668,7 +668,7 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
         // `"vendor/x-1.0.0.tgz"` or a tarball on another host is not a version of the registry's x.
         const read = classifyNpmSpec(name, spec, catalogs);
         // Local code, and a catalog: entry that could not be read, are said by the resolution (nonRegistryDirect).
-        if (read.kind === "local" || read.kind === "catalog") continue;
+        if (read.kind === "local" || read.kind === "catalog" || read.kind === "ambiguous") continue;
         if (read.kind !== "registry") uncheckable.push({ name, version: null, kind: read.kind });
         else if (read.name !== name) {
           // `"my-lodash": "npm:lodash@4.17.20"` declares lodash, under another folder name.

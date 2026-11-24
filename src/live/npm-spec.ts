@@ -44,7 +44,7 @@ export interface NpmRegistrySpec {
  * `catalog:` entry that could not be found or read (`catalog`).
  */
 export interface NpmOtherSpec {
-  kind: "git" | "url" | "file" | "local" | "catalog";
+  kind: "git" | "url" | "file" | "local" | "catalog" | "ambiguous";
   /** The catalog entry a `catalog:` spec resolved to, when it was found. */
   catalogSpec?: string;
 }
@@ -154,13 +154,16 @@ function aliasSpec(name: string, rest: string, yarn = false): NpmSpecClass {
   if (rest.trim() === "" || rest !== rest.trim() || /^npm:/i.test(rest)) return { kind: "url" };
   const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
   if (at < 0) {
+    // `"next": "npm:next"`: npm and Yarn agree, it is that package from the registry.
+    if (rest.toLowerCase() === name.toLowerCase() && PACKAGE_NAME.test(rest)) return registry(name, "*");
     const range = isSemverRange(rest);
     // A name a package could be published under now (no `~`, which only legacy names hold).
     const named = PACKAGE_NAME.test(rest) && !rest.includes("~") && !TARBALL_FILE.test(rest);
     if (yarn && (range || /^[a-z][a-z0-9._-]*$/i.test(rest))) return registry(name, rest);
     if (range && (!named || FULL_VERSION.test(rest))) return registry(name, rest);
     if (named && !range && !COMMON_TAGS.has(rest.toLowerCase())) return registry(rest, "*");
-    return { kind: "url" };
+    // npm reads x as a package, Yarn as a tag or range of the key: which is meant is not known.
+    return named ? { kind: "ambiguous" } : { kind: "url" };
   }
   const target = rest.slice(0, at);
   if (!PACKAGE_NAME.test(target) || TARBALL_FILE.test(target)) return { kind: "url" };

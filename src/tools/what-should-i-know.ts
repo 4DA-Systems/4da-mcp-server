@@ -20,7 +20,7 @@
  * accepted 10). They no longer decide anything here.
  */
 
-import { NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
+import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import { checkRequestedVersions, MAX_REQUESTED, readTaskVersions, sayRequested, type RequestedVersionFinding } from "./briefing-requested-versions.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
 import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
@@ -470,7 +470,7 @@ export async function executeWhatShouldIKnow(
       priority: "medium",
       action: privateTask.every((p) => p.unreadable_file)
         ? "Repair or regenerate the lockfile that could not be read (reinstall), then ask again: until it is read, where these packages come from is not known and this server sends none of their names."
-        : privateTask.every((p) => p.unreadable_file || p.why.includes(NOT_REGISTRY_MARK) || p.why.includes(UNREAD_CATALOG_MARK))
+        : privateTask.every((p) => p.unreadable_file || p.why.includes(NOT_REGISTRY_MARK) || p.why.includes(UNREAD_CATALOG_MARK) || p.why.includes(AMBIGUOUS_SPEC_MARK))
           ? "Review where these come from (a path, git, a URL, a workspace, an alias, or a catalog that could not be read: fix it), or ask about the registry package they install: this server does not look them up by these names."
           : "Check it with your private registry's own tooling before changing its version: this server never sends a private name anywhere.",
       url: null,

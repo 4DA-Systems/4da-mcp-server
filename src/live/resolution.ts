@@ -28,7 +28,7 @@ import { checkInstallState } from "./install-state.js";
 import { expandWorkspaces, memberNamesOf, pnpmYamlList, readManifestDeclarations } from "./js-manifests.js";
 import { lazyNpmCatalogs } from "./npm-catalog.js";
 import { classifyNpmSpec } from "./npm-spec.js";
-import { UNREAD_CATALOG_MARK } from "./private-packages.js";
+import { AMBIGUOUS_SPEC_MARK, AMBIGUOUS_SPEC_START, UNREAD_CATALOG_MARK } from "./private-packages.js";
 import { allOverrideSpecs } from "./overrides.js";
 import { lockfileCandidates, manifestCandidate, manifestProblemText, manifestSyntaxProblem, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
@@ -130,8 +130,12 @@ function workspaceMemberDirs(dir: string, workspaces: string[]): string[] {
 }
 
 /** A spec in words, for the reason a name is withheld. Paths and git spellings are the user's own. */
-function specWords(kind: "git" | "url" | "file" | "local" | "catalog", spec: string, catalogSpec?: string): string {
+function specWords(kind: "git" | "url" | "file" | "local" | "catalog" | "ambiguous", spec: string, catalogSpec?: string): string {
   const shown = spec.length > 120 ? `${spec.slice(0, 117)}...` : spec;
+  if (kind === "ambiguous") {
+    const x = shown.replace(/^npm:/i, "");
+    return `${AMBIGUOUS_SPEC_START}${x}, which npm reads as the package ${x} and Yarn as the tag or range ${x} of this name, ${AMBIGUOUS_SPEC_MARK}`;
+  }
   if (kind === "catalog") return catalogSpec === undefined ? `a catalog entry that could not be found or read (${shown})` : `a catalog entry that is itself a catalog: spec (${shown})`;
   if (catalogSpec !== undefined) return `${specWords(kind, catalogSpec)}, from the catalog (${shown})`;
   if (kind === "git") return `git (${shown})`;
@@ -175,7 +179,10 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
   }
   for (const m of manifests) {
     for (const d of m.declared) {
-      const spec = classifyNpmSpec(d.name, d.spec, catalogsFor(m.base));
+      let spec = classifyNpmSpec(d.name, d.spec, catalogsFor(m.base));
+      // A lockfile that records which package an ambiguous `npm:<x>` installed settles it.
+      const locked = spec.kind === "ambiguous" ? read.aliases?.get(d.name) : undefined;
+      if (locked) spec = { kind: "registry", name: locked, range: "*" };
       if (spec.kind === "registry") {
         // An `npm:` alias: the key is a folder name the project chose, never a registry package. It
         // installs the target, which is what is checked; the key itself is withheld, with the target named.
