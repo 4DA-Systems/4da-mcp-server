@@ -101,6 +101,31 @@ function run(payload: unknown, ledgerHome: string = home): { ms: number; decisio
   return { ms, decision, status: r.status };
 }
 
+/** What the hook takes to answer a call with nothing to read, on an idle machine. */
+const IDLE_MS = 60;
+
+/**
+ * How loaded this machine is right now: the hook answering a trivial call, against IDLE_MS (never
+ * under 1; never over 4, where the hook could no longer keep its own 2 s read budget and the test
+ * should fail).
+ */
+function load(): number {
+  const ms = Math.min(run(bash("npm ci")).ms, run(bash("npm ci")).ms);
+  return Math.min(4, Math.max(1, ms / IDLE_MS));
+}
+
+/**
+ * `ms` is inside `limit`, or inside it once the machine's load at this moment is allowed for. The
+ * suite runs hundreds of files at once, and the flat bound failed on a loaded CI runner (1,095 ms
+ * against 1,000 for a 4 MB-ledger row, on the 6.5.1 release PR) with nothing wrong in the hook. A
+ * pathological input is slower by ten times or more whatever the load (3 s, 10 s and 21 s were the
+ * rows this file was written for), so the scaled bound still catches one.
+ */
+function expectWithin(ms: number, limit: number): void {
+  if (ms < limit) return;
+  expect(ms).toBeLessThan(limit * load());
+}
+
 describe("a call that could not be read in time is held, never let through", () => {
   it("over the read budget, an install command or a manifest edit is denied as not read", () => {
     const out = respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now(), -1);
@@ -132,7 +157,7 @@ describe(`every pathological input is answered within ${LIMIT_MS} ms, as a child
       if (again.ms < r.ms) r = again;
     }
     expect(r.status).toBe(0);
-    expect(r.ms).toBeLessThan(LIMIT_MS);
+    expectWithin(r.ms, LIMIT_MS);
     if (mustBe) expect(r.decision).toBe(mustBe);
   });
 });
@@ -178,25 +203,25 @@ describe("the checker's slow rows are fast denials (round 3 of the hook review)"
     edits.push({ old_string: `pkg${lines - 1}==1.0.${lines - 1}`, new_string: `pkg${lines - 1}==2.0.0` });
     const r = best({ hook_event_name: "PreToolUse", tool_name: "MultiEdit", cwd: dir, tool_input: { file_path: file, edits } });
     expect(r.decision).toBe("deny");
-    expect(r.ms).toBeLessThan(LIMIT_MS);
+    expectWithin(r.ms, LIMIT_MS);
   });
 
   it("a Write of a manifest whose payload is over 8 MB", () => {
     const r = best(write("requirements.txt", "requests==2.0.0\n#" + " ".repeat(8 * 1024 * 1024 + 100) + "\n"));
     expect(r.decision).toBe("deny");
-    expect(r.ms).toBeLessThan(LIMIT_MS);
+    expectWithin(r.ms, LIMIT_MS);
   });
 
   it("an install command with a 70 KB comment", () => {
     const r = best(bash("npm i lodash@4.17.20 # " + "x".repeat(70 * 1024)));
     expect(r.decision).toBe("deny");
-    expect(r.ms).toBeLessThan(LIMIT_MS);
+    expectWithin(r.ms, LIMIT_MS);
   });
 
   it("a Cargo.toml nested 40,000 deep beside a pin", () => {
     const r = best(write("Cargo.toml", `[package]\nname = "a"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1.0.0"\n\n[package.metadata]\nx = ${"[".repeat(40_000)}${"]".repeat(40_000)}\n`));
     expect(r.decision).toBe("deny");
-    expect(r.ms).toBeLessThan(LIMIT_MS);
+    expectWithin(r.ms, LIMIT_MS);
   });
 
   it.each([
@@ -207,7 +232,7 @@ describe("the checker's slow rows are fast denials (round 3 of the hook review)"
     const vers = Array.from({ length: 25 }, (_, i) => `requests==2.0.${i}.post1.dev3`).join(" ");
     const r = best(bash(`pip install ${vers}`), h);
     expect(r.decision).toBe("deny");
-    expect(r.ms).toBeLessThan(2 * LIMIT_MS);
+    expectWithin(r.ms, 2 * LIMIT_MS);
   });
 });
 
@@ -246,6 +271,6 @@ describe("a replace_all edit that would build a huge manifest is held fast (roun
     const r = best(replaceAll(file, disk, newString));
     expect(r.status).toBe(0);
     expect(r.decision).toBe("deny");
-    expect(r.ms).toBeLessThan(LIMIT_MS);
+    expectWithin(r.ms, LIMIT_MS);
   });
 });
