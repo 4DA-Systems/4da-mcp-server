@@ -216,7 +216,7 @@ describe("modes", () => {
     const after = hook({ ...payload, hook_event_name: "PostToolUse" }, { FOURDA_GUARD: "advise" });
     const out = JSON.parse(after.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
-    expect(out.hookSpecificOutput.additionalContext).toContain("lodash: 4.17.21 -> 4.17.20");
+    expect(out.hookSpecificOutput.additionalContext).toContain("\"lodash\": \"4.17.21\" -> \"4.17.20\"");
   });
 
   it("FOURDA_GUARD=off does nothing, before or after", () => {
