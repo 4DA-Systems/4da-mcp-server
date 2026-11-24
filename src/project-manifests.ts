@@ -129,7 +129,10 @@ export function parseRequirementNames(content: string): string[] {
   for (const raw of content.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
     if (!line || line.startsWith("-")) continue;
-    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(line);
+    // A URL (`https://host/x-1.0.tar.gz`) or a path (`vendor/x.whl`) names no package: it is not
+    // `https` or `vendor` (privacy review 2026-11-24: pypi.org/pypi/https/json was asked).
+    if (/^[a-z][a-z0-9+.-]*:/i.test(line)) continue;
+    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?![A-Za-z0-9._-]*[\\/])/.exec(line);
     if (m) names.push(normalizePythonName(m[1]));
   }
   return [...new Set(names)];

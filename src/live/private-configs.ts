@@ -19,7 +19,6 @@ import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
 import { wildcardMatch } from "./glob-match.js";
 import {
-  CODE_HOSTS,
   hostOf,
   inlineBool,
   inlineKey,
@@ -440,13 +439,17 @@ export function uvEnvIndexes(env: NodeJS.ProcessEnv): PrivateSetting[] {
   return out;
 }
 
-/** A direct reference's location is public: pypi.org, a public wheel index, or a public code host. */
+/** A direct reference's location is a PyPI release: an archive on pypi.org or a public wheel index (not git, not a code host). */
 function publicLocation(location: string): boolean {
   const url = location.replace(/^git\+/i, "");
   if (/^file:/i.test(url)) return false;
   const host = hostOf(url) ?? /^(?:[\w.-]+@)?([^/:\s]+):/.exec(url)?.[1]?.toLowerCase() ?? null;
   if (!host) return false;
-  return isPublicExtraPypiIndex(`https://${host}/`) || CODE_HOSTS.test(host);
+  // A git checkout or archive on a public code host (github.com...) is not the PyPI release of its
+  // name either: only PyPI's own file hosts are (claims review 2026-11-24: `requests @ git+https://
+  // github.com/psf/requests` made a registry row and sent requests to pypi.org and HN).
+  if (/^git\+/i.test(location.trim()) || /\.git(?:[@#]|$)/i.test(url)) return false;
+  return isPublicExtraPypiIndex(`https://${host}/`);
 }
 
 /**

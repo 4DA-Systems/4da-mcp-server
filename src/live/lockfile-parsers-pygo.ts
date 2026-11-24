@@ -935,10 +935,20 @@ export function unpinnedRequirements(content: string): {
         direct.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1])), kind: kindOf(editable[1]) });
       }
       if (/^[a-z][a-z0-9+.-]*:/i.test(editable[1])) references.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1])), location: editable[1] });
+      // `-e ./libs/x`: local code, named (as far as the file says) by its egg or its directory.
+      else references.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1].split("#")[0])), location: `file:${editable[1].split("#")[0]}` });
       continue;
     }
     if (line.startsWith("-")) continue;
     const spec = line.split(";")[0].trim();
+    // A local path or archive (`./libs/x`, `../x`, `/opt/x`, `dist/x-1.0-py3-none-any.whl`): local code,
+    // never a PyPI release; asked about directly it was sent (privacy review 2026-11-24).
+    if (/^(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(spec) || (/^[^\s:@=<>!~]+[\\/]/.test(spec) && !/^[a-z][a-z0-9+.-]*:/i.test(spec))) {
+      const at = spec.split(/[\s#]/)[0];
+      const name = archiveName(at);
+      if (name) references.push({ name: normalizePythonName(name), location: `file:${at}` });
+      continue;
+    }
     // A bare URL requirement: the archive's name is all there is.
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(spec)) {
       if (!/^file:/i.test(spec)) direct.push({ name: normalizePythonName(archiveName(spec)), kind: kindOf(spec) });

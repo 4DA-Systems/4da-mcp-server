@@ -462,12 +462,14 @@ describe("R7: what stays public, and the helpers' edges", () => {
     expect(live.privateReason("PyPI", "requests")).toBeNull();
   });
 
-  it("a direct reference to pypi.org's files or a public code host is not private", () => {
+  // A git checkout on a public code host is not the PyPI release of its name, so it is withheld too
+  // (claims review 2026-11-24; a651-python-direct-sources-never-sent): only PyPI's own files are public.
+  it("a direct reference to pypi.org's files is not private; a git checkout on a public code host is", () => {
     const live = privateOf({
       "requirements.txt": "wheelpkg @ https://files.pythonhosted.org/packages/x/wheelpkg-1.0-py3-none-any.whl\nforkpkg @ git+https://github.com/someone/forkpkg@v1\nrequests==2.25.1\n",
     });
     expect(live.privateReason("PyPI", "wheelpkg")).toBeNull();
-    expect(live.privateReason("PyPI", "forkpkg")).toBeNull();
+    expect(live.privateReason("PyPI", "forkpkg")).not.toBeNull();
   });
 
   it("an include loop and a deep chain end, and an include outside the project is not read for options", () => {
