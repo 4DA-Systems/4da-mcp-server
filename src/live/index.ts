@@ -28,7 +28,7 @@ import { FixPathSources } from "./fix-paths.js";
 import type { CheckEcosystem, ReleaseMetadataSource } from "./release-metadata.js";
 import { fetchRegistryHealthFor } from "./registry-health.js";
 import { commonPathRoot, dedupeDependencies, dedupeDependenciesSteps, emptyVulnResult } from "./dependency-set.js";
-import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, type GroupResolution, type ResolutionGroup } from "./resolution.js";
+import { groupIsStale, resolveGroup, resolveGroupSteps, unlockedPythonGroups, withDeclaredNames, type GroupResolution, type ResolutionGroup } from "./resolution.js";
 import { runSteps, runStepsYielding, STEP_MASK, type Steps } from "./yield-point.js";
 import { mapEcosystem } from "./version-resolver.js";
 import { normalizePythonName } from "./lockfile-parsers-pygo.js";
@@ -968,7 +968,8 @@ export class LiveIntelligence {
     this.groupResults = this.groupResults.map((result) => {
       if (!groupIsStale(result)) return result;
       changed = true;
-      return resolveGroup(result.group);
+      // With the names the manifest declares now: a dependency added or removed is a row or is gone.
+      return resolveGroup(withDeclaredNames(result.group));
     });
     if (!changed) return rulesChanged;
     this.rebuildDependencySet();

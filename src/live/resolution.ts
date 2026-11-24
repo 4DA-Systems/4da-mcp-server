@@ -29,6 +29,7 @@ import { classifyNpmSpec } from "./npm-spec.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
+import { scanCurrentProject } from "../project-scanner.js";
 import { readTextFile } from "./text-file.js";
 import { runSteps, type Steps } from "./yield-point.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
@@ -374,4 +375,27 @@ export function unlockedPythonGroups(root: string, manifests: ReadonlyArray<{ pa
 /** True when any file the resolution depended on changed, appeared, or vanished. */
 export function groupIsStale(result: GroupResolution): boolean {
   return anySignatureChanged(result.signatures);
+}
+
+/**
+ * The group with the dependency names its directory declares now, read by the same scanner that
+ * named them at startup (scanCurrentProject, as the project-tree walk does). A group is re-resolved
+ * because one of its files changed, and the change may be a dependency added or removed: re-run
+ * with the startup names, the versions and the advisory set followed the files while the direct
+ * rows did not. package.json `{ ms }` with no lockfile, `lodash` added: vulnerability_scan scanned
+ * 2 pins and dependency_health listed `ms` alone until the server restarted (6.5.0 and the 6.5.1
+ * candidate). Only called for a group that is stale, so an unchanged project reads nothing.
+ */
+export function withDeclaredNames(group: ResolutionGroup): ResolutionGroup {
+  let scan: ReturnType<typeof scanCurrentProject>;
+  try {
+    scan = scanCurrentProject(group.dir);
+  } catch {
+    return group;
+  }
+  const ecosystem = mapEcosystem(group.language);
+  // The scanner's keys ("npm", "rust", ...) and a group's language ("javascript" from the test seam) name the same ecosystem.
+  const declared = Object.entries(scan.depsByEcosystem).find(([language]) => mapEcosystem(language) === ecosystem)?.[1];
+  // Nothing declared now (every dependency removed; Ruby and PHP, which the lockfile names): no names, as at startup.
+  return { ...group, deps: declared?.deps ?? [], devDeps: declared?.devDeps ?? [], targets: scan.depTargets };
 }
