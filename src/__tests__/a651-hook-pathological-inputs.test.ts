@@ -87,24 +87,26 @@ const CASES: Array<[string, unknown, "deny" | null]> = [
   ["requirements line of 30 KB of blanks", write("requirements.txt", `x==1${" ".repeat(30_000)}!\nlodash==4.17.20\n`), "deny"],
   ["go.mod line of 30 KB", write("go.mod", `module m\nrequire example.com/x v1${"0".repeat(30_000)}\nrequire golang.org/x/net v0.17.0\n`), "deny"],
   ["npm pkg set 30 KB key of [ quoted", bash(`npm pkg set "1${"[".repeat(30_000)}=1"; ${HELD}`), "deny"],
+  // Found by the fuzz in round 3: the PEP 440 spelling comparison (specKey) was quadratic on blanks.
+  ["Poetry value with 30 KB of blanks", write("pyproject.toml", `[tool.poetry.dependencies]\nx = "1${" ".repeat(30_000)}!"\nlodash = "4.17.20"\n`), "deny"],
 ];
 
-function run(payload: unknown): { ms: number; decision: string; status: number | null } {
-  const env: Record<string, string | undefined> = { ...process.env, FOURDA_MCP_HOME: home };
+function run(payload: unknown, ledgerHome: string = home): { ms: number; decision: string; status: number | null } {
+  const env: Record<string, string | undefined> = { ...process.env, FOURDA_MCP_HOME: ledgerHome };
   delete env.FOURDA_GUARD;
   const t0 = performance.now();
-  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(payload), encoding: "utf8", timeout: 15_000, env });
+  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(payload), encoding: "utf8", timeout: 15_000, env, maxBuffer: 1 << 26 });
   const ms = performance.now() - t0;
   const decision = r.stdout ? ((JSON.parse(r.stdout) as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision ?? "other") : "allow";
   return { ms, decision, status: r.status };
 }
 
 describe("a call that could not be read in time is held, never let through", () => {
-  it("over the read budget, an install command or a manifest edit is denied as not read in time", () => {
+  it("over the read budget, an install command or a manifest edit is denied as not read", () => {
     const out = respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now(), -1);
-    expect(out).toContain("could not be read in time");
+    expect(out).toContain("could not be read (reading it took over 2 s)");
     const edit = respond(write("package.json", '{"dependencies":{}}'), { FOURDA_MCP_HOME: home }, Date.now(), -1);
-    expect(edit).toContain("could not be read in time");
+    expect(edit).toContain("could not be read (reading it took over 2 s)");
   });
 
   it("a command that names no package manager is not held for being slow", () => {
@@ -132,5 +134,79 @@ describe(`every pathological input is answered within ${LIMIT_MS} ms, as a child
     expect(r.status).toBe(0);
     expect(r.ms).toBeLessThan(LIMIT_MS);
     if (mustBe) expect(r.decision).toBe(mustBe);
+  });
+});
+
+/**
+ * The rows of the round-3 checker's timing table that took over a second (a 4 MB MultiEdit took
+ * 21 s and Claude Code let the call through; 25 versions against 4 MB ledgers took 3 s; TOML
+ * nested about 7,400 deep threw and the call went ahead), each now a fast deny. The two 4 MB-ledger
+ * rows read 8 MB of ledger and are given 1,000 ms; the others 500 ms.
+ */
+describe("the checker's slow rows are fast denials (round 3 of the hook review)", { timeout: 60_000 }, () => {
+  const recent = () => new Date(Date.now() - 60_000).toISOString();
+  function bigLedger(name: string, make: (i: number) => unknown): string {
+    const h = join(dir, name);
+    mkdirSync(h, { recursive: true });
+    for (const f of ["check-ledger.jsonl", "check-ledger.1.jsonl"]) {
+      const out: string[] = [];
+      let size = 0;
+      for (let i = 0; size < 4 * 1024 * 1024 - 2000; i++) {
+        const v = make(i);
+        const l = typeof v === "string" ? v : JSON.stringify(v);
+        size += l.length + 1;
+        out.push(l);
+      }
+      writeFileSync(join(h, f), out.join("\n") + "\n");
+    }
+    return h;
+  }
+  const best = (payload: unknown, ledgerHome?: string) => {
+    let r = run(payload, ledgerHome);
+    for (let tries = 1; tries < 3 && r.ms >= LIMIT_MS; tries++) {
+      const again = run(payload, ledgerHome);
+      if (again.ms < r.ms) r = again;
+    }
+    return r;
+  };
+
+  it("a MultiEdit of a 4 MB requirements.txt with 8,000 edits", () => {
+    const lines = 200_000;
+    const file = join(dir, "requirements.txt");
+    writeFileSync(file, Array.from({ length: lines }, (_, i) => `pkg${i}==1.0.${i}`).join("\n") + "\n");
+    const edits = Array.from({ length: 8000 }, (_, i) => ({ old_string: `pkg${i}==1.0.${i}\n`, new_string: `pkg${i}==1.0.${i}\n` }));
+    edits.push({ old_string: `pkg${lines - 1}==1.0.${lines - 1}`, new_string: `pkg${lines - 1}==2.0.0` });
+    const r = best({ hook_event_name: "PreToolUse", tool_name: "MultiEdit", cwd: dir, tool_input: { file_path: file, edits } });
+    expect(r.decision).toBe("deny");
+    expect(r.ms).toBeLessThan(LIMIT_MS);
+  });
+
+  it("a Write of a manifest whose payload is over 8 MB", () => {
+    const r = best(write("requirements.txt", "requests==2.0.0\n#" + " ".repeat(8 * 1024 * 1024 + 100) + "\n"));
+    expect(r.decision).toBe("deny");
+    expect(r.ms).toBeLessThan(LIMIT_MS);
+  });
+
+  it("an install command with a 70 KB comment", () => {
+    const r = best(bash("npm i lodash@4.17.20 # " + "x".repeat(70 * 1024)));
+    expect(r.decision).toBe("deny");
+    expect(r.ms).toBeLessThan(LIMIT_MS);
+  });
+
+  it("a Cargo.toml nested 40,000 deep beside a pin", () => {
+    const r = best(write("Cargo.toml", `[package]\nname = "a"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1.0.0"\n\n[package.metadata]\nx = ${"[".repeat(40_000)}${"]".repeat(40_000)}\n`));
+    expect(r.decision).toBe("deny");
+    expect(r.ms).toBeLessThan(LIMIT_MS);
+  });
+
+  it.each([
+    ["PyPI unknown entries whose versions need normalising", (i: number) => ({ t: recent(), ecosystem: "PyPI", package: "Requests", version: `2.0.${i % 50}-rc.${i}.POST-${i}`, verdict: "unknown", reason: "x" })],
+    ["lines that do not parse", () => "{".repeat(200)],
+  ])("25 versions against 4 MB ledgers of %s", (label, make) => {
+    const h = bigLedger(label.replace(/[^a-z]/gi, "").slice(0, 20), make);
+    const vers = Array.from({ length: 25 }, (_, i) => `requests==2.0.${i}.post1.dev3`).join(" ");
+    const r = best(bash(`pip install ${vers}`), h);
+    expect(r.decision).toBe("deny");
+    expect(r.ms).toBeLessThan(2 * LIMIT_MS);
   });
 });

@@ -144,6 +144,7 @@ function jsonSections(text) {
     }
     if (ch === ":") keyBeforeColon = lastString;
     else if (ch === "{" || ch === "[") {
+      if (stack.length >= MAX_NESTING) refuse(`JSON nested more than ${MAX_NESTING} levels deep`);
       stack.push(keyBeforeColon !== null ? keyBeforeColon : ch === "{" && !seenNonSpace ? "" : null);
       events.push({ index: i, key: stack[stack.length - 1], depth: stack.length, unseen });
       keyBeforeColon = null;
@@ -346,10 +347,25 @@ function tomlTokens(text) {
  * Null when a string never closes: that text is not one a TOML reader reads.
  */
 function tomlAssignments(text, start) {
+  try {
+    return tomlAssignmentsOf(text, start);
+  } catch (error) {
+    // Nested past MAX_NESTING (value() refused it): not read, and refused, never a stack overflow
+    // that ended the hook silently (about 7,400 levels did; round 3 of the hook review).
+    if (error === TOO_DEEP) return null;
+    throw error;
+  }
+}
+
+/** Thrown out of a TOML value nested past MAX_NESTING. */
+const TOO_DEEP = new Error("nested too deeply");
+
+function tomlAssignmentsOf(text, start) {
   const tokens = tomlTokens(text);
   if (!tokens) return null;
   const out = [];
   let p = 0;
+  let depth = 0;
   let table = start;
   const kind = (at) => tokens[at]?.t;
   /** The dotted key starting at `p` as { parts, next }, or null. */
@@ -368,6 +384,10 @@ function tomlAssignments(text, start) {
     const tok = tokens[p++];
     if (!tok) return {};
     if (tok.t === "str") return { s: tok.v };
+    if ((tok.t === "[" || tok.t === "{") && ++depth > MAX_NESTING) {
+      refuse(`a TOML value nested more than ${MAX_NESTING} levels deep`);
+      throw TOO_DEEP;
+    }
     if (tok.t === "[") {
       const a = [];
       while (p < tokens.length && kind(p) !== "]") {
@@ -375,6 +395,7 @@ function tomlAssignments(text, start) {
         else p++;
       }
       p++;
+      depth--;
       return { a };
     }
     if (tok.t === "{") {
@@ -387,6 +408,7 @@ function tomlAssignments(text, start) {
         } else p++;
       }
       p++;
+      depth--;
       return { t: fields };
     }
     // A number, boolean or date: its parts after a "." (1.5) go with it.
@@ -533,14 +555,15 @@ function cargoFieldsOf(entries) {
  */
 function requirementString(text) {
   const s = text.trim();
-  if (s.length > MAX_REQUIREMENT_CHARS) return null;
+  if (s.length > MAX_REQUIREMENT_CHARS) return refuse(`a requirement over ${MAX_REQUIREMENT_CHARS} characters`);
   const m = PEP508_NAME.exec(s);
   if (!m) return null;
   let rest = s.slice(m[0].length);
   if (rest.startsWith("@")) return null;
-  rest = rest.replace(/\s*;[\s\S]*$/, "").trim();
-  const paren = /^\(\s*([^()]*?)\s*\)$/.exec(rest);
-  if (paren) rest = paren[1];
+  rest = withoutMarker(rest);
+  const paren = parenthesised(rest);
+  if (paren === undefined) return null;
+  if (paren !== null) rest = paren;
   const spec = PEP440_SPECIFIERS.exec(rest);
   return spec && spec[1].length === rest.length ? { name: m[1], spec: spec[1].replace(/\s+/g, "") } : null;
 }
@@ -661,17 +684,40 @@ function pyOtherSourceNames(entries, poetry) {
   return names;
 }
 
-/** One PEP 440 clause, and a set of them joined by commas. */
-const PEP440_CLAUSE = String.raw`(?:===|==|~=|!=|<=|>=|<|>)\s*[0-9A-Za-z*.+!_-]{1,80}`;
+/**
+ * One PEP 440 clause, and a set of them joined by commas. A clause's version is read whole,
+ * whatever its length (anchored, one character class: linear); one over MAX_VERSION_CHARS is then
+ * refused where the call's versions are checked (preToolUse), never dropped.
+ */
+const PEP440_CLAUSE = String.raw`(?:===|==|~=|!=|<=|>=|<|>)\s*[0-9A-Za-z*.+!_-]+`;
 const PEP440_SPECIFIERS = new RegExp(String.raw`^(${PEP440_CLAUSE}(?:\s*,\s*${PEP440_CLAUSE}){0,7})`);
+
+/** A requirement without its environment marker (`; python_version >= "3"`), found by a plain search (linear whatever the marker's length). */
+function withoutMarker(text) {
+  const at = text.indexOf(";");
+  return (at < 0 ? text : text.slice(0, at)).trim();
+}
+
+/**
+ * The inside of a specifier set in parentheses (`(==2.25.0)`, PEP 508), trimmed; null when `text`
+ * is not parenthesised; undefined when it is and is too long to be one (refused).
+ */
+function parenthesised(text) {
+  if (!text.startsWith("(") || !text.endsWith(")")) return null;
+  if (text.length > MAX_REQUIREMENT_CHARS) return refuse(`a requirement over ${MAX_REQUIREMENT_CHARS} characters`) ?? undefined;
+  const inner = text.slice(1, -1);
+  return /[()]/.test(inner) ? null : inner.trim();
+}
 
 /**
  * A requirements-file line (pip's format) as name and specifier set, or null: comments, options
- * (`-r`, `-e`, `--hash`), direct references (`name @ url`) and paths name no version.
+ * (`-r`, `-e`, `--hash`), direct references (`name @ url`) and paths name no version. The comment
+ * is stripped first; a line still over MAX_LINE_CHARS is refused (a pin with 51 `--hash` options
+ * on one line is read).
  */
 function requirementLine(line) {
-  if (line.length > MAX_LINE_CHARS) return null;
   const text = line.replace(/(^|\s)#.*$/, "").trim();
+  if (text.length > MAX_LINE_CHARS) return refuse(`a requirements line over ${MAX_LINE_CHARS} characters`);
   if (!text || text.startsWith("-")) return null;
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]\n]{0,200}\])?\s*\(?\s*/.exec(text);
   if (!m) return null;
@@ -682,14 +728,18 @@ function requirementLine(line) {
 
 /** A YAML plain or quoted scalar on one line, its comment dropped; null when empty or not a scalar. */
 function yamlScalar(raw) {
-  if (raw === undefined || raw.length > MAX_REQUIREMENT_CHARS) return null;
+  if (raw === undefined) return null;
   let v = raw.trim();
   if (v.startsWith("'") || v.startsWith('"')) {
     const q = v[0];
     const end = v.indexOf(q, 1);
     return end > 1 ? v.slice(1, end) : null;
   }
-  v = v.replace(/\s+#.*$/, "").trim();
+  // The comment is found by a plain search (one blank, then `#`) and dropped before the bound.
+  const comment = v.search(/\s#/);
+  if (comment >= 0) v = v.slice(0, comment);
+  v = v.trim();
+  if (v.length > MAX_REQUIREMENT_CHARS) return refuse(`a pnpm-workspace.yaml value over ${MAX_REQUIREMENT_CHARS} characters`);
   if (!v || /^[[{&*!|>%@`]/.test(v)) return null;
   return v;
 }
@@ -704,10 +754,15 @@ function pnpmWorkspaceVersions(text, out) {
   let catalog = null;
   let catalogIndent = -1;
   for (const raw of text.split("\n")) {
-    if (raw.length > MAX_LINE_CHARS) continue;
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
+    // A line still over the bound after its comment is dropped (yamlScalar) is refused, not skipped.
+    const at = line.search(/\s#/);
+    if ((at >= 0 ? at : line.length) > MAX_LINE_CHARS) {
+      refuse(`a pnpm-workspace.yaml line over ${MAX_LINE_CHARS} characters`);
+      continue;
+    }
     const indent = line.length - line.trimStart().length;
     const m = /^\s*(?:'([^'\n]{1,214})'|"([^"\n]{1,214})"|([^\s:#'"][^:#\n]{0,213}?))\s*:(?:\s+(.*))?$/.exec(line);
     if (indent === 0) {
@@ -815,10 +870,14 @@ function goDirectives(text, block = null) {
   const requires = [];
   const local = [];
   for (const raw of text.split("\n")) {
-    if (raw.length > MAX_LINE_CHARS) continue;
     // go.mod allows a module path or version in double quotes (`replace x => "github.com/fork/x" v1.0.0`).
+    // The comment is dropped first; a line still over the bound is refused, not skipped.
     const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").trim();
     if (!line) continue;
+    if (line.length > MAX_LINE_CHARS) {
+      refuse(`a go.mod line over ${MAX_LINE_CHARS} characters`);
+      continue;
+    }
     if (line === ")") {
       block = null;
       continue;
@@ -938,8 +997,11 @@ function specKey(file) {
     String(spec)
       .split(",")
       .map((clause) => {
-        const m = /^\s*(===|==|~=|!=|<=|>=|<|>)?\s*(.*?)\s*$/.exec(clause);
-        return `${m[1] ?? ""}${/\*$/.test(m[2]) ? m[2] : versionKey("PyPI", m[2])}`;
+        // A prefix match and trims (linear): `(.*?)\s*$` here took 2.3 s on 30 KB of blanks.
+        const c = clause.trim();
+        const op = /^(===|==|~=|!=|<=|>=|<|>)/.exec(c)?.[1] ?? "";
+        const version = c.slice(op.length).trim();
+        return `${op}${version.endsWith("*") ? version : versionKey("PyPI", version)}`;
       })
       .join(",");
 }
@@ -995,18 +1057,45 @@ const ECOSYSTEM = {
 /** A full semver version, optionally spelled `=1.2.3` or `v1.2.3` (npm and Cargo read both as that release). */
 const FULL_SEMVER = /^(?:={1,2}\s*)?v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
 /**
- * Bounds on what one token may be. Longer text is no requirement, version or manifest line any
- * package manager writes, and reading it costs time a hook does not have (several patterns below
- * scan a run of blanks once per position: 30 KB of them took 1.5 s). Such a token is not read:
- * the rest of the call is.
+ * Bounds on what the hook reads, each checked before the work it bounds. A call that is a manifest
+ * write or edit, or a command that names a package manager, with any part past a bound is HELD as
+ * "could not be read", saying which part (refuse, preToolUse): round 2 skipped such a part and let
+ * the call through, so a pin with a 4,000-character comment, 51 `--hash` options on one line or a
+ * 455-character marker went ahead unchecked (round 3 of the hook review). The readers under these
+ * bounds are linear (comments and markers are found by plain searches and dropped first), so the
+ * bounds are set well above what real manifests hold.
  */
-const MAX_REQUIREMENT_CHARS = 400;
-/** The longest manifest line read (a requirements line with its hashes stays well under it). */
-const MAX_LINE_CHARS = 4000;
-/** The longest version this hook reads; a longer one is no release of any registry. */
+const MAX_REQUIREMENT_CHARS = 65_536;
+/** The longest manifest line read, after its comment is dropped. */
+const MAX_LINE_CHARS = 65_536;
+/** The longest version read; a longer one is held (it is no release any registry serves). */
 const MAX_VERSION_CHARS = 80;
 /** The longest `npm pkg set` key read: a section, nested override parents and a 214-character name. */
 const MAX_KEY_CHARS = 600;
+/** The deepest TOML or JSON nesting read. */
+const MAX_NESTING = 100;
+/** The most work a MultiEdit may ask for, as its edit count times the file's length (each edit scans the file). */
+const MAX_EDIT_WORK = 32 * 1024 * 1024;
+/** The most ledger entries for one package the hook compares. */
+const MAX_ENTRIES_PER_PACKAGE = 5000;
+
+/** The first part of this call that could not be read (too long, too deep, too much work, too slow), or null. */
+let unreadPart = null;
+/** When this call's reading must be done (performance.now()), or Infinity outside one. */
+let deadline = Infinity;
+
+/** Marks this call as not read because of `part` (the first one counts); returns null, for a reader's `return`. */
+function refuse(part) {
+  if (unreadPart === null) unreadPart = part;
+  return null;
+}
+
+/** Whether this call's reading is past its time budget; marks it so when it is. */
+function overBudget() {
+  if (performance.now() <= deadline) return false;
+  refuse(`reading it took over ${READ_BUDGET_MS / 1000} s`);
+  return true;
+}
 /** PEP 440 pre-, post- and dev-release tags, longest first (read greedily: `rc` before `r`). */
 const PEP440_TAGS = ["preview", "alpha", "beta", "post", "pre", "rev", "dev", "rc", "a", "b", "c", "r"];
 
@@ -1159,7 +1248,10 @@ const specText = (spec) => {
 function repeatable(changes) {
   const out = [];
   for (const c of changes) {
+    if (typeof c?.name === "string" && c.name.length > 214) refuse("a package name over 214 characters");
     if (typeof c?.name !== "string" || !NAME_TEXT.test(c.name)) continue;
+    // A version past the bound is held as not read, never dropped (round 3 of the hook review).
+    if (typeof c.to === "string" && c.to.trim().length > MAX_VERSION_CHARS) refuse(`a version over ${MAX_VERSION_CHARS} characters`);
     const to = specText(c.to);
     if (!to) continue;
     const from = c.from == null ? null : specText(c.from) || null;
@@ -1256,10 +1348,15 @@ function introducedByEdit(kind, toolName, toolInput, path) {
   }
   const edits = editsOf(toolName, toolInput);
   if (!edits) return [];
+  // Each edit scans the file: decided before any is applied (a 4 MB file with 8,000 edits took 21 s,
+  // past Claude Code's hook timeout, and the call went ahead; round 3 of the hook review).
+  const size = (disk ?? "").length + edits.reduce((n, e) => n + (typeof e.new_string === "string" ? e.new_string.length : 0), 0);
+  if (edits.length * Math.max(size, 1) > MAX_EDIT_WORK) return refuse(`${edits.length} edits to a file of ${Math.round(size / 1024)} KB, more work than the hook takes on`) ?? [];
   // Claude Code matches an edit against the file with its line endings read as "\n".
   for (const base of disk === null ? [""] : [disk, disk.replace(/\r\n/g, "\n")]) {
     let text = base;
     for (const e of edits) {
+      if (overBudget()) return [];
       text = text === null ? null : applyEdit(text, e.old_string, e.new_string, e.replace_all);
     }
     if (text !== null) return wholeFileChanges(kind, base, text);
@@ -1289,7 +1386,8 @@ function introducedByEdit(kind, toolName, toolInput, path) {
  * Redirections (`2>&1`, `> out.txt`) are read and dropped. `dialect` is "bash" or "powershell".
  */
 export function simpleCommands(line, dialect) {
-  if (typeof line !== "string" || line.length > MAX_COMMAND_CHARS) return null;
+  if (typeof line !== "string") return null;
+  if (line.length > MAX_COMMAND_CHARS) return refuse(`a command over ${MAX_COMMAND_CHARS / 1024} KB`);
   const commands = [];
   let words = [];
   let word = null;
@@ -1533,6 +1631,7 @@ function jsVersion(raw) {
   // npm reads `lodash@ ^4.17.0` as the range after the blank.
   const text = typeof raw === "string" ? raw.trim() : "";
   if (!text || /[/:]/.test(text) || text.startsWith("npm:")) return null;
+  if (text.length > MAX_VERSION_CHARS && /^[~^<>=*\dvxX]/.test(text)) return refuse(`a version over ${MAX_VERSION_CHARS} characters`);
   if (exactFor("npm", text)) return text;
   return specText(text) === text && /^[~^<>=*\dvxX]/.test(text) ? text : null;
 }
@@ -1544,25 +1643,27 @@ const PEP508_NAME = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\
 
 /** `name==1.2`, `name>=2,<3`, `name[extra]~=1.4` as name and specifier set; null without a specifier, or for a direct reference. */
 function pep508(word) {
-  if (word.length > MAX_REQUIREMENT_CHARS) return null;
+  if (word.length > MAX_REQUIREMENT_CHARS) return refuse(`a requirement over ${MAX_REQUIREMENT_CHARS} characters`);
   if (word.includes("@") || word.includes("://")) return null;
   const m = PEP508_NAME.exec(word);
   if (!m) return null;
-  let rest = word.slice(m[0].length).replace(/\s*;.*$/, "").trim();
+  let rest = withoutMarker(word.slice(m[0].length));
   // `requests (==2.25.0)`: PEP 508 allows the specifier set in parentheses.
-  const paren = /^\(\s*([^()]*?)\s*\)$/.exec(rest);
-  if (paren) rest = paren[1];
+  const paren = parenthesised(rest);
+  if (paren === undefined) return null;
+  if (paren !== null) rest = paren;
   const spec = PEP440_SPECIFIERS.exec(rest);
   return spec && spec[1].length === rest.trim().length ? { name: m[1], spec: spec[1].replace(/\s+/g, "") } : null;
 }
 
 /** Poetry's `name@^1.2` / `name@1.2.3` / `name==1.2.3` / `"name>=1.2"`; null for `@latest`, git, URL or path sources. */
 function poetrySpec(word) {
-  if (word.length > MAX_REQUIREMENT_CHARS) return null;
+  if (word.length > MAX_REQUIREMENT_CHARS) return refuse(`a requirement over ${MAX_REQUIREMENT_CHARS} characters`);
   const at = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?@(.+)$/.exec(word);
   if (at) {
     const v = at[2].trim();
     if (v.toLowerCase() === "latest" || /[/:]/.test(v)) return null;
+    if (v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`);
     if (exactFor("PyPI", v) || /^[~^]\s*\d/.test(v)) return { name: at[1], spec: v };
     const set = PEP440_SPECIFIERS.exec(v);
     return set && set[1].length === v.length ? { name: at[1], spec: v } : null;
@@ -2003,6 +2104,7 @@ function npmPkgSet(words, json) {
     const eq = w.indexOf("=");
     // A key longer than a section and a package name is no dependency path (and `[` without `]`
     // over 60 KB made the key reader quadratic: 2.6 s, independent re-check of 0d30b40).
+    if (eq > MAX_KEY_CHARS) refuse(`an npm pkg set key over ${MAX_KEY_CHARS} characters`);
     if (eq <= 0 || eq > MAX_KEY_CHARS) continue;
     const parts = [...w.slice(0, eq).matchAll(/\[([^\]]*)\]|([^.[\]]+)/g)].map((m) => m[1] ?? m[2]);
     let value = w.slice(eq + 1);
@@ -2062,6 +2164,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return all.slice(1).flatMap((w) => {
       const m = CARGO_SPEC.exec(w);
       const v = m ? m[2].trim() : null;
+      if (v && v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`) ?? [];
       return v && (exactFor("crates.io", v) || specText(v) === v) ? [{ ecosystem: "crates.io", name: m[1], spec: v }] : [];
     });
   }
@@ -2114,6 +2217,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       const m = GO_SPEC.exec(w);
       if (!m || m[1].includes("...")) return [];
       const v = m[2];
+      if (v.length > MAX_VERSION_CHARS) return refuse(`a version over ${MAX_VERSION_CHARS} characters`) ?? [];
       return GO_EXACT.test(v) || /^v\d+(?:\.\d+)?$/.test(v) ? [{ ecosystem: "Go", name: m[1], spec: v }] : [];
     });
   }
@@ -2181,12 +2285,19 @@ function readLedger(dir, now) {
     let text;
     try {
       const path = join(dir, file);
-      if (statSync(path).size > MAX_LEDGER_BYTES) continue;
+      // A ledger past the bound is not read, and the call is held: its verdicts are not known
+      // (round 2 skipped such a file, so a newer avoid in it was never seen).
+      if (statSync(path).size > MAX_LEDGER_BYTES) {
+        refuse(`the check ledger ${file} is over ${MAX_LEDGER_BYTES / 1024 / 1024} MB`);
+        continue;
+      }
       text = readFileSync(path, "utf8");
     } catch {
       continue;
     }
+    let n = 0;
     for (const line of text.split("\n")) {
+      if (++n % 512 === 0 && overBudget()) return entries;
       if (!line) continue;
       let e;
       try {
@@ -2248,9 +2359,16 @@ function byPackage(ledger) {
     const eco = ["npm", "crates.io", "PyPI", "Go"].find((x) => x.toLowerCase() === e.ecosystem.toLowerCase());
     if (!eco) continue;
     const key = `${eco}\0${nameKey(eco, e.package)}`;
+    // Each entry's version and constraint keys, once (judge compared them per version asked: 25
+    // versions against a large ledger took 3 s; round 3 of the hook review).
+    e.vk = versionKey(eco, e.version);
+    e.ak = (typeof e.requested === "string" ? e.requested : e.verdict === "unknown" ? e.version : "").replace(/\s+/g, "");
     const list = index.get(key);
     if (list) list.push(e);
     else index.set(key, [e]);
+  }
+  for (const [key, list] of index) {
+    if (list.length > MAX_ENTRIES_PER_PACKAGE) refuse(`the check ledger holds over ${MAX_ENTRIES_PER_PACKAGE} entries for ${JSON.stringify(key.split("\0")[1].slice(0, 80))}`);
   }
   return index;
 }
@@ -2319,8 +2437,8 @@ function judge(index, c) {
   const want = exactVersion ? versionKey(eco, exactVersion) : null;
   // An answer for a constraint records it as `requested` (its pick as `version`); one that could
   // not resolve it records the constraint itself as `version`, with no pick.
-  const askedFor = (e) => (typeof e.requested === "string" ? e.requested : e.verdict === "unknown" ? e.version : "").replace(/\s+/g, "");
-  const answers = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? versionKey(eco, e.version) === want : askedFor(e) === constraint));
+  // (byPackage keys each entry once: `vk` its version, `ak` its constraint.)
+  const answers = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? e.vk === want : e.ak === constraint));
   const last = answers.at(-1);
   // The last decisive answer decides, whatever unknown answers came after it: an avoid or wait
   // holds until a later proceed or review (re-check of 0d30b40, S2: avoid, unknown, private went ahead).
@@ -2331,7 +2449,7 @@ function judge(index, c) {
   const top = exactVersion ? null : rangeCeiling(eco, c.spec);
   if (top) {
     const k = versionKey(eco, top);
-    const atTop = forPackage.filter((e) => !isWithheld(e) && versionKey(eco, e.version) === k && e.verdict !== "unknown").at(-1);
+    const atTop = forPackage.filter((e) => !isWithheld(e) && e.vk === k && e.verdict !== "unknown").at(-1);
     if (atTop && HOLDS.has(atTop.verdict)) return { deny: atTop };
     if (atTop && PASSES.has(atTop.verdict)) return "allow";
   }
@@ -2382,6 +2500,8 @@ function denialFor(introduced, ledger, dir, what) {
   const unchecked = [];
   const index = byPackage(ledger);
   for (const c of introduced) {
+    // Past the budget the call is held as not read (judgeCall), whatever is left to judge.
+    if (overBudget()) break;
     const verdict = judge(index, c);
     if (verdict === "allow") continue;
     if (verdict.deny) held.push({ c, entry: verdict.deny });
@@ -2470,37 +2590,87 @@ function introducedBy(input) {
   return { what: "edit", changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from })) };
 }
 
-/** PreToolUse: the denial JSON, or "" to let the call go ahead. */
+/**
+ * PreToolUse: the denial JSON, or "" to let the call go ahead. A call that names a package manager
+ * or writes a manifest (mayInstall) and that could not be read whole (a part past a bound, nested
+ * too deeply, too much edit work, an error of the hook's own, or reading past READ_BUDGET_MS from
+ * the hook's start, ledger step included) is HELD as "could not be read", never let through
+ * (round 3 of the hook review: round 2 skipped an over-long part and let the call through; a 4 MB
+ * MultiEdit outran Claude Code's 10 s timeout, which lets the call through).
+ */
 function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
-  const started = performance.now();
+  unreadPart = null;
+  // From the hook's own start: Node's start-up and reading stdin count against the budget too.
+  deadline = readBudgetMs >= 0 ? Math.min(performance.now() + readBudgetMs, mainStartedAt === null ? Infinity : mainStartedAt + readBudgetMs + 500) : -1;
+  try {
+    return judgeCall(input, env, now);
+  } catch {
+    // An error of the hook's own while reading: an install or manifest call it could not read is held.
+    if (!mayInstall(input)) return "";
+    refuse("the hook could not read it");
+    const dir = dataDir(env);
+    return readLedgerExists(dir) ? denyJson(notReadDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", unreadPart)) : "";
+  } finally {
+    deadline = Infinity;
+  }
+}
+
+/** preToolUse's work: the versions the call introduces, against the ledger. */
+function judgeCall(input, env, now) {
+  if (overBudget()) {
+    // Already past the budget before reading (a slow start or stdin): read nothing more.
+  }
   const found = introducedBy(input);
   if (!found) return "";
-  const changes = found.changes.filter((c) => NAME_TEXT.test(c.name) && specText(c.spec) === String(c.spec).trim());
-  // Reading the call took too long: whatever it holds was not read in time, and a call this hook
-  // could not read in time is held, never let through for being slow (B1 of the re-check of 0d30b40).
-  const slow = performance.now() - started > readBudgetMs && mayInstall(input);
-  if (changes.length === 0 && !slow) return "";
+  const changes = [];
+  for (const c of found.changes) {
+    const spec = String(c.spec).trim();
+    if (NAME_TEXT.test(c.name) && specText(c.spec) === spec) changes.push(c);
+    // A version or name past the bound is held as not read, never dropped (it was in round 2).
+    else if (spec.length > MAX_VERSION_CHARS) refuse(`a version over ${MAX_VERSION_CHARS} characters`);
+    else if (String(c.name).length > 214) refuse("a package name over 214 characters");
+  }
+  overBudget();
+  const unread = () => unreadPart !== null && mayInstall(input);
+  if (changes.length === 0 && !unread()) return "";
   const dir = dataDir(env);
   const ledger = readLedger(dir, now);
   if (ledger === null) return "";
-  const reason = slow ? tooSlowDenial(found.what) : denialFor(changes, ledger, dir, found.what);
-  if (!reason) return "";
-  return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+  const reason = unread() ? null : denialFor(changes, ledger, dir, found.what);
+  if (unread()) return denyJson(notReadDenial(found.what, unreadPart));
+  return reason ? denyJson(reason) : "";
 }
 
-/** How long reading one call may take before it is held as not read in time (Claude Code's own limit is 10 s). */
+/** The deny JSON for `reason`. */
+const denyJson = (reason) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+
+/** Whether `dir` holds a ledger (the hook denies only where one exists). */
+const readLedgerExists = (dir) => existsSync(dir) && ledgerStarted(dir);
+
+/** How long reading one call may take, counted from the hook's start, before it is held as not read (Claude Code's own limit is 10 s). */
 const READ_BUDGET_MS = 2000;
+/** When main() started (performance.now(), which counts from the process's start), or null when respond() is called in-process. */
+let mainStartedAt = null;
 
-/** Whether a call may install or write a dependency: a manifest edit, or a command that names a package manager (a cheap test, made only on a slow read). */
+/**
+ * Whether a call may install or write a dependency: a manifest write or edit (by file name), or a
+ * command that names a package manager and one of its install, add or update words. Asked only of
+ * a call that could not be read whole: any other call goes ahead, whatever its size.
+ */
 function mayInstall(input) {
-  if (input.tool_name !== "Bash" && input.tool_name !== "PowerShell") return true;
-  const command = String(input.tool_input?.command ?? "");
-  return /(?:^|[^A-Za-z0-9_-])(?:npm|pnpm|pnpx|yarn|bun|bunx|npx|corepack|cargo|pip\d*(?:\.\d+)?|pip-compile|python\d*(?:\.\d+)?|py|uv|uvx|poetry|go)(?:\.exe|\.cmd)?(?=$|[^A-Za-z0-9_-])/i.test(command.slice(0, MAX_COMMAND_CHARS));
+  if (input.tool_name !== "Bash" && input.tool_name !== "PowerShell") {
+    const file = input.tool_input?.file_path;
+    return typeof file === "string" && manifestKind(file) !== null;
+  }
+  const command = String(input.tool_input?.command ?? "").slice(0, 2 * MAX_COMMAND_CHARS);
+  return INSTALLER_WORD.test(command) && INSTALL_WORD.test(command);
 }
+const INSTALLER_WORD = /(?:^|[^A-Za-z0-9_-])(?:npm|pnpm|pnpx|yarn|bun|bunx|npx|corepack|cargo|pip\d*(?:\.\d+)?|pip-compile|piptools|python\d*(?:\.\d+)?|py|uv|uvx|poetry|go)(?:\.exe|\.cmd)?(?=$|[^A-Za-z0-9_-])/i;
+const INSTALL_WORD = /(?:^|[^A-Za-z0-9_-])(?:i|in|ins|inst|insta|instal|install|isntall|it|add|a|up|update|upgrade|get|lock|sync|compile|pkg|edit|exec|dlx|x|-m)(?=$|[^A-Za-z0-9_-])/i;
 
-/** The denial for a call that could not be read within READ_BUDGET_MS. */
-function tooSlowDenial(what) {
-  return `4DA guard: this ${what} was stopped before it ran: it could not be read in time (over ${READ_BUDGET_MS / 1000} s), so whether it adds a dependency version is not known. Split it into plain commands or smaller edits, each naming the versions it installs, and call the 4da MCP tool dependency_check for each version first.`;
+/** The denial for a call that could not be read whole: which part, and what to do. */
+function notReadDenial(what, part) {
+  return `4DA guard: this ${what} was stopped before it ran: it could not be read (${part}), so the dependency versions it would install were not checked. Split it into plain commands or smaller edits, each naming the versions it installs (and keep comments and markers short), and call the 4da MCP tool dependency_check for each version first.`;
 }
 
 /** PostToolUse (FOURDA_GUARD=advise): the advice after a manifest edit, or "". */
@@ -2547,14 +2717,22 @@ export function respond(input, env = process.env, now = Date.now(), readBudgetMs
 }
 
 async function main() {
-  // Past its own limit the hook ends silently: the call then goes ahead as if it had said nothing.
+  mainStartedAt = performance.now();
+  // A payload still arriving after SELF_LIMIT_MS (stdin left open) ends the hook silently, and the
+  // call goes ahead. The timer cannot fire while the hook reads a payload: that work is bounded and
+  // timed instead (preToolUse), so the hook answers far inside Claude Code's 10 s hook timeout.
   setTimeout(() => process.exit(0), SELF_LIMIT_MS).unref();
   process.stdin.setEncoding("utf8");
   let raw = "";
   for await (const chunk of process.stdin) {
     raw += chunk;
-    // A hook payload is kilobytes. One far beyond that is not one this hook reads.
-    if (raw.length > MAX_INPUT_CHARS) return;
+    // A hook payload is kilobytes. One far beyond that is not read: held when it is a manifest
+    // write or a package-manager command, as its first part shows; let through otherwise.
+    if (raw.length > MAX_INPUT_CHARS) {
+      const out = oversized(raw.slice(0, 64 * 1024));
+      if (out) process.stdout.write(out);
+      process.exit(0);
+    }
   }
   let input;
   try {
@@ -2564,6 +2742,28 @@ async function main() {
   }
   const out = respond(input);
   if (out) process.stdout.write(out);
+}
+
+/**
+ * The answer to a payload over MAX_INPUT_CHARS, from its first part: a PreToolUse write or edit of
+ * a manifest, or a command that names a package manager, is held as not read (round 2 let an 8 MB
+ * payload through unread). Anything else goes ahead. FOURDA_GUARD and the ledger are honoured.
+ */
+function oversized(head) {
+  const mode = guardMode(process.env.FOURDA_GUARD);
+  if (mode !== "block" || !/"hook_event_name"\s*:\s*"PreToolUse"/.test(head)) return "";
+  const tool = /"tool_name"\s*:\s*"(\w+)"/.exec(head)?.[1];
+  const file = /"file_path"\s*:\s*"((?:[^"\\]|\\.){1,4096})"/.exec(head)?.[1];
+  const command = /"command"\s*:\s*"((?:[^"\\]|\\.){0,65536})/.exec(head)?.[1] ?? "";
+  let path = null;
+  try {
+    path = file === undefined ? null : JSON.parse(`"${file}"`);
+  } catch {
+    path = null;
+  }
+  const input = { tool_name: tool, tool_input: { file_path: path ?? undefined, command } };
+  if (!tool || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
+  return denyJson(notReadDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
 }
 
 if (basename(process.argv[1] ?? "") === "manifest-edit.mjs") {
