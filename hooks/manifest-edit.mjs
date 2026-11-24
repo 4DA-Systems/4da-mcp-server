@@ -13,8 +13,10 @@
  *   make; the call goes through once it answers proceed.
  * - A range or constraint goes ahead on a `proceed` or `review` answered for that same constraint
  *   (the server resolves it; this hook does not), or, without one, on a `proceed` or `review` for
- *   exactly the release its inclusive ceiling names (`<=V`, `A - V`: the release a resolver picks
- *   from it); an `avoid` or `wait` for either holds it, and anything else is denied with the call.
+ *   exactly the release its inclusive ceiling names (`<=V`, `A - V`, only lower bounds beside it,
+ *   no `!=`: the release a fresh resolve picks from it; a lockfile already holding a release in
+ *   the range keeps that one); an `avoid` or `wait` for either holds it, and anything else is
+ *   denied with the call.
  * - A package the server recorded as private (never looked up) goes ahead in the project it
  *   answered for (the entry's `project` folder, or a folder inside it) and nowhere else; not when
  *   the command changes folder or installs globally, not over an avoid or wait for the exact
@@ -2114,10 +2116,12 @@ function byPackage(ledger) {
 }
 
 /**
- * The release a range's inclusive ceiling names, the one a resolver picks from it when it is
- * published: `<=V` (with lower bounds beside it), npm's `A - V`, PEP 440's `<=V` clause; null for
- * any other range (`<V`, `^1.2`, `~=1.4`, a union with `||`, a partial V), whose pick this hook
- * cannot know.
+ * The release a range's inclusive ceiling names, the one a fresh resolve picks from it when it is
+ * published (a lockfile that already holds a release in the range keeps that one): `<=V` with only
+ * lower bounds (`>=`, `>`) beside it, npm's `A - V`, PEP 440's `<=V` clause with only lower bounds;
+ * null for any other range (`<V`, `^1.2`, `~=1.4`, a union with `||`, a partial V, and any `!=`,
+ * which can exclude the ceiling itself: `<=2.0.0,!=2.0.0` picks a release below it; re-check of
+ * 0d30b40, S3), whose pick this hook cannot know.
  */
 function rangeCeiling(eco, spec) {
   const s = String(spec).trim();
@@ -2125,7 +2129,7 @@ function rangeCeiling(eco, spec) {
   if (eco === "PyPI") {
     const clauses = s.split(",").map((x) => x.trim());
     const le = clauses.filter((x) => x.startsWith("<="));
-    if (le.length !== 1 || clauses.some((x) => !x.startsWith("<=") && !/^(?:>=|>|!=)/.test(x))) return null;
+    if (le.length !== 1 || clauses.some((x) => !x.startsWith("<=") && !/^(?:>=|>)(?!=)/.test(x))) return null;
     return exactFor("PyPI", `==${le[0].slice(2).trim()}`);
   }
   if (eco !== "npm" && eco !== "crates.io") return null;
