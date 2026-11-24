@@ -15,10 +15,17 @@
  * backslash on Windows) or a tarball file name; and only then the registry. That is followed here,
  * with a backslash read as a path on every platform (no range or tag holds one).
  *
- * Two deliberate additions. A tarball URL on the public npm registry (or a public mirror of it)
- * that names this very package is that registry release, so it is checked; a tarball anywhere else
- * is withheld. pnpm's `catalog:` names a registry range kept in pnpm-workspace.yaml, and Yarn
- * berry's `npm:<range>` and `patch:` wrap a registry release: those stay registry releases.
+ * Deliberate additions. A tarball URL on the public npm registry (or a public mirror of it) that
+ * names this very package is that registry release, so it is checked; a tarball anywhere else is
+ * withheld. Yarn berry's `npm:<range>` and `patch:` wrap a registry release when what they wrap is
+ * one. pnpm's and Bun's `catalog:` is what the catalog entry says (npm-catalog.ts), classified by
+ * these same rules; an entry that cannot be found or read is `catalog` (withheld): what was not
+ * classified is never sent (review 2026-11-24: a `link:` catalog entry went to the registry).
+ *
+ * Whitespace: npm-package-arg does not trim a spec. A range with spaces around it is still a range
+ * to semver, and a path or git spelling stays one when trimmed, so the spec is trimmed; but a
+ * protocol spelling (`npm:`, `catalog:`, `patch:`, a URL) with leading or trailing whitespace is
+ * not what npm reads as that protocol, and is withheld.
  */
 
 import { isPublicNpmHost } from "./private-hosts.js";
@@ -28,11 +35,23 @@ export interface NpmRegistrySpec {
   kind: "registry";
   name: string;
   range: string;
+  /** The catalog entry a `catalog:` spec resolved to. */
+  catalogSpec?: string;
 }
 
-/** Not a registry release: git, a remote archive, a local archive, or local source code. */
+/**
+ * Not a registry release: git, a remote archive, a local archive, local source code, or a
+ * `catalog:` entry that could not be found or read (`catalog`).
+ */
 export interface NpmOtherSpec {
-  kind: "git" | "url" | "file" | "local";
+  kind: "git" | "url" | "file" | "local" | "catalog";
+  /** The catalog entry a `catalog:` spec resolved to, when it was found. */
+  catalogSpec?: string;
+}
+
+/** Where `catalog:` specs are resolved (npm-catalog.ts's NpmCatalogs). */
+export interface NpmCatalogLookup {
+  lookup(catalog: string, name: string): string | undefined;
 }
 
 export type NpmSpecClass = NpmRegistrySpec | NpmOtherSpec;
@@ -51,13 +70,16 @@ const CODE_HOST = /^(?:codeload\.github\.com|github\.com|api\.github\.com|raw\.g
 
 const registry = (name: string, range: string): NpmRegistrySpec => ({ kind: "registry", name, range });
 
-/** What `spec`, declared under the key `name` in a package.json, installs. */
-export function classifyNpmSpec(name: string, rawSpec: string): NpmSpecClass {
+/**
+ * What `spec`, declared under the key `name` in a package.json, installs. `catalogs` resolves a
+ * `catalog:` spec; without it (or without the entry) the spec is withheld as `catalog`.
+ */
+export function classifyNpmSpec(name: string, rawSpec: string, catalogs?: NpmCatalogLookup): NpmSpecClass {
   const spec = rawSpec.trim();
   // npm reads "" as `*` (the latest release): a registry spec.
   if (spec === "") return registry(name, "*");
   if (/^npm:/i.test(spec)) return aliasSpec(name, spec.slice(4).trim());
-  if (/^catalog:/i.test(spec)) return registry(name, spec);
+  if (/^catalog:/i.test(spec)) return catalogSpec(name, spec, catalogs);
   if (/^patch:/i.test(spec)) return patchSpec(name, spec);
   if (/^file:/i.test(spec)) return { kind: TARBALL_FILE.test(spec.split(/[?#]/)[0]) ? "file" : "local" };
   // `vendor/x-1.0.0.tgz` is a tarball file to npm (npm-package-arg's isFileType), not GitHub shorthand.
@@ -109,6 +131,17 @@ function patchSpec(name: string, spec: string): NpmSpecClass {
   if (!PACKAGE_NAME.test(target)) return { kind: "url" };
   const read = /^npm:/i.test(range) ? aliasSpec(target, range.slice(4)) : classifyNpmSpec(target, range);
   return read.kind === "registry" ? registry(read.name === target ? target : read.name, read.range) : read;
+}
+
+/** pnpm's and Bun's `catalog:` / `catalog:<name>`: the catalog entry, classified by the same rules. */
+function catalogSpec(name: string, spec: string, catalogs: NpmCatalogLookup | undefined): NpmSpecClass {
+  const catalog = spec.slice("catalog:".length).trim() || "default";
+  const entry = catalogs?.lookup(catalog, name);
+  if (entry === undefined) return { kind: "catalog" };
+  // A catalog entry that is itself `catalog:` is not resolved by pnpm either.
+  if (/^\s*catalog:/i.test(entry)) return { kind: "catalog", catalogSpec: entry };
+  const read = classifyNpmSpec(name, entry);
+  return { ...read, catalogSpec: entry };
 }
 
 /**

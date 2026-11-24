@@ -25,6 +25,7 @@ import { oversize, tooLargeText } from "./bounded-read.js";
 import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
 import { checkInstallState } from "./install-state.js";
 import { expandWorkspaces, memberNamesOf, pnpmYamlList, readManifestDeclarations } from "./js-manifests.js";
+import { lazyNpmCatalogs } from "./npm-catalog.js";
 import { classifyNpmSpec } from "./npm-spec.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
@@ -115,8 +116,10 @@ function workspaceMemberDirs(dir: string, workspaces: string[]): string[] {
 }
 
 /** A spec in words, for the reason a name is withheld. Paths and git spellings are the user's own. */
-function specWords(kind: "git" | "url" | "file" | "local", spec: string): string {
+function specWords(kind: "git" | "url" | "file" | "local" | "catalog", spec: string, catalogSpec?: string): string {
   const shown = spec.length > 120 ? `${spec.slice(0, 117)}...` : spec;
+  if (kind === "catalog") return catalogSpec === undefined ? `a catalog entry that could not be found or read (${shown})` : `a catalog entry that is itself a catalog: spec (${shown})`;
+  if (catalogSpec !== undefined) return `${specWords(kind, catalogSpec)}, from the catalog (${shown})`;
   if (kind === "git") return `git (${shown})`;
   if (kind === "url") return /^https?:\/\//i.test(spec) ? `the URL ${shown}` : `a source other than the npm registry (${shown})`;
   if (kind === "file") return `the local archive ${shown}`;
@@ -135,8 +138,14 @@ function specWords(kind: "git" | "url" | "file" | "local", spec: string): string
  * `"vendor/x-1.0.0.tgz"` and a workspace member declared `^1.0.0` reached registry.npmjs.org,
  * api.npmjs.org and hn.algolia.com by name (review 2026-11-24).
  */
-function nonRegistryDirect(dir: string, read: VersionSource): NotRegistryDependency[] {
+function nonRegistryDirect(dir: string, read: VersionSource, catalogFiles: Set<string>): NotRegistryDependency[] {
   const out = new Map<string, NotRegistryDependency>();
+  const catalogsByDir = new Map<string, ReturnType<typeof lazyNpmCatalogs>>();
+  const catalogsFor = (base: string) => {
+    let c = catalogsByDir.get(base);
+    if (!c) catalogsByDir.set(base, (c = lazyNpmCatalogs(base)));
+    return c;
+  };
   const add = (d: NotRegistryDependency) => {
     if (!out.has(d.name)) out.set(d.name, d);
   };
@@ -152,12 +161,16 @@ function nonRegistryDirect(dir: string, read: VersionSource): NotRegistryDepende
   }
   for (const m of manifests) {
     for (const d of m.declared) {
-      const spec = classifyNpmSpec(d.name, d.spec);
+      const spec = classifyNpmSpec(d.name, d.spec, catalogsFor(m.base));
       if (spec.kind === "registry") continue;
-      const where = d.spec.trim().replace(/^(?:file|link|portal):/i, "");
+      if (spec.kind === "catalog") {
+        add({ name: d.name, file: m.file, from: specWords("catalog", d.spec.trim(), spec.catalogSpec) });
+        continue;
+      }
+      const where = (spec.catalogSpec ?? d.spec).trim().replace(/^(?:file|link|portal):/i, "");
       // Where local source code is (never for `workspace:`, which names a member, or `exec:`).
-      const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test(d.spec.trim()) && where !== "" ? path.resolve(m.base, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
-      add({ name: d.name, file: m.file, from: specWords(spec.kind, d.spec.trim()), ...(at ? { at } : {}) });
+      const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test((spec.catalogSpec ?? d.spec).trim()) && where !== "" ? path.resolve(m.base, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
+      add({ name: d.name, file: m.file, from: specWords(spec.kind, d.spec.trim(), spec.catalogSpec), ...(at ? { at } : {}) });
     }
   }
   if (members.length > 0) {
@@ -172,6 +185,11 @@ function nonRegistryDirect(dir: string, read: VersionSource): NotRegistryDepende
     for (const name of lockNames) {
       if (!read.versions.has(name)) add({ name, file: read.source, from: "a link, git, a URL or a local archive (the lockfile's own entry)" });
     }
+  }
+  // A catalog that was read is watched: an edit to it re-resolves the group.
+  for (const c of catalogsByDir.values()) {
+    const got = c.read();
+    if (got?.file) catalogFiles.add(got.file);
   }
   return [...out.values()];
 }
@@ -239,7 +257,9 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   // no registry lookup is made by its name. 6.5.0 sent `"acme-lib": "file:libs/acme-lib"` to
   // registry.npmjs.org and api.npmjs.org from dependency_health and upgrade_planner. What such a
   // dependency installs is listed under coverage.not_checkable as before.
-  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read) : [];
+  const catalogFiles = new Set<string>();
+  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read, catalogFiles) : [];
+  for (const file of catalogFiles) if (!signatures.has(file)) signatures.set(file, signatureMap([file]).get(file) ?? "absent");
   const elsewhere = new Set(notRegistry.map((d) => d.name));
   const registryOnly = (names: string[]) => (elsewhere.size > 0 ? names.filter((name) => !elsewhere.has(name)) : names);
   const deps = real(registryOnly(fromLock ? fromLock.deps : group.deps));

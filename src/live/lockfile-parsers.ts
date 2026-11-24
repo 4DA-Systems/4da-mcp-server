@@ -39,6 +39,7 @@ import {
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
 import { inspectYarnLock, type YarnInspection } from "./js-dev-scope.js";
+import { lazyNpmCatalogs } from "./npm-catalog.js";
 import { classifyNpmSpec } from "./npm-spec.js";
 import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, MAX_MEMBER_MANIFESTS, memberListGapText, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec, type MemberListGap } from "./js-manifests.js";
 import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
@@ -643,6 +644,7 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     const declared = new Map<string, string>();
     const uncheckable: NonRegistryEntry[] = [];
     const aliases = new Map<string, string>();
+    const catalogs = lazyNpmCatalogs(cwd);
     let pkg: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(readTextFile(pkgPath));
@@ -659,8 +661,9 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
         if (typeof spec !== "string") continue;
         // Read as npm reads it (npm-spec.ts): `"x": "github:user/repo"`, `"org/repo"`, `"../libs/x"`,
         // `"vendor/x-1.0.0.tgz"` or a tarball on another host is not a version of the registry's x.
-        const read = classifyNpmSpec(name, spec);
-        if (read.kind === "local") continue;
+        const read = classifyNpmSpec(name, spec, catalogs);
+        // Local code, and a catalog: entry that could not be read, are said by the resolution (nonRegistryDirect).
+        if (read.kind === "local" || read.kind === "catalog") continue;
         if (read.kind !== "registry") uncheckable.push({ name, version: null, kind: read.kind });
         else if (read.name !== name) {
           // `"my-lodash": "npm:lodash@4.17.20"` declares lodash, under another folder name.

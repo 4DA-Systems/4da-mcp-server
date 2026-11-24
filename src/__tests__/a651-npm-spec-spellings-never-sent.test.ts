@@ -12,7 +12,7 @@
  * lockfile installs as a link (a workspace member) is local code.
  *
  * Controls: ordinary ranges and dist-tags on real packages (`^1.2.3`, `7.x`, `>=4 <5`, `*`, ``,
- * `latest`, `next`, an exact version, an `npm:` alias's TARGET, `catalog:`) are still looked up.
+ * `latest`, `next`, an exact version, an `npm:` alias's TARGET) are still looked up.
  * Every request (URL and body) is recorded by the harness's stubbed fetch; nothing leaves the machine.
  */
 
@@ -83,7 +83,9 @@ describe("classifyNpmSpec follows npm-package-arg", () => {
   it("keeps ranges, dist-tags, an alias target and a public registry tarball as registry releases", () => {
     for (const [name, spec] of Object.entries(CONTROLS)) expect([name, classifyNpmSpec(name, spec).kind]).toEqual([name, "registry"]);
     expect(classifyNpmSpec("string-width-cjs", "npm:string-width@^4.2.0")).toEqual({ kind: "registry", name: "string-width", range: "^4.2.0" });
-    expect(classifyNpmSpec("x", "catalog:")).toMatchObject({ kind: "registry", name: "x" });
+    // catalog: is what its catalog entry says (a651-npm-catalog-resolved); unread, it is withheld.
+    expect(classifyNpmSpec("x", "catalog:", { lookup: () => "^1.0.0" })).toMatchObject({ kind: "registry", name: "x", range: "^1.0.0" });
+    expect(classifyNpmSpec("x", "catalog:").kind).not.toBe("registry");
     // An alias whose target is not a registry spec is not a registry release (npa refuses it).
     expect(classifyNpmSpec("acme-a", "npm:acme-b@github:acmeorg/acme-b").kind).not.toBe("registry");
     // A registry-shaped tarball on another host, or one naming another package, is not this name's release.
