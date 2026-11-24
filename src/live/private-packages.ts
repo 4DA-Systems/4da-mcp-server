@@ -1675,7 +1675,8 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
   let single: { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null } | null = null;
   const flush = () => {
     const where = single ? fromElsewhere(single.registry, single.git, single.local) : null;
-    if (single && where) out.push({ name: single.pkg ?? single.key, registry: where, ...localPath(single.git, single.local) });
+    // A `package =` rename installs under its key: both names are the project's (privacy review 2026-11-24).
+    if (single && where) for (const name of new Set([single.key, single.pkg ?? single.key])) out.push({ name, registry: where, ...localPath(single.git, single.local) });
     single = null;
   };
   for (const line of tomlLines(content)) {
@@ -1698,7 +1699,7 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
     }
     if (!isDepTable(table) || !kv.value.startsWith("{")) continue;
     const where = fromElsewhere(inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index"), inlineKey(kv.value, "git"), inlineKey(kv.value, "path"));
-    if (where) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry: where, ...localPath(inlineKey(kv.value, "git"), inlineKey(kv.value, "path")) });
+    if (where) for (const name of new Set([kv.key, inlineKey(kv.value, "package") ?? kv.key])) out.push({ name, registry: where, ...localPath(inlineKey(kv.value, "git"), inlineKey(kv.value, "path")) });
   }
   flush();
   return out;
