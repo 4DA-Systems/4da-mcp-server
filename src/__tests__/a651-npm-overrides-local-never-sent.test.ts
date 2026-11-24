@@ -37,7 +37,7 @@ afterEach(() => h.dispose());
 
 describe("override keys and tables", () => {
   it("names the package each key forces", () => {
-    expect(["foo", "foo@1", "bar>foo", "bar@1>foo@2", "**/foo", "bar/foo", "@s/x", "**/@s/x@1", "bar>@s/x"].map(overrideKeyName)).toEqual(["foo", "foo", "foo", "foo", "foo", "foo", "@s/x", "@s/x", "@s/x"]);
+    expect(["foo", "foo@1", "bar>foo", "bar@1>foo@2", "**/foo", "bar/foo", "@s/x", "**/@s/x@1", "bar>@s/x"].map((k) => overrideKeyName(k))).toEqual(["foo", "foo", "foo", "foo", "foo", "foo", "@s/x", "@s/x", "@s/x"]);
     const specs = allOverrideSpecs({ overrides: { a: { ".": "1.0.0", b: "file:./b" } }, resolutions: { "**/c": "portal:./c" }, pnpm: { overrides: { "x>d": "link:./d" } } }, "overrides:\n  e: link:./e\n");
     expect(specs.map((s) => [s.name, s.spec])).toEqual([
       ["a", "1.0.0"],
