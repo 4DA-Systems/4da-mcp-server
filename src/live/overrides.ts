@@ -121,3 +121,66 @@ function readProjectOverride(dir: string, name: string, format: LockfileFormat):
   }
   return null;
 }
+
+/** The package an override key names: `foo`, `foo@1`, `bar>foo@2` (pnpm), Yarn's any-depth glob or `bar/foo`, `@s/x`. */
+export function overrideKeyName(key: string): string | null {
+  let k = key.trim();
+  const gt = k.lastIndexOf(">");
+  if (gt >= 0) k = k.slice(gt + 1).trim();
+  const segments = k.split("/").filter((s) => s !== "" && s !== "**");
+  if (segments.length === 0) return null;
+  const last = segments[segments.length - 1];
+  const scope = segments.length >= 2 && segments[segments.length - 2].startsWith("@") ? segments[segments.length - 2] : null;
+  let name = scope ? `${scope}/${last}` : last;
+  const at = name.indexOf("@", name.startsWith("@") ? 1 : 0);
+  if (at > 0) name = name.slice(0, at);
+  return name || null;
+}
+
+/**
+ * Every override, resolution and pnpm override in a parsed package.json (and the `overrides:` of a
+ * pnpm-workspace.yaml's text), whatever tool would honour it, as the name it forces and the spec:
+ * npm's nested form (`"a": { ".": "1", "b": "file:..." }`) is walked. A `$name` reference is skipped.
+ */
+export function allOverrideSpecs(manifest: unknown, workspaceYaml: string | null = null): Array<{ name: string; spec: string; where: string }> {
+  const out: Array<{ name: string; spec: string; where: string }> = [];
+  const walk = (table: unknown, where: string, depth: number) => {
+    if (!table || typeof table !== "object" || Array.isArray(table) || depth > 8) return;
+    for (const [key, value] of Object.entries(table as Record<string, unknown>)) {
+      if (key === ".") continue;
+      const name = overrideKeyName(key);
+      if (typeof value === "string") {
+        if (name && value.trim() && !value.trim().startsWith("$")) out.push({ name, spec: value, where });
+      } else if (value && typeof value === "object") {
+        const self = (value as Record<string, unknown>)["."];
+        if (name && typeof self === "string" && self.trim() && !self.trim().startsWith("$")) out.push({ name, spec: self, where });
+        walk(value, where, depth + 1);
+      }
+    }
+  };
+  if (manifest && typeof manifest === "object" && !Array.isArray(manifest)) {
+    const m = manifest as Record<string, unknown>;
+    walk(m.overrides, `"overrides" in package.json`, 0);
+    walk(m.resolutions, `"resolutions" in package.json`, 0);
+    walk((m.pnpm as Record<string, unknown> | undefined)?.overrides, `"pnpm.overrides" in package.json`, 0);
+  }
+  if (workspaceYaml) {
+    let inside = false;
+    for (const raw of workspaceYaml.split("\n")) {
+      const line = raw.replace(/\r$/, "");
+      if (!line.trim() || line.trimStart().startsWith("#")) continue;
+      if (!/^\s/.test(line)) {
+        inside = /^overrides:\s*(?:#.*)?$/.test(line);
+        continue;
+      }
+      if (!inside) continue;
+      const colon = line.lastIndexOf(": ");
+      if (colon < 0) continue;
+      const unquote = (text: string) => text.trim().replace(/^(['"])(.*)\1$/, "$2");
+      const name = overrideKeyName(unquote(line.slice(0, colon)));
+      const spec = unquote(line.slice(colon + 2).replace(/\s+#.*$/, ""));
+      if (name && spec && !spec.startsWith("$")) out.push({ name, spec, where: `"overrides" in pnpm-workspace.yaml` });
+    }
+  }
+  return out;
+}

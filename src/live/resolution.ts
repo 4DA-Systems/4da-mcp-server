@@ -27,6 +27,7 @@ import { checkInstallState } from "./install-state.js";
 import { expandWorkspaces, memberNamesOf, pnpmYamlList, readManifestDeclarations } from "./js-manifests.js";
 import { lazyNpmCatalogs } from "./npm-catalog.js";
 import { classifyNpmSpec } from "./npm-spec.js";
+import { allOverrideSpecs } from "./overrides.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
@@ -187,6 +188,34 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
     for (const rel of members) {
       const member = readManifestDeclarations(path.join(dir, rel, "package.json"));
       if (member?.name && names.has(member.name)) add({ name: member.name, file: manifestFile, from: `a workspace member (${rel.split(path.sep).join("/")})`, at: path.join(dir, rel) });
+    }
+  }
+  // An override, resolution or pnpm override that forces a dependency to local code, git or a URL
+  // (privacy review 2026-11-24: with no lockfile all three names went to the registry and HN).
+  if (root) {
+    let manifest: unknown = null;
+    try {
+      manifest = JSON.parse(readTextFile(manifestFile));
+    } catch {
+      manifest = null;
+    }
+    const yamlFile = path.join(dir, "pnpm-workspace.yaml");
+    let yaml: string | null = null;
+    try {
+      if (fs.existsSync(yamlFile)) {
+        watched.add(yamlFile);
+        yaml = readTextFile(yamlFile);
+      }
+    } catch {
+      yaml = null;
+    }
+    for (const o of allOverrideSpecs(manifest, yaml)) {
+      const spec = classifyNpmSpec(o.name, o.spec, catalogsFor(dir));
+      if (spec.kind === "registry") continue;
+      const raw = (spec.catalogSpec ?? o.spec).trim();
+      const where = raw.replace(/^(?:file|link|portal):/i, "");
+      const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test(raw) && where !== "" ? path.resolve(dir, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
+      add({ name: o.name, file: o.where.includes("pnpm-workspace.yaml") ? yamlFile : manifestFile, from: `${specWords(spec.kind, o.spec.trim(), spec.catalogSpec)}, forced by ${o.where}`, ...(at ? { at } : {}) });
     }
   }
   // A member of a workspace whose root is above it: the root's own packages are this project's own
