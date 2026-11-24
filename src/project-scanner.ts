@@ -20,6 +20,7 @@ import {
   parseGoModDirectDeps,
   parsePyprojectDependencies,
 } from "./project-manifests.js";
+import { tomlSyntaxProblem } from "./live/lockfile-parsers.js";
 import { readTextFile } from "./live/text-file.js";
 import { pushAll } from "./array-utils.js";
 
@@ -224,6 +225,8 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
     try {
       const content = readTextFile(cargoPath);
       langSet.add("rust");
+      // Not valid TOML: the group stays, so the resolver names the file as unreadable (review 2026-11-24).
+      if (tomlSyntaxProblem(content)) result.depsByEcosystem["rust"] ??= { deps: [], devDeps: [] };
 
       // Extract project name from [package] section
       const crateName = cargoPackageName(content);
@@ -275,7 +278,9 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   if (fs.existsSync(pyprojectPath)) {
     langSet.add("python");
     try {
-      const parsed = parsePyprojectDependencies(readTextFile(pyprojectPath));
+      const text = readTextFile(pyprojectPath);
+      if (tomlSyntaxProblem(text)) pyUnread = true;
+      const parsed = parsePyprojectDependencies(text);
       parsed.deps.forEach((d) => pyDeps.add(d));
       parsed.devDeps.forEach((d) => pyDevDeps.add(d));
     } catch {

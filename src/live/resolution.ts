@@ -29,7 +29,7 @@ import { expandWorkspaces, memberNamesOf, pnpmYamlList, readManifestDeclarations
 import { lazyNpmCatalogs } from "./npm-catalog.js";
 import { classifyNpmSpec } from "./npm-spec.js";
 import { allOverrideSpecs } from "./overrides.js";
-import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
+import { lockfileCandidates, manifestCandidate, manifestProblemText, manifestSyntaxProblem, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
 import { scanCurrentProject } from "../project-scanner.js";
@@ -321,6 +321,11 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   }
 
   const read = yield* resolveVersionSourceSteps(group.dir, ecosystem);
+  // A manifest that cannot be parsed, whatever the lockfile beside it: named as unreadable, never
+  // "nothing declared" (review 2026-11-24: beside a readable lockfile it read as complete and clean).
+  const manifestNamed = manifest !== null && (read.problems ?? []).some((p) => path.resolve(p.file) === path.resolve(manifest));
+  const manifestBroken = manifest !== null && !manifestNamed ? manifestSyntaxProblem(manifest) : null;
+  const manifestProblems: LockfileProblem[] = manifest !== null && manifestBroken ? [{ file: manifest, error: manifestProblemText(manifestBroken), ecosystem }] : [];
   yield;
   const readFiles = read.source ? [read.source, ...(read.extraSources ?? [])] : [];
   // The manifest is watched whether or not a lockfile was read: a dependency added to or removed
@@ -413,7 +418,7 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
     registryWide: read.registryWide ?? [],
     ...(read.indexRecorded ? { indexRecorded: true as const } : {}),
     unpinned,
-    problems: read.problems ?? [],
+    problems: [...(read.problems ?? []), ...manifestProblems],
     ...(notRegistry.length > 0 ? { notRegistry } : {}),
     signatures,
     digests,

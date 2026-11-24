@@ -55,6 +55,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { IgnoreRules } from "./gitignore.js";
+import { tomlSyntaxProblem } from "./live/lockfile-parsers.js";
 import { goWorkFor, isRequirementsFileName } from "./live/lockfile-parsers-pygo.js";
 import { readTextFile } from "./live/text-file.js";
 import { parsePyprojectDependencies, tomlTable } from "./project-manifests.js";
@@ -296,7 +297,8 @@ export interface TreeDiscovery {
    * MAX_LISTED_UNLOCKED), relative to the root. Nothing resolved them, so
    * nothing of theirs was checked.
    */
-  unlockedManifests?: Array<{ path: string; ecosystem: string; dependencies: number }>;
+  /** `unreadable`: the manifest could not be parsed, so what it declares is unknown. */
+  unlockedManifests?: Array<{ path: string; ecosystem: string; dependencies: number; unreadable?: string }>;
   /** Every such manifest found (`unlockedManifests` may list fewer). */
   unlockedManifestsCount?: number;
   /** Lockfiles that were scanned although .gitignore lists them, relative to the root. */
@@ -542,8 +544,8 @@ function below(base: string, rel: string): string {
  * that only sets `"type": "module"`) and a workspace member of a lockfile
  * above (`covers`) are not listed.
  */
-function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: LockCover[]): Array<{ name: string; ecosystem: string; dependencies: number }> {
-  const out: Array<{ name: string; ecosystem: string; dependencies: number }> = [];
+function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: LockCover[]): Array<{ name: string; ecosystem: string; dependencies: number; unreadable?: string }> {
+  const out: Array<{ name: string; ecosystem: string; dependencies: number; unreadable?: string }> = [];
   const read = (name: string) => {
     try {
       return readTextFile(path.join(dir, name));
@@ -560,11 +562,14 @@ function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: 
       );
       if (count > 0 && !covers.some((c) => c.coversPackageJson(below(c.rel, rel)))) out.push({ name: "package.json", ecosystem: "npm", dependencies: count });
     } catch {
-      // not JSON: nothing can be said about it
+      // Not JSON: what it declares is unknown, which is not "nothing" (review 2026-11-24): listed, unread.
+      if (!covers.some((c) => c.coversPackageJson(below(c.rel, rel)))) out.push({ name: "package.json", ecosystem: "npm", dependencies: 0, unreadable: "it is not valid JSON" });
     }
   }
   if (names.includes("Cargo.toml")) {
     const content = read("Cargo.toml") ?? "";
+    const broken = tomlSyntaxProblem(content);
+    if (broken) out.push({ name: "Cargo.toml", ecosystem: "crates.io", dependencies: 0, unreadable: `it is not valid TOML: ${broken}` });
     let table = "";
     let count = 0;
     let crate: string | null = null;
@@ -574,11 +579,16 @@ function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: 
       else if (/(?:^|\.)(?:dev-|build-)?dependencies$/.test(table) && /^\s*[A-Za-z_][\w-]*\s*[=.]/.test(line)) count++;
       else if (table === "package") crate ??= /^\s*name\s*=\s*"([^"]*)"/.exec(line)?.[1] ?? null;
     }
-    if (count > 0 && !(crate && covers.some((c) => c.coversCrate(crate as string)))) out.push({ name: "Cargo.toml", ecosystem: "crates.io", dependencies: count });
+    if (!broken && count > 0 && !(crate && covers.some((c) => c.coversCrate(crate as string)))) out.push({ name: "Cargo.toml", ecosystem: "crates.io", dependencies: count });
   }
   if (names.includes("pyproject.toml")) {
     try {
       const content = read("pyproject.toml") ?? "";
+      const broken = tomlSyntaxProblem(content);
+      if (broken) {
+        out.push({ name: "pyproject.toml", ecosystem: "PyPI", dependencies: 0, unreadable: `it is not valid TOML: ${broken}` });
+        return out;
+      }
       const declared = parsePyprojectDependencies(content);
       const count = declared.deps.length + declared.devDeps.length;
       const project = /^name\s*=\s*["']([^"']+)["']/m.exec(tomlTable(content, "project") ?? tomlTable(content, "tool.poetry") ?? "")?.[1] ?? null;
@@ -959,7 +969,7 @@ function walkProjectTree(
         // No lockfile here: a manifest is covered only when a lockfile above holds it as a workspace member.
         for (const manifest of unlockedManifestsIn(sub, childRel, names, here)) {
           unlockedCount++;
-          if (unlocked.length < MAX_LISTED_UNLOCKED) unlocked.push({ path: `${childRel}/${manifest.name}`, ecosystem: manifest.ecosystem, dependencies: manifest.dependencies });
+          if (unlocked.length < MAX_LISTED_UNLOCKED) unlocked.push({ path: `${childRel}/${manifest.name}`, ecosystem: manifest.ecosystem, dependencies: manifest.dependencies, ...(manifest.unreadable ? { unreadable: manifest.unreadable } : {}) });
         }
       }
       walk(sub, childRel, depth + 1, grandchildren, here, real);
@@ -1179,6 +1189,8 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
     parts.push(
       `${unlocked} manifest${unlocked === 1 ? " has" : "s have"} no lockfile beside ${unlocked === 1 ? "it" : "them"} and ${unlocked === 1 ? "is" : "are"} no workspace member of one above (${listed}${unlocked > 5 ? ", ..." : ""}), so the dependencies ${unlocked === 1 ? "it declares" : "they declare"} were not resolved and NOT checked; generate a lockfile there`,
     );
+    const broken = (discovery.unlockedManifests ?? []).filter((m) => m.unreadable);
+    if (broken.length > 0) parts.push(`${broken.slice(0, 5).map((m) => `${m.path} (${m.unreadable})`).join(", ")} could not be parsed, so what ${broken.length === 1 ? "it declares" : "they declare"} is not known: fix ${broken.length === 1 ? "it" : "them"}, then scan again`);
   }
   if (discovery.walkTruncated) parts.push(discovery.walkStopped ? walkBudgetNote() : `the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
   if (discovery.ignoredWalkTruncated) {

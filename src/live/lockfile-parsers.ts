@@ -408,6 +408,9 @@ function describeParseError(file: string, error: unknown): string | null {
   }
   if (error) return `could not be parsed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
   if (json) return null;
+  // A YAML lockfile (pnpm-lock.yaml) whose flow sequence or mapping is never closed stops mid-value:
+  // read as empty, it hid beside a package-lock.json that was read (review 2026-11-24).
+  if (/\.ya?ml$/i.test(file) && unclosedFlow(content)) return "it is truncated or damaged: a [ or { is not closed";
   // A text lockfile of some size that gave no package at all is damaged or in a format this reader does not know.
   const lines = content.split(/\r?\n/).filter((l) => l.trim() !== "").length;
   return lines > 20 ? "no package versions could be read from it (unsupported format or damaged)" : null;
@@ -1311,4 +1314,119 @@ function extractVersionFromSpec(spec: string): string | null {
   if (!spec) return null;
   const match = spec.match(/(\d+\.\d+\.\d+(?:-[\w.]+)?)/);
   return match ? match[1] : null;
+}
+
+/** A TOML key on the left of `=`: bare, quoted, or dotted parts of either. */
+const TOML_KEY = /^\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*\s*=/;
+/** A table header on one line: `[a.b]`, `[[a]]`, `[a."b c"]`, with an optional comment. */
+const TOML_HEADER = /^\s*\[\[?\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*\s*\]\]?\s*(?:#.*)?$/;
+
+/**
+ * Why a TOML manifest (Cargo.toml, pyproject.toml) is not valid TOML, or null when nothing says so.
+ * Not a full parser: it checks what a hand edit breaks (a table header left open, an array or inline
+ * table never closed, a string left open at the end of its line, a line that is neither a header nor
+ * `key = value`), which is what made a project read as having no dependencies (review 2026-11-24).
+ */
+export function tomlSyntaxProblem(content: string): string | null {
+  let depth = 0;
+  let multiline: string | null = null;
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    if (multiline) {
+      const end = line.indexOf(multiline);
+      if (end < 0) continue;
+      line = line.slice(end + 3);
+      multiline = null;
+    } else if (depth === 0) {
+      const t = line.trim();
+      if (t === "" || t.startsWith("#")) continue;
+      if (t.startsWith("[")) {
+        if (!TOML_HEADER.test(t)) return `line ${i + 1} is a table header that is not closed or not valid (${t.slice(0, 60)})`;
+        continue;
+      }
+      const key = TOML_KEY.exec(line);
+      if (!key) return `line ${i + 1} is neither a table header nor \`key = value\` (${t.slice(0, 60)})`;
+      line = line.slice(key[0].length);
+      if (line.trim() === "") return `line ${i + 1} has no value after \`=\``;
+    }
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      if (ch === "#") break;
+      if (ch === '"' || ch === "'") {
+        const triple = line.slice(j, j + 3);
+        if (triple === '"""' || triple === "'''") {
+          const end = line.indexOf(triple, j + 3);
+          if (end < 0) {
+            multiline = triple;
+            break;
+          }
+          j = end + 2;
+          continue;
+        }
+        let k = j + 1;
+        while (k < line.length && line[k] !== ch) k += ch === '"' && line[k] === "\\" ? 2 : 1;
+        if (k >= line.length) return `line ${i + 1} ends inside a string`;
+        j = k;
+        continue;
+      }
+      if (ch === "[" || ch === "{") depth++;
+      else if (ch === "]" || ch === "}") {
+        depth--;
+        if (depth < 0) return `line ${i + 1} closes a bracket that was never opened`;
+      }
+    }
+  }
+  if (multiline) return "a multi-line string is not closed at the end of the file";
+  if (depth > 0) return "an array or inline table is not closed at the end of the file";
+  return null;
+}
+
+/**
+ * Why the manifest the resolver reads beside a lockfile (package.json, Cargo.toml, pyproject.toml)
+ * cannot be parsed, or null. A manifest that cannot be read is not "nothing declared": the direct
+ * dependencies and the lockfile's cross-check against it are unknown (review 2026-11-24).
+ */
+export function manifestSyntaxProblem(file: string): string | null {
+  let content: string;
+  try {
+    content = readTextFile(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return null;
+    return `it could not be read (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+  }
+  if (/\.json$/i.test(file)) {
+    try {
+      const parsed: unknown = JSON.parse(content);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "it is not a JSON object";
+      return null;
+    } catch (error) {
+      return `it is not valid JSON (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+    }
+  }
+  const toml = tomlSyntaxProblem(content);
+  return toml ? `it is not valid TOML: ${toml}` : null;
+}
+
+/** The words for a manifest that could not be parsed: what was not checked because of it. */
+export function manifestProblemText(why: string): string {
+  return `${why}, so the dependencies it declares were not read: which are direct, and whether the lockfile holds every one, were not checked. Fix the file, then scan again`;
+}
+
+/** Whether YAML text leaves a flow sequence or mapping open at its end (brackets outside quotes and comments). */
+function unclosedFlow(content: string): boolean {
+  let depth = 0;
+  for (const line of content.split(/\r?\n/)) {
+    let quote: string | null = null;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === "'" || ch === '"') quote = ch;
+      else if (ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
+      else if (ch === "[" || ch === "{") depth++;
+      else if (ch === "]" || ch === "}") depth = Math.max(0, depth - 1);
+    }
+  }
+  return depth > 0;
 }
