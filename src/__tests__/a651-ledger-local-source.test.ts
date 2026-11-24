@@ -34,7 +34,7 @@ import { dispatchTool } from "../tool-dispatch.js";
 
 const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 const reason = (why: string) => `NOT CHECKED (private): lodash is a private package (${why}), so nothing about it was sent to OSV.dev or a public registry.`;
-const kind = (why: string) => ledgerEntries([{ ecosystem: "npm", package: "lodash", to: "4.17.20", verdict: "unknown", not_checked: "private", reason: reason(why) }], new Date(), "/p")[0].not_checked;
+const kind = (why: string) => ledgerEntries([{ ecosystem: "npm", package: "lodash", to: "4.17.20", verdict: "unknown", not_checked: "private", reason: reason(why) }], new Date())[0].not_checked;
 
 describe("ledgerEntries: which withheld names stay private", () => {
   it.each([
@@ -58,31 +58,31 @@ describe("ledgerEntries: which withheld names stay private", () => {
   });
 
   it("an unreadable lockfile stays unreadable_lockfile", () => {
-    const [e] = ledgerEntries([{ ecosystem: "npm", package: "lodash", to: "1", verdict: "unknown", not_checked: "private", unreadable_file: "/p/package-lock.json", reason: reason("FOURDA_PRIVATE_PACKAGES lists x") }], new Date(), "/p");
+    const [e] = ledgerEntries([{ ecosystem: "npm", package: "lodash", to: "1", verdict: "unknown", not_checked: "private", unreadable_file: "/p/package-lock.json", reason: reason("FOURDA_PRIVATE_PACKAGES lists x") }], new Date());
     expect(e.not_checked).toBe("unreadable_lockfile");
   });
 });
 
-describe("the 6.5.1 hook: local_source counts like private, in its own project only", () => {
+describe("the 6.5.1 hook: local_source is held", () => {
   let scratch: string;
   beforeEach(() => {
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "a651-local-source-"));
   });
   afterEach(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
-  it("allowed in A, held in B", () => {
+  it("held in A and in B: a registry install of a name A takes from elsewhere is unchecked (round 3, item 1)", () => {
     const home = path.join(scratch, "home");
     const a = path.join(scratch, "a");
     const b = path.join(scratch, "b");
     for (const d of [home, a, b]) fs.mkdirSync(d);
-    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", not_checked: "local_source", project: a }) + "\n");
+    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", not_checked: "local_source" }) + "\n");
     const run = (cwd: string) => {
       const env: Record<string, string | undefined> = { ...process.env, FOURDA_MCP_HOME: home };
       delete env.FOURDA_GUARD;
       const out = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd, tool_input: { command: "npm i lodash@3.10.1" } }), encoding: "utf8", env }).stdout;
       return out === "" ? "allow" : "deny";
     };
-    expect(run(a)).toBe("allow");
+    expect(run(a)).toBe("deny");
     expect(run(b)).toBe("deny");
   });
 });
