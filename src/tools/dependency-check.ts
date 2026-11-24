@@ -69,6 +69,7 @@ import { unreadFileKind } from "../live/private-packages.js";
 import { offlineResults, screenItems } from "./dependency-check-screen.js";
 import { itemResults, nameCrateSpellings, readFirstPublished } from "./dependency-check-verdict.js";
 import { gatherFindings } from "./dependency-check-findings.js";
+import { noteNewerRust } from "./dependency-check-rust-version.js";
 import { adviseNpmNoSafeRelease, caveatGoPicks, checkSameLines, findAffectedExact, offerCleanOutsideRanges } from "./dependency-check-alternatives.js";
 import { advisoryFacts, dropIncompleteLists, findContradictions, markBatchUnread, queryBatch, readDeclaredNotices } from "./dependency-check-batch.js";
 import { judgeReleaseContents, redateGoTargets, resolveItems } from "./dependency-check-resolve.js";
@@ -427,6 +428,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   const { plans, created } = await readFirstPublished(ctx, lookups, items);
   const results = itemResults(plans, { ctx, lookups, advisoriesFor, findings, created });
   nameCrateSpellings(results, items);
+  await noteNewerRust(results, liveIntel.getProjectRoot(), ctx.fixSources);
   return pass(results, { offline: batch.scan.offline, osvCached: batch.scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
 }
 

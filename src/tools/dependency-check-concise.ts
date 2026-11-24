@@ -34,6 +34,7 @@ export interface DetailedItem {
   signals: Signal[];
   range_check?: RangeCheck;
   maintenance_notices?: string[];
+  needs_newer_rust?: { needs: string; declared: string; manifest: string };
   /** "private": the package name is private and was never looked up (live/private-packages.ts). */
   not_checked?: string;
   /** not_checked "private" only because this lockfile (or manifest) could not be read. */
@@ -101,6 +102,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
       ? { resolution: { reads_as: item.resolution.reads_as, judged: item.resolution.judged.map(({ signals: _signals, ...j }) => j) } }
       : {}),
     ...(item.maintenance_notices?.length ? { maintenance_notices: item.maintenance_notices } : {}),
+    ...(item.needs_newer_rust ? { needs_newer_rust: item.needs_newer_rust } : {}),
     ...(Object.keys(quoted).length > 0 ? { quoted_from_registry: quoted } : {}),
   };
 }

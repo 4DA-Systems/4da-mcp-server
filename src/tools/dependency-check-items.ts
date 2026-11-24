@@ -34,6 +34,8 @@ export interface ItemResult {
   reason: string;
   signals: Signal[];
   range_check?: RangeCheck;
+  /** crates.io: `to` needs a newer Rust than the project's rust-version (a caveat; the verdict is unchanged). */
+  needs_newer_rust?: { needs: string; declared: string; manifest: string };
   /** Unmaintained-package notices on `to`: reported, never part of the verdict (audit L3). */
   maintenance_notices?: string[];
   /**

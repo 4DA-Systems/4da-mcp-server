@@ -19,6 +19,7 @@
 ### The pre-write check
 
 - `dependency_check` on a name it withholds never reads as checked. A name withheld because a lockfile could not be read is answered "NOT CHECKED (unreadable lockfile): <file> could not be read ... repair or regenerate the lockfile (reinstall), then call dependency_check again", with `unreadable_file` on the item and `_meta.unreadable_lockfile`; 6.5.0 called lodash "a private package" beside an unparseable `package-lock.json` and pointed at a private registry. An answer in which nothing was checked starts with "NOT CHECKED:". `_meta.sources_note` no longer says "every answer was read from the local cache" when items were withheld: it says how many were not looked up and how many were answered from the cache. `not_checked` stays `"private"` for both, so the guard hook's ledger is unchanged.
+- `dependency_check` on a crate release that needs a newer Rust than the project's `rust-version` says so, as the plan's `needsNewerRust` does: the item carries `needs_newer_rust` (the Rust it needs, the declared `rust-version` and the manifest) and its reason ends with the caveat. The verdict is unchanged: the release has no advisory, and the build failure is the caveat. It answered time 0.3.47 `proceed` in a project declaring `rust-version = "1.64"` with no mention, while the plan flagged it.
 
 ### Plugin hook and install
 
