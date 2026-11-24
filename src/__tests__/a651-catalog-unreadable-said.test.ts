@@ -44,6 +44,17 @@ describe("YAML anchors and repeated keys in a catalog", () => {
     expect(c.lookup("default", "react-dom")).toBe("^18.2.0");
     expect(c.lookup("legacy", "other")).toBe("2.1.3");
   });
+  it("refused rather than guessed: an alias before its anchor, an anchor defined twice, catalog with catalogs.default", () => {
+    // Check of round 2: the reader read every anchor in the file first (an alias before its anchor
+    // passed), took the last of two definitions (pnpm takes the earlier one at the point of use), and
+    // merged catalog with catalogs.default (pnpm refuses the file).
+    h.write("pnpm-workspace.yaml", "catalog:\n  react-dom: *react\n  react: &react ^18.2.0\n");
+    expect(npmCatalogsFor(h.dir).error).toBeTruthy();
+    h.write("pnpm-workspace.yaml", "catalog:\n  react: &v ^18.2.0\n  vue: &v ^3.0.0\n  react-dom: *v\n");
+    expect(npmCatalogsFor(h.dir).error).toMatch(/anchor twice/);
+    h.write("pnpm-workspace.yaml", "catalog:\n  react: ^18.2.0\ncatalogs:\n  default:\n    vue: ^3.0.0\n");
+    expect(npmCatalogsFor(h.dir).error).toMatch(/catalogs\.default/);
+  });
   it("a repeated key, or an alias of an unknown anchor, makes the catalog unreadable", () => {
     h.write("pnpm-workspace.yaml", "catalog:\n  acme-dup: link:../x\n  acme-dup: ^1.0.0\n");
     expect(npmCatalogsFor(h.dir).error).toMatch(/repeats a key/);

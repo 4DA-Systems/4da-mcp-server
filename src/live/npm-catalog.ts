@@ -143,12 +143,11 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
   const fail = (line: number, why = "could not be parsed") => none(file, `its catalog ${why} (line ${line})`);
   // pnpm refuses a mapping that repeats a key; taking the last would guess (re-check 2026-11-24).
   const duplicate = (line: number) => fail(line, "repeats a key, which pnpm refuses");
+  // Anchors are read in file order: an alias refers to an anchor defined above it. An alias before
+  // its anchor, and an anchor defined twice, are refused rather than guessed at (check of round 2).
   const anchors: Anchors = new Map();
-  // Anchors defined anywhere in the file (above the catalog) are what an alias in it refers to.
-  for (const raw of content.split(/\r?\n/)) {
-    const kv = keyValue(stripComment(raw).replace(/\s+$/, ""));
-    if (kv && /^&/.test(kv.value.trim())) scalar(kv.value, anchors);
-  }
+  let sawCatalog = false;
+  let sawCatalogsDefault = false;
   const lines = content.split(/\r?\n/);
   let section: "catalog" | "catalogs" | null = null;
   let sectionIndent = -1;
@@ -159,6 +158,12 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
     const text = stripComment(lines[i]).replace(/\s+$/, "");
     if (text.trim() === "") continue;
     const indent = text.length - text.trimStart().length;
+    const anchored = /^\s*[^:]+:\s+&([^\s,[\]{}]+)\s/.exec(text);
+    if (anchored) {
+      if (anchors.has(anchored[1])) return fail(i + 1, "defines a YAML anchor twice, which this reader does not follow");
+      const kvAnchor = keyValue(text);
+      if (kvAnchor) scalar(kvAnchor.value, anchors);
+    }
     if (indent === 0) {
       section = null;
       current = null;
@@ -174,6 +179,7 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
         else if (flow.size > 0) return fail(i + 1);
         section = null;
       } else if (section === "catalog") {
+        sawCatalog = true;
         current = byName.get("default") ?? new Map();
         byName.set("default", current);
       }
@@ -192,6 +198,7 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
     } else {
       if (sectionIndent < 0) sectionIndent = indent;
       if (indent === sectionIndent) {
+        if (kv.key === "default") sawCatalogsDefault = true;
         if (kv.value === "") {
           if (byName.has(kv.key) && kv.key !== "default") return duplicate(i + 1);
           current = byName.get(kv.key) ?? new Map();
@@ -214,6 +221,8 @@ function readPnpmCatalogs(file: string): NpmCatalogs {
     }
     if (++count > MAX_ENTRIES) return fail(i + 1);
   }
+  // pnpm refuses `catalog` together with `catalogs.default`; merging them would guess.
+  if (sawCatalog && sawCatalogsDefault) return none(file, "its catalog is given both as catalog and as catalogs.default, which pnpm refuses");
   return fromMaps(file, byName);
 }
 
