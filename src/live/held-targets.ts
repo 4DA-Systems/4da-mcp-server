@@ -80,7 +80,8 @@ export async function withHeldTargets(
     ...plans.flatMap((p) => p.candidates.map((v) => ({ key: `${p.item.name}@${v}`, specs: p.facts.heldSpecs![v] ?? {} }))),
     ...downgrades.map((d) => ({ key: `${d.item.name}@${d.version}`, specs: d.specs })),
   ];
-  const checks = await heldAdvisories(sources, query, releases, deadline);
+  // A fix target is about to be installed: what its dependencies exact-pin is judged too (held-second-level.ts).
+  const checks = await heldAdvisories(sources, query, releases, deadline, { secondLevel: true });
 
   for (const { item, candidates, facts } of plans) {
     const target = item.clean.target!;

@@ -165,8 +165,8 @@ describe("GOPRIVATE and FOURDA_PRIVATE_PACKAGES", () => {
       live,
     );
     expect(result.results.map((r) => r.verdict)).toEqual(["unknown", "unknown"]);
-    // All private: nothing "checked" (review of #64).
-    expect(result.summary).toMatch(/^2 not checked \(private\)/);
+    // All private: nothing "checked" (review of #64), and the answer leads with NOT CHECKED (6.5.1).
+    expect(result.summary).toMatch(/^NOT CHECKED: 2 not checked \(private\)/);
     expect(result.summary).not.toContain("checked:");
     const impact = await executeUpgradeImpact(noDb, { package: "acme-widgets", ecosystem: "npm", to_version: "2.0.0" }, live);
     expect(String((impact as { error?: string }).error)).toContain("NOT CHECKED (private)");

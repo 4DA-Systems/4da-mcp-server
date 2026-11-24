@@ -97,6 +97,26 @@ export const DATABASE_FREE_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Tools that read the server's dependency set (getResolvedDeps / getAuditDeps / its private
+ * rules) and do not re-resolve it themselves: re-resolved here first when a file it was read from
+ * changed (refreshIfLockfilesChanged: stat calls only when nothing changed). Without it they
+ * answered from whatever set the last refreshing tool (vulnerability_scan, dependency_health,
+ * upgrade_planner, upgrade_impact, what_should_i_know) left, or the startup set if none had run:
+ * get_context would list a dependency removed from package.json and dependency_check look up the
+ * versions read at startup. Those five refresh inside their executors, where they report it.
+ */
+export const READS_DEPENDENCY_SET: ReadonlySet<string> = new Set(["dependency_check", "ecosystem_pulse", "get_context", "knowledge_gaps"]);
+
+function refreshDependencySet(): void {
+  const live = getLiveIntelligence();
+  try {
+    if (live?.isInitialized()) live.refreshIfLockfilesChanged();
+  } catch {
+    // An unreadable file is reported by the tools that read it; the call goes on with the set it has.
+  }
+}
+
+/**
  * DB-backed tools whose payload reflects the curated feed and can therefore go stale. The MCP
  * server reads `4da.db` but cannot fetch or score, so these get a `data_freshness` annotation that
  * tells the caller whether the data is fresh. Live tools (vulnerability_scan, dependency_health,
@@ -133,6 +153,7 @@ export async function dispatchTool(
   }
 
   assertToolPermission(name);
+  if (READS_DEPENDENCY_SET.has(name)) refreshDependencySet();
 
   // BUSY/LOCKED retry at the single choke point every tool passes through.
   // The desktop engine writes to the same database every 30 minutes; a read

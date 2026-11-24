@@ -46,6 +46,13 @@ export interface VersionSource {
    */
   uncheckable?: UncheckableDependency[];
   /**
+   * npm family: names the lockfile installs from somewhere other than a registry, local code
+   * included (a link or workspace member, a `file:` directory, git, a URL, a local archive). A
+   * direct dependency of such a name that the lockfile installs from no registry is not looked up
+   * by its name, whatever spec package.json gives it (resolution.ts).
+   */
+  elsewhere?: string[];
+  /**
    * Packages the lockfile installs from a registry or index that is not the public one (Cargo
    * `source = "registry+https://..."` other than crates.io, or git; a uv / poetry / Pipfile index
    * other than pypi.org): private, never sent anywhere (private-packages.ts).

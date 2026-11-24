@@ -33,6 +33,11 @@
  *   7. Mutants still apply. Each mutant in scripts/mutation/mutations.mjs names exact text in a
  *      source file; a change that moves or rewrites that text must update the mutant with it
  *      (the same check as `node scripts/mutation/run.mjs --check`; it reads files only).
+ *   8. No raw control character. A source file or a top-level document holds no byte below
+ *      U+0020 other than tab, line feed and carriage return, and no U+007F: write the escape
+ *      (`\u0000`). A write that interpreted escapes put three NUL bytes in a template literal
+ *      of `src/live/held-dependencies.ts` (6.5.1 candidate): the string was the same, but git
+ *      and grep treat such a file as binary, so its diffs stop being reviewable.
  *
  * Exit 1 on any finding.
  */
@@ -160,6 +165,26 @@ findings.push(
 
 // 7. Mutants still apply ---------------------------------------------------------
 findings.push(...listFindings(mutations, root));
+
+// 8. No raw control character ------------------------------------------------------
+const isControl = (code) => (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f;
+const firstControl = (line) => {
+  for (let i = 0; i < line.length; i++) if (isControl(line.charCodeAt(i))) return i;
+  return -1;
+};
+const documents = readdirSync(root).filter((name) => /\.(md|json|ya?ml)$/.test(name)).map((name) => join(root, name));
+const readable = [...new Set([...sources, ...walk(join(root, "src"), (p) => /\.(ts|mts)$/.test(p)), ...documents])];
+for (const file of readable) {
+  readFileSync(file, "utf8")
+    .split("\n")
+    .forEach((line, i) => {
+      const at = firstControl(line);
+      if (at >= 0) {
+        const code = line.charCodeAt(at).toString(16).padStart(4, "0");
+        findings.push(`${rel(file)}:${i + 1}: raw control character U+${code.toUpperCase()} at column ${at + 1}; write it as an escape (\\u${code})`);
+      }
+    });
+}
 
 if (findings.length) {
   console.error(`check-repo: ${findings.length} finding(s)\n  ${findings.join("\n  ")}`);

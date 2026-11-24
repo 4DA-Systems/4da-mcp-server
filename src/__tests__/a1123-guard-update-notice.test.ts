@@ -78,7 +78,7 @@ describe("the update notice, through the tools as served", () => {
 
     const context = await answer("get_context", stubDb, {});
     expect(context.update_notice).toBe(
-      `A newer @4da/mcp-server is published: 99.1.0; this server runs ${SERVED}, and a pinned install never updates itself. Update the pin from @4da/mcp-server@${SERVED} to @4da/mcp-server@99.1.0 in your MCP configuration, or run: npx -y @4da/mcp-server@99.1.0 --setup --update`,
+      `A newer @4da/mcp-server is published: 99.1.0; this server runs ${SERVED}, and a pinned install never updates itself. Update the pin from @4da/mcp-server@${SERVED} to @4da/mcp-server@99.1.0 in your MCP configuration, or run: npx -y --prefer-offline @4da/mcp-server@99.1.0 --setup --update`,
     );
     expect(selfRequests()).toBe(1);
   });

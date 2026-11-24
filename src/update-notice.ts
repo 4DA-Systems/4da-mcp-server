@@ -23,6 +23,7 @@ import { LiveCache } from "./live/cache.js";
 import type { LiveIntelligence } from "./live/index.js";
 import { compareVersions } from "./live/version-compare.js";
 import { readPackageVersion } from "./setup.js";
+import { pinnedNpx } from "./usage.js";
 
 const PACKAGE = "@4da/mcp-server";
 const CACHE_KEY = "mcp-server-latest:v1";
@@ -49,7 +50,7 @@ export function updateNoticeText(running: string, latest: string): string | null
   if (!RUNNING.test(running) || !RELEASE.test(latest) || compareVersions(latest, running, "npm") <= 0) return null;
   return (
     `A newer ${PACKAGE} is published: ${latest}; this server runs ${running}, and a pinned install never updates itself. ` +
-    `Update the pin from ${PACKAGE}@${running} to ${PACKAGE}@${latest} in your MCP configuration, or run: npx -y ${PACKAGE}@${latest} --setup --update`
+    `Update the pin from ${PACKAGE}@${running} to ${PACKAGE}@${latest} in your MCP configuration, or run: ${pinnedNpx(latest)} --setup --update`
   );
 }
 

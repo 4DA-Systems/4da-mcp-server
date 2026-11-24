@@ -39,12 +39,14 @@ import {
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
 import { inspectYarnLock, type YarnInspection } from "./js-dev-scope.js";
+import { lazyNpmCatalogs } from "./npm-catalog.js";
+import { classifyNpmSpec } from "./npm-spec.js";
 import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, MAX_MEMBER_MANIFESTS, memberListGapText, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec, type MemberListGap } from "./js-manifests.js";
 import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
-import { isMergeConflictError, readTextFile } from "./text-file.js";
+import { isMergeConflictError, readManifestText, readTextFile } from "./text-file.js";
 import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import type { OsvEcosystem } from "./types.js";
 
@@ -150,7 +152,9 @@ function conflictedInputs(cwd: string, ecosystem: OsvEcosystem, read: VersionSou
   for (const file of new Set(candidates.map((f) => path.resolve(f)))) {
     if (readFiles.has(file) || !fs.existsSync(file)) continue;
     try {
-      readTextFile(file);
+      // A manifest is read once per signature (readManifestText); a lockfile is read as it is.
+      if ((CONFLICT_CHECKED_FILES[ecosystem] ?? []).includes(path.basename(file))) readManifestText(file);
+      else readTextFile(file);
     } catch (error) {
       if (isMergeConflictError(error)) conflicted.add(file);
     }
@@ -406,6 +410,9 @@ function describeParseError(file: string, error: unknown): string | null {
   }
   if (error) return `could not be parsed (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
   if (json) return null;
+  // A YAML lockfile (pnpm-lock.yaml) whose flow sequence or mapping is never closed stops mid-value:
+  // read as empty, it hid beside a package-lock.json that was read (review 2026-11-24).
+  if (/\.ya?ml$/i.test(file) && unclosedFlow(content)) return "it is truncated or damaged: a [ or { is not closed";
   // A text lockfile of some size that gave no package at all is damaged or in a format this reader does not know.
   const lines = content.split(/\r?\n/).filter((l) => l.trim() !== "").length;
   return lines > 20 ? "no package versions could be read from it (unsupported format or damaged)" : null;
@@ -456,6 +463,8 @@ interface NpmLockRead {
   scopeGraded?: boolean;
   /** The file holds no package although package.json declares dependencies: `problems` says so, and it is not read. */
   empty?: true;
+  /** Names the lockfile installs from somewhere other than a registry (VersionSource.elsewhere). */
+  elsewhere?: string[];
 }
 
 /** The read of a lockfile with no package in it: null, or `empty` when package.json says it should hold some. */
@@ -495,6 +504,7 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
         versions,
         instances,
         uncheckable: report.uncheckable,
+        elsewhere: report.elsewhere,
         problems: [problem, uncrossed].filter((p): p is LockfileProblem => p !== null),
         declared: report.declared,
         scopeGraded: report.scopeGraded,
@@ -538,7 +548,7 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const grade = inspection?.grade ?? { scopes: new Map<string, boolean>(), declared: [], graded: false };
       const instances = new InstanceSet();
       for (const copy of read) instances.add(copy.name, copy.version, grade.scopes.get(`${copy.name}\0${copy.version}`));
-      return { versions, instances, uncheckable: report.uncheckable, problems, declared: grade.declared, scopeGraded: grade.graded };
+      return { versions, instances, uncheckable: report.uncheckable, elsewhere: report.elsewhere, problems, declared: grade.declared, scopeGraded: grade.graded };
     },
   },
   {
@@ -554,16 +564,35 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const undeclared = declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true });
       if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
       const problem = incompleteProblem(file, null, undeclared);
-      return { versions, instances, uncheckable: report.uncheckable, problems: problem ? [problem] : [], declared: report.declared, scopeGraded: report.scopeGraded };
+      return { versions, instances, uncheckable: report.uncheckable, elsewhere: report.elsewhere, problems: problem ? [problem] : [], declared: report.declared, scopeGraded: report.scopeGraded };
     },
   },
 ];
 
-function readNpmLockFile(file: string): NpmLockRead | null {
-  const read = readPackageLock(JSON.parse(readTextFile(file)));
-  if (read.instances.size === 0 && read.uncheckable.length === 0) return null;
+function readNpmLockFile(file: string, cwd: string): NpmLockRead | null {
+  const lock: unknown = JSON.parse(readTextFile(file));
+  const read = readPackageLock(lock as Parameters<typeof readPackageLock>[0]);
+  if (read.instances.size === 0 && read.uncheckable.length === 0 && read.elsewhere.length === 0) return null;
+  // npm writes an entry for every dependency package.json declares (a link entry for local code):
+  // a declared name with none means the file was written before it was added, and what npm would
+  // install for it was never checked. pnpm, yarn and bun lockfiles were cross-checked this way; npm's
+  // was not, and a package-lock.json that lacked a declared dependency read as complete (6.5.0).
+  const undeclared = declaredWithoutEntry(cwd, (name) => npmLockHasEntry(lock, name), { skipLocal: true });
+  const problem = incompleteProblem(file, null, undeclared);
   // npm writes `dev` on every entry only devDependencies reach: the lockfile's own grading.
-  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: [], declared: read.declared, scopeGraded: true };
+  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, elsewhere: read.elsewhere, aliases: read.aliases, problems: problem ? [problem] : [], declared: read.declared, scopeGraded: true };
+}
+
+/**
+ * Whether an npm lockfile holds an entry for a dependency the project's own package.json declares:
+ * `packages["node_modules/<name>"]` (lockfileVersion 2 and 3, a link entry included), else the
+ * top-level `dependencies[<name>]` (lockfileVersion 1).
+ */
+function npmLockHasEntry(lock: unknown, name: string): boolean {
+  if (!lock || typeof lock !== "object") return false;
+  const { packages, dependencies } = lock as { packages?: unknown; dependencies?: unknown };
+  if (packages && typeof packages === "object") return Object.hasOwn(packages, `node_modules/${name}`);
+  return Boolean(dependencies && typeof dependencies === "object" && Object.hasOwn(dependencies, name));
 }
 
 function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
@@ -597,6 +626,7 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     return found(read.versions, read.instances, file, "lockfile", {
       ...(read.uncheckable.length > 0 ? { uncheckable: read.uncheckable.map((u) => ({ ...u, file })) } : {}),
       ...(read.aliases && read.aliases.size > 0 ? { aliases: read.aliases } : {}),
+      ...(read.elsewhere && read.elsewhere.length > 0 ? { elsewhere: read.elsewhere } : {}),
       ...(problems.length > 0 ? { problems } : {}),
       ...(read.declared && read.declared.length > 0 ? { declared: read.declared } : {}),
       ...(read.scopeGraded ? { scopeGraded: true as const } : {}),
@@ -619,6 +649,7 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     const declared = new Map<string, string>();
     const uncheckable: NonRegistryEntry[] = [];
     const aliases = new Map<string, string>();
+    const catalogs = lazyNpmCatalogs(cwd);
     let pkg: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(readTextFile(pkgPath));
@@ -633,16 +664,17 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
       const sections = (field: string) => (pkg[field] && typeof pkg[field] === "object" && !Array.isArray(pkg[field]) ? (pkg[field] as Record<string, unknown>) : {});
       for (const [name, spec] of Object.entries({ ...sections("dependencies"), ...sections("devDependencies") })) {
         if (typeof spec !== "string") continue;
-        // `"x": "github:user/repo"` or a tarball URL is not a version of the registry's x.
-        const other = nonRegistrySource(spec, spec);
-        if (other === "local") continue;
-        // `"my-lodash": "npm:lodash@4.17.20"` declares lodash, under another folder name.
-        const alias = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(.+)$/.exec(spec.trim());
-        if (other) uncheckable.push({ name, version: null, kind: other });
-        else if (alias && NPM_NAME.test(alias[1])) {
-          declared.set(alias[1], alias[2]);
-          aliases.set(name, alias[1]);
-        } else declared.set(name, spec);
+        // Read as npm reads it (npm-spec.ts): `"x": "github:user/repo"`, `"org/repo"`, `"../libs/x"`,
+        // `"vendor/x-1.0.0.tgz"` or a tarball on another host is not a version of the registry's x.
+        const read = classifyNpmSpec(name, spec, catalogs);
+        // Local code, and a catalog: entry that could not be read, are said by the resolution (nonRegistryDirect).
+        if (read.kind === "local" || read.kind === "catalog" || read.kind === "ambiguous") continue;
+        if (read.kind !== "registry") uncheckable.push({ name, version: null, kind: read.kind });
+        else if (read.name !== name) {
+          // `"my-lodash": "npm:lodash@4.17.20"` declares lodash, under another folder name.
+          declared.set(read.name, read.range);
+          aliases.set(name, read.name);
+        } else declared.set(name, read.range === spec.trim() ? spec : read.range);
       }
     } catch { /* skip */ }
     // npm installs exactly "1.2.3" (or "=1.2.3"); anything else is a range.
@@ -818,10 +850,13 @@ function tarballRelease(name: string, url: string): string | null {
 export function readPackageLock(lock: {
   packages?: Record<string, LockEntry>;
   dependencies?: Record<string, LockEntry>;
-}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[] } {
+}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[]; elsewhere: string[] } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: NonRegistryEntry[] = [];
+  // Top-level names the lockfile installs as a link (a workspace member, a `file:` directory) or from
+  // git, a URL or a local archive: whatever package.json's spec says, not a registry release (VersionSource.elsewhere).
+  const elsewhere = new Set<string>();
   const aliases = new Map<string, string>();
   const declared = new Map<string, DeclaredDependency>();
 
@@ -852,10 +887,15 @@ export function readPackageLock(lock: {
     const hoistedAliases: Array<[string, string]> = [];
     for (const [key, value] of Object.entries(lock.packages)) {
       const folder = packageNameFromNodeModulesPath(key);
-      if (!folder || !value || value.link) continue;
+      if (!folder || !value) continue;
+      if (value.link) {
+        if (key === `node_modules/${folder}`) elsewhere.add(folder);
+        continue;
+      }
       const name = typeof value.name === "string" && NPM_NAME.test(value.name) ? value.name : folder;
       const other = typeof value.resolved === "string" ? nonRegistrySource(value.resolved, urlRequested(folder)) : null;
       if (other) {
+        if (key === `node_modules/${folder}`) elsewhere.add(folder);
         if (other !== "local") uncheckable.push({ name, version: value.version ?? null, kind: other });
         continue;
       }
@@ -920,6 +960,7 @@ export function readPackageLock(lock: {
         } else if (version) {
           // v1 writes a git or URL dependency's location as its version.
           const other = nonRegistrySource(version, version);
+          if (other && topLevel) elsewhere.add(folder);
           if (other && other !== "local") uncheckable.push({ name: folder, version: null, kind: other });
           else if (other === null) {
             // A registry-shaped tarball URL (`/<name>/-/<name>-<v>.tgz`) on any host: the release its file
@@ -941,7 +982,7 @@ export function readPackageLock(lock: {
     }
   }
 
-  return { versions, instances, uncheckable, aliases, declared: [...declared.values()] };
+  return { versions, instances, uncheckable, aliases, declared: [...declared.values()], elsewhere: [...elsewhere] };
 }
 
 // =============================================================================
@@ -1275,4 +1316,142 @@ function extractVersionFromSpec(spec: string): string | null {
   if (!spec) return null;
   const match = spec.match(/(\d+\.\d+\.\d+(?:-[\w.]+)?)/);
   return match ? match[1] : null;
+}
+
+/** A TOML key on the left of `=`: bare, quoted, or dotted parts of either. */
+const TOML_KEY = /^\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*\s*=/;
+/** A table header on one line: `[a.b]`, `[[a]]`, `[a."b c"]`, with an optional comment. */
+const TOML_HEADER = /^\s*\[\[?\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*\s*\]\]?\s*(?:#.*)?$/;
+
+/**
+ * Why a TOML manifest (Cargo.toml, pyproject.toml) is not valid TOML, or null when nothing says so.
+ * Not a full parser: it checks what a hand edit breaks (a table header left open, an array or inline
+ * table never closed, a string left open at the end of its line, a line that is neither a header nor
+ * `key = value`), which is what made a project read as having no dependencies (review 2026-11-24).
+ */
+/**
+ * Where a multi-line string that is open at `from` closes on `line` (the index just past its
+ * delimiter), or -1. TOML 1.0: in a basic string (`"""`) a backslash escapes the next character
+ * (`\"""` is not a close), and one or two quotes right before the closing three belong to the
+ * string (`"""He said "hi""""`, `""""" `): the close is the last three of a run of up to five
+ * (re-check 2026-11-24: both were called "not closed", a valid Cargo.toml then UNREADABLE).
+ */
+function multilineClose(line: string, from: number, triple: string): number {
+  const quote = triple[0];
+  for (let i = from; i < line.length; i++) {
+    if (quote === '"' && line[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (line.startsWith(triple, i)) {
+      let end = i + 3;
+      while (end < line.length && line[end] === quote && end - i < 5) end++;
+      return end;
+    }
+  }
+  return -1;
+}
+
+export function tomlSyntaxProblem(content: string): string | null {
+  let depth = 0;
+  let multiline: string | null = null;
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    if (multiline) {
+      const end = multilineClose(line, 0, multiline);
+      if (end < 0) continue;
+      line = line.slice(end);
+      multiline = null;
+    } else if (depth === 0) {
+      const t = line.trim();
+      if (t === "" || t.startsWith("#")) continue;
+      if (t.startsWith("[")) {
+        if (!TOML_HEADER.test(t)) return `line ${i + 1} is a table header that is not closed or not valid (${t.slice(0, 60)})`;
+        continue;
+      }
+      const key = TOML_KEY.exec(line);
+      if (!key) return `line ${i + 1} is neither a table header nor \`key = value\` (${t.slice(0, 60)})`;
+      line = line.slice(key[0].length);
+      if (line.trim() === "") return `line ${i + 1} has no value after \`=\``;
+    }
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      if (ch === "#") break;
+      if (ch === '"' || ch === "'") {
+        const triple = line.slice(j, j + 3);
+        if (triple === '"""' || triple === "'''") {
+          const end = multilineClose(line, j + 3, triple);
+          if (end < 0) {
+            multiline = triple;
+            break;
+          }
+          j = end - 1;
+          continue;
+        }
+        let k = j + 1;
+        while (k < line.length && line[k] !== ch) k += ch === '"' && line[k] === "\\" ? 2 : 1;
+        if (k >= line.length) return `line ${i + 1} ends inside a string`;
+        j = k;
+        continue;
+      }
+      if (ch === "[" || ch === "{") depth++;
+      else if (ch === "]" || ch === "}") {
+        depth--;
+        if (depth < 0) return `line ${i + 1} closes a bracket that was never opened`;
+      }
+    }
+  }
+  if (multiline) return "a multi-line string is not closed at the end of the file";
+  if (depth > 0) return "an array or inline table is not closed at the end of the file";
+  return null;
+}
+
+/**
+ * Why the manifest the resolver reads beside a lockfile (package.json, Cargo.toml, pyproject.toml)
+ * cannot be parsed, or null. A manifest that cannot be read is not "nothing declared": the direct
+ * dependencies and the lockfile's cross-check against it are unknown (review 2026-11-24).
+ */
+export function manifestSyntaxProblem(file: string): string | null {
+  let content: string;
+  try {
+    content = readManifestText(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return null;
+    return `it could not be read (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+  }
+  if (/\.json$/i.test(file)) {
+    try {
+      const parsed: unknown = JSON.parse(content);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "it is not a JSON object";
+      return null;
+    } catch (error) {
+      return `it is not valid JSON (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;
+    }
+  }
+  const toml = tomlSyntaxProblem(content);
+  return toml ? `it is not valid TOML: ${toml}` : null;
+}
+
+/** The words for a manifest that could not be parsed: what was not checked because of it. */
+export function manifestProblemText(why: string): string {
+  return `${why}, so the dependencies it declares were not read: which are direct, and whether the lockfile holds every one, were not checked. Fix the file, then scan again`;
+}
+
+/** Whether YAML text leaves a flow sequence or mapping open at its end (brackets outside quotes and comments). */
+function unclosedFlow(content: string): boolean {
+  let depth = 0;
+  for (const line of content.split(/\r?\n/)) {
+    let quote: string | null = null;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === "'" || ch === '"') quote = ch;
+      else if (ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
+      else if (ch === "[" || ch === "{") depth++;
+      else if (ch === "]" || ch === "}") depth = Math.max(0, depth - 1);
+    }
+  }
+  return depth > 0;
 }

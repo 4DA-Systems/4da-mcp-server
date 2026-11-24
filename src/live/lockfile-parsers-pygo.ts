@@ -563,7 +563,8 @@ export function readRequirementsFile(
     for (const name of listed.names) extras.unpinned.push({ file: path.resolve(file), name });
     for (const other of listed.direct) extras.uncheckable.push({ ...other, version: null, file: path.resolve(file) });
     for (const ref of listed.references) {
-      if (privateDirectReference(ref.location)) extras.directPrivate.push({ name: ref.name, version: null, registry: /^file:/i.test(ref.location) ? "a local file" : sourceLabel(ref.location.replace(/^git\+/i, "")), file: path.resolve(file) });
+      // A git checkout or a local path is not a registry release (local); an archive on another host may be a private index's.
+      if (privateDirectReference(ref.location)) extras.directPrivate.push({ name: ref.name, version: null, registry: /^file:/i.test(ref.location) ? `the local path ${ref.location.replace(/^file:/i, "")}` : /^git\+|\.git(?:[@#]|$)/i.test(ref.location) ? `git (${sourceLabel(ref.location.replace(/^git\+/i, ""))})` : sourceLabel(ref.location.replace(/^git\+/i, "")), file: path.resolve(file), ...(/^file:|^git\+|\.git(?:[@#]|$)/i.test(ref.location) ? { local: true as const } : {}) });
     }
   }
   const overlong = overlongRequirementLines(content);
@@ -935,10 +936,20 @@ export function unpinnedRequirements(content: string): {
         direct.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1])), kind: kindOf(editable[1]) });
       }
       if (/^[a-z][a-z0-9+.-]*:/i.test(editable[1])) references.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1])), location: editable[1] });
+      // `-e ./libs/x`: local code, named (as far as the file says) by its egg or its directory.
+      else references.push({ name: normalizePythonName(egg?.[1] ?? archiveName(editable[1].split("#")[0])), location: `file:${editable[1].split("#")[0]}` });
       continue;
     }
     if (line.startsWith("-")) continue;
     const spec = line.split(";")[0].trim();
+    // A local path or archive (`./libs/x`, `../x`, `/opt/x`, `dist/x-1.0-py3-none-any.whl`): local code,
+    // never a PyPI release; asked about directly it was sent (privacy review 2026-11-24).
+    if (/^(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(spec) || (/^[^\s:@=<>!~]+[\\/]/.test(spec) && !/^[a-z][a-z0-9+.-]*:/i.test(spec))) {
+      const at = spec.split(/[\s#]/)[0];
+      const name = archiveName(at);
+      if (name) references.push({ name: normalizePythonName(name), location: `file:${at}` });
+      continue;
+    }
     // A bare URL requirement: the archive's name is all there is.
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(spec)) {
       if (!/^file:/i.test(spec)) direct.push({ name: normalizePythonName(archiveName(spec)), kind: kindOf(spec) });
@@ -1022,6 +1033,8 @@ export function readTomlPackageLock(content: string): {
       if (origin !== "local") uncheckable.push({ name: normalized, version, kind: origin });
       const location = originLocation(block, body);
       if (origin === "local" || origin === "file") privateIndex.push({ name: normalized, version, registry: `local code${location ? ` (${location})` : ""}`, local: true });
+      // A git checkout is not a registry release (local: withheld, not called private).
+      else if (origin === "git" && location) privateIndex.push({ name: normalized, version, registry: `git (${directLabel(location)})`, local: true });
       else if (location && privateDirectReference(location)) privateIndex.push({ name: normalized, version, registry: directLabel(location) });
       continue;
     }

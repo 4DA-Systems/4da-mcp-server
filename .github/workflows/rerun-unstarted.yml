@@ -1,0 +1,57 @@
+name: Rerun jobs that never started
+
+# A hosted job, in practice a macOS one, sometimes never gets a runner. GitHub
+# cancels it when the job's timeout-minutes pass, with no runner and no step,
+# and the whole CI run then reads as failed although nothing in the repository
+# failed. On 2026-11-24 that happened three times; once it stopped the 6.5.1
+# release at its "CI passed on the tagged commit" check, and each time a person
+# had to notice and run the job again.
+#
+# This runs such a CI run again by itself, at most twice. It acts only when
+# EVERY job that did not succeed was cancelled with no runner and no step. A job
+# that ran any step and failed is a real failure and is left for a person, and
+# so is a run that was cancelled as a whole (a newer push to the same pull
+# request, or a person): its conclusion is "cancelled", not "failure".
+#
+# It reads the run's jobs through the API and checks nothing out, so a pull
+# request cannot change what it does.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rerun:
+    name: Rerun a CI run whose only failures never got a runner
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Rerun when every job that did not succeed never started
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          set -euo pipefail
+          # One line per job that did not succeed: "<conclusion> <runner id> <number of steps> <name>".
+          jobs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | "\(.conclusion) \(.runner_id // 0) \(.steps | length) \(.name)"')
+          if [ -z "$jobs" ]; then
+            echo "Run $RUN_ID (attempt $ATTEMPT) failed, but no job reads as failed: left alone."
+            exit 0
+          fi
+          echo "$jobs"
+          # Anything other than "cancelled, no runner, no step" is a real failure.
+          started=$(printf '%s\n' "$jobs" | grep -Ev '^cancelled 0 0 ' || true)
+          if [ -n "$started" ]; then
+            echo "Run $RUN_ID (attempt $ATTEMPT) has a job that ran and did not succeed: left for a person."
+            exit 0
+          fi
+          echo "Every job that did not succeed in run $RUN_ID (attempt $ATTEMPT) never got a runner: running those jobs again."
+          gh run rerun "$RUN_ID" --failed --repo "$GITHUB_REPOSITORY"

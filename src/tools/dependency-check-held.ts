@@ -112,7 +112,8 @@ export class HeldJudge {
       }
     }
     if (releases.length === 0) return;
-    for (const [key, check] of await heldAdvisories(sources, this.query, releases, deadline)) {
+    // A release dependency_check judges is one about to be written: two levels down too (held-second-level.ts).
+    for (const [key, check] of await heldAdvisories(sources, this.query, releases, deadline, { secondLevel: true })) {
       this.checks.set(key, check);
       this.fromBatch.add(key);
     }

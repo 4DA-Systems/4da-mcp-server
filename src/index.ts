@@ -46,6 +46,7 @@ import { fileURLToPath } from "node:url";
 
 import { startHttpServer } from "./http-transport.js";
 import { runSetup } from "./setup.js";
+import { pinnedNpx, serverUsage } from "./usage.js";
 import { runDoctor } from "./doctor.js";
 import { exclusionNotes, scanProjectTree, treeResolutionGroups, type TreeDiscovery } from "./project-tree.js";
 import { LiveIntelligence } from "./live/index.js";
@@ -510,52 +511,8 @@ function stopServer(reason: string, first?: () => Promise<void>): void {
   });
 }
 
-/** --help, and the text an unknown argument exits with (cli-args.ts). */
-const USAGE = `
-  @4da/mcp-server — Dependency intelligence for AI coding agents
-
-  Usage:
-    npx @4da/mcp-server              Start MCP server (stdio transport)
-    npx @4da/mcp-server --http       Start Streamable HTTP transport
-    npx @4da/mcp-server --setup      Auto-configure your editor
-    npx @4da/mcp-server --doctor     Check installation health
-    npx @4da/mcp-server --version    Print version
-
-  Options:
-    --http              Use Streamable HTTP instead of stdio
-    --port <number>     HTTP port, 1 to 65535 (default: 4840)
-    --host <address>    HTTP bind address (default: 127.0.0.1). A non-loopback
-                        address exposes every tool to the network and is
-                        refused unless MCP_AUTH_SECRET is set; authentication
-                        is then mandatory for every request.
-    --setup             Detect editors and write MCP config
-    --dry-run           With --setup: print each file and entry, write nothing
-    --update            With --setup: replace an existing 4da entry that differs
-                        (default: keep it and say so)
-    --doctor            Validate database, bindings, and LLM providers
-
-  An argument not listed here exits with this text and code 2.
-
-  Environment (a yes/no variable is on for 1, true, yes or on, any case):
-    FOURDA_DB_PATH      Path to 4DA's SQLite database (auto-detected if omitted)
-    FOURDA_OFFLINE      Set to 1 / true to disable all network calls (OSV.dev, HN)
-    FOURDA_CALL_BUDGET_MS  Time one tool call may take (default 20000). Past it the
-                        call is answered NOT CHECKED; its lookups run on and are cached.
-    HTTPS_PROXY, HTTP_PROXY, NO_PROXY  Every lookup goes through the proxy (NO_PROXY
-                        honoured); an unreachable proxy means NOT CHECKED, never direct.
-    MCP_AUTH_SECRET     Shared secret for verifying relay-issued Bearer tokens
-                        (HMAC-SHA256). Falls back to JWT_SECRET. Without it, no
-                        token is accepted.
-    MCP_AUTH_REQUIRED   Set to 1 / true to require auth on a loopback --http bind
-                        (always required on a non-loopback bind)
-    MCP_ALLOWED_HOSTS   Extra comma-separated hostnames accepted in the Host /
-                        Origin headers (needed when binding to 0.0.0.0)
-
-  Works standalone (scans your project on startup) or with the full
-  4DA desktop app for content scoring, source monitoring, and more.
-  Desktop app: https://github.com/4DA-Systems/4DA/releases/latest
-  Docs:        https://4da.ai
-`;
+/** --help, and the text an unknown argument exits with (cli-args.ts): every command pinned to this version (usage.ts). */
+const USAGE = serverUsage(SERVER_VERSION);
 
 /**
  * Start the MCP server
@@ -663,7 +620,7 @@ async function main() {
   } else {
     // Database exists but is corrupt or unreadable
     console.error(`[4DA] Database issue: ${validation.error}`);
-    console.error(`  Or run: npx @4da/mcp-server --doctor  for diagnostics`);
+    console.error(`  Or run: ${pinnedNpx(SERVER_VERSION)} --doctor  for diagnostics`);
     console.error(``);
   }
 

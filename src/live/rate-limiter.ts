@@ -116,7 +116,7 @@ export const DEFAULT_RATE_LIMITS = {
   // querybatch requests (1,000 dependencies each). OSV.dev publishes no
   // per-client limit for it and osv-scanner sends a tree's batches back to
   // back; 10 a minute made any tree over 10,000 dependencies fail outright
-  // (D:\4DA\src-tauri, 10,568, reported 0 vulnerable on 2026-10-12). A burst
+  // (the 4DA app repository's Rust tree, 10,568, reported 0 vulnerable on 2026-10-12). A burst
   // of 60 covers 60,000 dependencies; past that a scan waits for tokens.
   osv: { maxPerMinute: 60 },
   // Per-package advisory lists for fix-path checks (/v1/query), one request per vulnerable package.

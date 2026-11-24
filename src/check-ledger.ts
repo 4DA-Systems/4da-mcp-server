@@ -18,6 +18,11 @@
  *   wrong allow.
  * - It exists from the server's start (startLedger), empty until the first verdict: the hook
  *   denies only where it finds one, so it never holds an edit beside a server that cannot record.
+ * - A name the server withheld is recorded by why: "private" for a private-registry rule (the
+ *   rules 6.5.0 had; the hook lets the name through, as 6.5.0 did), "local_source" for a name a
+ *   project takes from git, a path, its workspace, an alias, a catalog or another registry, and
+ *   "unreadable_lockfile" for one withheld because a lockfile or manifest could not be read (the
+ *   hook holds both).
  */
 
 import { appendFile, mkdir, rename, stat, writeFile } from "node:fs/promises";
@@ -33,6 +38,8 @@ export const LEDGER_MAX_BYTES = 512 * 1024;
 const MAX_REASON = 400;
 /** The longest name, version or constraint kept (dependency_check bounds its own inputs below this). */
 const MAX_FIELD = 300;
+/** The longest file path kept; a longer one is left out. */
+const MAX_PATH = 1024;
 
 /** One line of the ledger. */
 export interface LedgerEntry {
@@ -47,8 +54,14 @@ export interface LedgerEntry {
   requested?: string;
   /** The server's one-line reason, single-line and capped. */
   reason?: string;
-  /** Why the item was not looked up or did not finish: "private", "time_budget", "module_path". */
+  /**
+   * Why the item was not looked up or did not finish: "private", "local_source",
+   * "unreadable_lockfile" (withheld only because `unreadable_file` could not be read),
+   * "time_budget", "module_path", "input".
+   */
   not_checked?: string;
+  /** For "unreadable_lockfile": the lockfile or manifest that could not be read. */
+  unreadable_file?: string;
 }
 
 /** The fields of a dependency_check result item the ledger keeps. */
@@ -60,6 +73,34 @@ export interface CheckedItem {
   verdict: string;
   reason?: string;
   not_checked?: string;
+  /** Set when a name was withheld only because this file could not be read (dependency-check-screen.ts privateResult). */
+  unreadable_file?: string | null;
+}
+
+/** A path kept as it is, or null when it is empty, too long or holds a control character. */
+function pathField(value: unknown): string | null {
+  // eslint-disable-next-line no-control-regex -- a path with a control character is not kept at all
+  return typeof value === "string" && value !== "" && value.length <= MAX_PATH && !/[\u0000-\u001f\u007f-\u009f]/.test(value) ? value : null;
+}
+
+/** Whether a private-registry rule covers a name (LiveIntelligence.privateRegistryRuleCovers), asked at the ledger line. */
+export type PrivateRule = (ecosystem: string, name: string) => boolean;
+
+/**
+ * The ledger's word for a name the server withheld: "private" only when the code that knows the
+ * rules says a private-registry rule covers it (`privateRule`: the rules 6.5.0 had); "local_source"
+ * for everything else, and whenever that cannot be asked. Never decided from the answer's reason,
+ * which quotes repository text: a dependency spec `"file:./FOURDA_PRIVATE_PACKAGES lists x"`, a
+ * workspace folder or a project folder named after a rule made the round-2 text match record
+ * "private", which a 6.5.0 hook lets through at any version in every project (round 3 of the hook
+ * review, item 2). The hook holds "local_source".
+ */
+export function withheldKind(item: { ecosystem: string; package: string }, privateRule: PrivateRule | null): "private" | "local_source" {
+  try {
+    return privateRule !== null && privateRule(item.ecosystem, item.package) === true ? "private" : "local_source";
+  } catch {
+    return "local_source";
+  }
 }
 
 /** One line of server text: control characters and runs of blanks become one space, capped. */
@@ -70,7 +111,7 @@ function oneLine(text: string, max: number): string {
 }
 
 /** The ledger lines for one answer's items. Items without a name, version or verdict are left out. */
-export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date()): LedgerEntry[] {
+export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date(), privateRule: PrivateRule | null = null): LedgerEntry[] {
   const t = at.toISOString();
   const out: LedgerEntry[] = [];
   for (const item of items) {
@@ -78,6 +119,8 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
     const pkg = oneLine(item.package, MAX_FIELD);
     const version = oneLine(item.to, MAX_FIELD);
     if (!pkg || !version) continue;
+    const unread = item.not_checked === "private" ? pathField(item.unreadable_file) : null;
+    const withheld = item.not_checked === "private" && !unread ? withheldKind(item, privateRule) : null;
     out.push({
       t,
       ecosystem: oneLine(item.ecosystem, 40),
@@ -86,7 +129,13 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
       verdict: oneLine(item.verdict, 20),
       ...(typeof item.to_requested === "string" && item.to_requested ? { requested: oneLine(item.to_requested, MAX_FIELD) } : {}),
       ...(typeof item.reason === "string" && item.reason ? { reason: oneLine(item.reason, MAX_REASON) } : {}),
-      ...(typeof item.not_checked === "string" ? { not_checked: oneLine(item.not_checked, 40) } : {}),
+      ...(unread
+        ? { not_checked: "unreadable_lockfile", unreadable_file: unread }
+        : withheld
+          ? { not_checked: withheld }
+          : typeof item.not_checked === "string"
+            ? { not_checked: oneLine(item.not_checked, 40) }
+            : {}),
     });
   }
   return out;
@@ -124,11 +173,11 @@ let queue: Promise<void> = Promise.resolve();
  * Record each item's final verdict in the ledger of `dir` (the data folder by default). The
  * returned promise never rejects: a ledger that cannot be written is skipped.
  */
-export function recordVerdicts(items: readonly CheckedItem[], options: { now?: Date; dir?: string } = {}): Promise<void> {
+export function recordVerdicts(items: readonly CheckedItem[], options: { now?: Date; dir?: string; privateRule?: PrivateRule | null } = {}): Promise<void> {
   let entries: LedgerEntry[];
   let dir: string;
   try {
-    entries = ledgerEntries(items, options.now);
+    entries = ledgerEntries(items, options.now, options.privateRule ?? null);
     dir = options.dir ?? serverDataDir();
   } catch {
     return queue;

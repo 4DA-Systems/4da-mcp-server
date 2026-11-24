@@ -28,6 +28,7 @@
  * A private name is never sent and is reported as "not checked (private)", never as clean.
  */
 
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -36,6 +37,8 @@ import { anySignatureChanged, signatureMap, type FileSignature } from "./file-si
 import { pushAll } from "../array-utils.js";
 import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, textLines } from "./js-lockfile-readers.js";
 import { readRuleFile } from "./text-file.js";
+import { tomlTable } from "../project-manifests.js";
+import { workspaceSearchDirs } from "../project-tree.js";
 import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 import {
   CODE_HOSTS,
@@ -110,6 +113,20 @@ export interface PrivateDependency {
 export type PrivateKind = "registry" | "name";
 
 /** Said with every registry-kind reason: how to have a host that only mirrors the public registry checked. */
+/**
+ * The words that mark a reason as "not a registry release" (a path, git, a URL, a workspace member,
+ * an alias key): such a name is not a private package, and the answer says what it is instead.
+ */
+export const NOT_REGISTRY_MARK = "not a registry release";
+
+/** The words that mark a name declared through a catalog that could not be read: not private, not known. */
+export const UNREAD_CATALOG_MARK = "declared through a catalog that could not be read";
+
+/** How the words for an `npm:<x>` that npm and Yarn read differently start (resolution.ts specWords). */
+export const AMBIGUOUS_SPEC_START = "the spec npm:";
+/** The words that mark such a reason. */
+export const AMBIGUOUS_SPEC_MARK = "so neither was looked up";
+
 export const PUBLIC_MIRRORS_HINT = "set FOURDA_PUBLIC_MIRRORS to its host if it only mirrors the public registry";
 
 /** A lockfile entry installed from a registry that is not the public one (or from git). */
@@ -132,6 +149,10 @@ export interface PrivateIndexEntry {
    * project is the project's own package, not a dependency (LiveIntelligence.getOwnPackageCount).
    */
   at?: string;
+  /** An npm alias key (or a key an override replaces with an alias): private only inside its own project. */
+  aliasKey?: true;
+  /** Declared through a catalog that could not be read: where it comes from is not known. */
+  unknownSource?: true;
   /** A `go.work` workspace module: the workspace's copy is built whatever version a go.mod requires. */
   workspace?: true;
   /**
@@ -1187,6 +1208,28 @@ export class PrivatePackageRules {
     return new PrivatePackageRules(this.dirs, env, this.memberDirs);
   }
 
+  /**
+   * Whether a private-registry rule names this package: a FOURDA_PRIVATE_PACKAGES pattern, an npm
+   * scope mapped to a private registry, a Go GOPRIVATE / GONOPROXY / GONOSUMDB pattern, or a
+   * Pipfile [[source]] index (the rules 6.5.0 had). A Cargo `[patch]` (local code or another
+   * source) is not one. Decided from the rules themselves, never from reason text: a reason quotes
+   * repository text (a spec, a folder name) that can spell any rule's wording (round 3 of the hook
+   * review, item 2).
+   */
+  registryRuleCovers(ecosystem: string, name: string): boolean {
+    for (const l of this.listed) {
+      if (l.ecosystem !== null && l.ecosystem !== ecosystem) continue;
+      const hit = ecosystem === "PyPI" ? l.rePypi.test(pep503(name)) : ecosystem === "crates.io" ? l.reCrates.test(normName("crates.io", name)) : l.re.test(name);
+      if (hit) return true;
+    }
+    if (ecosystem === "npm" && name.startsWith("@")) {
+      const scope = name.slice(0, name.indexOf("/") > 0 ? name.indexOf("/") : undefined).toLowerCase();
+      if (this.npmScopes.has(scope)) return true;
+    }
+    if (ecosystem === "Go" && this.goPatterns.some((g) => goPrivateMatch(g.value, name))) return true;
+    return ecosystem === "PyPI" && this.pipfileNames.has(pep503(name));
+  }
+
   /** Why this name is private, or null when nothing says it is. */
   reasonFor(ecosystem: string, name: string): string | null {
     for (const l of this.listed) {
@@ -1246,6 +1289,20 @@ export class PrivatePackageRules {
    * poetry.lock and Pipfile.lock record each package's index. pdm.lock records none, and a
    * `[[tool.pdm.source]]` with a pdm.lock sent every private name (R8, B4).
    */
+  /**
+   * Whether a configured registry, index or proxy that is not public serves every name of
+   * `ecosystem` for `dir` (ecosystemWide's settings, not its "rule file could not be read" case):
+   * an npm registry, GOPROXY, a Cargo source replacement, a pip index or extra index, uv's, Poetry's,
+   * PDM's or pipenv's index. A private-registry rule as 6.5.0 had it (round 3 of the hook review, item 2).
+   */
+  registryConfigured(ecosystem: string, dir: string | null): boolean {
+    if (ecosystem === "npm") return this.npmRegistryFor(dir) !== null;
+    if (ecosystem === "Go") return Boolean(this.goProxy);
+    if (ecosystem === "crates.io") return this.cargoMirrorFor(dir) !== null;
+    if (ecosystem === "PyPI") return Boolean(this.pipIndex || this.pipExtraFrom || this.pythonIndexFor(dir));
+    return false;
+  }
+
   ecosystemWide(ecosystem: string, dir: string | null, indexRecorded: boolean): string | null {
     const hint = PUBLIC_MIRRORS_HINT;
     const npm = ecosystem === "npm" ? this.npmRegistryFor(dir) : null;
@@ -1671,9 +1728,11 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
   };
   let table = "";
   let single: { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null } | null = null;
+  const dottedEntries = new Map<string, { key: string; pkg: string | null; registry: string | null; git: string | null; local: string | null }>();
   const flush = () => {
     const where = single ? fromElsewhere(single.registry, single.git, single.local) : null;
-    if (single && where) out.push({ name: single.pkg ?? single.key, registry: where, ...localPath(single.git, single.local) });
+    // A `package =` rename installs under its key: both names are the project's (privacy review 2026-11-24).
+    if (single && where) for (const name of new Set([single.key, single.pkg ?? single.key])) out.push({ name, registry: where, ...localPath(single.git, single.local) });
     single = null;
   };
   for (const line of tomlLines(content)) {
@@ -1685,7 +1744,9 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
       if (sub && !header.array) single = { key: sub[2], pkg: null, registry: null, git: null, local: null };
       continue;
     }
-    const kv = tomlKeyValue(line);
+    // `"name".path = "..."`: a quoted crate name with a dotted key (tomlKeyValue reads no dot after a quote).
+    const quotedDotted = /^("[^"]+"|'[^']+')\s*\.\s*([A-Za-z0-9_-]+)\s*=\s*(.+)$/.exec(line);
+    const kv = quotedDotted ? { key: `${quotedDotted[1]}.${quotedDotted[2]}`, value: quotedDotted[3].trim() } : tomlKeyValue(line);
     if (!kv) continue;
     if (single) {
       if (kv.key === "registry" || kv.key === "registry-index") single.registry = tomlString(kv.value);
@@ -1694,11 +1755,32 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
       if (kv.key === "package") single.pkg = tomlString(kv.value);
       continue;
     }
-    if (!isDepTable(table) || !kv.value.startsWith("{")) continue;
+    if (!isDepTable(table)) continue;
+    // Dotted keys are the inline table spelled over lines: `name.path = "..."`, `name.git = "..."`,
+    // `name.registry = "..."`, `name.package = "real"` (re-check 2026-11-24: `x.workspace = true`
+    // was read as a crate named `x.workspace`, and `x.path` was not read at all).
+    const dotted = /^("[^"]+"|'[^']+'|[A-Za-z0-9_-]+)\s*\.\s*([A-Za-z0-9_-]+)$/.exec(kv.key);
+    if (dotted) {
+      const name = dotted[1].replace(/^["']|["']$/g, "");
+      const k = `${table}\0${name}`;
+      const d = dottedEntries.get(k) ?? { key: name, pkg: null, registry: null, git: null, local: null };
+      const v = tomlString(kv.value);
+      if (dotted[2] === "registry" || dotted[2] === "registry-index") d.registry = v;
+      if (dotted[2] === "git") d.git = v;
+      if (dotted[2] === "path") d.local = v;
+      if (dotted[2] === "package") d.pkg = v;
+      dottedEntries.set(k, d);
+      continue;
+    }
+    if (!kv.value.startsWith("{")) continue;
     const where = fromElsewhere(inlineKey(kv.value, "registry") ?? inlineKey(kv.value, "registry-index"), inlineKey(kv.value, "git"), inlineKey(kv.value, "path"));
-    if (where) out.push({ name: inlineKey(kv.value, "package") ?? kv.key, registry: where, ...localPath(inlineKey(kv.value, "git"), inlineKey(kv.value, "path")) });
+    if (where) for (const name of new Set([kv.key, inlineKey(kv.value, "package") ?? kv.key])) out.push({ name, registry: where, ...localPath(inlineKey(kv.value, "git"), inlineKey(kv.value, "path")) });
   }
   flush();
+  for (const d of dottedEntries.values()) {
+    single = d;
+    flush();
+  }
   return out;
 }
 
@@ -1713,10 +1795,10 @@ export function cargoManifestPrivate(content: string): Array<{ name: string; reg
  * With no lockfile, `omega-quant==2.0.0` and `omega-risk = "1.4.0"` were sent to OSV.dev and PyPI
  * (blind audit round 4). Returns each such name with the index or location it names.
  */
-export function pyprojectManifestPrivate(content: string): Array<{ name: string; registry: string }> {
+export function pyprojectManifestPrivate(content: string): Array<{ name: string; registry: string; local?: true }> {
   const indexes = new Map<string, string>();
   const wanted: Array<{ name: string; index: string; kind: "uv" | "poetry" }> = [];
-  const direct: Array<{ name: string; registry: string }> = [];
+  const direct: Array<{ name: string; registry: string; local?: true }> = [];
   let table = "";
   let block: { kind: "uv" | "poetry"; name: string | null; url: string | null } | null = null;
   const endBlock = () => {
@@ -1726,10 +1808,18 @@ export function pyprojectManifestPrivate(content: string): Array<{ name: string;
   const isPoetryDeps = (name: string) => /^tool\.poetry\.(?:dependencies|dev-dependencies|group\.[^.]+\.dependencies)$/.test(name);
   /** A `{ git = ..., url = ..., path = ... }` source: private unless its location is public. */
   const directSource = (name: string, table: string) => {
+    // `{ workspace = true }`: a uv workspace member, local code (re-check 2026-11-24: sent to pypi.org).
+    if (/(?:^|[{,\s])workspace\s*=\s*true\b/.test(table)) {
+      direct.push({ name, registry: "a uv workspace member (local code)", local: true });
+      return;
+    }
     const location = inlineKey(table, "git") ?? inlineKey(table, "url") ?? inlineKey(table, "path") ?? inlineKey(table, "file");
     if (!location) return;
     const local = inlineKey(table, "path") !== null || inlineKey(table, "file") !== null;
-    if (local || privateDirectReference(location)) direct.push({ name, registry: local ? `the local path ${location}` : sourceLabel(location.replace(/^git\+/i, "")) });
+    const git = inlineKey(table, "git") !== null;
+    // A path or a git checkout is not a registry release (local): withheld, and not called private.
+    if (local || git) direct.push({ name, registry: local ? `the local path ${location}` : `git (${sourceLabel(location.replace(/^git\+/i, ""))})`, local: true });
+    else if (privateDirectReference(location)) direct.push({ name, registry: sourceLabel(location.replace(/^git\+/i, "")) });
   };
   for (const line of tomlLines(content)) {
     const header = tomlHeader(line);
@@ -1758,7 +1848,7 @@ export function pyprojectManifestPrivate(content: string): Array<{ name: string;
       if (kv.key === "index") {
         const index = tomlString(kv.value);
         if (index) wanted.push({ name, index, kind: "uv" });
-      } else if (["git", "url", "path"].includes(kv.key)) directSource(name, `{ ${kv.key} = ${kv.value} }`);
+      } else if (["git", "url", "path", "workspace"].includes(kv.key)) directSource(name, `{ ${kv.key} = ${kv.value} }`);
     } else if (isPoetryDeps(table) && kv.value.startsWith("{")) {
       const source = inlineKey(kv.value, "source");
       if (source) wanted.push({ name: kv.key, index: source, kind: "poetry" });
@@ -1833,11 +1923,39 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
       members = [];
     }
     const found = [[root, rootText] as const, ...members.map((file) => [file, textOf(file)] as const)].flatMap(([file, text]) => [...read(file, text, cargo), ...read(file, text, ownName)]);
+    // A member of a workspace whose root is above it, with or without a Cargo.lock: the root's path,
+    // git and private-registry crates (`{ workspace = true }` inherits them) and every member crate are
+    // this project's own (review 2026-11-24: started in a member, an inherited path crate went to
+    // index.crates.io). Cargo's root is the nearest directory above with a [workspace] table.
+    const workspaceTable = /^\s*\[workspace\]/m;
+    if (rootText && !workspaceTable.test(rootText)) {
+      for (const ancestor of workspaceSearchDirs(path.resolve(dir))) {
+        const file = path.join(ancestor, "Cargo.toml");
+        const got = fs.existsSync(file) ? readRuleFile(file) : null;
+        if (got?.state !== "read" || !workspaceTable.test(got.text)) continue;
+        let listed: string[] = [];
+        try {
+          listed = cargoWorkspaceManifests(ancestor, got.text);
+        } catch {
+          listed = [];
+        }
+        const mine = path.resolve(root).toLowerCase();
+        if (listed.some((f) => path.resolve(f).toLowerCase() === mine)) pushAll(found, manifestPrivateSources(ancestor, ecosystem));
+        break;
+      }
+    }
     return [...found, ...unread];
   }
   if (ecosystem === "PyPI") {
     const file = path.join(dir, "pyproject.toml");
-    return [...read(file, textOf(file), pyprojectManifestPrivate), ...unread];
+    // The project's own name (`[project].name`, `[tool.poetry].name`) is local code, as a Cargo
+    // workspace's crates are (re-check 2026-11-24: asked about directly, it was sent to pypi.org).
+    const ownProject = (text: string) => {
+      const name = /^name\s*=\s*["']([^"']+)["']/m.exec(tomlTable(text, "project") ?? tomlTable(text, "tool.poetry") ?? "")?.[1];
+      return name ? [{ name, registry: "this project's own package (pyproject.toml)", local: true as const, path: "." }] : [];
+    };
+    const text = textOf(file);
+    return [...read(file, text, pyprojectManifestPrivate), ...read(file, text, ownProject), ...unread];
   }
   return [];
 }
@@ -2025,6 +2143,11 @@ export function lockfileRegistryWide(
  * declared there is checked again, and the answer never said so (pre-publish round 10, W4).
  */
 export function lockEntryReason(entry: PrivateIndexEntry): string {
+  if (entry.unknownSource) return `${entry.file}: ${entry.name} is ${entry.registry}, so where it comes from is not known and it was not looked up`;
+  // An `npm:<x>` npm and Yarn read differently: neither reading was looked up (it may be a registry release).
+  if (entry.registry.startsWith(AMBIGUOUS_SPEC_START)) return `${entry.file} declares it with ${entry.registry}`;
+  // Local code, a workspace member, git or an alias key: not a private package, and not looked up.
+  if (entry.local || /^(?:git\b|git\+|git:|ssh:)|\.git(?:[#?/@]|$)/i.test(entry.registry)) return `${entry.file} installs it from ${entry.registry}: ${NOT_REGISTRY_MARK}, so it was not looked up`;
   const base = `${entry.file} installs it from ${entry.registry}, not the public registry`;
   const registry = !entry.local && hostOf(entry.registry.replace(/^[a-z]+\+/i, "")) !== null && !/^(?:git\+|git:|ssh:)|\.git(?:[#?/]|$)/i.test(entry.registry);
   return registry ? `${base}; ${PUBLIC_MIRRORS_HINT}` : base;
@@ -2065,6 +2188,11 @@ export function withheldLine(excluded: { count: number; dependencies: ReadonlyAr
   const rest = excluded.count - n;
   if (rest <= 0) return line;
   return `${line} ${privateLine(rest, excluded.dependencies.filter((d) => !d.unreadable_file).map((d) => d.name))}`;
+}
+
+/** "lockfile" for a lockfile's path, else "file" (a manifest or a rule file). */
+export function unreadFileKind(file: string): "lockfile" | "file" {
+  return LOCKFILE_NAME.test(file) ? "lockfile" : "file";
 }
 
 /** A lockfile's name at the end of a path (not a manifest's, such as package.json or Cargo.toml). */

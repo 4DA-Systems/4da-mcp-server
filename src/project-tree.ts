@@ -55,6 +55,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { IgnoreRules } from "./gitignore.js";
+import { tomlSyntaxProblem } from "./live/lockfile-parsers.js";
 import { goWorkFor, isRequirementsFileName } from "./live/lockfile-parsers-pygo.js";
 import { readTextFile } from "./live/text-file.js";
 import { parsePyprojectDependencies, tomlTable } from "./project-manifests.js";
@@ -142,7 +143,7 @@ export const MAX_EXCLUDED_WALK_DIRS = 2_000;
 
 /**
  * Directories whose lockfiles are test data, not the project's dependencies:
- * a scan of D:\4DA\src-tauri read the 4DA conformance corpus
+ * a scan of the 4DA app repository's Rust tree read the 4DA conformance corpus
  * (tests/conformance/cases, 10,000+ vendored packages) as the app's own
  * (audit A3, 2026-10-12). Left out by default, counted and named in the
  * answer (`not_scanned`), and scanned on request (include_test_fixtures).
@@ -296,7 +297,8 @@ export interface TreeDiscovery {
    * MAX_LISTED_UNLOCKED), relative to the root. Nothing resolved them, so
    * nothing of theirs was checked.
    */
-  unlockedManifests?: Array<{ path: string; ecosystem: string; dependencies: number }>;
+  /** `unreadable`: the manifest could not be parsed, so what it declares is unknown. */
+  unlockedManifests?: Array<{ path: string; ecosystem: string; dependencies: number; unreadable?: string }>;
   /** Every such manifest found (`unlockedManifests` may list fewer). */
   unlockedManifestsCount?: number;
   /** Lockfiles that were scanned although .gitignore lists them, relative to the root. */
@@ -307,6 +309,8 @@ export interface TreeDiscovery {
    * or not (live/private-packages.ts; blind audit round 4).
    */
   registryConfigDirs?: string[];
+  /** Set when the walk was started in a folder with no manifest and read the nearest project above it (nearestProjectAbove). */
+  projectAbove?: { root: string; startedIn: string };
   /** Set when the walk was asked for a workspace member and read the workspace root instead (findWorkspaceRoot). */
   workspace?: WorkspaceRedirect;
   /**
@@ -542,8 +546,8 @@ function below(base: string, rel: string): string {
  * that only sets `"type": "module"`) and a workspace member of a lockfile
  * above (`covers`) are not listed.
  */
-function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: LockCover[]): Array<{ name: string; ecosystem: string; dependencies: number }> {
-  const out: Array<{ name: string; ecosystem: string; dependencies: number }> = [];
+function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: LockCover[]): Array<{ name: string; ecosystem: string; dependencies: number; unreadable?: string }> {
+  const out: Array<{ name: string; ecosystem: string; dependencies: number; unreadable?: string }> = [];
   const read = (name: string) => {
     try {
       return readTextFile(path.join(dir, name));
@@ -560,11 +564,14 @@ function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: 
       );
       if (count > 0 && !covers.some((c) => c.coversPackageJson(below(c.rel, rel)))) out.push({ name: "package.json", ecosystem: "npm", dependencies: count });
     } catch {
-      // not JSON: nothing can be said about it
+      // Not JSON: what it declares is unknown, which is not "nothing" (review 2026-11-24): listed, unread.
+      if (!covers.some((c) => c.coversPackageJson(below(c.rel, rel)))) out.push({ name: "package.json", ecosystem: "npm", dependencies: 0, unreadable: "it is not valid JSON" });
     }
   }
   if (names.includes("Cargo.toml")) {
     const content = read("Cargo.toml") ?? "";
+    const broken = tomlSyntaxProblem(content);
+    if (broken) out.push({ name: "Cargo.toml", ecosystem: "crates.io", dependencies: 0, unreadable: `it is not valid TOML: ${broken}` });
     let table = "";
     let count = 0;
     let crate: string | null = null;
@@ -574,11 +581,16 @@ function unlockedManifestsIn(dir: string, rel: string, names: string[], covers: 
       else if (/(?:^|\.)(?:dev-|build-)?dependencies$/.test(table) && /^\s*[A-Za-z_][\w-]*\s*[=.]/.test(line)) count++;
       else if (table === "package") crate ??= /^\s*name\s*=\s*"([^"]*)"/.exec(line)?.[1] ?? null;
     }
-    if (count > 0 && !(crate && covers.some((c) => c.coversCrate(crate as string)))) out.push({ name: "Cargo.toml", ecosystem: "crates.io", dependencies: count });
+    if (!broken && count > 0 && !(crate && covers.some((c) => c.coversCrate(crate as string)))) out.push({ name: "Cargo.toml", ecosystem: "crates.io", dependencies: count });
   }
   if (names.includes("pyproject.toml")) {
     try {
       const content = read("pyproject.toml") ?? "";
+      const broken = tomlSyntaxProblem(content);
+      if (broken) {
+        out.push({ name: "pyproject.toml", ecosystem: "PyPI", dependencies: 0, unreadable: `it is not valid TOML: ${broken}` });
+        return out;
+      }
       const declared = parsePyprojectDependencies(content);
       const count = declared.deps.length + declared.devDeps.length;
       const project = /^name\s*=\s*["']([^"']+)["']/m.exec(tomlTable(content, "project") ?? tomlTable(content, "tool.poetry") ?? "")?.[1] ?? null;
@@ -620,7 +632,7 @@ const samePath = (a: string, b: string) => (caselessPaths ? a.toLowerCase() === 
  * root (a stray lockfile in a home directory belongs to no project below it). None when `dir` is a
  * repository root itself.
  */
-function workspaceSearchDirs(dir: string): string[] {
+export function workspaceSearchDirs(dir: string): string[] {
   if (fs.existsSync(path.join(dir, ".git"))) return [];
   const above: string[] = [];
   for (let at = dir, level = 0; level < MAX_REPOSITORY_PARENTS; level++) {
@@ -712,6 +724,8 @@ export function findWorkspaceRoot(dir: string): { redirect: WorkspaceRedirect } 
 /** The sentence an answer leads with when the scan was started in a workspace member and read the workspace root, or null. */
 export function workspaceNote(discovery: TreeDiscovery | null): string | null {
   const ws = discovery?.workspace;
+  const above = discovery?.projectAbove;
+  if (!ws && above) return `Started in ${path.relative(above.root, above.startedIn).replace(/\\/g, "/") || above.startedIn}, a folder with no manifest inside the project at ${above.root}: that project was read (project_root).`;
   if (!ws) return null;
   const member = path.relative(ws.root, ws.startedIn).replace(/\\/g, "/") || ws.startedIn;
   const why = ws.kind === "go.work" ? "it is built as part of that workspace's go.work" : `its dependencies are pinned in that workspace's ${ws.lockfile}`;
@@ -726,11 +740,98 @@ export function workspaceNote(discovery: TreeDiscovery | null): string | null {
  * `discovery.workspace` says so; a lockfile above that could not be confirmed
  * to hold it is named (`discovery.ancestorLockfile`), never read.
  */
+/** A manifest or lockfile of a supported ecosystem, by file name. */
+const PROJECT_FILES = ["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "Pipfile", "setup.py", "go.mod", "Gemfile", "gems.rb", "composer.json"];
+
+function holdsProject(dir: string): boolean {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return names.some((n) => PROJECT_FILES.includes(n)) || lockfilesIn(dir, names).length > 0;
+}
+
+/** Levels nearestProjectAbove climbs at most. */
+const MAX_CLIMB = 3;
+
+/** A project of an ecosystem this server does not read: it is a project of its own, never the inside of one above. */
+function foreignProject(dir: string): boolean {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return names.some((n) => /^(?:pom\.xml|build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?|build\.sbt|mix\.exs|Package\.swift|pubspec\.yaml|CMakeLists\.txt|deno\.jsonc?|.+\.(?:csproj|fsproj|vbproj|sln))$/i.test(n));
+}
+
+/**
+ * Whether a folder below `dir` (a few levels, a bounded number of folders) holds a manifest or
+ * lockfile: then `dir` is a folder of projects, scanned as it is, never the inside of one. Past the
+ * bound the answer is yes (do not climb).
+ */
+function projectBelow(dir: string): boolean {
+  let queue = [dir];
+  let seen = 0;
+  for (let depth = 0; depth < 4 && queue.length > 0; depth++) {
+    const next: string[] = [];
+    for (const d of queue) {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(d, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name === "node_modules" || e.name.startsWith(".")) continue;
+        if (++seen > 400) return true;
+        const sub = path.join(d, e.name);
+        if (holdsProject(sub)) return true;
+        next.push(sub);
+      }
+    }
+    queue = next;
+  }
+  return false;
+}
+
+/**
+ * The nearest directory above `dir` that holds a manifest or lockfile, when `dir` holds none:
+ * started in `packages/a/src/lib` or `crates/a/src/bin`, the project is the folder above it, and
+ * nothing was known there (re-check 2026-11-24: siblings and path crates asked about were sent).
+ * Within workspaceSearchDirs's bounds (inside the git repository, never at or above home). Null
+ * when `dir` is a project itself or nothing above it is.
+ */
+export function nearestProjectAbove(dir: string): string | null {
+  const start = path.resolve(dir);
+  if (holdsProject(start) || foreignProject(start) || projectBelow(start)) return null;
+  // At most a few levels (`src/lib`, `src/bin`), and never past a folder that is a project of an
+  // ecosystem this server does not read (a Maven or Gradle project is its own project).
+  // Only inside a git repository, and never above its root: workspaceSearchDirs ends at the folder
+  // holding `.git` when there is one; without one nothing above the start is read (check of round 2,
+  // b-nogit: a parent outside any repository became the project).
+  const above = workspaceSearchDirs(start);
+  const repoRoot = above[above.length - 1];
+  if (!repoRoot || !fs.existsSync(path.join(repoRoot, ".git"))) return null;
+  for (const ancestor of above.slice(0, MAX_CLIMB)) {
+    if (holdsProject(ancestor)) return ancestor;
+    if (foreignProject(ancestor)) return null;
+  }
+  return null;
+}
+
 export function scanProjectTree(
   root: string,
   limits: { maxDepth: number; maxProjects: number; maxExcludedDirs?: number } = { maxDepth: MAX_DEPTH, maxProjects: MAX_PROJECTS },
   options: { includeFixtures?: boolean } = {},
 ): { entries: ProjectTreeEntry[]; discovery: TreeDiscovery } {
+  const above = nearestProjectAbove(root);
+  if (above) {
+    const inner = scanProjectTree(above, limits, options);
+    return inner.discovery.workspace ? inner : { entries: inner.entries, discovery: { ...inner.discovery, projectAbove: { root: above, startedIn: path.resolve(root) } } };
+  }
   const found = findWorkspaceRoot(root);
   if (found && "redirect" in found) {
     const tree = walkProjectTree(found.redirect.root, limits, options);
@@ -959,7 +1060,7 @@ function walkProjectTree(
         // No lockfile here: a manifest is covered only when a lockfile above holds it as a workspace member.
         for (const manifest of unlockedManifestsIn(sub, childRel, names, here)) {
           unlockedCount++;
-          if (unlocked.length < MAX_LISTED_UNLOCKED) unlocked.push({ path: `${childRel}/${manifest.name}`, ecosystem: manifest.ecosystem, dependencies: manifest.dependencies });
+          if (unlocked.length < MAX_LISTED_UNLOCKED) unlocked.push({ path: `${childRel}/${manifest.name}`, ecosystem: manifest.ecosystem, dependencies: manifest.dependencies, ...(manifest.unreadable ? { unreadable: manifest.unreadable } : {}) });
         }
       }
       walk(sub, childRel, depth + 1, grandchildren, here, real);
@@ -1103,6 +1204,17 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
   return notes;
 }
 
+/**
+ * The files whose problems make a scan's coverage incomplete: every problem lockfileProblemNotes
+ * words, and vulnerability_scan's coverage puts every one of those notes in and says `complete:
+ * false`. upgrade_planner's `vulnerabilityDataAvailable` reads the same list, so the two answers
+ * cannot disagree about a lockfile (they did for a conflicted go.sum: review of 6.5.1, 2026-11-24).
+ */
+export function incompleteLockfiles(problems: LockfileProblemLike[]): string[] {
+  if (lockfileProblemNotes(problems).length === 0) return [];
+  return [...new Set(problems.map((p) => p.file))];
+}
+
 /** Kept for its importers (upgrade_planner): lockfileProblemNotes. */
 export function unreadableNotes(problems: LockfileProblemLike[]): string[] {
   return lockfileProblemNotes(problems);
@@ -1168,6 +1280,8 @@ export function discoveryNote(discovery: TreeDiscovery | null): string | null {
     parts.push(
       `${unlocked} manifest${unlocked === 1 ? " has" : "s have"} no lockfile beside ${unlocked === 1 ? "it" : "them"} and ${unlocked === 1 ? "is" : "are"} no workspace member of one above (${listed}${unlocked > 5 ? ", ..." : ""}), so the dependencies ${unlocked === 1 ? "it declares" : "they declare"} were not resolved and NOT checked; generate a lockfile there`,
     );
+    const broken = (discovery.unlockedManifests ?? []).filter((m) => m.unreadable);
+    if (broken.length > 0) parts.push(`${broken.slice(0, 5).map((m) => `${m.path} (${m.unreadable})`).join(", ")} could not be parsed, so what ${broken.length === 1 ? "it declares" : "they declare"} is not known: fix ${broken.length === 1 ? "it" : "them"}, then scan again`);
   }
   if (discovery.walkTruncated) parts.push(discovery.walkStopped ? walkBudgetNote() : `the directory walk stopped after ${MAX_WALK_DIRS} directories, so lockfiles beyond that were not counted`);
   if (discovery.ignoredWalkTruncated) {

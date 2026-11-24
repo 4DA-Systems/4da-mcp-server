@@ -124,6 +124,8 @@ export function readBunLock(content: string, versions: Map<string, string>, inst
       if (at <= 0) continue;
       const kind = nonRegistrySource(value[0].slice(at + 1), value[0].slice(at + 1));
       if (kind && kind !== "local") report.uncheckable.push({ name: value[0].slice(0, at), version: null, kind });
+      // `name@workspace:packages/x`, `name@file:../x`, `name@link:x` too: local code, never a registry release.
+      if (kind) (report.elsewhere ??= []).push(value[0].slice(0, at));
     }
   }
 

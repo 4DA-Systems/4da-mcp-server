@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
  * npm: the release a parent upgrade names for what the project declares (the lever) is judged by
- * what it holds, as the planner's direct targets and dependency_check are (held-dependencies.ts):
+ * what it holds, one and two levels down, as the planner's direct targets and dependency_check are
+ * (held-dependencies.ts, held-second-level.ts):
  * nyc 18.0.0 brings istanbul-lib-processinfo's uuid fix in, and also requires glob "^13.0.6",
  * every 13.x of which an advisory affects. A lever release that holds an affected dependency the
  * installed release does not is not named as the fix silently:
@@ -45,23 +46,48 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
       }
     }
   }
+  // Releases judged NOT a clean fix here: one judgement for the whole plan (below).
+  // The cause, when what the release installs two levels down was only NOT CHECKED; null when it is affected.
+  const rejected = new Map<string, string | null>();
   for (const uses of groups.values()) {
     const { name, version } = uses[0].lever;
     const to = uses[0].lever.to!;
     const say = (text: string) => {
       for (const s of new Set(uses.map((u) => u.step))) if (!s.reasons.includes(text)) s.reasons.push(text);
     };
+    // A release the plan calls NOT a clean fix, or whose holds were NOT CHECKED, gets no command and
+    // no all_advisories claim, on the lever or on the row (claims review 2026-11-24, twolevel85: the
+    // handlebars row kept `npm install @hey-api/openapi-ts@0.97.3` and fixPathChecked all_advisories).
+    const withhold = (text: string, unchecked: string | null = null) => {
+      say(text);
+      rejected.set(`${name}\0${to}`, unchecked);
+      for (const u of uses) {
+        delete u.lever.commands;
+        delete u.lever.instructions;
+        delete u.lever.sameCommandsAs;
+        if (u.step.fixPathChecked === "all_advisories") u.step.fixPathChecked = "installed_advisories_only";
+        // No field names the rejected release as the one to move to, and no reason carries its install
+        // command (re-check 2026-11-24, twolevel85: the reason still read "upgrade @hey-api/openapi-ts
+        // to 0.97.3 (`npm install @hey-api/openapi-ts@0.97.3 --save-exact`)" and parentUpgrades `to: "0.97.3"`).
+        u.lever.to = null;
+        if (u.upgrade.levers.every((l) => l.to === null)) u.upgrade.to = null;
+        u.step.reasons = u.step.reasons.map((r) => (r === text || !r.includes(`${name}@${to}`) && !r.includes(`upgrade ${name} to ${to}`) ? r : withoutCommand(r, name, to)));
+      }
+    };
     const facts = await sources.releaseFacts("npm", name).catch(() => null);
     const judge = async (v: string): Promise<HeldCheck | undefined> => {
       const specs = facts?.heldSpecs?.[v];
       if (facts && !specs) return { status: "checked", affected: [] };
       if (!specs || Date.now() >= deadline) return undefined;
-      return (await heldAdvisories(sources, query, [{ key: v, specs }], deadline).catch(() => null))?.get(v);
+      // Two levels down too (held-second-level.ts), as a direct target is judged: a lever release is
+      // installed by the step as a target is. The installed release is judged the same way, so what it
+      // already holds there is carried over, not brought in.
+      return (await heldAdvisories(sources, query, [{ key: v, specs }], deadline, { secondLevel: true }).catch(() => null))?.get(v);
     };
     const at = facts ? await judge(to) : undefined;
     if (!at || at.status === "unchecked") {
       const why = at?.status === "unchecked" ? at.reason : facts ? "the planner's time budget ran out before it finished" : `the registry gave no answer for the releases of ${name}`;
-      say(`whether the dependencies ${name} ${to} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`);
+      withhold(`whether the dependencies ${name} ${to} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`, why);
       continue;
     }
     if (at.affected.length === 0) continue;
@@ -78,7 +104,24 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
         continue;
       }
     }
-    say(`${name} ${heldText(to, brought)}: upgrading ${name} to ${to} installs ${brought.length === 1 ? "it" : "them"}, so ${to} is NOT a clean fix: confirm a release with dependency_check before pinning it`);
+    withhold(`${name} ${heldText(to, brought)}: upgrading ${name} to ${to} installs ${brought.length === 1 ? "it" : "them"}, so ${to} is NOT a clean fix: confirm a release with dependency_check before pinning it`);
+  }
+  // The package's own row, pulled to the same release by the one-release-per-package rule, gets the
+  // same judgement: no target, no command, no all_advisories, so no run_order step (check of round 2:
+  // vercel 32.2.1 was NOT a clean fix on the lever rows and `npm install vercel@32.2.1` on its own).
+  for (const step of steps) {
+    if (step.ecosystem !== "npm" || step.scope !== "direct" || !step.targetVersion || !rejected.has(`${step.package}\0${step.targetVersion}`)) continue;
+    const release = step.targetVersion;
+    const unchecked = rejected.get(`${step.package}\0${release}`);
+    step.targetVersion = null;
+    delete step.upgradeCommands;
+    delete step.upgradeInstructions;
+    if (step.fixPathChecked === "all_advisories") step.fixPathChecked = "installed_advisories_only";
+    step.reasons.push(
+      unchecked
+        ? `${step.package} ${release}: whether what it installs two levels down is affected was NOT CHECKED (${unchecked}), so no target or command is given`
+        : `${step.package} ${release} is NOT a clean fix (what it installs two levels down is affected: see the rows that name it), so no target or command is given`,
+    );
   }
 }
 
@@ -114,4 +157,10 @@ async function liftedRelease(
     if (check.affected.every((d) => installed?.status === "checked" && sameCopy(installed.affected, d))) return v;
   }
   return null;
+}
+
+/** A reason with the rejected lever release's install command taken out and its advice turned into a warning. */
+function withoutCommand(reason: string, name: string, to: string): string {
+  const quoted = reason.replace(/\s*\(`[^`]*`\)/g, (m) => (m.includes(`${name}@${to}`) ? "" : m));
+  return quoted.replace(/ \(a major upgrade\)/, "").replace(`upgrade ${name} to ${to}`, `upgrading ${name} to ${to} would drop it, but ${to} is NOT a clean fix (see below), so no command is given`);
 }

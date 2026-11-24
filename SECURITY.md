@@ -4,7 +4,7 @@
 
 Only the latest release of `@4da/mcp-server` receives security fixes. Run the
 newest version by its number, as every command in the README does
-(`npx @4da/mcp-server@6.5.0` as of this file; `npm view @4da/mcp-server version`
+(`npx @4da/mcp-server@6.5.1` as of this file; `npm view @4da/mcp-server version`
 names the newest), and move the number when you update. A command with no
 version, or with `@latest`, runs whichever release is newest when it starts:
 one you did not choose or review. The Claude Code plugin, the Gemini extension

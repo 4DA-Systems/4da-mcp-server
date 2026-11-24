@@ -1,7 +1,7 @@
 {
   "name": "4da",
   "description": "Upgrade intelligence for your agent: what changes between the version you run and the one you want, which of your files it touches, which vulnerabilities it fixes. Vulnerability scans against your real lockfile tree, ranked upgrade plans, decision memory. Public package names and versions go to OSV.dev and the package registries when a tool needs them; private ones (.npmrc private scopes, GOPRIVATE, private indexes) never do (GitHub only if you opt in to release notes); your source code never leaves your machine.",
-  "version": "6.5.0",
+  "version": "6.5.1",
   "author": {
     "name": "4DA Systems",
     "url": "https://4da.ai"
@@ -22,7 +22,7 @@
       "args": [
         "-y",
         "--prefer-offline",
-        "@4da/mcp-server@6.5.0"
+        "@4da/mcp-server@6.5.1"
       ]
     }
   }

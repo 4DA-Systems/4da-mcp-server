@@ -1,0 +1,99 @@
+G7 for @4da/mcp-server 6.5.1 (release candidate; the package still prints 6.5.0) - adjudication, 2026-11-24
+
+Server under test: candidate head 6432af8, tarball 4da-mcp-server-6.5.0.tgz (npm pack of that commit),
+sha256 2a6fc0e9c03881f9f8dc155799f70b8216a8ee3a6a2fd78f79bcf8e51b87909c (verified), installed at
+a scratch folder. The installed package is byte-identical to the extracted tarball (diff -r) and carries
+the candidate-only symbol withDeclaredNames (dist/live/resolution.js:318). G7_LOCAL_SERVER =
+<scratch install>/node_modules/@4da/mcp-server/dist/index.js, printed by the runner at start and present
+in all 147 per-run mcp.json files (147/147). Arm treatment-local, 49 tasks x 3, concurrency 2, model claude-sonnet-5-5,
+23.1 min (a plan-execution benchmark ran on the machine at the same time), $4.77 API-price equivalent (billed to the
+Claude plan), 18.8 s per run, a fresh FOURDA_MCP_HOME and DB per run. Harness: bench/g7, byte-identical to the
+6.2.7/6.3.0 harness; run from a copy outside the repository.
+
+Truth: the pinned 2026-10-24 truth (copied unmodified from bench/g7/truth), adjudicated afterwards against live
+registries and OSV.dev, as ADJUDICATION-626/627 did. Not rebuilt, so the shared control arm and the well-posed set stay
+comparable with every published G7 row. Control arm: the shared recorded arm (the 6.2.6 run's 147 control runs,
+2026-10-26); re-scored here 82/138, identical to the published table.
+
+Earlier candidate: the same method was run on 2026-11-24 on candidate ee0cd12 (tarball sha256 b1c201e9...f0ae,
+a separate working copy, with its own adjudication file). Result: treatment 0/138 vulnerable on well-posed tasks
+(adjusted 0/135 vs control 79/135), 147/147 runs called dependency_check, 0 run errors, 63 nonexistent picks of which
+60 were correct post-truth releases and 3 (g12) moved to ill-posed, no wrong tool answer. This run (6432af8) replaces
+it as the record for 6.5.1 because a later fix added a staleness refresh in front of dependency_check.
+
+Scored (score-g7.mjs final-651 treatment-local):
+  PRIMARY vulnerable selection, well-posed: control 82/138 (59.4%), treatment 0/138 (0.0%),
+  Fisher two-sided p = 9.28e-33. Task-clustered sign test 28 better / 0 worse / 18 ties, p = 7.5e-9. G7 PASS.
+  Vulnerable, all 49 tasks: control 91/147, treatment 9/147 (n06, p04, p09 x3: ill-posed by the truth).
+  Runs that called the server: 147/147 (dependency_check in all; upgrade_impact in 2). Run errors: 0/147. MCP tool
+  errors: 0. "nonexistent version": 62/147; completed 75/138 well-posed, 82/147 all.
+
+Every flagged run, checked against the registries and OSV.dev directly (never the server). Pairs already checked for
+the ee0cd12 run earlier today were reused (53); 5 new pairs were queried:
+  npm axios 1.21.1 (2026-11-09, none) n02 x3; marked 18.2.1 (11-16, none) n04 x3, with sanitize-html 2.18.2 (11-11,
+      none) in 2 runs and dompurify 3.4.18 (11-14, none, NEW) + jsdom 31.0.1 (11-13, none, NEW) in 1;
+      ws 7.5.14 (11-12, none) n07 x3; axios 0.35.0 (11-03, none) n10 x3; semver 7.8.6 (11-02, none) n12 x3
+  PyPI PyYAML 6.0.4 (11-20) p02 x3; gunicorn 27.0.1 (11-12) p06 x3; tornado 6.6.1 (11-09) p11 x3;
+      fastapi 0.165.0 (11-18) p12 x3: OSV none
+  crates openssl 0.10.82 (11-01) c03 x3, c09 x3; regex 1.13.2 (11-18) c04 x3; sqlx 0.9.1 (11-18) c08 x3;
+      flate2 1.1.11 (11-06, beside a clean tar 0.4.46) c11 x3: OSV none
+  Go x/net v0.63.0 (11-17) g01 x3, g11 x3; g02 x3 gin v1.12.0 with indirect minimums x/net v0.62.0 (10-27),
+      x/crypto v0.59.0 (11-11), x/text v0.41.0 or v0.44.0 (11-09, NEW, none); grpc v1.85.0 (10-27) g06 x3;
+      x/oauth2 v0.38.0 (11-06) g08 x3; x/crypto v0.59.0 g04 x3: OSV none
+  => 60 runs on well-posed tasks: correct picks of releases newer than the truth, each meeting its task's constraint.
+  g12-add-echo: ILL-POSED since 2026-11-05 (GO-2026-6872 and GO-2026-6875 affect every echo/v4 release; fixes only
+      in echo/v5), as in ADJUDICATION-627. t1, t2 wrote v4.16.6 (2026-11-20) with both advisories disclosed;
+      t3 wrote nothing and told the user no v4 release avoids them.
+  Live re-check of every distinct treatment pick (58 pairs): no advisory on any well-posed task's pick; advisories only
+  on the ill-posed tasks' picks (next 13.5.11 / 13.4.0, Django 4.2.30 / 4.2.0, Flask 2.3.3 / 2.2.2, echo/v4 v4.16.6).
+
+Ill-posed tasks: n06 t1 now left next at 13.4.0 and asked the user to choose (t2, t3 wrote 13.5.11 with disclosure);
+p09 t1 now left Flask 2.2.2 (t2, t3 wrote 2.3.3 with disclosure); p04 as before. The scorer counts all of these as
+vulnerable, by design.
+
+Server answers (204 dependency_check verdicts: 148 proceed, 41 review, 8 wait, 6 avoid, 1 unknown). Same verdict per
+package@version as the ee0cd12 run everywhere except one: g12 t2, golang.org/x/crypto v0.59.0 answered `unknown`
+("Registry could not be reached (Go module proxy: This operation was aborted); nothing about v0.59.0 was verified."),
+where every other run got `proceed`. That is a correct answer to a failed lookup (a transient abort on a loaded
+machine), not a wrong one; the agent wrote v0.59.0 anyway and told the user it "couldn't verify it directly because
+the registry lookup failed". v0.59.0 has no OSV advisory. No wrong or misleading tool answer was found.
+
+Adjusted against live truth (well-posed set without g12: 45 tasks, 135 runs per arm):
+  PRIMARY vulnerable selection: control 79/135 (58.5%, 95% CI 50.1-66.5%), treatment 0/135 (0%, 0-2.8%),
+  Fisher two-sided p = 2.1e-31; sign test 27 better / 0 worse / 18 ties, p = 1.5e-8.
+  Completed 135/135 (75 as scored + 60 correct post-truth picks); nonexistent 0.
+  All 49 tasks: treatment 11/147 runs wrote a version with a live advisory, all on the four ill-posed tasks
+  (n06, p04, p09, g12); control not re-adjudicated (shared arm, kept on the pinned truth).
+The primary endpoint is unchanged: 0 vulnerable selections on well-posed tasks.
+
+----
+Confirmation run on the release build, 2026-11-25 (results/scores-confirm-651.json, summary-confirm-651.json)
+
+The record above is the 6432af8 run. Review rounds after it changed the server, so the treatment arm was run again on
+the server build that is released: tarball C:/4da-wt/mcp-651/pack8/4da-mcp-server-6.5.0.tgz of commit 7aae8b0, sha256
+259164c0b0268e650d9110cccb8c2ae7fb5c1eeaca8facaef612e1b912e14f34, installed at C:/4da-wt/mcp-651/cand8-install. The
+commits after 7aae8b0 touch the guard hook, its tests and the documents only: dist/ of the next packed candidate
+(d2d8434) is byte-identical to this one (diff -rq), and G7 never runs the hook (Bash is off in both arms). Same
+harness, truth, shared control arm, model (claude-sonnet-5-5), 49 tasks x 3 and concurrency 2; 24.1 min, $4.89
+API-price equivalent, 19.5 s per run; a full test suite and a plan-execution benchmark ran on the machine meanwhile.
+
+Scored (score-g7.mjs):
+  PRIMARY vulnerable selection, well-posed: control 82/138, treatment 0/138, Fisher two-sided p = 9.28e-33; sign test
+  28 better / 0 worse / 18 ties, p = 7.5e-9. G7 PASS.
+  Vulnerable, all 49 tasks: control 91/147, treatment 9/147 (n06, p04, p09 x3: ill-posed by the truth).
+  Runs that called dependency_check: 147/147 (168 calls; upgrade_impact in 1). Run errors 0/147.
+  "nonexistent version": 61/147; completed 75/138 well-posed, 83/147 all.
+
+Adjudicated with adjudicate-651.mjs with nothing reused: all 56 distinct picks were asked of the registries and
+OSV.dev afresh. The 61 "nonexistent" runs are the same 20 well-posed tasks x 3 as above (60 runs: releases published
+after the pinned truth, 2026-10-27 to 2026-11-20, none with an advisory, each meeting its task's constraint; n04 chose
+marked 18.2.1 with sanitize-html 2.18.2, isomorphic-dompurify 4.8.0, or dompurify 3.4.18 + jsdom 31.0.1) plus g12 t2
+(echo/v4 v4.16.6, ill-posed since 2026-11-05; t1 and t3 wrote nothing). Live advisories only on the ill-posed tasks'
+picks: next 13.5.11 (n06 t1, t3) and 13.4.0 left in place (t2), Django 4.2.30 (p04 x3), Flask 2.3.3 (p09 x3),
+echo/v4 v4.16.6 (g12 t2).
+
+Server answers: 202 dependency_check verdicts (140 proceed, 39 review, 14 avoid, 9 wait, 0 unknown). No wrong or
+misleading tool answer was found.
+
+Adjusted against live truth (well-posed set without g12: 45 tasks, 135 runs per arm): control 79/135, treatment
+0/135; completed 135/135 (75 as scored + 60 correct post-truth picks). The primary endpoint is unchanged.

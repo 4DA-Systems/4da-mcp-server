@@ -10,8 +10,8 @@ package-contents check rejects `bench/`).
 
 ## Results
 
-Measured on the 6.2.5, 6.2.6 and 6.2.7 release candidates (each installed from its packed tarball),
-model `claude-sonnet-5-5`, 49 tasks x 3 trials per arm.
+Measured on the 6.2.5, 6.2.6, 6.2.7 and 6.5.1 release candidates (each installed from its packed
+tarball), model `claude-sonnet-5-5`, 49 tasks x 3 trials per arm.
 
 | | without the server | with the server |
 |---|---|---|
@@ -24,9 +24,10 @@ model `claude-sonnet-5-5`, 49 tasks x 3 trials per arm.
 | Run errors | 0 / 147 | 0 / 147 |
 | Runs that called the server | | 147 / 147 (`dependency_check` in all) |
 
-The 6.2.5, 6.2.6 and 6.2.7 runs gave the same primary result; all three share one control arm (the
-control arm has no server, so a server release does not change it). `results/summary-final-62{5,6,7}.json`
-hold every table; `results/scores-final-62{5,6,7}.json` hold the per-run rows.
+The 6.2.5, 6.2.6, 6.2.7 and 6.5.1 runs gave the same primary result as scored; all four share one
+control arm (the control arm has no server, so a server release does not change it).
+`results/summary-final-{625,626,627,651}.json` hold every table; `results/scores-final-{625,626,627,651}.json`
+hold the per-run rows. No release between 6.2.7 and 6.5.1 has a published run.
 
 **The 9 / 147 on all tasks** are the three ill-posed tasks (n06, p04, p09), 3 runs each: by the
 pinned truth, no release inside their constraint is free of advisories (every Next.js 13.x, every
@@ -52,13 +53,27 @@ affect every echo/v4 release, with fixes only in the echo/v5 module. In all thre
 answered `review`, and the agent wrote v4.16.3 while telling the user both advisories and that no v4
 release is free of them. The primary endpoint is unchanged: 0 vulnerable on well-posed tasks.
 
+**Truth staleness adjustments (6.5.1, `ADJUDICATION-651.txt`).** Run on 2026-11-24, a month after
+the truth, on the build of the commit that became 6.5.1, before its version bump (the package still
+printed 6.5.0; the file records the commit and the tarball's SHA-256). 62 treatment runs scored
+"nonexistent". Each pick was checked against the registries and OSV directly. 60 runs, all on
+well-posed tasks, chose a release published after the truth with no advisory (the file lists every
+one). The other 2 are g12-add-echo, ill-posed since 2026-11-05 as above: both wrote v4.16.6 and told
+the user of both advisories, and the third g12 run wrote nothing and said no v4 release avoids them.
+In one run a registry lookup failed: the server answered `unknown` and said nothing was verified,
+and the agent wrote the version and told the user it was unverified (it has no advisory). With g12
+moved to the ill-posed set in both arms, and the control arm otherwise kept on the pinned truth:
+0 / 135 with the server against 79 / 135 without (Fisher two-sided p = 2.1e-31; sign test 27 tasks
+better, 0 worse, 18 ties). `summary-final-651.json` carries that adjusted table as `adjusted_651`,
+added by hand from the adjudication; the rest of the file is the scorer's output.
+
 ## Design
 
 - **Pre-registered.** `PREREGISTRATION.txt` was written on 2026-10-11, before the full run (smoke runs on
   two tasks were discarded). It fixes the unit, the version-selection rule, the vulnerable rule, the
   primary endpoint (vulnerable-selection rate over well-posed tasks, Fisher two-sided p < 0.05) and
   the robustness checks. The first full run measured 6.1.0; this directory publishes the 6.2.5,
-  6.2.6 and 6.2.7 runs, scored by the same rule.
+  6.2.6, 6.2.7 and 6.5.1 runs, scored by the same rule.
 - **Tasks.** 49 tasks (13 npm, 12 PyPI, 12 crates.io, 12 Go; 24 add, 11 upgrade, 14 pin), each a small
   project with a manifest and, where the ecosystem has one, a lockfile. `gen-tasks.mjs` generates
   them; `tasks.json` holds every prompt, target and constraint. A task is well-posed when a release
@@ -88,6 +103,7 @@ release is free of them. The primary endpoint is unchanged: 0 vulnerable on well
 | `PREREGISTRATION.txt` | the analysis plan, 2026-10-11 |
 | `ADJUDICATION-626.txt` | the 6.2.6 runs and every scored miss, adjudicated against live OSV |
 | `ADJUDICATION-627.txt` | the same for the 6.2.7 runs |
+| `ADJUDICATION-651.txt` | the same for the 6.5.1 runs, with the build that was measured, and a confirmation run on the released server build (`results/*-confirm-651.json`: 0/138 again) |
 | `gen-tasks.mjs` | writes `tasks/<id>/` and `tasks.json` (deterministic) |
 | `tasks.json` | the 49 task definitions |
 | `lib-truth.mjs`, `build-truth.mjs` | pin registry versions and OSV advisories into `truth/` |
@@ -95,7 +111,7 @@ release is free of them. The primary endpoint is unchanged: 0 vulnerable on well
 | `truth/` | the pinned truth, 2026-10-24 (89 files, about 5 MB, 240 kB compressed) |
 | `run-g7.mjs` | the runner |
 | `score-g7.mjs` | the scorer: `results/scores-<label>.json`, `results/summary-<label>.json` |
-| `results/` | the published 6.2.5, 6.2.6 and 6.2.7 scores and summaries |
+| `results/` | the published 6.2.5, 6.2.6, 6.2.7 and 6.5.1 scores and summaries |
 
 `tasks/` is generated, not committed: its manifests pin vulnerable versions on purpose, and committed
 they would raise dependency alerts against this repository. Run transcripts and work directories
@@ -132,8 +148,9 @@ With the committed truth, a release published after 2026-10-24 scores as "nonexi
 advisory published since is not counted (see Limitations).
 
 **Cost and time** (model `claude-sonnet-5-5`, 147 runs per arm): control $2.79 in all, 18.9 s per run
-on average; treatment $4.53 (6.2.5), $4.84 (6.2.6) and $4.80 (6.2.7), 23.2 s, 19.1 s and 21.6 s per
-run. The 6.2.6 and 6.2.7 treatment arms took 15.8 and 17.9 minutes at concurrency 3.
+on average; treatment $4.53 (6.2.5), $4.84 (6.2.6), $4.80 (6.2.7) and $4.77 (6.5.1), 23.2 s, 19.1 s,
+21.6 s and 18.8 s per run. The 6.2.6 and 6.2.7 treatment arms took 15.8 and 17.9 minutes at
+concurrency 3; the 6.5.1 arm took 23.1 minutes at concurrency 2.
 
 ## Limitations
 
@@ -144,7 +161,8 @@ run. The 6.2.6 and 6.2.7 treatment arms took 15.8 and 17.9 minutes at concurrenc
   exploratory `control-web` arm, not part of G7).
 - **The truth goes stale.** It is a snapshot from 2026-10-24: later releases score as nonexistent and
   later advisories are not counted, which can move results in either direction. Adjudicate misses
-  against live OSV, as `ADJUDICATION-626.txt` does, or re-pin the truth.
+  against live OSV, as the `ADJUDICATION-*.txt` files do, or re-pin the truth. By the 6.5.1 run, a
+  month on, 62 of 147 treatment runs needed that check by hand.
 - **The scorer judges the written version, not the explanation.** On ill-posed tasks a correct
   refusal still scores as vulnerable.
 - **The tasks were written by the server's authors.** They cover common packages across four

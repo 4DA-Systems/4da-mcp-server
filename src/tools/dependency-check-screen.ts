@@ -9,6 +9,7 @@
 import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { isNpmPackageName, quoteThirdParty } from "../untrusted-text.js";
+import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK, unreadFileKind } from "../live/private-packages.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
 import { head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
 
@@ -43,7 +44,7 @@ export async function screenItems(all: Requested[], liveIntel: LiveIntelligence 
   const requested = all.filter((_, i) => !privateWhy[i] && !(goPath[i] && !goPath[i]!.ok) && !npmName[i]);
   const privateItems = all.flatMap((r, i) => {
     const why = privateWhy[i];
-    if (why) return [{ at: i, result: privateResult(r, why) }];
+    if (why) return [{ at: i, result: privateResult(r, why, liveIntel?.withheldUnreadableFile?.(why) ?? null) }];
     const g = goPath[i];
     if (g && !g.ok) return [{ at: i, result: goPathResult(r, g) }];
     const bad = npmName[i];
@@ -124,9 +125,52 @@ function npmNameResult(r: Requested, problem: string): ItemResult {
 
 /**
  * An item whose package is private: unknown, with why, and nothing about it looked up. The
- * agent is told how to check it instead (the private registry's own tooling).
+ * agent is told how to check it instead (the private registry's own tooling). A name withheld only
+ * because a lockfile (or manifest) could not be read is not called private: where it would be
+ * installed from is not known, and the remedy is to repair that file (6.5.0 called lodash "a
+ * private package" beside an unparseable package-lock.json and sent the agent to a private registry).
  */
-function privateResult(r: Requested, why: string): ItemResult {
+function privateResult(r: Requested, why: string, unreadFile: string | null): ItemResult {
+  if (unreadFile) {
+    const kind = unreadFileKind(unreadFile);
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (unreadable ${kind}): ${unreadFile} could not be read, so where ${r.package} would be installed from is not known. It was withheld as possibly private: nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: repair or regenerate the ${kind} (reinstall), then call dependency_check again.`,
+      signals: [],
+      not_checked: "private",
+      unreadable_file: unreadFile,
+    };
+  }
+  // A name withheld because a project takes it from a path, git, a URL, its workspace or an alias is
+  // not a private package, and private-registry tooling is no help with it (re-check 2026-11-24).
+  if (why.includes(AMBIGUOUS_SPEC_MARK)) {
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (ambiguous npm: spec): ${r.package}: ${why}. Nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: write the spec as npm:<package>@<range>, or check the package it installs.`,
+      signals: [],
+      not_checked: "private",
+    };
+  }
+  if (why.includes(UNREAD_CATALOG_MARK)) {
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (catalog not read): ${r.package}: ${why}. Nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: fix the catalog, then call dependency_check again.`,
+      signals: [],
+      not_checked: "private",
+    };
+  }
+  if (why.includes(NOT_REGISTRY_MARK)) {
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (not a registry release): ${r.package}: ${why}. Nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: review the code it comes from, or ask about the registry package it installs.`,
+      signals: [],
+      not_checked: "private",
+    };
+  }
   return {
     ...head(provisional(r)),
     verdict: "unknown",

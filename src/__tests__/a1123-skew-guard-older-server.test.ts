@@ -95,7 +95,7 @@ describe("a data folder with no ledger: the servers that ran there record no ver
     expect(out.status).toBe(0);
     const parsed = JSON.parse(out.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(parsed.hookSpecificOutput.hookEventName).toBe("PostToolUse");
-    expect(parsed.hookSpecificOutput.additionalContext).toContain("lodash: 4.17.21 -> 4.17.20");
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('"lodash": "4.17.21" -> "4.17.20"');
     expect(parsed.hookSpecificOutput.additionalContext).toContain("dependency_check");
   });
 
@@ -113,7 +113,7 @@ describe("a data folder with a ledger: a server that records verdicts has run th
     fs.writeFileSync(path.join(home, LEDGER_FILE), "");
     const reason = denial(hook(event("PreToolUse", "Edit", lodashEdit("4.17.20"))));
     expect(reason).toContain("call the 4da MCP tool dependency_check");
-    expect(denial(hook(event("PreToolUse", "Bash", { command: "npm install lodash@4.17.20" })))).toContain("lodash 4.17.20");
+    expect(denial(hook(event("PreToolUse", "Bash", { command: "npm install lodash@4.17.20" })))).toContain('"lodash" "4.17.20" (npm)');
     // The guard held the edit, so nothing follows it.
     expect(hook(event("PostToolUse", "Edit", lodashEdit("4.17.20")))).toEqual({ status: 0, stdout: "" });
   });
@@ -130,7 +130,8 @@ describe("a data folder with a ledger: a server that records verdicts has run th
     expect(reason).toContain("If this stops again after dependency_check has answered for it, do not retry");
     expect(reason).toContain("older than 6.5.0");
     expect(reason).toContain("FOURDA_MCP_HOME");
-    expect(reason).toContain("FOURDA_GUARD=advise");
+    // FOURDA_GUARD is the user's setting, not the agent's (re-check of 0d30b40, S8).
+    expect(reason).toContain("FOURDA_GUARD (advise, off) is the user's setting: tell the user, and do not change it yourself");
   });
 
   it("other verdicts on record, none for this version: the same note, without the empty-ledger sentence", () => {
