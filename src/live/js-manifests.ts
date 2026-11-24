@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
-import { readTextFile } from "./text-file.js";
+import { readManifestText } from "./text-file.js";
 
 export const DEPENDENCY_SECTIONS = ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"] as const;
 export type DependencySection = (typeof DEPENDENCY_SECTIONS)[number];
@@ -52,7 +52,7 @@ const MAX_DECLARED = 20_000;
 export function readManifestDeclarations(file: string): ManifestDeclarations | null {
   let pkg: unknown;
   try {
-    pkg = JSON.parse(readTextFile(file));
+    pkg = JSON.parse(readManifestText(file));
   } catch {
     return null;
   }

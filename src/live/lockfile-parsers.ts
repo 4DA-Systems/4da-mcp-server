@@ -46,7 +46,7 @@ import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./
 import { runSteps, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
-import { isMergeConflictError, readTextFile } from "./text-file.js";
+import { isMergeConflictError, readManifestText, readTextFile } from "./text-file.js";
 import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import type { OsvEcosystem } from "./types.js";
 
@@ -152,7 +152,9 @@ function conflictedInputs(cwd: string, ecosystem: OsvEcosystem, read: VersionSou
   for (const file of new Set(candidates.map((f) => path.resolve(f)))) {
     if (readFiles.has(file) || !fs.existsSync(file)) continue;
     try {
-      readTextFile(file);
+      // A manifest is read once per signature (readManifestText); a lockfile is read as it is.
+      if ((CONFLICT_CHECKED_FILES[ecosystem] ?? []).includes(path.basename(file))) readManifestText(file);
+      else readTextFile(file);
     } catch (error) {
       if (isMergeConflictError(error)) conflicted.add(file);
     }
@@ -1413,7 +1415,7 @@ export function tomlSyntaxProblem(content: string): string | null {
 export function manifestSyntaxProblem(file: string): string | null {
   let content: string;
   try {
-    content = readTextFile(file);
+    content = readManifestText(file);
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return null;
     return `it could not be read (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`;

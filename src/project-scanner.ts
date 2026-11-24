@@ -21,7 +21,7 @@ import {
   parsePyprojectDependencies,
 } from "./project-manifests.js";
 import { tomlSyntaxProblem } from "./live/lockfile-parsers.js";
-import { readTextFile } from "./live/text-file.js";
+import { readManifestText, readTextFile } from "./live/text-file.js";
 import { pushAll } from "./array-utils.js";
 
 // =============================================================================
@@ -159,7 +159,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   const pkgPath = path.join(cwd, "package.json");
   if (fs.existsSync(pkgPath)) {
     try {
-      const pkg = JSON.parse(readTextFile(pkgPath));
+      const pkg = JSON.parse(readManifestText(pkgPath));
       langSet.add("javascript");
 
       if (pkg.name) {
@@ -227,7 +227,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   const cargoPath = path.join(cwd, "Cargo.toml");
   if (fs.existsSync(cargoPath)) {
     try {
-      const content = readTextFile(cargoPath);
+      const content = readManifestText(cargoPath);
       langSet.add("rust");
       // Not valid TOML: the group stays, so the resolver names the file as unreadable (review 2026-11-24).
       if (tomlSyntaxProblem(content)) result.depsByEcosystem["rust"] ??= { deps: [], devDeps: [] };
@@ -282,7 +282,7 @@ export function scanCurrentProject(cwd: string): ProjectScanResult {
   if (fs.existsSync(pyprojectPath)) {
     langSet.add("python");
     try {
-      const text = readTextFile(pyprojectPath);
+      const text = readManifestText(pyprojectPath);
       if (tomlSyntaxProblem(text)) pyUnread = true;
       const parsed = parsePyprojectDependencies(text);
       parsed.deps.forEach((d) => pyDeps.add(d));

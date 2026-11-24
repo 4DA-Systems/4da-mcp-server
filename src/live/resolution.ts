@@ -35,7 +35,7 @@ import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFro
 import { parsePyprojectDependencies } from "../project-manifests.js";
 import { scanCurrentProject } from "../project-scanner.js";
 import { workspaceSearchDirs } from "../project-tree.js";
-import { readTextFile } from "./text-file.js";
+import { readManifestText, readTextFile } from "./text-file.js";
 import { runSteps, type Steps } from "./yield-point.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
 import type { LockfileProblem, UncheckableDependency, UnpinnedRequirements, VersionSource } from "./lockfile-types.js";
@@ -218,7 +218,7 @@ function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string
   if (root) {
     let manifest: unknown = null;
     try {
-      manifest = JSON.parse(readTextFile(manifestFile));
+      manifest = JSON.parse(readManifestText(manifestFile));
     } catch {
       manifest = null;
     }
@@ -485,7 +485,7 @@ function inputDigest(file: string, groupDir: string): string {
   }
   let text: string;
   try {
-    text = readTextFile(file);
+    text = readManifestText(file);
   } catch {
     return "unreadable";
   }

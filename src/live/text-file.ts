@@ -147,3 +147,30 @@ export function readRuleFile(file: string): RuleFileRead {
   if (text.includes("\0")) return { state: "unreadable", reason: "is not text this server can decode (it holds NUL characters)" };
   return { state: "read", text };
 }
+
+/** Manifests read in this process, by path, with the stat signature they were read at. */
+const manifestMemo = new Map<string, { key: string; text: string }>();
+const MANIFEST_MEMO_ENTRIES = 4_000;
+
+/**
+ * readTextFile for a manifest several readers of one resolution read (package.json, Cargo.toml,
+ * pyproject.toml): read once per stat signature (mtime, size, inode) instead of once per reader.
+ * The first scan of 200 projects read each package.json seven times (re-check 2026-11-24: 2,401
+ * file reads against 6.5.0's 801). Throws as readTextFile does.
+ */
+export function readManifestText(file: string): string {
+  let key: string;
+  try {
+    const st = fs.statSync(file);
+    key = `${st.mtimeMs}:${st.size}:${st.ino}`;
+  } catch {
+    return readTextFile(file);
+  }
+  const hit = manifestMemo.get(file);
+  if (hit && hit.key === key) return hit.text;
+  const text = readTextFile(file);
+  manifestMemo.delete(file);
+  manifestMemo.set(file, { key, text });
+  if (manifestMemo.size > MANIFEST_MEMO_ENTRIES) manifestMemo.delete(manifestMemo.keys().next().value as string);
+  return text;
+}
