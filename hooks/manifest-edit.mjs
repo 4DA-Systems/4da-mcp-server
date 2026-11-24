@@ -805,8 +805,10 @@ function goDirectives(text, block = null) {
       const m = GO_REQUIREMENT.exec(args);
       if (m) requires.push({ name: m[1], spec: m[2] });
     } else if (verb === "replace") {
-      const m = /^(\S+)(?:\s+(v\S+))?\s*=>\s*(\S+)/.exec(args);
+      const m = /^(\S+)(?:\s+(v\S+))?\s*=>\s*(\S+)(?:\s+(v\S+))?/.exec(args);
       if (m && GO_LOCAL_PATH.test(m[3])) local.push({ name: m[1], version: m[2] ?? null });
+      // A replacement by a module version is what gets built, as an npm override is: read as its requirement.
+      else if (m && m[4] && GO_REQUIREMENT.test(`${m[3]} ${m[4]}`)) requires.push({ name: m[3], spec: m[4] });
     }
   }
   return { requires, local, block };
