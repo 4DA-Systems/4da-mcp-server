@@ -922,7 +922,24 @@ function versionChanges(file, before, after, disk) {
   // Where the edit sits in the file: the new text is on disk now, and the old text stood at the same place.
   const place = placeOnDisk(disk, after);
   const old = declaredVersions(file, typeof before === "string" ? before : "", disk, place);
-  return diffVersions(old, declaredVersions(file, after, disk, place));
+  return diffVersions(old, declaredVersions(file, after, disk, place), specKey(file));
+}
+
+/**
+ * How a manifest's version specifiers compare: a Python manifest's in PEP 440 normal form, clause by
+ * clause (`5.0.0rc1` and `5.0.0-rc1`, `+cpu` and `+CPU`, `2.31.0` and `2.31.0.0` are the same
+ * release: a spelling change introduces nothing; re-check of 0d30b40); the others as written.
+ */
+function specKey(file) {
+  if (ECOSYSTEM[file] !== "PyPI") return (spec) => spec;
+  return (spec) =>
+    String(spec)
+      .split(",")
+      .map((clause) => {
+        const m = /^\s*(===|==|~=|!=|<=|>=|<|>)?\s*(.*?)\s*$/.exec(clause);
+        return `${m[1] ?? ""}${/\*$/.test(m[2]) ? m[2] : versionKey("PyPI", m[2])}`;
+      })
+      .join(",");
 }
 
 /**
@@ -931,12 +948,12 @@ function versionChanges(file, before, after, disk) {
  * introduced (a dependency moved between sections). `from` is the section's old version, else the
  * name's only old version.
  */
-function diffVersions(old, now) {
+function diffVersions(old, now, same = (spec) => spec) {
   const before = new Map();
   for (const [key, specs] of old) {
     const name = keyName(key);
     const all = before.get(name) ?? new Set();
-    for (const spec of specs) all.add(spec);
+    for (const spec of specs) all.add(same(spec));
     before.set(name, all);
   }
   const changes = [];
@@ -946,8 +963,8 @@ function diffVersions(old, now) {
     const prev = old.get(key) ?? [];
     const anywhere = before.get(name) ?? new Set();
     for (const spec of specs) {
-      if (anywhere.has(spec) || seen.has(`${name}\0${spec}`)) continue;
-      seen.add(`${name}\0${spec}`);
+      if (anywhere.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
+      seen.add(`${name}\0${same(spec)}`);
       const from = prev.length === 1 ? prev[0] : prev.length === 0 && anywhere.size === 1 ? [...anywhere][0] : null;
       changes.push({ name, from, to: spec });
     }
@@ -961,7 +978,7 @@ function wholeFileChanges(file, before, after) {
     const context = fileContext(text);
     return declaredVersions(file, text, () => context, 0, true);
   };
-  return diffVersions(versionsOf(before), versionsOf(after));
+  return diffVersions(versionsOf(before), versionsOf(after), specKey(file));
 }
 
 const ECOSYSTEM = {
