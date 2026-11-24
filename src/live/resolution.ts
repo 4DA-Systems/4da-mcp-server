@@ -138,7 +138,7 @@ function specWords(kind: "git" | "url" | "file" | "local" | "catalog", spec: str
  * `"vendor/x-1.0.0.tgz"` and a workspace member declared `^1.0.0` reached registry.npmjs.org,
  * api.npmjs.org and hn.algolia.com by name (review 2026-11-24).
  */
-function nonRegistryDirect(dir: string, read: VersionSource, catalogFiles: Set<string>): NotRegistryDependency[] {
+function nonRegistryDirect(dir: string, read: VersionSource, catalogFiles: Set<string>, aliases: Map<string, string>): NotRegistryDependency[] {
   const out = new Map<string, NotRegistryDependency>();
   const catalogsByDir = new Map<string, ReturnType<typeof lazyNpmCatalogs>>();
   const catalogsFor = (base: string) => {
@@ -162,7 +162,15 @@ function nonRegistryDirect(dir: string, read: VersionSource, catalogFiles: Set<s
   for (const m of manifests) {
     for (const d of m.declared) {
       const spec = classifyNpmSpec(d.name, d.spec, catalogsFor(m.base));
-      if (spec.kind === "registry") continue;
+      if (spec.kind === "registry") {
+        // An `npm:` alias: the key is a folder name the project chose, never a registry package. It
+        // installs the target, which is what is checked; the key itself is withheld, with the target named.
+        if (spec.name.toLowerCase() !== d.name.toLowerCase()) {
+          if (!aliases.has(d.name)) aliases.set(d.name, spec.name);
+          add({ name: d.name, file: m.file, from: `an npm: alias of ${spec.name} (${d.spec.trim().slice(0, 120)}): it installs ${spec.name}, so ask about ${spec.name}` });
+        }
+        continue;
+      }
       if (spec.kind === "catalog") {
         add({ name: d.name, file: m.file, from: specWords("catalog", d.spec.trim(), spec.catalogSpec) });
         continue;
@@ -251,19 +259,24 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   // Ruby and PHP: the lockfile (and composer.json) name the direct dependencies; the project scanner does not.
   const fromLock = group.deps.length === 0 && group.devDeps.length === 0 && read.direct;
   // An npm alias is declared under the folder name it installs into; the dependency is the package behind it.
-  const real = (names: string[]) => (read.aliases ? [...new Set(names.map((name) => read.aliases?.get(name) ?? name))] : names);
+
   // npm: a dependency package.json takes from a path (a `file:` directory or archive), git or a URL
   // is not the registry package of its name, and the name may be private: it gets no direct row, so
   // no registry lookup is made by its name. 6.5.0 sent `"acme-lib": "file:libs/acme-lib"` to
   // registry.npmjs.org and api.npmjs.org from dependency_health and upgrade_planner. What such a
   // dependency installs is listed under coverage.not_checkable as before.
   const catalogFiles = new Set<string>();
-  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read, catalogFiles) : [];
+  // npm: every alias key, from the lockfile reader (package-lock) and from the manifests themselves
+  // (the pnpm, Yarn and Bun readers record none: review 2026-11-24, the key went to the registry).
+  const manifestAliases = new Map<string, string>();
+  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read, catalogFiles, manifestAliases) : [];
+  const aliasOf = (name: string) => read.aliases?.get(name) ?? manifestAliases.get(name) ?? name;
+  const real = (names: string[]) => (read.aliases || manifestAliases.size > 0 ? [...new Set(names.map(aliasOf))] : names);
   for (const file of catalogFiles) if (!signatures.has(file)) signatures.set(file, signatureMap([file]).get(file) ?? "absent");
   const elsewhere = new Set(notRegistry.map((d) => d.name));
   const registryOnly = (names: string[]) => (elsewhere.size > 0 ? names.filter((name) => !elsewhere.has(name)) : names);
-  const deps = real(registryOnly(fromLock ? fromLock.deps : group.deps));
-  const devDeps = real(registryOnly(fromLock ? fromLock.devDeps : group.devDeps));
+  const deps = registryOnly(real(fromLock ? fromLock.deps : group.deps));
+  const devDeps = registryOnly(real(fromLock ? fromLock.devDeps : group.devDeps));
   const lockScope = lockScopeOf(read);
   let resolved = resolveVersionsFrom(group.dir, deps, devDeps, ecosystem, read.versions, group.targets, lockScope);
   // No lockfile: a ranged dependency's version is the range's floor, a label.
