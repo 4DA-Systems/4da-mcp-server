@@ -49,10 +49,16 @@ export interface LockReadReport {
    * importer lists, bun's package keys. Not set when the lockfile does not say (no importers).
    */
   rootEntries?: ReadonlySet<string>;
+  /**
+   * Names the lockfile installs from somewhere other than a registry (a link or workspace member,
+   * a local directory or archive, git, a URL): pnpm's root importer, yarn's entries, bun's packages.
+   * A direct dependency of such a name is not looked up by it (VersionSource.elsewhere).
+   */
+  elsewhere?: string[];
 }
 
 export function emptyReadReport(): LockReadReport {
-  return { uncheckable: [], incomplete: 0, missingDirect: [] };
+  return { uncheckable: [], incomplete: 0, missingDirect: [], elsewhere: [] };
 }
 
 const GIT_LOCATION = /^(?:git\+|git:\/\/|git@|ssh:\/\/|github:|gitlab:|bitbucket:|gist:)/i;
@@ -404,9 +410,11 @@ export function* readPnpmLockSteps(content: string, versions: Map<string, string
   const pin = (name: string, value: string): void => {
     const version = exactVersion(value);
     if (version) setFirst(name, version, blockRuntime);
-    else if (!PROTOCOL_VALUE.test(unquote(value.trim()))) {
-      const real = parsePnpmKey(pnpmNodeKey(pnpmKeyRef(value)));
+    else {
+      const real = PROTOCOL_VALUE.test(unquote(value.trim())) ? null : parsePnpmKey(pnpmNodeKey(pnpmKeyRef(value)));
       if (real) aliasPins.push([real[0], real[1], blockRuntime]);
+      // `link:packages/a`, `file:../b`, a git or tarball key: the project's dependency is no registry release.
+      else if (report && (blockIndent === 0 || rootImporter)) (report.elsewhere ??= []).push(name);
     }
     if (lockMajor < 9) return;
     const target = pointsAt(name, value);
@@ -840,7 +848,11 @@ export function readYarnLock(
     }
     const header = /^"?(@?[^@\s"]+)@/.exec(firstLine);
     if (!header || header[1].startsWith("__")) continue;
-    if (/@(?:workspace|link|portal|file|exec|patch):/.test(firstLine)) continue;
+    if (/@(?:workspace|link|portal|file|exec|patch):/.test(firstLine)) {
+      // A workspace member, a link or a local directory: local code. A patch wraps a release, which has its own entry.
+      if (report && !/@patch:/.test(firstLine)) (report.elsewhere ??= []).push(header[1]);
+      continue;
+    }
     const raw = yarnBlockVersion(block);
     const version = raw ? exactVersion(raw) : null;
     if (!version) {
@@ -853,6 +865,7 @@ export function readYarnLock(
     const other = yarnNonRegistry(block, firstLine);
     if (other) {
       if (other !== "local") report?.uncheckable.push({ name: header[1], version, kind: other });
+      if (report) (report.elsewhere ??= []).push(header[1]);
       continue;
     }
     const name = yarnPackageName(block, firstLine, header[1]);

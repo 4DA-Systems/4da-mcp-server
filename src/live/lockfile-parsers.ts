@@ -39,6 +39,7 @@ import {
   type NonRegistryEntry,
 } from "./js-lockfile-readers.js";
 import { inspectYarnLock, type YarnInspection } from "./js-dev-scope.js";
+import { classifyNpmSpec } from "./npm-spec.js";
 import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, MAX_MEMBER_MANIFESTS, memberListGapText, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec, type MemberListGap } from "./js-manifests.js";
 import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
 import { runSteps, type Steps } from "./yield-point.js";
@@ -456,6 +457,8 @@ interface NpmLockRead {
   scopeGraded?: boolean;
   /** The file holds no package although package.json declares dependencies: `problems` says so, and it is not read. */
   empty?: true;
+  /** Names the lockfile installs from somewhere other than a registry (VersionSource.elsewhere). */
+  elsewhere?: string[];
 }
 
 /** The read of a lockfile with no package in it: null, or `empty` when package.json says it should hold some. */
@@ -495,6 +498,7 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
         versions,
         instances,
         uncheckable: report.uncheckable,
+        elsewhere: report.elsewhere,
         problems: [problem, uncrossed].filter((p): p is LockfileProblem => p !== null),
         declared: report.declared,
         scopeGraded: report.scopeGraded,
@@ -538,7 +542,7 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const grade = inspection?.grade ?? { scopes: new Map<string, boolean>(), declared: [], graded: false };
       const instances = new InstanceSet();
       for (const copy of read) instances.add(copy.name, copy.version, grade.scopes.get(`${copy.name}\0${copy.version}`));
-      return { versions, instances, uncheckable: report.uncheckable, problems, declared: grade.declared, scopeGraded: grade.graded };
+      return { versions, instances, uncheckable: report.uncheckable, elsewhere: report.elsewhere, problems, declared: grade.declared, scopeGraded: grade.graded };
     },
   },
   {
@@ -554,7 +558,7 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
       const undeclared = declaredWithoutEntry(cwd, (name) => listed?.has(name) === true, { skipLocal: true });
       if (versions.size === 0) return emptyRead(emptyLockProblem(file, undeclared));
       const problem = incompleteProblem(file, null, undeclared);
-      return { versions, instances, uncheckable: report.uncheckable, problems: problem ? [problem] : [], declared: report.declared, scopeGraded: report.scopeGraded };
+      return { versions, instances, uncheckable: report.uncheckable, elsewhere: report.elsewhere, problems: problem ? [problem] : [], declared: report.declared, scopeGraded: report.scopeGraded };
     },
   },
 ];
@@ -562,7 +566,7 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
 function readNpmLockFile(file: string, cwd: string): NpmLockRead | null {
   const lock: unknown = JSON.parse(readTextFile(file));
   const read = readPackageLock(lock as Parameters<typeof readPackageLock>[0]);
-  if (read.instances.size === 0 && read.uncheckable.length === 0) return null;
+  if (read.instances.size === 0 && read.uncheckable.length === 0 && read.elsewhere.length === 0) return null;
   // npm writes an entry for every dependency package.json declares (a link entry for local code):
   // a declared name with none means the file was written before it was added, and what npm would
   // install for it was never checked. pnpm, yarn and bun lockfiles were cross-checked this way; npm's
@@ -570,7 +574,7 @@ function readNpmLockFile(file: string, cwd: string): NpmLockRead | null {
   const undeclared = declaredWithoutEntry(cwd, (name) => npmLockHasEntry(lock, name), { skipLocal: true });
   const problem = incompleteProblem(file, null, undeclared);
   // npm writes `dev` on every entry only devDependencies reach: the lockfile's own grading.
-  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, aliases: read.aliases, problems: problem ? [problem] : [], declared: read.declared, scopeGraded: true };
+  return { versions: read.versions, instances: read.instances, uncheckable: read.uncheckable, elsewhere: read.elsewhere, aliases: read.aliases, problems: problem ? [problem] : [], declared: read.declared, scopeGraded: true };
 }
 
 /**
@@ -616,6 +620,7 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
     return found(read.versions, read.instances, file, "lockfile", {
       ...(read.uncheckable.length > 0 ? { uncheckable: read.uncheckable.map((u) => ({ ...u, file })) } : {}),
       ...(read.aliases && read.aliases.size > 0 ? { aliases: read.aliases } : {}),
+      ...(read.elsewhere && read.elsewhere.length > 0 ? { elsewhere: read.elsewhere } : {}),
       ...(problems.length > 0 ? { problems } : {}),
       ...(read.declared && read.declared.length > 0 ? { declared: read.declared } : {}),
       ...(read.scopeGraded ? { scopeGraded: true as const } : {}),
@@ -652,16 +657,16 @@ function* resolveNpmSteps(cwd: string): Steps<VersionSource> {
       const sections = (field: string) => (pkg[field] && typeof pkg[field] === "object" && !Array.isArray(pkg[field]) ? (pkg[field] as Record<string, unknown>) : {});
       for (const [name, spec] of Object.entries({ ...sections("dependencies"), ...sections("devDependencies") })) {
         if (typeof spec !== "string") continue;
-        // `"x": "github:user/repo"` or a tarball URL is not a version of the registry's x.
-        const other = nonRegistrySource(spec, spec);
-        if (other === "local") continue;
-        // `"my-lodash": "npm:lodash@4.17.20"` declares lodash, under another folder name.
-        const alias = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)@(.+)$/.exec(spec.trim());
-        if (other) uncheckable.push({ name, version: null, kind: other });
-        else if (alias && NPM_NAME.test(alias[1])) {
-          declared.set(alias[1], alias[2]);
-          aliases.set(name, alias[1]);
-        } else declared.set(name, spec);
+        // Read as npm reads it (npm-spec.ts): `"x": "github:user/repo"`, `"org/repo"`, `"../libs/x"`,
+        // `"vendor/x-1.0.0.tgz"` or a tarball on another host is not a version of the registry's x.
+        const read = classifyNpmSpec(name, spec);
+        if (read.kind === "local") continue;
+        if (read.kind !== "registry") uncheckable.push({ name, version: null, kind: read.kind });
+        else if (read.name !== name) {
+          // `"my-lodash": "npm:lodash@4.17.20"` declares lodash, under another folder name.
+          declared.set(read.name, read.range);
+          aliases.set(name, read.name);
+        } else declared.set(name, read.range === spec.trim() ? spec : read.range);
       }
     } catch { /* skip */ }
     // npm installs exactly "1.2.3" (or "=1.2.3"); anything else is a range.
@@ -837,10 +842,13 @@ function tarballRelease(name: string, url: string): string | null {
 export function readPackageLock(lock: {
   packages?: Record<string, LockEntry>;
   dependencies?: Record<string, LockEntry>;
-}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[] } {
+}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[]; elsewhere: string[] } {
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: NonRegistryEntry[] = [];
+  // Top-level names the lockfile installs as a link (a workspace member, a `file:` directory) or from
+  // git, a URL or a local archive: whatever package.json's spec says, not a registry release (VersionSource.elsewhere).
+  const elsewhere = new Set<string>();
   const aliases = new Map<string, string>();
   const declared = new Map<string, DeclaredDependency>();
 
@@ -871,10 +879,15 @@ export function readPackageLock(lock: {
     const hoistedAliases: Array<[string, string]> = [];
     for (const [key, value] of Object.entries(lock.packages)) {
       const folder = packageNameFromNodeModulesPath(key);
-      if (!folder || !value || value.link) continue;
+      if (!folder || !value) continue;
+      if (value.link) {
+        if (key === `node_modules/${folder}`) elsewhere.add(folder);
+        continue;
+      }
       const name = typeof value.name === "string" && NPM_NAME.test(value.name) ? value.name : folder;
       const other = typeof value.resolved === "string" ? nonRegistrySource(value.resolved, urlRequested(folder)) : null;
       if (other) {
+        if (key === `node_modules/${folder}`) elsewhere.add(folder);
         if (other !== "local") uncheckable.push({ name, version: value.version ?? null, kind: other });
         continue;
       }
@@ -939,6 +952,7 @@ export function readPackageLock(lock: {
         } else if (version) {
           // v1 writes a git or URL dependency's location as its version.
           const other = nonRegistrySource(version, version);
+          if (other && topLevel) elsewhere.add(folder);
           if (other && other !== "local") uncheckable.push({ name: folder, version: null, kind: other });
           else if (other === null) {
             // A registry-shaped tarball URL (`/<name>/-/<name>-<v>.tgz`) on any host: the release its file
@@ -960,7 +974,7 @@ export function readPackageLock(lock: {
     }
   }
 
-  return { versions, instances, uncheckable, aliases, declared: [...declared.values()] };
+  return { versions, instances, uncheckable, aliases, declared: [...declared.values()], elsewhere: [...elsewhere] };
 }
 
 // =============================================================================

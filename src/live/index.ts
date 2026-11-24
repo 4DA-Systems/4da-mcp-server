@@ -429,8 +429,16 @@ export class LiveIntelligence {
     yield;
     // A private registry or index the manifest itself names (Cargo `registry =`, uv `index =`,
     // Poetry `source =`): private with no lockfile too (blind audit round 4).
+    // npm: a dependency package.json (or the lockfile) takes from a path, git, a URL or a link is no
+    // registry release, and its name may be the company's own: withheld from dependency_check,
+    // upgrade_impact, the briefing and the pulse as Cargo `path`/`git` crates are, as local code, so
+    // a registry copy of the same name elsewhere in the tree is still checked (review 2026-11-24).
+    const npmNotRegistry = (r: GroupResolution): PrivateIndexEntry[] =>
+      (r.notRegistry ?? []).map((d) => ({ name: d.name, version: null, registry: d.from, file: d.file, local: true as const, ...(d.at ? { at: d.at } : {}) }));
     this.manifestPrivate = new Map(
-      this.groupResults.map((r) => [r, manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language))] as const).filter(([, list]) => list.length > 0),
+      this.groupResults
+        .map((r): [GroupResolution, PrivateIndexEntry[]] => [r, [...manifestPrivateSources(r.group.dir, mapEcosystem(r.group.language)), ...npmNotRegistry(r)]])
+        .filter(([, list]) => list.length > 0),
     );
     // go.work modules (never sent: the workspace's copy is built) and Python local packages, with
     // where each is, read inside the project only.

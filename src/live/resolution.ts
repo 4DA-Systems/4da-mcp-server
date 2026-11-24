@@ -19,12 +19,13 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { oversize, tooLargeText } from "./bounded-read.js";
 import { anySignatureChanged, signatureMap, signatureMtime, type FileSignature } from "./file-signature.js";
 import { checkInstallState } from "./install-state.js";
-import { nonRegistrySource } from "./js-lockfile-readers.js";
-import { readManifestDeclarations } from "./js-manifests.js";
+import { expandWorkspaces, memberNamesOf, pnpmYamlList, readManifestDeclarations } from "./js-manifests.js";
+import { classifyNpmSpec } from "./npm-spec.js";
 import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from "./lockfile-parsers.js";
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
@@ -75,18 +76,103 @@ export interface GroupResolution {
   unpinned: UnpinnedRequirements[];
   /** Lockfiles present in this directory that could not be read, with the reason. */
   problems: LockfileProblem[];
+  /**
+   * npm: the dependencies of this directory that are not registry releases (nonRegistryDirect),
+   * with what says so. None of their names is looked up anywhere: no row, and every tool withholds them.
+   */
+  notRegistry?: NotRegistryDependency[];
   signatures: Map<string, FileSignature>;
   resolvedAt: string;
 }
 
+/** An npm dependency that is not a registry release, and what says so. */
+export interface NotRegistryDependency {
+  name: string;
+  /** The file that says so: the package.json that declares it, or the lockfile. */
+  file: string;
+  /** Where it comes from, in words: `the path ../libs/x`, `git (org/repo)`, `a link (a workspace member)`. */
+  from: string;
+  /** Local code: the directory it is in, when the spec or the workspace says. */
+  at?: string;
+}
+
+/** Workspace member directories under `dir` (package.json `workspaces`, pnpm-workspace.yaml `packages`), relative. */
+function workspaceMemberDirs(dir: string, workspaces: string[]): string[] {
+  let patterns = workspaces;
+  try {
+    const yaml = path.join(dir, "pnpm-workspace.yaml");
+    if (fs.existsSync(yaml)) patterns = [...patterns, ...pnpmYamlList(readTextFile(yaml), "packages")];
+  } catch {
+    // unreadable: the patterns package.json gives
+  }
+  if (patterns.length === 0) return [];
+  try {
+    return expandWorkspaces(dir, patterns).dirs;
+  } catch {
+    return [];
+  }
+}
+
+/** A spec in words, for the reason a name is withheld. Paths and git spellings are the user's own. */
+function specWords(kind: "git" | "url" | "file" | "local", spec: string): string {
+  const shown = spec.length > 120 ? `${spec.slice(0, 117)}...` : spec;
+  if (kind === "git") return `git (${shown})`;
+  if (kind === "url") return /^https?:\/\//i.test(spec) ? `the URL ${shown}` : `a source other than the npm registry (${shown})`;
+  if (kind === "file") return `the local archive ${shown}`;
+  return `the local path ${shown}`;
+}
+
 /**
- * The names this directory's package.json declares from a path, git or a URL (nonRegistrySource),
- * in any dependency section; an empty set when it declares none or cannot be read. An npm alias
- * (`npm:pkg@1`) is a registry package and is not among them.
+ * The npm dependencies of this directory that are not registry releases, as npm reads them: a spec
+ * package.json (or a workspace member's) gives as a path, an archive, git, a URL on a host other than
+ * the public registry, `link:` or `workspace:` (classifyNpmSpec, npm-package-arg's rules); a workspace
+ * member's own name; and a name the lockfile installs only as a link, from git, a URL or a local
+ * archive (`read.elsewhere`, `read.uncheckable`), whatever spec package.json gives it. A name the
+ * lockfile ALSO installs from a registry is not among the lockfile's: that copy is a registry release.
+ *
+ * The 6.5.1 candidate knew only `file:`, `github:` and URL prefixes, so `"../libs/x"`, `"org/repo"`,
+ * `"vendor/x-1.0.0.tgz"` and a workspace member declared `^1.0.0` reached registry.npmjs.org,
+ * api.npmjs.org and hn.algolia.com by name (review 2026-11-24).
  */
-function nonRegistryDeclared(dir: string): Set<string> {
-  const manifest = readManifestDeclarations(path.join(dir, "package.json"));
-  return new Set((manifest?.declared ?? []).filter((d) => nonRegistrySource(d.spec, d.spec) !== null).map((d) => d.name));
+function nonRegistryDirect(dir: string, read: VersionSource): NotRegistryDependency[] {
+  const out = new Map<string, NotRegistryDependency>();
+  const add = (d: NotRegistryDependency) => {
+    if (!out.has(d.name)) out.set(d.name, d);
+  };
+  const manifestFile = path.join(dir, "package.json");
+  const root = readManifestDeclarations(manifestFile);
+  const manifests: Array<{ file: string; base: string; declared: NonNullable<typeof root>["declared"] }> = root ? [{ file: manifestFile, base: dir, declared: root.declared }] : [];
+  const members = root ? workspaceMemberDirs(dir, root.workspaces) : [];
+  for (const rel of members) {
+    const base = path.join(dir, rel);
+    const file = path.join(base, "package.json");
+    const member = readManifestDeclarations(file);
+    if (member) manifests.push({ file, base, declared: member.declared });
+  }
+  for (const m of manifests) {
+    for (const d of m.declared) {
+      const spec = classifyNpmSpec(d.name, d.spec);
+      if (spec.kind === "registry") continue;
+      const where = d.spec.trim().replace(/^(?:file|link|portal):/i, "");
+      // Where local source code is (never for `workspace:`, which names a member, or `exec:`).
+      const at = spec.kind === "local" && !/^(?:workspace|exec):/i.test(d.spec.trim()) && where !== "" ? path.resolve(m.base, where.replace(/^~(?=[\\/])/, os.homedir())) : undefined;
+      add({ name: d.name, file: m.file, from: specWords(spec.kind, d.spec.trim()), ...(at ? { at } : {}) });
+    }
+  }
+  if (members.length > 0) {
+    const names = memberNamesOf(dir, members).names;
+    for (const rel of members) {
+      const member = readManifestDeclarations(path.join(dir, rel, "package.json"));
+      if (member?.name && names.has(member.name)) add({ name: member.name, file: manifestFile, from: `a workspace member (${rel.split(path.sep).join("/")})`, at: path.join(dir, rel) });
+    }
+  }
+  if (read.source) {
+    const lockNames = [...(read.elsewhere ?? []), ...(read.uncheckable ?? []).map((u) => u.name)];
+    for (const name of lockNames) {
+      if (!read.versions.has(name)) add({ name, file: read.source, from: "a link, git, a URL or a local archive (the lockfile's own entry)" });
+    }
+  }
+  return [...out.values()];
 }
 
 export function resolveGroup(group: ResolutionGroup): GroupResolution {
@@ -152,8 +238,9 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   // no registry lookup is made by its name. 6.5.0 sent `"acme-lib": "file:libs/acme-lib"` to
   // registry.npmjs.org and api.npmjs.org from dependency_health and upgrade_planner. What such a
   // dependency installs is listed under coverage.not_checkable as before.
-  const elsewhere = ecosystem === "npm" ? nonRegistryDeclared(group.dir) : null;
-  const registryOnly = (names: string[]) => (elsewhere && elsewhere.size > 0 ? names.filter((name) => !elsewhere.has(name)) : names);
+  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read) : [];
+  const elsewhere = new Set(notRegistry.map((d) => d.name));
+  const registryOnly = (names: string[]) => (elsewhere.size > 0 ? names.filter((name) => !elsewhere.has(name)) : names);
   const deps = real(registryOnly(fromLock ? fromLock.deps : group.deps));
   const devDeps = real(registryOnly(fromLock ? fromLock.devDeps : group.devDeps));
   const lockScope = lockScopeOf(read);
@@ -220,6 +307,7 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
     ...(read.indexRecorded ? { indexRecorded: true as const } : {}),
     unpinned,
     problems: read.problems ?? [],
+    ...(notRegistry.length > 0 ? { notRegistry } : {}),
     signatures,
     resolvedAt,
   };
