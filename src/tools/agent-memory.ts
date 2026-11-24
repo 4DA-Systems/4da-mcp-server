@@ -224,12 +224,15 @@ export function executeAgentMemory(
         "session_id", "agent_type", "memory_type", "subject", "content", "context_tags", "expires_at",
       ]);
       try {
-        // Counted where the row will go.
-        const countRow = (to.target === "server_store" ? to.raw : rawDb)
-          .prepare(
-            `SELECT COUNT(*) as cnt FROM agent_memory WHERE agent_type = ?`,
-          )
-          .get(agentType) as { cnt: number } | undefined;
+        // Counted where the row will go. A busy database is asked once more (db.queryWithRetry):
+        // this tool answers its own errors, so the dispatcher's retry never saw a lock here.
+        const countRow = db.queryWithRetry(() =>
+          (to.target === "server_store" ? to.raw : rawDb)
+            .prepare(
+              `SELECT COUNT(*) as cnt FROM agent_memory WHERE agent_type = ?`,
+            )
+            .get(agentType),
+        ) as { cnt: number } | undefined;
         const currentCount = countRow?.cnt ?? 0;
         if (currentCount >= MAX_ENTRIES_PER_AGENT) {
           return {
@@ -249,14 +252,17 @@ export function executeAgentMemory(
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
         );
 
-        const result = stmt.run(
-          params.session_id || "unknown",
-          params.agent_type || "unknown",
-          params.memory_type || "context",
-          params.subject,
-          params.content,
-          JSON.stringify(params.context_tags || []),
-          params.expires_at || null,
+        // One statement, so a write that met a lock stored nothing and can be run again.
+        const result = db.queryWithRetry(() =>
+          stmt.run(
+            params.session_id || "unknown",
+            params.agent_type || "unknown",
+            params.memory_type || "context",
+            params.subject,
+            params.content,
+            JSON.stringify(params.context_tags || []),
+            params.expires_at || null,
+          ),
         );
 
         return {

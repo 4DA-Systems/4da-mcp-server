@@ -120,6 +120,10 @@ jobs:
         run: |
           set -euo pipefail
           runs="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=main&event=push&per_page=1"
+          # A CI run whose only failures are jobs that never got a runner is run again by
+          # rerun-unstarted.yml within a minute or two, so "failure" is believed only when it is
+          # still the answer after this many more looks (30 s apart).
+          grace=4
           for attempt in $(seq 1 90); do
             # The newest push run for the commit: "<status> <conclusion> <url>", or nothing when there is none.
             # An API call that fails is asked again, never read as an answer.
@@ -129,6 +133,12 @@ jobs:
               if [ "$conclusion" = "success" ]; then
                 echo "CI passed on $GITHUB_SHA: $url"
                 exit 0
+              fi
+              if [ "$conclusion" = "failure" ] && [ "$grace" -gt 0 ]; then
+                grace=$((grace - 1))
+                echo "attempt $attempt: CI for $GITHUB_SHA reads 'failure'; looking again in 30 s in case it is being run again"
+                sleep 30
+                continue
               fi
               case "$conclusion" in
                 cancelled)
@@ -143,6 +153,8 @@ jobs:
               echo "::error::No CI run on main for $GITHUB_SHA. The tag must be on a commit that was pushed to main as its tip (the merge commit), so that CI ran on exactly it."
               exit 1
             fi
+            # Running (again): a later failure gets its own grace.
+            if [ "$status" != "none" ] && [ "$status" != "unreadable" ]; then grace=4; fi
             echo "attempt $attempt: CI for $GITHUB_SHA is '$status'; waiting"
             sleep 20
           done
