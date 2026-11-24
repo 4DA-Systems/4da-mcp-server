@@ -52,6 +52,18 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
     const say = (text: string) => {
       for (const s of new Set(uses.map((u) => u.step))) if (!s.reasons.includes(text)) s.reasons.push(text);
     };
+    // A release the plan calls NOT a clean fix, or whose holds were NOT CHECKED, gets no command and
+    // no all_advisories claim, on the lever or on the row (claims review 2026-11-24, twolevel85: the
+    // handlebars row kept `npm install @hey-api/openapi-ts@0.97.3` and fixPathChecked all_advisories).
+    const withhold = (text: string) => {
+      say(text);
+      for (const u of uses) {
+        delete u.lever.commands;
+        delete u.lever.instructions;
+        delete u.lever.sameCommandsAs;
+        if (u.step.fixPathChecked === "all_advisories") u.step.fixPathChecked = "installed_advisories_only";
+      }
+    };
     const facts = await sources.releaseFacts("npm", name).catch(() => null);
     const judge = async (v: string): Promise<HeldCheck | undefined> => {
       const specs = facts?.heldSpecs?.[v];
@@ -65,7 +77,7 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
     const at = facts ? await judge(to) : undefined;
     if (!at || at.status === "unchecked") {
       const why = at?.status === "unchecked" ? at.reason : facts ? "the planner's time budget ran out before it finished" : `the registry gave no answer for the releases of ${name}`;
-      say(`whether the dependencies ${name} ${to} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`);
+      withhold(`whether the dependencies ${name} ${to} holds are affected was NOT CHECKED (${why}): confirm it with dependency_check before pinning it`);
       continue;
     }
     if (at.affected.length === 0) continue;
@@ -82,7 +94,7 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
         continue;
       }
     }
-    say(`${name} ${heldText(to, brought)}: upgrading ${name} to ${to} installs ${brought.length === 1 ? "it" : "them"}, so ${to} is NOT a clean fix: confirm a release with dependency_check before pinning it`);
+    withhold(`${name} ${heldText(to, brought)}: upgrading ${name} to ${to} installs ${brought.length === 1 ? "it" : "them"}, so ${to} is NOT a clean fix: confirm a release with dependency_check before pinning it`);
   }
 }
 

@@ -65,6 +65,11 @@ describe("a parent upgrade whose lever pins an affected copy two levels down", (
     expect(text).toMatch(/js-yaml 4\.1\.1/);
     expect(text).toMatch(/0\.97\.3 is NOT a clean fix/);
     expect(runText(result)).not.toContain(`${OPENAPI}@`);
+    // No command for a release the row itself calls NOT a clean fix, on the row or on its lever, and
+    // no all_advisories claim (claims review 2026-11-24, twolevel85).
+    expect(JSON.stringify(row.commands ?? [])).not.toContain(`${OPENAPI}@`);
+    expect(JSON.stringify(row.parentUpgrades ?? [])).not.toContain(`${OPENAPI}@0.97.3`);
+    expect(row.fixPathChecked).not.toBe("all_advisories");
   });
 
   it("control: a lever whose second level is clean is named and run as before", async () => {
