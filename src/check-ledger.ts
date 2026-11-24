@@ -29,6 +29,7 @@ import { appendFile, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { serverDataDir } from "./db.js";
+import { systemDirectoryProblem } from "./tools/project-scope.js";
 
 export const LEDGER_FILE = "check-ledger.jsonl";
 export const LEDGER_PREVIOUS_FILE = "check-ledger.1.jsonl";
@@ -179,11 +180,15 @@ let queue: Promise<void> = Promise.resolve();
 
 /**
  * The project folder an answer is given for: the root the server resolved its dependency set from
- * (LiveIntelligence.getProjectRoot), else the folder it was started in, absolute.
+ * (LiveIntelligence.getProjectRoot), else the folder it was started in, absolute. Null for a
+ * folder the server refuses to scan as a project (a drive or filesystem root, an operating-system
+ * folder, the home folder: tools/project-scope.ts systemDirectoryProblem), so its private answers
+ * count nowhere (re-check of 0d30b40, S5: `project: "C:\\"` let installs through anywhere on C:).
  */
 export function answeredFor(projectRoot: string | null | undefined): string | null {
   try {
-    return path.resolve(projectRoot ?? process.cwd());
+    const folder = path.resolve(projectRoot ?? process.cwd());
+    return systemDirectoryProblem(folder) === null ? folder : null;
   } catch {
     return null;
   }

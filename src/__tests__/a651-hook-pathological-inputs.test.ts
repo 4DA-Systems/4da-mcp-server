@@ -120,8 +120,15 @@ describe(`every pathological input is answered within ${LIMIT_MS} ms, as a child
   // One run first: the first spawn pays for warming the file cache.
   beforeAll(() => run(bash("npm ci")));
 
+  // The best of up to three runs: the full suite runs many files at once, and a loaded machine can
+  // add hundreds of milliseconds to starting Node. A pathological input is slow every time (the
+  // blocker took 16 to 21 s), so the fastest run still says whether the hook itself is slow.
   it.each(CASES)("%s", (_label, payload, mustBe) => {
-    const r = run(payload);
+    let r = run(payload);
+    for (let tries = 1; tries < 3 && r.ms >= LIMIT_MS; tries++) {
+      const again = run(payload);
+      if (again.ms < r.ms) r = again;
+    }
     expect(r.status).toBe(0);
     expect(r.ms).toBeLessThan(LIMIT_MS);
     if (mustBe) expect(r.decision).toBe(mustBe);

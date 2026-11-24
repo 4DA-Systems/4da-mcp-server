@@ -62,7 +62,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod", "pnpm-workspace.yaml"]);
@@ -2149,15 +2149,62 @@ const isWithheld = (e) => isPrivate(e) || e.not_checked === "unreadable_lockfile
 /** A withheld entry whose cause is a file that could not be read (6.5.0 recorded it as private with `unreadable_file`). */
 const isUnreadable = (e) => e.not_checked === "unreadable_lockfile" || (isPrivate(e) && typeof e.unreadable_file === "string" && e.unreadable_file !== "");
 
+/**
+ * A folder in the form Windows writes it, on Windows: Git Bash's `/c/work/app`, WSL's
+ * `/mnt/c/work/app` and the long-path `\\?\C:\work\app` all name `C:\work\app` (the payload's cwd
+ * can come in any of them, the server records the Windows form). Elsewhere, as it is.
+ */
+function windowsForm(folder) {
+  if (process.platform !== "win32") return folder;
+  const long = /^[\\/]{2}\?[\\/]([A-Za-z]:(?:[\\/].*)?)$/.exec(folder);
+  if (long) return long[1];
+  const posix = /^\/(?:mnt\/)?([A-Za-z])(?:\/(.*))?$/.exec(folder);
+  return posix ? `${posix[1].toUpperCase()}:\\${(posix[2] ?? "").replace(/\//g, "\\")}` : folder;
+}
+
 /** A folder as compared here: absolute, one separator, case folded where the file system folds it. */
 function folderKey(folder) {
-  const abs = resolve(folder).replace(/[\\/]+/g, "/").replace(/\/$/, "");
+  const abs = resolve(windowsForm(folder)).replace(/[\\/]+/g, "/").replace(/\/$/, "");
   return process.platform === "win32" || process.platform === "darwin" ? abs.toLowerCase() : abs;
 }
 
-/** Whether folder `here` is `project` or inside it (a folder that only starts with its name is not). */
+/** POSIX folders that are the system's own, never a project (tools/project-scope.ts POSIX_SYSTEM_DIRS / _TREES). */
+const POSIX_SYSTEM_DIRS = ["/usr", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/lib64", "/usr/libexec", "/usr/share", "/usr/include", "/usr/local", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/var", "/opt", "/home", "/mnt", "/media", "/Users", "/Library", "/Applications", "/Volumes", "/private", "/private/var", "/private/etc", "/cores"];
+const POSIX_SYSTEM_TREES = ["/proc", "/sys", "/dev", "/boot", "/run", "/System"];
+
+/**
+ * Whether a recorded project is a folder the server refuses to scan as a project (mirrors
+ * tools/project-scope.ts lexicalSystemDirectoryProblem, which the server applies before it records
+ * one): a drive or filesystem root, `/mnt/<letter>`, Windows' own folder and the trees it keeps on
+ * every drive, the Program Files, ProgramData and Users roots and the shared profiles, the POSIX
+ * system folders, the home folder. A private answer recorded for one would unlock every folder
+ * below it (re-check of 0d30b40, S5: `"C:\\"`). One level below a drive root (`D:\work`) is a project.
+ */
+function broadFolder(project, env = process.env) {
+  const key = folderKey(project);
+  const k = (x) => folderKey(x);
+  const within = (root) => key === k(root) || key.startsWith(`${k(root)}/`);
+  if (key === k(parseRoot(project)) || /^\/mnt\/[a-z]$/i.test(key)) return true;
+  if (process.platform === "win32") {
+    const drive = env.SystemDrive || "C:";
+    const users = `${drive}\\Users`;
+    const exact = [env.ProgramFiles || `${drive}\\Program Files`, env["ProgramFiles(x86)"] || `${drive}\\Program Files (x86)`, env.ProgramData || `${drive}\\ProgramData`, users, env.PUBLIC || `${users}\\Public`, `${users}\\Public`, `${users}\\Default`, `${users}\\Default User`, `${users}\\All Users`];
+    const root = parseRoot(windowsForm(project));
+    if (within(env.SystemRoot || env.windir || `${drive}\\Windows`)) return true;
+    if (["$Recycle.Bin", "System Volume Information", "Recovery", "Config.Msi"].some((t) => within(join(root, t)))) return true;
+    if (exact.some((d) => key === k(d))) return true;
+  } else if (POSIX_SYSTEM_TREES.some(within) || POSIX_SYSTEM_DIRS.some((d) => key === k(d))) return true;
+  const home = (process.platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  return Boolean(home) && key === k(home);
+}
+
+/** The root of a path (`C:\`, `/`). */
+const parseRoot = (folder) => parse(resolve(windowsForm(folder))).root;
+
+/** Whether folder `here` is `project` or inside it (a folder that only starts with its name is not), and `project` is no root, system or home folder. */
 function insideProject(here, project) {
   if (typeof here !== "string" || typeof project !== "string" || project === "") return false;
+  if (broadFolder(project)) return false;
   const h = folderKey(here);
   const p = folderKey(project);
   return h === p || h.startsWith(`${p}/`);
@@ -2326,7 +2373,7 @@ function introducedBy(input) {
   const cwd = typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd();
   if (toolName === "Bash" || toolName === "PowerShell") {
     const found = installsIn(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash");
-    const here = typeof toolInput.command === "string" && !LEAVES_FOLDER.test(toolInput.command) && !LEAVES_FOLDER_OPTION.test(toolInput.command) ? resolve(cwd) : null;
+    const here = typeof toolInput.command === "string" && !LEAVES_FOLDER.test(toolInput.command) && !LEAVES_FOLDER_OPTION.test(toolInput.command) ? resolve(windowsForm(cwd)) : null;
     return { what: "command", here, changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null })) };
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
@@ -2334,7 +2381,7 @@ function introducedBy(input) {
   const kind = manifestKind(toolInput.file_path);
   if (!kind) return null;
   const changes = repeatable(introducedByEdit(kind, toolName, toolInput, toolInput.file_path));
-  return { what: "edit", here: resolve(cwd, dirname(toolInput.file_path)), changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from })) };
+  return { what: "edit", here: resolve(windowsForm(cwd), dirname(windowsForm(toolInput.file_path))), changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from })) };
 }
 
 /**
