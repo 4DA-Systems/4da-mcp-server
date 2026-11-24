@@ -620,7 +620,7 @@ const samePath = (a: string, b: string) => (caselessPaths ? a.toLowerCase() === 
  * root (a stray lockfile in a home directory belongs to no project below it). None when `dir` is a
  * repository root itself.
  */
-function workspaceSearchDirs(dir: string): string[] {
+export function workspaceSearchDirs(dir: string): string[] {
   if (fs.existsSync(path.join(dir, ".git"))) return [];
   const above: string[] = [];
   for (let at = dir, level = 0; level < MAX_REPOSITORY_PARENTS; level++) {

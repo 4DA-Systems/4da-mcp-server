@@ -28,6 +28,7 @@
  * A private name is never sent and is reported as "not checked (private)", never as clean.
  */
 
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -36,6 +37,7 @@ import { anySignatureChanged, signatureMap, type FileSignature } from "./file-si
 import { pushAll } from "../array-utils.js";
 import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, textLines } from "./js-lockfile-readers.js";
 import { readRuleFile } from "./text-file.js";
+import { workspaceSearchDirs } from "../project-tree.js";
 import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 import {
   CODE_HOSTS,
@@ -1833,6 +1835,27 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
       members = [];
     }
     const found = [[root, rootText] as const, ...members.map((file) => [file, textOf(file)] as const)].flatMap(([file, text]) => [...read(file, text, cargo), ...read(file, text, ownName)]);
+    // A member of a workspace whose root is above it, with or without a Cargo.lock: the root's path,
+    // git and private-registry crates (`{ workspace = true }` inherits them) and every member crate are
+    // this project's own (review 2026-11-24: started in a member, an inherited path crate went to
+    // index.crates.io). Cargo's root is the nearest directory above with a [workspace] table.
+    const workspaceTable = /^\s*\[workspace\]/m;
+    if (rootText && !workspaceTable.test(rootText)) {
+      for (const ancestor of workspaceSearchDirs(path.resolve(dir))) {
+        const file = path.join(ancestor, "Cargo.toml");
+        const got = fs.existsSync(file) ? readRuleFile(file) : null;
+        if (got?.state !== "read" || !workspaceTable.test(got.text)) continue;
+        let listed: string[] = [];
+        try {
+          listed = cargoWorkspaceManifests(ancestor, got.text);
+        } catch {
+          listed = [];
+        }
+        const mine = path.resolve(root).toLowerCase();
+        if (listed.some((f) => path.resolve(f).toLowerCase() === mine)) found.push(...manifestPrivateSources(ancestor, ecosystem));
+        break;
+      }
+    }
     return [...found, ...unread];
   }
   if (ecosystem === "PyPI") {

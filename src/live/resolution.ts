@@ -31,6 +31,7 @@ import { lockfileCandidates, manifestCandidate, resolveVersionSourceSteps } from
 import { lockScopeOf, mapEcosystem, resolveAuditVersionsFrom, resolveVersionsFrom } from "./version-resolver.js";
 import { parsePyprojectDependencies } from "../project-manifests.js";
 import { scanCurrentProject } from "../project-scanner.js";
+import { workspaceSearchDirs } from "../project-tree.js";
 import { readTextFile } from "./text-file.js";
 import { runSteps, type Steps } from "./yield-point.js";
 import type { InstallDriftRecord, ResolutionSourceRecord, ResolvedDependency } from "./types.js";
@@ -138,7 +139,7 @@ function specWords(kind: "git" | "url" | "file" | "local" | "catalog", spec: str
  * `"vendor/x-1.0.0.tgz"` and a workspace member declared `^1.0.0` reached registry.npmjs.org,
  * api.npmjs.org and hn.algolia.com by name (review 2026-11-24).
  */
-function nonRegistryDirect(dir: string, read: VersionSource, catalogFiles: Set<string>, aliases: Map<string, string>): NotRegistryDependency[] {
+function nonRegistryDirect(dir: string, read: VersionSource, watched: Set<string>, aliases: Map<string, string>): NotRegistryDependency[] {
   const out = new Map<string, NotRegistryDependency>();
   const catalogsByDir = new Map<string, ReturnType<typeof lazyNpmCatalogs>>();
   const catalogsFor = (base: string) => {
@@ -188,6 +189,13 @@ function nonRegistryDirect(dir: string, read: VersionSource, catalogFiles: Set<s
       if (member?.name && names.has(member.name)) add({ name: member.name, file: manifestFile, from: `a workspace member (${rel.split(path.sep).join("/")})`, at: path.join(dir, rel) });
     }
   }
+  // A member of a workspace whose root is above it: the root's own packages are this project's own
+  // too, with or without a lockfile (review 2026-11-24: started in packages/a with no lockfile, the
+  // sibling members' names went to the registry). Read within the bounds findWorkspaceRoot uses.
+  if (!root || root.workspaces.length === 0) {
+    const enclosing = enclosingNpmWorkspace(dir, watched);
+    if (enclosing) for (const d of nonRegistryDirect(enclosing, NO_LOCKFILE, watched, aliases)) add(d);
+  }
   if (read.source) {
     const lockNames = [...(read.elsewhere ?? []), ...(read.uncheckable ?? []).map((u) => u.name)];
     for (const name of lockNames) {
@@ -197,9 +205,33 @@ function nonRegistryDirect(dir: string, read: VersionSource, catalogFiles: Set<s
   // A catalog that was read is watched: an edit to it re-resolves the group.
   for (const c of catalogsByDir.values()) {
     const got = c.read();
-    if (got?.file) catalogFiles.add(got.file);
+    if (got?.file) watched.add(got.file);
   }
   return [...out.values()];
+}
+
+/** A version source with nothing read: the enclosing workspace root's manifests are read, not its lockfile. */
+const NO_LOCKFILE = { kind: "none", source: null, versions: new Map<string, string>() } as unknown as VersionSource;
+
+/**
+ * The npm workspace root above `dir` that lists it as a member (package.json `workspaces` or
+ * pnpm-workspace.yaml `packages`), nearest first, within workspaceSearchDirs's bounds; null when
+ * none does. The files it reads are added to `watched`.
+ */
+function enclosingNpmWorkspace(dir: string, watched: Set<string>): string | null {
+  for (const ancestor of workspaceSearchDirs(path.resolve(dir))) {
+    const manifest = path.join(ancestor, "package.json");
+    const yaml = path.join(ancestor, "pnpm-workspace.yaml");
+    const hasYaml = fs.existsSync(yaml);
+    const declared = readManifestDeclarations(manifest);
+    if (!hasYaml && (!declared || declared.workspaces.length === 0)) continue;
+    watched.add(manifest);
+    if (hasYaml) watched.add(yaml);
+    const rel = path.relative(ancestor, path.resolve(dir)).split(path.sep).join("/");
+    const members = workspaceMemberDirs(ancestor, declared?.workspaces ?? []).map((m) => m.split(path.sep).join("/"));
+    if (members.includes(rel)) return ancestor;
+  }
+  return null;
 }
 
 export function resolveGroup(group: ResolutionGroup): GroupResolution {
@@ -265,14 +297,14 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   // no registry lookup is made by its name. 6.5.0 sent `"acme-lib": "file:libs/acme-lib"` to
   // registry.npmjs.org and api.npmjs.org from dependency_health and upgrade_planner. What such a
   // dependency installs is listed under coverage.not_checkable as before.
-  const catalogFiles = new Set<string>();
+  const watched = new Set<string>();
   // npm: every alias key, from the lockfile reader (package-lock) and from the manifests themselves
   // (the pnpm, Yarn and Bun readers record none: review 2026-11-24, the key went to the registry).
   const manifestAliases = new Map<string, string>();
-  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read, catalogFiles, manifestAliases) : [];
+  const notRegistry = ecosystem === "npm" ? nonRegistryDirect(group.dir, read, watched, manifestAliases) : [];
   const aliasOf = (name: string) => read.aliases?.get(name) ?? manifestAliases.get(name) ?? name;
   const real = (names: string[]) => (read.aliases || manifestAliases.size > 0 ? [...new Set(names.map(aliasOf))] : names);
-  for (const file of catalogFiles) if (!signatures.has(file)) signatures.set(file, signatureMap([file]).get(file) ?? "absent");
+  for (const file of watched) if (!signatures.has(file)) signatures.set(file, signatureMap([file]).get(file) ?? "absent");
   const elsewhere = new Set(notRegistry.map((d) => d.name));
   const registryOnly = (names: string[]) => (elsewhere.size > 0 ? names.filter((name) => !elsewhere.has(name)) : names);
   const deps = registryOnly(real(fromLock ? fromLock.deps : group.deps));
