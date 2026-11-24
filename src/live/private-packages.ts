@@ -1853,7 +1853,7 @@ export function manifestPrivateSources(dir: string, ecosystem: string): PrivateI
           listed = [];
         }
         const mine = path.resolve(root).toLowerCase();
-        if (listed.some((f) => path.resolve(f).toLowerCase() === mine)) found.push(...manifestPrivateSources(ancestor, ecosystem));
+        if (listed.some((f) => path.resolve(f).toLowerCase() === mine)) pushAll(found, manifestPrivateSources(ancestor, ecosystem));
         break;
       }
     }
