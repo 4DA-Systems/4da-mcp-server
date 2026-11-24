@@ -46,6 +46,8 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
       }
     }
   }
+  // Releases judged NOT a clean fix here: one judgement for the whole plan (below).
+  const rejected = new Set<string>();
   for (const uses of groups.values()) {
     const { name, version } = uses[0].lever;
     const to = uses[0].lever.to!;
@@ -57,6 +59,7 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
     // handlebars row kept `npm install @hey-api/openapi-ts@0.97.3` and fixPathChecked all_advisories).
     const withhold = (text: string) => {
       say(text);
+      rejected.add(`${name}\0${to}`);
       for (const u of uses) {
         delete u.lever.commands;
         delete u.lever.instructions;
@@ -101,6 +104,18 @@ export async function withLeverHolds(steps: FixPathStep[], liveIntel: Intel, dea
       }
     }
     withhold(`${name} ${heldText(to, brought)}: upgrading ${name} to ${to} installs ${brought.length === 1 ? "it" : "them"}, so ${to} is NOT a clean fix: confirm a release with dependency_check before pinning it`);
+  }
+  // The package's own row, pulled to the same release by the one-release-per-package rule, gets the
+  // same judgement: no target, no command, no all_advisories, so no run_order step (check of round 2:
+  // vercel 32.2.1 was NOT a clean fix on the lever rows and `npm install vercel@32.2.1` on its own).
+  for (const step of steps) {
+    if (step.ecosystem !== "npm" || step.scope !== "direct" || !step.targetVersion || !rejected.has(`${step.package}\0${step.targetVersion}`)) continue;
+    const release = step.targetVersion;
+    step.targetVersion = null;
+    delete step.upgradeCommands;
+    delete step.upgradeInstructions;
+    if (step.fixPathChecked === "all_advisories") step.fixPathChecked = "installed_advisories_only";
+    step.reasons.push(`${step.package} ${release} is NOT a clean fix (what it installs two levels down is affected: see the rows that name it), so no target or command is given`);
   }
 }
 

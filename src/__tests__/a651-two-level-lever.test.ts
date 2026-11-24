@@ -76,6 +76,21 @@ describe("a parent upgrade whose lever pins an affected copy two levels down", (
     expect(row.parentUpgrades[0].levers.map((l: { to: string | null }) => l.to)).toEqual([null]);
   });
 
+  it("the package's own row gets the same judgement: no target, command or all_advisories for 0.97.3", async () => {
+    // Its own advisory makes the openapi-ts row a fix row whose target the one-release rule sets to
+    // the lever's release (check of round 2, vercel 32.2.1: the own row kept target, command and
+    // run_order step while the lever rows called the same release NOT a clean fix).
+    h.ADVISORIES[OPENAPI] = [adv("GHSA-hhx9-57xq-r5rw", OPENAPI, fixedIn("0.50.0"))];
+    h.NPM[OPENAPI].versions["0.50.0"] = { dependencies: { handlebars: "4.7.8", [REF]: "1.4.0" } };
+    const { result, step } = await h.plan();
+    const own = step(OPENAPI);
+    expect(own, JSON.stringify(result.recommendations.map((r: { package: string; targetVersion: string }) => [r.package, r.targetVersion]))).toBeTruthy();
+    if (own.targetVersion === "0.97.3" || JSON.stringify(own.commands ?? []).includes("0.97.3")) {
+      throw new Error(`own row names 0.97.3: ${JSON.stringify({ target: own.targetVersion, commands: own.commands, fixPathChecked: own.fixPathChecked })}`);
+    }
+    expect(runText(result)).not.toContain(`${OPENAPI}@0.97.3`);
+  });
+
   it("control: a lever whose second level is clean is named and run as before", async () => {
     h.NPM[REF].versions["1.4.2"] = { dependencies: { "js-yaml": "4.3.2" } };
     const { result, step } = await h.plan();
