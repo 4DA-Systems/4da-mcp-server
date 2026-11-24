@@ -95,7 +95,7 @@ describe("a data folder with no ledger: the servers that ran there record no ver
     expect(out.status).toBe(0);
     const parsed = JSON.parse(out.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(parsed.hookSpecificOutput.hookEventName).toBe("PostToolUse");
-    expect(parsed.hookSpecificOutput.additionalContext).toContain("lodash: 4.17.21 -> 4.17.20");
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('"lodash": "4.17.21" -> "4.17.20"');
     expect(parsed.hookSpecificOutput.additionalContext).toContain("dependency_check");
   });
 

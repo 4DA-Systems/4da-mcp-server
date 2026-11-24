@@ -486,7 +486,8 @@ function cargoDependencies(entries, more = null) {
     const fields = { ...(more?.get(`${d.section}\0${d.name}`) ?? {}), ...d.fields };
     const version = fields.version?.s;
     if (typeof version !== "string" || !VERSION_SHAPED.test(version)) continue;
-    if (CARGO_OTHER_SOURCE.some((k) => k in fields)) continue;
+    // `registry = "crates-io"` names the public registry itself: a crates.io release.
+    if (CARGO_OTHER_SOURCE.some((k) => k in fields && !(k === "registry" && fields.registry?.s === "crates-io"))) continue;
     if (fields.package && typeof fields.package.s !== "string") continue;
     out.push({ name: fields.package ? fields.package.s : d.name, section: d.section, spec: version });
   }
@@ -1471,7 +1472,7 @@ function poetrySpec(word) {
 }
 
 const JS_VALUES = {
-  npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C", "--location"]),
+  npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C", "--location", "--audit-level", "--fetch-retries", "--fetch-timeout", "--auth-type", "--workspace-concurrency"]),
   pnpm: new Set(["--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
   // The last five are `yarn workspaces foreach`'s (berry).
   yarn: new Set(["--cwd", "--network-timeout", "--mutex", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder", "--use-yarnrc", "-j", "--jobs", "--include", "--exclude", "--from"]),

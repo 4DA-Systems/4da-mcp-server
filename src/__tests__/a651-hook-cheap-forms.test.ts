@@ -50,6 +50,7 @@ function editDecision(file: string, before: string, oldString: string, newString
 describe("commands", () => {
   it("an npm option that takes a value, before the subcommand", () => {
     expect(read("npm --location project install lodash@4.17.20")).toEqual(["npm lodash 4.17.20"]);
+    expect(read("npm --audit-level high install lodash@4.17.20")).toEqual(["npm lodash 4.17.20"]);
   });
 
   it("the public index or registry named explicitly is the public one", () => {
@@ -90,6 +91,12 @@ describe("manifest edits", () => {
   it("an npm alias added to package.json is held as its target", () => {
     const reason = editDecision("package.json", '{\n  "dependencies": {\n    "a": "1.0.0"\n  }\n}\n', '"a": "1.0.0"', '"a": "1.0.0",\n    "yargs-parser": "npm:minimist@1.2.6"');
     expect(reason).toContain('"minimist" "1.2.6" (npm)');
+  });
+
+  it('Cargo `registry = "crates-io"` is the public registry: held; another registry goes ahead', () => {
+    const before = '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\ntokio = "1.35.0"\n';
+    expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "crates-io" }')).toContain('"tokio" "1.18.0" (crates.io)');
+    expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "corp" }')).toBeNull();
   });
 
   it('"latest" is held with a call for latest', () => {
