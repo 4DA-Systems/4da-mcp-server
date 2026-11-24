@@ -60,7 +60,7 @@
  * manifest, so each is held to its shape first (NAME_TEXT, specText).
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -2158,13 +2158,26 @@ function windowsForm(folder) {
   if (process.platform !== "win32") return folder;
   const long = /^[\\/]{2}\?[\\/]([A-Za-z]:(?:[\\/].*)?)$/.exec(folder);
   if (long) return long[1];
+  // This machine's administrative share: `\\localhost\C$\work\app`.
+  const share = /^[\\/]{2}(?:localhost|127\.0\.0\.1)[\\/]([A-Za-z])\$(?:[\\/](.*))?$/i.exec(folder);
+  if (share) return `${share[1].toUpperCase()}:\\${share[2] ?? ""}`;
   const posix = /^\/(?:mnt\/)?([A-Za-z])(?:\/(.*))?$/.exec(folder);
   return posix ? `${posix[1].toUpperCase()}:\\${(posix[2] ?? "").replace(/\//g, "\\")}` : folder;
 }
 
-/** A folder as compared here: absolute, one separator, case folded where the file system folds it. */
+/**
+ * A folder as compared here: the real folder (a junction or symbolic link followed, an 8.3 short
+ * name expanded) where it exists, absolute, one separator, case folded where the file system
+ * folds it. A junction inside project A that leads to B is B.
+ */
 function folderKey(folder) {
-  const abs = resolve(windowsForm(folder)).replace(/[\\/]+/g, "/").replace(/\/$/, "");
+  let real = resolve(windowsForm(folder));
+  try {
+    real = realpathSync.native(real);
+  } catch {
+    // A folder that does not exist (yet) is compared as written.
+  }
+  const abs = real.replace(/[\\/]+/g, "/").replace(/\/$/, "");
   return process.platform === "win32" || process.platform === "darwin" ? abs.toLowerCase() : abs;
 }
 
@@ -2316,7 +2329,11 @@ function denialFor(introduced, ledger, dir, what, here) {
     if (elsewhere) {
       const where =
         typeof elsewhere.project === "string" && elsewhere.project
-          ? `for the project in ${quoted(elsewhere.project, 200)}; it lets a version through only in that folder and the folders inside it, and ${here === null ? `this ${what} may run elsewhere (it changes folder, names another one, or installs globally)` : `this ${what} runs in ${quoted(here, 200)}`}.`
+          ? broadFolder(elsewhere.project)
+            ? `for ${quoted(elsewhere.project, 200)}, a drive root, system folder or home folder, not a project: such an answer lets nothing through. Start the 4da server in the project's folder (or set FOURDA_PROJECT_DIR) and call dependency_check again.`
+            : here === null
+              ? `for the project in ${quoted(elsewhere.project, 200)}. That answer covers a plain install run in that folder (or one inside it): the install as the only command on the line, the package manager by its bare name, no environment setting, prefix, redirection or option that picks another folder, for example \`${plainForm(c)}\`. This ${what} is not one, so it is held.`
+              : `for the project in ${quoted(elsewhere.project, 200)}; it lets a version through only in that folder and the folders inside it, and this ${what} ${what === "edit" ? "is" : "runs"} in ${quoted(here, 200)}.`
           : "by a server that does not record the project it answered for (older than 6.5.1): such an answer lets nothing through. Update the 4da server.";
       lines.push(`- ${quotedChange(c)}: dependency_check answered it as private (never looked up) at ${when(elsewhere)}, ${where}`);
     }
@@ -2373,7 +2390,8 @@ function introducedBy(input) {
   const cwd = typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd();
   if (toolName === "Bash" || toolName === "PowerShell") {
     const found = installsIn(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash");
-    const here = typeof toolInput.command === "string" && !LEAVES_FOLDER.test(toolInput.command) && !LEAVES_FOLDER_OPTION.test(toolInput.command) ? resolve(windowsForm(cwd)) : null;
+    // A private answer covers only a plain install (plainInstall): any other command is in no project.
+    const here = plainInstall(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash") ? resolve(windowsForm(cwd)) : null;
     return { what: "command", here, changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null })) };
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
@@ -2385,14 +2403,90 @@ function introducedBy(input) {
 }
 
 /**
- * A command that may install outside the folder it starts in: it changes folder (`cd`, `pushd`,
- * `Set-Location` and its aliases), names another one (`--prefix`, `-C`, `--cwd`, `--dir`,
- * `--directory`, `--project`, `--manifest-path`, `-modfile`, pip's `--target` / `-t`), or installs
- * globally. A private answer, which counts only in its own project, then counts nowhere. Read on
- * the whole command line, wrappers included: a false match only keeps a private name held.
+ * Plain installs, the only commands a private answer covers (re-check of 0d30b40, S1: a list of
+ * folder-changing words leaked through `c''d`, `env --chdir`, `sudo -D`, `wsl --cd`, npm's
+ * abbreviated `--prefi`, `npm_config_global=true`, `GOFLAGS=-modfile=`, `PIP_TARGET=`, `pip
+ * --user`, a venv's own pip, PowerShell's `cd..` and `D:` ...). Per program: the subcommands that
+ * install, the options that do not choose where (`flags` take no value, `values` take one, written
+ * `--x=v` or `--x v`, judged by `value`), and the shape of an operand. Anything else, or any
+ * option not listed (npm accepts abbreviations, so only whole names count), makes the command not
+ * plain. A value-taking workspace or filter option names a member inside the project.
  */
-const LEAVES_FOLDER = /(?:^|[\s;&|(){}'"`])(?:cd|pushd|popd|chdir|set-location|push-location|pop-location|sl)(?=$|[\s;&|(){}'"`])/i;
-const LEAVES_FOLDER_OPTION = /(?:^|[\s'"])(?:--prefix|--cwd|--dir|--directory|--project|--manifest-path|-C|-modfile|--target|-t|-g|--global|--location(?:=|\s+)global)(?=$|[\s='"])/;
+const INSIDE = (v) => typeof v === "string" && v !== "" && !/^[./\\~]|\.\.|^[A-Za-z]:|[\\]/.test(v);
+const ANY_VALUE = (v) => typeof v === "string" && v !== "" && !/[/\\]/.test(v);
+const NPM_SPEC_WORD = (w) => /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9._~][a-z0-9._~-]*(?:@[^\s/\\]*(?:npm:(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9._~-]+(?:@[^\s/\\]*)?)?)?$/i.test(w);
+const PY_SPEC_WORD = (w) => !/[/\\]|^[.~-]|:\/\//.test(w);
+const CRATE_SPEC_WORD = (w) => /^[A-Za-z0-9_][A-Za-z0-9_-]*(?:@[^\s/\\]+)?$/.test(w);
+const GO_SPEC_WORD = (w) => /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*(?:@[^\s\\]+)?$/.test(w) && !w.includes("..");
+const JS_SAVE = ["-D", "--save-dev", "-E", "--save-exact", "-S", "--save", "-O", "--save-optional", "-P", "--save-prod", "--save-peer", "-B", "--save-bundle", "--no-save", "--legacy-peer-deps", "--strict-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--prefer-online", "--offline", "--force", "-f"];
+const PIP_FLAGS = ["-U", "--upgrade", "--no-deps", "--pre", "-q", "--quiet", "-v", "--verbose", "--no-cache-dir", "--force-reinstall", "--dry-run", "--no-input", "--disable-pip-version-check"];
+const PLAIN = {
+  npm: { sub: (w) => isInstallCommand("npm", w), flags: JS_SAVE, values: { "-w": INSIDE, "--workspace": INSIDE }, operand: NPM_SPEC_WORD },
+  pnpm: { sub: (w) => ["add", "install", "i", "up", "update", "upgrade"].includes(w), flags: JS_SAVE, values: { "--filter": INSIDE, "-F": INSIDE }, operand: NPM_SPEC_WORD, before: true },
+  yarn: { sub: (w) => ["add", "up", "upgrade"].includes(w), flags: ["-D", "--dev", "-E", "--exact", "-O", "--optional", "-P", "--peer", "-T", "--tilde", "--ignore-scripts"], values: {}, operand: NPM_SPEC_WORD },
+  bun: { sub: (w) => ["add", "a", "install", "i"].includes(w), flags: ["-d", "-D", "--dev", "-E", "--exact", "--optional", "--peer", "--no-save", "--ignore-scripts"], values: {}, operand: NPM_SPEC_WORD },
+  cargo: { sub: (w) => w === "add" || w === "update", flags: ["--dev", "--build", "--optional", "--no-optional", "--no-default-features", "--default-features", "-q", "--quiet", "-v", "--verbose", "--offline", "--locked"], values: { "-F": ANY_VALUE, "--features": ANY_VALUE, "--rename": ANY_VALUE, "-p": CRATE_SPEC_WORD, "--package": CRATE_SPEC_WORD, "--precise": ANY_VALUE }, operand: CRATE_SPEC_WORD },
+  pip: { sub: (w) => w === "install", flags: PIP_FLAGS, values: { "--upgrade-strategy": ANY_VALUE }, operand: PY_SPEC_WORD },
+  uv: { sub: (w) => w === "add" || w === "lock" || w === "sync", flags: ["--dev", "--frozen", "--no-sync", "--locked", "-q", "-v"], values: { "--group": ANY_VALUE, "--optional": ANY_VALUE, "--upgrade-package": PY_SPEC_WORD, "-P": PY_SPEC_WORD }, operand: PY_SPEC_WORD },
+  poetry: { sub: (w) => w === "add", flags: ["-D", "--dev", "--allow-prereleases", "--lock", "--dry-run"], values: { "-G": ANY_VALUE, "--group": ANY_VALUE, "--optional": ANY_VALUE }, operand: PY_SPEC_WORD },
+  go: { sub: (w) => w === "get", flags: ["-u", "-t", "-d", "-x", "-v", "-u=patch"], values: {}, operand: GO_SPEC_WORD },
+};
+
+/** Whether `args` (after the program) are a plain use of `rule`: [global options] subcommand, then neutral options and operands only. */
+function plainArgs(rule, args) {
+  let i = 0;
+  const option = (k) => {
+    const a = args[k];
+    const eq = a.indexOf("=");
+    const name = eq > 0 && a.startsWith("--") ? a.slice(0, eq) : a;
+    if (rule.flags.includes(a)) return 1;
+    if (!Object.hasOwn(rule.values, name)) return 0;
+    if (eq > 0 && a.startsWith("--")) return rule.values[name](a.slice(eq + 1)) ? 1 : 0;
+    return rule.values[name](args[k + 1]) ? 2 : 0;
+  };
+  // pnpm's --filter may stand before the subcommand.
+  while (rule.before && i < args.length && args[i].startsWith("-")) {
+    const n = option(i);
+    if (n === 0) return false;
+    i += n;
+  }
+  if (i >= args.length || !rule.sub(args[i])) return false;
+  for (i++; i < args.length; ) {
+    if (args[i].startsWith("-")) {
+      const n = option(i);
+      if (n === 0) return false;
+      i += n;
+    } else if (rule.operand(args[i])) i++;
+    else return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a command line is a plain install a private answer can cover: one simple command and
+ * nothing else on the line (no redirection either: `echo prefix=.. > .npmrc && npm i` writes npm's
+ * configuration), invoked by the package manager's bare name (not a path, not `npm.cmd`), with no
+ * environment assignment or prefix, its arguments those PLAIN lists. `python -m pip install`,
+ * `pip3` and `uv pip install` are pip's. Anything else is held, and the denial gives the plain form.
+ */
+function plainInstall(command, dialect) {
+  if (typeof command !== "string" || /[<>]/.test(command)) return false;
+  const commands = simpleCommands(command, dialect);
+  if (!commands || commands.length !== 1) return false;
+  const [program, ...args] = commands[0];
+  if (/^python3?$|^py$/.test(program)) return args[0] === "-m" && /^pip3?$/.test(args[1] ?? "") && plainArgs(PLAIN.pip, args.slice(2));
+  if (program === "pip3") return plainArgs(PLAIN.pip, args);
+  if (program === "uv" && args[0] === "pip") return plainArgs(PLAIN.pip, args.slice(1));
+  return Object.hasOwn(PLAIN, program) && plainArgs(PLAIN[program], args);
+}
+
+/** The plain form of an install of `c`, as a denial offers it. */
+function plainForm(c) {
+  if (c.ecosystem === "PyPI") return `pip install ${c.name}${/^[<>=!~]/.test(c.spec) ? "" : "=="}${c.spec}`;
+  if (c.ecosystem === "crates.io") return `cargo add ${c.name}@${c.spec}`;
+  if (c.ecosystem === "Go") return `go get ${c.name}@${c.spec}`;
+  return `npm install ${c.name}@${c.spec}`;
+}
 
 /** PreToolUse: the denial JSON, or "" to let the call go ahead. */
 function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
