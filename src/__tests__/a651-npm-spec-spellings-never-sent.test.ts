@@ -53,6 +53,7 @@ const NON_REGISTRY: Record<string, string> = {
 const CONTROLS: Record<string, string> = {
   minimist: "1.2.8",
   ms: "^2.1.3",
+  tar: "~6.1.11",
   semver: "7.x",
   debug: ">=4 <5",
   chalk: "*",
@@ -99,7 +100,7 @@ describe("no lockfile: no non-registry spelling is sent, ordinary ranges still a
   it("dependency_health asks about the controls only", async () => {
     const r = (await executeDependencyHealth(null, {}, await h.live())) as unknown as Record<string, any>;
     expect(leaked()).toEqual([]);
-    for (const name of ["minimist", "ms", "semver", "debug", "chalk", "lodash", "react", "typescript", "string-width", "is-number"]) {
+    for (const name of ["minimist", "ms", "tar", "semver", "debug", "chalk", "lodash", "react", "typescript", "string-width", "is-number"]) {
       expect([name, h.requests.includes(`https://registry.npmjs.org/${name}`)]).toEqual([name, true]);
     }
     expect(h.requests).not.toContain("https://registry.npmjs.org/string-width-cjs");

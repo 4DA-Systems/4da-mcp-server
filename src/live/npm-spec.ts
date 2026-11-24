@@ -72,7 +72,8 @@ export function classifyNpmSpec(name: string, rawSpec: string): NpmSpecClass {
     // Any other protocol (jsr:, a registry of another tool): not the npm registry's package of that name.
     return { kind: "url" };
   }
-  if (/[\\/]/.test(spec) || spec.startsWith(".") || spec.startsWith("~")) return { kind: TARBALL_FILE.test(spec.split(/[?#]/)[0]) ? "file" : "local" };
+  // npm-package-arg's isFileSpec: a leading `.`, `~/` (not `~`, which starts a tilde range) or a slash.
+  if (/[\\/]/.test(spec) || spec.startsWith(".") || /^~[\\/]/.test(spec)) return { kind: TARBALL_FILE.test(spec.split(/[?#]/)[0]) ? "file" : "local" };
   if (TARBALL_FILE.test(spec)) return { kind: "file" };
   // A version, a range or a dist-tag (`latest`, `next`, `beta`) of the registry package.
   return registry(name, spec);
