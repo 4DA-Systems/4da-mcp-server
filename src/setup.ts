@@ -256,6 +256,37 @@ function propertiesOf(objectNode: Node | undefined, match: (key: string) => bool
 }
 
 /**
+ * The first key that an object in the tree holds twice, as a printable path (`"mcpServers"."4da"."args"`),
+ * or null. Walked with an explicit stack: a deeply nested file cannot exhaust the call stack here.
+ */
+function firstDuplicateKey(root: Node | undefined): string | null {
+  interface Step { node: Node; key: string | null; up: Step | null }
+  const named = (step: Step | null, last: string): string => {
+    const keys = [last];
+    for (let s = step; s !== null; s = s.up) if (s.key !== null) keys.unshift(s.key);
+    return keys.map((k) => JSON.stringify(k.length > 80 ? `${k.slice(0, 80)}...` : k)).join(".");
+  };
+  const stack: Step[] = root ? [{ node: root, key: null, up: null }] : [];
+  while (stack.length > 0) {
+    const step = stack.pop()!;
+    if (step.node.type === "object") {
+      const seen = new Set<string>();
+      for (const property of step.node.children ?? []) {
+        const name = property.children?.[0]?.value;
+        if (typeof name !== "string") continue;
+        if (seen.has(name)) return named(step, name);
+        seen.add(name);
+        const value = property.children?.[1];
+        if (value) stack.push({ node: value, key: name, up: step });
+      }
+    } else if (step.node.type === "array") {
+      (step.node.children ?? []).forEach((child, i) => stack.push({ node: child, key: `[${i}]`, up: step }));
+    }
+  }
+  return null;
+}
+
+/**
  * Decide what writing `entry` under `<key>["4da"]` does to a config file whose
  * current text is `existing` (null when it does not exist).
  *
@@ -319,6 +350,13 @@ export function planConfig(
       action: "refuse",
       reason: `its "${key}" already has an entry named "${name}", and a "4da" entry beside it would be a second server; rename that entry to "4da" or remove it`,
     };
+  }
+  // A key written twice anywhere (an `args` inside the entry, another server's name): an editor
+  // reads one of them and `modify` would edit the other, so setup said "Written" while the editor
+  // kept the old command (audit 2026-11-25, H-3). Such a file is not written.
+  const duplicate = firstDuplicateKey(tree);
+  if (duplicate !== null) {
+    return { action: "refuse", reason: `it holds the key ${duplicate} twice, and an editor reads only one of them; remove one` };
   }
   const current = servers?.["4da"];
   if (current !== undefined && !isPlainObject(current)) {
