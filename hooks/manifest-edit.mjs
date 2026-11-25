@@ -571,7 +571,7 @@ function requirementString(text) {
   const paren = parenthesised(rest);
   if (paren === undefined) return null;
   if (paren !== null) rest = paren;
-  const spec = PEP440_SPECIFIERS.exec(rest);
+  const spec = specifierSet(rest);
   return spec && spec[1].length === rest.length ? { name: m[1], spec: spec[1].replace(/\s+/g, "") } : null;
 }
 
@@ -698,6 +698,19 @@ function pyOtherSourceNames(entries, poetry) {
  */
 const PEP440_CLAUSE = String.raw`(?:===|==|~=|!=|<=|>=|<|>)\s*[0-9A-Za-z*.+!_-]+`;
 const PEP440_SPECIFIERS = new RegExp(String.raw`^(${PEP440_CLAUSE}(?:\s*,\s*${PEP440_CLAUSE}){0,7})`);
+/** What follows a set of eight clauses when a ninth stands after it (anchored: one look). */
+const NINTH_CLAUSE = /^\s*,\s*(?:===|==|~=|!=|<=|>=|<|>)/;
+
+/**
+ * The specifier set at the start of `text` (PEP440_SPECIFIERS' match), or null. A set of more than
+ * eight clauses is refused, so the call is held as not read: it was read by its first eight, and a
+ * ninth clause can exclude or cap the release the first eight admit.
+ */
+function specifierSet(text) {
+  const spec = PEP440_SPECIFIERS.exec(text);
+  if (spec && NINTH_CLAUSE.test(text.slice(spec[0].length))) return refuse("a requirement with more than eight version clauses");
+  return spec;
+}
 
 /** A requirement without its environment marker (`; python_version >= "3"`), found by a plain search (linear whatever the marker's length). */
 function withoutMarker(text) {
@@ -729,7 +742,7 @@ function requirementLine(line) {
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]\n]{0,200}\])?\s*\(?\s*/.exec(text);
   if (!m) return null;
   const rest = text.slice(m[0].length);
-  const spec = PEP440_SPECIFIERS.exec(rest);
+  const spec = specifierSet(rest);
   return spec ? { name: nameKey("PyPI", m[1]), spec: spec[1].replace(/\s+/g, "") } : null;
 }
 
@@ -1727,7 +1740,7 @@ function pep508(word) {
   const paren = parenthesised(rest);
   if (paren === undefined) return null;
   if (paren !== null) rest = paren;
-  const spec = PEP440_SPECIFIERS.exec(rest);
+  const spec = specifierSet(rest);
   return spec && spec[1].length === rest.trim().length ? { name: m[1], spec: spec[1].replace(/\s+/g, "") } : null;
 }
 
@@ -1740,7 +1753,7 @@ function poetrySpec(word) {
     if (v.toLowerCase() === "latest" || /[/:]/.test(v)) return null;
     if (specTooLong(v)) return refuse(specTooLong(v));
     if (exactFor("PyPI", v) || /^[~^]\s*\d/.test(v)) return { name: at[1], spec: v };
-    const set = PEP440_SPECIFIERS.exec(v);
+    const set = specifierSet(v);
     return set && set[1].length === v.length ? { name: at[1], spec: v } : null;
   }
   return pep508(word);

@@ -6,6 +6,10 @@
 
 - `agent_memory` `store` asks a busy database once more before it answers "Failed to store memory: database is locked". The tool answers its own errors, so the server's one retry of a busy database, which acts on an error a tool throws, never saw a lock here: one such answer in 17,595 calls of the 6.5.1 concurrency run on a loaded machine. The quota count and the insert are one statement each, so a write that met a lock stored nothing and is safe to run again. A database still busy on the second try answers as before.
 
+### Guard hook
+
+- A pip requirement with more than eight version clauses (`x>=1,>=1,...,<2`) holds the manifest write or the install command as "could not be read", naming the part, like the hook's other bounds. The hook reads at most eight clauses. Through 6.5.1 a command (`pip install`, `uv add`, `poetry add`) or a `pyproject.toml` entry with a ninth clause was read as naming no version and went ahead, and a requirements-file line was judged on its first eight clauses; a ninth clause can exclude or cap the release the first eight admit. Eight clauses are read whole, as before. 6.5.1 listed this under Known limits, as "read by its first eight only".
+
 ### Tests and gates
 
 - A CI run whose only failures are jobs that never got a runner (cancelled with no runner and no step, in practice macOS install smokes: three times on 2026-11-24) is run again by `rerun-unstarted.yml`, at most twice; a job that ran a step and failed is left for a person. The release workflow's "CI passed on the tagged commit" check now looks again for two minutes before it believes a failure, so such a re-run no longer stops a release.
