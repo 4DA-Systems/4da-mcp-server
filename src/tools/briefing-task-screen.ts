@@ -443,8 +443,11 @@ export function screenTask(task: string): TaskScreen {
 
   // 7. PEP 508 extras: `requests[security,socks]==2.25.0` names requests at 2.25.0; an extra is never a name.
   // The requirement is moved over the brackets (its name stays where it was), so every reader binds the version.
+  // A redirection with a descriptor (`2>&1`, `2> err.log`, `&> out`) ends the command: written as `;` so no
+  // reader takes its `1` for a version or the next word for an operand (fourth blind check, B4).
   const text = chars
     .join("")
+    .replace(/(^|\s)(?:\d?>&\d|\d>>?|&>>?)/g, (m: string, pre: string) => `${pre};${" ".repeat(m.length - pre.length - 1)}`)
     .replace(/(^|[\s"'`(])([A-Za-z0-9][\w.-]{0,200})\[[\w.,\s-]{1,400}\](\S{0,300})/g, (m: string, pre: string, name: string, rest: string) => `${pre}${name}${rest}${" ".repeat(m.length - pre.length - name.length - rest.length)}`);
   return { text, withheld, names, scopes, ecosystems };
 }

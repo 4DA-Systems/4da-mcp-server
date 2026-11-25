@@ -56,9 +56,13 @@ describe("a separator ends the command's operands", () => {
     "npm install lodash (the util) and test",
     "npm install lodash — the util",
     "run `npm install lodash` then `git push`",
+    "npm install lodash 2>&1 zqx207",
+    "npm install lodash 2> err.log",
+    "npm install lodash &> out.log",
   ])("%s", async (task) => {
     const r = await brief(task);
     expect(named(r)).toEqual(["lodash"]);
+    expect(r.requested_versions).toBeUndefined();
   });
 
   it("npm install pg && psql -U admin -W pw: psql and pw are no packages", async () => {
