@@ -36,6 +36,8 @@ export interface PrivateLookup {
 /** Tokens that can be a package name the project does not install yet: a scoped npm name, a module path, a plain name. */
 const NAME_TOKEN = /(@[a-z0-9][\w.-]*\/[a-z0-9][\w.-]*|[a-z0-9][\w.-]*(?:\/[\w.-]+)+|[a-z0-9][\w.-]{2,})/gi;
 const ECOSYSTEMS = ["npm", "crates.io", "PyPI", "Go", "RubyGems", "Packagist"];
+/** How many distinct words of a task are asked of the private rules. */
+const MAX_PRIVATE_WORDS = 1_000;
 
 /** The private packages a task names: installed private dependencies it touches, and any name the private rules cover. */
 export function privateTaskPackages(task: string, files: string[], live: PrivateLookup | null): PrivateTaskPackage[] {
@@ -83,8 +85,13 @@ export function privateTaskPackages(task: string, files: string[], live: Private
   if (live.privateReason) {
     // Each distinct word once: "x@y.x@y.x@y..." is 20,000 words of one spelling, each asked of every
     // ecosystem's rules (1.4 s at 80,000 characters).
+    // At most MAX_PRIVATE_WORDS of them (199,000 characters of distinct words took 1.5 s here): past it no
+    // word is labelled private, but none is sent either, since a reader reads at most MAX_READ_PACKAGES
+    // names and every one is asked of the private rules again before any lookup (re-check, item 3).
+    let asked = 0;
     for (const token of new Set(task.match(NAME_TOKEN) ?? [])) {
       if (token.length > MAX_TASK_WORD) continue;
+      if (++asked > MAX_PRIVATE_WORDS) break;
       const name = token.replace(/[.,;:]+$/, "");
       for (const asked of ECOSYSTEMS) {
         // The ecosystem that makes it private, not the first one asked (blind audit round 5, 5).

@@ -52,10 +52,12 @@ import {
   closestPopularPypi,
   ENGLISH_TASK_WORDS,
   installedGoModule,
+  isManifestEntry,
   isManifestFile,
   isTomlEntry,
   isVersionSpec,
   MANIFEST_FIELDS,
+  normalizePypiName,
   normalizeVersionSyntax,
   NOT_A_PACKAGE_ADJECTIVES,
   PYTHON_STDLIB,
@@ -65,7 +67,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
-import { optionTakesValue, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { isKnownSwitch, lookupEvidence, MAX_TASK_WORD, NOT_KNOWN, optionTakesValue, pathLikeOperand, privateSignals, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -258,7 +260,7 @@ const MANAGERS: Record<string, Manager> = {
   pdm: { ecosystem: "PyPI", commands: new Set(["add"]) },
   pipx: { ecosystem: "PyPI", commands: new Set(["install"]) },
   rye: { ecosystem: "PyPI", commands: new Set(["add"]) },
-  go: { ecosystem: "Go", commands: new Set(["get"]) },
+  go: { ecosystem: "Go", commands: new Set(["get", "install"]) },
   gem: { ecosystem: null, commands: new Set(["install"]), registry: "RubyGems" },
   bundle: { ecosystem: null, commands: new Set(["add"]), registry: "RubyGems" },
   composer: { ecosystem: null, commands: new Set(["require"]), registry: "Packagist" },
@@ -335,10 +337,59 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
 export function detectAllNewPackages(task: string, deps: readonly ResolvedDependency[]): NewPackage[] {
   // Credentials, URLs, over-long words and whatever the task takes from a private registry, an index,
   // git, a path or a URL are never read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
-  // readTaskVersions names them NOT CHECKED.
+  // What may then be looked up is decided by gateTaskNames (briefing-requested-versions.ts), after the
+  // project's own private rules.
   const screen = screenTask(task);
   return readTaskItems(normalizeVersionSyntax(screen.text), deps).packages.filter((p) => screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]) === null);
 }
+
+/** What may be looked up for a task: the projects's dependency set, the names it reads structurally, and its private-source signals. */
+export interface LookupContext {
+  installed: (name: string) => boolean;
+  structural: ReadonlySet<string>;
+  signals: ReadonlyMap<CheckEcosystem, string>;
+}
+
+export function lookupContext(task: string, deps: readonly ResolvedDependency[], structural: ReadonlySet<string>): LookupContext {
+  const names = new Set<string>();
+  for (const d of deps) {
+    names.add(d.name.toLowerCase());
+    if (d.ecosystem === "PyPI") names.add(normalizePypiName(d.name));
+  }
+  return {
+    installed: (name) => names.has(name.toLowerCase()) || names.has(normalizePypiName(name)) || installedGoModule(name, deps) !== null,
+    structural,
+    signals: privateSignals(task),
+  };
+}
+
+/**
+ * The ecosystems among `ecosystems` where `name` may be looked up (the first one kept first), or the
+ * reason it is looked up in none: the task's private-source signal for its ecosystem, else NOT_KNOWN.
+ */
+export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], ctx: LookupContext): { allowed: CheckEcosystem[]; onlyStructural: boolean; why: string } {
+  const allowed: CheckEcosystem[] = [];
+  let onlyStructural = true;
+  for (const e of ecosystems) {
+    const ev = lookupEvidence(name, e, ctx);
+    if (ev === null) continue;
+    allowed.push(e);
+    if (ev !== "command") onlyStructural = false;
+  }
+  const signal = ctx.signals.get(ecosystems[0]);
+  return { allowed, onlyStructural, why: signal ? `not looked up: ${signal}` : NOT_KNOWN };
+}
+
+/** A word the briefing did not look up, as the answer names it. */
+export interface HeldWord {
+  shown: string;
+  reason: string;
+}
+
+
+/** Why an item is not looked up when a withheld span touches it. */
+export const NOT_READ_WHOLE =
+  "not read whole: part of it, or of the version beside it, looked like a credential, URL or address and was withheld, so it is not looked up at a version the task did not write";
 
 /** Where in the (normalized) task a version is written. */
 export interface TaskSpan {
@@ -370,6 +421,10 @@ export interface TaskItems {
   foreign: Array<TaskSpan & { name: string; registry: string }>;
   /** The task names more than MAX_READ_PACKAGES packages: the rest was not read (named NOT CHECKED). */
   truncated?: true;
+  /** `${ecosystem}\0${lower-case name}` of every name read as an install command's operand or a manifest entry's key. */
+  structural: Set<string>;
+  /** Words of a command that were not read (after an option that may take them as its value). */
+  unreadWords: Array<{ shown: string; reason: string }>;
 }
 
 /**
@@ -427,6 +482,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const found: NewPackage[] = [];
   /** Where each (ecosystem, name) is in `found`: a list of thousands of names was quadratic (F-M3). */
   const foundAt = new Map<string, number>();
+  const structural = new Set<string>();
+  const unreadWords: TaskItems["unreadWords"] = [];
   const bound: BoundVersion[] = [];
   const ignored: TaskSpan[] = [];
   const fixed: TaskItems["fixed"] = [];
@@ -541,6 +598,10 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         // A registry this server does not read: every argument to the clause's end is named NOT CHECKED,
         // and none of it (a name, `-v 5.0.0`) is read as an npm package or version (round 10, W14).
         for (j++; j < words.length && !endsList(j); j++) {
+          if (foreign.length >= MAX_READ_PACKAGES) {
+            truncated = true;
+            break;
+          }
           foreign.push({ ...span(j), name: "", registry: manager.registry ?? word });
           if (!words[j].startsWith("-") && !isVersionSpec(words[j]) && !LIST_WORDS.has(words[j]) && words[j - 1] !== "-v" && words[j - 1] !== "--version") {
             const name = raw[j].replace(/[),.;:!?'"]+$/, "").replace(/(?:[=~<>!]=?|[:@]).*$/, "");
@@ -552,13 +613,35 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         i = j < words.length && endsList(j) ? j - 1 : j;
         continue;
       }
+      const commandWord = word === "uv" && words[i + 1] === "pip" ? "pip" : word;
       for (j++; j < words.length; j++) {
+        // At most MAX_READ_PACKAGES names, here too: `npm install p1 ... p30000` returned 30,012 (re-check, item 3).
+        if (found.length >= MAX_READ_PACKAGES) {
+          truncated = true;
+          break;
+        }
         if (words[j].startsWith("-")) {
           // An option's value (`--tag next`, `-w packages/api`, `--prefix ./x`) is never a package (E2).
-          // `--opt=value` is always a value; `--opt value` when the option takes one and its value was not
-          // blanked by the screen (a URL leaves a long blank: the next word is then an operand).
+          // `--opt=value` is a value. After `--opt`, the next word is read as an operand only when the
+          // option is known to take no value (`-D`, `-U`); after any other option it may be that option's
+          // value, so it is not read, and is named as not read unless the option is known to take one
+          // (re-check of the 2026-11-25 fixes, item 2). A long blank is a value the screen withheld.
+          const flag = raw[j].replace(/[.,;:)]+$/, "");
           const gap = j + 1 < raw.length ? task.slice(span(j).end, starts[j + 1]) : "";
-          if (/^=\S*$/.test(gap) || (/^[ \t]{1,3}$/.test(gap) && optionTakesValue(word, raw[j].replace(/[.,;:)]+$/, "")))) j++;
+          if (/^=\S*$/.test(gap)) j++;
+          // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
+          else if (/^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && !words[j + 1].startsWith("-")) {
+            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: raw[j + 1].replace(/[.,;:)]+$/, "").slice(0, 80), reason: `not read: it follows the option ${flag.slice(0, 40)}, which may take it as its value` });
+            j++;
+          }
+          continue;
+        }
+        // A path, a URL or a GitHub shorthand is never a registry name (the screen names it).
+        // Judged on its whole blank-delimited word: a token may start after a `./` or `~/` no token holds.
+        let wordStart = starts[j];
+        while (wordStart > 0 && !/\s/.test(task[wordStart - 1]) && starts[j] - wordStart < 8) wordStart--;
+        if (pathLikeOperand(task.slice(wordStart, span(j).end), ecosystem)) {
+          if (separatorAfter(j) === "clause") break;
           continue;
         }
         // The first argument that is not a name ends the command; one the project already has does not.
@@ -566,6 +649,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (!name) break;
         // The command fixes the ecosystem for the version reader too (round 10, W14).
         fixed.push({ ...span(j), ecosystem });
+        // An install command's operand: evidence that it is a package (lookupEvidence, rule iii).
+        structural.add(`${ecosystem}\0${name.toLowerCase()}`);
         add(name, ecosystem, false, false, inlineVersion(j, ecosystem));
         if (separatorAfter(j) === "clause") break;
       }
@@ -764,6 +849,12 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const pepAlternatives: CheckEcosystem[] = pep === "PyPI" && !stated && asName(raw[k].replace(/(?:[=~<>!]=?).*$/, ""), "npm") !== null ? ["npm"] : [];
       const pepFallbackOnly = pepAlternatives.length > 0 && projectEcosystems(deps).includes("PyPI");
       if (pep) fixed.push({ ...span(k), ecosystem: pep, ...(pepAlternatives.length > 0 ? { alternatives: pepAlternatives } : {}), ...(pepFallbackOnly ? { fallbackOnly: true as const } : {}) });
+      // A manifest entry's key (`"x": "^1"`, `x = "1.0"`), or a requirements line on its own (`x==1.0`): evidence
+      // that it is a package (lookupEvidence, rule iii). Not an environment-variable name (`DB_PASS = "123"`).
+      const ownLine = pep !== null && /(?:^|\n)[ \t]*$/.test(task.slice(Math.max(0, starts[k] - 80), starts[k])) && /^[^\s]*[ \t]*(?:\n|$)/.test(task.slice(starts[k], starts[k] + MAX_TASK_WORD + 80));
+      if ((isManifestEntry(task, starts[k]) || ownLine) && !/^[A-Z][A-Z0-9_]*$/.test(raw[k].replace(/[@=~<>!].*$/, "")) && !(itemEcosystem === "npm" && /[A-Z]/.test(raw[k].split("@")[0]))) {
+        structural.add(`${tomlEntry ? toml : pep ? "PyPI" : "npm"}\0${name.toLowerCase()}`);
+      }
       const pkg = tomlEntry || pep ? add(name, itemEcosystem, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
       if (pkg && pep && pepAlternatives.length > 0) {
         pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
@@ -795,7 +886,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
     }
   }
-  return { packages: found, bound, ignored, fixed, foreign, ...(truncated ? { truncated: true as const } : {}) };
+  return { packages: found, bound, ignored, fixed, foreign, structural, unreadWords, ...(truncated ? { truncated: true as const } : {}) };
 }
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &

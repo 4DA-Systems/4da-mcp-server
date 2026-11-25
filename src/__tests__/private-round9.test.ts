@@ -142,7 +142,8 @@ describe("a guessed name in a project whose registries are all private (r9 B1)",
         },
       }),
     );
-    await brief("add left-pad");
+    // An install command's operand (re-check of the 2026-11-25 fixes, item 2: left-pad in prose is not looked up).
+    await brief("npm install left-pad");
     expect(leaks(/left-pad/).length).toBeGreaterThan(0);
     expect(leaks(/left-pad/).filter((r) => /PyPI|pypi\.org/.test(r))).toEqual([]);
   });
@@ -157,7 +158,7 @@ describe("a guessed name in a project whose registries are all private (r9 B1)",
         packages: { "": { name: "app", dependencies: deps }, "node_modules/lodash": { version: "4.17.21", resolved: "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz" } },
       }),
     );
-    const result = await brief("add left-pad");
+    const result = await brief("npm install left-pad");
     expect(leaks(/left-pad/).length).toBeGreaterThan(0);
     expect(JSON.stringify(result)).not.toMatch(/NOT CHECKED \(private\)/);
   });

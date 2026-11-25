@@ -136,7 +136,8 @@ describe("the version a task names is judged, at that version", () => {
   });
 
   it('"add github.com/gin-gonic/gin/ v1.6.0": a Go path the go command would not accept is never safe to delegate (audit B1)', async () => {
-    const result = await brief("add github.com/gin-gonic/gin/ v1.6.0", { react: "18.2.0" });
+    // As a command operand (re-check of the 2026-11-25 fixes, item 2: a Go path in prose is held, not looked up).
+    const result = await brief("go get github.com/gin-gonic/gin/@v1.6.0", { react: "18.2.0" });
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
     const gin = result.requested_versions?.find((r) => r.name.startsWith("github.com/gin-gonic/gin"));
     expect(gin).toMatchObject({ ecosystem: "Go", to: "v1.6.0", verdict: "unknown" });

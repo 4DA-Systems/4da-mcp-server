@@ -257,9 +257,16 @@ describe("the summary carries the worst verdict of every checked item", () => {
 describe("nothing past a cap is dropped without a word", () => {
   it("a list beside a known package keeps its clean bare names (superstruct, valibot, io-ts, is-even were dropped)", async () => {
     for (const n of ["valibot", "superstruct", "io-ts", "is-even"]) stub.npm[n] = { latest: "1.0.0", versions: ["1.0.0"] };
-    const r = await brief("add zod, valibot, superstruct, io-ts and is-even");
+    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
+    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
+    const r = await brief("npm install zod valibot superstruct io-ts is-even");
     expect(r.new_packages?.map((p) => p.name)).toEqual(["zod", "valibot", "superstruct", "io-ts", "is-even"]);
     for (const n of ["valibot", "superstruct", "io-ts", "is-even"]) expect(r.summary).toContain(`${n} (proceed)`);
+    // In prose, the popular one is looked up and the others are held, each by name: none is dropped.
+    const prose = await brief("add zod, valibot, superstruct, io-ts and is-even");
+    expect(prose.new_packages?.map((p) => p.name)).toEqual(["zod"]);
+    expect(prose.withheld_from_task?.map((w) => w.shown)).toEqual(["valibot", "superstruct", "io-ts", "is-even"]);
+    expect(prose.delegation_assessment.level).toBe("review_needed");
   });
 
   it("versions past eight are NOT CHECKED by name, never silently cut (the sixth was dropped)", async () => {
@@ -291,10 +298,11 @@ describe("false positives are gone, blockers stay", () => {
     expect(r.delegation_assessment.level).toBe("safe_to_delegate");
   });
 
-  it("use blueprints: a word after `use` stands only on a finding about the name (it was review_needed)", async () => {
+  it("use blueprints: a word nothing knows after `use` is not looked up, and said (re-check of the 2026-11-25 fixes, item 2)", async () => {
     const r = await brief("use blueprints");
     expect(r.new_packages).toBeUndefined();
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(r.withheld_from_task).toMatchObject([{ shown: "blueprints" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("use lodahs: a malware name after `use` still stands", async () => {
