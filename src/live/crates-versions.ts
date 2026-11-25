@@ -192,6 +192,19 @@ class HttpStatusError extends Error {
   }
 }
 
+/** A crates.io read this server's own request limit held back: never sent, never crates.io's answer (C-4). */
+class OwnLimitReached extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super(`this server's own request limit for crates.io was reached, so the read was not sent (it can be made in ${retryAfterSeconds} s)`);
+  }
+}
+
+/** A failed crates.io API read as a lookup: this server's own limit named as such (pre-publish audit 2026-11-25, C-4). */
+function unreachable(err: unknown, prefix = "crates.io: "): Extract<RegistryLookup<never>, { status: "unreachable" }> {
+  if (err instanceof OwnLimitReached) return { status: "unreachable", detail: err.message, ownLimit: { registry: "crates.io", retryAfterSeconds: err.retryAfterSeconds } };
+  return { status: "unreachable", detail: `${prefix}${errorText(err)}` };
+}
+
 export class CratesVersionsReader implements ReleaseMetadataSource {
   /** Earliest time the next crates.io API request may start. Reserved synchronously so concurrent callers queue. */
   private nextSlotMs = 0;
@@ -243,7 +256,7 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
       if (err instanceof HttpStatusError && err.status === 404) {
         return { status: "not_found", detail: `"${name}" is not on crates.io` };
       }
-      return { status: "unreachable", detail: `crates.io: ${errorText(err)}` };
+      return unreachable(err);
     }
 
     // Dependency lists come from the sparse index; without them the
@@ -259,7 +272,11 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
       const published = await this.publishedName(name);
       // The spelling could not be confirmed: never judged as if it had been (fail closed).
       if (published.status !== "ok") {
-        return { status: "unreachable", detail: `crates.io: the sparse index has no entry under "${name}" and its published spelling could not be read (${published.detail})` };
+        return {
+          status: "unreachable",
+          detail: `crates.io: the sparse index has no entry under "${name}" and its published spelling could not be read (${published.detail})`,
+          ...(published.status === "unreachable" && published.ownLimit ? { ownLimit: published.ownLimit } : {}),
+        };
       }
       canonical = published.data;
       if (canonical !== name) sparse = await this.sparseDependencies(canonical);
@@ -291,7 +308,7 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
       if (err instanceof HttpStatusError && err.status === 404) {
         return { status: "not_found", detail: `"${name}" is not on crates.io` };
       }
-      return { status: "unreachable", detail: `crates.io: ${errorText(err)}` };
+      return unreachable(err);
     }
   }
 
@@ -337,12 +354,12 @@ export class CratesVersionsReader implements ReleaseMetadataSource {
       const published = body.crate?.name;
       return { status: "ok", data: isCrateName(published) ? published : name };
     } catch (err) {
-      return { status: "unreachable", detail: errorText(err) };
+      return unreachable(err, "");
     }
   }
 
   private async apiGet<T>(url: string): Promise<T> {
-    if (!this.rateLimiter.consume("crates")) throw new Error("crates.io rate limit reached for this minute");
+    if (!this.rateLimiter.consume("crates")) throw new OwnLimitReached(this.rateLimiter.retryAfterSeconds("crates"));
     await this.waitForSlot();
     const response = await fetchWithTimeout(
       url,

@@ -920,7 +920,7 @@ export class OsvScanner {
    * Anything not rated stays unknown and is listed as unresolved, with why;
    * unknown is never clean.
    */
-  private async rateFromAliases(entries: VulnerabilityEntry[], deadline?: number): Promise<{ vulns: VulnerabilityEntry[]; report: AliasSeverityReport | null }> {
+  private async rateFromAliases(entries: VulnerabilityEntry[], deadline?: number): Promise<{ vulns: VulnerabilityEntry[]; report: AliasReadReport | null }> {
     // A GHSA alias that is itself one of this scan's records is graded already: no fetch.
     const known = new Map<string, VulnerabilityEntry["severity"]>();
     for (const e of entries) if (/^GHSA-/i.test(e.vulnId) && e.severity !== "unknown") known.set(e.vulnId, e.severity);
@@ -958,6 +958,11 @@ export class OsvScanner {
     }
     const read = new Map<string, VulnerabilityEntry["severity"]>(known);
     for (const [id, record] of records) read.set(id, deriveSeverity(record).severity);
+    // Of the aliases not read, those OSV.dev answered it holds no record for (404, cached as such):
+    // listed as unresolved as before, and named apart (`absent`), since such an alias grades nothing
+    // as an unrated record does. dependency_check counts an advisory graded through nothing but an
+    // alias with no answer as high (C-2); RUSTSEC-2021-0157's GHSA-69v2-w9vg-4g83 is a 404, not that.
+    const absent = this.source.network ? asked.filter((id) => !read.has(id) && this.cache.get<true>(`osv:absent:${id}`) === true) : [];
 
     const unresolved = new Set<string>();
     const ungraded: string[] = [];
@@ -975,10 +980,15 @@ export class OsvScanner {
       return { ...e, severity: graded.severity, severityFrom: graded.from! };
     });
     if (unresolved.size > 0 && reasons.length === 0) reasons.push("an alias record could not be read");
-    return {
-      vulns,
-      report: { rated: ratedCount, unresolved: [...unresolved].sort(), ungraded, reason: unresolved.size > 0 || ungraded.length > 0 ? reasons.join("; ") || "the aliases are unrated themselves" : null },
+    const report: AliasReadReport = {
+      rated: ratedCount,
+      unresolved: [...unresolved].sort(),
+      ungraded,
+      reason: unresolved.size > 0 || ungraded.length > 0 ? reasons.join("; ") || "the aliases are unrated themselves" : null,
     };
+    // Not enumerable: no tool's output or cached row carries it, and the report reads as before.
+    Object.defineProperty(report, "absent", { value: absent.filter((id) => unresolved.has(id)).sort(), enumerable: false });
+    return { vulns, report };
   }
 
   /**
@@ -1247,6 +1257,14 @@ const GRADE_RANK: Record<string, number> = { unknown: 0, low: 1, medium: 2, high
  * Umbrella records name several: RUSTSEC-2020-0014 lists 8 GHSAs, so taking
  * the first made the grade depend on alias order.
  */
+/**
+ * The alias report, with `absent` (not enumerable): the unresolved aliases OSV.dev answered it holds
+ * no record for (404). Read by dependency_check only; no tool's output carries it.
+ */
+export interface AliasReadReport extends AliasSeverityReport {
+  absent?: string[];
+}
+
 export function gradeFromAliases(
   ghsas: string[],
   read: ReadonlyMap<string, VulnerabilityEntry["severity"]>,

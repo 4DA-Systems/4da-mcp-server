@@ -73,6 +73,24 @@ function route(url: string, init?: RequestInit): Response {
       })),
     });
   }
+  // The package's own advisory list, from the same fixtures: a clean batch answer is read only when
+  // this list confirms it (pre-publish audit 2026-11-25, C-1), as api.osv.dev always serves it.
+  if (u.hostname === "api.osv.dev" && u.pathname === "/v1/query") {
+    const { package: pkg } = JSON.parse(String(init?.body)) as { package: { name: string; ecosystem: string } };
+    const byId = new Map<string, { id: string; summary: string; severity: string; versions: string[] }>();
+    for (const [key, list] of Object.entries(router.osv)) {
+      const at = key.lastIndexOf("@");
+      if (key.slice(0, at) !== pkg.name) continue;
+      for (const v of list) {
+        const entry = byId.get(v.id) ?? { id: v.id, summary: v.summary, severity: v.severity, versions: [] };
+        entry.versions.push(key.slice(at + 1));
+        byId.set(v.id, entry);
+      }
+    }
+    return json({
+      vulns: [...byId.values()].map((v) => ({ id: v.id, summary: v.summary, database_specific: { severity: v.severity }, affected: [{ package: { name: pkg.name, ecosystem: pkg.ecosystem }, versions: v.versions }] })),
+    });
+  }
   if (u.hostname === "api.osv.dev" && u.pathname.startsWith("/v1/vulns/")) {
     const id = decodeURIComponent(u.pathname.slice("/v1/vulns/".length));
     const hit = Object.values(router.osv).flat().find((v) => v.id === id);

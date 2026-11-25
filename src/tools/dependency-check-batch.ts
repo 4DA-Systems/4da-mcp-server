@@ -12,7 +12,7 @@ import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.j
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { isConcreteVersion } from "../live/release-version.js";
-import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
+import { isSecurityHoldingRelease, type AliasReadReport } from "../live/osv-scanner.js";
 import { unaccountedIds } from "../live/batch-confirm.js";
 import { noteScanFacts } from "./dependency-check-facts.js";
 import type { AdvisoryFacts, AdvisoryRef, CheckItem } from "./dependency-check-signals.js";
@@ -134,6 +134,12 @@ export function advisoryFacts(
   declaredFor: (item: CheckItem) => Set<string>,
 ): (item: CheckItem) => AdvisoryFacts {
   const { known, scan, byInstance } = batch;
+  // GHSA aliases whose record could not be read: an advisory graded only through one is not known
+  // to be less than high (C-2). One OSV.dev holds no record for (404, `absent`) was answered: it
+  // grades nothing, as an unrated record does (RUSTSEC-2021-0157's GHSA-69v2-w9vg-4g83).
+  const report = scan.aliasSeverity as AliasReadReport | undefined;
+  const absent = new Set(report?.absent ?? []);
+  const aliasUnread = new Set((report?.unresolved ?? []).filter((id) => !absent.has(id)));
   // A pre-install check needs a current answer: an expired cached one (OSV failed) can predate
   // the advisory that matters, and read as `proceed` (audit 6.2.5 B-2).
   const advisoriesFor = (item: CheckItem): AdvisoryFacts => {
@@ -143,13 +149,39 @@ export function advisoryFacts(
     const at = (version: string) => {
       const batch = byInstance.get(instanceKey(item.ecosystem, item.package, version));
       const missing = contradiction ? notInBatch(listAffecting(known.get(lookupKey(item)) ?? [], version, item.ecosystem), batch) : [];
-      return [...refs(batch, declaredFor(item)), ...missing.map(listOnlyRef)];
+      return [...refs(batch, declaredFor(item), aliasUnread), ...missing.map(listOnlyRef)];
     };
     const to = at(item.to);
     if (contradiction && !to.some((a) => !a.maintenance)) return { available: false, detail: `NOT CHECKED: ${contradiction}` };
+    // A clean batch answer is read only when the package's own advisory list could be held against
+    // it. With /v1/query failing, a batch answering `{}` for every release went unchallenged: lodash
+    // 4.17.20 read `proceed` and was cached for an hour (pre-publish audit 2026-11-25, C-1). An
+    // answer that names an advisory stands without the list; a clean one is unverified.
+    if (!to.some((a) => !a.maintenance) && !known.get(lookupKey(item))) return { available: false, detail: `NOT CHECKED: ${unverifiedClean(item)}` };
     return { available: true, to, from: item.from ? at(item.from) : [] };
   };
   return advisoriesFor;
+}
+
+/** Why a clean batch answer for an item could not be read as clean. */
+function unverifiedClean(item: CheckItem): string {
+  return `OSV.dev's batch query named no advisory for ${item.package} ${item.to}, but ${item.package}'s own advisory list (OSV.dev /v1/query) could not be read to confirm it, so the clean answer is unverified`;
+}
+
+/**
+ * The releases asked of the batch query whose clean answer could not be held against their
+ * package's list (unverifiedClean): dropped from the advisory cache, so a later call asks again
+ * instead of reading the unverified answer as clean for an hour (C-1).
+ */
+export function forgetUnverifiedClean(ctx: PassContext, items: Resolved[], batch: BatchAnswer): void {
+  const { scan, known, byInstance, osvDeps } = batch;
+  if (scan.offline || (scan.staleAnswers ?? 0) > 0) return;
+  const unverified = new Set(items.filter((item) => !known.get(lookupKey(item))).map((item) => lookupKey(item)));
+  if (unverified.size === 0) return;
+  const deps = osvDeps.filter(
+    (d) => d.version !== null && unverified.has(lookupKey({ ecosystem: d.ecosystem as CheckEcosystem, package: d.name })) && (byInstance.get(instanceKey(d.ecosystem, d.name, d.version)) ?? []).length === 0,
+  );
+  if (deps.length > 0) ctx.liveIntel.forgetAdvisoryAnswers?.(deps);
 }
 
 /** An advisory list that leaves out what the batch query names is incomplete: nothing computed from it stands. */
@@ -276,13 +308,18 @@ function osvDep(item: CheckItem, version: string): ResolvedDependency {
  * (its own or an alias's) or a fixed version. Anything else the scan worded as a notice counts,
  * and says so (`countedNotice`).
  */
-export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices: ReadonlySet<string> = new Set()): AdvisoryRef[] {
+export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices: ReadonlySet<string> = new Set(), aliasUnread: ReadonlySet<string> = new Set()): AdvisoryRef[] {
   return groupAdvisories(entries).map(({ best: v, members }) => {
     const worded = members.every((m) => isMaintenanceNotice(m));
     const declared =
       worded &&
       members.some((m) => declaredNotices.has(m.vulnId)) &&
       members.every((m) => m.severity === "unknown" && !m.severityFrom && !m.fixedVersion && !m.malware);
+    // Ungraded, and graded nowhere but through a GHSA alias whose record could not be read: the
+    // grade was not read, so it counts as high. A failed /v1/vulns read of GHSA-4374-p667-p6c8 made
+    // golang.org/x/net v0.17.0 `review` instead of `avoid` (pre-publish audit 2026-11-25, C-2).
+    const gradeUnread =
+      v.severity === "unknown" && !declared ? [...new Set(members.flatMap((m) => (m.aliases ?? []).filter((a) => aliasUnread.has(a))))].sort() : [];
     return {
       id: v.vulnId,
       severity: v.severity,
@@ -291,7 +328,8 @@ export function refs(entries: VulnerabilityEntry[] | undefined, declaredNotices:
       ...(worded && !declared ? { countedNotice: true } : {}),
       ...(v.severityFrom ? { severityFrom: v.severityFrom } : {}),
       // Matched, but no record read: the severity is not known and never reads as low (AdvisoryRef.unread).
-      ...(v.severity === "unknown" && members.some((m) => m.detailUnavailable) ? { unread: true as const } : {}),
+      ...(v.severity === "unknown" && (members.some((m) => m.detailUnavailable) || gradeUnread.length > 0) ? { unread: true as const } : {}),
+      ...(gradeUnread.length > 0 ? { gradeUnreadFrom: gradeUnread } : {}),
       // Every malicious-package record of the group, the MAL- one under a GHSA alias included.
       ...(members.some((m) => m.malware) ? { malware: [...new Set(members.filter((m) => m.malware).map((m) => m.vulnId))] } : {}),
     };

@@ -6,8 +6,10 @@
  * lookups off, every item is answered without a lookup.
  */
 
-import { checkGoModulePath, goPathNotCheckedText, type GoPathVerdict } from "../live/go-path.js";
+import { checkGoModulePath, goModulePathGrammarProblem, goPathNotCheckedText, goPathShapeProblem, type GoPathVerdict } from "../live/go-path.js";
 import type { LiveIntelligence } from "../live/index.js";
+import type { CheckEcosystem } from "../live/release-metadata.js";
+import { PYPI_NAME } from "../live/upgrade-pypi.js";
 import { isNpmPackageName, quoteThirdParty } from "../untrusted-text.js";
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK, unreadFileKind } from "../live/private-packages.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
@@ -34,21 +36,24 @@ export async function screenItems(all: Requested[], liveIntel: LiveIntelligence 
   // A Go module path the go command would not accept as written (`..`, `//`, a trailing `/`, `@`,
   // or a case the module does not declare) matches no advisory at OSV.dev: it is NOT CHECKED, with
   // the canonical path named, never `proceed` (pre-publish audit 2026-11-12, B1).
+  // A package that is no name its registry can have (a local path, a URL, a git source, a whole
+  // requirement line, a Cargo inline table, `babel/core`) is refused as written and never sent: the
+  // ecosystem's own name grammar decides, for every ecosystem (pre-publish audit 2026-11-25, E3:
+  // PyPI, crates.io and Go items went whole to their registry and OSV.dev). A Go path the go command
+  // would read as a misspelt module (`//`, `..`, a trailing `/`, `@`) keeps its own answer below.
+  const badName = all.map((r, i) => (privateWhy[i] ? null : nameProblem(r.ecosystem, r.package)));
   const live = Boolean(liveIntel?.isEnabled());
   const goPath = await Promise.all(
-    all.map((r, i) => (r.ecosystem === "Go" && !privateWhy[i] ? checkGoModulePath(r.package, live && r.target.kind === "exact" ? r.target.version : null, live ? undefined : offlineFetch) : null)),
+    all.map((r, i) => (r.ecosystem === "Go" && !privateWhy[i] && !badName[i] ? checkGoModulePath(r.package, live && r.target.kind === "exact" ? r.target.version : null, live ? undefined : offlineFetch) : null)),
   );
-  // An npm name shaped like a scope that npm cannot have (`babel/core`) is no package on any
-  // registry: refused as written, with the scoped spelling suggested, and never sent.
-  const npmName = all.map((r, i) => (r.ecosystem === "npm" && !privateWhy[i] ? npmScopeProblem(r.package) : null));
-  const requested = all.filter((_, i) => !privateWhy[i] && !(goPath[i] && !goPath[i]!.ok) && !npmName[i]);
+  const requested = all.filter((_, i) => !privateWhy[i] && !(goPath[i] && !goPath[i]!.ok) && !badName[i]);
   const privateItems = all.flatMap((r, i) => {
     const why = privateWhy[i];
     if (why) return [{ at: i, result: privateResult(r, why, liveIntel?.withheldUnreadableFile?.(why) ?? null) }];
+    const bad = badName[i];
+    if (bad) return [{ at: i, result: badNameResult(r, bad) }];
     const g = goPath[i];
-    if (g && !g.ok) return [{ at: i, result: goPathResult(r, g) }];
-    const bad = npmName[i];
-    return bad ? [{ at: i, result: npmNameResult(r, bad) }] : [];
+    return g && !g.ok ? [{ at: i, result: goPathResult(r, g) }] : [];
   });
   /** The results in the order asked, private items in their places. */
   const inOrder = (checked: ItemResult[]): ItemResult[] => {
@@ -91,10 +96,12 @@ const offlineFetch = (async () => {
 }) as unknown as typeof import("../live/http-utils.js").fetchWithTimeout;
 
 function goPathResult(r: Requested, verdict: Extract<GoPathVerdict, { ok: false }>): ItemResult {
+  // A spelling refused on its shape alone was never sent anywhere; one refused on its declared case was read from the proxy.
+  const unsent = goPathShapeProblem(r.package) ? " Nothing was sent to the Go proxy or OSV.dev." : "";
   return {
     ...head(provisional(r)),
     verdict: "unknown",
-    reason: goPathNotCheckedText(r.package, verdict),
+    reason: `${goPathNotCheckedText(r.package, verdict)}${unsent}`,
     signals: [],
     not_checked: "module_path",
     ...(verdict.canonical ? { canonical_module_path: verdict.canonical } : {}),
@@ -112,12 +119,55 @@ export function npmScopeProblem(name: string): string | null {
   return `a scoped package is written "@scope/name"${guess}`;
 }
 
-/** An npm item whose name npm cannot have: unknown, refused as written, nothing sent. */
-function npmNameResult(r: Requested, problem: string): ItemResult {
+/** What a name is called in each ecosystem, and the registry it would have been sent to. */
+const NAME_KIND: Record<CheckEcosystem, { what: string; registry: string }> = {
+  npm: { what: "npm package name", registry: "the npm registry" },
+  PyPI: { what: "PyPI project name", registry: "PyPI" },
+  "crates.io": { what: "crates.io crate name", registry: "crates.io" },
+  Go: { what: "Go module path", registry: "the Go proxy" },
+};
+
+/** Not a name: a path, a URL, a git source, an option or a manifest line in place of one. */
+const NOT_A_NAME = "pass the registry name alone (a local path, a URL, a git source, an install option or a manifest line is not one, and is checked by reviewing its source)";
+
+/**
+ * Why `name` is no name `ecosystem`'s registry can have, or null. npm: a scope written without "@"
+ * (with the scoped spelling suggested) or anything else outside npm's name rules. PyPI: PEP 508
+ * (letters, digits, `.`, `_`, `-`, starting and ending with a letter or digit). crates.io: a letter,
+ * then letters, digits, `_` and `-`, at most 64. Go: a module path (goModulePathGrammarProblem);
+ * a spelling the go command reads as a misspelt module is left to checkGoModulePath. Each test is
+ * one anchored regex with no nested quantifier: linear in the name's length (validateItem bounds it).
+ */
+export function nameProblem(ecosystem: CheckEcosystem, name: string): string | null {
+  switch (ecosystem) {
+    case "npm": {
+      if (isNpmPackageName(name)) return null;
+      // `lodash@4.17.21`, `@babel/core@7`: the version goes in `to`.
+      const pinned = /^(@?[^@]+)@[^@]*$/.exec(name);
+      if (pinned && isNpmPackageName(pinned[1])) return `a version goes in \`to\`, not in the name (did you mean ${JSON.stringify(pinned[1])}?)`;
+      return npmScopeProblem(name) ?? `npm names are letters, digits and "-._~", with an optional "@scope/"; ${NOT_A_NAME}`;
+    }
+    case "PyPI":
+      return PYPI_NAME.test(name) ? null : `a PyPI name is letters, digits, ".", "_" and "-", starting and ending with a letter or digit (extras and version specifiers go elsewhere: the version in \`to\`); ${NOT_A_NAME}`;
+    case "crates.io":
+      return CRATE_NAME.test(name) ? null : `a crate name is a letter followed by letters, digits, "_" and "-", at most 64 characters; ${NOT_A_NAME}`;
+    case "Go": {
+      if (goPathShapeProblem(name)) return null;
+      const why = goModulePathGrammarProblem(name);
+      return why ? `${why}; ${NOT_A_NAME}` : null;
+    }
+  }
+}
+
+const CRATE_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
+/** An item whose name its registry cannot have: unknown, refused as written, nothing sent. */
+function badNameResult(r: Requested, problem: string): ItemResult {
+  const kind = NAME_KIND[r.ecosystem];
   return {
     ...head(provisional(r)),
     verdict: "unknown",
-    reason: `NOT CHECKED: ${JSON.stringify(quoteThirdParty(r.package, 214))} is not a valid npm package name: ${problem}. Nothing was sent to the npm registry or OSV.dev: correct it and ask again. This is not a clean result.`,
+    reason: `NOT CHECKED: ${JSON.stringify(quoteThirdParty(r.package, 214))} is not a valid ${kind.what}: ${problem}. Nothing was sent to ${kind.registry} or OSV.dev: correct it and ask again. This is not a clean result.`,
     signals: [],
     not_checked: "input",
   };

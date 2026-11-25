@@ -38,6 +38,33 @@ export function goPathShapeProblem(raw: string): { canonical: string | null; rea
   return { canonical: canonicalGuess(path), reason: problems.join("; ") };
 }
 
+/**
+ * Why `path` (well-formed by goPathShapeProblem) cannot be a module path at all, or null: a module
+ * path is made of ASCII letters, digits and `-._~+` between slashes, and its first element is a
+ * domain name (a dot in it, not starting with `.` or `-`), as the go command's own check requires.
+ * A local path (`C:/Users/...`), a URL or a bare word is no module the Go proxy or OSV.dev knows, and
+ * sending it would send a home directory or a private host (pre-publish audit 2026-11-25, E3).
+ * Linear in the length of `path`.
+ */
+export function goModulePathGrammarProblem(path: string): string | null {
+  const bad = /[^A-Za-z0-9._~+\-/]/.exec(path);
+  if (bad) return `it contains ${JSON.stringify(bad[0])}, which no Go module path has (letters, digits and "-._~+" between slashes)`;
+  const first = path.split("/", 1)[0];
+  if (!first.includes(".") || /^[.-]/.test(first) || first.endsWith(".")) {
+    return "its first element is not a domain name (a module path starts with one, such as golang.org or github.com)";
+  }
+  // A host no public proxy can fetch from: an IP address or a name under a non-public suffix. Its
+  // module is private by construction, and sending the path would name the private host.
+  const tld = first.slice(first.lastIndexOf(".") + 1).toLowerCase();
+  if (/^[\d.]+$/.test(first) || NON_PUBLIC_SUFFIXES.has(tld) || first.toLowerCase().endsWith(".home.arpa")) {
+    return "its host is an IP address or a name under a non-public suffix, which proxy.golang.org cannot fetch from (a private module)";
+  }
+  return null;
+}
+
+/** Top-level names that never resolve on the public internet (RFC 2606, RFC 6761, RFC 6762, ICANN's .internal, and common private use). */
+const NON_PUBLIC_SUFFIXES = new Set(["local", "localhost", "internal", "lan", "corp", "home", "intranet", "private", "invalid", "test", "localdomain"]);
+
 /** The path a malformed spelling most likely means: version dropped, slashes collapsed, `.`/`..` resolved. */
 function canonicalGuess(path: string): string | null {
   const noVersion = path.replace(/\\/g, "/").split("@")[0].trim();
@@ -77,6 +104,9 @@ export async function checkGoModulePath(raw: string, version?: string | null, fe
   const shape = goPathShapeProblem(raw);
   if (shape) return { ok: false, ...shape };
   const path = raw.trim();
+  // Never sent to the proxy: it is no module path (E3).
+  const grammar = goModulePathGrammarProblem(path);
+  if (grammar) return { ok: false, canonical: null, reason: grammar };
   const key = `${path}@${version ?? ""}`;
   const hit = MEMO.get(key);
   if (hit) return hit;

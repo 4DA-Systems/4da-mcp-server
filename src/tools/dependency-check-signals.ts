@@ -78,6 +78,11 @@ export interface AdvisoryRef {
    */
   unread?: true;
   /**
+   * With `unread`: the record was read but carries no grade, and the GHSA aliases it would be graded
+   * by could not be read (osv-scanner.ts rateFromAliases): it counts as high (pre-publish audit 2026-11-25, C-2).
+   */
+  gradeUnreadFrom?: string[];
+  /**
    * The malicious-package records (malware.ts) in this advisory's alias group: a MAL- record often
    * comes in under its GHSA alias, which then names the group (blind audit round 5: chalk 5.6.1).
    */
@@ -379,7 +384,9 @@ function fmt(a: AdvisoryRef): string {
     : a.severityFrom
       ? `${a.severity}, per ${a.severityFrom}`
       : a.unread && a.severity === "unknown"
-        ? "severity NOT CHECKED: OSV.dev did not return its record, so it counts as high"
+        ? a.gradeUnreadFrom?.length
+          ? `severity NOT CHECKED: it carries no grade of its own and its alias ${a.gradeUnreadFrom.slice(0, 2).join(", ")} could not be read from OSV.dev, so it counts as high`
+          : "severity NOT CHECKED: OSV.dev did not return its record, so it counts as high"
         : a.severity;
   // Counted, and said why: it reads like a notice and is not one by the record's own statement.
   return `${a.id} (${grade}${a.countedNotice ? "; worded as an unmaintained-package notice, but not declared as one or it names a fixed release, so it counts" : ""})`;

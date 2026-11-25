@@ -71,7 +71,13 @@ export class NpmPackumentReader implements ReleaseMetadataSource {
       return { status: "ok", data: cached.index };
     }
     if (!this.rateLimiter.consume("npm")) {
-      return { status: "unreachable", detail: "npm registry rate limit reached for this minute" };
+      // This server's own limit, never the registry's: named as such, with when to ask again (C-4, as 6.5.0 did for Go).
+      const retryAfterSeconds = this.rateLimiter.retryAfterSeconds("npm");
+      return {
+        status: "unreachable",
+        detail: `this server's own request limit for the npm registry was reached, so the read was not sent (it can be made in ${retryAfterSeconds} s)`,
+        ownLimit: { registry: "the npm registry", retryAfterSeconds },
+      };
     }
 
     const headers: Record<string, string> = { Accept: "application/json" };
