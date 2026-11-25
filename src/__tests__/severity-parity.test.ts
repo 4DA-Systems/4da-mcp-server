@@ -200,8 +200,9 @@ describe("vulnerability_scan — sandbox@3.1.2 graded as the app grades it", () 
     expect(sandbox.severity).toBe("high");
     expect(sandbox.advisory_severity).toBe("critical");
     expect(sandbox.severity_note).toContain("transitive-only");
-    expect(out.by_severity).toMatchObject({ critical: 0, high: 1 });
-    expect(out.advisory_by_severity).toMatchObject({ critical: 1, high: 0 });
+    // PADDLE_LOCK has no `snapshots:` section, so it reads as PARTIAL and the counts are under found_in_checked_dependencies (audit 2026-11-25, F2).
+    expect(out.found_in_checked_dependencies.by_severity).toMatchObject({ critical: 0, high: 1 });
+    expect(out.found_in_checked_dependencies.by_advisory_severity).toMatchObject({ critical: 1, high: 0 });
     expect(out._meta.severity_rule).toContain("caps critical at high");
   });
 
@@ -215,8 +216,8 @@ describe("vulnerability_scan — sandbox@3.1.2 graded as the app grades it", () 
     expect(sandbox.is_dev).toBe(true);
     expect(sandbox.severity).toBe("medium");
     expect(sandbox.advisory_severity).toBe("critical");
-    expect(out.by_severity).toMatchObject({ critical: 0, high: 0, medium: 1 });
-    expect(out.advisory_by_severity).toMatchObject({ critical: 1 });
+    expect(out.found_in_checked_dependencies.by_severity).toMatchObject({ critical: 0, high: 0, medium: 1 });
+    expect(out.found_in_checked_dependencies.by_advisory_severity).toMatchObject({ critical: 1 });
   });
 
   it("does not read the app's placeholder row (is_dev = 0, scope 'unknown') as a determination", async () => {
