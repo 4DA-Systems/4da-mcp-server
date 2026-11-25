@@ -52,7 +52,6 @@ import {
   closestPopularPypi,
   ENGLISH_TASK_WORDS,
   installedGoModule,
-  isManifestEntry,
   isManifestFile,
   isTomlEntry,
   isVersionSpec,
@@ -67,7 +66,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
-import { isKnownSwitch, lookupEvidence, MAX_TASK_WORD, notKnownReason, optionTakesValue, pathLikeOperand, privateSignals, proseCues, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { isKnownSwitch, knownPublicName, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -343,43 +342,23 @@ export function detectAllNewPackages(task: string, deps: readonly ResolvedDepend
   return readTaskItems(normalizeVersionSyntax(screen.text), deps).packages.filter((p) => screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]) === null);
 }
 
-/** What may be looked up for a task: the projects's dependency set, the names it reads structurally, and its private-source signals. */
-export interface LookupContext {
-  installed: (name: string) => boolean;
-  structural: ReadonlySet<string>;
-  signals: ReadonlyMap<CheckEcosystem, string>;
-  prose: (name: string, eco: CheckEcosystem, primary: CheckEcosystem) => boolean;
-}
-
-export function lookupContext(task: string, deps: readonly ResolvedDependency[], structural: ReadonlySet<string>): LookupContext {
+/** Whether a name is one the project already depends on (its own dependency set: nothing is asked to know it). */
+export function installedNames(deps: readonly ResolvedDependency[]): (name: string) => boolean {
   const names = new Set<string>();
   for (const d of deps) {
     names.add(d.name.toLowerCase());
     if (d.ecosystem === "PyPI") names.add(normalizePypiName(d.name));
   }
-  return {
-    installed: (name) => names.has(name.toLowerCase()) || names.has(normalizePypiName(name)) || installedGoModule(name, deps) !== null,
-    structural,
-    signals: privateSignals(task),
-    prose: proseCues(task),
-  };
+  return (name) => names.has(name.toLowerCase()) || names.has(normalizePypiName(name)) || installedGoModule(name, deps) !== null;
 }
 
 /**
- * The ecosystems among `ecosystems` where `name` may be looked up (the first one kept first), or the
- * reason it is looked up in none: the task's private-source signal for its ecosystem, else notKnownReason.
+ * The ecosystems among `ecosystems` where the briefing itself may look `name` up: the project depends
+ * on it, or it is exactly a name of that ecosystem's bundled lists (knownPublicName).
  */
-export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], ctx: LookupContext, primary: CheckEcosystem = ecosystems[0]): { allowed: CheckEcosystem[]; onlyStructural: boolean; why: string } {
-  const allowed: CheckEcosystem[] = [];
-  let onlyStructural = true;
-  for (const e of ecosystems) {
-    const ev = lookupEvidence(name, e, ctx, primary);
-    if (ev === null) continue;
-    allowed.push(e);
-    if (ev !== "command" && ev !== "cue") onlyStructural = false;
-  }
-  const signal = ctx.signals.get(ecosystems[0]);
-  return { allowed, onlyStructural, why: signal ? `not looked up: ${signal}` : notKnownReason(name, ecosystems[0]) };
+export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], installed: (name: string) => boolean): CheckEcosystem[] {
+  if (installed(name)) return [...ecosystems];
+  return ecosystems.filter((e) => knownPublicName(name, e));
 }
 
 /** A word the briefing did not look up, as the answer names it. */
@@ -423,8 +402,6 @@ export interface TaskItems {
   foreign: Array<TaskSpan & { name: string; registry: string }>;
   /** The task names more than MAX_READ_PACKAGES packages: the rest was not read (named NOT CHECKED). */
   truncated?: true;
-  /** `${ecosystem}\0${lower-case name}` of every name read as an install command's operand or a manifest entry's key. */
-  structural: Set<string>;
   /** Words of a command that were not read (after an option that may take them as its value). */
   unreadWords: Array<{ shown: string; reason: string }>;
 }
@@ -484,7 +461,6 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const found: NewPackage[] = [];
   /** Where each (ecosystem, name) is in `found`: a list of thousands of names was quadratic (F-M3). */
   const foundAt = new Map<string, number>();
-  const structural = new Set<string>();
   const unreadWords: TaskItems["unreadWords"] = [];
   const bound: BoundVersion[] = [];
   const ignored: TaskSpan[] = [];
@@ -651,8 +627,6 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (!name) break;
         // The command fixes the ecosystem for the version reader too (round 10, W14).
         fixed.push({ ...span(j), ecosystem });
-        // An install command's operand: evidence that it is a package (lookupEvidence, rule iii).
-        structural.add(`${ecosystem}\0${name.toLowerCase()}`);
         add(name, ecosystem, false, false, inlineVersion(j, ecosystem));
         if (separatorAfter(j) === "clause") break;
       }
@@ -851,12 +825,6 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const pepAlternatives: CheckEcosystem[] = pep === "PyPI" && !stated && asName(raw[k].replace(/(?:[=~<>!]=?).*$/, ""), "npm") !== null ? ["npm"] : [];
       const pepFallbackOnly = pepAlternatives.length > 0 && projectEcosystems(deps).includes("PyPI");
       if (pep) fixed.push({ ...span(k), ecosystem: pep, ...(pepAlternatives.length > 0 ? { alternatives: pepAlternatives } : {}), ...(pepFallbackOnly ? { fallbackOnly: true as const } : {}) });
-      // A manifest entry's key (`"x": "^1"`, `x = "1.0"`), or a requirements line on its own (`x==1.0`): evidence
-      // that it is a package (lookupEvidence, rule iii). Not an environment-variable name (`DB_PASS = "123"`).
-      const ownLine = pep !== null && /(?:^|\n)[ \t]*$/.test(task.slice(Math.max(0, starts[k] - 80), starts[k])) && /^[^\s]*[ \t]*(?:\n|$)/.test(task.slice(starts[k], starts[k] + MAX_TASK_WORD + 80));
-      if ((isManifestEntry(task, starts[k]) || ownLine) && !/^[A-Z][A-Z0-9_]*$/.test(raw[k].replace(/[@=~<>!].*$/, "")) && !(itemEcosystem === "npm" && /[A-Z]/.test(raw[k].split("@")[0]))) {
-        structural.add(`${tomlEntry ? toml : pep ? "PyPI" : "npm"}\0${name.toLowerCase()}`);
-      }
       const pkg = tomlEntry || pep ? add(name, itemEcosystem, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
       if (pkg && pep && pepAlternatives.length > 0) {
         pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
@@ -888,7 +856,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
     }
   }
-  return { packages: found, bound, ignored, fixed, foreign, structural, unreadWords, ...(truncated ? { truncated: true as const } : {}) };
+  return { packages: found, bound, ignored, fixed, foreign, unreadWords, ...(truncated ? { truncated: true as const } : {}) };
 }
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &

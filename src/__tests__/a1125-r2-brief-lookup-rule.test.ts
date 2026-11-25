@@ -15,7 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { privateSignals } from "../tools/briefing-task-screen.js";
+import { executeDependencyCheck } from "../tools/dependency-check.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 
 let h: Harness;
@@ -62,9 +62,17 @@ describe("1. an entry is never a credential, and a version is never replaced by 
     ["npm install jsonwebtoken@8.5.1", "jsonwebtoken", "8.5.1"],
   ])("%s is judged at the version written", async (task, name, version) => {
     const r = await brief(task);
-    expect(r.requested_versions).toMatchObject([{ name, to: version, verdict: "avoid" }]);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(JSON.stringify(r.withheld_from_task ?? [])).not.toContain(name);
+    // A listed name is judged by the briefing; any other is handed back at the version the task writes
+    // (final design of the 2026-11-25 fixes), and dependency_check judges it there.
+    if (r.requested_versions) {
+      expect(r.requested_versions).toMatchObject([{ name, to: version, verdict: "avoid" }]);
+    } else {
+      expect(r.check_these?.arguments.items).toContainEqual(expect.objectContaining({ package: name, to: version }));
+      const check = (await executeDependencyCheck(null, r.check_these!.arguments, await h.live())) as { results: Array<{ package: string; verdict: string }> };
+      expect(check.results.find((x) => x.package === name)).toMatchObject({ verdict: "avoid" });
+    }
   });
 
   it("a credential-shaped value beside a package name holds the package whole, never judged at latest", async () => {
@@ -123,21 +131,11 @@ describe("2. a word is looked up only on evidence that it is a public package", 
     expect(looked(name).length).toBeGreaterThan(0);
   });
 
-  it("a word in prose nothing knows is held by name, with the reason, and the task is review_needed", async () => {
+  it("a name on no bundled list is handed back, never looked up, and the task is review_needed", async () => {
     const r = await brief("add left-pad-ng to the project");
     expect(looked("left-pad-ng")).toEqual([]);
-    expect(r.withheld_from_task).toMatchObject([{ shown: "left-pad-ng", reason: expect.stringContaining("nothing in the task shows left-pad-ng is a public package; if it is one, call dependency_check {ecosystem: \"npm\", package: \"left-pad-ng\", to: \"latest\"}") }]);
+    expect(r.check_these?.arguments.items).toContainEqual({ ecosystem: "npm", package: "left-pad-ng", to: "latest" });
     expect(r.delegation_assessment.level).toBe("review_needed");
-  });
-
-  it("the signal reads any spelling, case-insensitively, and names the public registry as no signal", () => {
-    expect([...privateSignals("npm_config_registry=https://npm.x.internal npm i a").keys()]).toContain("npm");
-    expect([...privateSignals("$ENV:Npm_Config_Registry = 'https://npm.x.internal'").keys()]).toContain("npm");
-    expect([...privateSignals("npm install --registry https://registry.npmjs.org lodash").keys()]).toEqual([]);
-    expect([...privateSignals("pip install -i https://pypi.org/simple requests").keys()]).toEqual([]);
-    expect([...privateSignals("GOPROXY=https://proxy.golang.org,direct go get x.io/y").keys()]).toEqual([]);
-    expect([...privateSignals("GOPRIVATE=x.internal go get x.internal/y").keys()]).toEqual(["Go"]);
-    expect([...privateSignals("add lodash and express").keys()]).toEqual([]);
   });
 });
 

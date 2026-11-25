@@ -12,6 +12,7 @@ import Database from "better-sqlite3";
 import { FourDADatabase } from "../db.js";
 import { LiveIntelligence } from "../live/index.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
+import { executeDependencyCheck } from "../tools/dependency-check.js";
 import { detectRequestedVersions, readTaskVersions } from "../tools/briefing-requested-versions.js";
 import type { ResolvedDependency } from "../live/types.js";
 
@@ -137,11 +138,15 @@ describe("the version a task names is judged, at that version", () => {
 
   it('"add github.com/gin-gonic/gin/ v1.6.0": a Go path the go command would not accept is never safe to delegate (audit B1)', async () => {
     // As a command operand (re-check of the 2026-11-25 fixes, item 2: a Go path in prose is held, not looked up).
-    const result = await brief("go get github.com/gin-gonic/gin/@v1.6.0", { react: "18.2.0" });
+    // Final design of the 2026-11-25 fixes: a Go module is on no bundled list, so it is handed back at the
+    // version the task names; dependency_check says the path is not one the go command accepts.
+    const result = await brief("add github.com/gin-gonic/gin/ v1.6.0", { react: "18.2.0" });
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
-    const gin = result.requested_versions?.find((r) => r.name.startsWith("github.com/gin-gonic/gin"));
-    expect(gin).toMatchObject({ ecosystem: "Go", to: "v1.6.0", verdict: "unknown" });
-    expect(gin?.reason).toMatch(/not a Go module path the go command accepts as written .* Check `github\.com\/gin-gonic\/gin` instead/);
+    const items = result.check_these?.arguments.items ?? [];
+    expect(items).toEqual([{ ecosystem: "Go", package: "github.com/gin-gonic/gin/", to: "v1.6.0" }]);
+    const check = (await executeDependencyCheck(null, { items }, project({ react: "18.2.0" }))) as { results: Array<{ verdict: string; reason: string }> };
+    expect(check.results[0]).toMatchObject({ verdict: "unknown" });
+    expect(check.results[0].reason).toMatch(/not a Go module path the go command accepts as written .* Check `github\.com\/gin-gonic\/gin` instead/);
   });
 
   it('"pin axios to 0.21.1": axios is seen, 0.21.1 is avoid', async () => {

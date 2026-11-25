@@ -142,10 +142,11 @@ describe("a guessed name in a project whose registries are all private (r9 B1)",
         },
       }),
     );
-    // An install command's operand (re-check of the 2026-11-25 fixes, item 2: left-pad in prose is not looked up).
-    await brief("npm install left-pad");
-    expect(leaks(/left-pad/).length).toBeGreaterThan(0);
-    expect(leaks(/left-pad/).filter((r) => /PyPI|pypi\.org/.test(r))).toEqual([]);
+    // Final design of the 2026-11-25 fixes: left-pad is on no bundled list: handed back, as npm's only.
+    const r = await brief("npm install left-pad");
+    expect(JSON.stringify(r)).toMatch(/"ecosystem":"npm","package":"left-pad","to":"latest"/);
+    expect(JSON.stringify(r)).not.toMatch(/"ecosystem":"PyPI","package":"left-pad"/);
+    expect(leaks(/left-pad/).filter((x) => /PyPI|pypi\.org/.test(x))).toEqual([]);
   });
 
   it("an ordinary npm project still checks a new package (no over-blocking)", async () => {
@@ -158,8 +159,9 @@ describe("a guessed name in a project whose registries are all private (r9 B1)",
         packages: { "": { name: "app", dependencies: deps }, "node_modules/lodash": { version: "4.17.21", resolved: "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz" } },
       }),
     );
+    // Final design: a new name on no bundled list is handed back for dependency_check, never called private.
     const result = await brief("npm install left-pad");
-    expect(leaks(/left-pad/).length).toBeGreaterThan(0);
+    expect(JSON.stringify(result)).toMatch(/"package":"left-pad"/);
     expect(JSON.stringify(result)).not.toMatch(/NOT CHECKED \(private\)/);
   });
 });

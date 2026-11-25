@@ -338,11 +338,20 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     ["add left-pad + electorn", NPM_PROJECT, "electorn"],
     ["add left-pad plus electorn", NPM_PROJECT, "electorn"],
     ["add left-pad 1.3.0, chalk 5.6.2 & electorn", NPM_PROJECT, "electorn"],
-  ])("%s: the later package is checked, and its malware is human_only (it was never checked)", async (task, deps, bad) => {
+  ])("%s: the later package is not lost: listed malware is human_only, a near-miss is flagged offline", async (task, deps, bad) => {
     NPM["lodash-es"] = { latest: "4.17.21", versions: ["4.17.21"] };
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is handed back in check_these, never sent by it, and a
+    // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief(task, deps);
-    expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
-    expect(r.delegation_assessment.level).toBe("human_only");
+    if (bad === "electorn") {
+      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ verdict: "review", did_you_mean: "electron", malicious: false });
+      expect(ASKED.some((u) => u.includes("electorn"))).toBe(false);
+      expect(r.delegation_assessment.level).toBe("review_needed");
+    } else {
+      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
+      expect(r.delegation_assessment.level).toBe("human_only");
+    }
   });
 
   it.each(["replace request with axios 0.21.0", "swap request for axios 0.21.0", "migrate from request to axios 0.21.0"])(
@@ -373,12 +382,14 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     expect(r.requested_versions?.map((v) => `${v.name}@${v.to}`)).toEqual(["lodash@4.17.21", "express@4.x"]);
   });
 
-  it("a clean list stays safe_to_delegate, every item checked", async () => {
-    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
-    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
-    const r = await brief("npm install left-pad@1.3.0 chalk@5.6.2 express@5.1.0");
-    expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["left-pad@1.3.0=proceed", "chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+  it("a clean list: every item is checked or handed back at its own version", async () => {
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is handed back in check_these, never sent by it, and a
+    // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
+    const r = await brief("add left-pad 1.3.0, chalk 5.6.2 and express 5.1.0");
+    expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
+    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "left-pad", to: "1.3.0" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("what a swap takes out is not judged as written: replacing request 2.88.2 is no reason to review", async () => {
@@ -395,49 +406,59 @@ describe("a task naming more packages than the briefing checks fails closed", ()
   });
 
   it("ten clean packages: the first eight are checked, the other two are NOT CHECKED by name, and it is not safe_to_delegate (it was, silently)", async () => {
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is handed back in check_these, never sent by it, and a
+    // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief(`npm install ${many(10).join(" ")}`);
-    expect(r.new_packages?.map((p) => p.name)).toEqual(many(8));
-    expect(r.new_packages?.every((p) => p.verdict === "proceed")).toBe(true);
+    expect(r.new_packages).toBeUndefined();
+    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(many(10));
     expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toContain("NOT CHECKED: 2 more packages named in the task (pkg-9, pkg-10)");
-    expect(r.summary).toContain("NOT CHECKED: 2 more packages named in the task (pkg-9, pkg-10)");
-    // Never looked up past the cap: said, not sent.
-    expect(ASKED.some((u) => u === "https://registry.npmjs.org/pkg-9")).toBe(false);
+    expect(r.summary).toContain("NOT CHECKED: 10 packages named in the task were not looked up by this briefing");
+    expect(ASKED.some((u) => /pkg-\d/.test(u))).toBe(false);
+    // Past dependency_check's own limit of 25 items, the rest is counted, not listed.
+    for (let i = 13; i <= 30; i++) NPM[`pkg-${i}`] = { latest: "1.0.0", versions: ["1.0.0"] };
+    const more = await brief(`npm install ${Array.from({ length: 30 }, (_, i) => `pkg-${i + 1}`).join(" ")}`);
+    expect(more.check_these?.arguments.items).toHaveLength(25);
+    expect(more.check_these?.not_listed).toBe(5);
   });
 
   it("a prose list past eight fails closed the same way", async () => {
     // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
     // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
     const r = await brief(`add ${many(8).join(", ")} and pkg-9`);
-    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(r.withheld_from_task?.map((w) => w.shown)).toEqual(many(9));
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(many(9));
     expect(ASKED.some((u) => /pkg-\d/.test(u))).toBe(false);
   });
 
-  it("exactly eight clean packages: all checked, safe_to_delegate, nothing said NOT CHECKED", async () => {
-    const r = await brief(`npm install ${many(8).join(" ")}`);
+  it("eight popular packages: all checked, safe_to_delegate, nothing said NOT CHECKED", async () => {
+    const eight = ["chalk", "express", "zod", "axios", "dayjs", "uuid", "debug", "commander"];
+    for (const name of eight) NPM[name] ??= { latest: "1.0.0", versions: ["1.0.0"] };
+    const r = await brief(`npm install ${eight.join(" ")}`);
     expect(r.new_packages).toHaveLength(8);
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(r.check_these).toBeUndefined();
     expect(r.summary).not.toContain("NOT CHECKED");
   });
 
   it("a private name never takes a checked slot, and is never named as unchecked", async () => {
     const r = await brief(`npm install acme-vault ${many(8).join(" ")}`, NPM_PROJECT, { privateReason: (_e: string, n: string) => (n === "acme-vault" ? "private by .npmrc" : null) });
-    expect(r.new_packages?.map((p) => p.name)).toEqual(many(8));
-    expect(r.summary).not.toContain("NOT CHECKED: 1 more");
+    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(many(8));
+    expect(JSON.stringify(r.check_these)).not.toContain("acme-vault");
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
   });
 });
 
 describe("what was already right stays right", () => {
   it.each([
-    ["add the lodahs package", "human_only"],
+    // Final design of the 2026-11-25 fixes: lodahs is a near-miss of lodash, judged offline (did you mean lodash?).
+    ["add the lodahs package", "review_needed"],
     ["add tests", "safe_to_delegate"],
     ["add logging to the handler", "safe_to_delegate"],
     ["add error handling, then update the docs", "safe_to_delegate"],
     ["add tests, logging and retries", "safe_to_delegate"],
     ["upgrade lodash to 4.17.21", "safe_to_delegate"],
-    ["add the left-pad package", "safe_to_delegate"],
+    // left-pad is on no bundled list: handed back in check_these, so review_needed.
+    ["add the left-pad package", "review_needed"],
   ] as const)("%s: %s", async (task, level) => {
     NPM.lodahs = { latest: "0.0.1-security", versions: ["0.0.1-security"] };
     OSV.push(advisory("MAL-2025-25502", "lodahs", "CRITICAL", {}, "npm", true));
@@ -453,6 +474,7 @@ describe("what was already right stays right", () => {
     const r = await brief("add frobnicator");
     expect(r.new_packages).toBeUndefined();
     expect(ASKED.some((u) => u.includes("frobnicator"))).toBe(false);
+    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "frobnicator", to: "latest" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
@@ -461,12 +483,11 @@ describe("what was already right stays right", () => {
       privateReason: (_eco: string, name: string) => (name.toLowerCase() === "acme-vault" ? "private by .npmrc @acme registry" : null),
     });
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
-    // electorn, a near-miss of electron, is looked up and is malware; left-pad is nothing this server knows in
-    // prose, so it is held by name, not dropped (re-check of the 2026-11-25 fixes, item 2).
-    expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["electorn=avoid"]);
-    expect(r.withheld_from_task?.map((w) => w.shown)).toContain("left-pad");
-    expect(ASKED.some((u) => u === "https://registry.npmjs.org/left-pad")).toBe(false);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    // electorn is a near-miss of electron, judged offline; left-pad is handed back; neither is sent (final design).
+    expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["electorn=review"]);
+    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(["left-pad", "electorn"]);
+    expect(ASKED.some((u) => /left-pad|electorn/.test(u))).toBe(false);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("a private name the project's registries do not have is never sent to the other ecosystems either", async () => {

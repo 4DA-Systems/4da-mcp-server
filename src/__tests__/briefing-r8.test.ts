@@ -194,10 +194,19 @@ describe("B1 in the briefing: the malware after a prose item is found (each was 
     ["add uuid, ctx", PY_PROJECT, "ctx"],
     ["add json and ctx", PY_PROJECT, "ctx"],
     ["add zod, lodahs", NPM_PROJECT, "lodahs"],
-  ])("%s: human_only on %s", async (task, deps, bad) => {
+  ])("%s: never safe on %s (a listed malicious name is human_only, a near-miss is flagged offline)", async (task, deps, bad) => {
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is handed back in check_these (not sent by the briefing),
+    // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await brief(task, deps);
-    expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
-    expect(r.delegation_assessment.level).toBe("human_only");
+    if (bad === "electorn" || bad === "lodahs") {
+      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ verdict: "review", malicious: false });
+      expect(r.new_packages?.find((p) => p.name === bad)?.did_you_mean).toBeTruthy();
+      expect(r.delegation_assessment.level).toBe("review_needed");
+    } else {
+      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
+      expect(r.delegation_assessment.level).toBe("human_only");
+    }
   });
 });
 
@@ -259,14 +268,13 @@ describe("nothing past a cap is dropped without a word", () => {
     for (const n of ["valibot", "superstruct", "io-ts", "is-even"]) stub.npm[n] = { latest: "1.0.0", versions: ["1.0.0"] };
     // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
     // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
-    const r = await brief("npm install zod valibot superstruct io-ts is-even");
-    expect(r.new_packages?.map((p) => p.name)).toEqual(["zod", "valibot", "superstruct", "io-ts", "is-even"]);
-    for (const n of ["valibot", "superstruct", "io-ts", "is-even"]) expect(r.summary).toContain(`${n} (proceed)`);
-    // In prose, the popular one is looked up and the others are held, each by name: none is dropped.
-    const prose = await brief("add zod, valibot, superstruct, io-ts and is-even");
-    expect(prose.new_packages?.map((p) => p.name)).toEqual(["zod"]);
-    expect(prose.withheld_from_task?.map((w) => w.shown)).toEqual(["valibot", "superstruct", "io-ts", "is-even"]);
-    expect(prose.delegation_assessment.level).toBe("review_needed");
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is handed back in check_these (not sent by the briefing),
+    // and a near-miss of a popular name is judged offline: review_needed, did you mean.
+    const r = await brief("add zod, valibot, superstruct, io-ts and is-even");
+    expect(r.new_packages?.map((p) => p.name)).toEqual(["zod"]);
+    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(["valibot", "superstruct", "io-ts", "is-even"]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("versions past eight are NOT CHECKED by name, never silently cut (the sixth was dropped)", async () => {
@@ -301,13 +309,15 @@ describe("false positives are gone, blockers stay", () => {
   it("use blueprints: a word nothing knows after `use` is not looked up, and said (re-check of the 2026-11-25 fixes, item 2)", async () => {
     const r = await brief("use blueprints");
     expect(r.new_packages).toBeUndefined();
-    expect(r.withheld_from_task).toMatchObject([{ shown: "blueprints" }]);
+    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "blueprints", to: "latest" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("use lodahs: a malware name after `use` still stands", async () => {
+    // Final design: a near-miss judged offline (did you mean lodash?), never safe.
     const r = await brief("use lodahs");
-    expect(r.delegation_assessment.level).toBe("human_only");
+    expect(r.new_packages).toMatchObject([{ name: "lodahs", verdict: "review", did_you_mean: "lodash" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 });
 

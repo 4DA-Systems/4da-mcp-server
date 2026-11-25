@@ -137,11 +137,11 @@ describe("E2: what the task's own command takes from elsewhere is never looked u
     expect(looked("lodash").length).toBeGreaterThan(0);
   });
 
-  it("a task that names a private npm registry looks up no new npm name at all, a popular one included (re-check, item 2)", async () => {
+  it("a private command does not hide the next clause's popular package, and its own package is never listed (final design)", async () => {
     const r = await brief("npm install --registry https://npm.zqxcorp.internal zqx-cli-tool; then add express");
     expect(leaked(/zqx/i)).toEqual([]);
-    expect(looked("express")).toEqual([]);
-    expect(JSON.stringify(r.withheld_from_task)).toMatch(/express.*registry, index, source or proxy for npm/);
+    expect(looked("express").length).toBeGreaterThan(0);
+    expect(JSON.stringify(r.check_these ?? {})).not.toMatch(/zqx/);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
