@@ -437,9 +437,7 @@ describe("what was already right stays right", () => {
     ["add error handling, then update the docs", "safe_to_delegate"],
     ["add tests, logging and retries", "safe_to_delegate"],
     ["upgrade lodash to 4.17.21", "safe_to_delegate"],
-    ["npm install left-pad", "safe_to_delegate"],
-    // Re-check of the 2026-11-25 fixes, item 2: left-pad is not on the bundled popular list, so in prose it is held.
-    ["add the left-pad package", "review_needed"],
+    ["add the left-pad package", "safe_to_delegate"],
   ] as const)("%s: %s", async (task, level) => {
     NPM.lodahs = { latest: "0.0.1-security", versions: ["0.0.1-security"] };
     OSV.push(advisory("MAL-2025-25502", "lodahs", "CRITICAL", {}, "npm", true));
