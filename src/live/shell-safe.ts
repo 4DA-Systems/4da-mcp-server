@@ -55,14 +55,19 @@ export function isShellSafeCargoTarget(target: string): boolean {
  * quoted), `!` (cmd delayed expansion, bash history expansion), `\` (an escape in bash and
  * PowerShell), `;`, `&`, `|`, `<` and `>` (separators and redirects unquoted), `(` and `)`
  * (PowerShell runs an unquoted `(x86)` as a subexpression), `{` and `}` (a PowerShell script block),
- * `*` and `?` (a wildcard picks another directory, even quoted, in PowerShell's Set-Location), `:`
+ * `*`, `?`, `[` and `]` (wildcards: PowerShell's Set-Location expands them even inside double
+ * quotes and bash unquoted, so `cd "web[1]"` lands in `web1`), `^` (cmd's escape: unquoted
+ * `cd c^d` lands in `cd`), `:`
  * past a drive (PowerShell reads `a:b` as a drive), control, format and invisible characters and
  * any space but U+0020. At the start of the path only: `-` and the Unicode dashes (an option), `~`
  * (bash expands `~tmp` to a user's home), `#` (a comment unquoted) and a bare `@name` (PowerShell
  * splats `@name` unquoted; `@scope/pkg` is literal). Allowed: letters, marks, digits, spaces and
- * `. _ - + @ # ~ , = [ ] ^` inside the name, which at worst make an unquoted `cd` fail.
+ * `. _ - + @ # ~ , =` inside the name. Each was tried beside a twin directory the shell could
+ * resolve it to (`a,b` beside `a` and `b`, `a+b` beside `ab`, ...) in pwsh, bash and cmd, quoted
+ * and unquoted: every quoted `cd` lands in the named directory; unquoted, a space (bash, pwsh) or
+ * `,` (pwsh) makes the `cd` fail and stay where it was, never enter another directory.
  */
-const REFUSED_CHAR = /[$`"'\\%!;&|<>(){}*?\u2018-\u201f\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\u115f\u1160\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/u;
+const REFUSED_CHAR = /[$`"'\\%!;&|<>(){}*?[\]^\u2018-\u201f\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\u115f\u1160\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/u;
 /** Refused as the first character of the path (after a drive or root). */
 const REFUSED_FIRST = /^[-\u2010-\u2015\u2212~#]/u;
 /** A leading drive (`C:/`) or root (`/`): the one place `:` and an empty first segment are allowed. */

@@ -92,7 +92,11 @@ export function dataFolderChecks(): Check[] {
   // The database the tools use: FOURDA_DB_PATH, else the desktop app's, else the own store.
   const selected = getDefaultDbPath();
   const standaloneMode = isOwnStorePath(selected);
-  const rest = [ownStoreCheck(standaloneMode), cacheCheck(), appDatabaseCheck(selected, standaloneMode)];
+  // An app database is in use only when it is there, readable and the desktop app's own (not set up, or
+  // this server's own format, and the server runs on its own store).
+  const app = standaloneMode ? null : FourDADatabase.validateDatabase(selected);
+  const appInUse = Boolean(app?.valid && !app.standalone);
+  const rest = [ownStoreCheck(standaloneMode, appInUse), cacheCheck(), appDatabaseCheck(selected, standaloneMode)];
   const made = existed ? "" : fs.existsSync(dir) ? " (created by this check)" : " (created on first use)";
   const folder: Check = {
     name: "Data folder",
@@ -102,7 +106,7 @@ export function dataFolderChecks(): Check[] {
   return [folder, ...rest];
 }
 
-function ownStoreCheck(standaloneMode: boolean): Check {
+function ownStoreCheck(standaloneMode: boolean, appInUse: boolean): Check {
   const name = "Own database";
   const own = standaloneDbPath();
   // Made only when the tools use it: in standalone mode, or beside the app's database for a record its schema cannot hold.
@@ -130,7 +134,8 @@ function ownStoreCheck(standaloneMode: boolean): Check {
   // Deep integrity_check: --doctor is an explicit diagnostic where a slow full scan is expected.
   const deep = FourDADatabase.validateDatabase(own, { deep: true });
   if (!deep.valid) return { name, status: "fail", detail: `${own}: ${deep.error ?? "cannot be read"}` };
-  const role = standaloneMode ? "" : " (beside the app's database, for records its schema cannot hold)";
+  // "Beside the app's database" only when one is in use; otherwise this is the database the tools use.
+  const role = appInUse ? " (beside the app's database, for records its schema cannot hold)" : "";
   const ready = `${deep.tables?.length ?? 0} tables, ready${role}`;
   if (before) {
     return {

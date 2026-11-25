@@ -51,12 +51,12 @@ describe("isShellSafeDir: a plain path on bash, cmd and PowerShell", () => {
     "c#lib",
     "v1,2",
     "a=b",
-    "[legacy]",
     "x  y",
     "a~b",
+    "a+b",
+    "a@b",
     "packages/-x",
     "i‐x",
-    "docs^1",
   ])("%j is a plain path", (dir) => {
     expect(isShellSafeDir(dir)).toBe(true);
     expect(unsafeDirLabel(dir)).toBe(dir);
@@ -90,6 +90,9 @@ describe("isShellSafeDir: a plain path on bash, cmd and PowerShell", () => {
     ["a|b", "a pipe"],
     ["a>b", "a redirect"],
     ["a*b", "a glob"],
+    ["web[1]", "a PowerShell wildcard even quoted, a bash glob unquoted: cd lands in web1"],
+    ["[legacy]", "a bracket wildcard"],
+    ["c^d", "cmd's escape: unquoted cd c^d lands in cd"],
     ["a\\b", "a backslash"],
     ["", "an empty name"],
     ["a//b", "an empty segment"],
