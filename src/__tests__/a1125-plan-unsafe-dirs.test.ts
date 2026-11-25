@@ -189,7 +189,9 @@ describe("upgrade_planner: a step in a directory whose name is not a plain path"
     project(["apps/my app", "packages/@scope/ui", "Ünïcödé.v2"]);
     const { result, step } = await h.plan();
     const row = step("lodash");
-    expect(row.commands.map((c: { dir: string }) => c.dir).sort()).toEqual(["Ünïcödé.v2", "apps/my app", "packages/@scope/ui"].sort());
+    // NFC on both sides: a filesystem may hand the name back decomposed (both forms are plain paths).
+    const nfc = (dirs: string[]) => dirs.map((d) => d.normalize("NFC")).sort();
+    expect(nfc(row.commands.map((c: { dir: string }) => c.dir))).toEqual(nfc(["Ünïcödé.v2", "apps/my app", "packages/@scope/ui"]));
     expect(result.run_order.length).toBeGreaterThan(0);
     expect(row.reasons.join("\n")).not.toMatch(/not safe to put in a command/);
   });

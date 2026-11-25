@@ -59,7 +59,7 @@ import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } fro
 import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
 import { declaredNpmOperator, hasUnsafeDir, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
-import { escapeUnsafeDirs, isShellSafeDir } from "../live/shell-safe.js";
+import { escapeUnsafeDirs, isShellSafeCargoTarget, isShellSafeDir } from "../live/shell-safe.js";
 import { walkNotReadNote } from "./what-should-i-know.js";
 import * as path from "node:path";
 
@@ -1122,12 +1122,18 @@ function notCheckedLead(lockfileRead: boolean, nothingReadable: boolean): string
   return "NOT CHECKED: this plan's vulnerability data is not complete, so a missing row or a low risk is not a clean result";
 }
 
+/** A Cargo `cfg(...)` whose string values are plain tokens: `cfg(target_os = "linux")`, `cfg(all(unix, target_arch = "x86_64"))`. */
+const PLAIN_CFG = /^cfg\((?:[A-Za-z0-9_(), =]|"[A-Za-z0-9_.-]{0,64}")*\)$/;
+
 /** Where a copy this host does not build IS built, in words: its declared target spec, or any target but this host's. */
 function builtFor(entries: VulnerabilityEntry[]): string[] {
   const specs = [...new Set(entries.filter((e) => !e.platformActive).map((e) => e.target).filter((t): t is string => Boolean(t)))];
   const words = specs.map((spec) => {
     const triple = /^not built for (\S+)$/.exec(spec)?.[1];
-    return triple ? `a target other than ${triple}` : spec;
+    if (triple) return /^[A-Za-z0-9_.-]{1,128}$/.test(triple) ? `a target other than ${triple}` : "a target other than this host's";
+    // A target header comes from the repository's Cargo.toml: quoted only as a plain cfg (its string
+    // values plain tokens), never `cfg(target_os = "$(...)")` (audit 2026-11-25 B, hostile cargo-target).
+    return isShellSafeCargoTarget(spec) || (spec.length <= 256 && PLAIN_CFG.test(spec)) ? spec : "a target whose cfg is not quoted here (it holds text that is not a plain cfg value; read it in Cargo.toml)";
   });
   return words.length > 0 ? [...new Set(words)] : ["another target"];
 }
