@@ -27,6 +27,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
+import { fileSignature } from "./file-signature.js";
 import { activeCratesForHost, activeCratesInFlight } from "./cargo-platform.js";
 import { readBunLock, stripTrailingCommas } from "./bun-lockfile.js";
 import {
@@ -44,11 +45,11 @@ import { lazyNpmCatalogs } from "./npm-catalog.js";
 import { classifyNpmSpec } from "./npm-spec.js";
 import { DEPENDENCY_SECTIONS, expandWorkspaces, isLocalSpec, isRuntimeSection, MAX_MEMBER_MANIFESTS, memberListGapText, memberNamesOf, nameMatchesAny, pnpmYamlList, readManifestDeclarations, type DeclaredSpec, type MemberListGap } from "./js-manifests.js";
 import { goWorkCandidates, requirementFiles, resolveGo, resolvePython } from "./lockfile-parsers-pygo.js";
-import { runSteps, type Steps } from "./yield-point.js";
+import { runSteps, STEP_MASK, type Steps } from "./yield-point.js";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type DeclaredDependency, type LockfileProblem, type PackageInstance, type VersionSource } from "./lockfile-types.js";
 import { resolvePhp, resolveRuby } from "./lockfile-parsers-rbphp.js";
 import { isMergeConflictError, readManifestText, readTextFile } from "./text-file.js";
-import { isPublicCratesSource, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
+import { isPublicCratesSource, rememberNpmLockLocationsSteps, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import type { OsvEcosystem } from "./types.js";
 
 export type { PackageInstance, VersionSource } from "./lockfile-types.js";
@@ -580,9 +581,18 @@ const NPM_LOCK_READERS: Array<{ name: string; read: (file: string, cwd: string) 
   },
 ];
 
-function readNpmLockFile(file: string, cwd: string): NpmLockRead | null {
+/**
+ * A package-lock.json or npm-shrinkwrap.json, as steps: parsed once (the private-source pass takes
+ * the locations kept here instead of parsing the file again, private-packages.ts), every pass over
+ * its entries pausing (audit 2026-11-25, F-M1: 20 lockfiles of 62 MB held a ping for 21.8 s).
+ */
+function* readNpmLockFile(file: string, cwd: string): Steps<NpmLockRead | null> {
+  // Before the read: a file changed while it is read does not match this signature afterwards.
+  const signature = fileSignature(file);
   const lock: unknown = JSON.parse(readTextFile(file));
-  const read = readPackageLock(lock as Parameters<typeof readPackageLock>[0]);
+  yield;
+  const read = yield* readPackageLockSteps(lock as Parameters<typeof readPackageLock>[0]);
+  yield* rememberNpmLockLocationsSteps(file, signature, lock);
   if (read.instances.size === 0 && read.uncheckable.length === 0 && read.elsewhere.length === 0) return null;
   // npm writes an entry for every dependency package.json declares (a link entry for local code):
   // a declared name with none means the file was written before it was added, and what npm would
@@ -858,10 +868,19 @@ function tarballRelease(name: string, url: string): string | null {
  * resolved from git or an arbitrary URL is not a registry release at all:
  * `uncheckable`, never an instance.
  */
-export function readPackageLock(lock: {
+export function readPackageLock(lock: PackageLockDoc): PackageLockRead {
+  return runSteps(readPackageLockSteps(lock));
+}
+
+type PackageLockDoc = {
   packages?: Record<string, LockEntry>;
   dependencies?: Record<string, LockEntry>;
-}): { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[]; elsewhere: string[] } {
+};
+type PackageLockRead = { versions: Map<string, string>; instances: InstanceSet; uncheckable: NonRegistryEntry[]; aliases: Map<string, string>; declared: DeclaredDependency[]; elsewhere: string[] };
+
+/** readPackageLock as steps: every pass over the entries pauses every STEP_MASK + 1 of them (F-M1). */
+export function* readPackageLockSteps(lock: PackageLockDoc): Steps<PackageLockRead> {
+  let n = 0;
   const versions = new Map<string, string>();
   const instances = new InstanceSet();
   const uncheckable: NonRegistryEntry[] = [];
@@ -877,6 +896,7 @@ export function readPackageLock(lock: {
     // cost 50,000²/2 copies (100,000 entries: 6.2 s of a 7.1 s read; pre-publish round 7).
     const requested = new Map<string, string[]>();
     for (const entry of Object.values(lock.packages)) {
+      if ((++n & STEP_MASK) === 0) yield;
       for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const) {
         const specs = entry?.[field];
         if (!specs || typeof specs !== "object") continue;
@@ -897,6 +917,7 @@ export function readPackageLock(lock: {
 
     const hoistedAliases: Array<[string, string]> = [];
     for (const [key, value] of Object.entries(lock.packages)) {
+      if ((++n & STEP_MASK) === 0) yield;
       const folder = packageNameFromNodeModulesPath(key);
       if (!folder || !value) continue;
       if (value.link) {
@@ -927,12 +948,14 @@ export function readPackageLock(lock: {
     // A workspace package's own nested copy (packages/x/node_modules/a) when nothing is hoisted.
     const copies = new Set<string>();
     for (const instance of instances.toArray()) {
+      if ((++n & STEP_MASK) === 0) yield;
       copies.add(`${instance.name}\0${instance.version}`);
       if (!versions.has(instance.name)) versions.set(instance.name, instance.version);
     }
     // What the project and each workspace member declare: the entries keyed by a directory, not an
     // install path, each dependency resolved from that directory as Node resolves it.
     for (const [key, value] of Object.entries(lock.packages)) {
+      if ((++n & STEP_MASK) === 0) yield;
       if (!value || value.link || packageNameFromNodeModulesPath(key) !== "") continue;
       for (const section of DEPENDENCY_SECTIONS) {
         const specs = value[section];
@@ -954,8 +977,9 @@ export function readPackageLock(lock: {
 
   if (instances.size === 0 && uncheckable.length === 0 && lock.dependencies) {
     const topAliases: Array<[string, string]> = [];
-    const walk = (deps: Record<string, LockEntry | string>, topLevel: boolean) => {
+    const walk = function* (deps: Record<string, LockEntry | string>, topLevel: boolean): Steps<void> {
       for (const [folder, value] of Object.entries(deps)) {
+        if ((++n & STEP_MASK) === 0) yield;
         if (!value || typeof value !== "object") continue;
         const version = typeof value.version === "string" ? value.version : "";
         const alias = V1_ALIAS.exec(version);
@@ -984,10 +1008,10 @@ export function readPackageLock(lock: {
             } else uncheckable.push({ name: folder, version: null, kind: "url" });
           }
         }
-        if (value.dependencies) walk(value.dependencies, false);
+        if (value.dependencies) yield* walk(value.dependencies, false);
       }
     };
-    walk(lock.dependencies, true);
+    yield* walk(lock.dependencies, true);
     for (const [name, version] of topAliases) {
       if (!versions.has(name)) versions.set(name, version);
     }
