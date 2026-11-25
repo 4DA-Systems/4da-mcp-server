@@ -21,7 +21,7 @@
  */
 
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
-import { checkRequestedVersions, gateTaskNames, MAX_CHECK_ITEMS, MAX_REQUESTED, type CheckItem, readTaskVersions, sayRequested, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
+import { checkRequestedVersions, gateTaskNames, MAX_CHECK_ITEMS, MAX_REQUESTED, type CheckItem, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
 import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
@@ -209,6 +209,12 @@ export interface WhatShouldIKnowResult {
    * Absent when there is none.
    */
   check_these?: { tool: "dependency_check"; arguments: { items: CheckItem[] }; not_listed?: number; note?: string };
+  /**
+   * Words the task may mean as packages that were read from prose, not from a command or a manifest entry:
+   * never looked up and never put in check_these (a secret written in prose looks as much like a name).
+   * Absent when there is none.
+   */
+  unverified_words?: UnverifiedWord[];
   advisories: Advisory[];
   decision_windows: DecisionWindow[];
   relevant_wisdom: WisdomEntry[];
@@ -463,10 +469,11 @@ export async function executeWhatShouldIKnow(
       ...(m.version ? { version: m.version } : {}),
       verdict: "review",
       latest: null,
-      reason: `${m.name} is a near-miss of the popular ${m.didYouMean} (judged offline from the bundled list; not looked up by this briefing): did you mean ${m.didYouMean}? Call dependency_check on it (see check_these) before adding it.`,
+      reason: `${m.name} may be a typosquat of the popular ${m.didYouMean} (judged offline from the bundled list; this briefing did not look it up): did you mean ${m.didYouMean}? Do not install it before dependency_check has answered for it.`,
       malicious: false,
       did_you_mean: m.didYouMean,
       name_finding: "review",
+      judged_offline: true as const,
     })),
   ];
   // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
@@ -606,12 +613,24 @@ export async function executeWhatShouldIKnow(
       unreadVersions,
       uncheckedPackages,
       withheldWords,
-      checkThese: gated.checkThese.length + gated.notListed,
+      checkThese: gated.checkThese.length + gated.notListed + gated.unverified.length,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
       relevantWisdom,
     });
+    // Third blind check of the 2026-11-25 fixes, item 2: handing names back must never read softer than 6.5.1.
+    // (a) A near-miss of a popular name, judged offline, is human_only until dependency_check has answered:
+    // npm took 12 of 12 such typosquats down as malware. (b) Any other unchecked name keeps review_needed, led
+    // by NOT ASSESSED, never "delegate".
+    const typosquats = newPackages.filter((p) => p.judged_offline);
+    const unchecked = gated.checkThese.length + gated.notListed + gated.unverified.length;
+    if (typosquats.length > 0 && assessed.level !== "human_only") {
+      assessed.level = "human_only";
+      assessed.reason = `The task may add ${typosquats.map((p) => `${p.name} (a possible typosquat of ${p.did_you_mean})`).join(", ")}: this briefing did not look ${typosquats.length === 1 ? "it" : "them"} up. Do not install ${typosquats.length === 1 ? "it" : "them"} before dependency_check has answered (${typosquats.length === 1 ? "it is" : "they are"} in ${gated.checkThese.some((i) => typosquats.some((t) => t.name === i.package)) ? "check_these" : "unverified_words"}); a human decides once it has. ${assessed.reason}`;
+    } else if (unchecked > 0 && assessed.level === "review_needed") {
+      assessed.reason = `NOT ASSESSED: ${unchecked} package${unchecked === 1 ? "" : "s"} the task names ${unchecked === 1 ? "was" : "were"} not checked by this briefing. Do not delegate the write until dependency_check has answered for ${unchecked === 1 ? "it" : "them"}; if it answers avoid or names malware for any, this task is human_only. ${assessed.reason.replace(/^Delegate, then review: /, "Also review: ")}`;
+    }
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
     const delegation = withReadGaps(
@@ -630,12 +649,21 @@ export async function executeWhatShouldIKnow(
       ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
       ...(requestedVersions.length > 0 ? { requested_versions: requestedVersions } : {}),
       ...(withheldWords.length > 0 ? { withheld_from_task: withheldWords } : {}),
+      ...(gated.unverified.length > 0 ? { unverified_words: gated.unverified } : {}),
       ...(gated.checkThese.length > 0
         ? {
             check_these: {
               tool: "dependency_check" as const,
               arguments: { items: gated.checkThese },
-              ...(gated.notListed > 0 ? { not_listed: gated.notListed, note: `${gated.notListed} more package${gated.notListed === 1 ? " was" : "s were"} named but not listed (dependency_check takes at most ${MAX_CHECK_ITEMS} items per call)` } : {}),
+              ...(gated.notListed > 0 ? { not_listed: gated.notListed } : {}),
+              ...(gated.notListed > 0 || gated.versionUnread.length > 0
+                ? {
+                    note: [
+                      ...(gated.notListed > 0 ? [`${gated.notListed} more package${gated.notListed === 1 ? " was" : "s were"} named but not listed (dependency_check takes at most ${MAX_CHECK_ITEMS} items per call)`] : []),
+                      ...(gated.versionUnread.length > 0 ? [`the version the task writes for ${gated.versionUnread.join(", ")} could not be read: ${gated.versionUnread.length === 1 ? "its item has" : "their items have"} no "to"; give dependency_check the version you mean`] : []),
+                    ].join("; "),
+                  }
+                : {}),
             },
           }
         : {}),
@@ -648,7 +676,7 @@ export async function executeWhatShouldIKnow(
       scan_status: scanStatus,
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
-      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${gated.checkThese.length > 0 ? `${checkTheseText(gated.checkThese.length + gated.notListed)} ` : ""}${withheldWords.length > 0 ? `${withheldWordsText(withheldWords)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${gated.checkThese.length > 0 ? `${checkTheseText(gated.checkThese.length + gated.notListed)} ` : ""}${gated.unverified.length > 0 ? `${unverifiedText(gated.unverified.length)} ` : ""}${withheldWords.length > 0 ? `${withheldWordsText(withheldWords)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -885,6 +913,11 @@ function notCheckedPackages(names: string[]): string {
 }
 
 /** The packages handed back as dependency_check arguments, as the summary says them. */
+/** The words read from prose and not looked up, as the summary says them. */
+function unverifiedText(n: number): string {
+  return `${n} word${n === 1 ? "" : "s"} the task may mean as packages ${n === 1 ? "was" : "were"} not looked up and ${n === 1 ? "is" : "are"} not in check_these: if one is a public package you intend to add, call dependency_check for it yourself.`;
+}
+
 function checkTheseText(n: number): string {
   return `NOT CHECKED: ${n} package${n === 1 ? "" : "s"} named in the task ${n === 1 ? "was" : "were"} not looked up by this briefing (it looks up only packages this project already uses or well-known names): call dependency_check with \`check_these.arguments\` before writing ${n === 1 ? "it" : "them"}.`;
 }

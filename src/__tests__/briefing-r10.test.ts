@@ -246,7 +246,7 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     const r = await brief("use blueprints");
     expect(osvAsks("blueprints")).toHaveLength(0);
     expect(r.new_packages).toBeUndefined();
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "blueprints", to: "latest" }]);
+    expect(r.unverified_words).toEqual([{ word: "blueprints", read_as: "npm" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
@@ -256,7 +256,9 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     const r = await brief("use pinguinlib");
     expect(osvAsks("pinguinlib")).toHaveLength(0);
     expect(r.delegation_assessment.level).toBe("review_needed");
-    const check = (await executeDependencyCheck(null, r.check_these!.arguments, stubIntel(NPM, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    expect(r.unverified_words).toEqual([{ word: "pinguinlib", read_as: "npm" }]);
+    const cmd = await brief("npm install pinguinlib");
+    const check = (await executeDependencyCheck(null, cmd.check_these!.arguments, stubIntel(NPM, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
     expect(check.results).toMatchObject([{ verdict: "avoid" }]);
   });
 
@@ -270,13 +272,13 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     const r = await brief("use lodahs");
     expect(r.new_packages).toMatchObject([{ name: "lodahs", verdict: "review", did_you_mean: "lodash" }]);
     expect(osvAsks("lodahs")).toHaveLength(0);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
   });
 
   it("use memoizers: handed back, never dropped as prose", async () => {
     const r = await brief("use memoizers");
     expect(r.new_packages).toBeUndefined();
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "memoizers", to: "latest" }]);
+    expect(r.unverified_words).toEqual([{ word: "memoizers", read_as: "npm" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 });
