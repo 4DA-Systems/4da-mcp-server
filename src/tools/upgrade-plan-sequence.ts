@@ -364,7 +364,7 @@ export function buildRunOrder(opts: RunOrderOptions): RunOrder {
     .order()
     .filter((n) => isShellSafeDir(n.dir))
     .map((n, i) => ({ n: i + 1, dir: n.dir, run: n.run, fixes: [...n.fixes].sort() }));
-  const note = runOrderNote(opts, runnable, peerBlocked, steps.length, graph.notes);
+  const note = runOrderNote(opts, runnable, peerBlocked, steps.length, graph.notes, steps.some((s) => s.run.startsWith("cargo update ")));
   return { run_order: steps, run_order_note: note, peerBlocked };
 }
 
@@ -835,14 +835,14 @@ function named(rows: SequencedRow[]): string {
 }
 
 /** What the script covers (the rows shown that a command fixes here) and what it leaves out, by why. */
-function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlocked: Map<SequencedRow, string>, steps: number, notes: string[]): string {
+function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlocked: Map<SequencedRow, string>, steps: number, notes: string[], cargoMoves = false): string {
   const ran = runnable.filter((r) => !peerBlocked.has(r));
   const parts: string[] = [];
   const shown = opts.rows.length;
   parts.push(
     steps === 0
       ? `run_order is empty: none of the ${shown} row${shown === 1 ? "" : "s"} shown is fixed on this host by a command`
-      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, in an order that is safe to run from the first step to the last (no step lowers a version that is installed or that an earlier step sets), each in the directory it names: upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
+      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, in an order that is safe to run from the first step to the last (no step lowers a version that is installed or that an earlier step sets), each in the directory it names: ${cargoMoves ? "Cargo's pre-updates and `--precise` moves before anything else in their directory (a crate before the crates that depend on it; each `--precise` names the version it moves, so it fails rather than lowers one an earlier step moved), then " : ""}upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
   );
   // The order is checked, and each upgraded release's first-level dependencies; nothing deeper.
   // held-second-level.ts: an npm target's dependencies' exact pins are judged; nothing deeper is.

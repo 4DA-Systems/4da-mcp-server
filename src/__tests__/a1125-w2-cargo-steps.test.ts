@@ -173,5 +173,7 @@ describe("a crate is moved before the crates that depend on it", () => {
     expect(plain.run_order.map((s) => s.run)[0]).toMatch(/crossbeam-epoch/);
     const ordered = buildRunOrder({ rows, totalRows: 2, heldUnclean: () => false, cargoDependsOn: dependsOn });
     expect(ordered.run_order.map((s) => s.run)).toEqual(["cargo update -p crossbeam-utils@0.8.5 --precise 0.8.7", "cargo update -p crossbeam-epoch@0.9.5 --precise 0.9.20"]);
+    // run_order_note says the order as it is: Cargo moves before the upgrades of their directory.
+    expect(ordered.run_order_note).toContain("Cargo's pre-updates and `--precise` moves before anything else in their directory (a crate before the crates that depend on it");
   });
 });
