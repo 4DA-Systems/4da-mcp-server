@@ -68,13 +68,11 @@ describe("check_these: what the briefing did not look up, as a dependency_check 
     const r = await brief("add h3 as the server framework");
     expect(sent().some((s) => s.includes("pypi.org/pypi/h3/"))).toBe(true);
     expect(sent().some((s) => s.includes("registry.npmjs.org/h3"))).toBe(false);
-    expect(r.check_these.arguments.items).toEqual([{ ecosystem: "npm", package: "h3", to: "latest" }]);
+    expect(r.unverified_words).toEqual([{ word: "h3", read_as: "npm" }]);
     // A name on no list: once per ecosystem the project may take it from.
     const both = await brief("add qzframe as the server framework");
-    expect(both.check_these.arguments.items).toEqual([
-      { ecosystem: "npm", package: "qzframe", to: "latest" },
-      { ecosystem: "PyPI", package: "qzframe", to: "latest" },
-    ]);
+    expect(both.unverified_words).toEqual([{ word: "qzframe", read_as: "npm or PyPI" }]);
+    expect(both.check_these).toBeUndefined();
     // A manager decides it: npm's alone, never PyPI's silently.
     const npm = await brief("npm i h3");
     expect(npm.check_these.arguments.items).toEqual([{ ecosystem: "npm", package: "h3", to: "latest" }]);
@@ -105,7 +103,7 @@ describe("check_these: what the briefing did not look up, as a dependency_check 
   });
 
   it("handing a name back is review_needed, never human_only on its own", async () => {
-    const r = await brief("add qzflux-lib as a dependency");
+    const r = await brief("npm install qzflux-lib");
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 });

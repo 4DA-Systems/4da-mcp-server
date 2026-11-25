@@ -189,7 +189,7 @@ const PEM = /-----BEGIN [A-Z ]{0,40}-----[\s\S]{0,8000}?(?:-----END [A-Z ]{0,40}
 export function looksLikeSecret(word: string): boolean {
   const w = strip(word, LEAD_WRAP, TRAIL_WRAP);
   if (new RegExp(SECRET_SHAPES.source).test(w)) return true;
-  for (const seg of w.split(/[-_.:/@=]+/)) {
+  for (const seg of w.split(/[-_.:/@=|^~<>,;]+/)) {
     if (seg.length < 10) continue;
     const upper = (seg.match(/[A-Z]/g) ?? []).length;
     const lower = (seg.match(/[a-z]/g) ?? []).length;
@@ -389,6 +389,13 @@ export function screenTask(task: string): TaskScreen {
   for (const m of task.matchAll(/\b[\w.-]{1,64}@[\w.-]{1,253}\.[a-z]{2,}:[\w./~-]{1,500}/gi)) hold("a git remote", `not read: a git remote is not a package name; ${NOT_SENT}`, m.index!, m.index! + m[0].length, false);
   for (const m of task.matchAll(/(?<![@\w.+-])[\w.+-]{1,64}@[a-z][a-z0-9-]{0,62}(?:\.[a-z0-9-]{1,63}){0,8}\.[a-z]{2,24}\b/gi)) {
     if (free(m.index!, m.index! + m[0].length)) hold("an email address", `not read: an address is not a package name; ${NOT_SENT}`, m.index!, m.index! + m[0].length, false);
+  }
+
+  // A file hash (`--hash=sha256:...`, pip's option) and build metadata after a version (`4.17.15+<hex>`) are
+  // neither names nor credentials: blanked, held as nothing, so they never make the package beside them
+  // "not read whole" (third blind check: `pip install PyJWT==1.7.1 --hash=sha256:...` listed nothing).
+  for (const m of task.matchAll(/\b(?:sha(?:1|224|256|384|512)|md5|blake2b)[:=][A-Za-z0-9+/=_-]{8,2000}|(?<=\d)\+[0-9A-Za-z][0-9A-Za-z.-]{0,300}/gi)) {
+    if (free(m.index!, m.index! + m[0].length)) blank(m.index!, m.index! + m[0].length);
   }
 
   // 6. Credentials.

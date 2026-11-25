@@ -273,7 +273,7 @@ describe("nothing past a cap is dropped without a word", () => {
     // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await brief("add zod, valibot, superstruct, io-ts and is-even");
     expect(r.new_packages?.map((p) => p.name)).toEqual(["zod"]);
-    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(["valibot", "superstruct", "io-ts", "is-even"]);
+    expect(r.unverified_words?.map((w) => w.word)).toEqual(["valibot", "superstruct", "io-ts", "is-even"]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
@@ -309,7 +309,7 @@ describe("false positives are gone, blockers stay", () => {
   it("use blueprints: a word nothing knows after `use` is not looked up, and said (re-check of the 2026-11-25 fixes, item 2)", async () => {
     const r = await brief("use blueprints");
     expect(r.new_packages).toBeUndefined();
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "blueprints", to: "latest" }]);
+    expect(r.unverified_words).toEqual([{ word: "blueprints", read_as: "npm" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 

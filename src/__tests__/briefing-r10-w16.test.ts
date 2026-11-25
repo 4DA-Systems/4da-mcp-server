@@ -138,7 +138,7 @@ describe("3. an ecosystem with no such release, or a namesake's near-miss, is no
     expect(r.requested_versions).toMatchObject([{ name: "pandas", ecosystem: "PyPI", verdict: "proceed" }]);
     for (const p of r.new_packages ?? []) expect(p).toMatchObject({ ecosystem: "PyPI", verdict: "proceed" });
     // npm's namesake is handed back (final design), never judged above PyPI's proceed.
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "pandas", to: "2.2.3" }]);
+    expect(r.unverified_words).toEqual([{ word: "pandas", read_as: "npm", version: "2.2.3" }]);
   });
 
   it("malware from an ecosystem that has the name and release still wins in a mixed project", async () => {

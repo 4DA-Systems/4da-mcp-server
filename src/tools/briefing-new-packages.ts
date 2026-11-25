@@ -52,6 +52,7 @@ import {
   closestPopularPypi,
   ENGLISH_TASK_WORDS,
   installedGoModule,
+  isManifestEntry,
   isManifestFile,
   isTomlEntry,
   isVersionSpec,
@@ -66,7 +67,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
-import { isKnownSwitch, knownPublicName, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { isKnownSwitch, knownPublicName, MAX_TASK_WORD, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -404,6 +405,12 @@ export interface TaskItems {
   truncated?: true;
   /** Words of a command that were not read (after an option that may take them as its value). */
   unreadWords: Array<{ shown: string; reason: string }>;
+  /**
+   * `${ecosystem}\0${lower-case name}` of every name read from structured syntax: an operand of an install
+   * command, or the key of a manifest or requirements entry. Only these go into the briefing's callable
+   * check_these; a name read from prose is listed as an unverified word (third blind check).
+   */
+  structured: Set<string>;
 }
 
 /**
@@ -462,6 +469,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   /** Where each (ecosystem, name) is in `found`: a list of thousands of names was quadratic (F-M3). */
   const foundAt = new Map<string, number>();
   const unreadWords: TaskItems["unreadWords"] = [];
+  const structured = new Set<string>();
   const bound: BoundVersion[] = [];
   const ignored: TaskSpan[] = [];
   const fixed: TaskItems["fixed"] = [];
@@ -615,6 +623,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           continue;
         }
         // A path, a URL or a GitHub shorthand is never a registry name (the screen names it).
+        // The rest of a constraint (`x@^4.0.0||<text>`) is no operand: what follows `|` belongs to the spec before it.
+        if (/\|\s*$/.test(task.slice(span(j - 1).end, starts[j]))) continue;
         // Judged on its whole blank-delimited word: a token may start after a `./` or `~/` no token holds.
         let wordStart = starts[j];
         while (wordStart > 0 && !/\s/.test(task[wordStart - 1]) && starts[j] - wordStart < 8) wordStart--;
@@ -627,6 +637,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (!name) break;
         // The command fixes the ecosystem for the version reader too (round 10, W14).
         fixed.push({ ...span(j), ecosystem });
+        structured.add(`${ecosystem}\0${name.toLowerCase()}`);
         add(name, ecosystem, false, false, inlineVersion(j, ecosystem));
         if (separatorAfter(j) === "clause") break;
       }
@@ -825,6 +836,12 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const pepAlternatives: CheckEcosystem[] = pep === "PyPI" && !stated && asName(raw[k].replace(/(?:[=~<>!]=?).*$/, ""), "npm") !== null ? ["npm"] : [];
       const pepFallbackOnly = pepAlternatives.length > 0 && projectEcosystems(deps).includes("PyPI");
       if (pep) fixed.push({ ...span(k), ecosystem: pep, ...(pepAlternatives.length > 0 ? { alternatives: pepAlternatives } : {}), ...(pepFallbackOnly ? { fallbackOnly: true as const } : {}) });
+      // The key of a manifest entry written into the task (`"x": "^1"`, `x = "1.0"`), or a requirements line on
+      // its own line (`x==1.0`): structured syntax. Not an environment-variable name (`DB_PASS = "123"`).
+      const ownLine = pep !== null && /(?:^|\n)[ \t]*$/.test(task.slice(Math.max(0, starts[k] - 80), starts[k])) && /^\S*[ \t]*(?:\n|$)/.test(task.slice(starts[k], starts[k] + MAX_TASK_WORD + 80));
+      if ((isManifestEntry(task, starts[k]) || ownLine) && !/^[A-Z][A-Z0-9_]*$/.test(raw[k].replace(/[@=~<>!].*$/, ""))) {
+        structured.add(`${tomlEntry ? toml : pep ? "PyPI" : fallback}\0${name.toLowerCase()}`);
+      }
       const pkg = tomlEntry || pep ? add(name, itemEcosystem, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
       if (pkg && pep && pepAlternatives.length > 0) {
         pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
@@ -856,7 +873,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
     }
   }
-  return { packages: found, bound, ignored, fixed, foreign, unreadWords, ...(truncated ? { truncated: true as const } : {}) };
+  return { packages: found, bound, ignored, fixed, foreign, unreadWords, structured, ...(truncated ? { truncated: true as const } : {}) };
 }
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &

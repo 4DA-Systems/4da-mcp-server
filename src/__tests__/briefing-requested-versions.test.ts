@@ -140,7 +140,7 @@ describe("the version a task names is judged, at that version", () => {
     // As a command operand (re-check of the 2026-11-25 fixes, item 2: a Go path in prose is held, not looked up).
     // Final design of the 2026-11-25 fixes: a Go module is on no bundled list, so it is handed back at the
     // version the task names; dependency_check says the path is not one the go command accepts.
-    const result = await brief("add github.com/gin-gonic/gin/ v1.6.0", { react: "18.2.0" });
+    const result = await brief("go get github.com/gin-gonic/gin/@v1.6.0", { react: "18.2.0" });
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
     const items = result.check_these?.arguments.items ?? [];
     expect(items).toEqual([{ ecosystem: "Go", package: "github.com/gin-gonic/gin/", to: "v1.6.0" }]);

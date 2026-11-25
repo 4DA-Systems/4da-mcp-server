@@ -312,6 +312,19 @@ export interface CheckItem {
 /** dependency_check's own limit on items per call. */
 export const MAX_CHECK_ITEMS = 25;
 
+/**
+ * A word of the task read from prose (after an adding verb, with no command or manifest syntax around
+ * it), not looked up and never put in a callable argument object: a secret written in prose ("add
+ * 5b0bd432cbc5001c as the signing key") is as plausible as a package name (third blind check).
+ */
+export interface UnverifiedWord {
+  word: string;
+  /** The ecosystem (or ecosystems) the word would be in if it were a package. */
+  read_as: string;
+  /** The version the task writes beside it, as written. */
+  version?: string;
+}
+
 /** A name the briefing does not look up that is a near-miss of a popular one, judged offline. */
 export interface OfflineNearMiss {
   name: string;
@@ -337,8 +350,10 @@ export function gateTaskNames<
   deps: readonly ResolvedDependency[],
   packages: readonly P[],
   requested: readonly R[],
-): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; checkThese: CheckItem[]; notListed: number; nearMisses: OfflineNearMiss[] } {
+): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; checkThese: CheckItem[]; notListed: number; nearMisses: OfflineNearMiss[]; unverified: UnverifiedWord[] } {
   const screen = screenTask(task);
+  // Which names were read from structured syntax (a command's operand, a manifest or requirements entry's key).
+  const structured = readTaskItems(normalizeVersionSyntax(screen.text), deps).structured;
   const touched = touchedNames(task, screen);
   const installed = installedNames(deps);
   const held: TaskWordWithheld[] = [];
@@ -354,9 +369,19 @@ export function gateTaskNames<
   /** The items to hand back, by ecosystem and name; a version the task names beats "latest". */
   const items = new Map<string, CheckItem>();
   const nearMisses: OfflineNearMiss[] = [];
+  const unverified = new Map<string, UnverifiedWord>();
   const offer = (name: string, ecosystems: readonly CheckEcosystem[], version: string | undefined, judgeNearMiss = true) => {
     let any = false;
+    // A word read from prose in every ecosystem it may be in: listed plainly, never as dependency_check arguments.
+    const fromProse = ecosystems.filter((e) => !structured.has(`${e}\0${name.toLowerCase()}`) && asName(name, e) !== null);
+    if (fromProse.length > 0) {
+      const key = name.toLowerCase();
+      const had = unverified.get(key);
+      if (!had) unverified.set(key, { word: name, read_as: fromProse.join(" or "), ...(version ? { version } : {}) });
+      else if (!had.version && version) had.version = version;
+    }
     for (const ecosystem of ecosystems) {
+      if (!structured.has(`${ecosystem}\0${name.toLowerCase()}`)) continue;
       // A name that fails the registry's grammar is not listed (it is data from the task).
       if (asName(name, ecosystem) === null) continue;
       const to = version ? checkableSpec(ecosystem, version) : "latest";
@@ -366,7 +391,7 @@ export function gateTaskNames<
       const had = items.get(key);
       if (!had || (had.to === "latest" && to !== "latest")) items.set(key, { ecosystem, package: name, to });
     }
-    if (!any && version) hold(`${name} ${version}`, `not listed: dependency_check reads no ${ecosystems.join(" or ")} version or constraint in "${version}"; call it with the version you mean`);
+    if (!any && version && fromProse.length === 0) hold(`${name} ${version}`, `not listed: dependency_check reads no ${ecosystems.join(" or ")} version or constraint in "${version}"; call it with the version you mean`);
     for (const ecosystem of judgeNearMiss ? ecosystems : []) {
       const of = offlineNearMiss(name, ecosystem);
       if (of && !nearMisses.some((m) => m.name === name && m.ecosystem === ecosystem)) nearMisses.push({ name, ecosystem, ...(version ? { version } : {}), didYouMean: of });
@@ -422,7 +447,7 @@ export function gateTaskNames<
   }
   if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not read whole, as the ones above" });
   const all = [...items.values()];
-  return { packages: keptPackages, requested: keptRequested, held, checkThese: all.slice(0, MAX_CHECK_ITEMS), notListed: Math.max(0, all.length - MAX_CHECK_ITEMS), nearMisses };
+  return { packages: keptPackages, requested: keptRequested, held, checkThese: all.slice(0, MAX_CHECK_ITEMS), notListed: Math.max(0, all.length - MAX_CHECK_ITEMS), nearMisses, unverified: [...unverified.values()].slice(0, MAX_CHECK_ITEMS) };
 }
 
 

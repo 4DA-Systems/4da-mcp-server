@@ -388,7 +388,7 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief("add left-pad 1.3.0, chalk 5.6.2 and express 5.1.0");
     expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "left-pad", to: "1.3.0" }]);
+    expect(r.unverified_words).toEqual([{ word: "left-pad", read_as: "npm", version: "1.3.0" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
@@ -427,7 +427,7 @@ describe("a task naming more packages than the briefing checks fails closed", ()
     // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
     const r = await brief(`add ${many(8).join(", ")} and pkg-9`);
     expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(many(9));
+    expect(r.unverified_words?.map((w) => w.word)).toEqual(many(9));
     expect(ASKED.some((u) => /pkg-\d/.test(u))).toBe(false);
   });
 
@@ -474,7 +474,7 @@ describe("what was already right stays right", () => {
     const r = await brief("add frobnicator");
     expect(r.new_packages).toBeUndefined();
     expect(ASKED.some((u) => u.includes("frobnicator"))).toBe(false);
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "frobnicator", to: "latest" }]);
+    expect(r.unverified_words).toEqual([{ word: "frobnicator", read_as: "npm" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
@@ -485,7 +485,7 @@ describe("what was already right stays right", () => {
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
     // electorn is a near-miss of electron, judged offline; left-pad is handed back; neither is sent (final design).
     expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["electorn=review"]);
-    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(["left-pad", "electorn"]);
+    expect(r.unverified_words?.map((w) => w.word)).toEqual(["left-pad", "electorn"]);
     expect(ASKED.some((u) => /left-pad|electorn/.test(u))).toBe(false);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });

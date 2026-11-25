@@ -134,7 +134,10 @@ describe("2. a word is looked up only on evidence that it is a public package", 
   it("a name on no bundled list is handed back, never looked up, and the task is review_needed", async () => {
     const r = await brief("add left-pad-ng to the project");
     expect(looked("left-pad-ng")).toEqual([]);
-    expect(r.check_these?.arguments.items).toContainEqual({ ecosystem: "npm", package: "left-pad-ng", to: "latest" });
+    // Third blind check of the 2026-11-25 fixes: a name read from prose is never put in check_these (a secret
+    // written in prose looks as much like a name); it is listed in unverified_words, not looked up.
+    expect(r.check_these).toBeUndefined();
+    expect(r.unverified_words).toMatchObject([{ word: "left-pad-ng" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 });
