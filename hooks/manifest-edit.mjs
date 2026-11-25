@@ -2607,7 +2607,7 @@ const isPrivateRule = (e) => e.not_checked === "private" && !isUnreadable(e);
  * from elsewhere is dependency confusion (round 3 of the hook review: `"acme-utils":
  * "github:acme/acme-utils"`, then `npm i acme-utils@9.9.9`).
  */
-function judge(index, c, what = "command") {
+function judge(index, c) {
   const eco = c.ecosystem;
   const forPackage = index.get(`${eco}\0${nameKey(eco, c.name)}`) ?? [];
   const exactVersion = exactFor(eco, c.spec);
@@ -2636,36 +2636,7 @@ function judge(index, c, what = "command") {
     if (isPrivateRule(withheld)) return "allow";
     return isUnreadable(withheld) ? { unreadable: withheld } : { localSource: withheld };
   }
-  // A Go package path (`go get golang.org/x/net/http2@v0.23.0`) with no verdict of its own: the
-  // server reads modules and answers unknown for a package path, and the hook cannot know where the
-  // module ends. So the decisive answer for the longest path prefix at the same version or
-  // constraint decides (Go builds a package from the module with the longest matching path): the
-  // agent checked the module that contains the package. No verdict, no release (audit 2026-11-25, D-M3).
-  // Commands only: a go.mod require names a module, never a package, so its own verdict decides.
-  if (eco === "Go" && what === "command") {
-    const parts = c.name.split("/");
-    for (let n = parts.length - 1; n >= 1; n--) {
-      const module = (index.get(`Go\0${parts.slice(0, n).join("/")}`) ?? []).filter(
-        (e) => !isWithheld(e) && (exactVersion ? e.vk === want : e.ak === constraint) && (HOLDS.has(e.verdict) || PASSES.has(e.verdict)),
-      );
-      const answer = module.at(-1);
-      if (answer) return HOLDS.has(answer.verdict) ? { deny: answer } : "allow";
-    }
-  }
   return { check: last ?? null };
-}
-
-/**
- * For a Go path that may name a package inside a module, an example of the module that contains it
- * (the hook cannot know; this is only the example a denial offers): three parts on github.com,
- * gitlab.com, bitbucket.org and golang.org/x, else two, and a `/vN` major-version part after them.
- * Null when the path is no longer than that.
- */
-function goModuleExample(path) {
-  const parts = path.split("/");
-  let n = /^(?:github\.com|gitlab\.com|bitbucket\.org|golang\.org)$/.test(parts[0]) ? 3 : 2;
-  if (/^v\d+$/.test(parts[n] ?? "")) n++;
-  return parts.length > n ? parts.slice(0, n).join("/") : null;
 }
 
 /** Server text repeated in a denial: one line, capped. */
@@ -2709,7 +2680,7 @@ function denialFor(introduced, ledger, dir, what) {
   for (const c of introduced) {
     // Past the budget the call is held as not read (judgeCall), whatever is left to judge.
     if (overBudget()) break;
-    const verdict = judge(index, c, what);
+    const verdict = judge(index, c);
     if (verdict === "allow") continue;
     if (verdict.deny) held.push({ c, entry: verdict.deny });
     else if (verdict.unreadable) unreadable.push({ c, entry: verdict.unreadable });
@@ -2754,14 +2725,14 @@ function denialFor(introduced, ledger, dir, what) {
     lines.push(
       `- ${named}: ${fresh.length === 0 ? "no proceed or review verdict" : "no dependency_check verdict"} in the last 24 hours. If ${one ? "it is the package" : "they are the packages"} you mean to add, call the 4da MCP tool dependency_check ${JSON.stringify({ items })}${batches}, and this ${what} will pass once that call answers proceed.`,
     );
-    // A Go path longer than a module path usually is may name a package inside a module, which
-    // dependency_check answers unknown for: name the module call that releases it (judge).
-    for (const { c } of what === "command" ? unchecked.filter(({ c }) => c.ecosystem === "Go").slice(0, 10) : []) {
-      const module = goModuleExample(c.name);
-      if (!module) continue;
-      const example = JSON.stringify({ items: [{ ecosystem: "Go", package: module, to: callTarget("Go", c.spec) }] });
+    // dependency_check reads Go modules and answers unknown for a package path, so a command that
+    // names one could never pass (audit 2026-11-25, D-M3). The hook cannot know where a module ends,
+    // and a verdict for one module never releases a longer path (a nested module starts with it):
+    // the way through is to name the module itself, which the exact-path rule then releases.
+    const goPaths = what === "command" ? unchecked.filter(({ c }) => c.ecosystem === "Go") : [];
+    if (goPaths.length > 0) {
       lines.push(
-        `- ${quotedChange(c)} may be a package inside a module: dependency_check reads modules and answers unknown for a package path. If so, check the module that contains this package at this version, e.g. dependency_check ${example}: this ${what} passes once dependency_check answers proceed or review for a module whose path this path starts with, at ${quoted(c.spec)}.`,
+        `- ${goPaths.slice(0, 8).map(({ c }) => quotedChange(c)).join(", ")}${goPaths.length > 8 ? `, and ${goPaths.length - 8} more` : ""}: a Go path may be a package inside a module, and dependency_check reads modules: it answers unknown for a package path (golang.org/x/net/http2 is a package of the module golang.org/x/net). If so, check the module that contains the package and name that module in the command instead (go get golang.org/x/net@v0.23.0, not go get golang.org/x/net/http2@v0.23.0): this ${what} passes once dependency_check answers proceed for each path exactly as the ${what} names it. A verdict for a module never releases a longer path.`,
       );
     }
     lines.push(
