@@ -21,7 +21,7 @@
  */
 
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
-import { checkRequestedVersions, MAX_REQUESTED, readTaskVersions, sayRequested, type RequestedVersionFinding } from "./briefing-requested-versions.js";
+import { checkRequestedVersions, MAX_REQUESTED, readTaskVersions, sayRequested, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
 import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
@@ -195,6 +195,12 @@ export interface WhatShouldIKnowResult {
    * dependency_check's verdict for exactly that version or constraint. Absent when it names none.
    */
   requested_versions?: RequestedVersionFinding[];
+  /**
+   * Words of the task the briefing withheld before reading it (a credential shape, a package the
+   * task's own command takes from a private registry, git or a path, an over-long word): each as
+   * shown (redacted) and why. None was looked up or sent. Absent when there is none.
+   */
+  withheld_from_task?: TaskWordWithheld[];
   advisories: Advisory[];
   decision_windows: DecisionWindow[];
   relevant_wisdom: WisdomEntry[];
@@ -453,6 +459,8 @@ export async function executeWhatShouldIKnow(
       ...(taskVersions.foreign ?? []),
     ]),
   ];
+  // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
+  const withheldWords = taskVersions.withheld ?? [];
   // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
   const unreadVersions = taskVersions.unread;
   const vulns = scan?.vulnerabilities ?? [];
@@ -571,6 +579,7 @@ export async function executeWhatShouldIKnow(
       requestedVersions,
       unreadVersions,
       uncheckedPackages,
+      withheldWords,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -592,6 +601,7 @@ export async function executeWhatShouldIKnow(
       ...(newPackages.length > 0 ? { new_packages: newPackages } : {}),
       ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
       ...(requestedVersions.length > 0 ? { requested_versions: requestedVersions } : {}),
+      ...(withheldWords.length > 0 ? { withheld_from_task: withheldWords } : {}),
       advisories,
       decision_windows: decisionWindows,
       relevant_wisdom: relevantWisdom,
@@ -601,7 +611,7 @@ export async function executeWhatShouldIKnow(
       scan_status: scanStatus,
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
-      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${withheldWords.length > 0 ? `${withheldWordsText(withheldWords)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -837,6 +847,11 @@ function notCheckedPackages(names: string[]): string {
   return `NOT CHECKED: ${names.length} more package${names.length === 1 ? "" : "s"} named in the task (${names.join(", ")})`;
 }
 
+/** The words withheld from the task, as the summary says them: what each is shown as and why, nothing sent. */
+function withheldWordsText(words: TaskWordWithheld[]): string {
+  return `NOT CHECKED: ${words.length} word${words.length === 1 ? "" : "s"} in the task ${words.length === 1 ? "was" : "were"} not looked up (${words.map((w) => `${w.shown}: ${w.reason}`).join("; ")}): nothing about ${words.length === 1 ? "it" : "them"} was sent.`;
+}
+
 /** The worse of two dependency_check verdicts (avoid > review > unknown > wait > proceed). */
 function worseVerdict(a: NewPackageFinding["verdict"], b: NewPackageFinding["verdict"]): NewPackageFinding["verdict"] {
   const rank = { proceed: 0, wait: 1, unknown: 2, review: 3, avoid: 4 } as const;
@@ -923,6 +938,8 @@ function assessDelegation(input: {
   unreadVersions?: string[];
   /** Packages the task adds past the briefing's cap: named, not checked. */
   uncheckedPackages?: string[];
+  /** Words withheld from the task before it was read: never looked up, so never safe to delegate on. */
+  withheldWords?: TaskWordWithheld[];
   taskDependencies: TaskDependency[];
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
@@ -979,7 +996,12 @@ function assessDelegation(input: {
     : [];
   const unchecked = input.uncheckedPackages ?? [];
   const cappedReasons = unchecked.length > 0 ? [`${notCheckedPackages(unchecked)}: call dependency_check on each before adding it`] : [];
-  const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...cappedReasons, ...unclear.map(
+  const withheldWords = input.withheldWords ?? [];
+  const withheldReasons =
+    withheldWords.length > 0
+      ? [`${withheldWords.length} word${withheldWords.length === 1 ? "" : "s"} in the task ${withheldWords.length === 1 ? "was" : "were"} not looked up (${withheldWords.map((w) => w.shown).join(", ")}; see withheld_from_task): check ${withheldWords.length === 1 ? "it" : "them"} with your own registry before acting on ${withheldWords.length === 1 ? "it" : "them"}`]
+      : [];
+  const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...cappedReasons, ...withheldReasons, ...unclear.map(
     (p) =>
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
   )];

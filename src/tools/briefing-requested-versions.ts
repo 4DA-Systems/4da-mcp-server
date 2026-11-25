@@ -201,6 +201,18 @@ export interface TaskVersions {
   unread: string[];
   /** Packages a manager this server does not read installs (`gem install rails`): named NOT CHECKED (round 10, W14). */
   foreign?: string[];
+  /**
+   * Words the briefing withheld from the task before reading it (a credential shape, a package the
+   * task's own command takes from a private registry, git or a path, an over-long word), each as it
+   * is shown (redacted) and why: never looked up, never sent (briefing-task-screen.ts).
+   */
+  withheld?: TaskWordWithheld[];
+}
+
+/** A word of the task the briefing did not look up: how it is shown, and why. */
+export interface TaskWordWithheld {
+  shown: string;
+  reason: string;
 }
 
 /** The (package, version) pairs a task names, in the order named (uncapped: the briefing checks MAX_REQUESTED and names the rest NOT CHECKED). */
@@ -243,14 +255,18 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   const items = all.packages;
   const notes: string[] = [];
   if (all.truncated) notes.push(`every package after the first ${MAX_READ_PACKAGES} the task names (not read: the task names more packages than a briefing reads)`);
+  const withheld: TaskWordWithheld[] = [];
+  const holdWord = (shown: string, reason: string) => {
+    if (!withheld.some((w) => w.shown === shown && w.reason === reason)) withheld.push({ shown, reason });
+  };
   const requested = read.requested.filter((r) => {
     const why = screenedOut(screen, r.name, [r.ecosystem, ...(r.alternatives ?? [])]);
-    if (why && !screen.names.has(r.name.toLowerCase())) notes.push(`${r.name} (${why})`);
+    if (why && !screen.names.has(r.name.toLowerCase())) holdWord(r.name, why);
     return why === null;
   });
   for (const p of items) {
     const why = screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]);
-    if (why && !screen.names.has(p.name.toLowerCase())) notes.push(`${p.name} (${why})`);
+    if (why && !screen.names.has(p.name.toLowerCase())) holdWord(p.name, why);
   }
   // A credential, URL or address is named (redacted) only where a reader would have taken a name from it:
   // a name the unscreened task gives that the screened one does not, inside that span.
@@ -266,9 +282,9 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       return lost.some((n) => span.includes(n));
     });
   }
-  for (const w of [...screen.withheld.filter((x) => x.always), ...lostTo].sort((a, b) => a.start - b.start)) notes.push(`${w.label} (${w.why})`);
+  for (const w of [...screen.withheld.filter((x) => x.always), ...lostTo].sort((a, b) => a.start - b.start)) holdWord(w.label, w.why);
   const foreign = [...new Set([...(read.foreign ?? []), ...notes])];
-  return { requested, unread: read.unread, ...(foreign.length > 0 ? { foreign } : {}) };
+  return { requested, unread: read.unread, ...(foreign.length > 0 ? { foreign } : {}), ...(withheld.length > 0 ? { withheld } : {}) };
 }
 
 /** The versions a task names, read from text the screen has already blanked. */
