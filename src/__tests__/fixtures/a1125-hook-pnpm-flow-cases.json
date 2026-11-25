@@ -1,0 +1,3145 @@
+[
+ {
+  "review": "review-hook",
+  "name": "sel: edit packages line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "'packages/*'",
+   "new_string": "'apps/*'",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: comment added",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  express>qs: 6.11.0\n",
+   "new_string": "  express>qs: 6.11.0 # pinned\n",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: reorder",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n",
+   "new_string": "  express>qs: 6.11.0\n  lodash@<4.17.21: ^4.17.21\n",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: remove line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  express>qs: 6.11.0\n",
+   "new_string": "",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: quote the key",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  lodash@<4.17.21:",
+   "new_string": "  'lodash@<4.17.21':",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: change selector only",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash@<4.17.21:",
+   "new_string": "lodash@<4.17.22:",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: re-save",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: CRLF re-save",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\r\n  - 'packages/*'\r\noverrides:\r\n  lodash@<4.17.21: ^4.17.21\r\n  express>qs: 6.11.0\r\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: edit packages line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "'packages/*'",
+   "new_string": "'apps/*'",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: re-save",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: CRLF re-save",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\r\n  - 'packages/*'\r\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\r\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: remove flow line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "catalog: { lodash: ^4.17.21, react: ^18.2.0 }\n",
+   "new_string": "",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: spacing change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "{ lodash: ^4.17.21, react",
+   "new_string": "{lodash: ^4.17.21, react",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: comment added",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "^18.2.0 }",
+   "new_string": "^18.2.0 } # ui",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: reorder entries",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "{ lodash: ^4.17.21, react: ^18.2.0 }",
+   "new_string": "{ react: ^18.2.0, lodash: ^4.17.21 }",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: convert to block same versions",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "catalog: { lodash: ^4.17.21, react: ^18.2.0 }\n",
+   "new_string": "catalog:\n  lodash: ^4.17.21\n  react: ^18.2.0\n",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flowML: edit packages",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  lodash: ^4.17.21,\n  react: ^18.2.0\n}\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "'packages/*'",
+   "new_string": "'apps/*'",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flowML: reorder lines",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  lodash: ^4.17.21,\n  react: ^18.2.0\n}\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  lodash: ^4.17.21,\n  react: ^18.2.0\n",
+   "new_string": "  react: ^18.2.0,\n  lodash: ^4.17.21\n",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flowML: add trailing comma",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  lodash: ^4.17.21,\n  react: ^18.2.0\n}\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  react: ^18.2.0\n",
+   "new_string": "  react: ^18.2.0,\n",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flowML: comment line inside",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  lodash: ^4.17.21,\n  react: ^18.2.0\n}\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  react: ^18.2.0\n",
+   "new_string": "  # ui\n  react: ^18.2.0\n",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "empty flow added: overrides: {}",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides: {}\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "empty flow added: catalog: {}",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: {}\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "empty flow added: overrides: [] ",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\nonlyBuiltDependencies: [esbuild]\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "unclosed bracket in a comment-ish value later",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  - esbuild\n",
+   "new_string": "  - esbuild\n  - sharp\n",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "alias: edit elsewhere",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: npm:lodash@4.17.21\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "'packages/*'",
+   "new_string": "'apps/*'",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "alias: same version spelled plain",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: npm:lodash@4.17.21\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "npm:lodash@4.17.21",
+   "new_string": "4.17.21",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "quoted key: edit elsewhere",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n\"catalog\":\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "'packages/*'",
+   "new_string": "'apps/*'",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "catalog comment section: edit comment",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: # shared\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "# shared",
+   "new_string": "# all",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "multi-line flow in non-section then catalog edit",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\npublicHoistPattern: [\n  '*eslint*',\n  '*prettier*'\n]\ncatalog:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "'*prettier*'",
+   "new_string": "'*types*'",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "quoted brace value in flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { \"a{\": ^1.0.0 }\nother: x\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "other: x",
+   "new_string": "other: y",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow that never closes, edit far below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21,\n  react: ^18.2.0\nsettings:\n  x: 1\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "x: 1",
+   "new_string": "x: 2",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow with bracket in a comment on cont line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  lodash: ^4.17.21, # see {issue\n  react: ^18.2.0 }\nsettings:\n  x: 1\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "x: 1",
+   "new_string": "x: 2",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow with # inside quoted value",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  lodash: \"^4.17.21\", a: \"#}\" }\nsettings:\n  x: 1\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "x: 1",
+   "new_string": "x: 2",
+   "replace_all": false
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook",
+  "name": "sel: avoid version put in",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  lodash@<4.17.21: ^4.17.21\n  express>qs: 6.11.0\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash@<4.17.21: ^4.17.21",
+   "new_string": "lodash@<4.17.21: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow: version change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "flowML: version change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  lodash: ^4.17.21,\n  react: ^18.2.0\n}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "plain block",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "quoted key flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\n\"catalog\": { lodash: 4.17.20 }\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "anchor before flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: &c { lodash: 4.17.20 }\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "tag before flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: !!map { lodash: 4.17.20 }\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "named anchor before flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalogs:\n  legacy: &l { lodash: 4.17.20 }\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "flow on next line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  { lodash: 4.17.20 }\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "value anchor",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: &v 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "value tag",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: !!str 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "value on next line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  lodash:\n    4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "block scalar",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: >-\n    4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "merge key from anchor",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\nx-pins: &pins\n  lodash: 4.17.20\ncatalog:\n  <<: *pins\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "explicit key",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  ? lodash\n  : 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "tab after colon",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  lodash:\t4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "BOM + overrides selector",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "﻿overrides:\n  lodash@<4.17.21: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "selector key quoted single",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides:\n  'lodash@<4.17.21': 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "selector key with || and spaces",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides:\n  \"lodash@<4.17.21 || >=5 <5.1\": 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "selector scoped",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides:\n  '@x/y>lodash@<4.17.21': 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "parent path 3 levels",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides:\n  a>b>lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "selector unquoted with range >=",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides:\n  lodash@>=4.0.0 <4.17.21: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "multi-document second doc",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\n---\ncatalog:\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "alias in overrides",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\noverrides:\n  foo: npm:lodash@4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "alias scoped",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  x: npm:@babel/traverse@7.23.1\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "alias catalog quoted",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  x: 'npm:lodash@4.17.20'\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "alias latest",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  x: npm:lodash@latest\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "CRLF catalog",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\r\n  lodash: 4.17.20\r\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook",
+  "name": "comment after key then flow next",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: # c\n  { lodash: 4.17.20 }\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "apostrophe flow above: change block override below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { foo: it's, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "dquote flow above: change block override below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { foo: a\"b, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "apostrophe flow: write adds avoid override below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { foo: it's, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: { foo: it's, react: ^18.2.0 }\noverrides:\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "apostrophe in same flow carries avoid",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "{ react: ^18.2.0 }",
+   "new_string": "{ foo: it's, lodash: 4.17.20 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "apostrophe in overrides flow, block catalog below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides: { foo: it's }\ncatalog:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "multiline dquoted scalar in flow, block below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { foo: \"a {\n  b\", react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "control: normal flow above, block below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { foo: ^1.0.0, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "ws: nonsense key lodash:4.17.20 becomes pin",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash:4.17.20, react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash:4.17.20",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "ws: folded plain 4.17.\\n20 becomes 4.17.20",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: 4.17.\n  20, react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "4.17.\n  20",
+   "new_string": "4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "move entry catalog -> overrides flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: 4.17.20 }\noverrides: { react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "catalog: { lodash: 4.17.20 }\noverrides: { react: ^18.2.0 }",
+   "new_string": "catalog: { react: ^18.2.0 }\noverrides: { lodash: 4.17.20 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "move entry catalog -> catalogs.x flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: 4.17.20 }\ncatalogs:\n  x: { react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "catalog: { lodash: 4.17.20 }\ncatalogs:\n  x: { react: ^18.2.0 }",
+   "new_string": "catalog: { react: ^18.2.0 }\ncatalogs:\n  x: { lodash: 4.17.20 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "move entry catalogs.a -> catalogs.b",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  a: { lodash: 4.17.20 }\n  b: { react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "a: { lodash: 4.17.20 }\n  b: { react: ^18.2.0 }",
+   "new_string": "a: { react: ^18.2.0 }\n  b: { lodash: 4.17.20 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "swap values between two entries",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21, react: 4.17.20 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "{ lodash: ^4.17.21, react: 4.17.20 }",
+   "new_string": "{ lodash: 4.17.20, react: ^4.17.21 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "nested flow: catalogs whole flow, change inner",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs: { a: { lodash: ^4.17.21 }, b: { react: ^18.2.0 } }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "nested flow: move inner between a and b",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs: { a: { lodash: 4.17.20 }, b: { react: ^18.2.0 } }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "a: { lodash: 4.17.20 }, b: { react: ^18.2.0 }",
+   "new_string": "a: { react: ^18.2.0 }, b: { lodash: 4.17.20 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "multi-line continuation line value change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  react: ^18.2.0,\n  lodash: ^4.17.21\n}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  lodash: ^4.17.21",
+   "new_string": "  lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "multi-line change while reorder",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  react: ^18.2.0,\n  lodash: ^4.17.21\n}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  react: ^18.2.0,\n  lodash: ^4.17.21",
+   "new_string": "  lodash: 4.17.20,\n  react: ^18.2.0",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "quote key change while value change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "'lodash': 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow on next line, value change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "^4.17.21",
+   "new_string": "4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "anchor flow, value change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: &c { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "^4.17.21",
+   "new_string": "4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "tag flow, value change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: !!map { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "^4.17.21",
+   "new_string": "4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "anchor + comment line between key and next-line flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: &c # pins\n  { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "^4.17.21",
+   "new_string": "4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow in catalogs on next line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x:\n    { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "^4.17.21",
+   "new_string": "4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow entry with explicit ? key",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "{ react: ^18.2.0 }",
+   "new_string": "{ react: ^18.2.0, ? lodash : 4.17.20 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow + duplicate of same entry elsewhere (catalog vs catalogs.x)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: 4.17.20 }\ncatalogs:\n  x: { react: ^18.2.0 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "x: { react: ^18.2.0 }",
+   "new_string": "x: { react: ^18.2.0, lodash: 4.17.20 }",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "unclosed flow (invalid) then block change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { react: ^18.2.0\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow sequence value in catalogs then block",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: [ a ]\n  y:\n    lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow: single -> double quotes on values (prettier)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: '^4.17.21', react: '^18.2.0' }\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: { lodash: \"^4.17.21\", react: \"^18.2.0\" }\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow: quote a key",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: { \"lodash\": ^4.17.21 }\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow: unquote a value",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: \"^4.17.21\" }\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21 }\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow: add anchor",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: &c { lodash: ^4.17.21 }\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook2",
+  "name": "flow: move to next line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  { lodash: ^4.17.21 }\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook2",
+  "name": "block: single -> double quotes (control)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: '^4.17.21'\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  lodash: \"^4.17.21\"\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "sq '' then # same line, change after",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: 'it'' #1', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "sq '' then # same line, block override below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: 'it'' #1', react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "sq '' then } closes early",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: 'x'' }', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "tag !!str ' #' then change same line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: !!str ' #x', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "anchor &a ' #' then change same line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: &q ' #x', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "tag '}' then JSON key next line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: !!str '}',\n  \"lodash\":\"^4.17.21\" }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "\"lodash\":\"^4.17.21\"",
+   "new_string": "\"lodash\":\"4.17.20\"",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "json adj value with ' #'",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\"a\":\"x #y\",\"lodash\":\"^4.17.21\"}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "\"lodash\":\"^4.17.21\"",
+   "new_string": "\"lodash\":\"4.17.20\"",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "json adj plain, change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\"react\":\"^18.2.0\",\"lodash\":\"^4.17.21\"}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "\"lodash\":\"^4.17.21\"",
+   "new_string": "\"lodash\":\"4.17.20\"",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "json adj value with }",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\"a\":\"}\",\"lodash\":\"^4.17.21\"}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "\"lodash\":\"^4.17.21\"",
+   "new_string": "\"lodash\":\"4.17.20\"",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "json adj value with } multi-line",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\"a\":\"}\",\n  \"lodash\":\"^4.17.21\"}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "\"lodash\":\"^4.17.21\"",
+   "new_string": "\"lodash\":\"4.17.20\"",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "json adj sq value with } then block",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\"a\":'}'}\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "{a:'x'} no blank",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {a:'x #', lodash: ^4.17.21}\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "dq multi-line, continuation starts with #, change there",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: \"x\n# \", lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "dq multi-line, continuation starts with #, block below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: \"x\n# \", react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "sq multi-line, continuation  # indented",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: 'x\n  # ', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "dq multi-line, blank line inside",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: \"x\n\n }\", lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "plain multi-line, continuation starts with '",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: foo\n  'bar, lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "plain multi-line ' continuation, block below",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: foo\n  'bar, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "plain multi-line ' then '#",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: foo\n  'bar', b: x' #, lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "quoted key with }",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { 'a}': x, lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "quoted key with , #",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { \"a, #\": x, lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "plain scalar with ] (error in yaml?)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: x]y, lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "comment with quote+brace after flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { react: ^18.2.0 } # it's { open\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "comment line inside multi-line flow with quote",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  # it's {\n  react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "trailing comment in multi-line with quote",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\n  react: ^18.2.0, # it's \"\n  lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "packages flow seq quotes + globs",
+  "files": {
+   "pnpm-workspace.yaml": "packages: ['packages/*', \"@scope/*\", '!**/test/**']\nonlyBuiltDependencies: [esbuild, \"@swc/core\"]\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "packages flow multi-line at col 0",
+  "files": {
+   "pnpm-workspace.yaml": "packages: [\n'packages/*',\n\"apps/*\" ]\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "packages flow with unterminated-looking '",
+  "files": {
+   "pnpm-workspace.yaml": "packages: [ it's ]\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "url value in flow",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: https://x/y:z, lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "block scalar above with { '",
+  "files": {
+   "pnpm-workspace.yaml": "x: |\n  catalog: { a: 'b\n  }\npackages:\n  - 'packages/*'\noverrides:\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "block scalar inside catalog with {",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  note: |\n    { it's\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "folded scalar inside overrides with {",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides:\n  note: >\n    { 'a #\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "CRLF flow then block",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: it's, react: ^18.2.0 }\r\noverrides:\r\n  lodash: ^4.17.21\r\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "BOM + flow overrides",
+  "files": {
+   "pnpm-workspace.yaml": "﻿overrides: { lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "tab before quote",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: {\ta:\t'x #', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "windows path in dq",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: \"C:\\\\x\\\\\" #\", lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "catalogs.x flow with '' #",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: 'it'' #', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "overrides flow with '' #",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\noverrides: { a: 'it'' #', lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "control: plain flow change",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { react: ^18.2.0, lodash: ^4.17.21 }\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V1 '' # opener, tag closer",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: 'it'' #', b: ^1.0.0 }\noverrides:\n  debug: !!str '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V1 '' # opener, tag closer (Write)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: 'it'' #', b: ^1.0.0 }\noverrides:\n  debug: !!str '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: 'it'' #', b: ^1.0.0 }\noverrides:\n  debug: !!str '}'\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V2 tag opener, tag closer",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: !!str ' #', b: ^1.0.0 }\noverrides:\n  debug: !!str '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V2 tag opener, tag closer (Write)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: !!str ' #', b: ^1.0.0 }\noverrides:\n  debug: !!str '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: !!str ' #', b: ^1.0.0 }\noverrides:\n  debug: !!str '}'\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V3 json opener, '' closer",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: {\"a\":\"b #\",\"b\":\"^1.0.0\"}\noverrides:\n  debug: 'x'' }'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V3 json opener, '' closer (Write)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: {\"a\":\"b #\",\"b\":\"^1.0.0\"}\noverrides:\n  debug: 'x'' }'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalogs:\n  x: {\"a\":\"b #\",\"b\":\"^1.0.0\"}\noverrides:\n  debug: 'x'' }'\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V5 plain-continuation ' opener (carried quote), '}' closer",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo\n    'bar, b: ^1.0.0 }\noverrides:\n  debug: '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V5 plain-continuation ' opener (carried quote), '}' closer (Write)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo\n    'bar, b: ^1.0.0 }\noverrides:\n  debug: '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo\n    'bar, b: ^1.0.0 }\noverrides:\n  debug: '}'\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V6 plain-continuation ' opener, ''}' closer in catalogs y",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo\n    'bar, b: ^1.0.0 }\n  y:\n    react: '}'\n  z:\n    lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V6 plain-continuation ' opener, ''}' closer in catalogs y (Write)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo\n    'bar, b: ^1.0.0 }\n  y:\n    react: '}'\n  z:\n    lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo\n    'bar, b: ^1.0.0 }\n  y:\n    react: '}'\n  z:\n    lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V7 control: no misread",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo, b: ^1.0.0 }\noverrides:\n  debug: '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20",
+   "replace_all": false
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "V7 control: no misread (Write)",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo, b: ^1.0.0 }\noverrides:\n  debug: '}'\n  lodash: ^4.17.21\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "avoid",
+    "reason": "x"
+   }
+  ],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalogs:\n  x: { a: foo, b: ^1.0.0 }\noverrides:\n  debug: '}'\n  lodash: 4.17.20\n"
+  },
+  "expect": "deny"
+ },
+ {
+  "review": "review-hook3",
+  "name": "plain continuation starting with ': add onlyBuilt entry",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: foo\n  'bar, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  - esbuild",
+   "new_string": "  - esbuild\n  - sharp"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "plain continuation starting with ': lodash -> 4.17.20 with proceed",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: foo\n  'bar, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "proceed"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "plain continuation starting with ': re-save",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: foo\n  'bar, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: { a: foo\n  'bar, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "block scalar under catalog with a { line: add onlyBuilt entry",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  note: |\n    { it's\n  react: ^18.2.0\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  - esbuild",
+   "new_string": "  - esbuild\n  - sharp"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "block scalar under catalog with a { line: lodash -> 4.17.20 with proceed",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  note: |\n    { it's\n  react: ^18.2.0\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "proceed"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "block scalar under catalog with a { line: re-save",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog:\n  note: |\n    { it's\n  react: ^18.2.0\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog:\n  note: |\n    { it's\n  react: ^18.2.0\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "'' then #: add onlyBuilt entry",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: 'it'' #1', react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "  - esbuild",
+   "new_string": "  - esbuild\n  - sharp"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "'' then #: lodash -> 4.17.20 with proceed",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: 'it'' #1', react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [
+   {
+    "package": "lodash",
+    "version": "4.17.20",
+    "verdict": "proceed"
+   }
+  ],
+  "tool": "Edit",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "old_string": "lodash: ^4.17.21",
+   "new_string": "lodash: 4.17.20"
+  },
+  "expect": "allow"
+ },
+ {
+  "review": "review-hook3",
+  "name": "'' then #: re-save",
+  "files": {
+   "pnpm-workspace.yaml": "packages:\n  - 'packages/*'\ncatalog: { a: 'it'' #1', react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "ledger": [],
+  "tool": "Write",
+  "input": {
+   "file_path": "pnpm-workspace.yaml",
+   "content": "packages:\n  - 'packages/*'\ncatalog: { a: 'it'' #1', react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\nonlyBuiltDependencies:\n  - esbuild\n"
+  },
+  "expect": "allow"
+ }
+]
