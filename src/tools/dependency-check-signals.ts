@@ -43,7 +43,9 @@ export interface Signal {
     /** npm, a new dependency whose name is a near-miss of a popular package (dependency-check-nearmiss.ts). */
     | "name_check"
     /** PyPI, a project that declares its Python: whether `to` supports all of it (dependency-check-python.ts). */
-    | "python_support";
+    | "python_support"
+    /** Go, a path with upper-case letters answered clean: its lower-case path's advisories (dependency-check-gocase.ts). */
+    | "module_path_case";
   value: unknown;
   /** This server's sentence about the fact. It quotes no third-party text. */
   evidence: string;
