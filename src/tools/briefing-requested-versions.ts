@@ -20,7 +20,7 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, installedNames, lookupEcosystems, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, installedNames, lookupEcosystems, MAX_READ_PACKAGES, NPM_TAG, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -306,7 +306,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
 export interface CheckItem {
   ecosystem: CheckEcosystem;
   package: string;
-  to: string;
+  /** Absent when the version the task writes could not be read (`zustand@<uuid>`): never replaced by latest. */
+  to?: string;
 }
 
 /** dependency_check's own limit on items per call. */
@@ -343,14 +344,14 @@ export interface OfflineNearMiss {
  * decide; a near-miss of a popular name is also reported offline (`nearMisses`). Nothing about them is sent.
  */
 export function gateTaskNames<
-  P extends { name: string; ecosystem: CheckEcosystem; version?: string; alternatives?: CheckEcosystem[]; guessed?: true; closed?: CheckEcosystem[]; fallbackOnly?: true },
+  P extends { name: string; ecosystem: CheckEcosystem; version?: string; versionUnread?: true; alternatives?: CheckEcosystem[]; guessed?: true; closed?: CheckEcosystem[]; fallbackOnly?: true },
   R extends RequestedVersion,
 >(
   task: string,
   deps: readonly ResolvedDependency[],
   packages: readonly P[],
   requested: readonly R[],
-): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; checkThese: CheckItem[]; notListed: number; nearMisses: OfflineNearMiss[]; unverified: UnverifiedWord[] } {
+): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; checkThese: CheckItem[]; notListed: number; nearMisses: OfflineNearMiss[]; unverified: UnverifiedWord[]; versionUnread: string[] } {
   const screen = screenTask(task);
   // Which names were read from structured syntax (a command's operand, a manifest or requirements entry's key).
   const structured = readTaskItems(normalizeVersionSyntax(screen.text), deps).structured;
@@ -370,7 +371,9 @@ export function gateTaskNames<
   const items = new Map<string, CheckItem>();
   const nearMisses: OfflineNearMiss[] = [];
   const unverified = new Map<string, UnverifiedWord>();
-  const offer = (name: string, ecosystems: readonly CheckEcosystem[], version: string | undefined, judgeNearMiss = true) => {
+  /** Names listed with no `to`: the version the task writes could not be read. */
+  const versionUnread: string[] = [];
+  const offer = (name: string, ecosystems: readonly CheckEcosystem[], version: string | undefined, judgeNearMiss = true, unreadVersion = false) => {
     let any = false;
     // A word read from prose in every ecosystem it may be in: listed plainly, never as dependency_check arguments.
     const fromProse = ecosystems.filter((e) => !structured.has(`${e}\0${name.toLowerCase()}`) && asName(name, e) !== null);
@@ -384,10 +387,17 @@ export function gateTaskNames<
       if (!structured.has(`${ecosystem}\0${name.toLowerCase()}`)) continue;
       // A name that fails the registry's grammar is not listed (it is data from the task).
       if (asName(name, ecosystem) === null) continue;
-      const to = version ? checkableSpec(ecosystem, version) : "latest";
+      const key = `${ecosystem}\0${name.toLowerCase()}`;
+      if (unreadVersion) {
+        any = true;
+        if (!items.has(key)) items.set(key, { ecosystem, package: name });
+        if (!versionUnread.includes(name)) versionUnread.push(name);
+        continue;
+      }
+      // A version or constraint as dependency_check reads it; an npm dist-tag as the task writes it (`next`).
+      const to = version ? (checkableSpec(ecosystem, version) ?? (ecosystem === "npm" && NPM_TAG.test(version) ? version : null)) : "latest";
       if (to === null) continue;
       any = true;
-      const key = `${ecosystem}\0${name.toLowerCase()}`;
       const had = items.get(key);
       if (!had || (had.to === "latest" && to !== "latest")) items.set(key, { ecosystem, package: name, to });
     }
@@ -398,7 +408,7 @@ export function gateTaskNames<
     }
   };
   /** The ecosystems an item may be looked up in by the briefing, or null (handed back, or held). */
-  const gate = (shown: string, name: string, own: CheckEcosystem[], others: CheckEcosystem[], version: string | undefined): CheckEcosystem[] | null => {
+  const gate = (shown: string, name: string, own: CheckEcosystem[], others: CheckEcosystem[], version: string | undefined, unreadVersion = false): CheckEcosystem[] | null => {
     if (touched.has(name.toLowerCase())) {
       hold(shown, NOT_READ_WHOLE);
       return null;
@@ -411,7 +421,7 @@ export function gateTaskNames<
     // A name the task gives no ecosystem for may be a listed name of another one (crates.io's rustdecimal in an npm project).
     const elsewhere = lookupEcosystems(name, others, installed).filter((e) => knownPublicName(name, e));
     if (elsewhere.length > 0) return elsewhere;
-    offer(name, own, version);
+    offer(name, own, version, true, unreadVersion);
     return null;
   };
   const keptPackages: P[] = [];
@@ -419,7 +429,13 @@ export function gateTaskNames<
     // When the task names no manager or file, every ecosystem the project uses that may have the name.
     const own: CheckEcosystem[] = p.fallbackOnly ? [p.ecosystem] : [p.ecosystem, ...(p.alternatives ?? [])];
     const others = p.guessed ? (["npm", "PyPI", "crates.io"] as const).filter((e) => !own.includes(e) && !p.closed?.includes(e)) : [];
-    const allowed = gate(p.name, p.name, own, [...others], p.version);
+    // A version the task writes that could not be read: never looked up at latest, listed with no `to`.
+    if (p.versionUnread) {
+      if (touched.has(p.name.toLowerCase())) hold(p.name, NOT_READ_WHOLE);
+      else offer(p.name, own, undefined, true, true);
+      continue;
+    }
+    const allowed = gate(p.name, p.name, own, [...others], p.version, p.versionUnread === true);
     if (!allowed) continue;
     const [ecosystem, ...alternatives] = allowed;
     const out = { ...p, ecosystem };
@@ -444,7 +460,7 @@ export function gateTaskNames<
   }
   if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not read whole, as the ones above" });
   const all = [...items.values()];
-  return { packages: keptPackages, requested: keptRequested, held, checkThese: all.slice(0, MAX_CHECK_ITEMS), notListed: Math.max(0, all.length - MAX_CHECK_ITEMS), nearMisses, unverified: [...unverified.values()].slice(0, MAX_CHECK_ITEMS) };
+  return { packages: keptPackages, requested: keptRequested, held, checkThese: all.slice(0, MAX_CHECK_ITEMS), notListed: Math.max(0, all.length - MAX_CHECK_ITEMS), nearMisses, unverified: [...unverified.values()].slice(0, MAX_CHECK_ITEMS), versionUnread };
 }
 
 
@@ -617,6 +633,8 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
     for (let k = i - 1, steps = 0; k >= 0 && steps < 6; k--, steps++) {
       const w = words[k];
       if (/[,;]/.test(gapAfter(k))) break;
+      // An option (`--network-timeout 100000`) is no package: its value is not a version of anything.
+      if (at0(k) > 0 && task[at0(k) - 1] === "-") break;
       if (CONNECTORS.has(w) || VERSIONISH.test(cleanToken(raw[k]))) continue;
       // "lodash in package.json to 4.17.20": the file the version goes in, and its preposition, are skipped.
       if (isManifestFile(raw[k])) continue;

@@ -655,7 +655,15 @@ export async function executeWhatShouldIKnow(
             check_these: {
               tool: "dependency_check" as const,
               arguments: { items: gated.checkThese },
-              ...(gated.notListed > 0 ? { not_listed: gated.notListed, note: `${gated.notListed} more package${gated.notListed === 1 ? " was" : "s were"} named but not listed (dependency_check takes at most ${MAX_CHECK_ITEMS} items per call)` } : {}),
+              ...(gated.notListed > 0 ? { not_listed: gated.notListed } : {}),
+              ...(gated.notListed > 0 || gated.versionUnread.length > 0
+                ? {
+                    note: [
+                      ...(gated.notListed > 0 ? [`${gated.notListed} more package${gated.notListed === 1 ? " was" : "s were"} named but not listed (dependency_check takes at most ${MAX_CHECK_ITEMS} items per call)`] : []),
+                      ...(gated.versionUnread.length > 0 ? [`the version the task writes for ${gated.versionUnread.join(", ")} could not be read: ${gated.versionUnread.length === 1 ? "its item has" : "their items have"} no "to"; give dependency_check the version you mean`] : []),
+                    ].join("; "),
+                  }
+                : {}),
             },
           }
         : {}),

@@ -76,6 +76,8 @@ export interface NewPackage {
   ecosystem: CheckEcosystem;
   /** The version or range the task writes for it ("axios 0.21.0", `debug@4.4.2`): checked at that, not at `latest`. */
   version?: string;
+  /** The task writes a version for it that is no version, range or tag (`zustand@<uuid>`): never read as latest. */
+  versionUnread?: true;
   /** Other ecosystems the project uses: a name the task gives no ecosystem for is checked in each, and the worst answer stands. */
   alternatives?: CheckEcosystem[];
   /**
@@ -223,6 +225,8 @@ const ENGLISH = new Set([...ENGLISH_TASK_WORDS].filter((w) => !POPULAR.has(w)));
 const ENGLISH_ENDING = /^[a-z]{3,}(?:ing|tion|sion|ment|ness|ity|ance|ence|ism|ship|ure|ies)$/;
 /** Punctuation and shapes no English word has: a name like this after "add" is a package ("logger-libs", "flatmap-stream"). */
 const NAME_SHAPED = /[-_.@/\d]/;
+/** An npm dist-tag as tasks write one (`next`, `beta`, `canary`, `next-14`): letters, then short dashed parts. */
+export const NPM_TAG = /^[a-z]{2,20}(?:-[a-z0-9]{1,10}){0,2}$/i;
 const VERSION_ONLY = /^v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][\w.]+)?$/i;
 /**
  * Words between a name and its version: "event-stream at version 3.3.6", "add chalk to 5.6.1" (r8: the
@@ -613,6 +617,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         continue;
       }
       const commandWord = word === "uv" && words[i + 1] === "pip" ? "pip" : word;
+      /** The package the command named last: Cargo's `--vers` / `--version` names its version. */
+      let lastAdded: NewPackage | null = null;
       for (j++; j < words.length; j++) {
         // At most MAX_READ_PACKAGES names, here too: `npm install p1 ... p30000` returned 30,012 (re-check, item 3).
         if (found.length >= MAX_READ_PACKAGES) {
@@ -627,6 +633,15 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           // (re-check of the 2026-11-25 fixes, item 2). A long blank is a value the screen withheld.
           const flag = raw[j].replace(/[.,;:)]+$/, "");
           const gap = j + 1 < raw.length ? task.slice(span(j).end, starts[j + 1]) : "";
+          // `cargo add hyper --vers 0.14.9`: the version of the crate before it, never a crate called "vers"
+          // (third blind check, item 5).
+          if (ecosystem === "crates.io" && (flag === "--vers" || flag === "--version") && lastAdded && j + 1 < raw.length && /^(?:[ \t]{1,3}|=)?$/.test(gap) && isVersionSpec(raw[j + 1].replace(/[.,;:)]+$/, "").replace(/^=(?!=)/, ""))) {
+            const version = taskVersionText(raw[j + 1].replace(/[.,;:)]+$/, "").replace(/^=(?!=)/, ""), ecosystem);
+            lastAdded.version = version;
+            bound.push({ name: lastAdded.name, version, ...span(j + 1) });
+            j++;
+            continue;
+          }
           if (/^=\S*$/.test(gap)) j++;
           // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
           else if (/^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && !words[j + 1].startsWith("-")) {
@@ -651,7 +666,14 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         // The command fixes the ecosystem for the version reader too (round 10, W14).
         fixed.push({ ...span(j), ecosystem });
         structured.add(`${ecosystem}\0${name.toLowerCase()}`);
-        add(name, ecosystem, false, false, inlineVersion(j, ecosystem));
+        // After `@`: a version or range; for npm a dist-tag kept as written (`zustand@next`); anything else
+        // (`zustand@<uuid>`) is a version that could not be read, never replaced by latest (third blind check, item 5).
+        const after = raw[j].indexOf("@", 1) > 0 ? raw[j].replace(/[.,;:)]+$/, "").slice(raw[j].indexOf("@", 1) + 1) : "";
+        const inline = inlineVersion(j, ecosystem);
+        const tag = !inline && ecosystem === "npm" && NPM_TAG.test(after) && !/^[a-f\d]{7,}$/i.test(after) ? after : null;
+        const pkg = add(name, ecosystem, false, false, inline ?? tag);
+        if (pkg && after && !inline && !tag && !/^(?:latest|\*)$/i.test(after)) pkg.versionUnread = true;
+        lastAdded = pkg;
         if (separatorAfter(j) === "clause") break;
       }
       i = j - 1;
@@ -899,7 +921,7 @@ function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
   return null;
 }
 
-function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, versionUnread: _versionUnread, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -982,7 +1004,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     );
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, versionUnread: _versionUnread, ...p } = pkg;
     if (!r) return unchecked(p, "no answer");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
