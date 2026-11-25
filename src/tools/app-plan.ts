@@ -214,9 +214,12 @@ export function readAppPlan(db: FourDADatabase | null | undefined, now: Date = n
   };
 }
 
-/** "5.28.4 -> 6.28.1 (major)", per installed line with a target. */
+/**
+ * "5.28.4 -> 6.28.1 (major)", per installed line with a target above it. A line already at its
+ * target is no move and is not printed (audit 2026-11-25 G-6: "0.18.2 -> 0.18.2").
+ */
 function moves(step: AppPlanStep): string {
-  const lines = step.lines.filter((l) => l.target);
+  const lines = step.lines.filter((l) => l.target && l.target !== l.installed);
   return lines.map((l) => `${l.installed} -> ${l.target}${l.upgrade_type ? ` (${l.upgrade_type})` : ""}`).join(", ");
 }
 
@@ -252,11 +255,19 @@ function refreshAdmits(step: AppPlanStep): string {
 export function nextStep(step: AppPlanStep, schema: number): string {
   const blocked = step.blocked_upstream ?? [];
   const blockedNote = blocked.length > 0 ? ` Blocked upstream: ${blocked.map((h) => blockedText(step, h)).join(" ")}` : "";
+  // Every line with a target is already at it: nothing to move, and no "a -> a" step printed.
+  const targeted = step.lines.filter((l) => l.target);
+  const moving = ["manifest_bump", "lockfile_refresh", "parent_update", "lockfile_or_parent_update", "mixed"].includes(step.mechanism);
+  if (moving && targeted.length > 0 && moves(step) === "") {
+    const at = [...new Set(targeted.map((l) => l.installed))].join(", ");
+    return `Nothing to move for ${step.package}: every copy the step lists is already at the release the app's plan names (${step.package} ${at}); this server did not check that release, so confirm with vulnerability_scan.${blockedNote}`;
+  }
   switch (step.mechanism) {
     case "manifest_bump":
       return `Bump ${step.package} in each project's manifest: ${moves(step)}.`;
     case "lockfile_refresh":
-      return `Refresh the lockfile so ${step.package} resolves to the fixed release (${moves(step)}); ${refreshAdmits(step)}, so no manifest changes.`;
+      // The app's target, not checked by this server: never called "the fixed release" (G-6).
+      return `Refresh the lockfile so ${step.package} resolves to the release the app's plan names (${moves(step)}); ${refreshAdmits(step)}, so no manifest changes.`;
     case "parent_update":
       return `Update the parent that pulls ${step.package} in to a release whose requirement admits the fix (${moves(step)}); see the plan item for which parent. Copies whose parents already admit it need only a lockfile refresh.`;
     case "blocked_upstream":

@@ -25,7 +25,7 @@ const step = (sites: Array<ReturnType<typeof site>>): AppPlanStepView => ({
 describe("lockfile_refresh in the app's plan", () => {
   it("a direct dependency: its declared range already admits the fix; no parent is named", () => {
     const text = nextStep(step([site("d:/web", true)]), 5);
-    expect(text).toMatch(/^Refresh the lockfile so qs resolves to the fixed release/);
+    expect(text).toMatch(/^Refresh the lockfile so qs resolves to the release the app's plan names/);
     expect(text).toMatch(/the range the project declares for qs already admits it/);
     expect(text).not.toMatch(/parent/);
   });

@@ -35,7 +35,7 @@ import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintena
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { compareVersions, inEcosystemForm, maxVersion, namesPackage } from "../live/version-compare.js";
 import { formatAppPlan, readAppPlan, type AppPlanResult } from "./app-plan.js";
-import { checkAllProjectsPlan, checkProjectPlan, serverPlanFacts, type AppPlanCheck } from "./app-plan-check.js";
+import { checkAllProjectsPlan, checkProjectPlan, planFormatNote, serverPlanFacts, type AppPlanCheck } from "./app-plan-check.js";
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
@@ -253,6 +253,12 @@ export interface UpgradePlanResult {
   app_plan_check?: AppPlanCheck;
   /** The project the plan covers, or null when it is not narrowed to one. */
   projectScope?: string | null;
+  /**
+   * Set when every project was asked for (project_path "*", or a server started outside a project)
+   * and only the server's own project could be planned: the app's stored plan, the only one that
+   * covers every project, could not be read. `reason` says why (audit 2026-11-25 G-3).
+   */
+  allProjects?: { covered: false; reason: string };
 }
 
 /** Time the plan spends checking the newer releases its rows offer against their advisories. */
@@ -391,6 +397,19 @@ export async function executeUpgradePlanner(
       : liveIntel;
   const plan = await executeStandalonePlanner(params, scoped);
   const result: UpgradePlanResult = { ...plan, projectScope: scopePath ?? plan.projectPath };
+  // Every project was asked for and only this one is planned: said first, never a silent narrowing
+  // (the desktop app's Brief hand-off relies on "*" meaning every project; audit 2026-11-25 G-3).
+  if (scope.kind === "all") {
+    const why = !app
+      ? "the 4DA desktop app's database is not attached, so there is no stored plan to read"
+      : appPlan?.kind === "absent" && appPlan.cause === "format"
+        ? (appPlan.formatNote ?? planFormatNote(appPlan.found)).replace(/[.]$/, "")
+        : `the 4DA app's stored plan could not be read: ${appPlan?.kind === "absent" ? appPlan.reason : "no plan"}`;
+    const lead = `NOT CHECKED: ${scope.reason}, and only the 4DA app's stored plan covers more than one: ${why}. What follows covers only ${plan.projectPath}, not every project`;
+    result.summary = `${lead}. ${result.summary}`;
+    result.vulnerabilityDataAvailable = false;
+    result.allProjects = { covered: false, reason: why };
+  }
   if (!app || !appPlan) return result;
   return {
     ...result,

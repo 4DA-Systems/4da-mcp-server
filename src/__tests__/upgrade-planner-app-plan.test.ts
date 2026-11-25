@@ -448,7 +448,7 @@ describe("upgrade_planner reads a schema-5 plan", () => {
   it("each decided route reads as what to do; a mixed-route step names its blocked copies", async () => {
     const result = (await executeUpgradePlanner(dbWith("v5routes", JSON.stringify(v5())), {}, null)) as AppPlanResult;
     const [, qs, send, cookie] = result.steps;
-    expect(qs.next_step).toMatch(/^Refresh the lockfile so qs resolves to the fixed release \(6\.14\.0 -> 6\.14\.1 \(patch\)\); every parent's requirement already admits it/);
+    expect(qs.next_step).toMatch(/^Refresh the lockfile so qs resolves to the release the app's plan names \(6\.14\.0 -> 6\.14\.1 \(patch\)\); every parent's requirement already admits it/);
     expect(send.next_step).toMatch(/^Update the parent that pulls send in to a release whose requirement admits the fix/);
     expect(cookie.next_step).toMatch(/^Transitive only, and the route is undecided or differs between copies/);
     expect(cookie.next_step).toContain("Blocked upstream: cookie 0.6.0 in d:/api is held by old-server 1.0.0 (its newest release), which requires cookie 0.6.0");
