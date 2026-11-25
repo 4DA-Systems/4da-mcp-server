@@ -324,6 +324,19 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     if (free(start, end)) holdPackage(m[2], specSource(m[3], "py") ?? "a URL", start, end);
   }
 
+  // Whether only blanks (and a YAML list dash) stand between `at` and its line's start, or its end. Walked over
+  // the blanks only: slicing the line per `key: value` match was quadratic on one long line (5.0 s on 199 KB of
+  // " a:"; sixth blind check, item 3).
+  const aloneBefore = (at: number) => {
+    let k = at;
+    while (k > 0 && at - k < MAX_TASK_WORD && (task[k - 1] === " " || task[k - 1] === "\t" || task[k - 1] === "-")) k--;
+    return k === 0 || task[k - 1] === "\n";
+  };
+  const aloneAfter = (at: number) => {
+    let k = at;
+    while (k < task.length && k - at < MAX_TASK_WORD && (task[k] === " " || task[k] === "\t")) k++;
+    return k === task.length || task[k] === "\n" || task[k] === "\r";
+  };
   /** Whether the word at `at` is an operand of an install command on its line (looked back over at most 200 characters). */
   const installOperand = (at: number) => /\b(?:npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|go)\s+(?:install|i|add|get|require)\b[^;&|\n]{0,200}$/i.test(task.slice(Math.max(0, at - 200), at));
   // 2b. Settings: `password==x`, `DB_PASSWORD=x`, `"secret_token": "x"`, `api_key = "x"`. A setting is not a
@@ -332,8 +345,7 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     const start = m.index!;
     const end = m.index! + m[0].length;
     // `key: value` only quoted (JSON) or alone on its line (YAML): "Auth: switch to passport" is prose.
-    const line = (at: number, dir: 1 | -1) => (dir < 0 ? task.slice(task.lastIndexOf("\n", at - 1) + 1, at) : task.slice(at, (task.indexOf("\n", at) + 1 || task.length + 1) - 1));
-    const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (/^[ \t-]*$/.test(line(start, -1)) && /^[ \t]*$/.test(line(end, 1)));
+    const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (aloneBefore(start) && aloneAfter(end));
     // A version or constraint as its value makes it a package (`"json-web-token": "3.0.1"`, `rusoto_credential =
     // "0.48.0"`), and an install command's operand is never a setting (sixth blind check, item 2).
     if (versionShaped(m[5]) || installOperand(start)) continue;
