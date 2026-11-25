@@ -122,11 +122,14 @@ describe("2. a pip-style comparator on an npm-only name is a guess: npm is judge
 });
 
 describe("3. an ecosystem with no such release, or a namesake's near-miss, is not the answer (round 10, W16)", () => {
-  it.each(["add rsa 4.7", "add pandas 2.2.3", "add numpy 2.1"])("mixed npm + PyPI project: %s is not review_needed over npm's namesake", async (task) => {
+  it.each(["add rsa 4.7", "add pandas 2.2.3", "add numpy 2.1"])("mixed npm + PyPI project: %s: PyPI's release is judged, npm's namesake only handed back", async (task) => {
     const r = await brief(task, MIXED);
     for (const v of r.requested_versions ?? []) expect(v).toMatchObject({ ecosystem: "PyPI", verdict: "proceed" });
     for (const p of r.new_packages ?? []) expect(p.verdict).toBe("proceed");
-    expect(r.delegation_assessment.level).not.toBe("review_needed");
+    // Final design of the 2026-11-25 fixes: PyPI's name is a listed one and is judged; npm's namesake is on no
+    // list, so it is handed back, never judged: no namesake verdict outranks PyPI's, and nothing is silently picked.
+    for (const i of r.check_these?.arguments.items ?? []) expect(i.ecosystem).toBe("npm");
+    expect(r.new_packages?.some((p) => p.ecosystem === "npm") ?? false).toBe(false);
   });
 
   it("an npm namesake that has the release but is only a near-miss of a popular npm name (pandas ~ canvas) does not outrank PyPI's proceed", async () => {
@@ -134,7 +137,8 @@ describe("3. an ecosystem with no such release, or a namesake's near-miss, is no
     const r = await brief("add pandas 2.2.3", MIXED);
     expect(r.requested_versions).toMatchObject([{ name: "pandas", ecosystem: "PyPI", verdict: "proceed" }]);
     for (const p of r.new_packages ?? []) expect(p).toMatchObject({ ecosystem: "PyPI", verdict: "proceed" });
-    expect(r.delegation_assessment.level).not.toBe("review_needed");
+    // npm's namesake is handed back (final design), never judged above PyPI's proceed.
+    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "pandas", to: "2.2.3" }]);
   });
 
   it("malware from an ecosystem that has the name and release still wins in a mixed project", async () => {

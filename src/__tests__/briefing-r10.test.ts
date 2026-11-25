@@ -21,6 +21,7 @@ import { detectAllNewPackages } from "../tools/briefing-new-packages.js";
 import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { checkableSpec } from "../tools/briefing-names.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
+import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
 
@@ -152,12 +153,13 @@ describe("2. a Cargo table entry is one package in one ecosystem", () => {
   });
 
   it("the briefing: one row, the same verdict in new_packages and requested_versions (they were avoid and unknown)", async () => {
+    // Final design of the 2026-11-25 fixes: smallvec is on no bundled list, so the briefing hands it back once,
+    // as crates.io's, at the constraint the entry writes; dependency_check judges it there.
     const r = await brief(`add ${ENTRY}`, NPM_AND_RUST);
-    expect(r.new_packages).toMatchObject([{ name: "smallvec", ecosystem: "crates.io", verdict: "avoid" }]);
-    expect(r.requested_versions).toMatchObject([{ name: "smallvec", ecosystem: "crates.io", verdict: "avoid" }]);
-    expect(r.summary).toContain("Task adds smallvec >=1.6.0,<1.6.1 (avoid)");
-    expect(r.summary).not.toContain("Task writes smallvec");
-    expect(r.summary).not.toContain("unknown");
+    expect(r.new_packages).toBeUndefined();
+    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "crates.io", package: "smallvec", to: ">=1.6.0,<1.6.1" }]);
+    const check = (await executeDependencyCheck(null, r.check_these!.arguments, stubIntel(NPM_AND_RUST, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    expect(check.results).toMatchObject([{ verdict: "avoid" }]);
     expect(stub.asked.some((u) => u === "https://registry.npmjs.org/smallvec")).toBe(false);
   });
 });
@@ -239,54 +241,42 @@ describe("4. a popular name that leads an add list is a package; English after t
   });
 });
 
-describe("5. a loose name is looked up once", () => {
-  it("use blueprints: one OSV.dev request for blueprints, and still nothing to report", async () => {
-    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
-    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
+describe("5. a word in prose is looked up only when it is a listed name (final design of the 2026-11-25 fixes)", () => {
+  it("use blueprints: nothing asked, handed back for dependency_check", async () => {
     const r = await brief("use blueprints");
     expect(osvAsks("blueprints")).toHaveLength(0);
-    expect(stub.asked.some((u) => u.includes("/v1/vulns/GHSA-blueprints-old"))).toBe(false);
     expect(r.new_packages).toBeUndefined();
-    expect(r.withheld_from_task).toMatchObject([{ shown: "blueprints" }]);
+    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "blueprints", to: "latest" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
-  it("use pinguinlib: a malware name after `use` still stands, from one lookup", async () => {
+  it("use pinguinlib: a name on no list is not asked by the briefing; dependency_check on check_these finds the malware", async () => {
     stub.npm.pinguinlib = { latest: "0.0.1-security", versions: ["0.0.1-security"] };
     stub.osv.push(advisory("MAL-2026-pinguinlib", "pinguinlib", "CRITICAL", {}, "npm", true));
-    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
-    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
     const r = await brief("use pinguinlib");
-    expect(r.new_packages).toBeUndefined();
-    expect(r.delegation_assessment.level).toBe("review_needed");
     expect(osvAsks("pinguinlib")).toHaveLength(0);
-    const cmd = await brief("npm install pinguinlib");
-    expect(cmd.new_packages).toMatchObject([{ name: "pinguinlib", malicious: true, verdict: "avoid" }]);
-    expect(cmd.delegation_assessment.level).toBe("human_only");
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    const check = (await executeDependencyCheck(null, r.check_these!.arguments, stubIntel(NPM, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    expect(check.results).toMatchObject([{ verdict: "avoid" }]);
   });
 
-  // Near-misses of popular names are never loose: they get the full check, name_check included.
-  it.each(["use crossenv", "use lodahs"])("%s: still human_only", async (task) => {
-    const name = task.split(" ")[1];
-    const r = await brief(task);
-    expect(r.new_packages?.find((p) => p.name === name)).toMatchObject({ malicious: true, verdict: "avoid" });
+  it("use crossenv: a listed malicious name is looked up and human_only", async () => {
+    const r = await brief("use crossenv");
+    expect(r.new_packages?.find((p) => p.name === "crossenv")).toMatchObject({ malicious: true, verdict: "avoid" });
     expect(r.delegation_assessment.level).toBe("human_only");
   });
 
-  it("a loose name whose advisories could not be read is unknown, never clean", async () => {
-    const real = globalThis.fetch;
-    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => (String(input).startsWith("https://api.osv.dev/") ? new Response("busy", { status: 503 }) : real(input, init)));
-    const r = await brief("npm install blueprints");
-    expect(r.new_packages).toMatchObject([{ name: "blueprints", verdict: "unknown" }]);
+  it("use lodahs: a near-miss of lodash, judged offline, never asked", async () => {
+    const r = await brief("use lodahs");
+    expect(r.new_packages).toMatchObject([{ name: "lodahs", verdict: "review", did_you_mean: "lodash" }]);
+    expect(osvAsks("lodahs")).toHaveLength(0);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
-  it("a name nobody publishes after `use` is prose (use memoizers)", async () => {
-    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
-    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
+  it("use memoizers: handed back, never dropped as prose", async () => {
     const r = await brief("use memoizers");
     expect(r.new_packages).toBeUndefined();
-    expect(r.withheld_from_task).toMatchObject([{ shown: "memoizers" }]);
+    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "memoizers", to: "latest" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 });

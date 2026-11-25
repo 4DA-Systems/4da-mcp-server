@@ -255,7 +255,7 @@ export function screenTask(task: string): TaskScreen {
     const kind = specSource(m[4], "js");
     if (kind && free(m.index!, m.index! + m[0].length)) holdPackage(m[2], kind, m.index!, m.index! + m[0].length);
   }
-  const TOML_SOURCE = /(^|[\s`(])([A-Za-z0-9][\w.-]{0,213})\s{0,8}=\s{0,8}\{([^}\n]{0,400})\}/gm;
+  const TOML_SOURCE = /(^|[\s`(])([A-Za-z0-9][\w.-]{0,213})\s{0,8}=\s{0,8}\{([^{}\n]{0,400})\}/gm;
   for (const m of task.matchAll(TOML_SOURCE)) {
     const fields = m[3];
     const kind = /\bgit\s{0,4}=/.test(fields) ? "git" : /\bpath\s{0,4}=/.test(fields) ? "a path" : /\burl\s{0,4}=/.test(fields) ? "a URL" : /\bworkspace\s{0,4}=\s{0,4}true/.test(fields) ? "a workspace" : /\bregistry\s{0,4}=\s{0,4}["'](?!crates-io["'])/.test(fields) || /\bsource\s{0,4}=/.test(fields) ? "a registry or source named in the entry" : null;
@@ -433,128 +433,13 @@ export function screenedOut(screen: TaskScreen, name: string, ecosystems: readon
 }
 
 /*
- * What may be looked up (re-check of the 2026-11-25 fixes, item 2). The screen above is a block-list,
- * and every spelling it did not know (`$env:NPM_CONFIG_REGISTRY`, a pasted requirements.txt led by
- * `--index-url`, a UUID or a base64 secret after "add") still reached the registries. So it is turned
- * around: a word from the task is looked up on a public registry only on positive evidence that it is
- * a public package there (lookupEvidence). The screen stays as a second layer in front of rule (iii).
+ * What the briefing itself looks up (final design of the 2026-11-25 fixes). Every list of private-source
+ * spellings and every reading of package cues in prose was beatable by a spelling it did not know, so the
+ * briefing stops guessing: it looks a name up on a public registry or OSV.dev only when the name is known
+ * to be public without asking anyone, because the project already depends on it (the caller's check) or
+ * because it is exactly a name in a bundled list (knownPublicName). A near-miss of a popular name is
+ * judged offline (offlineNearMiss). Every other name is handed back as dependency_check arguments.
  */
-
-/** Hosts of each ecosystem's public registry, index or proxy (and their public mirrors). */
-const PUBLIC_HOSTS: Record<CheckEcosystem, readonly string[]> = {
-  npm: ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com", "npmjs.com", "www.npmjs.com"],
-  PyPI: ["pypi.org", "pypi.python.org", "files.pythonhosted.org"],
-  "crates.io": ["crates.io", "index.crates.io", "static.crates.io"],
-  Go: ["proxy.golang.org", "sum.golang.org", "pkg.go.dev"],
-};
-const ALL_PUBLIC = new Set(Object.values(PUBLIC_HOSTS).flat());
-
-/** The hosts of the URLs in a value or a text. */
-function hostsIn(text: string): string[] {
-  const out: string[] = [];
-  for (const m of text.matchAll(/(?:[a-z][a-z0-9+.-]{0,30}:)?\/\/(?:[^\s/@"'`]{0,200}@)?([a-z0-9.-]{1,253})/gi)) out.push(m[1].toLowerCase().replace(/\.+$/, ""));
-  return out;
-}
-
-/** Whether a value (an option's, a setting's) names only the public registry of `eco`. */
-function onlyPublic(eco: CheckEcosystem, value: string): boolean {
-  const v = strip(value, "\"'`", "\"'`,;");
-  if (eco === "crates.io" && v === "crates-io") return true;
-  if (eco === "Go" && /^(?:(?:https:\/\/proxy\.golang\.org\/?|direct|off)(?:[,|]|$))+$/i.test(v)) return true;
-  const hosts = hostsIn(v);
-  return hosts.length > 0 && hosts.every((h) => PUBLIC_HOSTS[eco].includes(h));
-}
-
-/**
- * Settings and options that name a registry, index, source, proxy or mirror, per ecosystem, with the
- * value after them (case-insensitive, any spelling of the separator). Their value is public only when
- * it names the public registry itself; anything else, or no value at all, is a signal.
- */
-const SIGNAL_KEYS: Array<{ eco: readonly CheckEcosystem[]; key: RegExp }> = [
-  {
-    eco: ["npm"],
-    key: /(?:--?(?:config\.)?registry\b|npm_config_registry|npm_config_@[\w.-]{1,214}:registry|yarn_npm_registry_server|yarn_npm_scopes|bun_config_registry|npmregistryserver|npmscopes|@[\w.-]{1,214}:registry|(?:^|[\s"'`;$:])registry\b|always-auth|_authtoken|\b_auth\b|install\.scopes|\.npmrc\b|\.yarnrc(?:\.yml)?\b|bunfig(?:\.toml)?\b)/gi,
-  },
-  {
-    eco: ["PyPI"],
-    key: /(?:--(?:index-url|extra-index-url|default-index|index|find-links|trusted-host|pip-args|source)\b|(?:^|[\s"'`])-[if](?=\s)|pip_(?:extra_)?index_url|pip_find_links|uv_(?:extra_)?index(?:_url)?|uv_default_index|(?:^|[\s"'`])(?:extra-)?index-url\b|(?:^|[\s"'`{,])index\s{0,4}=|\[\[tool\.poetry\.source\]\]|\[\[tool\.uv\.index\]\]|\[tool\.uv\.sources\]|\[\[source\]\]|pip\.conf\b|pip\.ini\b|poetry\s+source\s+add)/gi,
-  },
-  { eco: ["crates.io"], key: /(?:\bcargo\b[^\n;|&]{0,200}?--(?:registry|index|git|path)\b|\[registries|\[source\b|replace-with|cargo_registr\w*|\bregistry\s{0,4}=|\.cargo\/config)/gi },
-  { eco: ["Go"], key: /(?:\bgoprivate\b|\bgoproxy\b|\bgonosumdb\b|\bgonoproxy\b|\bgoflags\b|\bgoinsecure\b|=>)/gi },
-  // Credentials given to a command or a setting: an authenticated, so private, source (when in doubt it is a signal).
-  { eco: ["npm", "PyPI", "crates.io", "Go"], key: /(?:(?:^|[\s"'`])--?(?:password|passwd|pass|token|auth[\w-]*|username|user-name|client-cert|cert|keyring[\w-]*|trusted-host|netrc)\b|\.netrc\b)/gi },
-];
-
-/** Spellings of a source that is not a registry at all (a path, git, a file, a workspace), per ecosystem. */
-const SOURCE_SPELLINGS: Array<{ eco: readonly CheckEcosystem[]; re: RegExp }> = [
-  { eco: ["npm"], re: /(?:\b(?:file|link|workspace|portal|catalog|github|gitlab|bitbucket|gist):|\bgit\+[a-z]+:|\bgit:\/\/|\.tgz\b|\bnpm\.pkg\.github\.com\b)/i },
-  { eco: ["PyPI"], re: /(?:\s@\s{0,4}(?:git\+|https?:|file:|ssh:)|\bgit\+[a-z]+:|\bfile:\/\/|(?:^|\s)-e\s|--editable\b|\.whl\b|\bpath\s{0,4}=|\bgit\s{0,4}=|\beditable\s{0,4}=)/i },
-  { eco: ["crates.io"], re: /(?:\bgit\s{0,4}=|\bpath\s{0,4}=|\bgit\+[a-z]+:)/i },
-  { eco: ["Go"], re: /(?:^|\s)replace\s+[\w./-]{1,300}(?:\s+v[\w.+-]{1,100})?\s{0,4}=>|=>\s{0,4}(?:\.{1,2}\/|\/)/im },
-];
-
-/** Prose that names a registry, index, mirror or feed: with any URL that is not a public registry's, a signal for every ecosystem. */
-const PROSE_REGISTRY = /\b(?:registry|registries|index|mirror|proxy|feed|repository|artifactory|nexus|verdaccio|codeartifact|gemfury|jfrog|cloudsmith|private|internal|self-hosted|on-prem|from)\b/i;
-
-/**
- * The ecosystems for which the task configures or names a registry, index, source, proxy or mirror
- * other than the public one, or a path, git, file or workspace source, with why. When in doubt it is a
- * signal: new names of that ecosystem from the task are then not looked up at all.
- */
-export function privateSignals(task: string): Map<CheckEcosystem, string> {
-  const out = new Map<CheckEcosystem, string>();
-  const text = boundWords(task);
-  for (const { eco, key } of SIGNAL_KEYS) {
-    for (const m of text.matchAll(key)) {
-      if (eco.every((e) => out.has(e))) break;
-      // The value: what follows the key on its line (after `=`, `:`, blanks or quotes).
-      const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 300).split("\n")[0];
-      const value = /^\s{0,4}[:=]?\s{0,4}["'`]?(\S{1,300})/.exec(after)?.[1] ?? "";
-      for (const e of eco) if (!onlyPublic(e, value) && !out.has(e)) out.set(e, `the task names a registry, index, source or proxy for ${e} ("${m[0].trim().slice(0, 40)}")`);
-    }
-  }
-  for (const { eco, re } of SOURCE_SPELLINGS) {
-    const m = re.exec(text);
-    if (m) for (const e of eco) if (!out.has(e)) out.set(e, `the task names a source other than the ${e} registry ("${m[0].trim().slice(0, 40)}")`);
-  }
-  const foreign = hostsIn(text).filter((h) => !ALL_PUBLIC.has(h));
-  if (foreign.length > 0 && PROSE_REGISTRY.test(text)) {
-    for (const e of ["npm", "PyPI", "crates.io", "Go"] as const) {
-      if (!out.has(e)) out.set(e, `the task names a host that is not a public registry's (${foreign[0].slice(0, 60)}) beside a registry, index or source`);
-    }
-  }
-  return out;
-}
-
-/** Why a name of the task may be looked up: (i) installed, (ii) popular or a near-miss of a popular name, (iii) an install command's operand or a manifest entry's key. */
-export type Evidence = "installed" | "popular" | "command" | "cue";
-
-/**
- * The evidence that `name` is a public package of `eco`: (i) the project already depends on it; (ii)
- * it is on the bundled popular list of that ecosystem or a near-miss of one by the product's own rule
- * (so typosquats like crossenv are still looked up and flagged); (iii) it stands as an operand of an
- * install command or a key of a manifest entry in the task (`structural`). Rules (ii) and (iii) never
- * hold where the task signals a private source for `eco`. Null: not looked up.
- */
-export function lookupEvidence(
-  name: string,
-  eco: CheckEcosystem,
-  ctx: {
-    installed: (name: string) => boolean;
-    structural: ReadonlySet<string>;
-    signals: ReadonlyMap<CheckEcosystem, string>;
-    prose?: (name: string, eco: CheckEcosystem, primary: CheckEcosystem) => boolean;
-  },
-  primary: CheckEcosystem = eco,
-): Evidence | null {
-  if (ctx.installed(name)) return "installed";
-  if (ctx.signals.has(eco)) return null;
-  if (popularOrNearMiss(name, eco)) return "popular";
-  // Rule (iv): a package cue beside the word in prose (proseCues).
-  if (ctx.prose?.(name, eco, primary) && !ctx.structural.has(`${eco}\0${name.toLowerCase()}`)) return "cue";
-  if (ctx.structural.has(`${eco}\0${name.toLowerCase()}`)) return "command";
-  return null;
-}
 
 const POPULAR_NPM_SET = new Set(POPULAR_NPM);
 const POPULAR_PYPI_SET = new Set(POPULAR_PYPI.map(normalizePypiName));
@@ -562,7 +447,7 @@ const POPULAR_PYPI_SET = new Set(POPULAR_PYPI.map(normalizePypiName));
 /**
  * Public names that have shipped a malicious or hijacked release (public incident history): looking
  * one up names nothing private, and is what the briefing exists for ("bring in ua-parser-js 0.7.29",
- * "pull in node-ipc 10.1.1", "add ctx" in a Python project, "bring in rustdecimal"). Part of rule (ii).
+ * "pull in node-ipc 10.1.1", "add ctx" in a Python project, "bring in rustdecimal").
  */
 const KNOWN_COMPROMISED: Record<CheckEcosystem, ReadonlySet<string>> = {
   npm: new Set([
@@ -577,12 +462,21 @@ const KNOWN_COMPROMISED: Record<CheckEcosystem, ReadonlySet<string>> = {
   Go: new Set(),
 };
 
-function popularOrNearMiss(name: string, eco: CheckEcosystem): boolean {
+/** Whether `name` is exactly a name of a bundled list of `eco`: the popular names, or a name with a known malicious or hijacked release. */
+export function knownPublicName(name: string, eco: CheckEcosystem): boolean {
   const lower = name.toLowerCase();
   if (KNOWN_COMPROMISED[eco].has(eco === "PyPI" ? normalizePypiName(lower) : lower)) return true;
-  if (eco === "npm") return POPULAR_NPM_SET.has(lower) || nearMissOf(lower) !== null;
-  if (eco === "PyPI") return POPULAR_PYPI_SET.has(normalizePypiName(lower)) || closestPopularPypi(lower) !== null;
+  if (eco === "npm") return POPULAR_NPM_SET.has(lower);
+  if (eco === "PyPI") return POPULAR_PYPI_SET.has(normalizePypiName(lower));
   return false;
+}
+
+/** The popular name `name` is a near-miss of in `eco`, judged offline from the bundled lists, or null. */
+export function offlineNearMiss(name: string, eco: CheckEcosystem): string | null {
+  if (knownPublicName(name, eco)) return null;
+  if (eco === "npm") return nearMissOf(name.toLowerCase())?.of ?? null;
+  if (eco === "PyPI") return closestPopularPypi(name);
+  return null;
 }
 
 
@@ -668,129 +562,4 @@ export function touchedNames(task: string, screen: TaskScreen): Set<string> {
 export function spansHolding(task: string, screen: TaskScreen, lost: ReadonlySet<string>): Withheld[] {
   if (lost.size === 0) return [];
   return screen.withheld.filter((w) => !w.always && namePieces(task.slice(w.start, w.end)).some((p) => lost.has(p)));
-}
-
-/*
- * Rule (iv), prose with a package cue (re-check of the 2026-11-25 fixes, round 3). Rules (i)-(iii) left
- * most prose unchecked ("add the left-pad package", "the time crate", "@sentry/node"), and with it the
- * new-package malware check. A word in prose is also looked up when ALL hold: it has the ecosystem's
- * strict registry-name shape and passes the credential screen; the task holds no private-source signal
- * for that ecosystem (checked by lookupEvidence first); and either it is written `@scope/name` (npm), or a
- * package noun stands right beside it in the same clause, or the clause names that ecosystem's manager or
- * registry together with an adding verb. A cue that says the opposite (secret, token, key, file, ...)
- * beside the word wins: not looked up. For crates.io and Go this is the only prose route.
- */
-
-/** Nouns that say the word beside them is a package; the ecosystem they tie it to, or null for any. */
-const PACKAGE_NOUNS: Record<string, CheckEcosystem | null> = {
-  package: null, packages: null, library: null, libraries: null, lib: null, dependency: null, dependencies: null, dep: null, deps: null,
-  module: null, modules: null, plugin: null, plugins: null, sdk: null, framework: null, crate: "crates.io", crates: "crates.io",
-  // A gem is RubyGems', which this server does not read: never a cue for an ecosystem it checks.
-  gem: "RubyGems" as CheckEcosystem,
-};
-/** Words naming a manager or registry, and the ecosystem they install from. */
-const MANAGER_WORDS: Record<string, CheckEcosystem> = {
-  npm: "npm", npmjs: "npm", "npmjs.com": "npm", pnpm: "npm", yarn: "npm", bun: "npm",
-  pip: "PyPI", pip3: "PyPI", pypi: "PyPI", "pypi.org": "PyPI", uv: "PyPI", poetry: "PyPI", pipenv: "PyPI", pdm: "PyPI",
-  cargo: "crates.io", "crates.io": "crates.io", crates: "crates.io",
-  go: "Go", golang: "Go", "pkg.go.dev": "Go",
-};
-const ADD_WORDS = new Set(["add", "adding", "adds", "install", "installing", "installs", "use", "using", "include", "including", "bring", "pull", "need", "needs", "adopt", "introduce", "require", "depend", "depends"]);
-/** Words beside a name that say it is not a package. */
-const CONTRARY_CUES = new Set([
-  "secret", "secrets", "token", "tokens", "key", "keys", "password", "passwords", "passwd", "credential", "credentials", "variable", "variables", "var", "env",
-  "flag", "flags", "setting", "settings", "option", "options", "file", "files", "folder", "folders", "directory", "directories", "dir", "branch", "branches",
-  "user", "users", "username", "host", "hosts", "hostname", "url", "urls", "value", "values",
-]);
-/** Words that make a whole clause about a credential. */
-const CREDENTIAL_WORDS = new Set(["secret", "secrets", "token", "tokens", "password", "passwords", "passwd", "credential", "credentials", "apikey", "api-key", "api_key"]);
-const FILLER_CUES = new Set(["the", "a", "an", "new", "this", "that", "our", "my", "your", "dev", "runtime", "official", "popular"]);
-
-/** Whether `word` has the strict registry-name shape of `eco`. */
-export function strictRegistryName(word: string, eco: CheckEcosystem): boolean {
-  if (word.length < 2 || word.length > 214) return false;
-  switch (eco) {
-    case "npm":
-      return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/.test(word);
-    case "PyPI":
-      return /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$/.test(word);
-    case "crates.io":
-      return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(word);
-    case "Go":
-      return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:\/[A-Za-z0-9._~-]+)+$/.test(word);
-  }
-}
-
-/**
- * The prose cues of a task, read once: for each word, whether a package cue (and no contrary cue) stands
- * beside it, and which ecosystem the cue names (null: any, so the name's own). Linear in the task.
- */
-export function proseCues(task: string): (name: string, eco: CheckEcosystem, primary: CheckEcosystem) => boolean {
-  const text = boundWords(task);
-  // Clause by clause: a sentence end, a semicolon, a line break or "then" ends one.
-  const cues = new Map<string, Set<CheckEcosystem | "any">>();
-  const contrary = new Set<string>();
-  for (const clause of text.split(/[.;!?](?:\s|$)|\n|\bthen\b/i)) {
-    const found = [...clause.matchAll(/@?[A-Za-z0-9][\w.@/~-]*/g)];
-    const words = found.map((m) => strip(m[0], "", ".,:)").toLowerCase());
-    // A manager word that prefixes another (`npm:zqx`, a deno or alias spec) names no manager.
-    const managers = new Set(
-      found
-        .filter((m) => clause[m.index! + m[0].length] !== ":")
-        .map((m) => MANAGER_WORDS[strip(m[0], "", ".,:)").toLowerCase()])
-        .filter((e): e is CheckEcosystem => e !== undefined),
-    );
-    const adding = words.some((w) => ADD_WORDS.has(w));
-    // A clause that sets a credential (`NPM_TOKEN`, "the secret") or names a path (`../x`, `./x`, `~/x`) is
-    // about a local or private thing: no word of it is looked up on a cue (re-check round 3, s10 and r48).
-    if (found.some((m) => /^[A-Z][A-Z0-9]*_[A-Z0-9_]*(?:TOKEN|SECRET|KEY|PASS|PASSWORD|AUTH|CREDENTIALS?)\b/.test(m[0])) || words.some((w) => CREDENTIAL_WORDS.has(w)) || /(?:^|\s)["'`(]?(?:\.{1,2}|~)?[/\\][\w.-]/.test(clause)) {
-      for (const w of words) contrary.add(w);
-      continue;
-    }
-    const mark = (w: string, e: CheckEcosystem | "any") => {
-      if (!cues.has(w)) cues.set(w, new Set());
-      cues.get(w)!.add(e);
-    };
-    for (let k = 0; k < words.length; k++) {
-      const w = words[k];
-      if (PACKAGE_NOUNS[w] !== undefined || ADD_WORDS.has(w) || MANAGER_WORDS[w] !== undefined || FILLER_CUES.has(w)) continue;
-      // A contrary cue within two words either side wins.
-      for (let d = -2; d <= 2; d++) if (d !== 0 && CONTRARY_CUES.has(words[k + d] ?? "")) contrary.add(w);
-      // `@scope/name`: npm.
-      if (/^@[a-z0-9][\w.~-]*\/[a-z0-9]/.test(w)) mark(w, "npm");
-      // A package noun right beside it, over articles: "the left-pad package", "the package left-pad", "zustand library".
-      let b = k - 1;
-      while (b >= 0 && FILLER_CUES.has(words[b])) b--;
-      let a = k + 1;
-      while (a < words.length && FILLER_CUES.has(words[a])) a++;
-      for (const n of [words[b], words[a]]) {
-        const tie = n === undefined ? undefined : PACKAGE_NOUNS[n];
-        if (tie !== undefined) mark(w, tie ?? "any");
-      }
-      // "add X as a (dev) dependency".
-      if (words[k + 1] === "as") {
-        let m = k + 2;
-        while (m < words.length && FILLER_CUES.has(words[m])) m++;
-        const tie = PACKAGE_NOUNS[words[m] ?? ""];
-        if (tie !== undefined) mark(w, tie ?? "any");
-      }
-      // The clause names a manager or registry with an adding verb: "add zustand from npm", "use tokio from crates.io".
-      if (adding) for (const e of managers) mark(w, e);
-    }
-  }
-  return (name, eco, primary) => {
-    const w = name.toLowerCase();
-    if (contrary.has(w) || !strictRegistryName(eco === "npm" ? w : name, eco) || looksLikeSecret(name)) return false;
-    const tied = cues.get(w);
-    if (!tied) return false;
-    // A noun naming no ecosystem ties the word to its own one only, never to every registry.
-    return tied.has(eco) || (tied.has("any") && eco === primary);
-  };
-}
-
-/** The reason a name nothing shows to be a public package is held: actionable in one line. */
-export function notKnownReason(name: string, eco: CheckEcosystem): string {
-  const call = `if it is one, call dependency_check {ecosystem: "${eco}", package: "${name}", to: "latest"}`;
-  const only = eco === "crates.io" || eco === "Go" ? ` (${eco} has no bundled list of popular names: in prose only a cue such as "the ${name} ${eco === "Go" ? "module" : "crate"}" or "add ${name} with ${eco === "Go" ? "go" : "cargo"}" lets the briefing look it up)` : "";
-  return `not looked up: nothing in the task shows ${name} is a public package; ${call}${only}`;
 }

@@ -20,6 +20,7 @@ import type { ResolvedDependency } from "../live/types.js";
 import { detectAllNewPackages } from "../tools/briefing-new-packages.js";
 import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
+import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
 
@@ -213,11 +214,15 @@ describe("3. Cargo's `=` pin is kept when the briefing asks dependency_check", (
   it('add serde_yaml = "0.8" and smallvec = "=1.6.0": the exact pin is read as exactly 1.6.0', async () => {
     const task = 'add serde_yaml = "0.8" and smallvec = "=1.6.0"';
     expect(requested(task, RUST)).toContain("crates.io:smallvec@=1.6.0");
+    // Final design of the 2026-11-25 fixes: neither crate is on a bundled list, so the briefing hands both back,
+    // each at the pin the task writes (Cargo's `=` kept), and dependency_check judges them there.
     const r = await brief(task, RUST);
-    const smallvec = r.requested_versions?.find((v) => v.name === "smallvec");
-    expect(smallvec).toMatchObject({ verdict: "avoid", resolved: "1.6.0" });
+    expect(r.check_these?.arguments.items).toContainEqual({ ecosystem: "crates.io", package: "smallvec", to: "=1.6.0" });
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    const check = (await executeDependencyCheck(null, r.check_these!.arguments, stubIntel(RUST, {}, readyScan()) as never)) as { results: Array<{ package: string; verdict: string; to: string; reason: string }> };
+    const smallvec = check.results.find((v) => v.package === "smallvec");
+    expect(smallvec).toMatchObject({ verdict: "avoid", to: "1.6.0" });
     expect(smallvec?.reason).not.toMatch(/1\.16\.5|\^1\.6\.0/);
-    expect(r.delegation_assessment.level).toBe("human_only");
   });
 });
 
