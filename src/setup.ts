@@ -51,6 +51,7 @@ import jsonc from "jsonc-parser";
 import type { JSONPath, Node, ParseError } from "jsonc-parser";
 
 import { parseSetupArgs } from "./cli-args.js";
+import { claudeCodeReport, claudeConfigDir, claudeMcpAdd, readClaudeCodeState } from "./setup-claude-code.js";
 import { NPX_OPTIONS, PACKAGE, pinnedNpx, readPackageVersion } from "./usage.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -72,7 +73,7 @@ function serverCommand(version: string): { command: string; args: string[] } {
 
 /** The Claude Code command printed instead of editing `~/.claude.json`. */
 export function claudeCodeCommand(version: string): string {
-  return `claude mcp add --scope user 4da -- npx ${NPX_OPTIONS.join(" ")} ${PACKAGE}@${version}`;
+  return claudeMcpAdd(version, "user");
 }
 
 /** `claudeCodeCommand` for the running package. */
@@ -88,10 +89,12 @@ export interface SetupContext {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   home: string;
+  /** The directory setup runs in: Claude Code's local- and project-scope servers for it are read. */
+  cwd?: string;
 }
 
 export function currentContext(): SetupContext {
-  return { platform: process.platform, env: process.env, home: homedir() };
+  return { platform: process.platform, env: process.env, home: homedir(), cwd: process.cwd() };
 }
 
 /** An editor whose MCP config file this setup writes. */
@@ -454,16 +457,6 @@ function snippet(target: EditorTarget): string {
     .join("\n");
 }
 
-/** Whether `~/.claude.json` already has a user-scope `4da` server. Read-only. */
-function claudeCodeHas4da(configPath: string): boolean {
-  try {
-    const root: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
-    return isPlainObject(root) && isPlainObject(root.mcpServers) && "4da" in root.mcpServers;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * An entry's command on one line, for the kept / replacing report. The text is
  * the user's own config: control characters are dropped and the line is capped.
@@ -527,19 +520,13 @@ export function runSetup(options: boolean | SetupOptions = {}, ctx: SetupContext
 
   let found = 0;
 
-  // Claude Code: print the command, never edit ~/.claude.json.
+  // Claude Code: read what it has (setup-claude-code.ts) and print the commands; never edit its files.
   const claudeJson = claudeCodeConfigPath(ctx);
   const claudeDir = pathFor(ctx).join(ctx.home, ".claude");
-  if (existsSync(claudeJson) || existsSync(claudeDir)) {
+  if (existsSync(claudeJson) || existsSync(claudeDir) || existsSync(claudeConfigDir(ctx))) {
     found++;
     log("  Found: Claude Code");
-    if (claudeCodeHas4da(claudeJson)) {
-      log(`  Already configured (user scope, ${claudeJson}).`);
-    } else {
-      log("  Claude Code keeps its MCP servers in ~/.claude.json, which it rewrites");
-      log("  itself; setup does not edit it. Add the server with:");
-      log(`    ${claudeCodeCommand(version)}`);
-    }
+    for (const line of claudeCodeReport(readClaudeCodeState(ctx, claudeJson, version), version)) log(line);
     log("");
   }
 
