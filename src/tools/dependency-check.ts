@@ -472,6 +472,15 @@ function validateItems(raw: unknown): Array<Requested | Refused> {
 function validateItem(r: unknown, i: number): Requested {
   const o = (r ?? {}) as Record<string, unknown>;
   const where = `items[${i}]`;
+  // A field this tool does not define is never ignored: `registry` or `index_url` says where the
+  // package lives, and this tool reads only the public registry, so the item is refused before
+  // anything is sent (pre-publish review 2026-11-26: both were looked up publicly). Own keys only.
+  if (typeof r === "object" && r !== null && !Array.isArray(r)) {
+    const unknown = Object.keys(o).find((k) => !ITEM_FIELDS.has(k));
+    if (unknown !== undefined) {
+      throw new Error(`${where}: unknown field ${JSON.stringify(quoteThirdParty(unknown, 40))}: this tool reads only the public registry and defines only ecosystem, package, to and from; nothing was sent`);
+    }
+  }
   // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
   for (const field of ["package", "to", "from"]) {
     const long = typeof o[field] === "string" ? lengthProblem(`${where}.${field}`, field, o[field] as string) : null;
@@ -501,9 +510,13 @@ function validateItem(r: unknown, i: number): Requested {
     }
     from = f.version;
   }
+  const asked = unquotePackageName(o.package);
   // The same reading of a name every tool uses (package-name.ts): quotes around it are not part of it (r7).
-  return { ecosystem, package: alias ? alias[1] : unquotePackageName(o.package), raw: rawTo, target, ...(from ? { from } : {}) };
+  return { ecosystem, package: alias ? alias[1] : asked, raw: rawTo, target, ...(from ? { from } : {}) };
 }
+
+/** The fields a dependency_check item may have. */
+const ITEM_FIELDS = new Set(["ecosystem", "package", "to", "from"]);
 
 const EXAMPLES: Record<CheckEcosystem, string> = {
   npm: '"7.x" or "^1.20.0"',
