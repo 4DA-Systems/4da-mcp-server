@@ -30,7 +30,7 @@
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
-import { closestPopularPypi, normalizePypiName } from "./briefing-names.js";
+import { checkableSpec, closestPopularPypi, normalizePypiName } from "./briefing-names.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 
 /**
@@ -247,6 +247,12 @@ export function settingName(key: string, isDependency?: (name: string) => boolea
   return !isDependency?.(key);
 }
 
+/** A value that is a version or constraint in some ecosystem's grammar (`3.0.1`, `^1.2`, `0.48`, `v1.6.0`): not a secret's shape. */
+function versionShaped(value: string): boolean {
+  if (SPEC_VALUE.test(value)) return true;
+  return (["npm", "PyPI", "crates.io", "Go"] as const).some((e) => checkableSpec(e, value) !== null || checkableSpec(e, `==${value}`) !== null);
+}
+
 export function screenTask(task: string, isDependency?: (name: string) => boolean): TaskScreen {
   const chars = task.split("");
   const withheld: Withheld[] = [];
@@ -318,6 +324,8 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     if (free(start, end)) holdPackage(m[2], specSource(m[3], "py") ?? "a URL", start, end);
   }
 
+  /** Whether the word at `at` is an operand of an install command on its line (looked back over at most 200 characters). */
+  const installOperand = (at: number) => /\b(?:npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|go)\s+(?:install|i|add|get|require)\b[^;&|\n]{0,200}$/i.test(task.slice(Math.max(0, at - 200), at));
   // 2b. Settings: `password==x`, `DB_PASSWORD=x`, `"secret_token": "x"`, `api_key = "x"`. A setting is not a
   // package: neither read nor listed, and only its name is shown, never its value (fifth blind check, item 2).
   for (const m of task.matchAll(/(?<=^|[\s"'`{,(])(["'`]?)([A-Za-z_][\w.-]{0,60})\1[ \t]{0,4}(={1,3}|:)[ \t]{0,4}(["'`]?)([^\s"'`,}]{1,300})\4/g)) {
@@ -326,6 +334,9 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     // `key: value` only quoted (JSON) or alone on its line (YAML): "Auth: switch to passport" is prose.
     const line = (at: number, dir: 1 | -1) => (dir < 0 ? task.slice(task.lastIndexOf("\n", at - 1) + 1, at) : task.slice(at, (task.indexOf("\n", at) + 1 || task.length + 1) - 1));
     const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (/^[ \t-]*$/.test(line(start, -1)) && /^[ \t]*$/.test(line(end, 1)));
+    // A version or constraint as its value makes it a package (`"json-web-token": "3.0.1"`, `rusoto_credential =
+    // "0.48.0"`), and an install command's operand is never a setting (sixth blind check, item 2).
+    if (versionShaped(m[5]) || installOperand(start)) continue;
     if (colonOk && settingName(m[2], isDependency) && free(start, end)) hold(`a setting named ${m[2].slice(0, 60)}`, `not read: a setting, not a package; its value is never repeated; ${NOT_SENT}`, start, end, true);
   }
 
