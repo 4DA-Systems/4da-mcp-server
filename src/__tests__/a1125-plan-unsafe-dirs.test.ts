@@ -115,6 +115,16 @@ describe("isShellSafeDir: a plain path on bash, cmd and PowerShell", () => {
     expect(out.reasons[1]).toBe(`in ${unsafeDirLabel("a$(x)")}.`);
   });
 
+  it("hundreds of unsafe directories over a large answer are rewritten quickly", () => {
+    const dirs = Array.from({ length: 400 }, (_, i) => `packages/d${i}$(x)`);
+    const reasons = Array.from({ length: 2000 }, (_, i) => `run \`npm ci\` in packages/d${i % 400}$(x); ${"plain words ".repeat(15)}`);
+    const start = process.hrtime.bigint();
+    const out = escapeUnsafeDirs({ reasons }, dirs) as { reasons: string[] };
+    expect(Number(process.hrtime.bigint() - start) / 1e6).toBeLessThan(2000);
+    expect(out.reasons.some((r) => r.includes("$(x)"))).toBe(false);
+    expect(escapeUnsafeDirs({ projectPath: "C:/w/d1$(x)" }, ["d1$(x)"])).toEqual({ projectPath: "C:/w/d1$(x)" });
+  });
+
   it("a Windows spelling of a nested unsafe directory is rewritten too", () => {
     const out = escapeUnsafeDirs({ note: "C:\\p\\packages\\z$(PWN13)\\package-lock.json" }, ["packages/z$(PWN13)"]) as { note: string };
     expect(out.note).not.toContain("$(PWN13)");

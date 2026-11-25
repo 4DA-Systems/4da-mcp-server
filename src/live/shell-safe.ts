@@ -107,8 +107,11 @@ export function unsafeDirWords(dir: string): string {
   return `the directory ${unsafeDirLabel(dir)} has a name that is not safe to put in a command (it holds characters a shell reads as code, or starts with "-" or "@"), so no command or directory is named for it: handle that directory by hand, with its name quoted`;
 }
 
-/** Keys whose strings are commands: never rewritten (a command is only ever named for a safe directory). */
-const COMMAND_KEYS = new Set(["command", "run", "installFix"]);
+/**
+ * Keys whose strings are kept verbatim: commands (only ever named for a safe directory) and the
+ * project's own root, which the caller chose and an agent passes back as project_path.
+ */
+const VERBATIM_KEYS = new Set(["command", "run", "installFix", "projectPath", "projectScope", "project_path"]);
 const NAME_START = /[\p{L}\p{N}._-]/u;
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -139,7 +142,7 @@ export function escapeUnsafeDirs<T>(value: T, dirs: Iterable<string>): T {
     return s;
   };
   const walk = (v: unknown, key: string | null): unknown => {
-    if (typeof v === "string") return key !== null && COMMAND_KEYS.has(key) ? v : rewrite(v);
+    if (typeof v === "string") return key !== null && VERBATIM_KEYS.has(key) ? v : rewrite(v);
     if (Array.isArray(v)) return v.map((x) => walk(x, key));
     if (v && typeof v === "object") {
       const out: Record<string, unknown> = {};
