@@ -760,8 +760,8 @@ function pnpmWorkspaceVersions(text, out) {
   let top = null;
   let catalog = null;
   let catalogIndent = -1;
-  // A byte order mark is not part of the first key (`﻿overrides:` read as indented hid the section).
-  for (const raw of text.replace(/^﻿/, "").split("\n")) {
+  // A byte order mark is not part of the first key (`\uFEFFoverrides:` read as indented hid the section).
+  for (const raw of text.replace(/^\uFEFF/, "").split("\n")) {
     tick();
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
