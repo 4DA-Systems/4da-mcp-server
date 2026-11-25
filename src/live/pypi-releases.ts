@@ -160,9 +160,7 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     const key = `pypi-releases:v2:${normalized}`;
     const hit = this.cache.get<PackageReleaseIndex>(key);
     if (hit) return { status: "ok", data: hit };
-    if (!this.rateLimiter.consume("pypi")) {
-      return { status: "unreachable", detail: "PyPI rate limit reached for this minute" };
-    }
+    if (!this.rateLimiter.consume("pypi")) return ownLimit(this.rateLimiter, "pypi");
     let response: Response;
     try {
       response = await fetchWithTimeout(
@@ -207,7 +205,7 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     if (hit) return { status: "ok", data: hit };
     if (!parsePep440(version)) return { status: "not_found", detail: "not a PEP 440 version" };
     // The registry-CDN bucket (as fix-path lookups): a requirement read never starves the release lists.
-    if (!this.rateLimiter.consume("fixpath-registry")) return { status: "unreachable", detail: "PyPI rate limit reached for this minute" };
+    if (!this.rateLimiter.consume("fixpath-registry")) return ownLimit(this.rateLimiter, "fixpath-registry");
     let response: Response;
     try {
       response = await fetchWithTimeout(`${PYPI_URL}/${encodeURIComponent(normalized)}/${encodeURIComponent(version)}/json`, { headers: { Accept: "application/json" } }, TIMEOUT_MS);
@@ -232,6 +230,19 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     const lookup = await this.getReleases(name);
     return lookup.status === "ok" ? { status: "ok", data: lookup.data.createdAt } : lookup;
   }
+}
+
+/**
+ * A PyPI read this server's own request limit held back: never sent, so PyPI is not blamed, and the
+ * answer says when to ask again (pre-publish audit 2026-11-25, C-4, as 6.5.0 did for the Go proxy).
+ */
+function ownLimit(rateLimiter: RateLimiter, bucket: "pypi" | "fixpath-registry"): Extract<RegistryLookup<never>, { status: "unreachable" }> {
+  const retryAfterSeconds = rateLimiter.retryAfterSeconds(bucket);
+  return {
+    status: "unreachable",
+    detail: `this server's own request limit for PyPI was reached, so the read was not sent (it can be made in ${retryAfterSeconds} s)`,
+    ownLimit: { registry: "PyPI", retryAfterSeconds },
+  };
 }
 
 function errorText(err: unknown): string {

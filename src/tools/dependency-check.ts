@@ -56,6 +56,7 @@ import type { ResolvedDependency } from "../live/types.js";
 import { maxOf } from "../array-utils.js";
 import { callFinding, callFindingKey, recordedCallHosts, secondsText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { recordVerdicts } from "../check-ledger.js";
+import { isOfflineMode } from "../env-flags.js";
 import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
 import type { Verdict } from "./dependency-check-signals.js";
@@ -71,7 +72,7 @@ import { itemResults, nameCrateSpellings, readFirstPublished } from "./dependenc
 import { gatherFindings } from "./dependency-check-findings.js";
 import { noteNewerRust } from "./dependency-check-rust-version.js";
 import { adviseNpmNoSafeRelease, caveatGoPicks, checkSameLines, findAffectedExact, offerCleanOutsideRanges } from "./dependency-check-alternatives.js";
-import { advisoryFacts, dropIncompleteLists, findContradictions, markBatchUnread, queryBatch, readDeclaredNotices } from "./dependency-check-batch.js";
+import { advisoryFacts, dropIncompleteLists, findContradictions, forgetUnverifiedClean, markBatchUnread, queryBatch, readDeclaredNotices } from "./dependency-check-batch.js";
 import { judgeReleaseContents, redateGoTargets, resolveItems } from "./dependency-check-resolve.js";
 import { adoptPublishedCrateNames, firstLookups, passContext } from "./dependency-check-lookups.js";
 
@@ -416,6 +417,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   const batch = await queryBatch(ctx, lookups, items);
   const declaredFor = await readDeclaredNotices(ctx, lookups, items, batch);
   const contradictionOf = findContradictions(ctx, items, batch);
+  forgetUnverifiedClean(ctx, items, batch);
   const advisoriesFor = advisoryFacts(batch, contradictionOf, declaredFor);
 
   const affectedExact = await findAffectedExact(ctx, lookups, items, advisoriesFor);
@@ -598,6 +600,25 @@ function refusedText(results: ItemResult[]): string {
   return `NOT CHECKED: ${refused} of ${n} item${n === 1 ? "" : "s"} ${refused === 1 ? "was" : "were"} refused as written (not_checked: "input"; each reason says why): nothing was looked up for ${refused === 1 ? "it" : "them"}. `;
 }
 
+/**
+ * The summary's opening when no item was checked (every verdict `unknown`) and nothing before it
+ * says so already, or "". With the network gone the summary read "4 checked: 4 unknown" and led with
+ * nothing an agent reads as incomplete (pre-publish audit 2026-11-25, C-6 / H-4).
+ */
+function noneCheckedText(results: ItemResult[], summary: string, offline: boolean): string {
+  if (results.length === 0 || summary.startsWith("NOT CHECKED") || !results.every((r) => r.verdict === "unknown")) return "";
+  const n = results.length;
+  const why = !offline ? "each reason says why" : isOfflineMode() ? "live lookups are disabled (FOURDA_OFFLINE)" : "OSV.dev and the registries could not be read; each reason says what failed";
+  return `NOT CHECKED: ${n === 1 ? "the item" : `none of the ${n} items`} could be checked (${why}). Nothing here is a clean result. `;
+}
+
+/** `_meta.offline_note`: what `offline: true` means in this answer. */
+function offlineNote(): string {
+  return isOfflineMode()
+    ? "Live lookups are disabled (FOURDA_OFFLINE): nothing was asked of OSV.dev or a registry."
+    : "OSV.dev could not be read in this call (FOURDA_OFFLINE is not set: the network, a proxy or OSV.dev failed), so some answers are missing; asking again may read it.";
+}
+
 function finish(checkedAt: string, results: ItemResult[], meta: { offline: boolean; osvCached: boolean; private?: number; registryNotice?: string; timeBudget?: { unfinished: number; ms: number } }) {
   // The counts are of the items looked up; the refused ones are named before them.
   const looked = results.filter((r) => r.not_checked !== "input");
@@ -608,11 +629,12 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
   // Of the items never looked up as private, those withheld only because a lockfile could not be read.
   const unread = results.filter((r) => r.not_checked === "private" && r.unreadable_file).length;
   const priv = (meta.private ?? 0) - unread;
+  const summary = refusedText(results) + ownLimitText(results) + (meta.timeBudget
+    ? `NOT CHECKED: ${meta.timeBudget.unfinished} of ${results.length} item${results.length === 1 ? "" : "s"} did not finish within ${secondsText(meta.timeBudget.ms)} (not_checked: "time_budget"): call dependency_check again for ${meta.timeBudget.unfinished === 1 ? "it" : "them"}; their lookups keep running and are cached. The other verdicts are final. ${summaryLine(looked, parts)}`
+    : summaryLine(looked, parts));
   return {
     checked_at: checkedAt,
-    summary: refusedText(results) + ownLimitText(results) + (meta.timeBudget
-      ? `NOT CHECKED: ${meta.timeBudget.unfinished} of ${results.length} item${results.length === 1 ? "" : "s"} did not finish within ${secondsText(meta.timeBudget.ms)} (not_checked: "time_budget"): call dependency_check again for ${meta.timeBudget.unfinished === 1 ? "it" : "them"}; their lookups keep running and are cached. The other verdicts are final. ${summaryLine(looked, parts)}`
-      : summaryLine(looked, parts)),
+    summary: noneCheckedText(results, summary, meta.offline) + summary,
     results,
     _meta: {
       ...checkSources(results),
@@ -620,6 +642,7 @@ function finish(checkedAt: string, results: ItemResult[], meta: { offline: boole
       untrusted_text: UNTRUSTED_TEXT_FIELDS.dependency_check,
       privacy: PRIVACY_NOTE,
       offline: meta.offline,
+      ...(meta.offline ? { offline_note: offlineNote() } : {}),
       osv_cached: meta.osvCached,
       ...(meta.timeBudget ? { call_budget_exceeded: true, unfinished_items: meta.timeBudget.unfinished } : {}),
       ...(meta.registryNotice ? { registry_notice: meta.registryNotice } : {}),

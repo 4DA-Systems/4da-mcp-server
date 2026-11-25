@@ -121,6 +121,7 @@ export function shapeDependencyCheck(answer: DetailedAnswer, format: DependencyC
       verdict_rule: meta.verdict_rule,
       untrusted_text: meta.untrusted_text,
       offline: meta.offline,
+      ...(meta.offline_note ? { offline_note: meta.offline_note } : {}),
       osv_cached: meta.osv_cached,
       ...(meta.private_packages ? { private_packages: meta.private_packages } : {}),
       ...(meta.unreadable_lockfile ? { unreadable_lockfile: meta.unreadable_lockfile } : {}),

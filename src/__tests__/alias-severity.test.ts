@@ -119,10 +119,10 @@ describe("every tool grades GO-2024-3333 HIGH, per GHSA-w32m-9786-jp63", () => {
     expect(health.aliasSeverity).toEqual({ rated: 1, unresolved: [], ungraded: [], reason: null });
   });
 
-  it("no answer for the alias: unknown everywhere, listed as unresolved, and dependency_check says review", async () => {
+  it("no answer for the alias: unknown everywhere, listed as unresolved, and dependency_check counts it as high (avoid; audit 2026-11-25 C-2)", async () => {
     records.set("GHSA-w32m-9786-jp63", "fail");
     const out = await executeDependencyCheck(noDb, { items: [{ ecosystem: "Go", package: "golang.org/x/net", to: "v0.20.0" }] }, live(), { now: NOW });
-    expect(out.results[0].verdict).toBe("review");
+    expect(out.results[0].verdict).toBe("avoid");
     const scan = (await executeVulnerabilityScan(null, { project_path: project, response_format: "detailed" }, live())) as Record<string, any>;
     expect(scan._meta.alias_severity.unresolved).toEqual(["GHSA-w32m-9786-jp63"]);
     expect(scan._meta.alias_severity.ungraded).toEqual(["GO-2024-3333"]);
