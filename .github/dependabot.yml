@@ -44,6 +44,15 @@ updates:
       # line stops receiving security releases or vitest drops support for it.
       - dependency-name: "vite"
         versions: [">=8"]
+      # DEFERRED 2026-11-25 (#116). undici 8 does not run on Node 22.12, the
+      # floor this package supports ("engines" in package.json): #116's
+      # "Node 22.12" leg failed with "Cannot read properties of undefined
+      # (reading 'bind')" while every other leg passed. undici is the server's
+      # HTTP client, pinned exactly. Lift this when the engines floor moves to
+      # a Node release undici 8 supports. 7.x releases still arrive: this entry
+      # covers 8 and later only.
+      - dependency-name: "undici"
+        versions: [">=8"]
 
   # The mcpb CLI that packs the .mcpb bundle, pinned with its own lockfile
   # (tools/mcpb/package-lock.json) so the package's audit stays its own.
