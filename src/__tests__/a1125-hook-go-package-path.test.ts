@@ -23,7 +23,7 @@ afterEach(() => s.dispose());
 
 const bash = (command: string, tool = "Bash") => ({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command } });
 const G = (pkg: string, version: string, verdict: string, extra: Record<string, string> = {}) => ({ ecosystem: "Go", package: pkg, version, verdict, ...extra });
-const WAY = "check the module that contains the package and name that module in the command instead";
+const WAY = "check the module that contains the package, then name the module, not the package: go get <module>@<version>";
 
 describe("a verdict for one module never releases a longer path", () => {
   it.each([

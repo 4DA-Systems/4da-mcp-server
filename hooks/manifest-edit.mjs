@@ -755,111 +755,43 @@ function yamlScalar(raw) {
 }
 
 /**
- * A YAML line of a flow mapping, read once: the brackets it opens less those it closes (outside
- * quotes) and its text before its comment.
+ * A pnpm-workspace.yaml text's non-blank lines, trailing blanks trimmed, CRLF and a byte order mark
+ * read away. `#` lines are kept: a `#` at a line start can sit inside a quoted scalar
+ * that runs over lines (pnpmHasBrace skips them, the change test does not).
  */
-function flowBrackets(line) {
-  let n = 0;
-  let quote = "";
-  let i = 0;
-  for (; i < line.length; i++) {
-    const ch = line[i];
-    if (quote) {
-      if (ch === quote) quote = "";
-      else if (ch === "\\" && quote === '"') i++;
-    } else if (ch === "'" || ch === '"') quote = ch;
-    else if (ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
-    else if (ch === "{" || ch === "[") n++;
-    else if (ch === "}" || ch === "]") n--;
+function pnpmContentLines(text) {
+  const out = [];
+  // YAML ends a line at a lone CR too (pnpm reads `# note\roverrides:` as two lines).
+  for (const raw of text.replace(/^\uFEFF/, "").split(/\r\n?|\n/)) {
+    tick();
+    const line = raw.trimEnd();
+    if (line) out.push(line);
   }
-  return { n, text: line.slice(0, i) };
+  return out;
 }
 
 /**
- * The entries of a whole flow mapping's text, each without blanks: what sits between the commas of
- * its outer brackets (a nested mapping stays inside its entry). Compared as a set, so an entry
- * moved, a blank or a trailing comma changes nothing, and `{}` has none.
+ * Whether pnpm-workspace.yaml content lines hold a flow mapping the hook does not read: a `{` or `}`
+ * on a line that is not a `#` line, once each exact empty mapping (`{}`, `{ }`) is taken out. No
+ * quote or comment is read: a reader of YAML's flow syntax could not be made right in small steps
+ * (three blind checks of the a1125 hook lane: `''` escapes, tags and anchors before a quote,
+ * carried quotes, block scalars holding braces), so a brace anywhere stands for one.
  */
-function flowEntries(text) {
-  const entries = [];
-  let cur = "";
-  let depth = 0;
-  let quote = "";
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quote) {
-      if (ch === quote) quote = "";
-      else if (ch === "\\" && quote === '"') cur += text[i++];
-      cur += ch;
-      continue;
-    }
-    if (/\s/.test(ch)) continue;
-    if (ch === "'" || ch === '"') quote = ch;
-    else if (ch === "{" || ch === "[") {
-      if (++depth === 1) {
-        if (cur) entries.push(cur);
-        cur = "";
-        continue;
-      }
-    } else if (ch === "}" || ch === "]") {
-      if (--depth === 0) {
-        if (cur) entries.push(cur);
-        cur = "";
-        continue;
-      }
-    } else if (ch === "," && depth === 1) {
-      if (cur) entries.push(cur);
-      cur = "";
-      continue;
-    }
-    cur += ch;
-  }
-  if (cur) entries.push(cur);
-  return entries;
-}
-
-/** A YAML value without its anchor and tag (`&c { ... }`, `!!map { ... }`), its comment dropped. */
-function withoutProperties(raw) {
-  let v = raw === undefined ? "" : flowBrackets(raw).text.trim();
-  for (let k = 0; k < 2; k++) v = v.replace(/^(?:&\S+|!\S*)(?:\s+|$)/, "");
-  return v;
-}
+const pnpmHasBrace = (lines) => lines.some((line) => !line.trimStart().startsWith("#") && /[{}]/.test(line.replace(/\{[ \t]*\}/g, "")));
 
 /**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
  * name and section (the same package in two catalogs is two entries). Only plain `key: value`
- * lines are read (a value `npm:name@version` as the package and version it names). A section or
- * named catalog written as a flow mapping (`catalog: { lodash: 4.17.20 }`, on one line or more, on
- * the line after its key, after an anchor or a tag) is not read: each of its entries is recorded
- * as unread (UNREAD_LINE), which holds the edit as not read when an entry is new or changed, and
- * never when none is (an entry moved, a comment or blank changed, `{}`). One that never closes is
- * not YAML pnpm can read, and records nothing.
+ * lines are read (a value `npm:name@version` as the package and version it names); flow mappings
+ * are not (wholeFileChanges holds a changed file that has one).
  */
 function pnpmWorkspaceVersions(text, out) {
   let top = null;
   let catalog = null;
   let catalogIndent = -1;
-  // How many brackets of a flow mapping are open: its lines run until they close (js-yaml, which
-  // pnpm reads this file with, takes continuation lines at any indent, column 0 included).
-  let flow = 0;
-  let flowText = [];
-  let flowWhere = "";
-  const flowStart = (raw) => /^[{[]/.test(withoutProperties(raw));
-  const flowDone = () => {
-    const name = `${UNREAD_LINE}a pnpm-workspace.yaml ${flowWhere.split(".")[0]} written as a flow mapping ({ ... }), which the hook does not read: write it as block lines, one "name: version" each`;
-    for (const entry of flowEntries(flowText.join("\n"))) put(out, name, null, `${flowWhere}:${entry}`);
-    flowText = [];
-  };
-  /** A flow mapping that opens with `value` (a line's text after its key, or a whole line) under `where`. */
-  const openFlow = (value, where) => {
-    flowWhere = where;
-    const read = flowBrackets(withoutProperties(value));
-    flowText = [read.text];
-    flow = Math.max(read.n, 0);
-    if (flow === 0) flowDone();
-  };
   // A byte order mark is not part of the first key (`\uFEFFoverrides:` read as indented hid the section).
-  for (const raw of text.replace(/^\uFEFF/, "").split("\n")) {
+  // YAML ends a line at a lone CR too (pnpm reads `# note\roverrides:` as two lines).
+  for (const raw of text.replace(/^\uFEFF/, "").split(/\r\n?|\n/)) {
     tick();
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
@@ -872,37 +804,19 @@ function pnpmWorkspaceVersions(text, out) {
     }
     const indent = line.length - line.trimStart().length;
     const m = /^\s*(?:'([^'\n]{1,214})'|"([^"\n]{1,214})"|([^\s:#'"][^:#\n]{0,213}?))\s*:(?:\s+(.*))?$/.exec(line);
-    if (flow > 0) {
-      const read = flowBrackets(line);
-      flowText.push(read.text);
-      flow += read.n;
-      if (flow <= 0) {
-        flow = 0;
-        flowDone();
-      }
-      continue;
-    }
     if (indent === 0) {
       // A quoted key (`"catalog":`) is the same key (D-M1).
       const key = m ? (m[1] ?? m[2] ?? m[3]) : "";
       top = m && yamlScalar(m[4]) === null && PNPM_VERSION_SECTIONS.has(key) ? key : null;
       catalog = null;
-      if (top !== null && flowStart(m[4])) openFlow(m[4], top);
       continue;
     }
-    if (top === null) continue;
-    // A flow mapping on the line after its key (`catalog:\n  { lodash: 4.17.20 }`).
-    if (/^[{[]/.test(trimmed)) {
-      openFlow(trimmed, top === "catalogs" && catalog !== null && indent > catalogIndent ? `catalogs.${catalog}` : top);
-      continue;
-    }
-    if (!m) continue;
+    if (!m || top === null) continue;
     const key = m[1] ?? m[2] ?? m[3];
     const value = yamlScalar(m[4]);
     if (top === "catalogs" && value === null) {
       catalog = key;
       catalogIndent = indent;
-      if (flowStart(m[4])) openFlow(m[4], `catalogs.${catalog}`);
       continue;
     }
     if (value === null) continue;
@@ -920,7 +834,9 @@ function pnpmWorkspaceVersions(text, out) {
     } else if (!/^[~^<>=*\dvxX]/.test(value)) continue;
     if (name === null) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
-    put(out, name, top === "catalogs" ? `catalogs.${catalog}` : top, spec);
+    const section = top === "catalogs" ? `catalogs.${catalog}` : top;
+    // A selector, parent-path or alias key is judged, but declares no version of the name (NARROW).
+    put(out, name, name === key ? section : `${section}${NARROW}${key}`, spec);
   }
 }
 
@@ -972,7 +888,8 @@ function npmWholeDependencies(text) {
       if (!name) continue;
       if (typeof value === "string") {
         const d = npmDeclared(name, value);
-        if (d) out.push({ name: d.name, section, spec: d.spec });
+        // Under a parent, behind a selector or parent path, or an alias: judged, but no declaration of the name (NARROW).
+        if (d) out.push({ name: d.name, section: depth > 0 || name !== key || d.name !== name ? `${section}${NARROW}${key}` : section, spec: d.spec });
       } else if (isObject(value) && depth < 32) overrides(value, `${section}/${key}`, name, depth + 1);
     }
   };
@@ -1151,16 +1068,16 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
   return out;
 }
 
-/**
- * The start of a declaredVersions name that is no package: a line a reader could not read, the
- * reason after it and the line's text as its spec. diffVersions holds the call as not read when
- * such a line is new or changed, and passes over it when it is unchanged: a line the hook cannot
- * read must not hold every later edit of a file that already has it.
- */
-const UNREAD_LINE = "\u0001";
-
 /** The package name of a declaredVersions key (which may carry its section after a NUL). */
 const keyName = (key) => key.split("\0")[0];
+
+/**
+ * Marks a declaredVersions section as narrow: an override under one parent, behind a version
+ * selector or parent path, or an alias under another name. Its own key's old value still counts
+ * as unchanged, but it declares no version of the name for diffVersions' "declared elsewhere" rule
+ * (fourth blind check of the a1125 hook lane: `"lodash@<4": 3.10.1` let `catalog: lodash 3.10.1` pass).
+ */
+const NARROW = "\u0002";
 
 /** Changed or added dependency versions between two snippets of one manifest. */
 function versionChanges(file, before, after, disk) {
@@ -1201,6 +1118,8 @@ function diffVersions(old, now, same = (spec) => spec) {
   const before = new Map();
   for (const [key, specs] of old) {
     tick();
+    // A narrow entry (one parent, a selector's range, another name) is no declaration for the whole tree.
+    if (key.includes(NARROW)) continue;
     const name = keyName(key);
     const all = before.get(name) ?? new Set();
     for (const spec of specs) all.add(same(spec));
@@ -1213,13 +1132,9 @@ function diffVersions(old, now, same = (spec) => spec) {
     const name = keyName(key);
     const prev = old.get(key) ?? [];
     const anywhere = before.get(name) ?? new Set();
-    // A line the reader could not read, new or changed in this edit: the edit is held as not read.
-    if (name.startsWith(UNREAD_LINE)) {
-      if (specs.some((spec) => !anywhere.has(spec))) refuse(name.slice(UNREAD_LINE.length));
-      continue;
-    }
+    const own = new Set(prev.map((spec) => same(spec)));
     for (const spec of specs) {
-      if (anywhere.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
+      if (anywhere.has(same(spec)) || own.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
       seen.add(`${name}\0${same(spec)}`);
       const from = prev.length === 1 ? prev[0] : prev.length === 0 && anywhere.size === 1 ? [...anywhere][0] : null;
       changes.push({ name, from, to: spec });
@@ -1230,6 +1145,22 @@ function diffVersions(old, now, same = (spec) => spec) {
 
 /** Changed or added dependency versions between two whole texts of one manifest (both show every section). */
 function wholeFileChanges(file, before, after) {
+  if (file === "pnpm-workspace.yaml") {
+    // A flow mapping in the new text: the hook does not claim to read the file. Any change of its
+    // content lines is held as not read, and no verdict releases it; a re-save, a comment or a
+    // blank line changed holds nothing.
+    const now = pnpmContentLines(after);
+    if (pnpmHasBrace(now)) {
+      const was = pnpmContentLines(before);
+      if (was.length !== now.length || was.some((line, i) => line !== now[i])) {
+        refuse(
+          "pnpm-workspace.yaml holds { or } outside a comment line, which this hook does not read exactly (a flow mapping, a brace glob, a quoted or commented brace), and this edit changes the file",
+          `No dependency_check verdict releases this edit. To make the file readable: write each flow mapping as block lines, one "name: version" per line; write a brace glob ('*{eslint,prettier}*', 'packages/{a,b}') as separate entries; move a brace in a trailing comment to a comment line of its own; take any other brace (in a quoted value or a block scalar) out of the file. Then the versions it sets are judged as in any other edit (call dependency_check for each one the denial names).`,
+        );
+      }
+      return [];
+    }
+  }
   const versionsOf = (text) => {
     const context = fileContext(text);
     return declaredVersions(file, text, () => context, 0, true);
@@ -1293,10 +1224,15 @@ let unreadPart = null;
 let deadline = Infinity;
 
 /** Marks this call as not read because of `part` (the first one counts); returns null, for a reader's `return`. */
-function refuse(part) {
-  if (unreadPart === null) unreadPart = part;
+function refuse(part, remedy = null) {
+  if (unreadPart === null) {
+    unreadPart = part;
+    unreadRemedy = remedy;
+  }
   return null;
 }
+/** What releases the first part that could not be read, when it is not the usual remedy (notReadDenial). */
+let unreadRemedy = null;
 
 /** Thrown out of a reader's loop once the call is past its time budget (preToolUse holds it). */
 const TOO_SLOW = new Error("over the time budget");
@@ -2807,7 +2743,7 @@ function denialFor(introduced, ledger, dir, what) {
     const batches = unchecked.length > MAX_CALL_ITEMS ? ` (the first ${MAX_CALL_ITEMS}; this ${what} names ${unchecked.length}, so call again for the rest)` : "";
     const one = unchecked.length === 1;
     lines.push(
-      `- ${named}: ${fresh.length === 0 ? "no proceed or review verdict" : "no dependency_check verdict"} in the last 24 hours. If ${one ? "it is the package" : "they are the packages"} you mean to add, call the 4da MCP tool dependency_check ${JSON.stringify({ items })}${batches}, and this ${what} will pass once that call answers proceed.`,
+      `- ${named}: ${fresh.length === 0 ? "no proceed or review verdict" : "no dependency_check verdict"} in the last 24 hours. If ${one ? "it is the package" : "they are the packages"} you mean to add, call the 4da MCP tool dependency_check ${JSON.stringify({ items })}${batches}, and this ${what} will pass once that call answers proceed or review.`,
     );
     // dependency_check reads Go modules and answers unknown for a package path, so a command that
     // names one could never pass (audit 2026-11-25, D-M3). The hook cannot know where a module ends,
@@ -2816,7 +2752,7 @@ function denialFor(introduced, ledger, dir, what) {
     const goPaths = what === "command" ? unchecked.filter(({ c }) => c.ecosystem === "Go") : [];
     if (goPaths.length > 0) {
       lines.push(
-        `- ${goPaths.slice(0, 8).map(({ c }) => quotedChange(c)).join(", ")}${goPaths.length > 8 ? `, and ${goPaths.length - 8} more` : ""}: a Go path may be a package inside a module, and dependency_check reads modules: it answers unknown for a package path (golang.org/x/net/http2 is a package of the module golang.org/x/net). If so, check the module that contains the package and name that module in the command instead (go get golang.org/x/net@v0.23.0, not go get golang.org/x/net/http2@v0.23.0): this ${what} passes once dependency_check answers proceed for each path exactly as the ${what} names it. A verdict for a module never releases a longer path.`,
+        `- ${goPaths.slice(0, 8).map(({ c }) => quotedChange(c)).join(", ")}${goPaths.length > 8 ? `, and ${goPaths.length - 8} more` : ""}: a Go path may be a package inside a module, and dependency_check reads modules: it answers unknown for a package path (golang.org/x/net/http2 is a package of the module golang.org/x/net). If so, check the module that contains the package, then name the module, not the package: go get <module>@<version>. This ${what} passes once dependency_check answers proceed or review for each path exactly as the ${what} names it. A verdict for a module never releases a longer path.`,
       );
     }
     lines.push(
@@ -2872,6 +2808,7 @@ function introducedBy(input) {
  */
 function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
   unreadPart = null;
+  unreadRemedy = null;
   // From the hook's own start: Node's start-up and reading stdin count against the budget too.
   deadline = readBudgetMs >= 0 ? Math.min(performance.now() + readBudgetMs, mainStartedAt === null ? Infinity : mainStartedAt + readBudgetMs + 500) : -1;
   try {
@@ -3102,6 +3039,7 @@ function namesInstall(command, dialect) {
 
 /** The denial for a call that could not be read whole: which part, and what to do. */
 function notReadDenial(what, part) {
+  if (unreadRemedy) return `4DA guard: this ${what} was stopped before it ran: it could not be read (${part}), so the dependency versions it would install were not checked. ${unreadRemedy}`;
   return `4DA guard: this ${what} was stopped before it ran: it could not be read (${part}), so the dependency versions it would install were not checked. Split it into plain commands or smaller edits, each naming the versions it installs (and keep comments and markers short), and call the 4da MCP tool dependency_check for each version first.`;
 }
 
