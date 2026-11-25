@@ -34,6 +34,16 @@ updates:
       # already matches ours.) Lift this once a Node 22 win32 prebuild exists.
       - dependency-name: "better-sqlite3"
         versions: [">=13"]
+      # DEFERRED 2026-11-25 (#51). pnpm-workspace.yaml caps vite below 8 with
+      # an override (`vite: ">=7.3.5 <8"`), so a Dependabot major bump edits
+      # package.json to "~8.x" while the lockfile, and every test, stay on
+      # vite 7: #51 went green that way without ever installing vite 8. vite
+      # is only the engine under vitest here and ships to nobody. Moving to 8
+      # is one deliberate change (the devDependency AND the override together,
+      # then the whole suite on the three platforms). Lift this when the 7.x
+      # line stops receiving security releases or vitest drops support for it.
+      - dependency-name: "vite"
+        versions: [">=8"]
 
   # The mcpb CLI that packs the .mcpb bundle, pinned with its own lockfile
   # (tools/mcpb/package-lock.json) so the package's audit stays its own.
