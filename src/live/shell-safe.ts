@@ -111,7 +111,7 @@ export function unsafeDirWords(dir: string): string {
  * Keys whose strings are kept verbatim: commands (only ever named for a safe directory) and the
  * project's own root, which the caller chose and an agent passes back as project_path.
  */
-const VERBATIM_KEYS = new Set(["command", "run", "installFix", "projectPath", "projectScope", "project_path"]);
+const VERBATIM_KEYS = new Set(["command", "run", "installFix", "projectPath", "projectScope", "project_path", "project_root"]);
 const NAME_START = /[\p{L}\p{N}._-]/u;
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
