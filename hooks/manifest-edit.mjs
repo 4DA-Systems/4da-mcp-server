@@ -742,7 +742,10 @@ function yamlScalar(raw) {
     const end = v.indexOf(q, 1);
     return end > 1 ? v.slice(1, end) : null;
   }
-  // The comment is found by a plain search (one blank, then `#`) and dropped before the bound.
+  // The comment is found by a plain search (one blank, then `#`) and dropped before the bound. A
+  // value that starts with `#` is all comment (`catalog: # shared versions` has no value; it hid
+  // the section: audit 2026-11-25, D-M1).
+  if (v.startsWith("#")) return null;
   const comment = v.search(/\s#/);
   if (comment >= 0) v = v.slice(0, comment);
   v = v.trim();
@@ -751,15 +754,44 @@ function yamlScalar(raw) {
   return v;
 }
 
+/** The brackets a YAML line opens less those it closes, outside quotes and before its comment (one pass). */
+function flowBrackets(line) {
+  let n = 0;
+  let quote = "";
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+      else if (ch === "\\" && quote === '"') i++;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
+    else if (ch === "{" || ch === "[") n++;
+    else if (ch === "}" || ch === "]") n--;
+  }
+  return n;
+}
+
 /**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
  * name and section (the same package in two catalogs is two entries). Only plain `key: value`
- * lines are read; flow mappings and anchors are not.
+ * lines are read (a value `npm:name@version` as the package and version it names). A section or
+ * named catalog written as a flow mapping (`catalog: { lodash: 4.17.20 }`, on one line or more) is
+ * not read: each of its lines is recorded as unread (UNREAD_LINE), which holds the edit as not read
+ * when that line is new or changed, and never when it is unchanged.
  */
 function pnpmWorkspaceVersions(text, out) {
   let top = null;
   let catalog = null;
   let catalogIndent = -1;
+  // How many brackets of a flow mapping are open: its lines run until they close (js-yaml, which
+  // pnpm reads this file with, takes continuation lines at any indent, column 0 included).
+  let flow = 0;
+  const flowStart = (raw) => raw !== undefined && /^[{[]/.test(raw.trim());
+  const unread = (line) => {
+    // Compared without its comment and blanks: a comment or spacing changed is no version changed.
+    const at = line.search(/\s#/);
+    put(out, `${UNREAD_LINE}a pnpm-workspace.yaml ${top} written as a flow mapping ({ ... }), which the hook does not read: write it as block lines, one "name: version" each`, null, (at >= 0 ? line.slice(0, at) : line).replace(/\s+/g, ""));
+  };
   // A byte order mark is not part of the first key (`\uFEFFoverrides:` read as indented hid the section).
   for (const raw of text.replace(/^\uFEFF/, "").split("\n")) {
     tick();
@@ -774,9 +806,20 @@ function pnpmWorkspaceVersions(text, out) {
     }
     const indent = line.length - line.trimStart().length;
     const m = /^\s*(?:'([^'\n]{1,214})'|"([^"\n]{1,214})"|([^\s:#'"][^:#\n]{0,213}?))\s*:(?:\s+(.*))?$/.exec(line);
+    if (flow > 0) {
+      unread(line);
+      flow += flowBrackets(line);
+      continue;
+    }
     if (indent === 0) {
-      top = m && yamlScalar(m[4]) === null && PNPM_VERSION_SECTIONS.has(m[3] ?? "") ? m[3] : null;
+      // A quoted key (`"catalog":`) is the same key (D-M1).
+      const key = m ? (m[1] ?? m[2] ?? m[3]) : "";
+      top = m && yamlScalar(m[4]) === null && PNPM_VERSION_SECTIONS.has(key) ? key : null;
       catalog = null;
+      if (top !== null && flowStart(m[4])) {
+        unread(line);
+        flow = Math.max(flowBrackets(m[4]), 0);
+      }
       continue;
     }
     if (!m || top === null) continue;
@@ -785,16 +828,28 @@ function pnpmWorkspaceVersions(text, out) {
     if (top === "catalogs" && value === null) {
       catalog = key;
       catalogIndent = indent;
+      if (flowStart(m[4])) {
+        unread(line);
+        flow = Math.max(flowBrackets(m[4]), 0);
+      }
       continue;
     }
-    if (value === null || !/^[~^<>=*\dvxX]/.test(value)) continue;
+    if (value === null) continue;
     // An override keyed by a selector (`lodash@<4.17.21`, what `pnpm audit --fix` writes) or a
     // parent path (`express>lodash`) sets the package the key ends in, as package.json's
     // pnpm.overrides is read (audit 2026-11-25, D-B1: these keys were skipped and went ahead).
-    const name = top === "overrides" ? overrideTarget(key) : key;
+    let name = top === "overrides" ? overrideTarget(key) : key;
+    let spec = value;
+    if (value.startsWith("npm:")) {
+      // An alias (`lodash: npm:lodash@4.17.20`) installs the package and version it names (D-M1).
+      const alias = npmDeclared(name ?? key, value);
+      if (!alias) continue;
+      name = alias.name;
+      spec = alias.spec;
+    } else if (!/^[~^<>=*\dvxX]/.test(value)) continue;
     if (name === null) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
-    put(out, name, top === "catalogs" ? `catalogs.${catalog}` : top, value);
+    put(out, name, top === "catalogs" ? `catalogs.${catalog}` : top, spec);
   }
 }
 
@@ -994,6 +1049,14 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
   return out;
 }
 
+/**
+ * The start of a declaredVersions name that is no package: a line a reader could not read, the
+ * reason after it and the line's text as its spec. diffVersions holds the call as not read when
+ * such a line is new or changed, and passes over it when it is unchanged: a line the hook cannot
+ * read must not hold every later edit of a file that already has it.
+ */
+const UNREAD_LINE = "\u0001";
+
 /** The package name of a declaredVersions key (which may carry its section after a NUL). */
 const keyName = (key) => key.split("\0")[0];
 
@@ -1048,6 +1111,11 @@ function diffVersions(old, now, same = (spec) => spec) {
     const name = keyName(key);
     const prev = old.get(key) ?? [];
     const anywhere = before.get(name) ?? new Set();
+    // A line the reader could not read, new or changed in this edit: the edit is held as not read.
+    if (name.startsWith(UNREAD_LINE)) {
+      if (specs.some((spec) => !anywhere.has(spec))) refuse(name.slice(UNREAD_LINE.length));
+      continue;
+    }
     for (const spec of specs) {
       if (anywhere.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
       seen.add(`${name}\0${same(spec)}`);
