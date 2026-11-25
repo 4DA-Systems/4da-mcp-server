@@ -48,11 +48,16 @@ export function poetryRequirements(content: string): PoetryRequirement[] {
   return out;
 }
 
+/** An inline table longer than this is no dependency entry. */
+const MAX_INLINE_TABLE = 4096;
+
 /** Inline-table keys that do not restrict where a Poetry dependency is installed: such a dependency is always locked. */
 const UNRESTRICTED_KEYS = new Set(["version", "extras", "optional", "source", "allow-prereleases", "allows-prereleases"]);
 
 /** The keys of a TOML inline table (`{ version = "1", markers = "..." }`); a string that looks like `, key =` only adds a key, so it errs toward "restricted". */
 export function inlineTableKeys(table: string): string[] {
+  // Longer than any dependency entry: one key nobody allows, so the entry is not compared.
+  if (table.length > MAX_INLINE_TABLE) return ["(too long to read)"];
   return [...table.matchAll(/(?:^\{|,)\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=/g)].map((m) => m[1].replace(/^["']|["']$/g, ""));
 }
 

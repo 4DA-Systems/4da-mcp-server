@@ -398,6 +398,47 @@ BUNDLED WITH
   });
 });
 
+describe("F1: the comparison is bounded on a manifest an attacker writes", () => {
+  const timed = (fn: () => unknown) => {
+    const start = process.cpuUsage();
+    fn();
+    const used = process.cpuUsage(start);
+    return (used.user + used.system) / 1000;
+  };
+  // Each just under the 1 MB a Gemfile is compared up to, and followed whole (no "not compared" problem).
+  it("a Gemfile of runs of spaces (a pattern with two adjacent \\s* costs their square)", () => {
+    const spaces = " ".repeat(4000);
+    const lines = [...Array.from({ length: 120 }, () => `gem${spaces}x`), ...Array.from({ length: 120 }, () => `rake do${spaces}x`), "gem 'rake'"];
+    write({ Gemfile: lines.join("\n"), "Gemfile.lock": GEMFILE_LOCK_RAKE });
+    expect(timed(() => read("RubyGems"))).toBeLessThan(1500);
+    expect(problems("RubyGems")).toEqual([]);
+  });
+
+  it("a Gemfile nested 30,000 groups deep with a gem on every level", () => {
+    const lines = [...Array.from({ length: 30000 }, () => "group :a do\ngem 'rake'"), ...Array.from({ length: 30000 }, () => "end")];
+    write({ Gemfile: lines.join("\n"), "Gemfile.lock": GEMFILE_LOCK_RAKE });
+    expect(timed(() => read("RubyGems"))).toBeLessThan(1500);
+    expect(problems("RubyGems")).toEqual([]);
+  });
+
+  it("a Pipfile and a pyproject.toml with a huge inline table of commas and open quotes", () => {
+    const table = `{${',"'.repeat(200000)}`;
+    write({
+      Pipfile: `[packages]\nsix = "*"\nx = ${table}\n`,
+      "Pipfile.lock": PIPFILE_LOCK({ six: "1.16.0" }),
+      "pyproject.toml": `[tool.poetry]\nname = "d"\n[tool.poetry.dependencies]\ny = ${table}\n`,
+      "poetry.lock": POETRY_LOCK([["six", "1.16.0", `z = ${table}`]]),
+    });
+    expect(timed(() => read("PyPI"))).toBeLessThan(3000);
+  });
+
+  it("a pdm.lock whose dependencies hold an unclosed quote per entry", () => {
+    const deps = Array.from({ length: 50000 }, () => '"a\\').join(",");
+    write({ "pdm.lock": PDM_LOCK([["six", "1.16.0", [deps]]]), "pyproject.toml": '[project]\nname = "d"\ndependencies = ["six"]\n' });
+    expect(timed(() => read("PyPI"))).toBeLessThan(3000);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 // F3: a GEM section with a private remote is private as a whole
 // ---------------------------------------------------------------------------------------------

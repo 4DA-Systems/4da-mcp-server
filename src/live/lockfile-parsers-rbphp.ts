@@ -180,6 +180,8 @@ export function gemfileDeclared(content: string): { names: string[] } | { error:
   const names: string[] = [];
   /** Open blocks: true when Bundler records the gems inside whatever happens at run time. */
   const blocks: boolean[] = [];
+  /** How many of the open blocks are conditional: a count, so a deep nest costs nothing per gem. */
+  let conditional = 0;
   let inComment = false;
   for (const raw of content.split(/\r?\n/)) {
     if (raw.length > MAX_LINE) continue;
@@ -195,16 +197,20 @@ export function gemfileDeclared(content: string): { names: string[] } | { error:
     if (code === "") continue;
     if (/^end\b/.test(code)) {
       if (blocks.length === 0) return { error: "it has an `end` with no block open, so its structure could not be followed" };
-      blocks.pop();
+      if (blocks.pop() === false) conditional--;
       continue;
     }
     if (/^(?:else|elsif|when|in|rescue|ensure)\b/.test(code)) continue;
     const opensKeyword = /^(?:if|unless|case|while|until|for|begin|def|class|module)\b/.test(code) && !/\bend\s*$/.test(code);
-    const opensDo = /\bdo\s*(?:\|[^|]*\|)?\s*$/.test(code);
-    const gem = /^gem\s*\(?\s*(['"])([^'"]*)\1/.exec(raw.trim());
-    if (gem && GEM_NAME.test(gem[2]) && !/\b(?:if|unless)\b/.test(code) && blocks.every(Boolean)) names.push(gem[2]);
-    if (opensKeyword) blocks.push(false);
-    else if (opensDo) blocks.push(RECORDED_BLOCKS.has(/^([a-z_]+)/.exec(code)?.[1] ?? ""));
+    // No two adjacent `\s*` in either pattern: a long run of spaces costs one pass, never its square (`code` is trimmed).
+    const opensDo = /\bdo(?:\s*\|[^|]*\|)?$/.test(code);
+    const gem = /^gem(?:\s+|\s*\(\s*)(['"])([^'"]*)\1/.exec(raw.trim());
+    if (gem && GEM_NAME.test(gem[2]) && !/\b(?:if|unless)\b/.test(code) && conditional === 0) names.push(gem[2]);
+    const opened = opensKeyword ? false : opensDo ? RECORDED_BLOCKS.has(/^([a-z_]+)/.exec(code)?.[1] ?? "") : null;
+    if (opened !== null) {
+      blocks.push(opened);
+      if (!opened) conditional++;
+    }
   }
   if (blocks.length > 0) return { error: "a block in it is never closed, so its structure could not be followed" };
   return { names: [...new Set(names)] };
