@@ -760,7 +760,8 @@ function pnpmWorkspaceVersions(text, out) {
   let top = null;
   let catalog = null;
   let catalogIndent = -1;
-  for (const raw of text.split("\n")) {
+  // A byte order mark is not part of the first key (`﻿overrides:` read as indented hid the section).
+  for (const raw of text.replace(/^﻿/, "").split("\n")) {
     tick();
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
@@ -787,10 +788,13 @@ function pnpmWorkspaceVersions(text, out) {
       continue;
     }
     if (value === null || !/^[~^<>=*\dvxX]/.test(value)) continue;
-    // An override keyed by a selector ("foo@<2", "bar>qs") is not one package's version.
-    if (top === "overrides" && /.@|>/.test(key)) continue;
+    // An override keyed by a selector (`lodash@<4.17.21`, what `pnpm audit --fix` writes) or a
+    // parent path (`express>lodash`) sets the package the key ends in, as package.json's
+    // pnpm.overrides is read (audit 2026-11-25, D-B1: these keys were skipped and went ahead).
+    const name = top === "overrides" ? overrideTarget(key) : key;
+    if (name === null) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
-    put(out, key, top === "catalogs" ? `catalogs.${catalog}` : top, value);
+    put(out, name, top === "catalogs" ? `catalogs.${catalog}` : top, value);
   }
 }
 
@@ -798,9 +802,14 @@ function pnpmWorkspaceVersions(text, out) {
  * The package an npm override, pnpm override or Yarn resolution key sets: pnpm's `parent>child`
  * and Yarn's `**\/child`, `parent/child`, `parent/@scope/child` set `child`, and a version
  * selector after the name (`semver@<7`) is not part of it. Null for a name with a glob in it.
+ * The parent and child are split where pnpm splits them (@pnpm/parse-overrides): at a `>` that
+ * follows neither a blank, `|` nor `@`, so the `>` of a range (`lodash@>=4.0.0 <4.17.21`) stays in
+ * the selector.
  */
 function overrideTarget(key) {
-  const parts = key.split(">").at(-1).trim().split("/");
+  let start = 0;
+  for (let i = 1; i < key.length; i++) if (key[i] === ">" && !" \t|@".includes(key[i - 1])) start = i + 1;
+  const parts = key.slice(start).trim().split("/");
   let name = parts.length >= 2 && parts.at(-2).startsWith("@") ? parts.slice(-2).join("/") : parts.at(-1);
   const at = name.indexOf("@", 1);
   if (at > 0) name = name.slice(0, at);
