@@ -272,7 +272,7 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     const r = await brief("use lodahs");
     expect(r.new_packages).toMatchObject([{ name: "lodahs", verdict: "review", did_you_mean: "lodash" }]);
     expect(osvAsks("lodahs")).toHaveLength(0);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
   });
 
   it("use memoizers: handed back, never dropped as prose", async () => {

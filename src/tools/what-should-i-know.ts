@@ -469,10 +469,11 @@ export async function executeWhatShouldIKnow(
       ...(m.version ? { version: m.version } : {}),
       verdict: "review",
       latest: null,
-      reason: `${m.name} is a near-miss of the popular ${m.didYouMean} (judged offline from the bundled list; not looked up by this briefing): did you mean ${m.didYouMean}? Call dependency_check on it (see check_these) before adding it.`,
+      reason: `${m.name} may be a typosquat of the popular ${m.didYouMean} (judged offline from the bundled list; this briefing did not look it up): did you mean ${m.didYouMean}? Do not install it before dependency_check has answered for it.`,
       malicious: false,
       did_you_mean: m.didYouMean,
       name_finding: "review",
+      judged_offline: true as const,
     })),
   ];
   // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
@@ -618,6 +619,18 @@ export async function executeWhatShouldIKnow(
       decisionConflicts,
       relevantWisdom,
     });
+    // Third blind check of the 2026-11-25 fixes, item 2: handing names back must never read softer than 6.5.1.
+    // (a) A near-miss of a popular name, judged offline, is human_only until dependency_check has answered:
+    // npm took 12 of 12 such typosquats down as malware. (b) Any other unchecked name keeps review_needed, led
+    // by NOT ASSESSED, never "delegate".
+    const typosquats = newPackages.filter((p) => p.judged_offline);
+    const unchecked = gated.checkThese.length + gated.notListed + gated.unverified.length;
+    if (typosquats.length > 0 && assessed.level !== "human_only") {
+      assessed.level = "human_only";
+      assessed.reason = `The task may add ${typosquats.map((p) => `${p.name} (a possible typosquat of ${p.did_you_mean})`).join(", ")}: this briefing did not look ${typosquats.length === 1 ? "it" : "them"} up. Do not install ${typosquats.length === 1 ? "it" : "them"} before dependency_check has answered (${typosquats.length === 1 ? "it is" : "they are"} in ${gated.checkThese.some((i) => typosquats.some((t) => t.name === i.package)) ? "check_these" : "unverified_words"}); a human decides once it has. ${assessed.reason}`;
+    } else if (unchecked > 0 && assessed.level === "review_needed") {
+      assessed.reason = `NOT ASSESSED: ${unchecked} package${unchecked === 1 ? "" : "s"} the task names ${unchecked === 1 ? "was" : "were"} not checked by this briefing. Do not delegate the write until dependency_check has answered for ${unchecked === 1 ? "it" : "them"}; if it answers avoid or names malware for any, this task is human_only. ${assessed.reason.replace(/^Delegate, then review: /, "Also review: ")}`;
+    }
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
     const delegation = withReadGaps(

@@ -146,6 +146,8 @@ export interface NewPackageFinding extends NewPackage {
   did_you_mean: string | null;
   /** What the name check itself said, apart from the release's own signals: avoid, review, or null. */
   name_finding: "avoid" | "review" | null;
+  /** A near-miss of a popular name judged offline from the bundled lists: this briefing did not look the name up. */
+  judged_offline?: true;
   /**
    * The task named no ecosystem, so the name was checked in every one the project uses; this
    * finding is the worst answer, and these are the others (`not_found`: that registry has no such name).

@@ -220,7 +220,7 @@ describe("what_should_i_know: a task that adds a package", () => {
     // exactly a name of a bundled list; any other name is handed back in check_these (not sent by the briefing),
     // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await executeWhatShouldIKnow(db, { task: "add the lodahs package" }, intel());
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
     expect(r.new_packages).toMatchObject([{ name: "lodahs", ecosystem: "npm", verdict: "review", malicious: false, did_you_mean: "lodash" }]);
     expect(r.summary).toContain("did you mean lodash?");
     expect(ASKED.some((u) => u.includes("lodahs"))).toBe(false);
@@ -239,7 +239,7 @@ describe("what_should_i_know: a task that adds a package", () => {
     // The task names no manager or file: the word is read as either, never one picked silently.
     expect(r.unverified_words).toEqual([{ word: "lodahs", read_as: "PyPI or npm" }]);
     expect(r.new_packages).toMatchObject([{ name: "lodahs", ecosystem: "npm", verdict: "review", did_you_mean: "lodash" }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
   });
 
   it("a stated ecosystem is never second-guessed: \"pip install lodahs\" stays PyPI", () => {
@@ -250,18 +250,19 @@ describe("what_should_i_know: a task that adds a package", () => {
   it("the same when the project scan is not ready: a malware name is never \"unknown\"", async () => {
     const r = await executeWhatShouldIKnow(db, { task: "add the lodahs package" }, intel(null));
     expect(r.scan_status).toBe("unavailable");
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
     expect(r.delegation_assessment.reason).toContain("did you mean lodash?");
   });
 
-  it("a near-miss of a popular package is review_needed, with the name it likely meant", async () => {
+  it("a near-miss of a popular package, judged offline, is human_only until checked, with the name it likely meant", async () => {
     const r = await executeWhatShouldIKnow(db, { task: "npm install expres" }, intel());
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
     expect(r.delegation_assessment.reason).toContain("the task adds expres (review: did you mean express?), which dependency_check does not clear");
     expect(r.new_packages).toMatchObject([{ name: "expres", verdict: "review", malicious: false, did_you_mean: "express", name_finding: "review" }]);
     // And with no ready scan the finding still stands, beside the note that the rest is unreviewed.
     const cold = await executeWhatShouldIKnow(db, { task: "npm install expres" }, intel(null));
-    expect(cold.delegation_assessment.level).toBe("review_needed");
+    expect(cold.delegation_assessment.level).toBe("human_only");
+    expect(cold.delegation_assessment.reason).toContain("a possible typosquat of express");
     expect(cold.delegation_assessment.reason).toContain("did you mean express?");
     expect(cold.delegation_assessment.reason).toContain("Vulnerability scan unavailable");
   });
@@ -365,8 +366,8 @@ describe("round 5: a task that adds malware is never safe_to_delegate", () => {
 
   it.each([
     // Final design: lodahs and expres are near-misses judged offline (review); flatmap-stream is a listed malicious name.
-    ["replace lodash with lodahs", "lodahs", "review_needed"],
-    ["swap express for expres", "expres", "review_needed"],
+    ["replace lodash with lodahs", "lodahs", "human_only"],
+    ["swap express for expres", "expres", "human_only"],
     ["add flatmap-stream", "flatmap-stream", "human_only"],
   ])("an npm project: %s brings %s in and is %s (it was safe_to_delegate with new_packages [])", async (task, name, level) => {
     const r = await executeWhatShouldIKnow(db, { task }, intel());
@@ -532,7 +533,7 @@ describe("dependency phrasings and PyPI typo-squats (black-box audit of 60c9edc,
   it('"we need electorn for the desktop build" is review_needed: did you mean electron? (it was safe_to_delegate)', async () => {
     const r = await executeWhatShouldIKnow(db, { task: "we need electorn for the desktop build" }, intel());
     expect(r.new_packages).toMatchObject([{ name: "electorn", did_you_mean: "electron" }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
   });
 
   it.each([

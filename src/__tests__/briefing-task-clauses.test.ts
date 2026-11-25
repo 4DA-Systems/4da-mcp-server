@@ -347,7 +347,7 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     if (bad === "electorn") {
       expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ verdict: "review", did_you_mean: "electron", malicious: false });
       expect(ASKED.some((u) => u.includes("electorn"))).toBe(false);
-      expect(r.delegation_assessment.level).toBe("review_needed");
+      expect(r.delegation_assessment.level).toBe("human_only");
     } else {
       expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
       expect(r.delegation_assessment.level).toBe("human_only");
@@ -451,7 +451,7 @@ describe("a task naming more packages than the briefing checks fails closed", ()
 describe("what was already right stays right", () => {
   it.each([
     // Final design of the 2026-11-25 fixes: lodahs is a near-miss of lodash, judged offline (did you mean lodash?).
-    ["add the lodahs package", "review_needed"],
+    ["add the lodahs package", "human_only"],
     ["add tests", "safe_to_delegate"],
     ["add logging to the handler", "safe_to_delegate"],
     ["add error handling, then update the docs", "safe_to_delegate"],
@@ -487,7 +487,7 @@ describe("what was already right stays right", () => {
     expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["electorn=review"]);
     expect(r.unverified_words?.map((w) => w.word)).toEqual(["left-pad", "electorn"]);
     expect(ASKED.some((u) => /left-pad|electorn/.test(u))).toBe(false);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
   });
 
   it("a private name the project's registries do not have is never sent to the other ecosystems either", async () => {

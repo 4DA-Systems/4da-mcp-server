@@ -202,7 +202,7 @@ describe("B1 in the briefing: the malware after a prose item is found (each was 
     if (bad === "electorn" || bad === "lodahs") {
       expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ verdict: "review", malicious: false });
       expect(r.new_packages?.find((p) => p.name === bad)?.did_you_mean).toBeTruthy();
-      expect(r.delegation_assessment.level).toBe("review_needed");
+      expect(r.delegation_assessment.level).toBe("human_only");
     } else {
       expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
       expect(r.delegation_assessment.level).toBe("human_only");
@@ -317,7 +317,7 @@ describe("false positives are gone, blockers stay", () => {
     // Final design: a near-miss judged offline (did you mean lodash?), never safe.
     const r = await brief("use lodahs");
     expect(r.new_packages).toMatchObject([{ name: "lodahs", verdict: "review", did_you_mean: "lodash" }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("human_only");
   });
 });
 
