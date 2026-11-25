@@ -110,7 +110,8 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
     annotations: { title: "Dependency health", ...READ_NETWORK },
   },
   upgrade_planner: {
-    summary: "Prioritized upgrade plan for one project (project_path): the 4DA app's work order when computed (per-line targets, manifest vs lockfile fix), else the smallest version that fixes each vulnerability. Call when the user asks what to upgrade.",
+    summary:
+      'Ranked upgrade plan for one project (project_path), computed by this server from its lockfiles on disk: the smallest version that fixes each vulnerability, whether a lockfile refresh or a parent upgrade reaches it, the commands and run_order. With the 4DA app attached, app_plan_check compares the app\'s stored plan; only project_path "*" returns the app\'s plan across every project (unverified), and its summary starts NOT CHECKED when it cannot. Call when the user asks what to upgrade.',
     definition: upgradePlannerTool,
     category: "security",
     tags: ["upgrade", "dependencies", "recommendations", "versions"],
