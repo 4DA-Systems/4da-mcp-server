@@ -404,13 +404,10 @@ export function gateTaskNames<
       return null;
     }
     const allowed = lookupEcosystems(name, own, installed);
-    if (allowed.length > 0) {
-      // Listed in one ecosystem it may be in, not in another ("add h3" in an npm + PyPI project: PyPI's h3 is
-      // a popular name, npm's is not): the others are handed back too, never dropped silently.
-      const rest = own.filter((e) => !allowed.includes(e));
-      if (rest.length > 0) offer(name, rest, version, false);
-      return allowed;
-    }
+    // Decided in an ecosystem (a dependency there, or a bundled-list name there): its namesakes in the other
+    // ecosystems are not listed. Listing them made 33 of 190 ordinary tasks review_needed, and following them
+    // judged the wrong registry ("use crossenv": PyPI's crossenv, proceed; third blind check, item 4).
+    if (allowed.length > 0) return allowed;
     // A name the task gives no ecosystem for may be a listed name of another one (crates.io's rustdecimal in an npm project).
     const elsewhere = lookupEcosystems(name, others, installed).filter((e) => knownPublicName(name, e));
     if (elsewhere.length > 0) return elsewhere;

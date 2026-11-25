@@ -61,14 +61,15 @@ describe("check_these: what the briefing did not look up, as a dependency_check 
     expect(check.results).toMatchObject([{ verdict: "avoid" }]);
   });
 
-  it("a name the task gives no manager or file for is never judged in one registry silently", async () => {
+  it("a name decided in one ecosystem is not listed in the others; one nothing decides is read as either", async () => {
     h.write("requirements.txt", "requests==2.31.0\n");
     h.PYPI = { requests: { "2.31.0": {} }, h3: { "4.0.0": {} } };
-    // PyPI's h3 is a popular name (looked up); npm's h3 is not: handed back, so both are said.
+    // PyPI's h3 is a popular name: decided there and looked up; npm's namesake is not listed (third blind check, item 4).
     const r = await brief("add h3 as the server framework");
     expect(sent().some((s) => s.includes("pypi.org/pypi/h3/"))).toBe(true);
     expect(sent().some((s) => s.includes("registry.npmjs.org/h3"))).toBe(false);
-    expect(r.unverified_words).toEqual([{ word: "h3", read_as: "npm" }]);
+    expect(r.unverified_words).toBeUndefined();
+    expect(r.check_these).toBeUndefined();
     // A name on no list: once per ecosystem the project may take it from.
     const both = await brief("add qzframe as the server framework");
     expect(both.unverified_words).toEqual([{ word: "qzframe", read_as: "npm or PyPI" }]);
