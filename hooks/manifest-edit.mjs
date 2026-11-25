@@ -755,46 +755,75 @@ function yamlScalar(raw) {
 }
 
 /**
- * A YAML line of a flow mapping, read once: the brackets it opens less those it closes (outside
- * quotes) and its text before its comment.
+ * Whether a `'` or `"` at this point of a flow mapping opens a quoted scalar: only where YAML lets
+ * one start, at the start of a line or after `{`, `[`, `,`, or `:` and a blank. Inside a plain
+ * scalar (`it's`, `a"b`) it is a character of the scalar (second blind check of the a1125 hook
+ * lane: read as a quote, it hid every `}` after it and the rest of the file).
  */
-function flowBrackets(line) {
+const quoteOpens = (last, blankBefore) => last === "" || last === "{" || last === "[" || last === "," || (last === ":" && blankBefore);
+
+/**
+ * A YAML line of a flow mapping, read once: the brackets it opens less those it closes (outside
+ * quotes), its text before its comment, and the quote still open at its end (`quote`: the one open
+ * at its start, a quoted scalar may run on to the next line).
+ */
+function flowBrackets(line, quote = "") {
   let n = 0;
-  let quote = "";
+  let last = "";
   let i = 0;
   for (; i < line.length; i++) {
     const ch = line[i];
     if (quote) {
-      if (ch === quote) quote = "";
-      else if (ch === "\\" && quote === '"') i++;
-    } else if (ch === "'" || ch === '"') quote = ch;
+      if (ch === quote) {
+        quote = "";
+        last = ch;
+      } else if (ch === "\\" && quote === '"') i++;
+      continue;
+    }
+    if (/\s/.test(ch)) continue;
+    if ((ch === "'" || ch === '"') && quoteOpens(last, i > 0 && /\s/.test(line[i - 1]))) quote = ch;
     else if (ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
     else if (ch === "{" || ch === "[") n++;
     else if (ch === "}" || ch === "]") n--;
+    last = ch;
   }
-  return { n, text: line.slice(0, i) };
+  return { n, text: line.slice(0, i), quote };
 }
 
 /**
  * The entries of a whole flow mapping's text, each without blanks: what sits between the commas of
  * its outer brackets (a nested mapping stays inside its entry). Compared as a set, so an entry
- * moved, a blank or a trailing comma changes nothing, and `{}` has none.
+ * moved, a blank or a trailing comma changes nothing, and `{}` has none. Quotes are read as
+ * flowBrackets reads them.
  */
 function flowEntries(text) {
   const entries = [];
   let cur = "";
   let depth = 0;
   let quote = "";
+  let last = "";
+  let space = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (quote) {
-      if (ch === quote) quote = "";
-      else if (ch === "\\" && quote === '"') cur += text[i++];
+      if (ch === quote) {
+        quote = "";
+        last = ch;
+      } else if (ch === "\\" && quote === '"') cur += text[i++];
       cur += ch;
       continue;
     }
-    if (/\s/.test(ch)) continue;
-    if (ch === "'" || ch === '"') quote = ch;
+    if (ch === "\n") last = "";
+    if (/\s/.test(ch)) {
+      space = true;
+      continue;
+    }
+    // A blank inside a scalar or after `:` is kept, as one: `lodash:4.17.20` is a key, `4.17.\n  20` folds to `4.17. 20`.
+    if (space && cur && !"{}[],:".includes(ch) && !"{}[],".includes(cur.at(-1))) cur += " ";
+    space = false;
+    const opens = (ch === "'" || ch === '"') && quoteOpens(last, i > 0 && /\s/.test(text[i - 1]));
+    last = ch;
+    if (opens) quote = ch;
     else if (ch === "{" || ch === "[") {
       if (++depth === 1) {
         if (cur) entries.push(cur);
@@ -844,6 +873,7 @@ function pnpmWorkspaceVersions(text, out) {
   let flow = 0;
   let flowText = [];
   let flowWhere = "";
+  let flowQuote = "";
   const flowStart = (raw) => /^[{[]/.test(withoutProperties(raw));
   const flowDone = () => {
     const name = `${UNREAD_LINE}a pnpm-workspace.yaml ${flowWhere.split(".")[0]} written as a flow mapping ({ ... }), which the hook does not read: write it as block lines, one "name: version" each`;
@@ -855,6 +885,7 @@ function pnpmWorkspaceVersions(text, out) {
     flowWhere = where;
     const read = flowBrackets(withoutProperties(value));
     flowText = [read.text];
+    flowQuote = read.quote;
     flow = Math.max(read.n, 0);
     if (flow === 0) flowDone();
   };
@@ -873,8 +904,9 @@ function pnpmWorkspaceVersions(text, out) {
     const indent = line.length - line.trimStart().length;
     const m = /^\s*(?:'([^'\n]{1,214})'|"([^"\n]{1,214})"|([^\s:#'"][^:#\n]{0,213}?))\s*:(?:\s+(.*))?$/.exec(line);
     if (flow > 0) {
-      const read = flowBrackets(line);
+      const read = flowBrackets(line, flowQuote);
       flowText.push(read.text);
+      flowQuote = read.quote;
       flow += read.n;
       if (flow <= 0) {
         flow = 0;
@@ -921,6 +953,13 @@ function pnpmWorkspaceVersions(text, out) {
     if (name === null) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
     put(out, name, top === "catalogs" ? `catalogs.${catalog}` : top, spec);
+  }
+  // A flow mapping still open at the end of the file: whatever the counter misread, every line from
+  // its first to the last is recorded as unread, so a change anywhere there is held as not read
+  // (fail closed; an unchanged file holds nothing).
+  if (flow > 0) {
+    const name = `${UNREAD_LINE}a pnpm-workspace.yaml ${flowWhere.split(".")[0]} flow mapping ({ ... }) whose end the hook could not find, which it does not read: write it as block lines, one "name: version" each`;
+    for (const line of flowText) put(out, name, null, line.replace(/\s+/g, " ").trim());
   }
 }
 
@@ -2816,7 +2855,7 @@ function denialFor(introduced, ledger, dir, what) {
     const goPaths = what === "command" ? unchecked.filter(({ c }) => c.ecosystem === "Go") : [];
     if (goPaths.length > 0) {
       lines.push(
-        `- ${goPaths.slice(0, 8).map(({ c }) => quotedChange(c)).join(", ")}${goPaths.length > 8 ? `, and ${goPaths.length - 8} more` : ""}: a Go path may be a package inside a module, and dependency_check reads modules: it answers unknown for a package path (golang.org/x/net/http2 is a package of the module golang.org/x/net). If so, check the module that contains the package and name that module in the command instead (go get golang.org/x/net@v0.23.0, not go get golang.org/x/net/http2@v0.23.0): this ${what} passes once dependency_check answers proceed for each path exactly as the ${what} names it. A verdict for a module never releases a longer path.`,
+        `- ${goPaths.slice(0, 8).map(({ c }) => quotedChange(c)).join(", ")}${goPaths.length > 8 ? `, and ${goPaths.length - 8} more` : ""}: a Go path may be a package inside a module, and dependency_check reads modules: it answers unknown for a package path (golang.org/x/net/http2 is a package of the module golang.org/x/net). If so, check the module that contains the package and name that module in the command instead: name the module, not the package (go get <module>@<version>): this ${what} passes once dependency_check answers proceed or review for each path exactly as the ${what} names it. A verdict for a module never releases a longer path.`,
       );
     }
     lines.push(

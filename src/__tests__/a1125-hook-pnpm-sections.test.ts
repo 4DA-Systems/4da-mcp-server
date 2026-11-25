@@ -132,9 +132,48 @@ describe("a flow mapping is held as not read when it changes, and only then", ()
     expect(s.write(file, `${HEAD}catalog: {}\noverrides: { }\ncatalogs:\n  legacy: {}\n`).decision).toBe("allow");
   });
 
-  it("a flow mapping that never closes is not YAML pnpm reads: an edit below it is not held", () => {
-    const file = s.file("pnpm-workspace.yaml", `${HEAD}catalog: { lodash: ^4.17.21,\n  react: ^18.2.0\nsettings:\n  x: 1\n`);
-    expect(s.edit(file, "x: 1", "x: 2").decision).toBe("allow");
+  it("a flow mapping that never closes: a change anywhere below its first line is held, an unchanged file is not", () => {
+    const text = `${HEAD}catalog: { lodash: ^4.17.21,\n  react: ^18.2.0\nsettings:\n  x: 1\n`;
+    const file = s.file("pnpm-workspace.yaml", text);
+    const run = s.edit(file, "x: 1", "x: 2");
+    expect(run.decision).toBe("deny");
+    expect(run.text).toContain("could not be read");
+    expect(s.write(file, text).decision).toBe("allow");
+    expect(s.edit(file, "'packages/*'", "'apps/*'").decision).toBe("allow");
+  });
+
+  // Second blind check: a quote inside a plain scalar was read as opening a quoted scalar, so the
+  // flow mapping never closed and every later line was dropped (pnpm reads these files and applies
+  // the override below).
+  it.each([
+    ["`it's` in a flow catalog", "catalog: { foo: it's, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n"],
+    ['`a"b` in a flow catalog', 'catalog: { foo: a"b, react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n'],
+    ["`it's` in flow overrides above a block catalog", "overrides: { foo: it's }\ncatalog:\n  lodash: ^4.17.21\n"],
+    ["a double-quoted scalar split across lines", 'catalog: { foo: "a b\n  c }", react: ^18.2.0 }\noverrides:\n  lodash: ^4.17.21\n'],
+  ])("%s: the version below it is held with the avoid; re-saved or edited above, not held", (_label, rest) => {
+    s.ledger([AVOID]);
+    const text = HEAD + rest;
+    const file = s.file("pnpm-workspace.yaml", text);
+    const run = s.edit(file, "lodash: ^4.17.21", "lodash: 4.17.20");
+    expect(run.decision, run.text).toBe("deny");
+    expect(run.text).toContain("answered avoid");
+    expect(s.write(file, text.replace("lodash: ^4.17.21", "lodash: 4.17.20")).decision).toBe("deny");
+    expect(s.write(file, text).decision).toBe("allow");
+    expect(s.edit(file, "'packages/*'", "'apps/*'").decision).toBe("allow");
+  });
+
+  it("a blank that changes what YAML reads is a change: `lodash:4.17.20` (a key) to `lodash: 4.17.20`, a folded `4.17.\\n  20`", () => {
+    const one = s.file("a/pnpm-workspace.yaml", `${HEAD}catalog: { lodash:4.17.20, react: ^18.2.0 }\n`);
+    expect(s.edit(one, "lodash:4.17.20", "lodash: 4.17.20").decision).toBe("deny");
+    const two = s.file("b/pnpm-workspace.yaml", `${HEAD}catalog: { lodash: 4.17.\n  20, react: ^18.2.0 }\n`);
+    expect(s.edit(two, "4.17.\n  20", "4.17.20").decision).toBe("deny");
+    expect(s.edit(two, "{ lodash", "{lodash").decision).toBe("allow");
+  });
+
+  it("a Write that adds an override below a flow line with `it's` is held", () => {
+    s.ledger([AVOID]);
+    const file = s.file("pnpm-workspace.yaml", `${HEAD}catalog: { foo: it's }\n`);
+    expect(s.write(file, `${HEAD}catalog: { foo: it's }\noverrides:\n  lodash: 4.17.20\n`).decision).toBe("deny");
   });
 
   it("12,000 and 50,000 flow lines: an edit elsewhere is not held, and the denial's rewrite is judged, inside the CPU bound", () => {
