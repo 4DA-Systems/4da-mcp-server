@@ -46,7 +46,7 @@ import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
-import { CRATES_USER_AGENT, releaseFeatureNames } from "./crates-versions.js";
+import { CRATES_USER_AGENT, defaultEnabledDependencies, releaseFeatureNames } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
@@ -141,6 +141,12 @@ export interface CratesSparse {
    * cached before it was read: such a record is read again (upgrade-planner-cargo-steps.ts).
    */
   links?: Record<string, string>;
+  /**
+   * version -> the optional dependencies its `default` feature turns on (crates-versions.ts
+   * defaultEnabledDependencies): a build with default features has them, so `--precise` must meet
+   * their requirements too (chrono 0.4.30's iana-time-zone). Absent on a record cached before it was read.
+   */
+  defaultDeps?: Record<string, string[]>;
 }
 
 /** npm's abbreviated document: per version, the fields fix paths read. */
@@ -476,7 +482,7 @@ export class FixPathSources {
     try {
       const res = await fetchWithTimeout(sparseIndexUrl(name), { headers: { "User-Agent": CRATES_USER_AGENT } }, TIMEOUT_MS);
       if (!res.ok) return null;
-      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {}, links: {} };
+      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {}, links: {}, defaultDeps: {} };
       for (const line of (await res.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -496,6 +502,10 @@ export class FixPathSources {
           // A Rust version as Cargo writes one ("1.64", "1.67.1"); anything else is not kept.
           if (typeof entry.rust_version === "string" && /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(entry.rust_version.trim())) out.rustVersions![entry.vers] = entry.rust_version.trim();
           if (typeof entry.links === "string" && entry.links.length > 0 && entry.links.length <= 128) out.links![entry.vers] = entry.links;
+          // Features name a dependency by the name the crate uses; reqs key it by the crate's own name.
+          const optional = new Map((entry.deps ?? []).filter((d) => d.optional === true).map((d) => [d.name, d.package ?? d.name] as const));
+          const byDefault = [...defaultEnabledDependencies(entry as Parameters<typeof defaultEnabledDependencies>[0])].filter((d) => optional.has(d)).map((d) => optional.get(d)!);
+          if (byDefault.length > 0) out.defaultDeps![entry.vers] = byDefault;
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
@@ -2078,12 +2088,17 @@ export async function cargoPrecisePrerequisites(
     if (visited.has(`${crate}@${version}`)) continue;
     visited.add(`${crate}@${version}`);
     if (visited.size > MAX_CLOSURE_CRATES) return null;
-    const deps = (await sources.cratesSparse(crate))?.reqs[version];
+    let record = await sources.cratesSparse(crate);
+    // A record cached before the default features were read is read again (chrono 0.4.30 needs iana-time-zone by default).
+    if (record && record.defaultDeps === undefined) record = (await sources.cratesSparse(crate, true)) ?? record;
+    const deps = record?.reqs[version];
     if (!deps) return null;
+    const byDefault = new Set(record?.defaultDeps?.[version] ?? []);
     for (const [dep, entries] of Object.entries(deps)) {
       const lockedVersions = locked.get(dep) ?? [];
       for (const { req, optional } of entries) {
-        if (optional && lockedVersions.length === 0) continue; // a feature this build does not enable
+        // An optional dependency no locked copy and no default feature brings in: a feature this build does not enable.
+        if (optional && lockedVersions.length === 0 && !byDefault.has(dep)) continue;
         if (lockedVersions.some((v) => cargoReqAdmits(req, v) === true)) continue;
         const available = (await sources.cratesSparse(dep))?.versions;
         if (!available) return null;

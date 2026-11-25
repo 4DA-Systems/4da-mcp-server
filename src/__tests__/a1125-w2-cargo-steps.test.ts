@@ -39,7 +39,7 @@ function lock(pkgs: Pkg[]) {
   fs.writeFileSync(path.join(root, "Cargo.lock"), `version = 3\n\n${body}`);
 }
 
-type Sparse = Record<string, { versions: string[]; reqs: Record<string, Record<string, Array<{ req: string; optional: boolean }>>>; links?: Record<string, string> }>;
+type Sparse = Record<string, { versions: string[]; reqs: Record<string, Record<string, Array<{ req: string; optional: boolean }>>>; links?: Record<string, string>; defaultDeps?: Record<string, string[]> }>;
 const sources = (index: Sparse) => ({ cratesSparse: async (name: string) => (index[name] ? { yanked: [], rustVersions: {}, links: {}, ...index[name] } : null) }) as unknown as FixPathSources;
 const row = (over: Partial<CargoStepRow>): CargoStepRow => ({ package: "x", ecosystem: "crates.io", currentVersion: "1.0.0", reasons: [], ...over });
 const soon = () => Date.now() + 5_000;
@@ -75,7 +75,8 @@ describe("every --precise gets the pre-update its target needs", () => {
       { name: "core-foundation-sys", version: "0.8.2" },
     ]);
     const index: Sparse = {
-      chrono: { versions: ["0.4.19", "0.4.30"], reqs: { "0.4.30": { "iana-time-zone": [{ req: "^0.1.45", optional: false }] } } },
+      // As the index has it: optional, and turned on by chrono's default `clock` feature.
+      chrono: { versions: ["0.4.19", "0.4.30"], reqs: { "0.4.30": { "iana-time-zone": [{ req: "^0.1.45", optional: true }] } }, defaultDeps: { "0.4.30": ["iana-time-zone"] } },
       "iana-time-zone": { versions: ["0.1.45", "0.1.60"], reqs: { "0.1.60": { "core-foundation-sys": [{ req: "^0.8.3", optional: false }] } } },
       "core-foundation-sys": { versions: ["0.8.2", "0.8.7"], reqs: {} },
     };
