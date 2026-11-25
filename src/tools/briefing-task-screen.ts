@@ -283,15 +283,16 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     for (let k = start; k < end; k++) if (blanked[k]) return false;
     return true;
   };
-  // 1b. A word with a shell expansion in it (`P4ss$w0rd`, `${secret}`, `%TOKEN%`, an inner backtick): withheld
-  // whole and never shown, so no reader takes one half for a name and the other for a version (fifth blind
-  // check, item 3). Its wrapping quotes and backticks aside; a price ($5) or a percentage (50%) is no expansion.
+  // 1b. A word with a shell expansion in it (`P4ss$w0rd`, `${secret}`, `$(cmd)`, `%TOKEN%`): withheld whole and
+  // never shown, so no reader takes one half for a name and the other for a version (fifth blind check, item 3).
+  // A backtick is markdown, not shell: never an expansion (sixth blind check, item 1). A price ($5) or a
+  // percentage (50%) is no expansion either.
   for (const m of task.matchAll(/\$\([^()\n]{0,300}\)?/g)) {
     if (free(m.index!, m.index! + m[0].length)) hold("a word with a shell expansion in it", `not read: its value is not in the task; ${NOT_SENT}`, m.index!, m.index! + m[0].length, true);
   }
   for (const m of task.matchAll(/\S{1,300}/g)) {
-    const inner = m[0].replace(/^["'`([{]+/, "").replace(/["'`)\]}.,;:!?]+$/, "");
-    if (/\$[A-Za-z_{(]|%[A-Za-z_]|`/.test(inner) && free(m.index!, m.index! + m[0].length)) {
+    const inner = m[0].replace(/^["'`([{*]+/, "").replace(/["'`)\]}.,;:!?*]+$/, "");
+    if (/\$[A-Za-z_{(]|%[A-Za-z_]\w*%/.test(inner) && free(m.index!, m.index! + m[0].length)) {
       hold("a word with a shell expansion in it", `not read: its value is not in the task; ${NOT_SENT}`, m.index!, m.index! + m[0].length, true);
     }
   }
@@ -490,8 +491,17 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
   // The requirement is moved over the brackets (its name stays where it was), so every reader binds the version.
   // A redirection with a descriptor (`2>&1`, `2> err.log`, `&> out`) ends the command: written as `;` so no
   // reader takes its `1` for a version or the next word for an operand (fourth blind check, B4).
+  // A markdown code span that touches other text (`**`x@1.2.5`**`, `` `x`@1.2.5 ``, `` `x`'s ``, `` `a`,`b` ``) loses
+  // its backticks, so the readers see the name and its version as they would without them (sixth blind
+  // check, item 1). One with blanks on both sides keeps them: the readers take a backticked word as a name.
   const text = chars
     .join("")
+    .replace(/`([^`\s]{1,300})`/g, (m: string, inner: string, at: number, all: string) => {
+      const after = all[at + m.length];
+      if (after === "@") return `  ${inner}`;
+      const before = at > 0 ? all[at - 1] : undefined;
+      return (before === undefined || /\s/.test(before)) && (after === undefined || /\s/.test(after)) ? m : ` ${inner} `;
+    })
     .replace(/(^|\s)(?:\d?>&\d|\d>>?|&>>?)/g, (m: string, pre: string) => `${pre};${" ".repeat(m.length - pre.length - 1)}`)
     .replace(/(^|[\s"'`(])([A-Za-z0-9][\w.-]{0,200})\[[\w.,\s-]{1,400}\](\S{0,300})/g, (m: string, pre: string, name: string, rest: string) => `${pre}${name}${rest}${" ".repeat(m.length - pre.length - name.length - rest.length)}`);
   return { text, withheld, names, scopes, ecosystems };
@@ -627,7 +637,8 @@ export function touchedNames(task: string, screen: TaskScreen): Set<string> {
     if (w.always) continue;
     // The word around the span, then one word either side (each scan stops at the next blank run).
     let a = w.start;
-    while (a > 0 && !isSpace(task[a - 1])) a--;
+    // A markdown link's target (`[text](url)`) is not part of its text (sixth blind check, item 1).
+    if (task.slice(Math.max(0, w.start - 2), w.start) !== "](") while (a > 0 && !isSpace(task[a - 1])) a--;
     let b = w.end;
     while (b < task.length && !isSpace(task[b])) b++;
     // A credential's value may be the version of the name before it (`"jsonwebtoken": "8.5.1"`): that word

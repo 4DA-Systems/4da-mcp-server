@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
  * Fifth blind check of the 2026-11-25 fixes, item 3: `npm install lodash P4ss$w0rdzqx` showed the two
- * halves in two lists, and `${zqxsecret99}` was shown as `${zqxsecret99`. A word with `$`, `%` or a
- * backtick in it is withheld whole and shown only as "a word with a shell expansion in it". Stubbed fetch.
+ * halves in two lists, and `${zqxsecret99}` was shown as `${zqxsecret99`. A word with `$NAME`, `${`, `$(` or `%NAME%`
+ * in it is withheld whole (a backtick is markdown: sixth blind check, item 1) and shown only as "a word with a shell expansion in it". Stubbed fetch.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -26,7 +26,6 @@ describe("a word with a shell expansion in it is withheld whole", () => {
     ["npm install ${zqxsecret99}", /zqxsecret99/],
     ["npm install %ZQX_SECRET224%", /ZQX_SECRET224/i],
     ["npm install $(cat zqxfile226)", /zqxfile226/],
-    ["npm install lo`zqxcmd`dash", /zqxcmd/],
   ])("%s", async (task, secret) => {
     const r = await brief(task);
     expect(JSON.stringify({ ...r, task: undefined })).not.toMatch(secret);
