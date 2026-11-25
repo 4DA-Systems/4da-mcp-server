@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { FourDADatabase } from "../db.js";
+import { futureTimestamp, type FourDADatabase } from "../db.js";
 import { NEWEST_TESTED_APP, OLDEST_SUPPORTED_APP, SUPPORTED_PLAN_FORMATS } from "../app-compat.js";
 import { maxOf } from "../array-utils.js";
 import type { LiveIntelligence } from "../live/index.js";
@@ -86,7 +86,7 @@ export function appTimeMs(stamp: string | null | undefined): number {
  * (the oldest ecosystem sync when it was generated) and the oldest verified sync the app records
  * now (`osv_sync_status.last_synced_at`; an empty time means never verified and is not a time).
  */
-export function advisoryDataAge(db: FourDADatabase, snapshot: Pick<AppPlanSnapshot, "sourceFreshness"> | null, now: number = Date.now()): { hours: number | null; since: string | null } {
+export function advisoryDataAge(db: FourDADatabase, snapshot: Pick<AppPlanSnapshot, "sourceFreshness"> | null, now: number = Date.now()): AdvisoryAge {
   const stamps: string[] = [];
   if (snapshot?.sourceFreshness) stamps.push(snapshot.sourceFreshness);
   try {
@@ -101,14 +101,31 @@ export function advisoryDataAge(db: FourDADatabase, snapshot: Pick<AppPlanSnapsh
   for (const stamp of stamps) {
     const ms = appTimeMs(stamp);
     if (Number.isNaN(ms)) continue;
+    // A verified time ahead of this clock by more than the skew cannot be believed: the age is not
+    // known, never 0 hours (it was clamped to 0, so data stamped a year ahead read as fresh; audit
+    // 2026-11-25, G-5).
+    if (isFutureMs(ms, now)) return { hours: null, since: stamp, future: true };
     if (!oldest || ms < oldest.ms) oldest = { ms, stamp };
   }
   if (!oldest) return { hours: null, since: null };
   return { hours: Math.max(0, Math.round(((now - oldest.ms) / 3_600_000) * 10) / 10), since: oldest.stamp };
 }
 
+/** How old the app's advisory data is; `future` when a verified time is ahead of this clock (then `hours` is null). */
+export interface AdvisoryAge {
+  hours: number | null;
+  since: string | null;
+  future?: true;
+}
+
+/** Whether an epoch time is more than FUTURE_SKEW_MINUTES ahead of `now` (db.ts futureTimestamp). */
+function isFutureMs(ms: number, now: number): boolean {
+  return futureTimestamp(Math.round((now - ms) / 60_000));
+}
+
 /** "advisory data last verified 960 hours ago (2026-10-14 03:00:00), older than 24 hours", or null when within the limit or unknown. */
-function advisoryAgeProblem(age: { hours: number | null; since: string | null }): string | null {
+function advisoryAgeProblem(age: AdvisoryAge): string | null {
+  if (age.future) return `the app's advisory data has a last verified time in the future (${age.since}), so its age cannot be told`;
   if (age.hours === null || age.hours <= MAX_ADVISORY_AGE_HOURS) return null;
   return `the app's advisory data was last verified ${age.hours} hours ago (${age.since}), more than ${MAX_ADVISORY_AGE_HOURS} hours, so the plan may miss advisories published since`;
 }
@@ -272,6 +289,8 @@ export function checkProjectPlan(
   const stale = advisoryAgeProblem(age);
   if (stale) problems.push(stale);
   if (Number.isNaN(generatedMs)) problems.push(`the plan's generation time "${snapshot.generatedAt}" cannot be read`);
+  // A generation time ahead of this clock would outlast every later lockfile change.
+  else if (isFutureMs(generatedMs, now)) problems.push(`the plan's generated time is in the future (${snapshot.generatedAt}), so whether a lockfile changed after it cannot be told`);
   else if (server.newestLockfile && server.newestLockfile.mtimeMs > generatedMs) {
     const rel = path.relative(server.root, server.newestLockfile.file).replace(/\\/g, "/") || server.newestLockfile.file;
     problems.push(`the plan was generated (${snapshot.generatedAt}) before ${rel} was last modified (${new Date(server.newestLockfile.mtimeMs).toISOString()})`);
@@ -341,7 +360,10 @@ export function checkAllProjectsPlan(db: FourDADatabase, read: Extract<AppPlanRe
   const ageProblem = advisoryAgeProblem(age);
   if (ageProblem) staleReasons.push(ageProblem);
   const generatedMs = appTimeMs(snapshot.generatedAt);
-  if (!Number.isNaN(generatedMs)) {
+  // A generation time ahead of this clock: no lockfile change could ever come after it, so the
+  // check below would never fire (audit 2026-11-25, G-5).
+  if (!Number.isNaN(generatedMs) && isFutureMs(generatedMs, now)) staleReasons.push(`the plan's generated time is in the future (${snapshot.generatedAt}), so whether a lockfile changed after it cannot be told`);
+  else if (!Number.isNaN(generatedMs)) {
     const changed = planProjects(db, snapshot.steps)
       .map((dir) => ({ dir, changed: lockfileChangedSince(dir, generatedMs) }))
       .filter((p) => p.changed !== null);
