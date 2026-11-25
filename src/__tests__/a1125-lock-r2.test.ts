@@ -161,10 +161,32 @@ describe("2: gems.locked beside a Gemfile.lock", () => {
   it("byte-identical (or only line endings apart): no CONFLICT", () => {
     write({ "gems.rb": "source 'https://rubygems.org'\ngem 'rake'\n", "gems.locked": RAKE_LOCK, "Gemfile.lock": RAKE_LOCK.replace(/\n/g, "\r\n") });
     expect(problems("RubyGems")).toEqual([]);
+    expect(resolveVersionSource(dir, "RubyGems").extraSources).toEqual([path.join(dir, "Gemfile.lock")]);
   });
   it("different: CONFLICT, as before", () => {
     write({ "gems.rb": "source 'https://rubygems.org'\ngem 'rake'\n", "gems.locked": RAKE_LOCK, "Gemfile.lock": LOCK("    rake (12.0.0)\n", "  rake\n") });
     expect(problems("RubyGems").map((p) => [path.basename(p.file), p.conflict])).toEqual([["Gemfile.lock", true]]);
+  });
+});
+
+describe("3: a DEPENDENCIES entry with no spec", () => {
+  it("is PARTIAL (F/gem-dropspec: rack listed, its spec gone)", () => {
+    write({ Gemfile: 'source "https://rubygems.org"\ngem "rack", "2.0.1"\ngem "rake"\n', "Gemfile.lock": LOCK("    rake (13.2.1)\n", "  rack (= 2.0.1)\n  rake\n") });
+    const got = problems("RubyGems");
+    expect(got).toHaveLength(1);
+    expect(got[0].partial).toBe(true);
+    expect(got[0].error).toMatch(/\(rack\)/);
+  });
+  it("is no damage for a platform-only gem, a conditional one, or bundler", () => {
+    write({
+      Gemfile: 'source "https://rubygems.org"\ngem "tzinfo-data", platforms: %i[ windows jruby ]\ngem "wdm", ">= 0.1.0" if Gem.win_platform?\nplatforms :jruby do\n  gem "jdbc"\nend\ngem "rake"\n',
+      "Gemfile.lock": LOCK("    rake (13.2.1)\n", "  bundler\n  jdbc\n  rake\n  tzinfo-data\n  wdm (>= 0.1.0)\n"),
+    });
+    expect(problems("RubyGems")).toEqual([]);
+  });
+  it("is not judged with no Gemfile to say which gems are platform-only", () => {
+    write({ "Gemfile.lock": LOCK("    rake (13.2.1)\n", "  rake\n  tzinfo-data\n") });
+    expect(problems("RubyGems")).toEqual([]);
   });
 });
 

@@ -210,6 +210,8 @@ export interface GemfileDeclared {
   names: string[];
   /** Of `names`, those restricted to some platforms (`platforms:` / `platform:`, a `platforms` block): a lock may hold no spec for them. */
   platformOnly: Set<string>;
+  /** Gems declared behind a condition or in a block not followed, lower-cased: not compared, and a lock may hold no spec for them (`gem "wdm" if Gem.win_platform?`). */
+  conditional: Set<string>;
   /** Of `names`, where each is installed from: the registry, a git repository or a local path. */
   sourceOf: Map<string, "registry" | "git" | "path">;
 }
@@ -238,6 +240,7 @@ export function gemfileDeclared(content: string): GemfileDeclared | { error: str
   if (content.length > MAX_GEMFILE_BYTES) return { error: "it is larger than any Gemfile this server compares" };
   const names: string[] = [];
   const platformOnly = new Set<string>();
+  const conditional = new Set<string>();
   const sourceOf = new Map<string, "registry" | "git" | "path">();
   const blocks: BlockKind[] = [];
   /** Open blocks of each kind: counts, so a deep nest costs nothing per gem. */
@@ -271,9 +274,11 @@ export function gemfileDeclared(content: string): GemfileDeclared | { error: str
       const declaredKey = /^git_source\s*\(?\s*:(\w+)/.exec(code);
       if (declaredKey) gitKeys.add(declaredKey[1]);
       const gem = /^gem(?:\s+|\s*\(\s*)(['"])([^'"]*)\1/.exec(raw);
-      if (gem && GEM_NAME.test(gem[2]) && !/(?<![\w.:])(?:if|unless)(?![\w?!:])/.test(code) && open.other === 0) {
+      const guarded = /(?<![\w.:])(?:if|unless)(?![\w?!:])/.test(code) || open.other > 0;
+      if (gem && guarded) conditional.add(gem[2].toLowerCase());
+      if (gem && GEM_NAME.test(gem[2]) && !guarded) {
         names.push(gem[2]);
-        if (open.platforms > 0 || /(?<![\w.:])platforms?\s*:|:platforms?\s*=>/.test(code)) platformOnly.add(gem[2]);
+        if (open.platforms > 0 || /(?<![\w.:])platforms?\s*:|:platforms?\s*=>/.test(code)) platformOnly.add(gem[2].toLowerCase());
         const keys = [...code.matchAll(/(?<![\w:])(\w+)\s*:(?!:)|:(\w+)\s*=>/g)].map((m) => m[1] ?? m[2]);
         sourceOf.set(gem[2], keys.includes("path") || open.path > 0 ? "path" : keys.some((k) => gitKeys.has(k)) || open.git > 0 ? "git" : "registry");
       }
@@ -312,7 +317,7 @@ export function gemfileDeclared(content: string): GemfileDeclared | { error: str
     }
   }
   if (blocks.length > 0) return { error: "a block in it is never closed, so its structure could not be followed" };
-  return { names: [...new Set(names)], platformOnly, sourceOf };
+  return { names: [...new Set(names)], platformOnly, conditional, sourceOf };
 }
 
 /** "x", "x and y", "x, y, z and 2 more": a few names of a list, as every lockfile reason words them. */
@@ -520,22 +525,32 @@ export function resolveRuby(cwd: string): VersionSource {
   const problems: LockfileProblem[] = [];
   // gems.rb's pair was read: a Gemfile.lock left beside it is not what Bundler installs, and is said.
   const passedOver = path.join(cwd, "Gemfile.lock");
-  if (lockPath !== passedOver && fs.existsSync(passedOver) && !sameText(passedOver, content)) {
+  /** A Gemfile.lock that is a copy of the gems.locked read: read too, so it is never named unread. */
+  const copy = lockPath !== passedOver && fs.existsSync(passedOver) && sameText(passedOver, content);
+  if (lockPath !== passedOver && fs.existsSync(passedOver) && !copy) {
     problems.push({ file: passedOver, conflict: true, error: "gems.locked was read instead: with a gems.rb present Bundler uses gems.rb and gems.locked, so this file is not what gets installed" });
   }
-  // A spec's dependency with no spec of its own: the file is damaged inside (F4).
-  const inner = danglingDamage(read.dangling, "spec");
-  const damage = cut && inner ? { reason: `${cut}; ${inner.reason.replace(/^it is truncated or damaged: /, "")}`, missing: inner.missing } : cut ? { reason: cut, missing: 0 } : inner;
   // The Gemfile beside it, against what the file records (F1): DEPENDENCIES and every spec.
   const manifestName = path.basename(lockPath) === "gems.locked" ? "gems.rb" : "Gemfile";
   const manifest = readManifest(path.join(cwd, manifestName));
   let ahead: string[] = [];
+  /** DEPENDENCIES entries with no spec anywhere in the file (review item 3), known only with the Gemfile followed. */
+  let unspecced: string[] = [];
   if (manifest.state === "read") {
     const declared = gemfileDeclared(manifest.text);
     const recorded = new Set([...read.specs, ...read.direct.map((n) => n.toLowerCase())]);
     if ("error" in declared) problems.push(notComparedProblem(lockPath, manifestName, declared.error));
-    else ahead = declared.names.filter((n) => !recorded.has(n.toLowerCase()));
+    else {
+      ahead = declared.names.filter((n) => !recorded.has(n.toLowerCase()));
+      // Bundler writes a spec for every DEPENDENCIES entry, except a gem the Gemfile restricts to
+      // other platforms (`tzinfo-data`, platforms: windows) or declares behind a condition (`wdm` if
+      // Gem.win_platform?), and bundler itself. Any other entry with no spec: a spec was lost.
+      unspecced = [...new Set(read.direct.map((n) => n.toLowerCase()))].filter((n) => n !== "bundler" && !read.specs.has(n) && !declared.platformOnly.has(n) && !declared.conditional.has(n)).sort();
+    }
   } else if (manifest.state === "unreadable") problems.push(notComparedProblem(lockPath, manifestName, manifest.reason));
+  // A spec's dependency (F4) or a DEPENDENCIES entry (item 3) with no spec of its own: damaged inside.
+  const inner = danglingDamage([...new Set([...read.dangling, ...unspecced])].sort(), "spec");
+  const damage = cut && inner ? { reason: `${cut}; ${inner.reason.replace(/^it is truncated or damaged: /, "")}`, missing: inner.missing } : cut ? { reason: cut, missing: 0 } : inner;
   const uncheckable = read.uncheckable.map((u) => ({ ...u, file: lockPath }));
   if (read.instances.size === 0) {
     // Nothing was read and the file says why: named, never taken for a project with no gems.
@@ -549,6 +564,7 @@ export function resolveRuby(cwd: string): VersionSource {
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
   return found(read.versions, read.instances, lockPath, "lockfile", {
     direct: { deps: read.direct, devDeps: [] },
+    ...(copy ? { extraSources: [passedOver] } : {}),
     ...(privateIndex.length > 0 ? { privateIndex } : {}),
     ...(uncheckable.length > 0 ? { uncheckable } : {}),
     ...(problems.length > 0 ? { problems } : {}),
