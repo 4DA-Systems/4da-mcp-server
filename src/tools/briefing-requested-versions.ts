@@ -20,7 +20,7 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, dependencyOf, installedNames, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, installedNames, screenFor, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -35,7 +35,7 @@ import {
   specText,
 } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
-import { boundWords, knownPublicName, offlineNearMiss, screenedOut, screenTask, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
+import { boundWords, knownPublicName, offlineNearMiss, screenedOut, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
@@ -224,7 +224,7 @@ export interface TaskWordWithheld {
 /** The (package, version) pairs a task names, in the order named (uncapped: the briefing checks MAX_REQUESTED and names the rest NOT CHECKED). */
 /** What the reader takes for (package, version) pairs (screened), before the lookup rule readTaskVersions applies. */
 export function detectRequestedVersions(task: string, deps: readonly ResolvedDependency[]): RequestedVersion[] {
-  const screen = screenTask(task, dependencyOf(deps));
+  const screen = screenFor(task, deps);
   return readVersionsOf(screen.text, deps).requested.filter((r) => screenedOut(screen, r.name, [r.ecosystem, ...(r.alternatives ?? [])]) === null);
 }
 
@@ -258,7 +258,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   // Credentials, URLs, over-long words and whatever the task takes from a private registry, an index,
   // git, a path or a URL are blanked before anything is read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
   // What may then be looked up is gateTaskNames's, after the project's own private rules.
-  const screen = screenTask(task, dependencyOf(deps));
+  const screen = screenFor(task, deps);
   const read = readVersionsOf(screen.text, deps);
   const all = readTaskItems(normalizeVersionSyntax(screen.text), deps);
   const notes: string[] = [];
@@ -338,7 +338,7 @@ export function gateTaskNames<
   packages: readonly P[],
   requested: readonly R[],
 ): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; unverified: UnverifiedWord[]; unverifiedTotal: number } {
-  const screen = screenTask(task, dependencyOf(deps));
+  const screen = screenFor(task, deps);
   const touched = touchedNames(task, screen);
   const installed = installedNames(deps);
   // The ecosystems whose bundled lists count: the project's own, and those a command in the task installs

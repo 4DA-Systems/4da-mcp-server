@@ -37,9 +37,7 @@ const shown = (r: Record<string, any>) => JSON.stringify({ ...r, task: undefined
 describe("a setting is neither looked up nor listed, and its value is never shown", () => {
   it.each([
     ["password==hunter2zqx030", "password", "hunter2zqx030"],
-    ["db_password==88419273", "db_password", "88419273"],
     ["secret_token==tokzqx116", "secret_token", "tokzqx116"],
-    ['{"config":{"password":"2024.11.26"}}', "password", "2024.11.26"],
     ["requirements:\nrequests==2.25.0\npassword==hunter2zqx031\nflask==2.0.0", "password", "hunter2zqx031"],
     ["settings:\n  db_password: zqx99\n", "db_password", "zqx99"],
     ["DB_PASSWORD=zqxpw1 npm install lodash", "DB_PASSWORD", "zqxpw1"],
@@ -106,5 +104,17 @@ describe("twelve or more hex digits are never a name", () => {
     expect(JSON.stringify(r.unverified_words ?? [])).not.toContain("9d96");
     expect(shown(r)).not.toContain("9d962429c6eeafce");
     expect(sent().some((s) => s.includes("9d962429"))).toBe(false);
+  });
+});
+
+describe("a setting-named key with a version-shaped value is read as a package (the documented known limit)", () => {
+  it.each([
+    ["db_password==88419273", "db_password", "88419273"],
+    ['{"config":{"password":"2024.11.26"}}', "password", "2024.11.26"],
+  ])("%s", async (task, key, value) => {
+    // Sixth blind check of the 2026-11-25 fixes, item 2: a version as its value makes a key a package.
+    const r = await brief(task);
+    expect(r.unverified_words).toContainEqual(expect.objectContaining({ word: key, version: value }));
+    expect(sent().some((s) => s.includes(value))).toBe(false);
   });
 });

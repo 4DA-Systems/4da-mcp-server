@@ -66,7 +66,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
-import { isKnownSwitch, MAX_TASK_WORD, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { isKnownSwitch, MAX_TASK_WORD, optionTakesValue, pathLikeOperand, screenedOut, screenTask, type TaskScreen } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -342,7 +342,7 @@ export function detectAllNewPackages(task: string, deps: readonly ResolvedDepend
   // git, a path or a URL are never read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
   // What may then be looked up is decided by gateTaskNames (briefing-requested-versions.ts), after the
   // project's own private rules.
-  const screen = screenTask(task, dependencyOf(deps));
+  const screen = screenFor(task, deps);
   return readTaskItems(normalizeVersionSyntax(screen.text), deps).packages.filter((p) => screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]) === null);
 }
 
@@ -366,6 +366,18 @@ export function installedNames(deps: readonly ResolvedDependency[]): (name: stri
     if (d.ecosystem === "npm" || d.ecosystem === "PyPI" || d.ecosystem === "crates.io" || d.ecosystem === "Go") keys.add(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`);
   }
   return (name, ecosystem) => keys.has(`${ecosystem}\0${ecosystemKey(name, ecosystem)}`);
+}
+
+/** The last task screened, for these dependencies: a briefing screens its task once, not once per reader (sixth blind check, item 3). */
+let lastScreen: { task: string; key: string; screen: TaskScreen } | null = null;
+
+/** The task as the screen leaves it, for a project with these dependencies (one screen per task and dependency set). */
+export function screenFor(task: string, deps: readonly ResolvedDependency[]): TaskScreen {
+  const key = deps.map((d) => d.name).join("\n");
+  if (lastScreen && lastScreen.task === task && lastScreen.key === key) return lastScreen.screen;
+  const screen = screenTask(task, dependencyOf(deps));
+  lastScreen = { task, key, screen };
+  return screen;
 }
 
 /** Whether a word names one of the project's own dependencies, in any ecosystem: never a setting. */

@@ -61,7 +61,7 @@ import { walkBudgetNote } from "../walk-budget.js";
 import { escapeUnsafeDirs, liveUnsafeDirs, type UnsafeDirSources } from "../live/shell-safe.js";
 import * as path from "node:path";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
-import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, type NewPackageFinding } from "./briefing-new-packages.js";
+import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, screenFor, type NewPackageFinding } from "./briefing-new-packages.js";
 import {
   getRelevantWisdom,
   getRelevantWisdomHybrid,
@@ -653,7 +653,7 @@ export async function executeWhatShouldIKnow(
   if (!embedConfig) {
     return finalize(getRelevantWisdom(db, task, files), "ranked_lexical");
   }
-  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig);
+  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig, screenFor(task, ecosystemDeps()).forEmbedding);
   return finalize(wisdom, recall_mode, recall_note);
 }
 

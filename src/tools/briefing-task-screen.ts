@@ -30,7 +30,7 @@
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
-import { closestPopularPypi, normalizePypiName } from "./briefing-names.js";
+import { checkableSpec, closestPopularPypi, normalizePypiName } from "./briefing-names.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 
 /**
@@ -59,6 +59,11 @@ export interface TaskScreen {
   scopes: Set<string>;
   /** Ecosystems whose public registry the task replaces: none of their names is looked up. */
   ecosystems: Map<CheckEcosystem, string>;
+  /**
+   * `text` with the values of a command's options and its words with a colon inside blanked too: the readers
+   * never read those, and this copy is what an embedding provider may be sent (sixth blind check, item 4).
+   */
+  forEmbedding: string;
 }
 
 const LEAD_QUOTES = "\"'`";
@@ -247,6 +252,12 @@ export function settingName(key: string, isDependency?: (name: string) => boolea
   return !isDependency?.(key);
 }
 
+/** A value that is a version or constraint in some ecosystem's grammar (`3.0.1`, `^1.2`, `0.48`, `v1.6.0`): not a secret's shape. */
+function versionShaped(value: string): boolean {
+  if (SPEC_VALUE.test(value)) return true;
+  return (["npm", "PyPI", "crates.io", "Go"] as const).some((e) => checkableSpec(e, value) !== null || checkableSpec(e, `==${value}`) !== null);
+}
+
 export function screenTask(task: string, isDependency?: (name: string) => boolean): TaskScreen {
   const chars = task.split("");
   const withheld: Withheld[] = [];
@@ -268,6 +279,8 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     names.add(name.toLowerCase());
     hold(name, `not looked up: the task takes it from ${kind}`, start, end, true);
   };
+  /** Spans the readers never read but `text` keeps: option values and colon words (blanked in `forEmbedding`). */
+  const quiet: Array<{ start: number; end: number }> = [];
   const closeEcosystem = (ecosystem: CheckEcosystem, what: string, start: number, end: number) => {
     if (!ecosystems.has(ecosystem)) ecosystems.set(ecosystem, what);
     blank(start, end);
@@ -283,15 +296,16 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     for (let k = start; k < end; k++) if (blanked[k]) return false;
     return true;
   };
-  // 1b. A word with a shell expansion in it (`P4ss$w0rd`, `${secret}`, `%TOKEN%`, an inner backtick): withheld
-  // whole and never shown, so no reader takes one half for a name and the other for a version (fifth blind
-  // check, item 3). Its wrapping quotes and backticks aside; a price ($5) or a percentage (50%) is no expansion.
+  // 1b. A word with a shell expansion in it (`P4ss$w0rd`, `${secret}`, `$(cmd)`, `%TOKEN%`): withheld whole and
+  // never shown, so no reader takes one half for a name and the other for a version (fifth blind check, item 3).
+  // A backtick is markdown, not shell: never an expansion (sixth blind check, item 1). A price ($5) or a
+  // percentage (50%) is no expansion either.
   for (const m of task.matchAll(/\$\([^()\n]{0,300}\)?/g)) {
     if (free(m.index!, m.index! + m[0].length)) hold("a word with a shell expansion in it", `not read: its value is not in the task; ${NOT_SENT}`, m.index!, m.index! + m[0].length, true);
   }
   for (const m of task.matchAll(/\S{1,300}/g)) {
-    const inner = m[0].replace(/^["'`([{]+/, "").replace(/["'`)\]}.,;:!?]+$/, "");
-    if (/\$[A-Za-z_{(]|%[A-Za-z_]|`/.test(inner) && free(m.index!, m.index! + m[0].length)) {
+    const inner = m[0].replace(/^["'`([{*]+/, "").replace(/["'`)\]}.,;:!?*]+$/, "");
+    if (/\$[A-Za-z_{(]|%[A-Za-z_]\w*%/.test(inner) && free(m.index!, m.index! + m[0].length)) {
       hold("a word with a shell expansion in it", `not read: its value is not in the task; ${NOT_SENT}`, m.index!, m.index! + m[0].length, true);
     }
   }
@@ -317,14 +331,31 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     if (free(start, end)) holdPackage(m[2], specSource(m[3], "py") ?? "a URL", start, end);
   }
 
+  // Whether only blanks (and a YAML list dash) stand between `at` and its line's start, or its end. Walked over
+  // the blanks only: slicing the line per `key: value` match was quadratic on one long line (5.0 s on 199 KB of
+  // " a:"; sixth blind check, item 3).
+  const aloneBefore = (at: number) => {
+    let k = at;
+    while (k > 0 && at - k < MAX_TASK_WORD && (task[k - 1] === " " || task[k - 1] === "\t" || task[k - 1] === "-")) k--;
+    return k === 0 || task[k - 1] === "\n";
+  };
+  const aloneAfter = (at: number) => {
+    let k = at;
+    while (k < task.length && k - at < MAX_TASK_WORD && (task[k] === " " || task[k] === "\t")) k++;
+    return k === task.length || task[k] === "\n" || task[k] === "\r";
+  };
+  /** Whether the word at `at` is an operand of an install command on its line (looked back over at most 200 characters). */
+  const installOperand = (at: number) => /\b(?:npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|go)\s+(?:install|i|add|get|require)\b[^;&|\n]{0,200}$/i.test(task.slice(Math.max(0, at - 200), at));
   // 2b. Settings: `password==x`, `DB_PASSWORD=x`, `"secret_token": "x"`, `api_key = "x"`. A setting is not a
   // package: neither read nor listed, and only its name is shown, never its value (fifth blind check, item 2).
   for (const m of task.matchAll(/(?<=^|[\s"'`{,(])(["'`]?)([A-Za-z_][\w.-]{0,60})\1[ \t]{0,4}(={1,3}|:)[ \t]{0,4}(["'`]?)([^\s"'`,}]{1,300})\4/g)) {
     const start = m.index!;
     const end = m.index! + m[0].length;
     // `key: value` only quoted (JSON) or alone on its line (YAML): "Auth: switch to passport" is prose.
-    const line = (at: number, dir: 1 | -1) => (dir < 0 ? task.slice(task.lastIndexOf("\n", at - 1) + 1, at) : task.slice(at, (task.indexOf("\n", at) + 1 || task.length + 1) - 1));
-    const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (/^[ \t-]*$/.test(line(start, -1)) && /^[ \t]*$/.test(line(end, 1)));
+    const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (aloneBefore(start) && aloneAfter(end));
+    // A version or constraint as its value makes it a package (`"json-web-token": "3.0.1"`, `rusoto_credential =
+    // "0.48.0"`), and an install command's operand is never a setting (sixth blind check, item 2).
+    if (versionShaped(m[5]) || installOperand(start)) continue;
     if (colonOk && settingName(m[2], isDependency) && free(start, end)) hold(`a setting named ${m[2].slice(0, 60)}`, `not read: a setting, not a package; its value is never repeated; ${NOT_SENT}`, start, end, true);
   }
 
@@ -402,9 +433,12 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
         const flag = eq > 0 ? text.slice(0, eq) : text;
         const value = eq > 0 ? text.slice(eq + 1) : args[k + 1] ? bare(args[k + 1].text) : undefined;
         source ??= sourceOption(family, flag, value);
+        if (eq > 0) quiet.push({ start: args[k].start + args[k].text.indexOf("=") + 1, end: args[k].end });
+        else if (args[k + 1] && !bare(args[k + 1].text).startsWith("-") && !isKnownSwitch(manager, flag)) quiet.push({ start: args[k + 1].start, end: args[k + 1].end });
         if (eq < 0 && VALUE_OPTIONS[family].has(flag)) k++;
         continue;
       }
+      if (/:[^\s/]/.test(text) && !specSource(text, family)) quiet.push({ start: args[k].start, end: args[k].end });
       operands.push(args[k]);
     }
     // The subcommand (`install`, `add`, `pip install`) is no package. Only an install's operands are
@@ -490,11 +524,22 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
   // The requirement is moved over the brackets (its name stays where it was), so every reader binds the version.
   // A redirection with a descriptor (`2>&1`, `2> err.log`, `&> out`) ends the command: written as `;` so no
   // reader takes its `1` for a version or the next word for an operand (fourth blind check, B4).
+  // A markdown code span that touches other text (`**`x@1.2.5`**`, `` `x`@1.2.5 ``, `` `x`'s ``, `` `a`,`b` ``) loses
+  // its backticks, so the readers see the name and its version as they would without them (sixth blind
+  // check, item 1). One with blanks on both sides keeps them: the readers take a backticked word as a name.
   const text = chars
     .join("")
+    .replace(/`([^`\s]{1,300})`/g, (m: string, inner: string, at: number, all: string) => {
+      const after = all[at + m.length];
+      if (after === "@") return `  ${inner}`;
+      const before = at > 0 ? all[at - 1] : undefined;
+      return (before === undefined || /\s/.test(before)) && (after === undefined || /\s/.test(after)) ? m : ` ${inner} `;
+    })
     .replace(/(^|\s)(?:\d?>&\d|\d>>?|&>>?)/g, (m: string, pre: string) => `${pre};${" ".repeat(m.length - pre.length - 1)}`)
     .replace(/(^|[\s"'`(])([A-Za-z0-9][\w.-]{0,200})\[[\w.,\s-]{1,400}\](\S{0,300})/g, (m: string, pre: string, name: string, rest: string) => `${pre}${name}${rest}${" ".repeat(m.length - pre.length - name.length - rest.length)}`);
-  return { text, withheld, names, scopes, ecosystems };
+  const embed = text.split("");
+  for (const q of quiet) for (let k = Math.max(0, q.start); k < Math.min(q.end, embed.length); k++) if (embed[k] !== "\n") embed[k] = " ";
+  return { text, withheld, names, scopes, ecosystems, forEmbedding: embed.join("") };
 }
 
 /** The task with only its over-long words blanked: what the readers read with no screen, bounded. */
@@ -627,7 +672,8 @@ export function touchedNames(task: string, screen: TaskScreen): Set<string> {
     if (w.always) continue;
     // The word around the span, then one word either side (each scan stops at the next blank run).
     let a = w.start;
-    while (a > 0 && !isSpace(task[a - 1])) a--;
+    // A markdown link's target (`[text](url)`) is not part of its text (sixth blind check, item 1).
+    if (task.slice(Math.max(0, w.start - 2), w.start) !== "](") while (a > 0 && !isSpace(task[a - 1])) a--;
     let b = w.end;
     while (b < task.length && !isSpace(task[b])) b++;
     // A credential's value may be the version of the name before it (`"jsonwebtoken": "8.5.1"`): that word
