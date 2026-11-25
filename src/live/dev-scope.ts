@@ -13,6 +13,10 @@
  * scope = 'unknown'` as a placeholder. Reading that as "known runtime" would
  * claim a certainty the app itself does not have. The grade would not change
  * (unknown and runtime both get no discount), but `dev_scope_known` would lie.
+ *
+ * A row saying dev is never used: it would lower a grade on the app's word
+ * alone, and the app's inventory can be older than the lockfile on disk
+ * (audit 2026-11-25, G-2). See applyInstanceDevScope.
  */
 
 import type { SqliteDatabase } from "../sqlite-driver.js";
@@ -90,12 +94,17 @@ function loadScopeIndex(db: SqliteDatabase, dir: string, ecosystem: string): Sco
 }
 
 /**
- * Stamp transitive dependencies with the dev scope the app determined for
- * them. A dependency pinned in several workspaces is dev-only only when every
- * one of them says dev, and known only when every one of them was determined.
- * Anything short of that keeps the resolver's own (unknown) scope. Direct
- * dependencies are untouched: their manifest already says. Returns new
- * objects; never throws; a database without the table changes nothing.
+ * Mark transitive dependencies whose scope the lockfile on disk does not say
+ * (devScopeKnown false) as known RUNTIME when the app determined runtime for
+ * them in every workspace that pins them. The app's data never lowers a grade
+ * (audit 2026-11-25, G-2): a row saying dev, however recent, changes nothing,
+ * and a scope the server's own lockfile reading already knows (npm's `dev`
+ * flag) is never overridden. The app's inventory can be older than the
+ * lockfile (it is rewritten only when the app rescans), and a stale dev row
+ * lowered severities and dropped vulnerable packages from the health count
+ * (6 -> 3). Direct dependencies are untouched: their manifest already says.
+ * Returns new objects; never throws; a database without the table changes
+ * nothing.
  */
 export function applyInstanceDevScope(
   db: SqliteDatabase | null,
@@ -110,13 +119,12 @@ export function applyInstanceDevScope(
   };
 
   return deps.map((dep) => {
-    if (dep.isDirect || !dep.version || dep.sourceDirs.length === 0) return dep;
-    let allDev = true;
+    if (dep.isDirect || dep.devScopeKnown || !dep.version || dep.sourceDirs.length === 0) return dep;
     for (const dir of dep.sourceDirs) {
       const row = indexFor(dir, dep.ecosystem)?.get(instanceKey(dep.ecosystem, dep.name, dep.version));
-      if (!row || !row.known) return dep;
-      allDev &&= row.isDev;
+      // Only a determined runtime row counts; a dev row would lower the grade on the app's word alone.
+      if (!row || !row.known || row.isDev) return dep;
     }
-    return { ...dep, devScopeKnown: true, isDev: allDev };
+    return { ...dep, devScopeKnown: true, isDev: false };
   });
 }
