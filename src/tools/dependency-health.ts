@@ -312,7 +312,10 @@ async function dependencyHealthAnswer(
   // A walk that stopped before it reached every directory: the score is over the part it read, never
   // "all healthy", and the summary says so first (audit 2026-11-25 F-B1).
   const walkNote = walkNotReadNote(liveIntel.getDiscovery());
-  const partialNotes = [...(walkNote ? [walkNote] : []), ...lockfileProblemNotes([...refused, ...uncrossed]), ...registryNote];
+  // A lockfile that was read whole but could not be compared with its manifest is a note beside
+  // the score, never a reason to call the score partial (the scan and the planner treat it so too).
+  const uncrossedNotes = lockfileProblemNotes(uncrossed);
+  const partialNotes = [...(walkNote ? [walkNote] : []), ...lockfileProblemNotes(refused), ...registryNote];
   const scorePartial = !withheld && partialNotes.length > 0;
   // One population for every count: the stored scan can be vulnerability_scan's,
   // which includes direct devDependencies by default, while the registry rows
@@ -479,7 +482,7 @@ async function dependencyHealthAnswer(
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
-  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes.filter((n) => n !== walkNote)]) parts.push(note.replace(/[.]$/, ""));
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes.filter((n) => n !== walkNote), ...uncrossedNotes]) parts.push(note.replace(/[.]$/, ""));
 
   return {
     scannedAt: new Date().toISOString(),
