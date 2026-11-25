@@ -102,3 +102,25 @@ describe("a narrow key is judged, but declares no version for the whole tree", (
     expect(s.edit(file, '"name": "r"', '"name": "s"').decision).toBe("allow");
   });
 });
+
+describe("the brace denial's wording, followed for each shape, makes the file readable", () => {
+  it.each([
+    ["a flow mapping", `${H}catalog: { lodash: ^4.17.21 }\n`, `${H}catalog:\n  lodash: ^4.17.21\n`],
+    ["a brace glob", `${H}publicHoistPattern:\n  - '*{eslint,prettier}*'\ncatalog:\n  lodash: ^4.17.21\n`, `${H}publicHoistPattern:\n  - '*eslint*'\n  - '*prettier*'\ncatalog:\n  lodash: ^4.17.21\n`],
+    ["a brace glob in packages", `packages:\n  - 'packages/{a,b}'\ncatalog:\n  lodash: ^4.17.21\n`, `packages:\n  - 'packages/a'\n  - 'packages/b'\ncatalog:\n  lodash: ^4.17.21\n`],
+    ["a quoted brace", `${H}settings:\n  x: '}'\ncatalog:\n  lodash: ^4.17.21\n`, `${H}catalog:\n  lodash: ^4.17.21\n`],
+    ["a block scalar", `${H}notes: |\n  { see }\ncatalog:\n  lodash: ^4.17.21\n`, `${H}catalog:\n  lodash: ^4.17.21\n`],
+    ["a trailing comment", `${H}catalog: # see {issue}\n  lodash: ^4.17.21\n`, `${H}# see {issue}\ncatalog:\n  lodash: ^4.17.21\n`],
+  ])("%s", (_label, braced, readable) => {
+    s.ledger([AVOID]);
+    const file = s.file("pnpm-workspace.yaml", braced);
+    const held = s.edit(file, "lodash: ^4.17.21", "lodash: 4.17.20");
+    expect(held.text).toContain(NOT_READ);
+    expect(held.text).toContain("brace glob");
+    // Following the wording: the readable file is judged by its versions, not held as not read.
+    const rewritten = s.write(file, readable.replace("lodash: ^4.17.21", "lodash: 4.17.20"));
+    expect(rewritten.decision).toBe("deny");
+    expect(rewritten.text).toContain("answered avoid");
+    expect(rewritten.text).not.toContain("could not be read");
+  });
+});

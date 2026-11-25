@@ -1154,8 +1154,8 @@ function wholeFileChanges(file, before, after) {
       const was = pnpmContentLines(before);
       if (was.length !== now.length || was.some((line, i) => line !== now[i])) {
         refuse(
-          "pnpm-workspace.yaml holds a flow mapping ({ ... }), which the hook does not read, and this edit changes the file",
-          'No dependency_check verdict releases this edit. Rewrite each flow mapping in pnpm-workspace.yaml as block lines, one "name: version" per line, so the hook can read the file; then the versions it sets are judged as in any other edit (call dependency_check for each one the denial names).',
+          "pnpm-workspace.yaml holds { or } outside a comment line, which this hook does not read exactly (a flow mapping, a brace glob, a quoted or commented brace), and this edit changes the file",
+          `No dependency_check verdict releases this edit. To make the file readable: write each flow mapping as block lines, one "name: version" per line; write a brace glob ('*{eslint,prettier}*', 'packages/{a,b}') as separate entries; move a brace in a trailing comment to a comment line of its own; take any other brace (in a quoted value or a block scalar) out of the file. Then the versions it sets are judged as in any other edit (call dependency_check for each one the denial names).`,
         );
       }
       return [];

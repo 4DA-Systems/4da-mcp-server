@@ -37,7 +37,7 @@ interface Case {
 }
 
 const CASES = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "a1125-hook-pnpm-flow-cases.json"), "utf8")) as Case[];
-const NOT_READ = "No dependency_check verdict releases this edit. Rewrite each flow mapping in pnpm-workspace.yaml as block lines";
+const NOT_READ = "No dependency_check verdict releases this edit. To make the file readable: write each flow mapping as block lines";
 const AVOID = { ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid", reason: "advisories" };
 const HEAD = "packages:\n  - 'packages/*'\n";
 
