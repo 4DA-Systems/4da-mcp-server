@@ -283,6 +283,19 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     for (let k = start; k < end; k++) if (blanked[k]) return false;
     return true;
   };
+  // 1b. A word with a shell expansion in it (`P4ss$w0rd`, `${secret}`, `%TOKEN%`, an inner backtick): withheld
+  // whole and never shown, so no reader takes one half for a name and the other for a version (fifth blind
+  // check, item 3). Its wrapping quotes and backticks aside; a price ($5) or a percentage (50%) is no expansion.
+  for (const m of task.matchAll(/\$\([^()\n]{0,300}\)?/g)) {
+    if (free(m.index!, m.index! + m[0].length)) hold("a word with a shell expansion in it", `not read: its value is not in the task; ${NOT_SENT}`, m.index!, m.index! + m[0].length, true);
+  }
+  for (const m of task.matchAll(/\S{1,300}/g)) {
+    const inner = m[0].replace(/^["'`([{]+/, "").replace(/["'`)\]}.,;:!?]+$/, "");
+    if (/\$[A-Za-z_{(]|%[A-Za-z_]|`/.test(inner) && free(m.index!, m.index! + m[0].length)) {
+      hold("a word with a shell expansion in it", `not read: its value is not in the task; ${NOT_SENT}`, m.index!, m.index! + m[0].length, true);
+    }
+  }
+
   // 2. Manifest entries taken from git, a path, a workspace or a URL, written into the task.
   const JSON_SOURCE = /(["'])(@?[\w.~-]{1,214}(?:\/[\w.~-]{1,214})?)\1\s{0,8}:\s{0,8}(["'])([^"'\n]{1,500})\3/g;
   for (const m of task.matchAll(JSON_SOURCE)) {
