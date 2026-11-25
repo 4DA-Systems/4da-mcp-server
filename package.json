@@ -86,7 +86,7 @@
     "@modelcontextprotocol/server": "^2.4.0",
     "hono": "^4.13.19",
     "jsonc-parser": "^3.3.1",
-    "undici": "7.30.1"
+    "undici": "8.12.4"
   },
   "optionalDependencies": {
     "better-sqlite3": "^12.9.0"
