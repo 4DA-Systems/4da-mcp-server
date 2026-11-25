@@ -436,7 +436,12 @@ export function screenTask(task: string): TaskScreen {
     }
   }
 
-  return { text: chars.join(""), withheld, names, scopes, ecosystems };
+  // 7. PEP 508 extras: `requests[security,socks]==2.25.0` names requests at 2.25.0; an extra is never a name.
+  // The requirement is moved over the brackets (its name stays where it was), so every reader binds the version.
+  const text = chars
+    .join("")
+    .replace(/(^|[\s"'`(])([A-Za-z0-9][\w.-]{0,200})\[[\w.,\s-]{1,400}\](\S{0,300})/g, (m: string, pre: string, name: string, rest: string) => `${pre}${name}${rest}${" ".repeat(m.length - pre.length - name.length - rest.length)}`);
+  return { text, withheld, names, scopes, ecosystems };
 }
 
 /** The task with only its over-long words blanked: what the readers read with no screen, bounded. */
