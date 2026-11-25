@@ -56,7 +56,8 @@ import {
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { exclusionNotes, lockfileProblemNotes, splitLockfileProblems } from "../project-tree.js";
+import { exclusionNotes, lockfileProblemNotes, splitLockfileProblems, type TreeDiscovery } from "../project-tree.js";
+import { walkBudgetNote } from "../walk-budget.js";
 import * as path from "node:path";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, type NewPackageFinding } from "./briefing-new-packages.js";
@@ -600,7 +601,7 @@ export async function executeWhatShouldIKnow(
       scan_status: scanStatus,
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
-      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -856,12 +857,32 @@ function sayNewPackage(p: NewPackageFinding): string {
  * requirements include refused. Each with the note every tool words it in (lockfileProblemNotes),
  * paths relative to the project.
  */
-function lockfilesNotRead(liveIntel: BriefingLiveIntel | null): { notes: string[]; files: NonNullable<WhatShouldIKnowResult["lockfiles_not_read"]> } {
+/**
+ * The sentence for a directory walk that stopped before it reached every directory (its directory
+ * bound, or its time budget: walk-budget.ts), or null when it read the whole tree. Starts NOT
+ * CHECKED: a dependency in the part never reached was checked nowhere (audit 2026-11-25 F-B1: the
+ * briefing said safe_to_delegate for one, the planner vulnerabilityDataAvailable: true).
+ * upgrade_planner and dependency_health lead with it too.
+ */
+export function walkNotReadNote(discovery: Pick<TreeDiscovery, "walkTruncated" | "walkStopped"> | null | undefined): string | null {
+  if (!discovery?.walkTruncated) return null;
+  const why = discovery.walkStopped === "time_budget" ? walkBudgetNote() : "the directory walk stopped at its directory bound, so the directories it had not reached were not read and their lockfiles were not counted";
+  return `NOT CHECKED: ${why}. A dependency in that part was checked nowhere, so this is not a complete result: pass project_path for the part of the project you need${discovery.walkStopped === "time_budget" ? " (or raise FOURDA_WALK_BUDGET_MS on a slow disk)" : ""}.`;
+}
+
+function lockfilesNotRead(liveIntel: BriefingLiveIntel | null): { notes: string[]; files: NonNullable<WhatShouldIKnowResult["lockfiles_not_read"]>; walkCut: boolean } {
   let problems: ReturnType<NonNullable<BriefingLiveIntel["getLockfileProblems"]>> = [];
   try {
     problems = liveIntel?.getLockfileProblems?.() ?? [];
   } catch {
     problems = [];
+  }
+  let walk: string | null = null;
+  try {
+    walk = walkNotReadNote(liveIntel?.getDiscovery?.() ?? null);
+  } catch {
+    // Unknown whether the walk finished: said as not read, never as complete.
+    walk = "NOT CHECKED: whether the directory walk read the whole project is not known, so this is not a complete result.";
   }
   const { unreadable, partial, refused, mergeConflicts } = splitLockfileProblems(problems);
   const root = liveIntel?.getProjectRoot?.() ?? null;
@@ -869,8 +890,10 @@ function lockfilesNotRead(liveIntel: BriefingLiveIntel | null): { notes: string[
   const gaps = [...mergeConflicts, ...unreadable, ...partial, ...refused];
   const reasonOf = (p: (typeof gaps)[number]) => (mergeConflicts.includes(p) ? "merge_conflict" : unreadable.includes(p) ? "unreadable" : partial.includes(p) ? "partial" : "refused") as "merge_conflict" | "unreadable" | "partial" | "refused";
   return {
-    notes: lockfileProblemNotes(gaps, show),
+    // The walk first: what it never reached can hold any of the task's packages.
+    notes: [...(walk ? [walk] : []), ...lockfileProblemNotes(gaps, show)],
     files: gaps.map((p) => ({ path: show(p.file), reason: reasonOf(p), error: p.error })),
+    walkCut: walk !== null,
   };
 }
 
@@ -883,7 +906,7 @@ function withReadGaps(verdict: { level: DelegationLevel; reason: string }, notes
   if (notes.length === 0) return verdict;
   const said = notes.join(" ");
   if (verdict.level === "safe_to_delegate") {
-    return { level: "unknown", reason: `${said} This briefing cannot clear the task while what that pins is unchecked: fix the file, then ask again.` };
+    return { level: "unknown", reason: `${said} This briefing cannot clear the task while that is unchecked: fix what is named, then ask again.` };
   }
   if (verdict.level === "unknown") return { level: "unknown", reason: `${said} ${verdict.reason}` };
   return { level: verdict.level, reason: `${verdict.reason} ${said}` };
@@ -1002,6 +1025,8 @@ function summarize(
   newPackages: NewPackageFinding[] = [],
   requested: RequestedVersionFinding[] = [],
   unread: string[] = [],
+  /** The walk stopped before it read the whole project: "named in the task" is only about the part read. */
+  walkCut = false,
 ): string {
   const parts: string[] = [];
   for (const note of notCovered) parts.push(note.replace(/[.]$/, ""));
@@ -1026,7 +1051,9 @@ function summarize(
   parts.push(
     deps.length > 0
       ? `Task touches ${deps.map((d) => `${labelOf(d, deps)}${d.installed.length ? ` ${d.installed.join("/")}` : ""}`).join(", ")}`
-      : "No dependency of this project is named in the task",
+      : walkCut
+        ? "No dependency named in the task was found in the part of the project that was read"
+        : "No dependency of this project is named in the task",
   );
   const known = deps.filter((d) => d.latest && d.latest.on_latest_major !== null);
   if (known.length > 0) {

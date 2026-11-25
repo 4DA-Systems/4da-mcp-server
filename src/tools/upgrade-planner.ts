@@ -60,6 +60,7 @@ import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
 import { declaredNpmOperator, hasUnsafeDir, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
 import { escapeUnsafeDirs, isShellSafeDir } from "../live/shell-safe.js";
+import { walkNotReadNote } from "./what-should-i-know.js";
 import * as path from "node:path";
 
 export interface UpgradePlannerParams {
@@ -514,7 +515,11 @@ async function executeStandalonePlanner(
   // CVE-aware either (review 2026-11-24: a subdirectory package.json with no lockfile).
   const manifestsUnlocked = discoveryAtStart?.unlockedManifestsCount ?? 0;
   const setMoved = liveIntel.getGeneration() !== startGeneration;
-  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable && lockfileReadAtStart && lockfilesNotRead === 0 && manifestsUnlocked === 0 && !setMoved;
+  // A walk that stopped before it reached every directory left lockfiles unread and uncounted: a
+  // plan over the part it read is not CVE-aware for the project (audit 2026-11-25 F-B1).
+  const walkNote = walkNotReadNote(discoveryAtStart);
+  const vulnerabilityDataAvailable =
+    vulnResult !== null && coverage === null && !nothingReadable && lockfileReadAtStart && lockfilesNotRead === 0 && manifestsUnlocked === 0 && !setMoved && walkNote === null;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
   // charged with RUSTSEC-2026-0190 (fixed in 1.0.103 — it isn't affected) while
@@ -1036,6 +1041,7 @@ async function executeStandalonePlanner(
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
   for (const note of [...exclusionNotes(discoveryAtStart), ...unreadableNotes(problemsAtStart)]) parts.push(note.replace(/[.]$/, ""));
+  if (walkNote) parts.unshift(walkNote.replace(/[.]$/, ""));
   if (setMoved) parts.unshift("NOT CHECKED: the dependency set changed while this plan was computed (a lockfile or manifest changed), so its rows and its notes may describe different files; plan again");
   const nothing = vulnerabilityDataAvailable ? "nothing to upgrade (no known vulnerability, deprecation, or newer release of a direct dependency)" : "no vulnerability data to plan from";
   if (only && limited.length === 0) parts.push(emptyAnswerNote(only, liveIntel, includeDev, nothing));
