@@ -48,6 +48,41 @@ export function poetryRequirements(content: string): PoetryRequirement[] {
   return out;
 }
 
+/** Inline-table keys that do not restrict where a Poetry dependency is installed: such a dependency is always locked. */
+const UNRESTRICTED_KEYS = new Set(["version", "extras", "optional", "source", "allow-prereleases", "allows-prereleases"]);
+
+/** The keys of a TOML inline table (`{ version = "1", markers = "..." }`); a string that looks like `, key =` only adds a key, so it errs toward "restricted". */
+export function inlineTableKeys(table: string): string[] {
+  return [...table.matchAll(/(?:^\{|,)\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*=/g)].map((m) => m[1].replace(/^["']|["']$/g, ""));
+}
+
+/**
+ * The names Poetry always writes a poetry.lock entry for (audit 2026-11-25, F1): every dependency
+ * of `[tool.poetry.dependencies]`, the dev table and every group, `python` excepted, whose
+ * constraint is a string or an inline table that does not restrict it (no `markers`, `python`,
+ * `platform`) and that is a registry package (no `git`, `path`, `url`, `file`). Optional ones are
+ * locked too (every extra is). An array of constraints, or a dotted table, is not compared. Names
+ * as written; the caller normalises them.
+ */
+export function poetryLockedNames(content: string): string[] {
+  const out: string[] = [];
+  let table = "";
+  for (const line of tomlLines(content)) {
+    const header = tomlHeader(line);
+    if (header) {
+      table = header.array ? "" : header.name;
+      continue;
+    }
+    if (!POETRY_TABLE.test(table)) continue;
+    const kv = tomlKeyValue(line);
+    if (!kv || !NAME.test(kv.key) || kv.key.toLowerCase() === "python") continue;
+    if (kv.value.startsWith("{")) {
+      if (inlineTableKeys(kv.value).every((key) => UNRESTRICTED_KEYS.has(key))) out.push(kv.key);
+    } else if (tomlString(kv.value) !== null) out.push(kv.key);
+  }
+  return out;
+}
+
 function requirementText(name: string, value: string): string {
   if (value.startsWith("{")) {
     const git = inlineKey(value, "git");
