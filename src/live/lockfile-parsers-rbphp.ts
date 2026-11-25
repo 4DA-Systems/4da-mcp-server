@@ -520,7 +520,7 @@ export function resolveRuby(cwd: string): VersionSource {
   const problems: LockfileProblem[] = [];
   // gems.rb's pair was read: a Gemfile.lock left beside it is not what Bundler installs, and is said.
   const passedOver = path.join(cwd, "Gemfile.lock");
-  if (lockPath !== passedOver && fs.existsSync(passedOver)) {
+  if (lockPath !== passedOver && fs.existsSync(passedOver) && !sameText(passedOver, content)) {
     problems.push({ file: passedOver, conflict: true, error: "gems.locked was read instead: with a gems.rb present Bundler uses gems.rb and gems.locked, so this file is not what gets installed" });
   }
   // A spec's dependency with no spec of its own: the file is damaged inside (F4).
@@ -553,6 +553,15 @@ export function resolveRuby(cwd: string): VersionSource {
     ...(uncheckable.length > 0 ? { uncheckable } : {}),
     ...(problems.length > 0 ? { problems } : {}),
   });
+}
+
+/** Whether `file` holds `text` (line endings aside): a copy of the lockfile read is no conflict with it. Unreadable is not the same. */
+function sameText(file: string, text: string): boolean {
+  try {
+    return readTextFile(file).replace(/\r\n/g, "\n") === text.replace(/\r\n/g, "\n");
+  } catch {
+    return false;
+  }
 }
 
 /** A manifest beside a lockfile: read, absent, or there and not readable (said, never taken for absent). */

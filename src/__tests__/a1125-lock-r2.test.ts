@@ -157,6 +157,17 @@ describe("1b: the Gemfile shapes real projects use are followed", () => {
   });
 });
 
+describe("2: gems.locked beside a Gemfile.lock", () => {
+  it("byte-identical (or only line endings apart): no CONFLICT", () => {
+    write({ "gems.rb": "source 'https://rubygems.org'\ngem 'rake'\n", "gems.locked": RAKE_LOCK, "Gemfile.lock": RAKE_LOCK.replace(/\n/g, "\r\n") });
+    expect(problems("RubyGems")).toEqual([]);
+  });
+  it("different: CONFLICT, as before", () => {
+    write({ "gems.rb": "source 'https://rubygems.org'\ngem 'rake'\n", "gems.locked": RAKE_LOCK, "Gemfile.lock": LOCK("    rake (12.0.0)\n", "  rake\n") });
+    expect(problems("RubyGems").map((p) => [path.basename(p.file), p.conflict])).toEqual([["Gemfile.lock", true]]);
+  });
+});
+
 describe("1a: a lockfile only not compared with its manifest is a note, never a lead", () => {
   it("the totals stay numbers, the summary leads with nothing, the plan keeps its data", async () => {
     write({ "composer.json": "{ not json", "composer.lock": JSON.stringify({ packages: [{ name: "a/a", version: "1.0.0", dist: { type: "zip", url: "https://api.github.com/repos/a/a/zipball/x" } }], "packages-dev": [] }) });
