@@ -20,7 +20,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { emptySource, found, InstanceSet, partialRead, unreadableReason, type LockfileProblem, type UncheckableDependency, type VersionSource } from "./lockfile-types.js";
 import { pyprojectRequirements, uvOverrideRequirements } from "./pyproject-requirements.js";
-import { poetryRequirements } from "./poetry-requirements.js";
+import { inlineTableKeys, poetryLockedNames, poetryRequirements } from "./poetry-requirements.js";
+import { tomlHeader, tomlKeyValue, tomlLines, tomlString } from "./private-hosts.js";
+import { danglingDamage, manifestAheadProblem, manifestAheadText, notComparedProblem } from "./lockfile-parsers-rbphp.js";
 import { isMergeConflictError, readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
@@ -184,9 +186,10 @@ export function resolvePython(cwd: string): VersionSource {
 
   // A lockfile here holds a merge conflict: the project has a lockfile, so pyproject.toml's pins are not read in its place.
   let conflictedLock = false;
+  const besides = new Set(PYTHON_TOML_LOCKS.filter((file) => fs.existsSync(path.join(cwd, file))));
   for (const file of PYTHON_TOML_LOCKS) {
     const lockPath = path.join(cwd, file);
-    if (!fs.existsSync(lockPath)) continue;
+    if (!besides.has(file)) continue;
     try {
       const content = readTextFile(lockPath);
       const read = readTomlPackageLock(content);
@@ -194,7 +197,9 @@ export function resolvePython(cwd: string): VersionSource {
       for (const p of read.privateIndex) privateIndex.push({ ...p, file: lockPath });
       // pdm.lock records no index per package: what its configured sources serve is not visible in it.
       if (file === "pdm.lock") indexUnrecorded = true;
-      const damage = pythonLockDamage(file, content, pyproject);
+      const damage = pythonLockDamage(file, content, pyproject, besides);
+      // pyproject.toml is there and could not be read: this lockfile was not compared with it (F1), and that is said.
+      if (pyprojectUnread && file !== "uv.lock") damaged.push(notComparedProblem(lockPath, "pyproject.toml", pyprojectUnread.error));
       if (read.instances.size === 0) {
         // Nothing was read and the file says why: named here, never taken for a project with no dependencies.
         if (damage) damaged.push({ file: lockPath, error: `${damage.reason}; no package version could be read from it` });
@@ -221,8 +226,21 @@ export function resolvePython(cwd: string): VersionSource {
         sources.push(pipfileLock);
         lockfile = true;
       }
+      // The Pipfile beside it, against the entries it holds (F1). Not readable is said, never damage.
+      const pipfile = path.join(cwd, "Pipfile");
+      let ahead: string[] = [];
+      if (fs.existsSync(pipfile) && read.names.size > 0) {
+        try {
+          ahead = [...new Set(pipfileLockedNames(readTextFile(pipfile)).filter((n) => !read.names.has(n)))].sort();
+        } catch (error) {
+          damaged.push(notComparedProblem(pipfileLock, "Pipfile", unreadableReason(error).replace(/^could not be read/, "it could not be read")));
+        }
+      }
       // Entries skipped inside a file that was otherwise read (`skipped`), or a file that gave nothing.
-      if (read.problem) damaged.push({ file: pipfileLock, error: read.problem, ...(read.pins.length > 0 && read.malformed > 0 ? { skipped: read.malformed } : {}) });
+      if (ahead.length > 0 && read.pins.length > 0) {
+        const problem = manifestAheadProblem(pipfileLock, "Pipfile", ahead);
+        damaged.push(read.problem ? { ...problem, error: `${read.problem}; also, ${problem.error}`, skipped: (problem.skipped ?? 0) + read.malformed } : problem);
+      } else if (read.problem) damaged.push({ file: pipfileLock, error: read.problem, ...(read.pins.length > 0 && read.malformed > 0 ? { skipped: read.malformed } : {}) });
     } catch (error) {
       // Unreadable or not JSON: resolveVersionSource names it and why.
       if (isMergeConflictError(error)) conflictedLock = true;
@@ -385,6 +403,8 @@ interface PipfileLockRead {
   problem: string | null;
   /** Entries that could not be read (counted in `problem`). */
   malformed: number;
+  /** Every package the file has an entry for, in either section, PEP 503 normalised (what a Pipfile is compared with). */
+  names: Set<string>;
 }
 
 /**
@@ -393,7 +413,7 @@ interface PipfileLockRead {
  * costs that entry and is said, never the entries around it and never the whole file.
  */
 function readPipfileLock(lock: unknown, file: string): PipfileLockRead {
-  const out: PipfileLockRead = { pins: [], uncheckable: [], privateIndex: [], problem: null, malformed: 0 };
+  const out: PipfileLockRead = { pins: [], uncheckable: [], privateIndex: [], problem: null, malformed: 0, names: new Set() };
   const isTable = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
   if (!isTable(lock) || !["_meta", "default", "develop"].some((key) => key in lock)) {
     out.problem = "it is valid JSON but not a Pipfile.lock: it has no `default` or `develop` section";
@@ -416,6 +436,7 @@ function readPipfileLock(lock: unknown, file: string): PipfileLockRead {
       continue;
     }
     for (const [name, info] of Object.entries(entries)) {
+      out.names.add(normalizePythonName(name));
       if (!isTable(info) || (info.version !== undefined && typeof info.version !== "string")) {
         unread.push(name.replace(/[^\w.@/-]+/g, "?").slice(0, 80));
         continue;
@@ -456,12 +477,30 @@ function readPipfileLock(lock: unknown, file: string): PipfileLockRead {
  *   `[tool.uv]` override or constraint covers.
  * pdm.lock carries nothing of the kind (its `[metadata]` comes first).
  */
-function pythonLockDamage(name: string, content: string, pyproject: string | null): { reason: string; missing: number; behindManifest?: true } | null {
+function pythonLockDamage(name: string, content: string, pyproject: string | null, besides: ReadonlySet<string> = new Set()): { reason: string; missing: number; behindManifest?: true } | null {
   const shared = tomlLockDamage(content);
   const parts: string[] = [];
   let missing = 0;
   let outOfDate = false;
   if (name === "poetry.lock" && !/^\[metadata\]\s*$/m.test(content)) parts.push("it has no [metadata] table, which Poetry writes last");
+  if (name === "poetry.lock" || name === "pdm.lock") {
+    // An entry's dependency with no entry of its own (F4), and what pyproject.toml declares that
+    // the file has no entry for (F1), as uv.lock is held to both.
+    const graph = name === "pdm.lock" ? pdmLockGraph(content) : poetryLockGraph(content);
+    const names = graph.names;
+    // The project itself has no table (a plugin of it depends on it: textual-dev on textual).
+    const own = pyproject === null ? null : projectName(pyproject);
+    const dangling = graph.dangling.filter((n) => n !== own);
+    const inner = danglingDamage(dangling, "[[package]] table");
+    if (inner) parts.push(inner.reason.replace(/^it is truncated or damaged: /, ""));
+    const declared = pyproject === null ? [] : name === "pdm.lock" ? pdmDeclared(pyproject, content) : poetryDeclared(pyproject, besides);
+    const ahead = [...new Set(declared.filter((n) => !names.has(n)))].sort();
+    if (ahead.length > 0 && names.size > 0) {
+      outOfDate = dangling.length === 0;
+      parts.push(manifestAheadText("pyproject.toml", ahead));
+    }
+    missing = dangling.length + ahead.length;
+  }
   if (name === "uv.lock") {
     const { tables, dangling } = uvLockTables(content);
     const some = (list: string[]) => `${list.slice(0, 3).join(", ")}${list.length > 3 ? ", ..." : ""}`;
@@ -483,8 +522,151 @@ function pythonLockDamage(name: string, content: string, pyproject: string | nul
   if (parts.length === 0) return shared;
   if (shared) return { reason: `${shared.reason}; ${parts.join("; ")}`, missing: shared.missing + missing };
   // Only the manifest disagrees: cut between two tables, or written before the manifest changed.
-  if (outOfDate && parts.length === 1) return { reason: `it is truncated or out of date: ${parts[0]}`, missing, behindManifest: true };
+  if (outOfDate && parts.length === 1) return { reason: name === "uv.lock" ? `it is truncated or out of date: ${parts[0]}` : parts[0], missing, behindManifest: true };
   return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing };
+}
+
+/**
+ * What a pdm.lock names: every `[[package]]` table (`names`, PEP 503 normalised), and the packages
+ * an entry's `dependencies` require that have no table (`dangling`, F4). A requirement behind an
+ * environment marker may legitimately have none, and is not counted.
+ */
+function pdmLockGraph(content: string): { names: Set<string>; dangling: string[] } {
+  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1).map((block) => block.split(/^\[/m)[0]);
+  const names = new Set<string>();
+  for (const body of blocks) {
+    const name = /^name\s*=\s*"([^"]*)"/m.exec(body)?.[1];
+    if (name) names.add(normalizePythonName(name));
+  }
+  const dangling = new Set<string>();
+  for (const body of blocks) {
+    // One line (`dependencies = ["a", "b[x]"]`) or one requirement per line up to a `]` of its own.
+    const list = /^dependencies\s*=\s*\[(.*)\][ \t]*\r?$/m.exec(body)?.[1] ?? /^dependencies\s*=\s*\[[ \t]*\r?\n([^]*?)^\]/m.exec(body)?.[1] ?? "";
+    for (const m of list.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+      if (m[1].includes(";")) continue;
+      const dep = requirementName(m[1]);
+      if (dep && !names.has(dep)) dangling.add(dep);
+    }
+  }
+  return { names, dangling: [...dangling].sort() };
+}
+
+/**
+ * Names Poetry (before 1.4) and pipenv treat as "unsafe" and leave out of the lockfile, like
+ * pip-tools without --allow-unsafe: a manifest or an entry naming one is no sign of a stale or
+ * damaged file (rasa's pyproject.toml declares setuptools; its poetry.lock has no entry for it).
+ */
+const UNLOCKED_TOOLS = new Set(["setuptools", "distribute", "pip", "wheel"]);
+
+/** Poetry `[package.dependencies]` values that do not restrict a dependency: it is always locked. */
+const POETRY_LOCKED_KEYS = new Set(["version", "extras", "source"]);
+
+/**
+ * What a poetry.lock names: every `[[package]]` table, and the packages an entry's
+ * `[package.dependencies]` require with no table (F4). Only a plain constraint (`idna = ">=2.5"`, or
+ * an inline table of version / extras alone) is counted: an optional, marker, python- or
+ * platform-restricted dependency, or an array of them, may legitimately have no table.
+ */
+function poetryLockGraph(content: string): { names: Set<string>; dangling: string[] } {
+  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1);
+  const names = new Set<string>();
+  for (const block of blocks) {
+    const name = /^name\s*=\s*"([^"]*)"/m.exec(block.split(/^\[/m)[0])?.[1];
+    if (name) names.add(normalizePythonName(name));
+  }
+  const dangling = new Set<string>();
+  for (const block of blocks) {
+    const deps = /^\[package\.dependencies\][ \t]*\r?$([^]*?)(?=^\[|(?![^]))/m.exec(block)?.[1] ?? "";
+    for (const line of tomlLines(deps)) {
+      const kv = tomlKeyValue(line);
+      if (!kv) continue;
+      const plain = kv.value.startsWith("{") ? inlineTableKeys(kv.value).every((k) => POETRY_LOCKED_KEYS.has(k)) : tomlString(kv.value) !== null;
+      const dep = normalizePythonName(kv.key);
+      if (plain && dep && !names.has(dep) && !UNLOCKED_TOOLS.has(dep)) dangling.add(dep);
+    }
+  }
+  return { names, dangling: [...dangling].sort() };
+}
+
+/** The project's own name in pyproject.toml (`[project] name`, `[tool.poetry] name`), normalised; null when none is read. */
+function projectName(pyproject: string): string | null {
+  let table = "";
+  for (const line of tomlLines(pyproject)) {
+    const header = tomlHeader(line);
+    if (header) {
+      table = header.array ? "" : header.name;
+      continue;
+    }
+    if (table !== "project" && table !== "tool.poetry") continue;
+    const kv = tomlKeyValue(line);
+    const name = kv?.key === "name" ? tomlString(kv.value) : null;
+    if (name) return normalizePythonName(name);
+  }
+  return null;
+}
+
+/**
+ * `[project]` requirements a lockfile always holds an entry for: no environment marker (one may
+ * rule it out everywhere the lock supports), no direct reference (installed from a location,
+ * locked under whatever name that location builds), and not the project itself (`pkg[cli]` in an
+ * extra of pkg). `groups`: the optional-dependencies / dependency-groups the lock holds, besides
+ * `[project] dependencies`.
+ */
+function projectLockedNames(pyproject: string, groups: ReadonlySet<string> | null): string[] {
+  const own = projectName(pyproject);
+  return pyprojectRequirements(pyproject)
+    .filter((r) => (r.section === "dependencies" ? groups === null || groups.has("default") : groups !== null && r.group !== null && groups.has(r.group)))
+    .filter((r) => !r.text.includes(";") && !/^[^@]*@/.test(r.text.replace(/\[[^\]]*\]/, "")))
+    .map((r) => requirementName(r.text))
+    .filter((n): n is string => n !== null && n !== own);
+}
+
+/**
+ * What a pdm.lock must hold for this pyproject.toml (F1): `[project] dependencies` when the lock
+ * holds the default group, and each optional-dependencies or dependency group its `[metadata]
+ * groups` names. A lock that names no groups is held to `[project] dependencies` only.
+ */
+function pdmDeclared(pyproject: string, lock: string): string[] {
+  const meta = /^\[metadata\][ \t]*\r?$([^]*?)(?=^\[|(?![^]))/m.exec(lock)?.[1] ?? "";
+  const listed = /^groups\s*=\s*\[([^\]]*)\]/m.exec(meta)?.[1];
+  const groups = listed === undefined ? new Set(["default"]) : new Set([...listed.matchAll(/"([^"]*)"/g)].map((m) => m[1]));
+  return projectLockedNames(pyproject, groups);
+}
+
+/**
+ * What a poetry.lock must hold for this pyproject.toml (F1): every Poetry table dependency Poetry
+ * always locks (poetryLockedNames), and `[project] dependencies` (Poetry 2 reads them) unless a
+ * uv.lock or pdm.lock beside it is what that table is for.
+ */
+function poetryDeclared(pyproject: string, besides: ReadonlySet<string>): string[] {
+  const poetry = poetryLockedNames(pyproject).map(normalizePythonName);
+  const project = besides.has("uv.lock") || besides.has("pdm.lock") ? [] : projectLockedNames(pyproject, new Set(["default"]));
+  return [...poetry, ...project].filter((n) => !UNLOCKED_TOOLS.has(n));
+}
+
+/**
+ * The packages a Pipfile declares that pipenv always writes a Pipfile.lock entry for (F1):
+ * `[packages]` and `[dev-packages]` entries whose value is a version string, or an inline table of
+ * version / extras / index alone. A marker or platform key (pipenv may leave the package out), an
+ * editable, path, git or file entry (the project's own code, or a location) is not compared.
+ * Names PEP 503 normalised.
+ */
+export function pipfileLockedNames(content: string): string[] {
+  const out: string[] = [];
+  let table = "";
+  for (const line of tomlLines(content)) {
+    const header = tomlHeader(line);
+    if (header) {
+      table = header.array ? "" : header.name;
+      continue;
+    }
+    if (table !== "packages" && table !== "dev-packages") continue;
+    const kv = tomlKeyValue(line);
+    if (!kv || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(kv.key)) continue;
+    const plain = kv.value.startsWith("{") ? inlineTableKeys(kv.value).every((k) => k === "version" || k === "extras" || k === "index") : tomlString(kv.value) !== null;
+    if (plain && !UNLOCKED_TOOLS.has(normalizePythonName(kv.key))) out.push(normalizePythonName(kv.key));
+  }
+  return out;
 }
 
 /** The name a PEP 508 requirement string starts with, PEP 503 normalised; null when it starts with none. */
@@ -992,6 +1174,10 @@ function archiveName(url: string): string {
 function packageOrigin(block: string, body: string): "index" | "git" | "url" | "file" | "local" {
   const uv = /^source\s*=\s*\{\s*([a-z-]+)\s*=/m.exec(body)?.[1];
   if (uv && uv !== "registry") return uv === "git" ? "git" : uv === "url" ? "url" : uv === "path" ? "file" : "local";
+  // pdm.lock writes the location as a key of the table itself (`git = "https://..."`, `url = ...`,
+  // `path = ...`): until 6.5.2 such a package read as an index release (audit 2026-11-25, F6).
+  const pdm = /^(git|url|path)\s*=\s*["']/m.exec(body)?.[1];
+  if (pdm) return pdm === "path" ? "local" : pdm === "git" ? "git" : "url";
   const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
   const poetryType = /^type\s*=\s*"([^"]*)"/m.exec(poetrySource)?.[1];
   if (poetryType === "git" || poetryType === "url" || poetryType === "file") return poetryType;
@@ -1051,6 +1237,8 @@ export function readTomlPackageLock(content: string): {
 function originLocation(block: string, body: string): string | null {
   const uv = /^source\s*=\s*\{\s*[a-z-]+\s*=\s*"([^"]+)"/m.exec(body)?.[1];
   if (uv) return uv;
+  const pdm = /^(?:git|url|path)\s*=\s*"([^"]+)"/m.exec(body)?.[1];
+  if (pdm) return pdm;
   const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
   return /^url\s*=\s*"([^"]+)"/m.exec(poetrySource)?.[1] ?? null;
 }

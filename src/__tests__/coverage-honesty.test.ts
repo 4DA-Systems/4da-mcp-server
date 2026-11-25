@@ -126,7 +126,9 @@ describe("project scans say what they did not cover", () => {
     write("Gemfile.lock", GEMFILE_LOCK);
     const result = await scan();
     expect(result.ecosystems_scanned).toEqual(["RubyGems"]);
-    expect(result.total_vulnerable_packages).toBe(1);
+    // GEMFILE_LOCK names mini_portile2 as a dependency of nokogiri with no spec of its own: PARTIAL (audit 2026-11-25, F4), counted under found_in_checked_dependencies (F2).
+    expect(result.total_vulnerable_packages).toBeNull();
+    expect(result.found_in_checked_dependencies.vulnerable_packages).toBe(1);
     expect(result.vulnerable_packages[0]).toMatchObject({ package: "rails", current_version: "6.0.0", is_direct: true });
   });
 
