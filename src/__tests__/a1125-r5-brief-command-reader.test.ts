@@ -41,7 +41,13 @@ describe("the command reader", () => {
     expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "qzstand", to: "next" }]);
   });
 
-  it.each(["npm install qzstand@98e62aac-d9e2-44a1-946d-1fbf082c44aa", "npm install qzstand@9d962429c6eeafce", "npm install zustand@9d962429c6eeafce"])(
+  it("npm install qzstand@<uuid>: the UUID is a credential shape, so the package is held whole, never listed at latest", async () => {
+    const r = await brief("npm install qzstand@98e62aac-d9e2-44a1-946d-1fbf082c44aa");
+    expect(r.check_these).toBeUndefined();
+    expect(JSON.stringify(r.withheld_from_task)).toMatch(/qzstand.*not read whole/);
+  });
+
+  it.each(["npm install qzstand@9d962429c6eeafce", "npm install zustand@9d962429c6eeafce"])(
     "%s: listed with no `to`, never as latest",
     async (task) => {
       const r = await brief(task);
