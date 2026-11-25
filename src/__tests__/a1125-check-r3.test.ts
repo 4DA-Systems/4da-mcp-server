@@ -58,4 +58,18 @@ describe("1: an item field this tool does not define refuses that item, and noth
   });
 });
 
+describe("2: crates.io build metadata is ignored, as Cargo ignores it, and never sent", () => {
+  it('serde "1.0.0+zqxbuild" is checked as 1.0.0, and the answer says the metadata was ignored', async () => {
+    const { results } = await check([{ ecosystem: "crates.io", package: "serde", to: "1.0.0+zqxbuild", from: "0.9.0+zqxfrom" }]);
+    expect(results[0].to).toBe("1.0.0");
+    expect(results[0].reason).toMatch(/^Build metadata in "1\.0\.0\+zqxbuild" was ignored, as Cargo ignores it when resolving: checked 1\.0\.0/);
+    expect(sent.some((s) => s.includes("serde"))).toBe(true);
+    expect(sent.filter((s) => /zqx/i.test(s))).toEqual([]);
+  });
+
+  it("a version without metadata carries no such note", async () => {
+    const { results } = await check([{ ecosystem: "crates.io", package: "serde", to: "1.0.0" }]);
+    expect(results[0].reason).not.toMatch(/Build metadata/);
+  });
+});
 
