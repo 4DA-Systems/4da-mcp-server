@@ -1843,7 +1843,7 @@ function poetrySpec(word) {
 
 const JS_VALUES = {
   npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C", "--location", "--audit-level", "--fetch-retries", "--fetch-timeout", "--auth-type", "--workspace-concurrency"]),
-  pnpm: new Set(["--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
+  pnpm: new Set(["--prefix", "--global-dir", "--cache-dir", "--state-dir", "--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
   // The last five are `yarn workspaces foreach`'s (berry).
   yarn: new Set(["--cwd", "--network-timeout", "--mutex", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder", "--use-yarnrc", "-j", "--jobs", "--include", "--exclude", "--from"]),
   bun: new Set(["--cwd", "--config", "-c", "--backend", "--cache-dir", "--network-concurrency", "--concurrent-scripts"]),
@@ -1932,7 +1932,10 @@ const PWSH_VALUES = /^-(?:executionpolicy|ep|ex|windowstyle|w|workingdirectory|w
 const CARGO_VALUES = new Set(["-C", "-F", "--features", "--rename", "-p", "--package", "--manifest-path", "--target", "--config", "-Z", "--color", "--lockfile-path"]);
 const CARGO_REFUSE = new Set(["--git", "--path", "--registry", "--branch", "--tag", "--rev", "--index"]);
 const PY_INDEX = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links"]);
-const PIP_VALUES = new Set(["-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
+/** pip options that take a value, its general ones (`pip --help`: `--cert`, `--client-cert`, ...) first: they may stand before `install`. */
+const PIP_VALUES = new Set(["--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
+/** uv's global options that take a value, which may stand before its subcommand (uv help). */
+const UV_GLOBAL_VALUES = new Set(["--cache-dir", "--color", "--allow-insecure-host", "--directory", "--project", "--config-file", "--python-preference"]);
 const UV_ADD_VALUES = new Set(["--group", "--optional", "--extra", "--package", "--project", "--directory", "--python", "-p", "--marker", "-m", "--bounds", "--script", "--config-file", "--cache-dir", "-r", "--requirements", "-c", "--constraints", "--tag", "--branch", "--rev", "--refresh-package", "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package", "--exclude-newer", "--link-mode", "--keyring-provider", "--resolution", "--prerelease", "--fork-strategy", "--index-strategy", "--python-preference", "--color"]);
 const POETRY_VALUES = new Set(["--group", "-G", "--extras", "-E", "--python", "--platform", "--markers", "--directory", "-C", "--project", "-P", "--optional"]);
 const GO_VALUES = new Set(["-C", "-tags", "-modfile", "-ldflags", "-gcflags", "-asmflags", "-mod", "-o", "-p", "-pkgdir", "-toolexec"]);
@@ -1957,12 +1960,15 @@ const NPM_SHORT_VALUE = new Set(["C", "L", "c", "m", "w"]);
  */
 function npmOption(a, next) {
   if (a.includes("=")) return "switch";
-  if (/^-[^-]/.test(a)) return a.length === 2 && NPM_SHORT_VALUE.has(a[1]) ? "value" : "switch";
-  if (a.slice(2).startsWith("no-") && NPM_OPTIONS.includes(a.slice(5))) return "switch";
+  // A switch followed by `true` or `false` takes it as its value (nopt: `--audit false install`
+  // runs install; audit 2026-11-25, D minor). npm has no command named either word.
+  const bool = next === "true" || next === "false" ? "value" : "switch";
+  if (/^-[^-]/.test(a)) return a.length === 2 && NPM_SHORT_VALUE.has(a[1]) ? "value" : bool;
+  if (a.slice(2).startsWith("no-") && NPM_OPTIONS.includes(a.slice(5))) return bool;
   const name = npmOptionName(a.slice(2));
   if (name === null) return "unknown";
-  if (name === "color") return next === "always" ? "value" : "switch";
-  return NPM_VALUE_OPTIONS.has(name) ? "value" : "switch";
+  if (name === "color") return next === "always" ? "value" : bool;
+  return NPM_VALUE_OPTIONS.has(name) ? "value" : bool;
 }
 
 /** The npm option a long name (without `--`) names: itself, or the one option it is a unique prefix of; null otherwise. */
@@ -2353,7 +2359,9 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return [];
   }
   if (program === "uv") {
-    if (args[0] === "pip") return args[1] === "compile" ? upgradePackages(args.slice(2)) : pipInstalls(args.slice(1));
+    // uv's global options may stand before `pip` (`uv -q pip install`, `uv --directory sub pip install`).
+    const at = subcommandAt(args, UV_GLOBAL_VALUES);
+    if (at >= 0 && args[at] === "pip") return args[at + 1] === "compile" ? upgradePackages(args.slice(at + 2)) : pipInstalls(args.slice(at + 1));
     const all = operands(args, { values: UV_ADD_VALUES, refuse: PY_INDEX });
     if (!all) return [];
     // `uv lock` / `uv sync` / `uv add` move a package to the version `--upgrade-package x==v` names.
