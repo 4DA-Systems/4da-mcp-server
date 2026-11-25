@@ -248,7 +248,7 @@ export function resolvePython(cwd: string): VersionSource {
           const declared: string[] = [];
           const missingCategories: string[] = [];
           for (const [category, names] of pipfileCategories(readTextFile(pipfile))) {
-            if (category === "default" || category === "develop" || category in sections) declared.push(...names);
+            if (category === "default" || category === "develop" || category in sections) pushAll(declared, names);
             else if (names.length > 0) missingCategories.push(category);
           }
           ahead = [...new Set(declared.filter((n) => !held.has(n)))].sort();
@@ -697,7 +697,7 @@ function pdmDeclared(pyproject: string, lock: string): Declared {
   const names: string[] = [];
   const notCompared: string[] = [];
   for (const [group, list] of projectGroups(pyproject, true)) {
-    if (locked.has(group)) names.push(...list);
+    if (locked.has(group)) pushAll(names, list);
     else if (list.length > 0) notCompared.push(group);
   }
   return { names, notCompared };
