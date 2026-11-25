@@ -342,7 +342,7 @@ async function checkDependencies(
   }
   // The refused items in their places.
   let k = 0;
-  const answered = validated.map((v) => (isRefused(v) ? refusedResult(v) : merged[k++]));
+  const answered = validated.map((v) => (isRefused(v) ? refusedResult(v) : withNotes(merged[k++], v.notes)));
   const priv = answered.filter((x) => x.not_checked === "private").length;
   const notice = first.meta.registryNotice ?? second?.meta.registryNotice;
   return finish(first.checkedAt, answered, {
@@ -351,6 +351,11 @@ async function checkDependencies(
     ...(priv > 0 ? { private: priv } : {}),
     ...(notice ? { registryNotice: notice } : {}),
   });
+}
+
+/** An item's answer led by what of it as written was read otherwise (Requested.notes). */
+function withNotes(result: ItemResult, notes: string[] | undefined): ItemResult {
+  return notes && notes.length > 0 ? { ...result, reason: `${notes.join(" ")} | ${result.reason}` } : result;
 }
 
 /** The releases of crate `name` in `req` this project's lockfiles hold (crates.io folds case and "-"/"_"). */
@@ -472,6 +477,15 @@ function validateItems(raw: unknown): Array<Requested | Refused> {
 function validateItem(r: unknown, i: number): Requested {
   const o = (r ?? {}) as Record<string, unknown>;
   const where = `items[${i}]`;
+  // A field this tool does not define is never ignored: `registry` or `index_url` says where the
+  // package lives, and this tool reads only the public registry, so the item is refused before
+  // anything is sent (pre-publish review 2026-11-26: both were looked up publicly). Own keys only.
+  if (typeof r === "object" && r !== null && !Array.isArray(r)) {
+    const unknown = Object.keys(o).find((k) => !ITEM_FIELDS.has(k));
+    if (unknown !== undefined) {
+      throw new Error(`${where}: unknown field ${JSON.stringify(quoteThirdParty(unknown, 40))}: this tool reads only the public registry and defines only ecosystem, package, to and from; nothing was sent`);
+    }
+  }
   // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
   for (const field of ["package", "to", "from"]) {
     const long = typeof o[field] === "string" ? lengthProblem(`${where}.${field}`, field, o[field] as string) : null;
@@ -480,7 +494,13 @@ function validateItem(r: unknown, i: number): Requested {
   const ecosystem = ECOSYSTEMS.find((e) => e === o.ecosystem || (typeof o.ecosystem === "string" && e.toLowerCase() === o.ecosystem.trim().toLowerCase()));
   if (!ecosystem) throw new Error(`${where}.ecosystem must be one of ${ECOSYSTEMS.map((e) => `"${e}"`).join(", ")}`);
   if (typeof o.package !== "string" || !o.package.trim()) throw new Error(`${where}.package must be a non-empty string`);
-  const rawTo = typeof o.to === "string" ? o.to.trim() : "";
+  const notes: string[] = [];
+  // Cargo ignores build metadata (`1.0.0+build`) when it resolves: it is dropped before any lookup,
+  // so it never reaches crates.io or OSV.dev, and the answer says so.
+  const cargoBuild = (v: string) => (ecosystem === "crates.io" ? v.replace(CARGO_BUILD_METADATA, "$1") : v);
+  const givenTo = typeof o.to === "string" ? o.to.trim() : "";
+  const rawTo = cargoBuild(givenTo);
+  if (rawTo !== givenTo) notes.push(`Build metadata in ${JSON.stringify(quoteThirdParty(givenTo, 80))} was ignored, as Cargo ignores it when resolving: checked ${rawTo}, and the metadata was not sent.`);
   // An npm alias (`"my-lodash": "npm:lodash@4.17.20"` in package.json) installs the package it names:
   // that package is the one judged, not the alias, which is no package on the registry.
   const alias = ecosystem === "npm" ? /^npm:((?:@[^/@\s]+\/)?[^@\s]+)(?:@(.+))?$/.exec(rawTo) : null;
@@ -495,15 +515,27 @@ function validateItem(r: unknown, i: number): Requested {
   }
   let from: string | undefined;
   if (o.from !== undefined && o.from !== null && o.from !== "") {
-    const f = typeof o.from === "string" ? parseTarget(ecosystem, o.from) : null;
+    const f = typeof o.from === "string" ? parseTarget(ecosystem, cargoBuild(o.from.trim())) : null;
     if (!f || f.kind !== "exact") {
       throw new Error(`${where}.from must be an exact version, the one installed (got ${JSON.stringify(o.from)}), not a range`);
     }
     from = f.version;
   }
+  // An alias in `to` is the caller's explicit request to check the package it installs: named first,
+  // so the verdict is never read as the one for `package` (pre-publish review 2026-11-26).
+  const asked = unquotePackageName(o.package);
+  if (alias && alias[1] !== asked) {
+    notes.push(`Checked ${alias[1]}@${alias[2] ?? "latest"}, the package this alias installs, not ${quoteThirdParty(asked, 80)}.`);
+  }
   // The same reading of a name every tool uses (package-name.ts): quotes around it are not part of it (r7).
-  return { ecosystem, package: alias ? alias[1] : unquotePackageName(o.package), raw: rawTo, target, ...(from ? { from } : {}) };
+  return { ecosystem, package: alias ? alias[1] : asked, raw: rawTo, target, ...(from ? { from } : {}), ...(notes.length > 0 ? { notes } : {}) };
 }
+
+/** The fields a dependency_check item may have. */
+const ITEM_FIELDS = new Set(["ecosystem", "package", "to", "from"]);
+
+/** A version's build metadata (`+build.5`) after its last digit: Cargo ignores it. Linear: one character class each side. */
+const CARGO_BUILD_METADATA = /(\d)\+[0-9A-Za-z.-]*/g;
 
 const EXAMPLES: Record<CheckEcosystem, string> = {
   npm: '"7.x" or "^1.20.0"',

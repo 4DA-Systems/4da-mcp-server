@@ -65,6 +65,8 @@ export interface Requested {
   raw: string;
   target: Target;
   from?: string;
+  /** Sentences the answer leads with: what of the item as written was read otherwise (an alias target, ignored build metadata). */
+  notes?: string[];
 }
 
 /** A request item with its `to` resolved to one version (or left unresolved with the reason). */
