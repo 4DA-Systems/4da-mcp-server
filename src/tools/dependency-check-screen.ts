@@ -145,7 +145,7 @@ export function nameProblem(ecosystem: CheckEcosystem, name: string): string | n
       // `lodash@4.17.21`, `@babel/core@7`: the version goes in `to`.
       const pinned = /^(@?[^@]+)@[^@]*$/.exec(name);
       if (pinned && isNpmPackageName(pinned[1])) return `a version goes in \`to\`, not in the name (did you mean ${JSON.stringify(pinned[1])}?)`;
-      return npmScopeProblem(name) ?? `npm names are letters, digits and "-._~", with an optional "@scope/"; ${NOT_A_NAME}`;
+      return npmScopeProblem(name) ?? `An npm name is letters, digits and "-._~", with an optional "@scope/"; ${NOT_A_NAME}`;
     }
     case "PyPI":
       return PYPI_NAME.test(name) ? null : `a PyPI name is letters, digits, ".", "_" and "-", starting and ending with a letter or digit (extras and version specifiers go elsewhere: the version in \`to\`); ${NOT_A_NAME}`;
