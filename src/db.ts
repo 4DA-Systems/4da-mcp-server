@@ -900,12 +900,25 @@ export interface DataFreshness {
 /** Minutes a feed may go without a fetch before DB-backed tools flag it stale. */
 const STALE_AFTER_MINUTES = 60;
 
-/** Whole minutes between a UTC `YYYY-MM-DD HH:MM:SS` timestamp and now, or null if unparseable. */
-function minutesSince(ts: string | null): number | null {
+/** How far ahead of this machine's clock a timestamp may be and still read as "now" (clock skew). */
+export const FUTURE_SKEW_MINUTES = 5;
+
+/**
+ * Whole minutes between a UTC `YYYY-MM-DD HH:MM:SS` timestamp and now, or null if unparseable.
+ * Negative for a timestamp ahead of this clock: the caller decides (futureTimestamp). It was
+ * clamped to 0, so a timestamp in the future read as fetched this minute, forever (audit
+ * 2026-11-25, G-5).
+ */
+export function minutesSince(ts: string | null, now: number = Date.now()): number | null {
   if (!ts) return null;
   const ms = Date.parse(ts.replace(" ", "T") + "Z");
   if (Number.isNaN(ms)) return null;
-  return Math.max(0, Math.round((Date.now() - ms) / 60000));
+  return Math.round((now - ms) / 60000);
+}
+
+/** Whether an age from minutesSince is a timestamp too far in the future to be believed (more than the skew). */
+export function futureTimestamp(ageMinutes: number | null): boolean {
+  return ageMinutes !== null && ageMinutes < -FUTURE_SKEW_MINUTES;
 }
 
 /** Filler words ignored when comparing titles for near-duplicate collapsing. */
@@ -1473,11 +1486,19 @@ export class FourDADatabase {
       // engine_runs may not exist on an older desktop-app DB — its absence is itself a stale signal.
     }
 
-    const ageMinutes = minutesSince(lastFetchAt);
+    const rawAge = minutesSince(lastFetchAt);
+    // A last fetch ahead of this clock (a clock change, a database copied from another machine)
+    // tells nothing about the feed's age: stale, and said, never "fresh" (G-5).
+    const inFuture = futureTimestamp(rawAge);
+    const ageMinutes = rawAge === null || inFuture ? null : Math.max(0, rawAge);
     const isStale = ageMinutes === null || ageMinutes > STALE_AFTER_MINUTES;
     let note = isStale
       ? `Feed data ${
-          ageMinutes === null ? "has never been fetched" : `is ~${ageMinutes} min old`
+          inFuture
+            ? `has a last fetch time in the future (${lastFetchAt} UTC), so its age cannot be told`
+            : ageMinutes === null
+              ? "has never been fetched"
+              : `is ~${ageMinutes} min old`
         } and may be stale: the MCP server reads the database but does not fetch. Run ` +
         "`fourda-engine --once` (or open the 4DA app) to refresh."
       : `Feed data is ~${ageMinutes} min old (fresh).`;
