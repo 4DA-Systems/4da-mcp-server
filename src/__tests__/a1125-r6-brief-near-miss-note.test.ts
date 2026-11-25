@@ -37,8 +37,8 @@ describe("a name on a bundled list is never a near-miss", () => {
 
   it("the fourth reviewer's 213 popular names", () => {
     const tasks = [
-      ...(JSON.parse(readFileSync("C:/4da-wt/fix-1125/review-pass4/pop-npm.json", "utf8")) as string[]),
-      ...(JSON.parse(readFileSync("C:/4da-wt/fix-1125/review-pass4/pop-py.json", "utf8")) as string[]),
+      ...(JSON.parse(readFileSync(new URL("./fixtures/a1125-brief/pop-npm.json", import.meta.url), "utf8")) as string[]),
+      ...(JSON.parse(readFileSync(new URL("./fixtures/a1125-brief/pop-py.json", import.meta.url), "utf8")) as string[]),
     ];
     expect(tasks).toHaveLength(213);
     for (const t of tasks) {

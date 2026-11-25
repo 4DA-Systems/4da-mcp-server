@@ -8,7 +8,6 @@
  * round-4 check_these suite and the round-5 structured-only suite. Stubbed fetch.
  */
 
-import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
@@ -131,7 +130,30 @@ describe("the credential screen stays in front", () => {
 });
 
 describe("build metadata after a version is never a name", () => {
-  const G = JSON.parse(readFileSync("C:/4da-wt/fix-1125/review-pass3/cases-g.json", "utf8")) as Array<{ id: string; task: string }>;
+  // The third reviewer's 48 cases, rebuilt here: six made-up credential shapes after each of eight
+  // carriers. The shapes are assembled from pieces so that no token-shaped literal stands in the
+  // repository (GitHub's push protection refuses a file that holds one, made up or not).
+  const fill = (n: number, seed: number): string => Array.from({ length: n }, (_, i) => "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[(seed * 31 + i * 17) % 54]).join("");
+  const hex = (seed: number): string => Array.from({ length: 32 }, (_, i) => "0123456789abcdef"[(seed * 7 + i * 11) % 16]).join("");
+  const shapes = (seed: number): string[] => [
+    "gh" + "p_" + fill(36, seed),
+    "np" + "m_" + fill(36, seed + 1),
+    "AK" + "IA" + fill(16, seed + 2).toUpperCase(),
+    hex(seed + 3),
+    "sk" + "_live_" + fill(24, seed + 4),
+    "gl" + "pat-" + fill(20, seed + 5),
+  ];
+  const carriers: Array<(x: string) => string> = [
+    (x) => `npm install lodash@4.17.15+${x}`,
+    (x) => `npm install zustand@1.0.0+${x}`,
+    (x) => `pip install requests==2.25.0+${x}`,
+    (x) => `npm install lodash,${x}`,
+    (x) => `npm install lodash;${x}`,
+    (x) => `cargo add serde@1.0.0+${x}`,
+    (x) => `npm install zustand@^4.0.0||${x}`,
+    (x) => `add "zustand": "1.0.0+${x}" to package.json`,
+  ];
+  const G = carriers.flatMap((carry, c) => shapes(c * 10 + 1).map((x, i) => ({ id: `g${c * 6 + i}`, task: carry(x) })));
   it.each(G.map((c) => [c.task]))("%s", async (task) => {
     const after = /(?:\+|\|\||,|;)([A-Za-z0-9_-]{8,})/.exec(task)![1];
     const r = await brief(task);

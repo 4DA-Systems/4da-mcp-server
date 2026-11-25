@@ -11,8 +11,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { screenTask } from "../tools/briefing-task-screen.js";
 
-const SHAPED = JSON.parse(readFileSync("C:/4da-wt/fix-1125/review-pass6/setting-shaped.json", "utf8")) as { npm: string[]; crates: string[] };
-const VULN = JSON.parse(readFileSync("C:/4da-wt/fix-1125/review-pass6/setting-vuln.json", "utf8")) as { py: string[]; vul: Array<[string, string, string[]]> };
+const SHAPED = JSON.parse(readFileSync(new URL("./fixtures/a1125-brief/setting-shaped.json", import.meta.url), "utf8")) as { npm: string[]; crates: string[] };
+const VULN = JSON.parse(readFileSync(new URL("./fixtures/a1125-brief/setting-vuln.json", import.meta.url), "utf8")) as { py: string[]; vul: Array<[string, string, string[]]> };
 
 const asSetting = (task: string) => screenTask(task).withheld.filter((w) => w.label.startsWith("a setting named"));
 
