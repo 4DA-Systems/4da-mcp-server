@@ -11,6 +11,7 @@ export interface Install {
 export function respond(input: unknown, env?: Record<string, string | undefined>, now?: number, readBudgetMs?: number): string;
 /** `depth`: the wrappers (a shell's `-c`, a runner) the command was found inside; 0 for a command line as typed. */
 export function installsIn(command: string, dialect: "bash" | "powershell", depth?: number): Install[];
-export function simpleCommands(line: string, dialect: "bash" | "powershell"): string[][] | null;
+/** `redirects`, when given, collects the redirection targets (`write`: `>` or `>>`). */
+export function simpleCommands(line: string, dialect: "bash" | "powershell", redirects?: Array<{ target: string; write: boolean }> | null): string[][] | null;
 export function dataDir(env?: Record<string, string | undefined>, platform?: string, home?: string): string;
 export function poetryToPep440(spec: string): string;
