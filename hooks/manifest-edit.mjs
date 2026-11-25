@@ -761,7 +761,8 @@ function yamlScalar(raw) {
  */
 function pnpmContentLines(text) {
   const out = [];
-  for (const raw of text.replace(/^\uFEFF/, "").split("\n")) {
+  // YAML ends a line at a lone CR too (pnpm reads `# note\roverrides:` as two lines).
+  for (const raw of text.replace(/^\uFEFF/, "").split(/\r\n?|\n/)) {
     tick();
     const line = raw.trimEnd();
     if (line) out.push(line);
@@ -789,7 +790,8 @@ function pnpmWorkspaceVersions(text, out) {
   let catalog = null;
   let catalogIndent = -1;
   // A byte order mark is not part of the first key (`\uFEFFoverrides:` read as indented hid the section).
-  for (const raw of text.replace(/^\uFEFF/, "").split("\n")) {
+  // YAML ends a line at a lone CR too (pnpm reads `# note\roverrides:` as two lines).
+  for (const raw of text.replace(/^\uFEFF/, "").split(/\r\n?|\n/)) {
     tick();
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
