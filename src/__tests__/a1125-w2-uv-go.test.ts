@@ -17,7 +17,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FixPathSources } from "../live/fix-paths.js";
 import { buildRunOrder, type SequencedRow } from "../tools/upgrade-plan-sequence.js";
-import { hasSelfRequiringTarget, withoutSelfRequiringTargets, type RunnableRow } from "../tools/upgrade-plan-runnable.js";
+import { hasSelfRequiringTarget, withoutSelfRequiringTargets, withPythonFloorHolds, type RunnableRow } from "../tools/upgrade-plan-runnable.js";
+import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
+import type { VulnerabilityScanResult } from "../live/types.js";
 import { adv, createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
 
 const uvRow = (pkg: string, run: string): SequencedRow => ({
@@ -135,5 +137,39 @@ describe("a target that clears none of the row's advisories is not a fix", () =>
     expect(result.run_order.map((s: { run: string }) => s.run).join("\n")).not.toContain("websocket");
     // The fix that is real still runs.
     expect(result.run_order.flatMap((s: { fixes: string[] }) => s.fixes)).toContain(`Go:${net}`);
+  });
+});
+
+describe("a uv pin whose requirement resolves to an affected release on the project's lowest Python is held", () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "4da-w2-floor-")));
+    fs.writeFileSync(path.join(root, "uv.lock"), 'version = 1\nrequires-python = ">=3.10, <=3.13"\n');
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  const row = (): RunnableRow => ({
+    package: "virtualenv", ecosystem: "PyPI", currentVersion: "20.27.0", targetVersion: "21.14.13", scope: "transitive", reasons: [],
+    refreshCommands: [{ dir: ".", command: "uv lock --upgrade-package virtualenv==21.14.13" }],
+  });
+  const requires = ['distlib<1,>=0.4.3', 'filelock<5,>=3.24.2; python_version >= "3.10"', 'filelock<=3.19.1,>=3.19.1; python_version < "3.10"'];
+  const facts = { versions: ["3.16.1", "3.24.2", "4.1.0", "4.2.1"], withdrawn: [], withdrawnWhy: {}, latest: "4.2.1", requiresPython: { "4.1.0": ">=3.10", "4.2.1": ">=3.11" } };
+  const sources = { pypiRequiresDist: async () => requires, releaseFacts: async (_e: string, n: string) => (n === "filelock" ? facts : { versions: [], withdrawn: [], withdrawnWhy: {}, latest: null }) } as unknown as Pick<FixPathSources, "pypiRequiresDist" | "releaseFacts">;
+  const answer = (affected: boolean) => async () => ({ vulnerabilities: affected ? [{ package: "filelock", currentVersion: "4.1.0", vulnId: "GHSA-v4x8-3wr5-3wq8", maintenance: false }] : [] }) as unknown as VulnerabilityScanResult;
+
+  it("virtualenv 21.14.13 on Python 3.10 brings filelock 4.1.0 (4.2.x needs 3.11): NOT a clean fix", async () => {
+    const r = row();
+    await withPythonFloorHolds([r], root, sources, answer(true), Date.now() + 5_000);
+    const held = r.reasons.find((x) => HELD_UNCLEAN_REASON.test(x));
+    expect(held).toContain('On this project\'s lowest supported Python (3.10, from uv.lock) it requires filelock "<5,>=3.24.2", and the newest filelock that Python can install is 4.1.0 (4.2.1 needs a newer Python), which GHSA-v4x8-3wr5-3wq8 affect');
+  });
+
+  it("a clean release on the floor, or a floor that changes nothing, keeps the step", async () => {
+    const r = row();
+    await withPythonFloorHolds([r], root, sources, answer(false), Date.now() + 5_000);
+    expect(r.reasons).toEqual([]);
+    fs.writeFileSync(path.join(root, "uv.lock"), 'version = 1\nrequires-python = ">=3.11"\n');
+    const q = row();
+    await withPythonFloorHolds([q], root, sources, answer(true), Date.now() + 5_000);
+    expect(q.reasons).toEqual([]);
   });
 });

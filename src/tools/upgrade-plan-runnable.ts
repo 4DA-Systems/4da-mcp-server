@@ -27,6 +27,8 @@ import { normalizePythonName } from "../live/lockfile-parsers-pygo.js";
 import { tomlHeader, tomlKeyValue, tomlLines, tomlStrings } from "../live/private-hosts.js";
 import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.js";
 import { lowestPython, parsePep508, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { isPrereleaseVersion } from "../live/osv-ranges.js";
+import type { ResolvedDependency, VulnerabilityScanResult } from "../live/types.js";
 import { isShellSafeDir, unsafeDirWords } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { overrideCommandsOf, recordOverrideCommands } from "./upgrade-plan-overrides.js";
@@ -397,6 +399,86 @@ export async function withoutSelfRequiringTargets(rows: RunnableRow[], projectRo
       );
       r.reasons = r.reasons.filter((t) => !(t.startsWith("Fixable now with a lockfile refresh") && words.some((w) => t.includes(`\`${w.command}\``))));
       for (const w of words) if (!r.reasons.includes(`${SELF_REQUIRING_START}${w.instruction}`)) r.reasons.push(`${SELF_REQUIRING_START}${w.instruction}`);
+    }
+  }
+}
+
+/**
+ * Whether a PEP 508 marker holds on Python `python`: only `python_version` / `python_full_version`
+ * comparisons joined by `and` / `or` are read; anything else is null (not known).
+ */
+function pythonMarkerHolds(marker: string, python: string): boolean | null {
+  const text = marker.trim();
+  if (text === "") return true;
+  const ors = text.split(/\s+or\s+/);
+  let any = false;
+  for (const or of ors) {
+    let all = true;
+    for (const clause of or.split(/\s+and\s+/)) {
+      const m = /^\(?\s*python(?:_full)?_version\s*(<=|>=|==|!=|<|>|~=)\s*["']([0-9.*]+)["']\s*\)?$/.exec(clause.trim());
+      if (!m) return null;
+      const admits = pythonSpecAdmits(`${m[1]}${m[2]}`, python);
+      if (admits === null) return null;
+      all &&= admits;
+    }
+    any ||= all;
+  }
+  return any;
+}
+
+/**
+ * A uv pin whose release requires a dependency that, on the project's lowest supported Python,
+ * resolves to an affected release (crewAI 0.86.0: virtualenv 21.14.13 requires filelock
+ * ">=3.24.2,<5" on Python 3.10, where the newest filelock it can install is 4.1.0, which 18
+ * advisories affect; 4.2.x needs Python 3.11). The step would bring the affected copy in: it is held
+ * as NOT a clean fix (out of run_order, not counted as fixed). Only a pick the Python floor changes
+ * is judged here (the newest release the requirement admits is the planner's own held check);
+ * whatever cannot be read leaves the step as it is.
+ */
+export async function withPythonFloorHolds(
+  rows: RunnableRow[],
+  projectRoot: string,
+  sources: Pick<FixPathSources, "pypiRequiresDist" | "releaseFacts"> | null,
+  query: ((deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>) | null,
+  deadline: number,
+): Promise<void> {
+  if (!sources || !query) return;
+  for (const r of rows) {
+    if (r.ecosystem !== "PyPI") continue;
+    const commands = [...(r.upgradeCommands ?? []), ...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.levers.flatMap((l) => l.commands ?? []))];
+    for (const c of commands) {
+      if (Date.now() > deadline) return;
+      const m = UV_PIN.exec(c.command);
+      if (!m) continue;
+      const python = projectPython(path.resolve(projectRoot, c.dir));
+      const lowest = lowestPython(python?.spec ?? null);
+      if (!python || !lowest) continue;
+      const requires = await sources.pypiRequiresDist(m[1], m[2]).catch(() => null);
+      if (!requires) continue;
+      for (const raw of requires) {
+        const parsed = parsePep508(raw);
+        if (!parsed || parsed.extra || parsed.spec === "") continue;
+        const marker = raw.includes(";") ? raw.slice(raw.indexOf(";") + 1) : "";
+        if (pythonMarkerHolds(marker, lowest) !== true) continue;
+        const facts = await sources.releaseFacts("PyPI", parsed.name).catch(() => null);
+        if (!facts) continue;
+        const admitted = facts.versions
+          .filter((v) => !isPrereleaseVersion(v, "PyPI") && pythonSpecAdmits(parsed.spec, v) === true)
+          .sort((a, b) => compareVersions(b, a, "PyPI"));
+        const onFloor = admitted.find((v) => {
+          const needs = facts.requiresPython?.[v];
+          return !needs || pythonSpecAdmits(needs, lowest) !== false;
+        });
+        if (!onFloor || onFloor === admitted[0]) continue;
+        const answer = await query([{ name: parsed.name, version: onFloor, ecosystem: "PyPI", isDev: false, isDirect: false, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }]).catch(() => null);
+        if (!answer || (answer.uncheckedDependencies ?? []).length > 0) continue;
+        const ids = [...new Set(answer.vulnerabilities.filter((v) => !v.maintenance && v.currentVersion === onFloor).map((v) => v.vulnId))];
+        if (ids.length === 0) continue;
+        const shown = ids.slice(0, 4).join(", ") + (ids.length > 4 ? ` and ${ids.length - 4} more` : "");
+        const why = `${m[1]} ${m[2]} is NOT a clean fix: confirm a release with dependency_check before pinning it. On this project's lowest supported Python (${lowest}, from ${python.from}) it requires ${parsed.name} "${parsed.spec}", and the newest ${parsed.name} that Python can install is ${onFloor} (${admitted[0]} needs a newer Python), which ${shown} affect: \`${c.command}\` would bring it in`;
+        if (!r.reasons.includes(why)) r.reasons.push(why);
+        break;
+      }
     }
   }
 }

@@ -60,7 +60,7 @@ import { AFTER_RUN, protocolOf } from "./upgrade-plan-protocol.js";
 import { cargoDependencyReader, hasCargoPrecondition, withCargoStepPreconditions } from "./upgrade-planner-cargo-steps.js";
 import { explainCommandlessRows, NO_COMMAND_REASON_START } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
-import { declaredNpmOperator, hasUnsafeDir, withheldStepsOf, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, hasSelfRequiringTarget, withoutSelfRequiringTargets, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { declaredNpmOperator, hasUnsafeDir, withheldStepsOf, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, hasSelfRequiringTarget, withoutSelfRequiringTargets, withPythonFloorHolds, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
 import { escapeUnsafeDirs, isShellSafeCargoTarget, isShellSafeDir, liveUnsafeDirs } from "../live/shell-safe.js";
 import { walkNotReadNote } from "./what-should-i-know.js";
 import * as path from "node:path";
@@ -271,6 +271,8 @@ const OFFER_CHECK_BUDGET_MS = 10_000;
 const SEQUENCE_BUDGET_MS = 3_000;
 /** How the reason starts for a row whose target clears none of its advisories. */
 const NOT_A_FIX_START = `${NO_COMMAND_REASON_START}: it is NOT a fix, `;
+/** Time the uv pins' requirements may take to be judged on the project's lowest Python. */
+const PYTHON_FLOOR_BUDGET_MS = 4_000;
 /** Time the check that a target clears any of its row's advisories may take. */
 const NOT_A_FIX_BUDGET_MS = 4_000;
 /** Time the Cargo steps may spend reading what their targets require (upgrade-planner-cargo-steps.ts). */
@@ -921,6 +923,8 @@ async function executeStandalonePlanner(
   await withPythonSupport(limited, root, liveIntel.getFixPathSources());
   // A uv target that requires the project itself at another version cannot lock (upgrade-plan-runnable.ts).
   await withoutSelfRequiringTargets(limited, root, liveIntel.getFixPathSources());
+  // A uv pin whose requirement resolves, on the project's lowest Python, to an affected release is held (upgrade-plan-runnable.ts).
+  await withPythonFloorHolds(limited, root, liveIntel.getFixPathSources(), (deps) => liveIntel.queryAdvisories(deps), Date.now() + withinCallBudget(PYTHON_FLOOR_BUDGET_MS, 500));
   // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
   await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
   // A Cargo step's preconditions, read before it is named: the pre-update a `--precise` needs, and
