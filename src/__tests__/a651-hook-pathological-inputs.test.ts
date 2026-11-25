@@ -23,11 +23,6 @@ import { respond } from "../../hooks/manifest-edit.mjs";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 const LIMIT_MS = 500;
-/**
- * CPU time a row that reads 8 MB of ledger may use: the hook's own read budget (READ_BUDGET_MS in
- * the hook). Past it the hook could not answer in time on an idle machine either.
- */
-const LEDGER_CPU_MS = 2000;
 const BIG = 60_000;
 
 // Made when the table is built (the table writes the manifests the Write cases name).
@@ -138,25 +133,27 @@ function best(payload: unknown, ledgerHome?: string, limit: number = LIMIT_MS): 
     const cpu = Math.min(Number.isNaN(r.cpu) ? Infinity : r.cpu, Number.isNaN(again.cpu) ? Infinity : again.cpu);
     r = { ...(again.ms < r.ms ? again : r), cpu: cpu === Infinity ? Number.NaN : cpu };
   }
-  console.log(`[timing] wall ${r.ms.toFixed(0)} cpu ${r.cpu.toFixed(0)} limit ${limit}`); // TEMP: one CI run to read the runners' numbers
   return r;
 }
 
 /**
- * The hook answered inside `limit` on the wall clock, or its own work took less than `cpuLimit` of
- * CPU time. The wall clock is what Claude Code's timeout counts, but on a shared machine it mostly
+ * The hook answered inside `limit` on the wall clock, or its own work took less than twice `limit`
+ * of CPU time. The wall clock is what Claude Code's timeout counts, but on a shared machine it mostly
  * measures the wait for a core, not the hook: with 32 busy processes on 16 cores a trivial call
  * went from 52 ms to 2,000 ms and a 4 MB-ledger row from 390 ms to 4,600 ms, while their CPU time
  * went from 46 to 61 ms and from 450 to 660 ms (measured 2026-11-25). The wall-clock bound failed
  * twice on loaded CI runners with nothing wrong in the hook (1,095 ms and 1,418 ms against 1,000
  * for a 4 MB-ledger row), the second time through a bound scaled by how long a trivial call took at
  * that moment: a trivial call does not slow down the way 8 MB of ledger does. A pathological input
- * is slow in CPU time too (3 s, 10 s and 21 s were the rows this file was written for), so the CPU
- * bound catches one on any machine; a run that reports no CPU time fails.
+ * is slow in CPU time too (1.5 s, 2.6 s, 3 s, 10 s and 21 s were the rows this file was written
+ * for, against 0.14 s here for the slowest 500 ms row and 0.55 s for a ledger row), so the CPU bound
+ * catches one on any machine. Twice the bound, not the bound: CPU time is steadier than the wall
+ * clock, not constant (a slower runner core, a busy sibling thread: up to 1.5 times here under
+ * load). A run that reports no CPU time fails.
  */
-function expectWithin(r: Run, limit: number, cpuLimit: number = limit): void {
+function expectWithin(r: Run, limit: number): void {
   if (r.ms < limit) return;
-  expect(r.cpu, `the hook's CPU time (wall clock ${r.ms.toFixed(0)} ms against ${limit} ms)`).toBeLessThan(cpuLimit);
+  expect(r.cpu, `the hook's CPU time (wall clock ${r.ms.toFixed(0)} ms against ${limit} ms)`).toBeLessThan(2 * limit);
 }
 
 describe("a call that could not be read in time is held, never let through", () => {
@@ -192,8 +189,7 @@ describe(`every pathological input is answered within ${LIMIT_MS} ms, as a child
  * The rows of the round-3 checker's timing table that took over a second (a 4 MB MultiEdit took
  * 21 s and Claude Code let the call through; 25 versions against 4 MB ledgers took 3 s; TOML
  * nested about 7,400 deep threw and the call went ahead), each now a fast deny. The two 4 MB-ledger
- * rows read 8 MB of ledger and are given 1,000 ms on the wall clock or 2,000 ms of CPU time (the
- * hook's read budget); the others 500 ms of either.
+ * rows read 8 MB of ledger and are given 1,000 ms; the others 500 ms (expectWithin says of what).
  */
 describe("the checker's slow rows are fast denials (round 3 of the hook review)", { timeout: 60_000 }, () => {
   const recent = () => new Date(Date.now() - 60_000).toISOString();
@@ -250,7 +246,7 @@ describe("the checker's slow rows are fast denials (round 3 of the hook review)"
     const vers = Array.from({ length: 25 }, (_, i) => `requests==2.0.${i}.post1.dev3`).join(" ");
     const r = best(bash(`pip install ${vers}`), h, 2 * LIMIT_MS);
     expect(r.decision).toBe("deny");
-    expectWithin(r, 2 * LIMIT_MS, LEDGER_CPU_MS);
+    expectWithin(r, 2 * LIMIT_MS);
   });
 });
 
