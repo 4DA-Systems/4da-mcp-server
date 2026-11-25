@@ -15,7 +15,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { executeDependencyCheck } from "../tools/dependency-check.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 
 let h: Harness;
@@ -64,14 +63,12 @@ describe("1. an entry is never a credential, and a version is never replaced by 
     const r = await brief(task);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(JSON.stringify(r.withheld_from_task ?? [])).not.toContain(name);
-    // A listed name is judged by the briefing; any other is handed back at the version the task writes
-    // (final design of the 2026-11-25 fixes), and dependency_check judges it there.
+    // A listed name is judged by the briefing; any other is listed at the version the task writes (fourth
+    // blind check: a plain list, never tool arguments).
     if (r.requested_versions) {
       expect(r.requested_versions).toMatchObject([{ name, to: version, verdict: "avoid" }]);
     } else {
-      expect(r.check_these?.arguments.items).toContainEqual(expect.objectContaining({ package: name, to: version }));
-      const check = (await executeDependencyCheck(null, r.check_these!.arguments, await h.live())) as { results: Array<{ package: string; verdict: string }> };
-      expect(check.results.find((x) => x.package === name)).toMatchObject({ verdict: "avoid" });
+      expect(r.unverified_words).toContainEqual({ word: name, read_as: "npm", version });
     }
   });
 
@@ -134,9 +131,7 @@ describe("2. a word is looked up only on evidence that it is a public package", 
   it("a name on no bundled list is handed back, never looked up, and the task is review_needed", async () => {
     const r = await brief("add left-pad-ng to the project");
     expect(looked("left-pad-ng")).toEqual([]);
-    // Third blind check of the 2026-11-25 fixes: a name read from prose is never put in check_these (a secret
-    // written in prose looks as much like a name); it is listed in unverified_words, not looked up.
-    expect(r.check_these).toBeUndefined();
+    // Fourth blind check of the 2026-11-25 fixes: a name not looked up is listed in unverified_words.
     expect(r.unverified_words).toMatchObject([{ word: "left-pad-ng" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });

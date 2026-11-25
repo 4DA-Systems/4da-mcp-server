@@ -130,21 +130,31 @@ export function optionTakesValue(manager: string, flag: string): boolean {
 /** The kind of source a command's option names, or null when it names none (or the public one). */
 function sourceOption(family: Family, flag: string, value: string | undefined): string | null {
   if (family === "js") {
-    if (flag === "--registry") return publicNpm(value) ? null : "a registry named in its command";
+    // npm takes an option by any unambiguous prefix (`--reg URL`), and a URL may be glued to a short one
+    // (`-ihttps://...`): any option but a proxy whose value is a registry URL other than npm's names one
+    // (fourth blind check).
+    if (/^--reg(?:i(?:s(?:t(?:r(?:y)?)?)?)?)?$/i.test(flag)) return publicNpm(value) ? null : "a registry named in its command";
     if (/^--@[^:]+:registry$/i.test(flag)) return "a registry named in its command";
+    const url = flag.includes("://") ? flag.replace(/^-{1,2}[A-Za-z]?/, "") : value;
+    if (!/proxy/i.test(flag) && url && /^(?:https?:)?\/\//i.test(url) && !publicNpm(url)) return "a registry named in its command";
     return null;
   }
+  // A long option given by a prefix of its name (`--inde`, `--extra-index`, `--reg`), as pip and npm take one.
+  const prefixOf = (...full: string[]) => flag.startsWith("--") && flag.length >= 5 && full.some((f) => f.startsWith(flag.toLowerCase()));
   if (family === "py") {
-    if (["-i", "--index-url", "--extra-index-url", "--index", "--default-index"].includes(flag)) return publicPypi(value?.replace(/^[\w-]+=/, "")) ? null : "a package index named in its command";
-    if (flag === "-f" || flag === "--find-links") return "a find-links location named in its command";
+    if (flag === "-i" || prefixOf("--index-url", "--extra-index-url", "--index", "--default-index")) return publicPypi(value?.replace(/^[\w-]+=/, "")) ? null : "a package index named in its command";
+    if (flag === "-f" || prefixOf("--find-links")) return "a find-links location named in its command";
+    // A URL glued to a short option (`-ihttps://...`), or any option but a proxy whose value is an index URL.
+    const url = flag.includes("://") ? flag.replace(/^-{1,2}[A-Za-z]?/, "") : value;
+    if (!/proxy|cert/i.test(flag) && url && /^(?:https?:)?\/\//i.test(url) && !publicPypi(url)) return "a package index named in its command";
     return null;
   }
   if (family === "poetry") return flag === "--source" ? "a source named in its command" : null;
   if (family === "cargo") {
-    if (flag === "--registry") return value === "crates-io" ? null : "a registry named in its command";
+    if (prefixOf("--registry")) return value === "crates-io" ? null : "a registry named in its command";
     if (flag === "--git" || flag === "--branch" || flag === "--tag" || flag === "--rev") return "git";
     if (flag === "--path") return "a path";
-    if (flag === "--index") return "a registry index named in its command";
+    if (prefixOf("--index")) return "a registry index named in its command";
   }
   return null;
 }
@@ -213,6 +223,11 @@ function redact(word: string): string {
 
 const NOT_SENT = "nothing about it was sent";
 
+/** A URL's user info (`https://user:secret@host/x.tgz`) is never repeated in what the answer shows (fourth blind check). */
+function withoutUserInfo(text: string): string {
+  return text.replace(/(\/\/)[^/@\s]{1,300}@/g, "$1(user info withheld)@");
+}
+
 /** Words that end a command in prose ("then", "&&", ";"), and verbs that start the next clause after "and". */
 const COMMAND_ENDS = new Set(["then", "&&", "||", ";", "|", "and", "or", "but", "after", "before", "so"]);
 
@@ -280,7 +295,7 @@ export function screenTask(task: string): TaskScreen {
     scopes.add(m[2].toLowerCase());
     blank(m.index! + m[1].length, m.index! + m[0].length);
   }
-  for (const m of task.matchAll(/(^|[\s"'`])((?:npm_config_|NPM_CONFIG_)?registry|npmRegistryServer)\s{0,4}[=\s]\s{0,4}["'`]?((?:https?:)?\/\/\S{1,2000})/gm)) {
+  for (const m of task.matchAll(/(^|[\s"'`])((?:npm_config_|NPM_CONFIG_|BUN_CONFIG_|YARN_NPM_)?(?:registry|REGISTRY)|YARN_REGISTRY|YARN_NPM_REGISTRY_SERVER|npmRegistryServer)\s{0,4}[=\s]\s{0,4}["'`]?((?:https?:)?\/\/\S{1,2000})/gm)) {
     if (!publicNpm(m[3])) closeEcosystem("npm", "a registry the task sets for npm", m.index! + m[1].length, m.index! + m[0].length);
   }
   for (const m of task.matchAll(/(^|[\s"'`])((?:PIP_|UV_)?(?:EXTRA_)?(?:INDEX_URL|DEFAULT_INDEX|INDEX)|(?:global\.)?(?:extra-)?index-url|index_url)\s{0,4}[=\s]\s{0,4}["'`]?(\S{1,2000})/gim)) {
@@ -306,7 +321,11 @@ export function screenTask(task: string): TaskScreen {
     for (; j < words.length && j - i <= 40; j++) {
       const w = words[j].text;
       if (COMMAND_ENDS.has(w.toLowerCase())) break;
+      // A shell or sentence separator ends the command too (fourth blind check, item 2): `&`, `|`, a
+      // redirection, a comment, a new line, a parenthesis, a lone dash (an em dash folded), `$(`, a backtick.
+      if (/^(?:[&|<>#(]|\d?>|\/\/|-$|\$\()/.test(w) || /\n/.test(task.slice(words[j - 1].end, words[j].start))) break;
       last = j;
+      if (/[,()]["')]*$/.test(w)) break;
       // A sentence or clause ends with this word ("x.", "x;", "x`").
       if (/[;!?`]["')]*$/.test(w) || /[A-Za-z0-9"'`)]\.["')]*$/.test(w)) break;
     }
@@ -375,7 +394,7 @@ export function screenTask(task: string): TaskScreen {
       // `name@file:../x` names the package; a bare path or URL names only the source.
       const named = /^(?:@[^@/\s]+\/)?[^@/\s:]+@/.test(bare(o.text)) ? operandName(o.text) : null;
       if (named) holdPackage(named, kind, o.start, o.end);
-      else hold(bare(o.text).slice(0, 80), `not looked up: the task installs it from ${kind}, not by a registry name`, o.start, o.end, true);
+      else hold(withoutUserInfo(bare(o.text)).slice(0, 80), `not looked up: the task installs it from ${kind}, not by a registry name`, o.start, o.end, true);
     }
     // Each word belongs to one command: "npm npm npm ..." was parsed forty words at a time from every word (re-check, item 3).
     i = Math.max(i, last);
@@ -422,7 +441,15 @@ export function screenTask(task: string): TaskScreen {
     }
   }
 
-  return { text: chars.join(""), withheld, names, scopes, ecosystems };
+  // 7. PEP 508 extras: `requests[security,socks]==2.25.0` names requests at 2.25.0; an extra is never a name.
+  // The requirement is moved over the brackets (its name stays where it was), so every reader binds the version.
+  // A redirection with a descriptor (`2>&1`, `2> err.log`, `&> out`) ends the command: written as `;` so no
+  // reader takes its `1` for a version or the next word for an operand (fourth blind check, B4).
+  const text = chars
+    .join("")
+    .replace(/(^|\s)(?:\d?>&\d|\d>>?|&>>?)/g, (m: string, pre: string) => `${pre};${" ".repeat(m.length - pre.length - 1)}`)
+    .replace(/(^|[\s"'`(])([A-Za-z0-9][\w.-]{0,200})\[[\w.,\s-]{1,400}\](\S{0,300})/g, (m: string, pre: string, name: string, rest: string) => `${pre}${name}${rest}${" ".repeat(m.length - pre.length - name.length - rest.length)}`);
+  return { text, withheld, names, scopes, ecosystems };
 }
 
 /** The task with only its over-long words blanked: what the readers read with no screen, bounded. */
@@ -484,7 +511,8 @@ export function knownPublicName(name: string, eco: CheckEcosystem): boolean {
 
 /** The popular name `name` is a near-miss of in `eco`, judged offline from the bundled lists, or null. */
 export function offlineNearMiss(name: string, eco: CheckEcosystem): string | null {
-  if (knownPublicName(name, eco)) return null;
+  // A name that is itself on a bundled list, in any ecosystem, is never a near-miss (fourth blind check, item 4).
+  if ((["npm", "PyPI", "crates.io"] as const).some((e) => knownPublicName(name, e))) return null;
   if (eco === "npm") return nearMissOf(name.toLowerCase())?.of ?? null;
   if (eco === "PyPI") return closestPopularPypi(name);
   return null;

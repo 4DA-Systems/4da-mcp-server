@@ -52,7 +52,6 @@ import {
   closestPopularPypi,
   ENGLISH_TASK_WORDS,
   installedGoModule,
-  isManifestEntry,
   isManifestFile,
   isTomlEntry,
   isVersionSpec,
@@ -148,8 +147,6 @@ export interface NewPackageFinding extends NewPackage {
   did_you_mean: string | null;
   /** What the name check itself said, apart from the release's own signals: avoid, review, or null. */
   name_finding: "avoid" | "review" | null;
-  /** A near-miss of a popular name judged offline from the bundled lists: this briefing did not look the name up. */
-  judged_offline?: true;
   /**
    * The task named no ecosystem, so the name was checked in every one the project uses; this
    * finding is the worst answer, and these are the others (`not_found`: that registry has no such name).
@@ -422,12 +419,6 @@ export interface TaskItems {
   truncated?: true;
   /** Words of a command that were not read (after an option that may take them as its value). */
   unreadWords: Array<{ shown: string; reason: string }>;
-  /**
-   * `${ecosystem}\0${lower-case name}` of every name read from structured syntax: an operand of an install
-   * command, or the key of a manifest or requirements entry. Only these go into the briefing's callable
-   * check_these; a name read from prose is listed as an unverified word (third blind check).
-   */
-  structured: Set<string>;
 }
 
 /**
@@ -461,6 +452,26 @@ export function taskVersionText(token: string, ecosystem?: CheckEcosystem): stri
 /** A specifier only PyPI writes right after the name: `requests~=2.31`, `flask<2.2.5`, `x===1.0`, `x==2.*`. */
 const PEP440_INLINE = /^[A-Za-z0-9][\w.-]*(?:~=|===|==|!=|>=|<=|<|>)\S/;
 
+/**
+ * What ends a command's operands, between two tokens: a shell operator or redirection, a comment, a new
+ * line, a comma before a blank, a parenthesis, a brace, a dash between clauses, a backtick, `$(`.
+ */
+const OPERANDS_END = /[&|;<>#\n(){}–—`]|\/\/|,\s|\$\(|(?:^|\s)-(?:\s|$)/;
+
+/**
+ * Whether the blank-delimited word around `at` has a colon followed by more of it (`admin:hunter2`,
+ * `user:pass@host`): never a package name. A spec source the screen names (`npm:`, `file:`, `git+ssh:`)
+ * is read there, so it is not one of these.
+ */
+function colonWord(task: string, at: number): boolean {
+  let a = at;
+  while (a > 0 && !/\s/.test(task[a - 1]) && at - a < MAX_TASK_WORD) a--;
+  let b = at;
+  while (b < task.length && !/\s/.test(task[b]) && b - at < MAX_TASK_WORD) b++;
+  const word = task.slice(a, b);
+  return /:[^\s/]/.test(word) && !/^(?:[\w.@/-]*@)?(?:npm|jsr|file|link|portal|workspace|catalog|patch|git(?:\+[a-z]+)?|github|gitlab|bitbucket|https?):/i.test(word);
+}
+
 export function readTaskItems(task: string, deps: readonly ResolvedDependency[]): TaskItems {
   const quoted = new Set((task.match(/`([^`\s]+)`/g) ?? []).map((q) => q.slice(1, -1).toLowerCase()));
   // Word-ish tokens that keep package punctuation; a leading "-" marks a command flag; a version may
@@ -486,7 +497,6 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   /** Where each (ecosystem, name) is in `found`: a list of thousands of names was quadratic (F-M3). */
   const foundAt = new Map<string, number>();
   const unreadWords: TaskItems["unreadWords"] = [];
-  const structured = new Set<string>();
   const bound: BoundVersion[] = [];
   const ignored: TaskSpan[] = [];
   const fixed: TaskItems["fixed"] = [];
@@ -625,6 +635,19 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           truncated = true;
           break;
         }
+        // A shell or sentence separator ends the operands (`&& git push origin x` listed git, push, origin;
+        // fourth blind check, item 2); a shell variable or expansion (`$X`, `%X%`, `${X}`) is never a name,
+        // nor is a word with a colon inside (`--auth admin:hunter2` listed hunter2). A dash standing alone
+        // is a dash between clauses (an em dash is folded to one).
+        const before = task.slice(span(j - 1).end, starts[j]);
+        const expands = /\$\(|\$\{?$/.test(before) || /%$/.test(before);
+        if (expands) unreadWords.push({ shown: `${before.trim().slice(-2)}${raw[j].slice(0, 20)}`, reason: "not read: a shell expansion, whose value the task does not give" });
+        if (/\$\(/.test(before) || (!before.startsWith("|") && OPERANDS_END.test(before)) || (raw[j] === "-" && /\s$/.test(before))) break;
+        if (expands) continue;
+        if (colonWord(task, starts[j])) {
+          unreadWords.push({ shown: "a word with a colon inside", reason: "not read: a user and password or a host and port is no package name (it is never repeated: it may be a secret)" });
+          continue;
+        }
         if (words[j].startsWith("-")) {
           // An option's value (`--tag next`, `-w packages/api`, `--prefix ./x`) is never a package (E2).
           // `--opt=value` is a value. After `--opt`, the next word is read as an operand only when the
@@ -645,7 +668,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           if (/^=\S*$/.test(gap)) j++;
           // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
           else if (/^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && !words[j + 1].startsWith("-")) {
-            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: raw[j + 1].replace(/[.,;:)]+$/, "").slice(0, 80), reason: `not read: it follows the option ${flag.slice(0, 40)}, which may take it as its value` });
+            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: `the word after ${flag.slice(0, 40)}`, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)" });
             j++;
           }
           continue;
@@ -672,7 +695,6 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (!name) break;
         // The command fixes the ecosystem for the version reader too (round 10, W14).
         fixed.push({ ...span(j), ecosystem });
-        structured.add(`${ecosystem}\0${name.toLowerCase()}`);
         // After `@`: a version or range; for npm a dist-tag kept as written (`zustand@next`); anything else
         // (`zustand@<uuid>`) is a version that could not be read, never replaced by latest (third blind check, item 5).
         const after = raw[j].indexOf("@", 1) > 0 ? raw[j].replace(/[.,;:)]+$/, "").slice(raw[j].indexOf("@", 1) + 1) : "";
@@ -878,12 +900,6 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const pepAlternatives: CheckEcosystem[] = pep === "PyPI" && !stated && asName(raw[k].replace(/(?:[=~<>!]=?).*$/, ""), "npm") !== null ? ["npm"] : [];
       const pepFallbackOnly = pepAlternatives.length > 0 && projectEcosystems(deps).includes("PyPI");
       if (pep) fixed.push({ ...span(k), ecosystem: pep, ...(pepAlternatives.length > 0 ? { alternatives: pepAlternatives } : {}), ...(pepFallbackOnly ? { fallbackOnly: true as const } : {}) });
-      // The key of a manifest entry written into the task (`"x": "^1"`, `x = "1.0"`), or a requirements line on
-      // its own line (`x==1.0`): structured syntax. Not an environment-variable name (`DB_PASS = "123"`).
-      const ownLine = pep !== null && /(?:^|\n)[ \t]*$/.test(task.slice(Math.max(0, starts[k] - 80), starts[k])) && /^\S*[ \t]*(?:\n|$)/.test(task.slice(starts[k], starts[k] + MAX_TASK_WORD + 80));
-      if ((isManifestEntry(task, starts[k]) || ownLine) && !/^[A-Z][A-Z0-9_]*$/.test(raw[k].replace(/[@=~<>!].*$/, ""))) {
-        structured.add(`${tomlEntry ? toml : pep ? "PyPI" : fallback}\0${name.toLowerCase()}`);
-      }
       const pkg = tomlEntry || pep ? add(name, itemEcosystem, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
       if (pkg && pep && pepAlternatives.length > 0) {
         pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
@@ -915,7 +931,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
     }
   }
-  return { packages: found, bound, ignored, fixed, foreign, unreadWords, structured, ...(truncated ? { truncated: true as const } : {}) };
+  return { packages: found, bound, ignored, fixed, foreign, unreadWords, ...(truncated ? { truncated: true as const } : {}) };
 }
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &

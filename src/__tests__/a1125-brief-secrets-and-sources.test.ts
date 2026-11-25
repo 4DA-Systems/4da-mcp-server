@@ -141,7 +141,7 @@ describe("E2: what the task's own command takes from elsewhere is never looked u
     const r = await brief("npm install --registry https://npm.zqxcorp.internal zqx-cli-tool; then add express");
     expect(leaked(/zqx/i)).toEqual([]);
     expect(looked("express").length).toBeGreaterThan(0);
-    expect(JSON.stringify(r.check_these ?? {})).not.toMatch(/zqx/);
+    expect(JSON.stringify(r.unverified_words ?? [])).not.toMatch(/zqx/);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 

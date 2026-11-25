@@ -142,8 +142,8 @@ describe("the version a task names is judged, at that version", () => {
     // version the task names; dependency_check says the path is not one the go command accepts.
     const result = await brief("go get github.com/gin-gonic/gin/@v1.6.0", { react: "18.2.0" });
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
-    const items = result.check_these?.arguments.items ?? [];
-    expect(items).toEqual([{ ecosystem: "Go", package: "github.com/gin-gonic/gin/", to: "v1.6.0" }]);
+    expect(result.unverified_words).toEqual([{ word: "github.com/gin-gonic/gin/", read_as: "Go", version: "v1.6.0" }]);
+    const items = [{ ecosystem: "Go" as const, package: "github.com/gin-gonic/gin/", to: "v1.6.0" }];
     const check = (await executeDependencyCheck(null, { items }, project({ react: "18.2.0" }))) as { results: Array<{ verdict: string; reason: string }> };
     expect(check.results[0]).toMatchObject({ verdict: "unknown" });
     expect(check.results[0].reason).toMatch(/not a Go module path the go command accepts as written .* Check `github\.com\/gin-gonic\/gin` instead/);

@@ -24,6 +24,11 @@ import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
 
+/** The dependency_check call an agent makes for the unverified words (fourth blind check: the answer itself holds no arguments). */
+const follow = (r: { unverified_words?: Array<{ word: string; read_as: string; version?: string }> }) => ({
+  items: (r.unverified_words ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: w.version ?? "latest" })),
+});
+
 const NPM = [dep("lodash", "4.17.20"), dep("react", "18.2.0")];
 const RUST = [dep("tokio", "1.40.0", "crates.io")];
 
@@ -217,9 +222,9 @@ describe("3. Cargo's `=` pin is kept when the briefing asks dependency_check", (
     // Final design of the 2026-11-25 fixes: neither crate is on a bundled list, so the briefing hands both back,
     // each at the pin the task writes (Cargo's `=` kept), and dependency_check judges them there.
     const r = await brief(task, RUST);
-    expect(r.check_these?.arguments.items).toContainEqual({ ecosystem: "crates.io", package: "smallvec", to: "=1.6.0" });
+    expect(r.unverified_words).toContainEqual({ word: "smallvec", read_as: "crates.io", version: "=1.6.0" });
     expect(r.delegation_assessment.level).toBe("review_needed");
-    const check = (await executeDependencyCheck(null, r.check_these!.arguments, stubIntel(RUST, {}, readyScan()) as never)) as { results: Array<{ package: string; verdict: string; to: string; reason: string }> };
+    const check = (await executeDependencyCheck(null, follow(r), stubIntel(RUST, {}, readyScan()) as never)) as { results: Array<{ package: string; verdict: string; to: string; reason: string }> };
     const smallvec = check.results.find((v) => v.package === "smallvec");
     expect(smallvec).toMatchObject({ verdict: "avoid", to: "1.6.0" });
     expect(smallvec?.reason).not.toMatch(/1\.16\.5|\^1\.6\.0/);

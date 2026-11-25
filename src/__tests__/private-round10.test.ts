@@ -207,10 +207,10 @@ describe("item 1: only a registry-wide reason makes an ecosystem private for new
     expect(leaks(/example\.com\/newthing/).length).toBeGreaterThan(0);
     // The briefing too: every installed Go module is private by GOPRIVATE, which covers only its pattern.
     sent.length = 0;
-    // Final design of the 2026-11-25 fixes: the briefing hands a module on no bundled list back for
+    // Final design of the 2026-11-25 fixes: the briefing lists a module on no bundled list in unverified_words for
     // dependency_check (sent above, by that call), never as private.
     const brief = await call("what_should_i_know", { task: "go get example.com/newthing" });
-    expect(brief).toMatch(/"package": ?"example\.com\/newthing"/);
+    expect(brief).toMatch(/"word": ?"example\.com\/newthing"/);
     expect(brief).not.toMatch(/example\.com\/newthing is private/);
   });
 
