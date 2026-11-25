@@ -124,6 +124,10 @@ export interface RunOrderStep {
   n: number;
   dir: string;
   run: string;
+  /** Project-relative files the step changes (upgrade-plan-protocol.ts). */
+  changes?: string[];
+  /** How to put back what the step can leave edited when it fails (upgrade-plan-protocol.ts); absent when a failure writes nothing. */
+  if_it_fails?: string;
   /** "ecosystem:package" of the rows this step serves. */
   fixes: string[];
 }
