@@ -27,6 +27,7 @@ import { normalizePythonName } from "../live/lockfile-parsers-pygo.js";
 import { tomlHeader, tomlKeyValue, tomlLines, tomlStrings } from "../live/private-hosts.js";
 import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.js";
 import { lowestPython, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { isShellSafeDir, unsafeDirWords } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { overrideCommandsOf, recordOverrideCommands } from "./upgrade-plan-overrides.js";
 
@@ -382,4 +383,86 @@ export function withYarnClassicResolutions(rows: Array<RunnableRow & { action: s
     const why = `Yarn classic has no command that refreshes one package's yarn.lock entries; every ${r.package} copy ${dirs.length === 1 && dirs[0] === "." ? "the lockfile" : `the lockfile in ${dirs.join(", ")}`} holds is on the ${line}.x line at or below ${r.targetVersion}, so an exact resolution moves them all there and nothing else: ${cmds.map((c) => `\`${c.command}\`${c.dir === "." ? "" : ` in ${c.dir}`}`).join(", then ")} (the resolution stays in package.json; remove it once every parent's own release holds ${r.targetVersion} or later)`;
     if (!r.reasons.includes(why)) r.reasons.push(why);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Directories whose names are not safe in a command (audit 2026-11-25 B-B1)
+// ---------------------------------------------------------------------------
+
+/** How the reason a row gets for a directory whose name is not safe in a command starts. */
+export const UNSAFE_DIR_REASON_START = "NOT RUNNABLE HERE: ";
+const UNSAFE_DIR_REASON = /^NOT RUNNABLE HERE: the directory /;
+
+/** Whether the row has a step in a directory whose name is not safe in a command: never counted as fixed, never in run_order. */
+export function hasUnsafeDir(row: { reasons: string[] }): boolean {
+  return row.reasons.some((r) => UNSAFE_DIR_REASON.test(r));
+}
+
+type DirField = { dir: string };
+
+/**
+ * Every command, instruction and reinstall directory of a row whose directory is not a plain path
+ * (shell-safe.ts isShellSafeDir) is taken off the row: no command and no `dir` an agent could
+ * paste is named there, only the reason, which names the directory escaped and says to handle it
+ * by hand. Commands in the row's other directories stay. The directories found are returned, for
+ * the answer's prose to be rewritten (escapeUnsafeDirs). `installDirs` is the reinstall row's
+ * directories, rewritten in place.
+ */
+export function withholdUnsafeDirs<R extends RunnableRow & { installFix?: string }>(rows: R[], installDirs: Map<R, string[]>): Set<string> {
+  const found = new Set<string>();
+  for (const r of rows) {
+    const bad = new Set<string>();
+    const keep = <T extends DirField>(list: T[] | undefined): T[] | undefined => {
+      if (!list) return list;
+      for (const c of list) if (!isShellSafeDir(c.dir)) bad.add(c.dir);
+      return list.filter((c) => isShellSafeDir(c.dir));
+    };
+    const set = <K extends "upgradeCommands" | "upgradeInstructions" | "refreshCommands">(key: K) => {
+      const kept = keep(r[key] as DirField[] | undefined);
+      if (kept === undefined) return;
+      if (kept.length > 0) (r as Record<K, unknown>)[key] = kept;
+      else delete r[key];
+    };
+    set("upgradeCommands");
+    set("upgradeInstructions");
+    set("refreshCommands");
+    for (const u of r.parentUpgrades ?? []) {
+      const refresh = keep(u.refreshCommands);
+      if (refresh !== undefined) {
+        if (refresh.length > 0) u.refreshCommands = refresh;
+        else delete u.refreshCommands;
+      }
+      for (const l of u.levers) {
+        const cmds = keep(l.commands);
+        if (cmds !== undefined) {
+          if (cmds.length > 0) l.commands = cmds;
+          else delete l.commands;
+        }
+        const words = keep(l.instructions);
+        if (words !== undefined) {
+          if (words.length > 0) l.instructions = words;
+          else delete l.instructions;
+        }
+      }
+    }
+    for (const c of overrideCommandsOf(r)) if (!isShellSafeDir(c.dir)) bad.add(c.dir);
+    const reinstall = installDirs.get(r);
+    if (reinstall) {
+      for (const d of reinstall) if (!isShellSafeDir(d)) bad.add(d);
+      const safe = reinstall.filter((d) => isShellSafeDir(d));
+      if (safe.length > 0) installDirs.set(r, safe);
+      else if (reinstall.length > 0) {
+        // Every directory to reinstall in is unsafe: no reinstall command at all (never the root's in their place).
+        installDirs.delete(r);
+        delete r.installFix;
+      }
+    }
+    if (bad.size === 0) continue;
+    for (const d of [...bad].sort()) {
+      found.add(d);
+      const why = `${UNSAFE_DIR_REASON_START}${unsafeDirWords(d)}. This row is not counted as fixed and is not in run_order`;
+      if (!r.reasons.includes(why)) r.reasons.push(why);
+    }
+  }
+  return found;
 }

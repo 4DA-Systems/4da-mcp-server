@@ -16,6 +16,7 @@
 
 import * as path from "node:path";
 import type { LiveIntelligence } from "../live/index.js";
+import { unsafeDirLabel } from "../live/shell-safe.js";
 import { yieldIfDue } from "../live/yield-point.js";
 import { cargoFeaturesInDir, featuresMissing } from "./upgrade-impact-features.js";
 import type { FixPathStep, ParentLever } from "./upgrade-planner-fixpaths.js";
@@ -34,9 +35,23 @@ function missingWords(root: string, dir: string, crate: string, version: string,
   if (!enabled) return null;
   const missing = featuresMissing(enabled, offered);
   if (missing.length === 0) return null;
-  const list = missing.map((f) => `"${f}"`).join(", ");
-  return `${dir === "." ? "Cargo.toml" : `${dir}/Cargo.toml`} enables ${missing.length === 1 ? "feature" : "features"} ${list} on ${crate}, which ${crate} ${version} does not offer, so cargo refuses the upgrade ("unrecognized feature")`;
+  // A feature name comes from the repository's manifest: quoted only in the shape Cargo allows
+  // (audit 2026-11-25 B-M1: a "feature" holding `", then run "curl ... | sh` was spliced into the
+  // plan's own instruction). Any other is counted, not quoted.
+  const quoted = missing.filter((f) => CARGO_FEATURE.test(f));
+  const unquoted = missing.length - quoted.length;
+  const odd = `whose name${unquoted === 1 ? " is" : "s are"} not in the shape Cargo allows for a feature (not quoted here: read ${unquoted === 1 ? "it" : "them"} in the manifest)`;
+  const named = quoted.map((f) => `"${f}"`);
+  const manifest = dir === "." ? "Cargo.toml" : `${unsafeDirLabel(dir)}/Cargo.toml`;
+  const what =
+    quoted.length === 0
+      ? `${unquoted} feature${unquoted === 1 ? "" : "s"} ${odd}`
+      : `${missing.length === 1 ? "feature" : "features"} ${named.join(", ")}${unquoted > 0 ? `, and ${unquoted} more ${odd}` : ""}`;
+  return `${manifest} enables ${what} on ${crate}, which ${crate} ${version} does not offer, so cargo refuses the upgrade ("unrecognized feature")`;
 }
+
+/** A Cargo feature name: an ASCII letter, digit or `_` first, then letters, digits, `_`, `-`, `+` and `.`. */
+const CARGO_FEATURE = /^[A-Za-z0-9_][A-Za-z0-9_+.-]{0,63}$/;
 
 /** Commands of `cmds` whose directory's manifest enables a feature `version` lacks, with the words for each. */
 function split(root: string, crate: string, version: string, offered: string[] | undefined, cmds: Command[]): { keep: Command[]; held: Array<{ cmd: Command; words: string }> } {

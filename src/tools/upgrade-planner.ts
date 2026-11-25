@@ -35,7 +35,7 @@ import { isActionableVulnerability, isMaintenanceNotice } from "../live/maintena
 import { computeSemverDistance } from "../live/semver-utils.js";
 import { compareVersions, inEcosystemForm, maxVersion, namesPackage } from "../live/version-compare.js";
 import { formatAppPlan, readAppPlan, type AppPlanResult } from "./app-plan.js";
-import { checkAllProjectsPlan, checkProjectPlan, serverPlanFacts, type AppPlanCheck } from "./app-plan-check.js";
+import { checkAllProjectsPlan, checkProjectPlan, planFormatNote, serverPlanFacts, type AppPlanCheck } from "./app-plan-check.js";
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
@@ -58,7 +58,10 @@ import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
-import { declaredNpmOperator, staleLocksNote, uvWorkspaces, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { declaredNpmOperator, hasUnsafeDir, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { escapeUnsafeDirs, isShellSafeCargoTarget, isShellSafeDir } from "../live/shell-safe.js";
+import { walkNotReadNote } from "./what-should-i-know.js";
+import * as path from "node:path";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -250,6 +253,12 @@ export interface UpgradePlanResult {
   app_plan_check?: AppPlanCheck;
   /** The project the plan covers, or null when it is not narrowed to one. */
   projectScope?: string | null;
+  /**
+   * Set when every project was asked for (project_path "*", or a server started outside a project)
+   * and only the server's own project could be planned: the app's stored plan, the only one that
+   * covers every project, could not be read. `reason` says why (audit 2026-11-25 G-3).
+   */
+  allProjects?: { covered: false; reason: string };
 }
 
 /** Time the plan spends checking the newer releases its rows offer against their advisories. */
@@ -281,7 +290,7 @@ const APP_ATTACHED_NOTE = "The 4DA app's stored plan is never used in its place;
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). The plan is computed by this server from the project's lockfiles on disk, with or without the 4DA desktop app (provenance lockfile_engine). With the app's database attached, `app_plan_check` says how the app's stored plan compares (agrees; differs, with up to 10 `differences`; not_comparable when its plan format is one this server does not read, its advisory data is more than 24 hours old, or a lockfile changed after it was generated; no_plan); the app's plan never replaces this one. The exception is project_path \"*\" with the app attached: the answer is then the app's stored plan across every project it tracks (provenance app_plan, `app_plan_check.status` unverified, not checked against the lockfiles on disk): per package the ecosystem, each installed version with its minimum clean target, upgrade type, the projects that hold it, the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update, mixed, no_fix) and `next_step` in words, `stale` when past its expiry, when its advisory data is more than 24 hours old, or when a lockfile of a project it covers changed after it. The plan: the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; a Cargo row whose release needs a newer Rust than the manifest's rust-version says so in `needsNewerRust` (the step stays: the build on the declared Rust is what fails); dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. `package` narrows the plan to one package. Privacy: the plan may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). The plan is computed by this server from the project's lockfiles on disk, with or without the 4DA desktop app (provenance lockfile_engine). With the app's database attached, `app_plan_check` says how the app's stored plan compares (agrees; differs, with up to 10 `differences`; not_comparable when its plan format is one this server does not read, its advisory data is more than 24 hours old, or a lockfile changed after it was generated; no_plan); the app's plan never replaces this one. The exception is project_path \"*\" with the app attached: the answer is then the app's stored plan across every project it tracks (provenance app_plan, `app_plan_check.status` unverified, not checked against the lockfiles on disk); when \"*\" is asked and no app plan can be read (no app attached, none stored, a newer plan format), the answer covers only the server's own project, its summary starts with NOT CHECKED saying so and why, `allProjects` is { covered: false, reason } and vulnerabilityDataAvailable is false. The app's plan: per package the ecosystem, each installed version with its minimum clean target, upgrade type, the projects that hold it, the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update, mixed, no_fix) and `next_step` in words, `stale` when past its expiry, when its advisory data is more than 24 hours old, or when a lockfile of a project it covers changed after it. The plan: the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; a Cargo row whose release needs a newer Rust than the manifest's rust-version says so in `needsNewerRust` (the step stays: the build on the declared Rust is what fails); dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. A directory walk that stopped before reading the whole project (its directory bound or time budget) makes the plan incomplete the same way. A step in a directory whose name is not a plain path (shell metacharacters, a leading \"-\", control or invisible characters) names no command and no directory: its reasons name the directory escaped, and it is not counted as fixed or put in run_order. `package` narrows the plan to one package. Privacy: the plan may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -388,6 +397,19 @@ export async function executeUpgradePlanner(
       : liveIntel;
   const plan = await executeStandalonePlanner(params, scoped);
   const result: UpgradePlanResult = { ...plan, projectScope: scopePath ?? plan.projectPath };
+  // Every project was asked for and only this one is planned: said first, never a silent narrowing
+  // (the desktop app's Brief hand-off relies on "*" meaning every project; audit 2026-11-25 G-3).
+  if (scope.kind === "all") {
+    const why = !app
+      ? "the 4DA desktop app's database is not attached, so there is no stored plan to read"
+      : appPlan?.kind === "absent" && appPlan.cause === "format"
+        ? (appPlan.formatNote ?? planFormatNote(appPlan.found)).replace(/[.]$/, "")
+        : `the 4DA app's stored plan could not be read: ${appPlan?.kind === "absent" ? appPlan.reason : "no plan"}`;
+    const lead = `NOT CHECKED: ${scope.reason}, and only the 4DA app's stored plan covers more than one: ${why}. What follows covers only ${plan.projectPath}, not every project`;
+    result.summary = `${lead}. ${result.summary}`;
+    result.vulnerabilityDataAvailable = false;
+    result.allProjects = { covered: false, reason: why };
+  }
   if (!app || !appPlan) return result;
   return {
     ...result,
@@ -512,7 +534,11 @@ async function executeStandalonePlanner(
   // CVE-aware either (review 2026-11-24: a subdirectory package.json with no lockfile).
   const manifestsUnlocked = discoveryAtStart?.unlockedManifestsCount ?? 0;
   const setMoved = liveIntel.getGeneration() !== startGeneration;
-  const vulnerabilityDataAvailable = vulnResult !== null && coverage === null && !nothingReadable && lockfileReadAtStart && lockfilesNotRead === 0 && manifestsUnlocked === 0 && !setMoved;
+  // A walk that stopped before it reached every directory left lockfiles unread and uncounted: a
+  // plan over the part it read is not CVE-aware for the project (audit 2026-11-25 F-B1).
+  const walkNote = walkNotReadNote(discoveryAtStart);
+  const vulnerabilityDataAvailable =
+    vulnResult !== null && coverage === null && !nothingReadable && lockfileReadAtStart && lockfilesNotRead === 0 && manifestsUnlocked === 0 && !setMoved && walkNote === null;
   // Keyed by ecosystem + name + INSTANCE version. A name-only key attached every
   // instance's CVEs to whichever row asked first: the direct anyhow 1.0.104 was
   // charged with RUSTSEC-2026-0190 (fixed in 1.0.103 — it isn't affected) while
@@ -882,6 +908,9 @@ async function executeStandalonePlanner(
   await withPythonSupport(limited, root, liveIntel.getFixPathSources());
   // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
   await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
+  // A directory name comes from the repository: a step in one that is not a plain path names no
+  // command and no directory, only words (audit 2026-11-25 B-B1; shell-safe.ts isShellSafeDir).
+  const unsafeDirs = withholdUnsafeDirs(limited, installDirsOf);
   // Every command a row names, as data, from the fields its words were built from (all passes done).
   attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));
   // A direct upgrade with nothing to run says why, and the hand step that takes it.
@@ -891,6 +920,9 @@ async function executeStandalonePlanner(
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
   const heldRows = limited.filter(heldUnclean);
+  // Not counted as fixed: a target that is not a clean fix, or a step in a directory whose name is not safe in a command.
+  const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || hasUnsafeDir(r);
+  const unsafeRows = limited.filter(hasUnsafeDir);
   // The rows shown as one script safe to run top to bottom (upgrade-plan-sequence.ts).
   const declaredNpm = new Set(
     [...liveIntel.getResolvedDeps(), ...(liveIntel.getAuditDeps() as Array<{ ecosystem: string; name: string; version: string | null; isDirect?: boolean }>)]
@@ -903,11 +935,12 @@ async function executeStandalonePlanner(
     goSource: liveIntel.getReleaseSources().Go,
     peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
     declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
+    notRunnableHere: hasUnsafeDir,
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
   const sharedLeft = (r: (typeof limited)[number]) => r.reasons.some((x) => SHARED_COPY_REASON.test(x));
-  const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
+  const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !notCounted(r) && r.targetVersion !== null);
   const upgrades = directRows.filter((r) => !sharedLeft(r));
   const partlyDirect = directRows.length - upgrades.length;
   // Rows whose advisories OSV.dev did not answer for, or whose newer release was not confirmed (r7).
@@ -920,12 +953,12 @@ async function executeStandalonePlanner(
   const partlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && (r.bundledCopies?.length ?? 0) > 0).length;
   const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length + partlyBundled;
   const fixPathNotDetermined = limited.filter((r) => r.action === "not_determined").length;
-  const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r)).length;
-  const refreshesPartlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r) && (r.bundledCopies?.length ?? 0) > 0).length;
-  const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent" && !heldUnclean(r)).length;
+  const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh" && !notCounted(r)).length;
+  const refreshesPartlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && !notCounted(r) && (r.bundledCopies?.length ?? 0) > 0).length;
+  const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent" && !notCounted(r)).length;
   const devOnly = limited.filter((r) => r.isDev).length;
   const overrides = limited.filter((r) => r.action === "override_or_replace").length;
-  const reinstalls = limited.filter((r) => r.action === "reinstall").length;
+  const reinstalls = limited.filter((r) => r.action === "reinstall" && !hasUnsafeDir(r)).length;
   const noFix = limited.filter((r) => r.action === "no_fix_available").length;
   const inactive = limited.filter((r) => r.action === "not_built_on_this_host").length;
   const unverifiedParents = limited.filter((r) => r.action === "upgrade_parent_unverified").length;
@@ -986,6 +1019,11 @@ async function executeStandalonePlanner(
       `${requiresUnexamined.length} target${requiresUnexamined.length !== 1 ? "s" : ""} whose own requirements were not examined${capped > 0 ? ` (${capped} past the ${MAX_REQUIRED_TARGETS} a call examines)` : ""}: not a clean fix until dependency_check examines ${requiresUnexamined.length === 1 ? "it" : "them"}`,
     );
   }
+  if (unsafeRows.length > 0) {
+    parts.push(
+      `${unsafeRows.length} with a step in a directory whose name is not safe to put in a command (it holds characters a shell reads as code): no command or directory is named there, the reasons name it escaped, and ${unsafeRows.length === 1 ? "it is" : "they are"} not counted as fixed and not in run_order`,
+    );
+  }
   const newerRust = rustVersionSummary(limited);
   if (newerRust) parts.push(newerRust);
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
@@ -1022,6 +1060,7 @@ async function executeStandalonePlanner(
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
   for (const note of [...exclusionNotes(discoveryAtStart), ...unreadableNotes(problemsAtStart)]) parts.push(note.replace(/[.]$/, ""));
+  if (walkNote) parts.unshift(walkNote.replace(/[.]$/, ""));
   if (setMoved) parts.unshift("NOT CHECKED: the dependency set changed while this plan was computed (a lockfile or manifest changed), so its rows and its notes may describe different files; plan again");
   const nothing = vulnerabilityDataAvailable ? "nothing to upgrade (no known vulnerability, deprecation, or newer release of a direct dependency)" : "no vulnerability data to plan from";
   if (only && limited.length === 0) parts.push(emptyAnswerNote(only, liveIntel, includeDev, nothing));
@@ -1036,7 +1075,7 @@ async function executeStandalonePlanner(
     pushAll(parts, rest);
   }
 
-  return {
+  const answer: UpgradePlanResult = {
     generatedAt: new Date().toISOString(),
     projectPath: liveIntel.getProjectRoot() ?? vulnResult?.projectPath ?? process.cwd(),
     totalDeps: deps.length,
@@ -1056,6 +1095,19 @@ async function executeStandalonePlanner(
       .join(" "),
     provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
+  // Every unsafe directory the answer can name in prose (a reason, a note, a lockfile problem) is
+  // named escaped; command fields are left alone (none is named in such a directory).
+  const proseDirs = new Set(unsafeDirs);
+  const addDir = (dir: string) => {
+    const rel = relativeDir(dir, root);
+    if (!isShellSafeDir(rel)) proseDirs.add(rel);
+  };
+  for (const d of auditAtStart) for (const s of d.sourceDirs ?? []) addDir(s);
+  for (const v of vulnResult?.vulnerabilities ?? []) for (const s of [...(v.sourceDirs ?? []), ...(v.platformInactiveDirs ?? [])]) addDir(s);
+  for (const r of drift) addDir(r.dir);
+  for (const p of problemsAtStart) addDir(path.dirname(p.file));
+  for (const s of [...(discoveryAtStart?.skipped ?? []), ...(discoveryAtStart?.unlockedManifests ?? []), ...(discoveryAtStart?.notCovered ?? [])]) addDir(path.posix.dirname(s.path.replace(/\\/g, "/")));
+  return escapeUnsafeDirs(answer, proseDirs);
 }
 
 /** A summary sentence that marks the answer incomplete. */
@@ -1070,12 +1122,18 @@ function notCheckedLead(lockfileRead: boolean, nothingReadable: boolean): string
   return "NOT CHECKED: this plan's vulnerability data is not complete, so a missing row or a low risk is not a clean result";
 }
 
+/** A Cargo `cfg(...)` whose string values are plain tokens: `cfg(target_os = "linux")`, `cfg(all(unix, target_arch = "x86_64"))`. */
+const PLAIN_CFG = /^cfg\((?:[A-Za-z0-9_(), =]|"[A-Za-z0-9_.-]{0,64}")*\)$/;
+
 /** Where a copy this host does not build IS built, in words: its declared target spec, or any target but this host's. */
 function builtFor(entries: VulnerabilityEntry[]): string[] {
   const specs = [...new Set(entries.filter((e) => !e.platformActive).map((e) => e.target).filter((t): t is string => Boolean(t)))];
   const words = specs.map((spec) => {
     const triple = /^not built for (\S+)$/.exec(spec)?.[1];
-    return triple ? `a target other than ${triple}` : spec;
+    if (triple) return /^[A-Za-z0-9_.-]{1,128}$/.test(triple) ? `a target other than ${triple}` : "a target other than this host's";
+    // A target header comes from the repository's Cargo.toml: quoted only as a plain cfg (its string
+    // values plain tokens), never `cfg(target_os = "$(...)")` (audit 2026-11-25 B, hostile cargo-target).
+    return isShellSafeCargoTarget(spec) || (spec.length <= 256 && PLAIN_CFG.test(spec)) ? spec : "a target whose cfg is not quoted here (it holds text that is not a plain cfg value; read it in Cargo.toml)";
   });
   return words.length > 0 ? [...new Set(words)] : ["another target"];
 }

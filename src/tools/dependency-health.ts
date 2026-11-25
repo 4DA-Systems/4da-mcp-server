@@ -15,6 +15,7 @@ import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
 import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems, workspaceNote } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
+import { walkNotReadNote } from "./what-should-i-know.js";
 import { withheldLine } from "../live/private-packages.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { quoteThirdParty } from "../untrusted-text.js";
@@ -290,7 +291,10 @@ export async function executeDependencyHealth(
           `PARTIAL: ${registryFailed.length} of ${registryData.length} direct dependenc${registryData.length === 1 ? "y" : "ies"} could not be checked against ${registryFailed.length === 1 ? "its registry" : "their registries"} (${String(registryFailed[0].fetchError).slice(0, 120)}); whether ${registryFailed.length === 1 ? "it is" : "they are"} outdated or deprecated is unknown, not current.`,
         ]
       : [];
-  const partialNotes = [...lockfileProblemNotes([...partialReads, ...refused, ...conflicts, ...uncrossed]), ...registryNote];
+  // A walk that stopped before it reached every directory: the score is over the part it read, never
+  // "all healthy", and the summary says so first (audit 2026-11-25 F-B1).
+  const walkNote = walkNotReadNote(liveIntel.getDiscovery());
+  const partialNotes = [...(walkNote ? [walkNote] : []), ...lockfileProblemNotes([...partialReads, ...refused, ...conflicts, ...uncrossed]), ...registryNote];
   const scorePartial = !withheld && partialNotes.length > 0;
   // One population for every count: the stored scan can be vulnerability_scan's,
   // which includes direct devDependencies by default, while the registry rows
@@ -457,7 +461,7 @@ export async function executeDependencyHealth(
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
-  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes]) parts.push(note.replace(/[.]$/, ""));
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes.filter((n) => n !== walkNote)]) parts.push(note.replace(/[.]$/, ""));
 
   return {
     scannedAt: new Date().toISOString(),
@@ -490,7 +494,7 @@ export async function executeDependencyHealth(
     // By each advisory's own grade, before the transitive/dev-only discount vulnerability_scan's
     // by_severity applies; unlabelled, the two read as a contradiction (audit 6.2.5 D-8: 13 vs 1 critical).
     ...(vulnSummary ? { vulnerabilitySummaryBasis: "each advisory's own severity, before the transitive and dev-only discount vulnerability_scan's by_severity applies" } : {}),
-    summary: `${withheld
+    summary: `${walkNote ? `${walkNote} ` : ""}${withheld
       ? `${[noLockfile, coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
       : `Health: ${healthScore}/100${scorePartial ? " over the checked part only (see scoreCoverage)" : ""} (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`}${startedIn ? ` ${startedIn}` : ""}`,
     scanDurationMs: Date.now() - start,
