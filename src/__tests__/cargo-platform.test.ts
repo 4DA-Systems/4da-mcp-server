@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import {
   hostTriple,
   activeCratesForHost,
+  resolveActiveCratesForHost,
   parseTreeNames,
   cargoTreeInvocation,
   _resetCargoPlatformCache,
@@ -167,8 +168,9 @@ describe("activeCratesForHost", () => {
    * but it leaves nothing to assert, so the test is then reported as skipped,
    * never as passed; with FOURDA_REQUIRE_CARGO=1 it fails.
    */
-  function resolvedOrSkip(skip: (note?: string) => never): Set<string> {
-    const crates = activeCratesForHost(FIXTURE_DIR);
+  async function resolvedOrSkip(skip: (note?: string) => never): Promise<Set<string>> {
+    // cargo runs as a child process now (audit 2026-11-25, F-M2): wait for its answer.
+    const crates = await resolveActiveCratesForHost(FIXTURE_DIR);
     if (crates === null) {
       if (required) {
         throw new Error(
@@ -182,7 +184,7 @@ describe("activeCratesForHost", () => {
 
   it.runIf(runnable)(
     "excludes a crate no enabled feature ever compiles",
-    ({ skip }) => {
+    async ({ skip }) => {
       // 2026-09-08 divergence: `cargo metadata --filter-platform` resolves the
       // TARGET axis only, so it kept the `reqwest -> quinn` edge even though
       // `reqwest`'s enabled features contain no `http3`. `quinn-proto` — never
@@ -190,7 +192,7 @@ describe("activeCratesForHost", () => {
       // Preemption's #1 HIGH on the founder instance. `cargo tree` resolves
       // features too, which is what the build does. The fixture locks `itoa`
       // behind a feature nothing enables.
-      const crates = resolvedOrSkip(skip);
+      const crates = await resolvedOrSkip(skip);
       expect(crates.has("ryu"), "a crate the build DOES compile").toBe(true);
       expect(crates.has("itoa"), "an optional dep of a disabled feature is not built here").toBe(false);
     },
@@ -199,10 +201,10 @@ describe("activeCratesForHost", () => {
 
   it.runIf(runnable)(
     "excludes locked crates that never build on this host",
-    ({ skip }) => {
+    async ({ skip }) => {
       // The live incident: nine Linux-only GTK3 crates reported on a Windows
       // host. The fixture locks one crate per OS family.
-      const crates = resolvedOrSkip(skip);
+      const crates = await resolvedOrSkip(skip);
       if (process.platform === "win32") {
         expect(crates.has("windows-sys"), "windows-sys must be active on Windows").toBe(true);
         expect(crates.has("libc"), "libc is unix-only here and must not be active on Windows").toBe(false);
@@ -216,10 +218,10 @@ describe("activeCratesForHost", () => {
 
   it.runIf(runnable)(
     "memoizes per directory",
-    ({ skip }) => {
+    async ({ skip }) => {
       // A real answer first: the same Set twice is the memo, where `null === null`
       // would hold with no memo at all.
-      const first = resolvedOrSkip(skip);
+      const first = await resolvedOrSkip(skip);
       expect(first.size).toBeGreaterThan(0);
       expect(activeCratesForHost(FIXTURE_DIR)).toBe(first);
     },

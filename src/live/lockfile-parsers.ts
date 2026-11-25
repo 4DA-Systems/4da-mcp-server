@@ -27,6 +27,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
+import { activeCratesForHost, activeCratesInFlight } from "./cargo-platform.js";
 import { readBunLock, stripTrailingCommas } from "./bun-lockfile.js";
 import {
   emptyReadReport,
@@ -166,8 +167,16 @@ function* readVersionSourceSteps(cwd: string, ecosystem: OsvEcosystem): Steps<Ve
   switch (ecosystem) {
     case "npm":
       return yield* resolveNpmSteps(cwd);
-    case "crates.io":
-      return resolveRust(cwd);
+    case "crates.io": {
+      // Which crates this host builds is cargo's answer, asked as a child process while Cargo.lock is
+      // read. A resolution run in steps waits for it (bounded, the event loop free meanwhile); one run
+      // synchronously goes on without it, and its crates all count (cargo-platform.ts; F-M2).
+      activeCratesForHost(cwd);
+      const read = resolveRust(cwd);
+      const pending = activeCratesInFlight(cwd);
+      if (pending) yield pending;
+      return read;
+    }
     case "PyPI":
       return resolvePython(cwd);
     case "Go":
