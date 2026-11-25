@@ -59,7 +59,7 @@ import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } fro
 import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
 import { declaredNpmOperator, hasUnsafeDir, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
-import { escapeUnsafeDirs, isShellSafeCargoTarget, isShellSafeDir } from "../live/shell-safe.js";
+import { escapeUnsafeDirs, isShellSafeCargoTarget, isShellSafeDir, liveUnsafeDirs } from "../live/shell-safe.js";
 import { walkNotReadNote } from "./what-should-i-know.js";
 import * as path from "node:path";
 
@@ -1109,6 +1109,7 @@ async function executeStandalonePlanner(
   for (const r of drift) addDir(r.dir);
   for (const p of problemsAtStart) addDir(path.dirname(p.file));
   for (const s of [...(discoveryAtStart?.skipped ?? []), ...(discoveryAtStart?.unlockedManifests ?? []), ...(discoveryAtStart?.notCovered ?? [])]) addDir(path.posix.dirname(s.path.replace(/\\/g, "/")));
+  for (const d of liveUnsafeDirs(liveIntel, root)) proseDirs.add(d);
   return escapeUnsafeDirs(answer, proseDirs);
 }
 

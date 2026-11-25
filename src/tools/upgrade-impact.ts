@@ -65,6 +65,7 @@ import { quoteThirdParty, thirdPartyUrl, UNTRUSTED_TEXT_FIELDS } from "../untrus
 import { isOfflineMode } from "../env-flags.js";
 import { recordedCallHosts } from "../call-budget.js";
 import { heldAffectedRows, heldImpactText, judgeTargetHeld, type HeldContext, type HeldImpact } from "./upgrade-impact-held.js";
+import { escapeUnsafeDirs, liveUnsafeDirs } from "../live/shell-safe.js";
 
 export interface UpgradeImpactParams {
   package: string;
@@ -627,5 +628,8 @@ export async function executeUpgradeImpact(
     githubChangelog: githubChangelogEnabled(),
     held,
   });
-  return typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(analyze) : analyze();
+  const answer = await (typeof liveIntel?.runInContext === "function" ? liveIntel.runInContext(analyze) : analyze());
+  // Sentences never carry a repository directory whose name is not a plain path (audit 2026-11-25
+  // review); `your_code.files[].path` is data and stays as it is.
+  return escapeUnsafeDirs(answer, ready ? liveUnsafeDirs(liveIntel) : [], { verbatim: ["path"] });
 }

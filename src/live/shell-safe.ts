@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+import * as fs from "node:fs";
+
 /**
  * Which values may be spliced into a command an agent is told to run.
  *
@@ -122,7 +124,8 @@ const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * command the server writes holds one). A match must start a word (not follow a letter, digit,
  * `.`, `_` or `-`). Both `/` and `\` spellings are matched; longest first, in one pass.
  */
-export function escapeUnsafeDirs<T>(value: T, dirs: Iterable<string>): T {
+export function escapeUnsafeDirs<T>(value: T, dirs: Iterable<string>, opts: { verbatim?: Iterable<string> } = {}): T {
+  const verbatim = new Set([...VERBATIM_KEYS, ...(opts.verbatim ?? [])]);
   const unsafe = [...new Set([...dirs].filter((d) => !isShellSafeDir(d) && d.length > 0))];
   if (unsafe.length === 0) return value;
   const label = new Map<string, string>();
@@ -142,7 +145,7 @@ export function escapeUnsafeDirs<T>(value: T, dirs: Iterable<string>): T {
     return s;
   };
   const walk = (v: unknown, key: string | null): unknown => {
-    if (typeof v === "string") return key !== null && VERBATIM_KEYS.has(key) ? v : rewrite(v);
+    if (typeof v === "string") return key !== null && verbatim.has(key) ? v : rewrite(v);
     if (Array.isArray(v)) return v.map((x) => walk(x, key));
     if (v && typeof v === "object") {
       const out: Record<string, unknown> = {};
@@ -152,4 +155,99 @@ export function escapeUnsafeDirs<T>(value: T, dirs: Iterable<string>): T {
     return v;
   };
   return walk(value, null) as T;
+}
+
+/** The parts of the live layer liveUnsafeDirs reads (all optional: a test's stand-in may lack some). */
+export interface UnsafeDirSources {
+  getProjectRoot?(): string | null;
+  getResolvedDeps?(): ReadonlyArray<{ sourceDirs?: string[] }>;
+  getAuditDeps?(): ReadonlyArray<{ sourceDirs?: string[] }>;
+  getInstallDrift?(): ReadonlyArray<{ dir: string }>;
+  getLockfileProblems?(): ReadonlyArray<{ file: string }>;
+  getVulnerabilities?(): { vulnerabilities: ReadonlyArray<{ sourceDirs?: string[]; platformInactiveDirs?: string[] }> } | null;
+  getDiscovery?(): { skipped?: ReadonlyArray<{ path: string }>; notCovered?: ReadonlyArray<{ path: string }>; unlockedManifests?: ReadonlyArray<{ path: string }> } | null;
+}
+
+/**
+ * Every project-relative directory of the live layer's dependency set whose name is not a plain
+ * path (with its unsafe ancestors), for escapeUnsafeDirs over a tool's whole answer (audit
+ * 2026-11-25 review: the briefing's `advisories[].action` and dependency_health named them raw).
+ */
+export function liveUnsafeDirs(intel: UnsafeDirSources | null | undefined, rootOverride?: string | null): Set<string> {
+  const out = new Set<string>();
+  if (!intel) return out;
+  const call = <R>(f: () => R | undefined): R | undefined => {
+    try {
+      return f();
+    } catch {
+      return undefined;
+    }
+  };
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const root = norm(rootOverride ?? call(() => intel.getProjectRoot?.()) ?? "");
+  const add = (dir: string | undefined, relativeAlready = false) => {
+    if (!dir) return;
+    let rel = norm(dir);
+    if (!relativeAlready && root) {
+      if (rel.toLowerCase() === root.toLowerCase()) return;
+      if (rel.toLowerCase().startsWith(`${root.toLowerCase()}/`)) rel = rel.slice(root.length + 1);
+    }
+    if (rel === "" || rel === "." || isShellSafeDir(rel)) return;
+    out.add(rel);
+    const parts = rel.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const prefix = parts.slice(0, i).join("/");
+      if (prefix && !isShellSafeDir(prefix)) out.add(prefix);
+    }
+  };
+  const dirOf = (file: string) => norm(file).replace(/\/[^/]*$/, "");
+  for (const d of [...(call(() => intel.getResolvedDeps?.()) ?? []), ...(call(() => intel.getAuditDeps?.()) ?? [])]) for (const s of d.sourceDirs ?? []) add(s);
+  for (const v of call(() => intel.getVulnerabilities?.())?.vulnerabilities ?? []) for (const s of [...(v.sourceDirs ?? []), ...(v.platformInactiveDirs ?? [])]) add(s);
+  for (const r of call(() => intel.getInstallDrift?.()) ?? []) add(r.dir);
+  for (const p of call(() => intel.getLockfileProblems?.()) ?? []) add(dirOf(p.file));
+  // Workspace members, go.work and Cargo members are named from manifests the live layer does not
+  // list by directory: the project's own directories with unsafe names are read from disk too.
+  if (root) for (const d of unsafeDirsOnDisk(root)) add(d, true);
+  const discovery = call(() => intel.getDiscovery?.());
+  for (const s of [...(discovery?.skipped ?? []), ...(discovery?.notCovered ?? []), ...(discovery?.unlockedManifests ?? [])]) {
+    const d = dirOf(s.path);
+    if (d !== norm(s.path)) add(d, true);
+  }
+  return out;
+}
+
+/** Directories never descended into when looking for unsafe names: installs, builds, VCS data. */
+const SKIP_DIRS = new Set(["node_modules", ".git", ".hg", ".svn", "target", ".venv", "venv", "__pycache__", ".tox", "vendor", ".yarn", ".pnpm-store"]);
+
+/**
+ * The project-relative directories under `root` whose names are not plain paths, read from disk:
+ * breadth first, at most 8 levels and 20,000 directories, within 500 ms, never through a link and
+ * never into an unsafe directory (everything under it is named through it).
+ */
+function unsafeDirsOnDisk(root: string): string[] {
+  const out: string[] = [];
+  const deadline = Date.now() + 500;
+  let queue: string[] = [""];
+  let seen = 0;
+  for (let depth = 0; depth < 8 && queue.length > 0; depth++) {
+    const next: string[] = [];
+    for (const rel of queue) {
+      if (Date.now() > deadline || seen > 20_000) return out;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(rel === "" ? root : `${root}/${rel}`, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        if (!e.isDirectory() || SKIP_DIRS.has(e.name)) continue;
+        seen++;
+        const child = rel === "" ? e.name : `${rel}/${e.name}`;
+        if (!isShellSafeDir(child)) out.push(child);
+        else next.push(child);
+      }
+    }
+    queue = next;
+  }
+  return out;
 }

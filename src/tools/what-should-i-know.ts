@@ -58,6 +58,7 @@ import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { exclusionNotes, lockfileProblemNotes, splitLockfileProblems, type TreeDiscovery } from "../project-tree.js";
 import { walkBudgetNote } from "../walk-budget.js";
+import { escapeUnsafeDirs, liveUnsafeDirs, type UnsafeDirSources } from "../live/shell-safe.js";
 import * as path from "node:path";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
 import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, type NewPackageFinding } from "./briefing-new-packages.js";
@@ -593,7 +594,8 @@ export async function executeWhatShouldIKnow(
         : assessed,
       notRead.notes,
     );
-    return {
+    // A directory name from the repository is named escaped in every sentence (audit 2026-11-25 review).
+    return escapeUnsafeDirs<WhatShouldIKnowResult>({
       task,
       files,
       project_path: liveIntel?.getProjectRoot?.() ?? null,
@@ -616,7 +618,7 @@ export async function executeWhatShouldIKnow(
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
       _meta: { untrusted_text: UNTRUSTED },
-    };
+    }, liveUnsafeDirs(liveIntel as UnsafeDirSources | null));
   };
 
   // Wisdom retrieval is lexical by default and hybrid when an embedding
