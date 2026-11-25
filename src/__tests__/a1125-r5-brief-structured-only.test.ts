@@ -87,3 +87,17 @@ describe("build metadata after a version is never a name", () => {
     expect(r.requested_versions).toMatchObject([{ name: "lodash", to: "4.17.15" }]);
   });
 });
+
+describe("a structured operand that is a credential is never listed (measurement after the fixes)", () => {
+  it.each([
+    ["npm install 75ebbd2c-2be9-4afe-b207-eab4e7dc3c3b", "75ebbd2c"],
+    ["pip install requests 771d41c7-9128-4494-848c-f617bcde6978", "771d41c7"],
+    ["npm install Winter2026sfzp", "winter2026"],
+    ["pip install requests Winter2026sgkr", "winter2026"],
+    ["npm install @qztok/aB3dE9fG", "ab3de9fg"],
+  ])("%s", async (task, secret) => {
+    const r = await brief(task);
+    expect(JSON.stringify(r.check_these ?? {}).toLowerCase()).not.toContain(secret);
+    expect(sent().filter((s) => s.toLowerCase().includes(secret))).toEqual([]);
+  });
+});

@@ -189,6 +189,8 @@ const PEM = /-----BEGIN [A-Z ]{0,40}-----[\s\S]{0,8000}?(?:-----END [A-Z ]{0,40}
 export function looksLikeSecret(word: string): boolean {
   const w = strip(word, LEAD_WRAP, TRAIL_WRAP);
   if (new RegExp(SECRET_SHAPES.source).test(w)) return true;
+  // A UUID (an API key, a license, a header value; third blind check): no registry name is one.
+  if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(w)) return true;
   for (const seg of w.split(/[-_.:/@=|^~<>,;]+/)) {
     if (seg.length < 10) continue;
     const upper = (seg.match(/[A-Z]/g) ?? []).length;
@@ -196,6 +198,8 @@ export function looksLikeSecret(word: string): boolean {
     const digits = (seg.match(/\d/g) ?? []).length;
     // Mixed capitals, small letters and digits in one run: names are words, not this.
     if (upper >= 2 && lower >= 2 && digits >= 2) return true;
+    // A password shape: a capital, small letters, then a run of four digits and more letters (`Winter2026sfzp`).
+    if (upper >= 1 && lower >= 4 && /[A-Za-z]\d{4,}[A-Za-z]/.test(seg)) return true;
     // A long run of letters and many digits (hex, base32): no registry name looks like this.
     if (seg.length >= 20 && digits >= 4 && digits + upper + lower === seg.length && digits >= seg.length / 5) return true;
   }

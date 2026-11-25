@@ -660,6 +660,13 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           if (separatorAfter(j) === "clause") break;
           continue;
         }
+        // A scoped npm name is lower case by npm's rule: one with capitals (`@x/aB3dE9fG`) is no package name,
+        // and is never lower-cased into one (third blind check).
+        if (ecosystem === "npm" && raw[j].startsWith("@") && /[A-Z]/.test(raw[j].replace(/(?<=.)@.*$/, ""))) {
+          unreadWords.push({ shown: `${raw[j].slice(0, 4)}...`, reason: "not read: npm package names are lower case, so this is no package name" });
+          if (separatorAfter(j) === "clause") break;
+          continue;
+        }
         // The first argument that is not a name ends the command; one the project already has does not.
         const name = asName(raw[j], ecosystem);
         if (!name) break;
