@@ -108,6 +108,24 @@ export function pyprojectRequirements(content: string): PyprojectRequirement[] {
 }
 
 /**
+ * PDM's development groups, `[tool.pdm.dev-dependencies]` (`lint = ["ruff", "-e file:///..."]`),
+ * as written with the group each is listed under. A pdm.lock records which groups it holds.
+ */
+export function pdmDevRequirements(content: string): Array<{ text: string; group: string }> {
+  const out: Array<{ text: string; group: string }> = [];
+  for (const body of tableBodies(content, "tool.pdm.dev-dependencies")) {
+    const nextKey = new RegExp(ARRAY_KEY.source, ARRAY_KEY.flags);
+    for (let key = nextKey.exec(body); key !== null; key = nextKey.exec(body)) {
+      const group = key[1] ?? key[2] ?? key[3];
+      const { strings, end } = arrayStrings(body, key.index + key[0].length);
+      nextKey.lastIndex = Math.max(end, nextKey.lastIndex);
+      for (const text of strings) if (text.trim() !== "") out.push({ text: text.trim(), group });
+    }
+  }
+  return out;
+}
+
+/**
  * The requirement strings `[tool.uv]` lists under `override-dependencies` and
  * `constraint-dependencies`: they change or remove what uv locks for a name,
  * so a `[project]` dependency they cover need not have a table in uv.lock.

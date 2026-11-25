@@ -190,6 +190,54 @@ describe("3: a DEPENDENCIES entry with no spec", () => {
   });
 });
 
+describe("4: manifest sections that were never compared", () => {
+  const PDM = (groups: string, names: string[]) =>
+    `[metadata]\ngroups = ${groups}\nlock_version = "4.4.1"\n\n${names.map((n) => `[[package]]\nname = "${n}"\nversion = "1.0.0"\nsummary = ""\nfiles = []\n`).join("\n")}`;
+  const POETRY = (names: string[]) => `${names.map((n) => `[[package]]\nname = "${n}"\nversion = "1.0.0"\ndescription = ""\noptional = false\npython-versions = "*"\nfiles = []\n`).join("\n")}\n[metadata]\nlock-version = "2.1"\npython-versions = "^3.9"\ncontent-hash = "0"\n`;
+  const notes = (eco: OsvEcosystem) => problems(eco).filter((p) => p.notCrossChecked);
+  const partials = (eco: OsvEcosystem) => problems(eco).filter((p) => p.partial);
+
+  it("PDM [tool.pdm.dev-dependencies]: a group the lock holds is compared (pd05)", () => {
+    write({ "pyproject.toml": '[project]\nname = "x"\ndependencies = ["anyio"]\n[tool.pdm.dev-dependencies]\ndev = ["pytest", "flask", "-e file:///${PROJECT_ROOT}/sub"]\n', "pdm.lock": PDM('["default", "dev"]', ["anyio", "pytest"]) });
+    expect(partials("PyPI")[0]?.error).toMatch(/pyproject\.toml declares flask, but/);
+  });
+  it("PDM: a group the lock does not record is said as not compared, a note (pd02, pd04)", () => {
+    write({ "pyproject.toml": '[project]\nname = "x"\ndependencies = ["anyio"]\n[project.optional-dependencies]\nweb2 = ["flask"]\n[tool.pdm.dev-dependencies]\nweb3 = ["django"]\n', "pdm.lock": PDM('["default"]', ["anyio"]) });
+    expect(partials("PyPI")).toEqual([]);
+    expect(notes("PyPI")[0]?.error).toMatch(/does not record the groups web2, web3/);
+  });
+  it("Poetry 2: [project.optional-dependencies] and [dependency-groups] are compared (p2-02, p2-03)", () => {
+    write({ "pyproject.toml": '[project]\nname = "x"\ndependencies = ["anyio"]\n[project.optional-dependencies]\nweb = ["flask"]\n[dependency-groups]\ndocs = ["mkdocs"]\n', "poetry.lock": POETRY(["anyio"]) });
+    expect(partials("PyPI")[0]?.error).toMatch(/declares flask and mkdocs, but/);
+  });
+  it("a gem moved from path: to the registry in the Gemfile only (rb22), and a multi-line path: gem is no move", () => {
+    write({
+      Gemfile: "source 'https://rubygems.org'\ngem 'rake'\ngem 'kaminari'\ngem 'draw_all',\n  path: 'gems/draw_all',\n  require: false\n",
+      "Gemfile.lock": `PATH\n  remote: vendor/kaminari\n  specs:\n    kaminari (1.2.2)\n\nPATH\n  remote: gems/draw_all\n  specs:\n    draw_all (0.1.0)\n\n${LOCK("    rake (13.2.1)\n", "  draw_all!\n  kaminari!\n  rake\n")}`,
+    });
+    const got = partials("RubyGems");
+    expect(got).toHaveLength(1);
+    expect(got[0].error).toMatch(/Gemfile installs kaminari from the registry, but this lockfile holds it from a local path/);
+    expect(got[0].error).not.toMatch(/draw_all/);
+  });
+  it("composer: an empty packages-dev beside a require-dev it lacks is said as not compared (php05)", () => {
+    write({
+      "composer.json": JSON.stringify({ require: { "a/a": "1" }, "require-dev": { "mockery/mockery": "^1" } }),
+      "composer.lock": JSON.stringify({ packages: [{ name: "a/a", version: "1.0.0", dist: { type: "zip", url: "https://api.github.com/x" } }], "packages-dev": [] }),
+    });
+    expect(partials("Packagist")).toEqual([]);
+    expect(notes("Packagist")[0]?.error).toMatch(/require-dev \(mockery\/mockery\) was not compared/);
+  });
+  it("Pipfile: a custom category the lock holds is compared; one it lacks is said (pf07)", () => {
+    const lock = (extra: Record<string, unknown>) => JSON.stringify({ _meta: { sources: [] }, default: { six: { version: "==1.16.0" } }, develop: {}, ...extra });
+    write({ Pipfile: '[packages]\nsix = "*"\n\n[docs]\nmkdocs = "*"\n', "Pipfile.lock": lock({}) });
+    expect(partials("PyPI")).toEqual([]);
+    expect(notes("PyPI")[0]?.error).toMatch(/no section for the category docs/);
+    write({ "Pipfile.lock": lock({ docs: { sphinx: { version: "==7.0.0" } } }) });
+    expect(partials("PyPI")[0]?.error).toMatch(/Pipfile declares mkdocs, but/);
+  });
+});
+
 describe("1a: a lockfile only not compared with its manifest is a note, never a lead", () => {
   it("the totals stay numbers, the summary leads with nothing, the plan keeps its data", async () => {
     write({ "composer.json": "{ not json", "composer.lock": JSON.stringify({ packages: [{ name: "a/a", version: "1.0.0", dist: { type: "zip", url: "https://api.github.com/repos/a/a/zipball/x" } }], "packages-dev": [] }) });

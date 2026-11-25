@@ -59,6 +59,8 @@ export function readGemfileLock(content: string): {
   uncheckable: Array<{ name: string; version: string; kind: "git" }>;
   /** Every gem name the file holds a spec for, in any section, lower-cased. */
   specs: Set<string>;
+  /** The sections (`GEM`, `GIT`, `PATH`) each spec name is held in, lower-cased: where the lock installs it from. */
+  specSections: Map<string, Set<string>>;
   /** Gems a spec depends on that have no spec anywhere in the file (F4). */
   dangling: string[];
 } {
@@ -68,6 +70,7 @@ export function readGemfileLock(content: string): {
   const privateIndex: Array<{ name: string; version: string; registry: string }> = [];
   const uncheckable: Array<{ name: string; version: string; kind: "git" }> = [];
   const specs = new Set<string>();
+  const specSections = new Map<string, Set<string>>();
   const required = new Set<string>();
   let section = "";
   let inSpecs = false;
@@ -123,6 +126,7 @@ export function readGemfileLock(content: string): {
     const version = line.slice(open + 2, -1).split("-")[0].trim();
     if (!name || name.includes(" ") || !version) continue;
     specs.add(name.toLowerCase());
+    specSections.set(name.toLowerCase(), (specSections.get(name.toLowerCase()) ?? new Set<string>()).add(section));
     if (section === "GIT") {
       if (!uncheckable.some((u) => u.name === name)) uncheckable.push({ name, version, kind: "git" });
       continue;
@@ -134,7 +138,7 @@ export function readGemfileLock(content: string): {
   }
   closeGemSection();
   const dangling = [...required].filter((n) => !specs.has(n)).sort();
-  return { instances, versions, direct, privateIndex, uncheckable, specs, dangling };
+  return { instances, versions, direct, privateIndex, uncheckable, specs, specSections, dangling };
 }
 
 /** A gem name: what `gem '<name>'` must hold to be compared (no interpolation, no spaces). */
@@ -253,6 +257,7 @@ export function gemfileDeclared(content: string): GemfileDeclared | { error: str
   const gitKeys = new Set(["git", "github", "gitlab", "bitbucket"]);
   let inComment = false;
   let heredoc: string | null = null;
+  let pending = "";
   for (const line of content.split(/\r?\n/)) {
     if (line.length > MAX_LINE) continue;
     if (heredoc !== null) {
@@ -267,7 +272,15 @@ export function gemfileDeclared(content: string): GemfileDeclared | { error: str
       inComment = true;
       continue;
     }
-    for (const { raw, code } of rubyStatements(line)) {
+    // A statement continued on the next line (`gem 'x',` then `  path: 'y'`) is read as one.
+    const statements = rubyStatements(pending ? `${pending} ${line}` : line);
+    pending = "";
+    const last = statements[statements.length - 1];
+    if (last && /[,(\\]$/.test(last.code) && last.raw.length < MAX_LINE) {
+      pending = last.raw.replace(/\\$/, "");
+      statements.pop();
+    }
+    for (const { raw, code } of statements) {
       // `<<~EOS` starts a heredoc: its body, up to the terminator, is no code.
       const doc = /<<[~-]?(['"]?)([A-Za-z_]\w*)\1/.exec(code);
       if (doc) heredoc = doc[2];
@@ -536,12 +549,22 @@ export function resolveRuby(cwd: string): VersionSource {
   let ahead: string[] = [];
   /** DEPENDENCIES entries with no spec anywhere in the file (review item 3), known only with the Gemfile followed. */
   let unspecced: string[] = [];
+  /** Gems installed from another source than the lock records (review item 4). */
+  const moved: string[] = [];
   if (manifest.state === "read") {
     const declared = gemfileDeclared(manifest.text);
     const recorded = new Set([...read.specs, ...read.direct.map((n) => n.toLowerCase())]);
     if ("error" in declared) problems.push(notComparedProblem(lockPath, manifestName, declared.error));
     else {
       ahead = declared.names.filter((n) => !recorded.has(n.toLowerCase()));
+      // A gem the Gemfile now installs from elsewhere than the lock records (a path or git gem moved
+      // to the registry, rb22): what the lock holds for it is not what the Gemfile installs.
+      const section = { registry: "GEM", git: "GIT", path: "PATH" } as const;
+      const where = { GEM: "the registry", GIT: "git", PATH: "a local path" } as Record<string, string>;
+      for (const [name, from] of declared.sourceOf) {
+        const held = read.specSections.get(name.toLowerCase());
+        if (held && !held.has(section[from])) moved.push(`${manifestName} installs ${name} from ${where[section[from]]}, but this lockfile holds it from ${[...held].map((h) => where[h]).join(" and ")}`);
+      }
       // Bundler writes a spec for every DEPENDENCIES entry, except a gem the Gemfile restricts to
       // other platforms (`tzinfo-data`, platforms: windows) or declares behind a condition (`wdm` if
       // Gem.win_platform?), and bundler itself. Any other entry with no spec: a spec was lost.
@@ -559,7 +582,11 @@ export function resolveRuby(cwd: string): VersionSource {
     const extra = { ...(problems.length > 0 ? { problems } : {}), ...(uncheckable.length > 0 ? { uncheckable } : {}) };
     return { ...emptySource(), ...extra };
   }
-  if (ahead.length > 0) problems.push(manifestAheadProblem(lockPath, manifestName, ahead, damage));
+  if (ahead.length > 0 || moved.length > 0) {
+    const behind = [...(ahead.length > 0 ? [manifestAheadText(manifestName, ahead)] : []), ...moved.slice(0, 3)].join("; ");
+    const count = ahead.length + moved.length;
+    problems.push(damage ? partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + count) : partialRead(lockPath, behind, count, true));
+  }
   else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing));
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
   return found(read.versions, read.instances, lockPath, "lockfile", {
@@ -605,6 +632,12 @@ export function resolvePhp(cwd: string): VersionSource {
   const problems: LockfileProblem[] = [];
   // composer.json against what the lock holds (F1); an entry's requirement with no entry (F4).
   const ahead = manifest.state === "read" ? composerManifestAhead(manifest.json, lock as Record<string, unknown>, read.names) : [];
+  // A lock with no dev package beside a require-dev it lacks: written with --no-dev, or before the
+  // require-dev was added. Which is not known, so require-dev is not compared, and that is said.
+  const devUnlocked = manifest.state === "read" && !(Array.isArray(lock["packages-dev" as keyof typeof lock]) && (lock["packages-dev" as keyof typeof lock] as unknown[]).length > 0)
+    ? composerKeys(manifest.json["require-dev"]).filter((n) => !isComposerPlatform(n) && !read.names.has(n))
+    : [];
+  if (devUnlocked.length > 0) problems.push(notComparedProblem(lockPath, "composer.json", `the lock holds no dev package, so require-dev (${someNames(devUnlocked)}) was not compared: it was written with --no-dev, or before require-dev changed`));
   if (manifest.state === "unreadable") problems.push(notComparedProblem(lockPath, "composer.json", manifest.reason));
   // The root package provides or replaces some names itself (symfony-demo replaces symfony/polyfill-php70,
   // which its locked packages require): without composer.json read, which ones is not known, so no
