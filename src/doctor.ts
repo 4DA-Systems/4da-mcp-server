@@ -205,6 +205,9 @@ function appDatabaseCheck(selected: string, standaloneMode: boolean): Check {
   // Read only, with the deep integrity_check (the startup path uses the cheap probe).
   const v = FourDADatabase.validateDatabase(selected, { deep: true });
   if (!v.valid) return { name, status: configured ? "fail" : "warn", detail: v.error ?? `${selected} cannot be read` };
+  // An app database that is not set up (or another server's store) is not used: the server runs on
+  // its own store, and the note says why (audit 2026-11-25, G-1).
+  if (v.standalone && v.note) return { name, status: "warn", detail: v.note };
   if (v.standalone) {
     return { name, status: "pass", detail: `${selected}: a database of this server's own format, not the desktop app's (${v.tables?.length ?? 0} tables)` };
   }
