@@ -29,7 +29,7 @@ import {
   standaloneDbPath,
 } from "./db.js";
 import { closeServerCacheDb, getServerCacheDb, serverCacheState } from "./live/cache.js";
-import { NODE_SQLITE_MIN, openDatabase, sqliteDriverStatus } from "./sqlite-driver.js";
+import { openDatabase, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { checkLookupReachability } from "./doctor-network.js";
@@ -254,7 +254,7 @@ export async function runDoctor(): Promise<void> {
       ? (sqlite.problem ?? "no SQLite driver")
       : sqlite.driver.name === "node:sqlite"
         ? `node:sqlite (built into Node ${process.versions.node}) opened an in-memory database`
-        : `better-sqlite3 opened an in-memory database (${passedOver || `node:sqlite needs Node ${NODE_SQLITE_MIN}+`})`,
+        : `better-sqlite3 opened an in-memory database (${passedOver || "node:sqlite needs Node 22.13+ or 23.4+"})`,
   });
 
   // 3. The data folder and every database the tools use, by path. Opening them needs a driver.
