@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 let bodies: string[];
@@ -35,7 +36,7 @@ async function brief(task: string): Promise<Record<string, any>> {
 
 /** Every word the answer names as a package, looked up or not. */
 const named = (r: Record<string, any>) => [
-  ...(r.unverified_words ?? []).map((w: { word: string }) => w.word),
+  ...(waitingWords(r) ?? []).map((w: { word: string }) => w.word),
   ...(r.new_packages ?? []).map((p: { name: string }) => p.name),
   ...(r.requested_versions ?? []).map((p: { name: string }) => p.name),
 ];

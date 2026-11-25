@@ -21,7 +21,29 @@
  */
 
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
-import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
+import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersion, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
+import {
+  blankWords,
+  confirmationReason,
+  confirmationSummary,
+  declarationFor,
+  dismissedBy,
+  MAX_TO_CONFIRM,
+  NEXT_STEP,
+  UNDECLARED_NOTE,
+  readDeclarations,
+  readNotPackages,
+  sameName,
+  toConfirmEntry,
+  type CheckedIndex,
+  type DeclaredPackage,
+  type PrivateIndex,
+  type TaskPackages,
+} from "./briefing-confirm.js";
+import { credentialShape } from "./briefing-task-screen.js";
+import { checkableSpec } from "./briefing-names.js";
+import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
+import type { CheckEcosystem } from "../live/release-metadata.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
 import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
@@ -61,7 +83,7 @@ import { walkBudgetNote } from "../walk-budget.js";
 import { escapeUnsafeDirs, liveUnsafeDirs, type UnsafeDirSources } from "../live/shell-safe.js";
 import * as path from "node:path";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
-import { checkNewPackages, detectAllNewPackages, MAX_NEW_PACKAGES, screenFor, type NewPackageFinding } from "./briefing-new-packages.js";
+import { checkNewPackages, detectAllNewPackages, ecosystemKey, installedNames, MAX_NEW_PACKAGES, screenFor, type NewPackage, type NewPackageFinding } from "./briefing-new-packages.js";
 import {
   getRelevantWisdom,
   getRelevantWisdomHybrid,
@@ -79,6 +101,10 @@ export interface WhatShouldIKnowParams {
   files?: string[];
   /** Project directory the task is about. Default: the project the server was started in. */
   project_path?: string;
+  /** The caller's statement about packages of the task (briefing-confirm.ts): checked now when public, never sent when not. */
+  packages?: unknown;
+  /** Words of the task the caller says are not packages: dropped. */
+  not_packages?: unknown;
 }
 
 interface Advisory {
@@ -152,9 +178,10 @@ interface TaskDependency {
  * "unknown" is the verdict when the vulnerability scan could not be consulted:
  * the briefing has not reviewed the task, which is a different claim from
  * "reviewed and found nothing". "safe_to_delegate" is only ever emitted over a
- * ready scan.
+ * ready scan. "confirmation_needed": the briefing is not finished; the AGENT acts (it settles the names in
+ * task_packages.to_confirm with its next call), no person is needed yet (briefing-confirm.ts).
  */
-export type DelegationLevel = "safe_to_delegate" | "review_needed" | "human_only" | "unknown";
+export type DelegationLevel = "safe_to_delegate" | "review_needed" | "human_only" | "unknown" | "confirmation_needed";
 
 /**
  * Whether the live vulnerability scan backed this briefing.
@@ -197,18 +224,11 @@ export interface WhatShouldIKnowResult {
    */
   requested_versions?: RequestedVersionFinding[];
   /**
-   * Words of the task the briefing withheld before reading it (a credential shape, a package the
-   * task's own command takes from a private registry, git or a path, an over-long word): each as
-   * shown (redacted) and why. None was looked up or sent. Absent when there is none.
+   * Every package-like thing of the task, exactly once: what waits for the caller's confirmation
+   * (to_confirm, with next_step), what was checked and on what basis, what is private, what the screen
+   * or the argument check kept from being read (its value never repeated), and the caller's dismissed words.
    */
-  withheld_from_task?: TaskWordWithheld[];
-  /**
-   * The names the task gives that this briefing did not look up (it looks up only packages the project
-   * already uses and names on its bundled lists), from a command, a manifest entry or prose alike: a plain
-   * list, never tool arguments, so nothing in it is callable as it stands. At most 25; the summary counts all.
-   * Absent when there is none.
-   */
-  unverified_words?: UnverifiedWord[];
+  task_packages: TaskPackages;
   advisories: Advisory[];
   decision_windows: DecisionWindow[];
   relevant_wisdom: WisdomEntry[];
@@ -306,7 +326,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. It finds the dependencies the task names (exact package names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares) and reports, for each: installed versions, version-confirmed vulnerabilities with fix versions, how many major versions a requested upgrade crosses (for \"latest\": the newest stable release and whether the project is already on that major), and the newer releases the desktop app's feed recorded (newer_releases: npm and crates.io, only for a package the feed follows; absent otherwise, never an empty list standing in for no answer). For a package the task ADDS (\"add the X package\", \"npm install X\"), new_packages gives dependency_check's verdict for each name, every item of a list (\"add a, b and c\"), at the version the task writes for it or else latest (checked in every ecosystem the project uses when the task does not say which; the worst answer stands): a name that is malware is human_only, a near-miss of a popular package or a name the registry does not have is review_needed. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading about those packages. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown; only version-confirmed evidence about the task's packages, a finding on a package the task adds, running install drift or a recorded-decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact for the breaking changes.",
+    "Pre-task briefing built from the task outward. Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in, public: true if it is on the public registry (checked in this call), public: false if it comes from a private registry, git, a path or the workspace (never sent); words of the task that are not packages go in `not_packages`. Any other name the task may mean as a package is not looked up: it comes back in task_packages.to_confirm, the level is confirmation_needed, and task_packages.next_step says what to call; do it. For each dependency the task names (exact names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases, only for a package the feed follows). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the version written, else latest; malware is human_only. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); only version-confirmed evidence, a finding on a checked package, running install drift or a decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -319,7 +339,29 @@ export const whatShouldIKnowTool = {
         type: "array",
         items: { type: "string" },
         description:
-          "File paths involved in the task (optional). Manifest and source paths help find the packages involved. Read locally only: never sent anywhere, the embedding provider included (it gets the task text).",
+          "File paths involved in the task (optional). Manifest and source paths help find the packages involved. Read locally only: never sent anywhere, the embedding provider included (it gets the task with credentials, settings and the names you mark private or not_packages blanked).",
+      },
+      packages: {
+        type: "array",
+        maxItems: 25,
+        description:
+          "Packages this task adds or changes, at most 25. public: true = on the public registry: checked in this call at `version` (default: the version the task writes, else latest), verdict recorded as dependency_check records it. public: false = private registry, git, path or workspace: never sent. Names the task does not mention are accepted.",
+        items: {
+          type: "object",
+          properties: {
+            ecosystem: { type: "string", enum: ["npm", "PyPI", "crates.io", "Go"], description: "Package registry." },
+            name: { type: "string", description: "Package name as published." },
+            version: { type: "string", description: "Version, constraint or dist-tag the task will write." },
+            public: { type: "boolean" },
+          },
+          required: ["ecosystem", "name", "public"],
+        },
+      },
+      not_packages: {
+        type: "array",
+        maxItems: 25,
+        items: { type: "string" },
+        description: "Words of the task that are not packages (a password, a file, a setting), at most 25: dropped, never looked up.",
       },
       project_path: {
         type: "string",
@@ -451,19 +493,99 @@ export async function executeWhatShouldIKnow(
   // never shaped as tool arguments (fourth blind check); a near-miss of a popular name is judged offline.
   const taskVersions = readTaskVersions(task, ecosystemDeps());
   const gated = gateTaskNames(task, ecosystemDeps(), registryPrivate(detectAllNewPackages(task, ecosystemDeps()).filter(notPrivate)), registryPrivate(taskVersions.requested.filter(notPrivate)));
-  const named = gated.packages.map((p) => {
+  // The caller's statement (briefing-confirm.ts): what it marks private or not a package is never looked
+  // up, by the gate's own rule included; what it marks public is checked now, past the project's private
+  // rules and the credential shapes, and recorded in the check ledger as dependency_check records it.
+  const declared = readDeclarations(params.packages);
+  const notPackages = readNotPackages(params.not_packages);
+  const argsNotRead: TaskWordWithheld[] = [...declared.refused, ...notPackages.refused];
+  const declaredPrivate: PrivateIndex[] = [];
+  const declaredPublic: DeclaredPackage[] = [];
+  for (const d of declared.entries) {
+    if (!d.public) {
+      declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "marked private by you" });
+      continue;
+    }
+    const why = registryReason(d.ecosystem, d.name) ?? privateAnywhere(liveIntel, d.name) ?? (privateShort.has(d.name.toLowerCase()) ? "a private package of this project" : null);
+    if (why) {
+      declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "this project's registry configuration" });
+      if (!privateTask.some((p) => p.package.toLowerCase() === d.name.toLowerCase())) privateTask.push({ package: d.name, ecosystem: d.ecosystem, installed: [], why });
+      continue;
+    }
+    if (credentialShape(d.name)) {
+      argsNotRead.push({ shown: `packages[${d.at}]`, reason: "not read: it looks like a credential; if it is a package, call dependency_check on it" });
+      continue;
+    }
+    declaredPublic.push(d);
+  }
+  // Marked private by the caller: weighed as the project's own private packages are.
+  for (const d of declaredPrivate) {
+    if (d.basis === "marked private by you" && !privateTask.some((p) => p.package.toLowerCase() === d.name.toLowerCase())) {
+      privateTask.push({ package: d.name, ecosystem: d.ecosystem as CheckEcosystem, installed: [], why: "marked private by the caller: never looked up" });
+    }
+  }
+  /** A name the caller marked private (in any ecosystem) or not a package: never looked up by the briefing. */
+  const off = (p: { name: string; ecosystem: CheckEcosystem; alternatives?: CheckEcosystem[] }) =>
+    declaredPrivate.some((d) => [p.ecosystem, ...(p.alternatives ?? [])].some((e) => sameName(d.name, p.name, e))) ||
+    dismissedBy(p.name, [p.ecosystem, ...(p.alternatives ?? [])], notPackages.words) !== undefined;
+  const lookedUp = gated.packages.filter((p) => !off(p));
+  const wanted = gated.requested.filter((r) => !off(r));
+  const installed = installedNames(ecosystemDeps());
+  const declaredKeys = new Set(declaredPublic.map((d) => `${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`));
+  const declaredNew: NewPackage[] = [];
+  const declaredWanted: RequestedVersion[] = [];
+  for (const d of declaredPublic) {
+    const word = gated.unverified.find((w) => sameName(w.word, d.name, d.ecosystem));
+    const same = (x: { name: string; ecosystem: CheckEcosystem }) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem);
+    const known = lookedUp.find(same);
+    const version = d.version ?? word?.version ?? known?.version;
+    // The ecosystem is the caller's: no guess, no alternative, no prose reading of the word.
+    if (known) {
+      lookedUp.splice(lookedUp.indexOf(known), 1);
+    }
+    if (!installed(d.name, d.ecosystem)) declaredNew.push({ name: d.name, ecosystem: d.ecosystem, ...(version ? { version } : {}) });
+    if (version && !/^latest$/i.test(version) && checkableSpec(d.ecosystem, version) !== null) {
+      const had = wanted.find(same);
+      if (had) wanted.splice(wanted.indexOf(had), 1);
+      const copies = ecosystemDeps().filter((x) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem) && x.version);
+      declaredWanted.push({ name: d.name, ecosystem: d.ecosystem, to: version, ...(copies.length === 1 && copies[0].version ? { from: copies[0].version } : {}) });
+    }
+  }
+  // The caller's answers settle the words the task gives: what is left waits for confirmation.
+  const settledWords = declared.entries;
+  const waiting = gated.unverified.filter((w) => !declarationFor(w.word, settledWords) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) === undefined);
+  const dismissedWords = gated.unverified.filter((w) => !declarationFor(w.word, settledWords) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) !== undefined);
+  const dismissed = [...new Set(dismissedWords.map((w) => dismissedBy(w.word, w.read_as.split(" or "), notPackages.words)!))];
+  // A dismissal never makes the briefing reassuring about a name that stands where a package stands: an
+  // install command's operand, a manifest entry, or a near-miss of a popular name. The word is dismissed as
+  // asked, and the level is at least review_needed, naming it (wave 2: `npm install lodahs` answered with
+  // not_packages ["lodahs"] would otherwise end safe_to_delegate, and the literal command still installs it).
+  const standing = dismissedWords.flatMap((w) => {
+    const near = /^one edit from (\S+): /.exec(w.note ?? "")?.[1];
+    if (w.seen === "command") return [`you said ${w.word} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`];
+    if (w.seen === "manifest") return [`you said ${w.word} is not a package; it stands where a package name stands in a manifest entry of the task: make sure nothing installs it`];
+    if (near) return [`you said ${w.word} is not a package; it is one edit from ${near}: make sure nothing installs it`];
+    return [];
+  });
+  // Only what the caller declared goes to the check ledger: the briefing's own lookups stay unrecorded.
+  const privateRule = (liveIntel as { privateRegistryRuleCovers?: (e: string, n: string) => boolean } | null)?.privateRegistryRuleCovers;
+  const recordDeclared = (results: readonly CheckedItem[]) => {
+    const mine = results.filter((r) => typeof r.package === "string" && declaredKeys.has(`${r.ecosystem}\0${ecosystemKey(r.package, r.ecosystem as CheckEcosystem)}`));
+    if (mine.length > 0) void recordVerdicts(mine, { privateRule: privateRule ? (e, n) => privateRule.call(liveIntel, e, n) : null });
+  };
+  const named = [...declaredNew, ...lookedUp].map((p) => {
     const closed = NAME_ECOSYSTEMS.filter((e) => e !== p.ecosystem && registryReason(e, p.name) !== null);
     return closed.length > 0 ? { ...p, closed: [...new Set([...(p.closed ?? []), ...closed])] } : p;
   });
   const newPackages = [
-    ...(await checkNewPackages(liveIntel, named.slice(0, MAX_NEW_PACKAGES))),
+    ...(await checkNewPackages(liveIntel, named.slice(0, MAX_NEW_PACKAGES), undefined, recordDeclared)),
   ];
   // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14). Past their
   // own cap they are named NOT CHECKED too: the sixth version a task named was dropped without a word (r8).
-  const wantedVersions = gated.requested;
-  const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions.slice(0, MAX_REQUESTED));
+  const wantedVersions = [...declaredWanted, ...wanted];
+  const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions.slice(0, MAX_REQUESTED), undefined, recordDeclared);
   const uncheckedPackages = [
     ...new Set([
       ...named.slice(MAX_NEW_PACKAGES).map((p) => p.name),
@@ -475,11 +597,11 @@ export async function executeWhatShouldIKnow(
     ]),
   ];
   // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
-  const withheldWords = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason))];
+  const withheldWords = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason)), ...argsNotRead];
   // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
   const unreadVersions = taskVersions.unread;
   const vulns = scan?.vulnerabilities ?? [];
-  const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages, allDeps()) : null;
+  const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages.filter((p) => !off(p as { name: string; ecosystem: CheckEcosystem })), allDeps()) : null;
   const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns, latest));
   // With no database open, the stored parts below are not read (STORED_DATA_ABSENT_NOTE).
 
@@ -600,15 +722,26 @@ export async function executeWhatShouldIKnow(
       decisionConflicts,
       relevantWisdom,
     });
-    // A name not looked up keeps the task at review_needed at least, led by NOT ASSESSED, never "delegate"
-    // (third blind check, item 2). A near-miss of a popular name is no hold: its unverified word carries a
-    // note about the spelling (fourth blind check, item 4).
-    const unchecked = gated.unverifiedTotal;
-    if (unchecked > 0 && assessed.level === "review_needed") {
-      assessed.reason = `${notAssessedText(unchecked)} ${assessed.reason.replace(/^Delegate, then review: /, "Also review: ")}`;
-    } else if (unchecked > 0 && assessed.level === "safe_to_delegate") {
-      assessed.level = "review_needed";
-      assessed.reason = notAssessedText(unchecked);
+    // Names waiting for the caller's confirmation: the briefing is not finished, and the AGENT acts
+    // (confirmation_needed), unless what is known already makes the task human_only. It outranks
+    // review_needed and unknown: the agent can act on it now. With nothing waiting, the level follows
+    // from every checked row, so a confirmed typosquat or critical pin is human_only again (wave 2, P4/P5).
+    if (standing.length > 0) {
+      const said = `${standing.join("; ")}.`.replace(/^y/, "Y");
+      if (assessed.level === "safe_to_delegate") {
+        assessed.level = "review_needed";
+        assessed.reason = said;
+      } else assessed.reason = `${assessed.reason} ${said}`;
+    }
+    // No package declared and nothing waiting: the reader reads names from the task in its plain forms only.
+    if (assessed.level === "safe_to_delegate" && params.packages === undefined) assessed.reason = `${assessed.reason} ${UNDECLARED_NOTE}`;
+    if (waiting.length > 0) {
+      if (assessed.level === "human_only") assessed.reason = `${assessed.reason} ${waiting.length} name${waiting.length === 1 ? " also waits" : "s also wait"} for confirmation in task_packages.to_confirm.`;
+      else {
+        const before = assessed.level === "safe_to_delegate" ? "" : ` Also: ${assessed.reason.replace(/^Delegate, then review: /, "")}`;
+        assessed.level = "confirmation_needed";
+        assessed.reason = `${confirmationReason(waiting.length)}${before}`;
+      }
     }
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
@@ -627,8 +760,7 @@ export async function executeWhatShouldIKnow(
       ...(newPackages.length > 0 ? { new_packages: newPackages } : {}),
       ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
       ...(requestedVersions.length > 0 ? { requested_versions: requestedVersions } : {}),
-      ...(withheldWords.length > 0 ? { withheld_from_task: withheldWords } : {}),
-      ...(gated.unverified.length > 0 ? { unverified_words: gated.unverified } : {}),
+      task_packages: taskPackagesSection({ task, waiting, dismissed, notRead: withheldWords, declaredPrivate, privateTask, declaredKeys, taskDependencies, newPackages, requestedVersions, installed, undeclared: params.packages === undefined }),
       advisories,
       decision_windows: decisionWindows,
       relevant_wisdom: relevantWisdom,
@@ -638,7 +770,7 @@ export async function executeWhatShouldIKnow(
       scan_status: scanStatus,
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
-      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${gated.unverifiedTotal > 0 ? `${notAssessedText(gated.unverifiedTotal)} ` : ""}${withheldWords.length > 0 ? `${withheldWordsText(withheldWords)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${withheldWords.length > 0 ? `${withheldWordsText(withheldWords)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -653,7 +785,9 @@ export async function executeWhatShouldIKnow(
   if (!embedConfig) {
     return finalize(getRelevantWisdom(db, task, files), "ranked_lexical");
   }
-  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig, screenFor(task, ecosystemDeps()).forEmbedding);
+  // The embedding copy: the screened task with the names the caller marked private and its not_packages words blanked too (P2).
+  const embedText = blankWords(screenFor(task, ecosystemDeps()).forEmbedding, [...declaredPrivate.map((d) => d.name), ...notPackages.words, ...declared.entries.filter((d) => d.public && credentialShape(d.name)).map((d) => d.name)]);
+  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig, embedText);
   return finalize(wisdom, recall_mode, recall_note);
 }
 
@@ -874,9 +1008,54 @@ function notCheckedPackages(names: string[]): string {
   return `NOT CHECKED: ${names.length} more package${names.length === 1 ? "" : "s"} named in the task (${names.join(", ")})`;
 }
 
-/** The names the task gives that were not looked up (unverified_words), as the summary and the reason say them. */
-function notAssessedText(n: number): string {
-  return `NOT ASSESSED: ${n} name${n === 1 ? "" : "s"} the task may mean as packages ${n === 1 ? "was" : "were"} not looked up by this briefing (it looks up only packages this project already uses and well-known names). Before writing any of them, call dependency_check for the ones that are public packages you mean to add; if it answers avoid or names malware, this task is human_only.`;
+/**
+ * The one section that holds every package-like thing of the task exactly once (briefing-confirm.ts):
+ * what waits (shaped so it cannot be pasted back as the `packages` argument: no `public`, a list of
+ * ecosystems), a compact index of what was checked and on what basis, what is private, what was not read.
+ */
+function taskPackagesSection(input: {
+  task: string;
+  waiting: UnverifiedWord[];
+  dismissed: string[];
+  notRead: TaskWordWithheld[];
+  declaredPrivate: PrivateIndex[];
+  privateTask: PrivateTaskPackage[];
+  declaredKeys: Set<string>;
+  taskDependencies: TaskDependency[];
+  newPackages: NewPackageFinding[];
+  requestedVersions: RequestedVersionFinding[];
+  installed: (name: string, ecosystem: CheckEcosystem) => boolean;
+  /** The call carried no `packages` argument. */
+  undeclared: boolean;
+}): TaskPackages {
+  const key = (ecosystem: string, name: string) => `${ecosystem}\0${ecosystemKey(name, ecosystem as CheckEcosystem)}`;
+  const basis = (ecosystem: string, name: string): CheckedIndex["basis"] =>
+    input.declaredKeys.has(key(ecosystem, name)) ? "confirmed public by you" : input.installed(name, ecosystem as CheckEcosystem) ? "project dependency" : "well-known name";
+  const checked: CheckedIndex[] = [];
+  const add = (row: CheckedIndex) => {
+    if (!checked.some((c) => key(c.ecosystem, c.name) === key(row.ecosystem, row.name) && c.version === row.version)) checked.push(row);
+  };
+  for (const r of input.requestedVersions) add({ name: r.name, ecosystem: r.ecosystem, version: r.to, verdict: r.verdict, basis: basis(r.ecosystem, r.name) });
+  for (const n of input.newPackages) add({ name: n.name, ecosystem: n.ecosystem, version: n.version ?? n.latest ?? "latest", verdict: n.verdict, basis: basis(n.ecosystem, n.name) });
+  for (const d of input.taskDependencies) {
+    add({ name: d.package, ecosystem: d.ecosystem, version: d.installed.join("/") || "declared range", verdict: d.vulnerabilities.length > 0 ? `${d.vulnerabilities.length} confirmed vulnerabilit${d.vulnerabilities.length === 1 ? "y" : "ies"}` : "no confirmed vulnerability", basis: "project dependency" });
+  }
+  const privateRows: PrivateIndex[] = [...input.declaredPrivate];
+  for (const p of input.privateTask) {
+    if (!privateRows.some((d) => d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: "this project's registry configuration" });
+  }
+  const waiting = input.waiting.slice(0, MAX_TO_CONFIRM).map((w) => toConfirmEntry(input.task, w));
+  return {
+    status: input.waiting.length > 0 ? "confirmation_needed" : "complete",
+    to_confirm: waiting,
+    ...(input.waiting.length > MAX_TO_CONFIRM ? { to_confirm_total: input.waiting.length } : {}),
+    checked,
+    private: privateRows,
+    not_read: input.notRead,
+    dismissed: input.dismissed,
+    ...(input.waiting.length > 0 ? { next_step: NEXT_STEP } : {}),
+    ...(input.waiting.length === 0 && input.undeclared ? { note: UNDECLARED_NOTE } : {}),
+  };
 }
 
 /** The words withheld from the task, as the summary says them: what each is shown as and why, nothing sent. */
@@ -1032,7 +1211,7 @@ function assessDelegation(input: {
   const withheldWords = input.withheldWords ?? [];
   const withheldReasons =
     withheldWords.length > 0
-      ? [`${withheldWords.length} word${withheldWords.length === 1 ? "" : "s"} in the task ${withheldWords.length === 1 ? "was" : "were"} not looked up (${withheldWords.map((w) => w.shown).join(", ")}; see withheld_from_task): check ${withheldWords.length === 1 ? "it" : "them"} with your own registry before acting on ${withheldWords.length === 1 ? "it" : "them"}`]
+      ? [`${withheldWords.length} word${withheldWords.length === 1 ? "" : "s"} in the task ${withheldWords.length === 1 ? "was" : "were"} not looked up (${withheldWords.map((w) => w.shown).join(", ")}; see task_packages.not_read): check ${withheldWords.length === 1 ? "it" : "them"} with your own registry before acting on ${withheldWords.length === 1 ? "it" : "them"}`]
       : [];
   const nameReasons = [...privateReasons, ...versionReasons, ...unreadReasons, ...cappedReasons, ...withheldReasons, ...unclear.map(
     (p) =>

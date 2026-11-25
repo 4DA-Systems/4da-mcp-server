@@ -16,6 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords, notReadWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 let bodies: string[];
@@ -62,13 +63,13 @@ describe("1. an entry is never a credential, and a version is never replaced by 
   ])("%s is judged at the version written", async (task, name, version) => {
     const r = await brief(task);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(JSON.stringify(r.withheld_from_task ?? [])).not.toContain(name);
+    expect(JSON.stringify(notReadWords(r) ?? [])).not.toContain(name);
     // A listed name is judged by the briefing; any other is listed at the version the task writes (fourth
     // blind check: a plain list, never tool arguments).
     if (r.requested_versions) {
       expect(r.requested_versions).toMatchObject([{ name, to: version, verdict: "avoid" }]);
     } else {
-      expect(r.unverified_words).toContainEqual({ word: name, read_as: "npm", version });
+      expect(waitingWords(r)).toContainEqual({ word: name, read_as: "npm", version });
     }
   });
 
@@ -76,7 +77,7 @@ describe("1. an entry is never a credential, and a version is never replaced by 
     const r = await brief('Add "jsonwebtoken": "Zq9xK2Lm8PqR4s" to package.json');
     expect(r.new_packages ?? []).toEqual([]);
     expect(r.requested_versions ?? []).toEqual([]);
-    expect(JSON.stringify(r.withheld_from_task)).toMatch(/jsonwebtoken.*not read whole/);
+    expect(JSON.stringify(notReadWords(r))).toMatch(/jsonwebtoken.*not read whole/);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(leaked(/Zq9xK2Lm8PqR4s/)).toEqual([]);
   });
@@ -131,9 +132,9 @@ describe("2. a word is looked up only on evidence that it is a public package", 
   it("a name on no bundled list is handed back, never looked up, and the task is review_needed", async () => {
     const r = await brief("add left-pad-ng to the project");
     expect(looked("left-pad-ng")).toEqual([]);
-    // Fourth blind check of the 2026-11-25 fixes: a name not looked up is listed in unverified_words.
-    expect(r.unverified_words).toMatchObject([{ word: "left-pad-ng" }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    // Fourth blind check of the 2026-11-25 fixes: a name not looked up is listed in task_packages.to_confirm.
+    expect(waitingWords(r)).toMatchObject([{ word: "left-pad-ng" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 });
 

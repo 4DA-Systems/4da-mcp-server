@@ -26,7 +26,7 @@ export const SERVER_INSTRUCTIONS = [
   "",
   "Also:",
   "- Before a major upgrade: upgrade_impact (breaking changes, and the files that import it).",
-  "- Before a non-trivial task: what_should_i_know (a briefing on the dependencies the task touches).",
+  "- Before a non-trivial task: what_should_i_know with the packages it adds; confirm names it asks.",
   "- Advisories of the installed versions: vulnerability_scan. What to upgrade, in what order: upgrade_planner. Freshness: dependency_health.",
   "- Settled decisions: check_decision_alignment before choosing a library or pattern; decision_memory records one.",
   "",

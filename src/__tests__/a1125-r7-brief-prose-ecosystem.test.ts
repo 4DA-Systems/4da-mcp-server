@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -29,7 +30,7 @@ describe("a prose language or manager word decides no ecosystem", () => {
   ])("%s: %s is listed, not looked up", async (task, name) => {
     const r = await brief(task);
     expect(h.requests.filter((u) => u.includes(name))).toEqual([]);
-    expect((r.unverified_words ?? []).map((w: { word: string }) => w.word)).toContain(name);
+    expect((waitingWords(r) ?? []).map((w: { word: string }) => w.word)).toContain(name);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 

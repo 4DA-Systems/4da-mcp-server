@@ -17,6 +17,7 @@ import { LiveIntelligence } from "../live/index.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { clearLiveIntelligence } from "../live-singleton.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let scratch: string;
 let sent: string[];
@@ -144,7 +145,7 @@ describe("a guessed name in a project whose registries are all private (r9 B1)",
     );
     // Final design of the 2026-11-25 fixes: left-pad is on no bundled list: listed as npm's only.
     const r = await brief("npm install left-pad");
-    expect(r.unverified_words).toEqual([{ word: "left-pad", read_as: "npm" }]);
+    expect(waitingWords(r)).toEqual([{ word: "left-pad", read_as: "npm" }]);
     expect(leaks(/left-pad/).filter((x) => /PyPI|pypi\.org/.test(x))).toEqual([]);
   });
 
@@ -160,7 +161,7 @@ describe("a guessed name in a project whose registries are all private (r9 B1)",
     );
     // Final design: a new name on no bundled list is handed back for dependency_check, never called private.
     const result = await brief("npm install left-pad");
-    expect(JSON.stringify(result)).toMatch(/"word":"left-pad"/);
+    expect(JSON.stringify(result)).toMatch(/"name":"left-pad"/);
     expect(JSON.stringify(result)).not.toMatch(/NOT CHECKED \(private\)/);
   });
 });

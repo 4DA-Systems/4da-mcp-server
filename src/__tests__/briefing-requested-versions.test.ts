@@ -15,6 +15,7 @@ import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
 import { detectRequestedVersions, readTaskVersions } from "../tools/briefing-requested-versions.js";
 import type { ResolvedDependency } from "../live/types.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 const NOW = new Date("2026-11-14T00:00:00Z");
 const day = (n: number) => new Date(NOW.getTime() - n * 86_400_000).toISOString();
@@ -142,7 +143,7 @@ describe("the version a task names is judged, at that version", () => {
     // version the task names; dependency_check says the path is not one the go command accepts.
     const result = await brief("go get github.com/gin-gonic/gin/@v1.6.0", { react: "18.2.0" });
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(result.unverified_words).toEqual([{ word: "github.com/gin-gonic/gin/", read_as: "Go", version: "v1.6.0" }]);
+    expect(waitingWords(result)).toEqual([{ word: "github.com/gin-gonic/gin/", read_as: "Go", version: "v1.6.0" }]);
     const items = [{ ecosystem: "Go" as const, package: "github.com/gin-gonic/gin/", to: "v1.6.0" }];
     const check = (await executeDependencyCheck(null, { items }, project({ react: "18.2.0" }))) as { results: Array<{ verdict: string; reason: string }> };
     expect(check.results[0]).toMatchObject({ verdict: "unknown" });

@@ -3,7 +3,7 @@
  * Audit 2026-11-25: the words what_should_i_know withholds from a task before reading it (a
  * credential shape, a package the task's own command takes from a private registry, git or a path,
  * an over-long word) were listed as "NOT CHECKED: N more package(s) named in the task", which they
- * are not. They are now `withheld_from_task` (how each is shown and why) with their own sentence;
+ * are not. They are now `task_packages.not_read` (how each is shown and why) with their own sentence;
  * the delegation level stays review_needed. Genuinely further packages keep "more packages".
  * Stubbed fetch: nothing leaves the machine.
  */
@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { notReadWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 const PROXY_VARS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
@@ -41,7 +42,7 @@ describe("words withheld from the task", () => {
     [`add ${"a".repeat(400)} to the deps`, "a word of 400 characters", /longer than any package name/],
   ])("%s: its own field and sentence, never 'more packages'", async (task, shown, reason) => {
     const r = await brief(task);
-    expect(r.withheld_from_task).toEqual(expect.arrayContaining([expect.objectContaining({ shown, reason: expect.stringMatching(reason) })]));
+    expect(notReadWords(r)).toEqual(expect.arrayContaining([expect.objectContaining({ shown, reason: expect.stringMatching(reason) })]));
     expect(r.summary).toMatch(/NOT CHECKED: \d+ words? in the task (was|were) not looked up \(/);
     expect(r.summary).toMatch(/nothing about (it|them) was sent\./);
     expect(r.summary).toContain(shown);
@@ -50,15 +51,15 @@ describe("words withheld from the task", () => {
     expect(r.delegation_assessment.reason).toMatch(/not looked up/);
   });
 
-  it("a plain task has no withheld_from_task", async () => {
+  it("a plain task has no task_packages.not_read", async () => {
     const r = await brief("add express");
-    expect(r.withheld_from_task).toBeUndefined();
+    expect(notReadWords(r)).toBeUndefined();
     expect(r.summary).not.toMatch(/words? in the task (was|were) not looked up/);
   });
 
   it("a package installed by a manager this server does not read is still 'more packages'", async () => {
     const r = await brief("gem install rails");
     expect(r.summary).toMatch(/NOT CHECKED: 1 more package named in the task \(rails/);
-    expect(r.withheld_from_task).toBeUndefined();
+    expect(notReadWords(r)).toBeUndefined();
   });
 });

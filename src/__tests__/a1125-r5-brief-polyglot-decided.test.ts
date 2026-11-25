@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -29,12 +30,12 @@ async function brief(task: string): Promise<Record<string, any>> {
 describe("a name decided in one ecosystem is not listed in the others", () => {
   it.each(["use crossenv", "add express", "upgrade express to 5", "add the lodash package"])("%s", async (task) => {
     const r = await brief(task);
-    expect(r.unverified_words).toBeUndefined();
+    expect(waitingWords(r)).toBeUndefined();
     expect(h.requests.some((u) => /pypi\.org\/pypi\/(?:crossenv|express|lodash)\/|index\.crates\.io\/.*(?:crossenv|express|lodash)/.test(u))).toBe(false);
   });
 
   it("a name nothing decides is read in every ecosystem the project uses", async () => {
     const r = await brief("add qzframe");
-    expect(r.unverified_words).toEqual([{ word: "qzframe", read_as: "npm or PyPI or crates.io" }]);
+    expect(waitingWords(r)).toEqual([{ word: "qzframe", read_as: "npm or PyPI or crates.io" }]);
   });
 });

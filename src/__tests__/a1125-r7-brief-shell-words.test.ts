@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { notReadWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -29,13 +30,13 @@ describe("a word with a shell expansion in it is withheld whole", () => {
   ])("%s", async (task, secret) => {
     const r = await brief(task);
     expect(JSON.stringify({ ...r, task: undefined })).not.toMatch(secret);
-    expect(r.withheld_from_task).toContainEqual(expect.objectContaining({ shown: "a word with a shell expansion in it" }));
+    expect(notReadWords(r)).toContainEqual(expect.objectContaining({ shown: "a word with a shell expansion in it" }));
     expect(h.requests.some((u) => secret.test(decodeURIComponent(u)))).toBe(false);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
   it.each(["make the page 50% faster", "it costs $5 a month", "run `npm test` first"])("%s: no expansion", async (task) => {
     const r = await brief(task);
-    expect(JSON.stringify(r.withheld_from_task ?? [])).not.toContain("shell expansion");
+    expect(JSON.stringify(notReadWords(r) ?? [])).not.toContain("shell expansion");
   });
 });
