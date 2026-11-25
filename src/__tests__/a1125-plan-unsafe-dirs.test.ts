@@ -46,6 +46,17 @@ describe("isShellSafeDir: a plain path on bash, cmd and PowerShell", () => {
     "../sibling",
     "C:/work/project",
     "/home/dev/project",
+    // Real repository names, inert quoted and unquoted (audit 2026-11-25 blind check).
+    "@scope/pkg2",
+    "c#lib",
+    "v1,2",
+    "a=b",
+    "[legacy]",
+    "x  y",
+    "a~b",
+    "packages/-x",
+    "i‐x",
+    "docs^1",
   ])("%j is a plain path", (dir) => {
     expect(isShellSafeDir(dir)).toBe(true);
     expect(unsafeDirLabel(dir)).toBe(dir);
@@ -59,11 +70,15 @@ describe("isShellSafeDir: a plain path on bash, cmd and PowerShell", () => {
     ["e %PWN5% x", "a cmd variable"],
     ["f$HOME$PWN6", "a variable"],
     ["--registry=PWN7", "a leading dash"],
-    ["packages/-x", "a segment that starts with a dash"],
     ["g'PWN8'", "a quote"],
     ["h{PWN9}", "a PowerShell script block"],
-    ["i\u2010PWN10", "a Unicode hyphen"],
-    ["i\u2013x", "an en dash PowerShell reads as a parameter dash"],
+    ["\u2013x", "a leading en dash PowerShell reads as a parameter dash"],
+    ["~tmp", "a leading tilde (bash: the home of user tmp)"],
+    ["#x", "a leading # (a comment unquoted)"],
+    ["a:b", "a PowerShell drive"],
+    ["a?b", "a wildcard"],
+    ["a\u201cb", "a curly quote PowerShell ends a string on"],
+    ["a\u00a0b", "a no-break space"],
     ["j @(PWN11)", "a PowerShell array subexpression"],
     ["k!PWN12!", "cmd delayed expansion"],
     ["Program Files (x86)/app", "parentheses: PowerShell runs (x86) as a subexpression when unquoted"],
@@ -71,13 +86,10 @@ describe("isShellSafeDir: a plain path on bash, cmd and PowerShell", () => {
     ["x\u202ey", "a bidi override"],
     ["x\u3164y", "a Hangul filler that renders blank"],
     ["x\ny", "a newline"],
-    ["@scope", "a leading @ (PowerShell splatting)"],
+    ["@scope", "a bare leading @ (PowerShell splats @scope unquoted)"],
     ["a|b", "a pipe"],
     ["a>b", "a redirect"],
     ["a*b", "a glob"],
-    ["a~b", "a tilde"],
-    ["a,b", "a PowerShell array comma"],
-    ["a#b", "a comment sign"],
     ["a\\b", "a backslash"],
     ["", "an empty name"],
     ["a//b", "an empty segment"],
@@ -123,6 +135,12 @@ describe("isShellSafeDir: a plain path on bash, cmd and PowerShell", () => {
     expect(Number(process.hrtime.bigint() - start) / 1e6).toBeLessThan(2000);
     expect(out.reasons.some((r) => r.includes("$(x)"))).toBe(false);
     expect(escapeUnsafeDirs({ projectPath: "C:/w/d1$(x)" }, ["d1$(x)"])).toEqual({ projectPath: "C:/w/d1$(x)" });
+  });
+
+  it("a bare @scope is escaped on its own, never inside @scope/pkg; a plain dir field is kept exactly", () => {
+    const out = escapeUnsafeDirs({ reasons: ["in @scope and in @scope/pkg2 and packages/@scope/pkg"], dir: "@scope/pkg2" }, ["@scope"]) as { reasons: string[]; dir: string };
+    expect(out.reasons[0]).toBe(`in ${unsafeDirLabel("@scope")} and in @scope/pkg2 and packages/@scope/pkg`);
+    expect(out.dir).toBe("@scope/pkg2");
   });
 
   it("a Windows spelling of a nested unsafe directory is rewritten too", () => {
@@ -184,14 +202,18 @@ describe("upgrade_planner: a step in a directory whose name is not a plain path"
     expect(JSON.stringify(result)).toContain(marker);
   });
 
-  it("a safe directory beside an unsafe one keeps its own command, and the row stays out of run_order", async () => {
-    project(["ok", "a$(PWN1)"]);
+  it("a safe directory beside an unsafe one keeps its step in run_order; only the unsafe one is withheld, and said", async () => {
+    project(["ok", "a$(PWN1)", "zz"]);
     const { result, step } = await h.plan();
     const row = step("lodash");
     expect(DIR_FIELDS(result).filter((d) => !isShellSafeDir(d))).toEqual([]);
     expect(row.commands.some((c: { dir: string }) => c.dir === "ok")).toBe(true);
-    expect(result.run_order).toEqual([]);
+    // Every step in a safe directory stays, in order (the blind check: one odd directory emptied run_order).
+    expect(result.run_order.map((s: { dir: string }) => s.dir)).toEqual(["ok", "zz"]);
     expect(result.quickWins).toBe(0);
+    expect(result.run_order_note).toMatch(/^run_order is 2 steps/);
+    expect(result.run_order_note).toMatch(/1 step was withheld because it would run in a directory whose name is not safe to put in a command/);
+    expect(result.summary).toMatch(/1 with 1 step withheld/);
     expect(JSON.stringify(result)).not.toContain("$(PWN1)");
   });
 

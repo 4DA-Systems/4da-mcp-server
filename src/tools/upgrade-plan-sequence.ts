@@ -258,8 +258,11 @@ export interface RunOrderOptions {
   peerConflict?: (dir: string, pkg: string, version: string) => PeerConflict | null;
   /** The operator of `name`'s declaration in `dir`/package.json ("^", "~", "" for an exact pin); null when it is not declared there or not read. */
   declaredOperator?: (dir: string, name: string) => string | null;
-  /** Rows with a step in a directory whose name is not safe in a command: left out, and said (upgrade-plan-runnable.ts withholdUnsafeDirs). */
-  notRunnableHere?: (row: SequencedRow) => boolean;
+  /**
+   * Steps taken off a row because they would run in a directory whose name is not safe in a command
+   * (upgrade-plan-runnable.ts withholdUnsafeDirs): its other steps still run; the note says how many were withheld.
+   */
+  withheldSteps?: (row: SequencedRow) => number;
 }
 
 export interface PeerConflict {
@@ -282,8 +285,7 @@ export interface RunOrder {
 const FIX_ACTIONS = new Set(["upgrade_direct", "lockfile_refresh", "upgrade_parent", "reinstall"]);
 
 /** A row whose commands are its whole fix on this host: a fix action, or an override whose snippet is written as commands (not one whose only commands are a parent lever that leaves other paths). */
-const isRunnable = (opts: Pick<RunOrderOptions, "heldUnclean" | "notRunnableHere">) => (r: SequencedRow) =>
-  !(opts.notRunnableHere?.(r) ?? false) &&
+const isRunnable = (opts: Pick<RunOrderOptions, "heldUnclean">) => (r: SequencedRow) =>
   (FIX_ACTIONS.has(r.action) || (r.action === "override_or_replace" && r.breaking !== true && overrideCommandsOf(r).length > 0)) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null);
 
 /** A row left out because part of its fix is done by hand: a manifest or lockfile edit, an override, a lever with no command. */
@@ -719,8 +721,8 @@ export interface SequenceContext {
   peers?: PeerContext;
   /** RunOrderOptions.declaredOperator. */
   declaredOperator?: RunOrderOptions["declaredOperator"];
-  /** RunOrderOptions.notRunnableHere. */
-  notRunnableHere?: RunOrderOptions["notRunnableHere"];
+  /** RunOrderOptions.withheldSteps. */
+  withheldSteps?: RunOrderOptions["withheldSteps"];
   /** Time the go.mod reads may take. */
   budgetMs: number;
 }
@@ -770,7 +772,7 @@ async function goRequirements(rows: SequencedRow[], source: SequenceContext["goS
  */
 export async function sequencePlan(rows: SequencedRow[], ctx: SequenceContext): Promise<{ run_order: RunOrderStep[]; run_order_note: string }> {
   const goRequires = await goRequirements(rows, ctx.goSource, Date.now() + ctx.budgetMs);
-  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined, declaredOperator: ctx.declaredOperator, notRunnableHere: ctx.notRunnableHere });
+  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined, declaredOperator: ctx.declaredOperator, withheldSteps: ctx.withheldSteps });
   for (const [row, why] of result.peerBlocked) if (!row.reasons.includes(why)) row.reasons.push(why);
   return { run_order: result.run_order, run_order_note: result.run_order_note };
 }
@@ -802,15 +804,26 @@ function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlock
   const forced = ran.filter((r) => overrideCommandsOf(r).length > 0);
   if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override or resolution written by \`npm pkg set\` (${named(forced)}): it applies to every copy its key names, so re-scan after running`);
   const inScript = new Set(runnable);
-  const unsafe = opts.rows.filter((r) => opts.notRunnableHere?.(r) ?? false);
-  // Each row is named once, in the first group that holds it: one in an unsafe directory there.
+  const withheld = (r: SequencedRow) => opts.withheldSteps?.(r) ?? 0;
+  // Steps that would run in a directory whose name is not safe in a command are withheld; the
+  // row's steps elsewhere stay in the script (audit 2026-11-25 blind check: one odd directory
+  // emptied run_order for the whole package).
+  const partly = ran.filter((r) => withheld(r) > 0);
+  const withheldTotal = opts.rows.reduce((n, r) => n + withheld(r), 0);
+  if (withheldTotal > 0) {
+    const one = withheldTotal === 1;
+    const tail = partly.length > 0 ? `; ${partly.length} row${partly.length === 1 ? " is" : "s are"} here only for ${partly.length === 1 ? "its" : "their"} other directories and ${partly.length === 1 ? "is" : "are"} not counted as fixed (${named(partly)})` : "";
+    parts.push(`${withheldTotal} step${one ? " was" : "s were"} withheld because ${one ? "it" : "they"} would run in a directory whose name is not safe to put in a command (it holds characters a shell reads as code; the rows' reasons name it, escaped): do ${one ? "it" : "them"} by hand${tail}`);
+  }
+  const unsafe = opts.rows.filter((r) => withheld(r) > 0 && !inScript.has(r));
+  // Each row is named once, in the first group that holds it: one with every step withheld there.
   const rows = opts.rows.filter((r) => !unsafe.includes(r));
   const eligible = (r: SequencedRow) => !inScript.has(r) && !opts.heldUnclean(r) && (FIX_ACTIONS.has(r.action) || r.action === "override_or_replace") && (r.action !== "upgrade_direct" || r.targetVersion !== null);
   const hand = rows.filter((r) => eligible(r) && isHandEdit(r));
   // The script alone does not finish the job: what is left to edit by hand is counted and named.
   if (hand.length > 0) parts.push(`${hand.length} row${hand.length === 1 ? " is a hand edit" : "s are hand edits"} and ${hand.length === 1 ? "is" : "are"} not in this script: ${named(hand)} (a manifest or lockfile edit, or an override that crosses a major; ${hand.length === 1 ? "its reasons say" : "their reasons say"} what to edit)`);
   const groups: Array<[string, SequencedRow[]]> = [
-    ["have a step in a directory whose name is not safe to put in a command (handled by hand; their reasons name it, escaped)", unsafe],
+    ["have their steps in a directory whose name is not safe to put in a command (handled by hand; their reasons name it, escaped)", unsafe],
     ["name no command for their fix (their reasons say why)", rows.filter((r) => eligible(r) && !isHandEdit(r) && r.action !== "override_or_replace")],
     ["name no confirmed target (NOT CHECKED; their reasons say why)", rows.filter((r) => r.action === "upgrade_direct" && r.targetVersion === null && !opts.heldUnclean(r))],
     ["have a target that is NOT a clean fix (it holds an affected dependency; see their reasons)", rows.filter((r) => FIX_ACTIONS.has(r.action) && opts.heldUnclean(r))],

@@ -16,6 +16,7 @@ import { driftFor } from "./install-drift-notes.js";
 import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems, workspaceNote } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { walkNotReadNote } from "./what-should-i-know.js";
+import { escapeUnsafeDirs, liveUnsafeDirs } from "../live/shell-safe.js";
 import { withheldLine } from "../live/private-packages.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { quoteThirdParty } from "../untrusted-text.js";
@@ -199,7 +200,17 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
   };
 }
 
+/** dependency_health, with every repository directory whose name is not a plain path named escaped in its sentences (audit 2026-11-25 review). */
 export async function executeDependencyHealth(
+  db: FourDADatabase | null,
+  params: DependencyHealthParams,
+  liveIntel: LiveIntelligence | null,
+): Promise<DependencyHealthResult> {
+  const answer = await dependencyHealthAnswer(db, params, liveIntel);
+  return escapeUnsafeDirs(answer, liveUnsafeDirs(liveIntel));
+}
+
+async function dependencyHealthAnswer(
   _db: FourDADatabase | null,
   params: DependencyHealthParams,
   liveIntel: LiveIntelligence | null,
