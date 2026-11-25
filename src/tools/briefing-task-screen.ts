@@ -139,17 +139,22 @@ function sourceOption(family: Family, flag: string, value: string | undefined): 
     if (!/proxy/i.test(flag) && url && /^(?:https?:)?\/\//i.test(url) && !publicNpm(url)) return "a registry named in its command";
     return null;
   }
+  // A long option given by a prefix of its name (`--inde`, `--extra-index`, `--reg`), as pip and npm take one.
+  const prefixOf = (...full: string[]) => flag.startsWith("--") && flag.length >= 5 && full.some((f) => f.startsWith(flag.toLowerCase()));
   if (family === "py") {
-    if (["-i", "--index-url", "--extra-index-url", "--index", "--default-index"].includes(flag)) return publicPypi(value?.replace(/^[\w-]+=/, "")) ? null : "a package index named in its command";
-    if (flag === "-f" || flag === "--find-links") return "a find-links location named in its command";
+    if (flag === "-i" || prefixOf("--index-url", "--extra-index-url", "--index", "--default-index")) return publicPypi(value?.replace(/^[\w-]+=/, "")) ? null : "a package index named in its command";
+    if (flag === "-f" || prefixOf("--find-links")) return "a find-links location named in its command";
+    // A URL glued to a short option (`-ihttps://...`), or any option but a proxy whose value is an index URL.
+    const url = flag.includes("://") ? flag.replace(/^-{1,2}[A-Za-z]?/, "") : value;
+    if (!/proxy|cert/i.test(flag) && url && /^(?:https?:)?\/\//i.test(url) && !publicPypi(url)) return "a package index named in its command";
     return null;
   }
   if (family === "poetry") return flag === "--source" ? "a source named in its command" : null;
   if (family === "cargo") {
-    if (flag === "--registry") return value === "crates-io" ? null : "a registry named in its command";
+    if (prefixOf("--registry")) return value === "crates-io" ? null : "a registry named in its command";
     if (flag === "--git" || flag === "--branch" || flag === "--tag" || flag === "--rev") return "git";
     if (flag === "--path") return "a path";
-    if (flag === "--index") return "a registry index named in its command";
+    if (prefixOf("--index")) return "a registry index named in its command";
   }
   return null;
 }

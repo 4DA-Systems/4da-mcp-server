@@ -88,6 +88,11 @@ describe("an abbreviated or glued private registry is a private source", () => {
     "npm install -ihttps://npm.zqx.internal zqx-cli",
     "npm install --reg https://npm.zqx.internal zqx-cli",
     "YARN_REGISTRY=https://npm.zqx.internal yarn add zqx-cli",
+    "npm i zqx-cli --regi=https://npm.zqx.internal/",
+    "pip install -ihttps://pypi.zqx.internal/simple zqx-cli",
+    "pip install --inde https://pypi.zqx.internal/simple zqx-cli",
+    "pip install --extra-index https://pypi.zqx.internal/simple zqx-cli",
+    "cargo add zqx_cli --reg zqx",
   ])("%s", async (task) => {
     const r = await brief(task);
     expect(named(r)).toEqual([]);
