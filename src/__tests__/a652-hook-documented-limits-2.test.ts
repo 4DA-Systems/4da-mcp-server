@@ -79,12 +79,13 @@ describe("forms the hook still does not read", () => {
     expect(bash("go install golang.org/x/tools/gopls@v0.16.0")).toBe("allow");
     expect(bash("go get golang.org/x/tools@v0.16.0")).toBe("no verdict");
   });
-  it("Cargo root dotted keys, a root inline table and the underscore table names go ahead", () => {
+  it("Cargo root dotted keys, a root inline table and the underscore table names are read (wave 2; no longer a limit)", () => {
     expect(edit("Cargo.toml", CARGO, `${CARGO}[dependencies]\nserde = "1.0.100"\n`)).toBe("no verdict");
-    expect(edit("Cargo.toml", CARGO, `${CARGO}dependencies.serde = "1.0.100"\n`)).toBe("allow");
-    expect(edit("Cargo.toml", CARGO, `${CARGO}dependencies = { serde = "1.0.100" }\n`)).toBe("allow");
-    expect(edit("Cargo.toml", CARGO, `${CARGO}[dev_dependencies]\nserde = "1.0.100"\n`)).toBe("allow");
-    expect(edit("Cargo.toml", CARGO, `${CARGO}[build_dependencies]\nserde = "1.0.100"\n`)).toBe("allow");
+    // These sit at the top of the file: below [package] a dotted key is [package]'s own.
+    expect(edit("Cargo.toml", CARGO, `dependencies.serde = "1.0.100"\n${CARGO}`)).toBe("no verdict");
+    expect(edit("Cargo.toml", CARGO, `dependencies = { serde = "1.0.100" }\n${CARGO}`)).toBe("no verdict");
+    expect(edit("Cargo.toml", CARGO, `${CARGO}[dev_dependencies]\nserde = "1.0.100"\n`)).toBe("no verdict");
+    expect(edit("Cargo.toml", CARGO, `${CARGO}[build_dependencies]\nserde = "1.0.100"\n`)).toBe("no verdict");
   });
   it("a Poetry inline dependencies table goes ahead", () => {
     const poetry = '[tool.poetry]\nname = "a"\n';

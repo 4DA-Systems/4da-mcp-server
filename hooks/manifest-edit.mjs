@@ -96,8 +96,11 @@ const NPM_DEPENDENCY_SECTIONS = new Set(["dependencies", "devDependencies", "opt
 const NPM_PLAIN_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 /** A specifier shaped like a registry version or range (not `workspace:`, `file:`, `link:`, `npm:`, git or a URL). */
 const VERSION_SHAPED = /^[~^<>=]*\s*v?\d/;
-/** Cargo's dependency tables, the last part of [dependencies], [target.'cfg(..)'.build-dependencies], [workspace.dependencies]. */
-const CARGO_DEPENDENCY_TABLES = new Set(["dependencies", "dev-dependencies", "build-dependencies"]);
+/**
+ * Cargo's dependency tables, the last part of [dependencies], [target.'cfg(..)'.build-dependencies],
+ * [workspace.dependencies], with the old spellings cargo still reads before the 2024 edition.
+ */
+const CARGO_DEPENDENCY_TABLES = new Set(["dependencies", "dev-dependencies", "build-dependencies", "dev_dependencies", "build_dependencies"]);
 /** Cargo dependency keys that take the crate from somewhere other than crates.io: its name may be private and its version is not a crates.io release. */
 const CARGO_OTHER_SOURCE = ["path", "git", "registry", "registry-index"];
 /** Poetry dependency keys that take the package from somewhere other than PyPI. */
@@ -314,7 +317,8 @@ function tomlString(text, i, q, triple) {
 /** A TOML text as tokens (strings with their value, bare words, punctuation, line ends), comments dropped; null when a string never closes. */
 function tomlTokens(text) {
   const out = [];
-  let i = 0;
+  // A byte order mark (cargo reads a Cargo.toml that starts with one) is not part of the first key.
+  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
   while (i < text.length) {
     tick();
     const ch = text[i];
@@ -499,22 +503,11 @@ function cargoDependencies(entries, more = null) {
     if (!d) deps.set(key, (d = { section, name, fields: Object.create(null) }));
     return d;
   };
-  for (const { table, keys, value } of entries) {
-    if (!keys) continue;
-    if (table === null || CARGO_DEPENDENCY_TABLES.has(table.at(-1))) {
-      // An unknown table (a snippet that shows none) is read as a dependency table, as it always was.
-      const section = table === null ? "" : table.join(".");
-      if (keys.length > 1) {
-        dep(section, keys[0]).fields[keys.slice(1).join(".")] = value;
-      } else if (!TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) {
-        const d = dep(section, keys[0]);
-        if (value.t) Object.assign(d.fields, value.t);
-        else d.fields.version = value;
-      }
-    } else if (table.length >= 2 && CARGO_DEPENDENCY_TABLES.has(table.at(-2))) {
-      dep(table.slice(0, -1).join("."), table.at(-1)).fields[keys.join(".")] = value;
-    }
-  }
+  cargoEntries(entries, (section, name, field, value) => {
+    if (field !== null) dep(section, name).fields[field] = value;
+    else if (value.t) Object.assign(dep(section, name).fields, value.t);
+    else dep(section, name).fields.version = value;
+  });
   const out = [];
   for (const d of deps.values()) {
     const fields = { ...(more?.get(`${d.section}\0${d.name}`) ?? {}), ...d.fields };
@@ -531,28 +524,61 @@ function cargoDependencies(entries, more = null) {
 /** The keys of each Cargo dependency in a whole file, by section and name (for a snippet's dependencies). */
 function cargoFieldsOf(entries) {
   const out = new Map();
-  for (const { table, keys, value } of entries ?? []) {
-    if (!keys || !table) continue;
-    let section;
-    let name;
-    let field;
-    if (CARGO_DEPENDENCY_TABLES.has(table.at(-1))) {
-      section = table.join(".");
-      name = keys[0];
-      field = keys.length > 1 ? keys.slice(1).join(".") : null;
-    } else if (table.length >= 2 && CARGO_DEPENDENCY_TABLES.has(table.at(-2))) {
-      section = table.slice(0, -1).join(".");
-      name = table.at(-1);
-      field = keys.join(".");
-    } else continue;
-    const key = `${section}\0${name}`;
-    const fields = out.get(key) ?? Object.create(null);
-    if (field === null) {
-      if (value.t) Object.assign(fields, value.t);
-    } else fields[field] = value;
-    out.set(key, fields);
-  }
+  cargoEntries(
+    (entries ?? []).filter((e) => e.table !== null),
+    (section, name, field, value) => {
+      const key = `${section}\0${name}`;
+      const fields = out.get(key) ?? Object.create(null);
+      if (field === null) {
+        if (value.t) Object.assign(fields, value.t);
+      } else fields[field] = value;
+      out.set(key, fields);
+    },
+  );
   return out;
+}
+
+/**
+ * Each Cargo dependency key of TOML assignments, as `found(section, name, field, value)`: `field`
+ * the key below the dependency (`version`, `features`), or null for the dependency's whole value (a
+ * version string or an inline table). Read from the full key path (table parts, then key parts,
+ * then the keys of inline tables): the dependency table as a header (`[dependencies]`,
+ * `[target.'cfg(unix)'.dev-dependencies]`, `[dependencies.serde]`), and, as cargo also reads them
+ * (`cargo metadata`, verified 2026-11-27), as a dotted key or inline table at the top, under
+ * `[target.<cfg>]` or under `[workspace]` (`dependencies.serde = "1"`, `dependencies = { serde = "1" }`),
+ * with the old names `dev_dependencies` and `build_dependencies` too (audit 2026-11-25, D minors). A
+ * snippet whose table is not known (table null) is read as a dependency table, as it always was.
+ */
+function cargoEntries(entries, found) {
+  const walk = (path, tableLength, value) => {
+    let at = -1;
+    if (tableLength >= 1 && CARGO_DEPENDENCY_TABLES.has(path[tableLength - 1])) at = tableLength - 1;
+    else if (tableLength >= 2 && CARGO_DEPENDENCY_TABLES.has(path[tableLength - 2])) at = tableLength - 2;
+    else {
+      for (let i = tableLength; i < path.length && at < 0; i++) {
+        const before = path.slice(0, i);
+        if (CARGO_DEPENDENCY_TABLES.has(path[i]) && (i === 0 || (i === 1 && before[0] === "workspace") || (i === 2 && before[0] === "target"))) at = i;
+      }
+    }
+    const rest = at >= 0 ? path.slice(at + 1) : [];
+    if (at >= 0 && rest.length >= 1) {
+      const section = path.slice(0, at + 1).join(".");
+      if (rest.length > 1) found(section, rest[0], rest.slice(1).join("."), value);
+      else if (!TOML_NOT_DEPENDENCIES.has(rest[0].toLowerCase())) found(section, rest[0], null, value);
+      return;
+    }
+    // Not yet below a dependency table: an inline table's keys go on the path (`dependencies = { serde = "1" }`).
+    if (value.t && path.length < MAX_NESTING) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], tableLength, v);
+  };
+  for (const { table, keys, value } of entries) {
+    if (!keys) continue;
+    if (table === null) {
+      if (keys.length > 1) found("", keys[0], keys.slice(1).join("."), value);
+      else if (!TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) found("", keys[0], null, value);
+      continue;
+    }
+    walk([...table, ...keys], table.length, value);
+  }
 }
 
 /**
