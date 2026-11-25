@@ -65,6 +65,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
+import { optionTakesValue, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -156,6 +157,12 @@ const POPULAR = new Set(POPULAR_NPM);
  * is never safe_to_delegate (what-should-i-know.ts): a long list is never silently cut.
  */
 export const MAX_NEW_PACKAGES = 8;
+/**
+ * How many packages a task is read for. Each is judged against the bundled popular lists (a near-miss
+ * check), and a task listing 10,000 names took 28 s of CPU (pre-publish audit 2026-11-25, F-M3): past
+ * it the rest of the task is not read, and the briefing says so (NOT CHECKED), never safe_to_delegate.
+ */
+export const MAX_READ_PACKAGES = 100;
 /** How long a briefing waits for the name checks. Past it they are unchecked, never clean. */
 const NAME_CHECK_BUDGET_MS = 10_000;
 
@@ -326,7 +333,11 @@ export function detectNewPackages(task: string, deps: readonly ResolvedDependenc
 
 /** Every package the task adds, uncapped: the briefing checks the first MAX_NEW_PACKAGES and names the rest as not checked. */
 export function detectAllNewPackages(task: string, deps: readonly ResolvedDependency[]): NewPackage[] {
-  return readTaskItems(normalizeVersionSyntax(task), deps).packages;
+  // Credentials, URLs, over-long words and whatever the task takes from a private registry, an index,
+  // git, a path or a URL are never read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
+  // readTaskVersions names them NOT CHECKED.
+  const screen = screenTask(task);
+  return readTaskItems(normalizeVersionSyntax(screen.text), deps).packages.filter((p) => screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]) === null);
 }
 
 /** Where in the (normalized) task a version is written. */
@@ -357,6 +368,8 @@ export interface TaskItems {
   fixed: Array<TaskSpan & { ecosystem: CheckEcosystem; alternatives?: CheckEcosystem[]; fallbackOnly?: true }>;
   /** Arguments of a manager whose registry this server does not read (`gem install rails`): named NOT CHECKED. */
   foreign: Array<TaskSpan & { name: string; registry: string }>;
+  /** The task names more than MAX_READ_PACKAGES packages: the rest was not read (named NOT CHECKED). */
+  truncated?: true;
 }
 
 /**
@@ -412,6 +425,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
   const installedName = (name: string) => deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps) !== null;
   const found: NewPackage[] = [];
+  /** Where each (ecosystem, name) is in `found`: a list of thousands of names was quadratic (F-M3). */
+  const foundAt = new Map<string, number>();
   const bound: BoundVersion[] = [];
   const ignored: TaskSpan[] = [];
   const fixed: TaskItems["fixed"] = [];
@@ -422,8 +437,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     // ("install gin" with github.com/gin-gonic/gin in go.mod), is not new (blind audit round 4).
     if (guess && installedName(name)) return null;
     const alternatives = guess ? others.filter((e) => asName(name, e) !== null) : [];
-    const at = found.findIndex((f) => f.ecosystem === ecosystem && f.name === name);
+    const at = foundAt.get(`${ecosystem}\0${name}`) ?? -1;
     if (at < 0) {
+      foundAt.set(`${ecosystem}\0${name}`, found.length);
       found.push({
         name,
         ecosystem,
@@ -508,7 +524,12 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   /** A word that ends a list: a new clause, or another verb. */
   const endsList = (j: number) => j >= words.length || words[j] === "then" || CLAUSE_VERBS.has(words[j]) || IN_VERBS.has(words[j]) || ON_VERBS.has(words[j]);
 
+  let truncated = false;
   for (let i = 0; i < words.length; i++) {
+    if (found.length >= MAX_READ_PACKAGES) {
+      truncated = true;
+      break;
+    }
     const word = words[i];
     // `npm install a b`, `pnpm add -D a`, `go get host/path`: every argument that is a name.
     const manager = Object.hasOwn(MANAGERS, word) ? MANAGERS[word] : undefined;
@@ -532,7 +553,14 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         continue;
       }
       for (j++; j < words.length; j++) {
-        if (words[j].startsWith("-")) continue;
+        if (words[j].startsWith("-")) {
+          // An option's value (`--tag next`, `-w packages/api`, `--prefix ./x`) is never a package (E2).
+          // `--opt=value` is always a value; `--opt value` when the option takes one and its value was not
+          // blanked by the screen (a URL leaves a long blank: the next word is then an operand).
+          const gap = j + 1 < raw.length ? task.slice(span(j).end, starts[j + 1]) : "";
+          if (/^=\S*$/.test(gap) || (/^[ \t]{1,3}$/.test(gap) && optionTakesValue(word, raw[j].replace(/[.,;:)]+$/, "")))) j++;
+          continue;
+        }
         // The first argument that is not a name ends the command; one the project already has does not.
         const name = asName(raw[j], ecosystem);
         if (!name) break;
@@ -615,7 +643,12 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     let proseSeen = false;
     /** This list's packages, and whether anything marked each as one. */
     const listed: Array<{ pkg: NewPackage; strong: boolean }> = [];
+    let listedStrong = false;
     while (start) {
+      if (found.length >= MAX_READ_PACKAGES) {
+        truncated = true;
+        break;
+      }
       const k: number = start.at;
       const skipped = start.skipped;
       const tomlEntry = isTomlEntry(task, starts[k]);
@@ -672,7 +705,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         return (POPULAR.has(w) && !COMMON_WORDS.has(w) && !ENGLISH.has(w)) || nearMissOf(w) !== null || NAME_SHAPED.test(w);
       })();
       const leadsList = skipped === 0 && !afterSeparator && !proseSeen && listed.length === 0 && separatorAfter(k) === "list" && afterComma;
-      const inPackageList = afterSeparator && !proseSeen && listed.some((l) => l.strong) && itemEnds;
+      const inPackageList = afterSeparator && !proseSeen && listedStrong && itemEnds;
       const commonPackage = !ENGLISH_TASK_WORDS.has(name) && (leadsList || inPackageList);
       const known =
         !(proseSeen && ENGLISH_TASK_WORDS.has(name)) &&
@@ -738,6 +771,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         else pkg.preferOnTie = "npm";
       }
       if (pkg) listed.push({ pkg, strong });
+      if (pkg && strong) listedStrong = true;
       if (after) bound.push({ name: raw[k].replace(/[.,;:)]+$/, ""), version: after.version, ...span(after.at) });
       // "the lodahs package, and expres": a package word may close the item.
       if (PACKAGE_WORDS.has(words[next] ?? "") && separatorAfter(next - 1) === null) next++;
@@ -761,7 +795,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
     }
   }
-  return { packages: found, bound, ignored, fixed, foreign };
+  return { packages: found, bound, ignored, fixed, foreign, ...(truncated ? { truncated: true as const } : {}) };
 }
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &

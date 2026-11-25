@@ -20,7 +20,7 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, nameClean, nameOnlyReview, NO_SUCH_RELEASE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -35,6 +35,7 @@ import {
   specText,
 } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
+import { boundWords, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
@@ -234,6 +235,44 @@ const POPULAR = new Set<string>([...POPULAR_NPM, ...POPULAR_PYPI.map(normalizePy
 const popularName = (lower: string) => POPULAR.has(lower) || POPULAR.has(normalizePypiName(lower));
 
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
+  // Credentials, URLs, over-long words and whatever the task takes from a private registry, an index,
+  // git, a path or a URL are blanked before anything is read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
+  const screen = screenTask(task);
+  const read = readVersionsOf(screen.text, deps);
+  const all = readTaskItems(normalizeVersionSyntax(screen.text), deps);
+  const items = all.packages;
+  const notes: string[] = [];
+  if (all.truncated) notes.push(`every package after the first ${MAX_READ_PACKAGES} the task names (not read: the task names more packages than a briefing reads)`);
+  const requested = read.requested.filter((r) => {
+    const why = screenedOut(screen, r.name, [r.ecosystem, ...(r.alternatives ?? [])]);
+    if (why && !screen.names.has(r.name.toLowerCase())) notes.push(`${r.name} (${why})`);
+    return why === null;
+  });
+  for (const p of items) {
+    const why = screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]);
+    if (why && !screen.names.has(p.name.toLowerCase())) notes.push(`${p.name} (${why})`);
+  }
+  // A credential, URL or address is named (redacted) only where a reader would have taken a name from it:
+  // a name the unscreened task gives that the screened one does not, inside that span.
+  const conditional = screen.withheld.filter((w) => !w.always);
+  let lostTo: typeof conditional = [];
+  if (conditional.length > 0) {
+    const plain = boundWords(task);
+    const before = new Set([...readTaskItems(normalizeVersionSyntax(plain), deps).packages.map((p) => p.name.toLowerCase()), ...readVersionsOf(plain, deps).requested.map((r) => r.name.toLowerCase())]);
+    const after = new Set([...items.map((p) => p.name.toLowerCase()), ...read.requested.map((r) => r.name.toLowerCase())]);
+    const lost = [...before].filter((n) => !after.has(n) && n.length > 1);
+    lostTo = conditional.filter((w) => {
+      const span = task.slice(w.start, w.end).toLowerCase();
+      return lost.some((n) => span.includes(n));
+    });
+  }
+  for (const w of [...screen.withheld.filter((x) => x.always), ...lostTo].sort((a, b) => a.start - b.start)) notes.push(`${w.label} (${w.why})`);
+  const foreign = [...new Set([...(read.foreign ?? []), ...notes])];
+  return { requested, unread: read.unread, ...(foreign.length > 0 ? { foreign } : {}) };
+}
+
+/** The versions a task names, read from text the screen has already blanked. */
+function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
   task = normalizeVersionSyntax(task);
   // The versions the clause reader bound to a name ("pull in node-ipc 10.1.1", "replace request with
   // axios 0.21.0", "add lodash 4.17.21 and crossenv 6.1.1"), and the versions of what a swap takes out.
