@@ -491,7 +491,10 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   // A Python standard-library name is English, except one npm's popular list has in a project that does
   // not install from PyPI: "add uuid and electorn" in an npm project ended the list at `uuid` (r8, B1).
   const stdlib = (n: string) => PYTHON_STDLIB.has(n) && (guessed.has("PyPI") || !POPULAR.has(n));
-  const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
+  // Keyed by each ecosystem's own name rule: requirements' `zqx_tools` is the scan's `zqx-tools`, so the
+  // project's own dependency was read as new and looked up a second time (fifth blind check, item 1).
+  const haveKey = (ecosystem: CheckEcosystem, name: string) => `${ecosystem}\0${ecosystemKey(name, ecosystem)}`;
+  const have = new Set(deps.map((d) => haveKey(d.ecosystem as CheckEcosystem, d.name)));
   const installedName = (name: string) => deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps) !== null;
   const found: NewPackage[] = [];
   /** Where each (ecosystem, name) is in `found`: a list of thousands of names was quadratic (F-M3). */
@@ -502,7 +505,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const fixed: TaskItems["fixed"] = [];
   const foreign: TaskItems["foreign"] = [];
   const add =(name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false, version: string | null = null, loose = false): NewPackage | null => {
-    if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`) || isManifestFile(name)) return null;
+    if (!name || have.has(haveKey(ecosystem, name)) || isManifestFile(name)) return null;
     // A guessed name the project already has, in any ecosystem or as a Go module's short name
     // ("install gin" with github.com/gin-gonic/gin in go.mod), is not new (blind audit round 4).
     if (guess && installedName(name)) return null;
@@ -798,7 +801,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (stated) return stated;
         const bare = raw[k].replace(/(?:[=~<>!]=?).*$/, "").toLowerCase();
         const other = deps.find((d) => d.name.toLowerCase() === bare && d.ecosystem !== "PyPI");
-        return other && !have.has(`PyPI\0${bare}`) ? null : "PyPI";
+        return other && !have.has(haveKey("PyPI", bare)) ? null : "PyPI";
       };
       const pep = pepEcosystem();
       const itemEcosystem: CheckEcosystem = tomlEntry ? toml : (pep ?? fallback);
@@ -963,8 +966,6 @@ const notFound = (f: NewPackageFinding) => nameNotFound(f) || (Boolean(f.version
 /** Findings whose "review" is only a near-miss of the name in that ecosystem, and those whose name check is clean (nameOnlyReview, nameClean). */
 const NAME_ONLY = new WeakSet<NewPackageFinding>();
 const NAME_CLEAN = new WeakSet<NewPackageFinding>();
-/** The checkable ecosystems a bare name can be in (a Go module is a host path, never a bare name). */
-const NAME_ECOSYSTEMS: readonly CheckEcosystem[] = ["npm", "crates.io", "PyPI"];
 
 /**
  * How bad one ecosystem's answer for a name is: malware, then a name finding of avoid, then any
@@ -1077,24 +1078,8 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     const answerFor = (x: { i: number; q: NewPackage }) =>
       byName(x) ? (names ? nameFinding(x.q, names[named.indexOf(x)]) : unchecked(x.q, "the lookups did not finish in time")) : finding(x.q, answer.results[full.indexOf(x)]);
     const answered = packages.map((_p, i) => items.filter((x) => x.i === i).map(answerFor));
-    // A name the task gives no ecosystem for that none of the project's ecosystems has: the others'
-    // malicious-package records are read too. "bring in rustdecimal" in an npm project came back
-    // safe_to_delegate: npm has no such name, and crates.io's rustdecimal is malware
-    // (GHSA-7pwq-f4pq-78gm; pre-publish audit of 5d709ff). Only a malware answer there is kept.
-    const elsewhere = packages.flatMap((p, i) =>
-      p.guessed && answered[i].length > 0 && answered[i].every(nameNotFound)
-        ? NAME_ECOSYSTEMS.filter((e) => !answered[i].some((f) => f.ecosystem === e) && !p.closed?.includes(e) && asName(p.name, e) !== null).map((ecosystem) => ({ i, q: { name: p.name, ecosystem } as NewPackage }))
-        : [],
-    );
-    if (elsewhere.length > 0) {
-      const more = await run(elsewhere.map((x) => x.q)).catch(() => null);
-      if (more) {
-        elsewhere.forEach((x, k) => {
-          const f = finding(x.q, more.results[k]);
-          if (f.malicious || f.name_finding === "avoid") answered[x.i].push(f);
-        });
-      }
-    }
+    // No lookup outside the gate: the "rustdecimal fallback" looked a name its own registry did not have up in
+    // every other ecosystem, which is exactly what a private dependency gets (fifth blind check, item 1).
     const out = packages.map((p, i) => {
       let answers = answered[i];
       // A fallback ecosystem counts only when the task's own one has no such name or release (W16).
