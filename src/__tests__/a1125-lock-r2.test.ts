@@ -238,6 +238,30 @@ describe("4: manifest sections that were never compared", () => {
   });
 });
 
+describe("5: an entry another package needs, missing from a file read whole", () => {
+  const wording = (p: { error: string; interior?: true }) => {
+    expect(p.interior).toBe(true);
+    expect(p.error).toMatch(/^an entry another package needs is missing: /);
+    expect(p.error).toMatch(/The whole file was read and what it holds was checked/);
+    expect(p.error).not.toMatch(/read up to the damage/);
+  };
+  it("Gemfile.lock (rb21) and composer.lock (php07)", () => {
+    write({ Gemfile: "gem 'rails'\n", "Gemfile.lock": LOCK("    rails (6.1.4)\n      rack (>= 2)\n", "  rails\n") });
+    wording(problems("RubyGems")[0]);
+    write({
+      "composer.json": JSON.stringify({ require: { "a/a": "1" } }),
+      "composer.lock": JSON.stringify({ packages: [{ name: "a/a", version: "1.0.0", require: { "psr/log": "^1" }, dist: { type: "zip", url: "https://api.github.com/x" } }], "packages-dev": [] }),
+    });
+    wording(problems("Packagist")[0]);
+  });
+  it("a cut file keeps the cut wording", () => {
+    write({ "Gemfile.lock": "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (6.1.4)\n      rack (>= 2)\n" });
+    const got = problems("RubyGems")[0];
+    expect(got.interior).toBeUndefined();
+    expect(got.error).toMatch(/read up to the damage/);
+  });
+});
+
 describe("1a: a lockfile only not compared with its manifest is a note, never a lead", () => {
   it("the totals stay numbers, the summary leads with nothing, the plan keeps its data", async () => {
     write({ "composer.json": "{ not json", "composer.lock": JSON.stringify({ packages: [{ name: "a/a", version: "1.0.0", dist: { type: "zip", url: "https://api.github.com/repos/a/a/zipball/x" } }], "packages-dev": [] }) });

@@ -344,9 +344,9 @@ function someNames(names: string[]): string {
  * 2026-11-25, F1; npm and uv said it already): PARTIAL, behind the manifest. `damage`, when the
  * file is also damaged inside, makes it damage (the cut wording) rather than only out of date.
  */
-export function manifestAheadProblem(lockPath: string, manifest: string, missing: string[], damage: { reason: string; missing: number } | null = null): LockfileProblem {
+export function manifestAheadProblem(lockPath: string, manifest: string, missing: string[], damage: { reason: string; missing: number; interior?: true } | null = null): LockfileProblem {
   const behind = manifestAheadText(manifest, missing);
-  if (damage) return partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + missing.length);
+  if (damage) return partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + missing.length, damage.interior ? "interior" : false);
   return partialRead(lockPath, behind, missing.length, true);
 }
 
@@ -366,11 +366,15 @@ export function notComparedProblem(lockPath: string, manifest: string, why: stri
 }
 
 /** A lockfile's damage from entries it depends on and holds no entry for (F4), worded as uv.lock's. */
-export function danglingDamage(dangling: string[], entry: string): { reason: string; missing: number } | null {
+export function danglingDamage(dangling: string[], entry: string): { reason: string; part: string; missing: number; interior: true } | null {
   if (dangling.length === 0) return null;
   const one = dangling.length === 1;
-  return { reason: `it is truncated or damaged: ${dangling.length} package${one ? "" : "s"} named as ${one ? "a dependency has" : "dependencies have"} no ${entry} (${someNames(dangling)})`, missing: dangling.length };
+  const part = `${dangling.length} package${one ? "" : "s"} named as ${one ? "a dependency has" : "dependencies have"} no ${entry} (${someNames(dangling)})`;
+  return { reason: `${INTERIOR_DAMAGE}: ${part}`, part, missing: dangling.length, interior: true };
 }
+
+/** How a file read whole but lacking an entry another package needs is introduced (review item 5: never "read up to the damage"). */
+export const INTERIOR_DAMAGE = "an entry another package needs is missing";
 
 interface ComposerPackage {
   name?: unknown;
@@ -573,7 +577,7 @@ export function resolveRuby(cwd: string): VersionSource {
   } else if (manifest.state === "unreadable") problems.push(notComparedProblem(lockPath, manifestName, manifest.reason));
   // A spec's dependency (F4) or a DEPENDENCIES entry (item 3) with no spec of its own: damaged inside.
   const inner = danglingDamage([...new Set([...read.dangling, ...unspecced])].sort(), "spec");
-  const damage = cut && inner ? { reason: `${cut}; ${inner.reason.replace(/^it is truncated or damaged: /, "")}`, missing: inner.missing } : cut ? { reason: cut, missing: 0 } : inner;
+  const damage: { reason: string; missing: number; interior?: true } | null = cut && inner ? { reason: `${cut}; ${inner.part}`, missing: inner.missing } : cut ? { reason: cut, missing: 0 } : inner;
   const uncheckable = read.uncheckable.map((u) => ({ ...u, file: lockPath }));
   if (read.instances.size === 0) {
     // Nothing was read and the file says why: named, never taken for a project with no gems.
@@ -585,9 +589,9 @@ export function resolveRuby(cwd: string): VersionSource {
   if (ahead.length > 0 || moved.length > 0) {
     const behind = [...(ahead.length > 0 ? [manifestAheadText(manifestName, ahead)] : []), ...moved.slice(0, 3)].join("; ");
     const count = ahead.length + moved.length;
-    problems.push(damage ? partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + count) : partialRead(lockPath, behind, count, true));
+    problems.push(damage ? partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + count, damage.interior ? "interior" : false) : partialRead(lockPath, behind, count, true));
   }
-  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing));
+  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing, damage.interior ? "interior" : false));
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
   return found(read.versions, read.instances, lockPath, "lockfile", {
     direct: { deps: read.direct, devDeps: [] },
@@ -652,7 +656,7 @@ export function resolvePhp(cwd: string): VersionSource {
     return { ...emptySource(), ...(problems.length > 0 ? { problems } : {}), ...(uncheckable.length > 0 ? { uncheckable } : {}) };
   }
   if (ahead.length > 0) problems.push(manifestAheadProblem(lockPath, "composer.json", ahead, damage));
-  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing));
+  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing, "interior"));
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
   return found(read.versions, read.instances, lockPath, "lockfile", {
     direct: composerDirect(cwd),

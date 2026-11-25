@@ -22,7 +22,7 @@ import { emptySource, found, InstanceSet, partialRead, unreadableReason, type Lo
 import { pdmDevRequirements, pyprojectRequirements, uvOverrideRequirements } from "./pyproject-requirements.js";
 import { inlineTableKeys, poetryLockedNames, poetryRequirements } from "./poetry-requirements.js";
 import { tomlHeader, tomlKeyValue, tomlLines, tomlString } from "./private-hosts.js";
-import { danglingDamage, manifestAheadProblem, manifestAheadText, notComparedProblem } from "./lockfile-parsers-rbphp.js";
+import { danglingDamage, INTERIOR_DAMAGE, manifestAheadProblem, manifestAheadText, notComparedProblem } from "./lockfile-parsers-rbphp.js";
 import { isMergeConflictError, readTextFile } from "./text-file.js";
 import { isPublicExtraPypiIndex, isPublicPypiIndex, sourceLabel, type PrivateIndexEntry } from "./private-packages.js";
 import { pushAll } from "../array-utils.js";
@@ -214,7 +214,7 @@ export function resolvePython(cwd: string): VersionSource {
       for (const i of read.instances.toArray()) take(i.name, i.version, i.dev);
       sources.push(lockPath);
       lockfile = true;
-      if (damage) damaged.push(partialRead(lockPath, damage.reason, damage.missing, damage.behindManifest === true));
+      if (damage) damaged.push(partialRead(lockPath, damage.reason, damage.missing, damage.behindManifest === true ? true : damage.interior === true ? "interior" : false));
     } catch (error) {
       // Unreadable: the next source (resolveVersionSource names this one and why).
       if (isMergeConflictError(error)) conflictedLock = true;
@@ -501,12 +501,19 @@ function readPipfileLock(lock: unknown, file: string): PipfileLockRead {
  *   `[tool.uv]` override or constraint covers.
  * pdm.lock carries nothing of the kind (its `[metadata]` comes first).
  */
-function pythonLockDamage(name: string, content: string, pyproject: string | null, besides: ReadonlySet<string> = new Set(), notCompared: string[] = []): { reason: string; missing: number; behindManifest?: true } | null {
+function pythonLockDamage(name: string, content: string, pyproject: string | null, besides: ReadonlySet<string> = new Set(), notCompared: string[] = []): { reason: string; missing: number; behindManifest?: true; interior?: true } | null {
   const shared = tomlLockDamage(content);
   const parts: string[] = [];
   let missing = 0;
   let outOfDate = false;
-  if (name === "poetry.lock" && !/^\[metadata\]\s*$/m.test(content)) parts.push("it has no [metadata] table, which Poetry writes last");
+  /** A sign the file stops short (no [metadata], no table at all), as against an entry missing inside it. */
+  let cut = false;
+  /** An entry another package needs is missing (review item 5). */
+  let interior = false;
+  if (name === "poetry.lock" && !/^\[metadata\]\s*$/m.test(content)) {
+    parts.push("it has no [metadata] table, which Poetry writes last");
+    cut = true;
+  }
   if (name === "poetry.lock" || name === "pdm.lock") {
     // An entry's dependency with no entry of its own (F4), and what pyproject.toml declares that
     // the file has no entry for (F1), as uv.lock is held to both.
@@ -516,7 +523,10 @@ function pythonLockDamage(name: string, content: string, pyproject: string | nul
     const own = pyproject === null ? null : projectName(pyproject);
     const dangling = graph.dangling.filter((n) => n !== own);
     const inner = danglingDamage(dangling, "[[package]] table");
-    if (inner) parts.push(inner.reason.replace(/^it is truncated or damaged: /, ""));
+    if (inner) {
+      parts.push(inner.part);
+      interior = true;
+    }
     const declared = pyproject === null ? { names: [], notCompared: [] } : name === "pdm.lock" ? pdmDeclared(pyproject, content) : poetryDeclared(pyproject, besides);
     pushAll(notCompared, declared.notCompared);
     const ahead = [...new Set(declared.names.filter((n) => !names.has(n)))].sort();
@@ -529,8 +539,12 @@ function pythonLockDamage(name: string, content: string, pyproject: string | nul
   if (name === "uv.lock") {
     const { tables, dangling } = uvLockTables(content);
     const some = (list: string[]) => `${list.slice(0, 3).join(", ")}${list.length > 3 ? ", ..." : ""}`;
-    if (tables.size === 0) parts.push("it holds no [[package]] table, and uv always writes at least the project's own");
+    if (tables.size === 0) {
+      parts.push("it holds no [[package]] table, and uv always writes at least the project's own");
+      cut = true;
+    }
     if (dangling.length > 0) {
+      interior = true;
       parts.push(`${dangling.length} package${dangling.length === 1 ? "" : "s"} named as ${dangling.length === 1 ? "a dependency has" : "dependencies have"} no [[package]] table (${some(dangling)})`);
     }
     // A requirement behind an environment marker need not be locked; one for every environment is.
@@ -548,6 +562,8 @@ function pythonLockDamage(name: string, content: string, pyproject: string | nul
   if (shared) return { reason: `${shared.reason}; ${parts.join("; ")}`, missing: shared.missing + missing };
   // Only the manifest disagrees: cut between two tables, or written before the manifest changed.
   if (outOfDate && parts.length === 1) return { reason: name === "uv.lock" ? `it is truncated or out of date: ${parts[0]}` : parts[0], missing, behindManifest: true };
+  // Read whole, with an entry another package needs missing inside it: not a cut.
+  if (interior && !cut) return { reason: `${INTERIOR_DAMAGE}: ${parts.join("; ")}`, missing, interior: true };
   return { reason: `it is truncated or damaged: ${parts.join("; ")}`, missing };
 }
 
