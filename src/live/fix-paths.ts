@@ -1784,7 +1784,9 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       if (bounded && npmRangeAdmits(declared, target) === true) return isShellSafeName(name, "npm") ? { command: npmDirectRefresh(manager, name), refresh: true } : null;
       const command = npmDirectCommand(manager, declared, name, target);
       // berry's `yarn up` is a project command: at a workspace root it rewrites the members' declarations too (hasWorkspaces).
-      return command ? { command: manager === "yarn-berry" && hasWorkspaces(json!) ? command.replace(/^yarn up /, "yarn add ") : command } : null;
+      if (!command || manager !== "yarn-berry" || !hasWorkspaces(json!)) return command ? { command } : null;
+      const flag = berryAddFlag(json!, name);
+      return flag === null ? null : { command: `${command.replace(/^yarn up /, "yarn add ")}${flag}` };
     }
     case "crates.io": {
       const manifest = read("Cargo.toml");
@@ -1853,8 +1855,33 @@ function yarnMemberFix(projectDir: string, manager: "yarn1" | "yarn-berry", name
   if (op === null) return null;
   const spec = op === "" ? `${name}@${target}` : `"${name}@${op}${target}"`;
   const section = declared[0].section;
-  const flag = manager === "yarn1" && section === "devDependencies" ? " --dev" : manager === "yarn1" && section === "optionalDependencies" ? " --optional" : "";
+  if (manager === "yarn-berry") {
+    // Berry refuses `add` for a package the manifest also lists as a peer unless -D or -P says which entry.
+    const peer = member.declared.some((d) => d.name === name && d.section === "peerDependencies");
+    if (peer && section !== "devDependencies") return null;
+    return { command: `yarn workspace ${member.name} add ${spec}${peer ? " --dev" : ""}` };
+  }
+  const flag = section === "devDependencies" ? " --dev" : section === "optionalDependencies" ? " --optional" : "";
   return { command: `yarn workspace ${member.name} add ${spec}${flag}` };
+}
+
+/**
+ * The flag a Yarn Berry `yarn add` at a workspace root needs for `name`: "" when the root lists no peer
+ * entry for it, " --dev" for a dev dependency it also lists as a peer, null for a dependency or optional
+ * dependency it also lists as a peer. Berry refuses `add` for a peer-listed package without -D or -P
+ * ("is already listed as a peer dependency", yarn 3.2.4 and 4.9.1, 2026-11-26), and -P would move the
+ * peer range instead, so no `yarn add` moves such a dependency (`yarn up` does, but at a workspace root
+ * it rewrites the members' declarations too).
+ */
+function berryAddFlag(packageJson: string, name: string): string | null {
+  let pkg: Record<string, Record<string, unknown> | undefined>;
+  try {
+    pkg = JSON.parse(packageJson);
+  } catch {
+    return null;
+  }
+  if (typeof pkg?.peerDependencies?.[name] !== "string") return "";
+  return typeof pkg?.devDependencies?.[name] === "string" ? " --dev" : null;
 }
 
 /**

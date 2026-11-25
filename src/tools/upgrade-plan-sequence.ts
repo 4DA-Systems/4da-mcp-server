@@ -176,7 +176,8 @@ const SPEC = String.raw`"?((?:@[^/\s"@]+\/)?[^@\s"]+)@[=^~]?([^"\s]+)"?`;
 const SET_FORMS: Array<[RegExp, string]> = [
   [new RegExp(`^npm install ${SPEC}(?: --save-exact)?$`), "npm"],
   [new RegExp(`^pnpm up ${SPEC}$`), "pnpm"],
-  [new RegExp(`^yarn (?:upgrade|up|add) ${SPEC}$`), "yarn"],
+  // `--dev`: a Berry root `yarn add` for a dev dependency the manifest also lists as a peer (fix-paths.ts berryAddFlag).
+  [new RegExp(`^yarn (?:upgrade|up|add) ${SPEC}(?: --dev)?$`), "yarn"],
 ];
 const REFRESH_FORMS: Array<[RegExp, string]> = [
   [/^npm update (\S+)$/, "npm"],
