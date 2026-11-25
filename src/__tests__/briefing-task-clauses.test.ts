@@ -338,16 +338,16 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     ["add left-pad + electorn", NPM_PROJECT, "electorn"],
     ["add left-pad plus electorn", NPM_PROJECT, "electorn"],
     ["add left-pad 1.3.0, chalk 5.6.2 & electorn", NPM_PROJECT, "electorn"],
-  ])("%s: the later package is not lost: listed malware is human_only, a near-miss is flagged offline", async (task, deps, bad) => {
+  ])("%s: the later package is not lost: listed malware is human_only, a near-miss is noted", async (task, deps, bad) => {
     NPM["lodash-es"] = { latest: "4.17.21", versions: ["4.17.21"] };
     // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
     // exactly a name of a bundled list; any other name is listed in unverified_words, never sent by it, and a
-    // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
+    // near-miss of a popular name (electorn, lodahs) carries a spelling note (fourth blind check, item 4).
     const r = await brief(task, deps);
     if (bad === "electorn") {
-      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ verdict: "review", did_you_mean: "electron", malicious: false });
+      expect(r.unverified_words?.find((w) => w.word === bad)).toMatchObject({ note: "one edit from electron: check the spelling" });
       expect(ASKED.some((u) => u.includes("electorn"))).toBe(false);
-      expect(r.delegation_assessment.level).toBe("human_only");
+      expect(r.delegation_assessment.level).toBe("review_needed");
     } else {
       expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
       expect(r.delegation_assessment.level).toBe("human_only");
@@ -451,7 +451,7 @@ describe("a task naming more packages than the briefing checks fails closed", ()
 describe("what was already right stays right", () => {
   it.each([
     // Final design of the 2026-11-25 fixes: lodahs is a near-miss of lodash, judged offline (did you mean lodash?).
-    ["add the lodahs package", "human_only"],
+    ["add the lodahs package", "review_needed"],
     ["add tests", "safe_to_delegate"],
     ["add logging to the handler", "safe_to_delegate"],
     ["add error handling, then update the docs", "safe_to_delegate"],
@@ -483,11 +483,11 @@ describe("what was already right stays right", () => {
       privateReason: (_eco: string, name: string) => (name.toLowerCase() === "acme-vault" ? "private by .npmrc @acme registry" : null),
     });
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
-    // electorn is a near-miss of electron, judged offline; left-pad is handed back; neither is sent (final design).
-    expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["electorn=review"]);
+    // electorn is a near-miss of electron, noted; left-pad is listed; neither is sent (fourth blind check, item 4).
+    expect(r.new_packages).toBeUndefined();
     expect(r.unverified_words?.map((w) => w.word)).toEqual(["left-pad", "electorn"]);
     expect(ASKED.some((u) => /left-pad|electorn/.test(u))).toBe(false);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("a private name the project's registries do not have is never sent to the other ecosystems either", async () => {

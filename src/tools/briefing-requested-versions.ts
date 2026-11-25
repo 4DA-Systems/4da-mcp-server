@@ -320,22 +320,14 @@ export interface UnverifiedWord {
   note?: string;
 }
 
-/** A name the briefing does not look up that is a near-miss of a popular one, judged offline. */
-export interface OfflineNearMiss {
-  name: string;
-  ecosystem: CheckEcosystem;
-  version?: string;
-  didYouMean: string;
-}
-
 /**
  * What the briefing itself looks up, applied after the project's own private rules (final design of the
  * 2026-11-25 fixes): a name only when the project already depends on it, or it is exactly a name of a
  * bundled list (popular names, names with a known malicious release); never when a span the screen
  * withheld touches it (its version would otherwise be judged at latest). Every other name is listed once
  * in `unverified` (a plain list, never tool arguments: fourth blind check), with the version as the task
- * writes it and the ecosystems it may be in; a near-miss of a popular name is also judged offline
- * (`nearMisses`). Nothing about them is sent.
+ * writes it and the ecosystems it may be in; a near-miss of a popular name carries a note saying so
+ * (fourth blind check, item 4: a note, not a hold). Nothing about them is sent.
  */
 export function gateTaskNames<
   P extends { name: string; ecosystem: CheckEcosystem; version?: string; versionUnread?: true; alternatives?: CheckEcosystem[]; guessed?: true; closed?: CheckEcosystem[]; fallbackOnly?: true },
@@ -345,7 +337,7 @@ export function gateTaskNames<
   deps: readonly ResolvedDependency[],
   packages: readonly P[],
   requested: readonly R[],
-): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; nearMisses: OfflineNearMiss[]; unverified: UnverifiedWord[]; unverifiedTotal: number } {
+): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; unverified: UnverifiedWord[]; unverifiedTotal: number } {
   const screen = screenTask(task);
   const touched = touchedNames(task, screen);
   const installed = installedNames(deps);
@@ -359,8 +351,6 @@ export function gateTaskNames<
     if (held.length < MAX_HELD_SHOWN) held.push({ shown, reason });
     else beyondHeld++;
   };
-  /** The items to hand back, by ecosystem and name; a version the task names beats "latest". */
-  const nearMisses: OfflineNearMiss[] = [];
   const unverified = new Map<string, UnverifiedWord>();
   /** A name the briefing does not look up: one plain entry, in every ecosystem it may be in by that registry's grammar. */
   const offer = (name: string, ecosystems: readonly CheckEcosystem[], version: string | undefined, judgeNearMiss = true, unreadVersion = false) => {
@@ -375,9 +365,14 @@ export function gateTaskNames<
       const ecos = new Set([...had.read_as.split(" or "), ...readAs]);
       had.read_as = [...ecos].join(" or ");
     }
-    for (const ecosystem of judgeNearMiss ? readAs : []) {
+    // A near-miss of a popular name, judged offline: a note about the spelling, not a hold.
+    const entry = unverified.get(key)!;
+    for (const ecosystem of judgeNearMiss && !entry.note ? readAs : []) {
       const of = offlineNearMiss(name, ecosystem);
-      if (of && !nearMisses.some((m) => m.name === name && m.ecosystem === ecosystem)) nearMisses.push({ name, ecosystem, ...(written ? { version: written } : {}), didYouMean: of });
+      if (of) {
+        entry.note = `one edit from ${of}: check the spelling`;
+        break;
+      }
     }
   };
   /** The ecosystems an item may be looked up in by the briefing, or null (handed back, or held). */
@@ -432,7 +427,7 @@ export function gateTaskNames<
   }
   if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not read whole, as the ones above" });
   const words = [...unverified.values()];
-  return { packages: keptPackages, requested: keptRequested, held, nearMisses, unverified: words.slice(0, MAX_UNVERIFIED_WORDS), unverifiedTotal: words.length };
+  return { packages: keptPackages, requested: keptRequested, held, unverified: words.slice(0, MAX_UNVERIFIED_WORDS), unverifiedTotal: words.length };
 }
 
 

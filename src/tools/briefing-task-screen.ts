@@ -498,7 +498,8 @@ export function knownPublicName(name: string, eco: CheckEcosystem): boolean {
 
 /** The popular name `name` is a near-miss of in `eco`, judged offline from the bundled lists, or null. */
 export function offlineNearMiss(name: string, eco: CheckEcosystem): string | null {
-  if (knownPublicName(name, eco)) return null;
+  // A name that is itself on a bundled list, in any ecosystem, is never a near-miss (fourth blind check, item 4).
+  if ((["npm", "PyPI", "crates.io"] as const).some((e) => knownPublicName(name, e))) return null;
   if (eco === "npm") return nearMissOf(name.toLowerCase())?.of ?? null;
   if (eco === "PyPI") return closestPopularPypi(name);
   return null;

@@ -194,15 +194,15 @@ describe("B1 in the briefing: the malware after a prose item is found (each was 
     ["add uuid, ctx", PY_PROJECT, "ctx"],
     ["add json and ctx", PY_PROJECT, "ctx"],
     ["add zod, lodahs", NPM_PROJECT, "lodahs"],
-  ])("%s: never safe on %s (a listed malicious name is human_only, a near-miss is flagged offline)", async (task, deps, bad) => {
+  ])("%s: never safe on %s (a listed malicious name is human_only, a near-miss is noted offline)", async (task, deps, bad) => {
     // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
     // exactly a name of a bundled list; any other name is listed in unverified_words (not sent by the briefing),
     // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await brief(task, deps);
     if (bad === "electorn" || bad === "lodahs") {
-      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ verdict: "review", malicious: false });
-      expect(r.new_packages?.find((p) => p.name === bad)?.did_you_mean).toBeTruthy();
-      expect(r.delegation_assessment.level).toBe("human_only");
+      // Fourth blind check of the 2026-11-25 fixes, item 4: a spelling note, review_needed, never a hold.
+      expect(r.unverified_words?.find((w) => w.word === bad)?.note).toMatch(/^one edit from /);
+      expect(r.delegation_assessment.level).toBe("review_needed");
     } else {
       expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
       expect(r.delegation_assessment.level).toBe("human_only");
@@ -314,10 +314,10 @@ describe("false positives are gone, blockers stay", () => {
   });
 
   it("use lodahs: a malware name after `use` still stands", async () => {
-    // Final design: a near-miss judged offline (did you mean lodash?), never safe.
+    // A near-miss noted offline (one edit from lodash), never safe (fourth blind check, item 4).
     const r = await brief("use lodahs");
-    expect(r.new_packages).toMatchObject([{ name: "lodahs", verdict: "review", did_you_mean: "lodash" }]);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    expect(r.unverified_words).toMatchObject([{ word: "lodahs", note: "one edit from lodash: check the spelling" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 });
 

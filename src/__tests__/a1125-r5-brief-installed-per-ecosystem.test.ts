@@ -53,7 +53,7 @@ describe("a dependency of one ecosystem is not evidence in another", () => {
   ] as const)("%s is not looked up; it is listed for %s", async (task, ecosystem, name) => {
     const r = await brief(task);
     expect(askedIn(ecosystem, name)).toEqual([]);
-    expect(r.unverified_words).toEqual([{ word: name, read_as: ecosystem }]);
+    expect(r.unverified_words).toMatchObject([{ word: name, read_as: ecosystem }]);
   });
 
   it("inside its own ecosystem, with its name rule, a dependency is still looked up", async () => {

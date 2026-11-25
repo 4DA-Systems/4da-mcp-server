@@ -22,11 +22,13 @@ async function brief(task: string): Promise<Record<string, any>> {
   return (await executeWhatShouldIKnow(null, { task, project_path: h.dir }, await h.live())) as Record<string, any>;
 }
 
-describe("a near-miss judged offline is human_only until checked", () => {
+describe("a near-miss judged offline is noted, never held (fourth blind check, item 4)", () => {
   it.each(["npm install lodahs", "add lodahs", "npm install electorn", "npm install babelcli", "npm install mongose", "npm install nodesass"])("%s", async (task) => {
     const r = await brief(task);
-    expect(r.delegation_assessment.level).toBe("human_only");
-    expect(r.delegation_assessment.reason).toMatch(/a possible typosquat of [\w.-]+\): this briefing did not look it up\. Do not install it before dependency_check has answered/);
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).toMatch(/^NOT ASSESSED: /);
+    expect(r.delegation_assessment.reason).not.toContain("a human decides once it has");
+    expect(r.unverified_words.find((w: { word: string }) => w.word === task.split(" ").pop()).note).toMatch(/^one edit from [\w.-]+: check the spelling$/);
     expect((r.unverified_words ?? []).map((w: { word: string }) => w.word)).toContain(task.split(" ").pop());
   });
 });

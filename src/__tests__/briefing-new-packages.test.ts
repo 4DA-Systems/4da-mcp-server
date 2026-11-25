@@ -220,17 +220,15 @@ afterEach(() => {
 });
 
 describe("what_should_i_know: a task that adds a package", () => {
-  it("\"add the lodahs package\" is never safe: a near-miss of lodash, judged offline, and dependency_check finds the malware", async () => {
-    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
-    // exactly a name of a bundled list; any other name is listed in unverified_words (not sent by the briefing),
-    // and a near-miss of a popular name is judged offline: review_needed, did you mean.
+  it("\"add the lodahs package\" is never safe: a near-miss of lodash, noted offline, and dependency_check finds the malware", async () => {
+    // Fourth blind check of the 2026-11-25 fixes, item 4: a near-miss of a popular name is listed in
+    // unverified_words with a spelling note; review_needed led by NOT ASSESSED, never a hold.
     const r = await executeWhatShouldIKnow(db, { task: "add the lodahs package" }, intel());
-    expect(r.delegation_assessment.level).toBe("human_only");
-    expect(r.new_packages).toMatchObject([{ name: "lodahs", ecosystem: "npm", verdict: "review", malicious: false, did_you_mean: "lodash" }]);
-    expect(r.summary).toContain("did you mean lodash?");
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).toMatch(/^NOT ASSESSED: /);
+    expect(r.new_packages).toBeUndefined();
     expect(ASKED.some((u) => u.includes("lodahs"))).toBe(false);
-    // Fourth blind check of the 2026-11-25 fixes: a name not looked up is listed in unverified_words.
-    expect(r.unverified_words).toEqual([{ word: "lodahs", read_as: "npm or crates.io" }]);
+    expect(r.unverified_words).toEqual([{ word: "lodahs", read_as: "npm or crates.io", note: "one edit from lodash: check the spelling" }]);
     // Called for it, dependency_check finds the malware.
     const check = (await executeDependencyCheck(null, { items: [{ ecosystem: "npm", package: "lodahs", to: "latest" }] }, intel() as never)) as { results: Array<{ ecosystem: string; verdict: string }> };
     expect(check.results.find((x) => x.ecosystem === "npm")).toMatchObject({ verdict: "avoid" });
@@ -241,9 +239,8 @@ describe("what_should_i_know: a task that adds a package", () => {
     expect(detectNewPackages("add the lodahs package", mixed)).toEqual([{ name: "lodahs", ecosystem: "PyPI", alternatives: ["npm"], guessed: true }]);
     const r = await executeWhatShouldIKnow(db, { task: "add the lodahs package" }, intel(READY_SCAN, { getResolvedDeps: () => mixed }));
     // The task names no manager or file: the word is read as either, never one picked silently.
-    expect(r.unverified_words).toEqual([{ word: "lodahs", read_as: "PyPI or npm" }]);
-    expect(r.new_packages).toMatchObject([{ name: "lodahs", ecosystem: "npm", verdict: "review", did_you_mean: "lodash" }]);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    expect(r.unverified_words).toEqual([{ word: "lodahs", read_as: "PyPI or npm", note: "one edit from lodash: check the spelling" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("a stated ecosystem is never second-guessed: \"pip install lodahs\" stays PyPI", () => {
@@ -251,24 +248,22 @@ describe("what_should_i_know: a task that adds a package", () => {
     expect(detectNewPackages("pip install lodahs", mixed)).toEqual([{ name: "lodahs", ecosystem: "PyPI" }]);
   });
 
-  it("the same when the project scan is not ready: a malware name is never \"unknown\"", async () => {
+  it("the same when the project scan is not ready: never safe", async () => {
     const r = await executeWhatShouldIKnow(db, { task: "add the lodahs package" }, intel(null));
     expect(r.scan_status).toBe("unavailable");
-    expect(r.delegation_assessment.level).toBe("human_only");
-    expect(r.delegation_assessment.reason).toContain("did you mean lodash?");
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(r.unverified_words).toMatchObject([{ word: "lodahs", note: "one edit from lodash: check the spelling" }]);
   });
 
-  it("a near-miss of a popular package, judged offline, is human_only until checked, with the name it likely meant", async () => {
+  it("a near-miss of a popular package is noted with the name it likely meant, and review_needed", async () => {
     const r = await executeWhatShouldIKnow(db, { task: "npm install expres" }, intel());
-    expect(r.delegation_assessment.level).toBe("human_only");
-    expect(r.delegation_assessment.reason).toContain("the task adds expres (review: did you mean express?), which dependency_check does not clear");
-    expect(r.new_packages).toMatchObject([{ name: "expres", verdict: "review", malicious: false, did_you_mean: "express", name_finding: "review" }]);
-    // And with no ready scan the finding still stands, beside the note that the rest is unreviewed.
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).not.toContain("a human decides once it has");
+    expect(r.unverified_words).toEqual([{ word: "expres", read_as: "npm", note: "one edit from express: check the spelling" }]);
+    // And with no ready scan the note still stands, beside the note that the rest is unreviewed.
     const cold = await executeWhatShouldIKnow(db, { task: "npm install expres" }, intel(null));
-    expect(cold.delegation_assessment.level).toBe("human_only");
-    expect(cold.delegation_assessment.reason).toContain("a possible typosquat of express");
-    expect(cold.delegation_assessment.reason).toContain("did you mean express?");
-    expect(cold.delegation_assessment.reason).toContain("Vulnerability scan unavailable");
+    expect(cold.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(cold.unverified_words).toMatchObject([{ word: "expres", note: "one edit from express: check the spelling" }]);
   });
 
   it("a name the registry does not have is review_needed (a private package, a typo, or a hallucinated name)", async () => {
@@ -367,14 +362,19 @@ describe("round 5: a task that adds malware is never safe_to_delegate", () => {
   });
 
   it.each([
-    // Final design: lodahs and expres are near-misses judged offline (review); flatmap-stream is a listed malicious name.
-    ["replace lodash with lodahs", "lodahs", "human_only"],
-    ["swap express for expres", "expres", "human_only"],
+    // lodahs and expres are near-misses, noted offline (review_needed, fourth blind check item 4); flatmap-stream
+    // is a listed malicious name, looked up (human_only).
+    ["replace lodash with lodahs", "lodahs", "review_needed"],
+    ["swap express for expres", "expres", "review_needed"],
     ["add flatmap-stream", "flatmap-stream", "human_only"],
   ])("an npm project: %s brings %s in and is %s (it was safe_to_delegate with new_packages [])", async (task, name, level) => {
     const r = await executeWhatShouldIKnow(db, { task }, intel());
-    expect(r.new_packages).toMatchObject([{ name, ecosystem: "npm" }]);
-    expect(r.new_packages![0].verdict).not.toBe("proceed");
+    if (level === "human_only") {
+      expect(r.new_packages).toMatchObject([{ name, ecosystem: "npm" }]);
+      expect(r.new_packages![0].verdict).not.toBe("proceed");
+    } else {
+      expect(r.unverified_words).toMatchObject([{ word: name, note: expect.stringMatching(/^one edit from /) }]);
+    }
     expect(r.delegation_assessment.level).toBe(level);
   });
 
@@ -532,8 +532,8 @@ describe("dependency phrasings and PyPI typo-squats (black-box audit of 60c9edc,
 
   it('"we need electorn for the desktop build" is review_needed: did you mean electron? (it was safe_to_delegate)', async () => {
     const r = await executeWhatShouldIKnow(db, { task: "we need electorn for the desktop build" }, intel());
-    expect(r.new_packages).toMatchObject([{ name: "electorn", did_you_mean: "electron" }]);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    expect(r.unverified_words).toMatchObject([{ word: "electorn", note: "one edit from electron: check the spelling" }]);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it.each([
