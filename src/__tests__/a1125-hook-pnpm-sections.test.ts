@@ -76,6 +76,13 @@ describe("a flow mapping is held as not read when it changes, and only then", ()
     ["over several lines", "catalog: {\n  lodash: 4.17.20, react: 18.2.0\n}\n"],
     ["continued at column 0 (js-yaml reads it)", "catalog: {\nlodash: 4.17.20 }\n"],
     ["a named catalog continued at column 0", "catalogs:\n  legacy: { left-pad: 1.3.0,\nlodash: 4.17.20 }\n"],
+    ["on the line after its key", "catalog:\n  { lodash: 4.17.20 }\n"],
+    ["on the line after a commented key", "catalog: # c\n  { lodash: 4.17.20 }\n"],
+    ["a named catalog on the line after its key", "catalogs:\n  legacy:\n    { lodash: 4.17.20 }\n"],
+    ["after an anchor", "catalog: &c { lodash: 4.17.20 }\n"],
+    ["after a tag", "catalog: !!map { lodash: 4.17.20 }\n"],
+    ["after an anchor and a tag", "overrides: &o !!map { lodash: 4.17.20 }\n"],
+    ["a named catalog after an anchor", "catalogs:\n  legacy: &l { lodash: 4.17.20 }\n"],
   ])("%s: a Write is held as not read, empty ledger", (_label, section) => {
     const run = s.write(s.file("pnpm-workspace.yaml", HEAD), HEAD + section);
     expect(run.decision, run.text).toBe("deny");
@@ -102,6 +109,51 @@ describe("a flow mapping is held as not read when it changes, and only then", ()
     expect(s.edit(file, "'packages/*'", "'apps/*'").decision).toBe("allow");
     expect(s.edit(file, "^18.2.0 }\n", "^18.2.0 } # pinned\n").decision).toBe("allow");
     expect(s.edit(file, "{ lodash: ^4.17.21, react: ^18.2.0 }", "{lodash: ^4.17.21, react: ^18.2.0}").decision).toBe("allow");
+    expect(s.edit(file, "{ lodash: ^4.17.21, react: ^18.2.0 }", "{ react: ^18.2.0, lodash: ^4.17.21 }").decision).toBe("allow");
+    expect(s.edit(file, "{ lodash: ^4.17.21, react: ^18.2.0 }", "{\n  react: ^18.2.0,\n  lodash: ^4.17.21,\n}").decision).toBe("allow");
+  });
+
+  it("the same spellings unchanged hold nothing: re-saved, edited elsewhere", () => {
+    for (const [i, section] of [
+      "catalog:\n  { lodash: 4.17.20 }\n",
+      "catalog: &c !!map { lodash: 4.17.20 }\n",
+      "catalogs:\n  legacy: &l { lodash: 4.17.20 }\n",
+      "catalog: {\nlodash: 4.17.20 }\n",
+    ].entries()) {
+      const text = HEAD + section;
+      const file = s.file(`u${i}/pnpm-workspace.yaml`, text);
+      expect(s.write(file, text).decision, section).toBe("allow");
+      expect(s.edit(file, "'packages/*'", "'apps/*'").decision, section).toBe("allow");
+    }
+  });
+
+  it("an empty flow mapping is no version: catalog: {} and overrides: {} are not held", () => {
+    const file = s.file("pnpm-workspace.yaml", HEAD);
+    expect(s.write(file, `${HEAD}catalog: {}\noverrides: { }\ncatalogs:\n  legacy: {}\n`).decision).toBe("allow");
+  });
+
+  it("a flow mapping that never closes is not YAML pnpm reads: an edit below it is not held", () => {
+    const file = s.file("pnpm-workspace.yaml", `${HEAD}catalog: { lodash: ^4.17.21,\n  react: ^18.2.0\nsettings:\n  x: 1\n`);
+    expect(s.edit(file, "x: 1", "x: 2").decision).toBe("allow");
+  });
+
+  it("12,000 and 50,000 flow lines: an edit elsewhere is not held, and the denial's rewrite is judged, inside the CPU bound", () => {
+    for (const n of [12_000, 50_000]) {
+      const lines = Array.from({ length: n }, (_, i) => `  package-number-${i}: 1.0.${i},`).join("\n");
+      const before = `${HEAD}catalog: {\n${lines}\n  lodash: ^4.17.21 }\nsettings:\n  x: 1\n`;
+      const file = s.file(`f${n}/pnpm-workspace.yaml`, before);
+      const write = (content: string) => ({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: file, content } });
+      expect(timedWithin(s.home, write(before.replace("x: 1", "x: 2")), 1000).decision).toBe("allow");
+      const changed = timedWithin(s.home, write(before.replace("lodash: ^4.17.21", "lodash: 4.17.20")), 1000);
+      expect(changed.decision).toBe("deny");
+      expect(changed.text).toContain("could not be read");
+      // The rewrite the denial asks for (block lines) is read and judged, not held as not read.
+      const block = before.replace("catalog: {\n", "catalog:\n").replace(/,\n/g, "\n").replace(" }\nsettings", "\nsettings");
+      const rewritten = timedWithin(s.home, write(block), 1000);
+      expect(rewritten.decision).toBe("deny");
+      expect(rewritten.text).not.toContain("could not be read");
+      expect(rewritten.text).toContain("dependency_check");
+    }
   });
 
   it("after a flow mapping closes, the next section is read: an avoid there is held for its own reason", () => {

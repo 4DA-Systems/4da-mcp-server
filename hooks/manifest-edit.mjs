@@ -754,11 +754,15 @@ function yamlScalar(raw) {
   return v;
 }
 
-/** The brackets a YAML line opens less those it closes, outside quotes and before its comment (one pass). */
+/**
+ * A YAML line of a flow mapping, read once: the brackets it opens less those it closes (outside
+ * quotes) and its text before its comment.
+ */
 function flowBrackets(line) {
   let n = 0;
   let quote = "";
-  for (let i = 0; i < line.length; i++) {
+  let i = 0;
+  for (; i < line.length; i++) {
     const ch = line[i];
     if (quote) {
       if (ch === quote) quote = "";
@@ -768,16 +772,68 @@ function flowBrackets(line) {
     else if (ch === "{" || ch === "[") n++;
     else if (ch === "}" || ch === "]") n--;
   }
-  return n;
+  return { n, text: line.slice(0, i) };
+}
+
+/**
+ * The entries of a whole flow mapping's text, each without blanks: what sits between the commas of
+ * its outer brackets (a nested mapping stays inside its entry). Compared as a set, so an entry
+ * moved, a blank or a trailing comma changes nothing, and `{}` has none.
+ */
+function flowEntries(text) {
+  const entries = [];
+  let cur = "";
+  let depth = 0;
+  let quote = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+      else if (ch === "\\" && quote === '"') cur += text[i++];
+      cur += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) continue;
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "{" || ch === "[") {
+      if (++depth === 1) {
+        if (cur) entries.push(cur);
+        cur = "";
+        continue;
+      }
+    } else if (ch === "}" || ch === "]") {
+      if (--depth === 0) {
+        if (cur) entries.push(cur);
+        cur = "";
+        continue;
+      }
+    } else if (ch === "," && depth === 1) {
+      if (cur) entries.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) entries.push(cur);
+  return entries;
+}
+
+/** A YAML value without its anchor and tag (`&c { ... }`, `!!map { ... }`), its comment dropped. */
+function withoutProperties(raw) {
+  let v = raw === undefined ? "" : flowBrackets(raw).text.trim();
+  for (let k = 0; k < 2; k++) v = v.replace(/^(?:&\S+|!\S*)(?:\s+|$)/, "");
+  return v;
 }
 
 /**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
  * name and section (the same package in two catalogs is two entries). Only plain `key: value`
  * lines are read (a value `npm:name@version` as the package and version it names). A section or
- * named catalog written as a flow mapping (`catalog: { lodash: 4.17.20 }`, on one line or more) is
- * not read: each of its lines is recorded as unread (UNREAD_LINE), which holds the edit as not read
- * when that line is new or changed, and never when it is unchanged.
+ * named catalog written as a flow mapping (`catalog: { lodash: 4.17.20 }`, on one line or more, on
+ * the line after its key, after an anchor or a tag) is not read: each of its entries is recorded
+ * as unread (UNREAD_LINE), which holds the edit as not read when an entry is new or changed, and
+ * never when none is (an entry moved, a comment or blank changed, `{}`). One that never closes is
+ * not YAML pnpm can read, and records nothing.
  */
 function pnpmWorkspaceVersions(text, out) {
   let top = null;
@@ -786,11 +842,21 @@ function pnpmWorkspaceVersions(text, out) {
   // How many brackets of a flow mapping are open: its lines run until they close (js-yaml, which
   // pnpm reads this file with, takes continuation lines at any indent, column 0 included).
   let flow = 0;
-  const flowStart = (raw) => raw !== undefined && /^[{[]/.test(raw.trim());
-  const unread = (line) => {
-    // Compared without its comment and blanks: a comment or spacing changed is no version changed.
-    const at = line.search(/\s#/);
-    put(out, `${UNREAD_LINE}a pnpm-workspace.yaml ${top} written as a flow mapping ({ ... }), which the hook does not read: write it as block lines, one "name: version" each`, null, (at >= 0 ? line.slice(0, at) : line).replace(/\s+/g, ""));
+  let flowText = [];
+  let flowWhere = "";
+  const flowStart = (raw) => /^[{[]/.test(withoutProperties(raw));
+  const flowDone = () => {
+    const name = `${UNREAD_LINE}a pnpm-workspace.yaml ${flowWhere.split(".")[0]} written as a flow mapping ({ ... }), which the hook does not read: write it as block lines, one "name: version" each`;
+    for (const entry of flowEntries(flowText.join("\n"))) put(out, name, null, `${flowWhere}:${entry}`);
+    flowText = [];
+  };
+  /** A flow mapping that opens with `value` (a line's text after its key, or a whole line) under `where`. */
+  const openFlow = (value, where) => {
+    flowWhere = where;
+    const read = flowBrackets(withoutProperties(value));
+    flowText = [read.text];
+    flow = Math.max(read.n, 0);
+    if (flow === 0) flowDone();
   };
   // A byte order mark is not part of the first key (`\uFEFFoverrides:` read as indented hid the section).
   for (const raw of text.replace(/^\uFEFF/, "").split("\n")) {
@@ -807,8 +873,13 @@ function pnpmWorkspaceVersions(text, out) {
     const indent = line.length - line.trimStart().length;
     const m = /^\s*(?:'([^'\n]{1,214})'|"([^"\n]{1,214})"|([^\s:#'"][^:#\n]{0,213}?))\s*:(?:\s+(.*))?$/.exec(line);
     if (flow > 0) {
-      unread(line);
-      flow += flowBrackets(line);
+      const read = flowBrackets(line);
+      flowText.push(read.text);
+      flow += read.n;
+      if (flow <= 0) {
+        flow = 0;
+        flowDone();
+      }
       continue;
     }
     if (indent === 0) {
@@ -816,22 +887,22 @@ function pnpmWorkspaceVersions(text, out) {
       const key = m ? (m[1] ?? m[2] ?? m[3]) : "";
       top = m && yamlScalar(m[4]) === null && PNPM_VERSION_SECTIONS.has(key) ? key : null;
       catalog = null;
-      if (top !== null && flowStart(m[4])) {
-        unread(line);
-        flow = Math.max(flowBrackets(m[4]), 0);
-      }
+      if (top !== null && flowStart(m[4])) openFlow(m[4], top);
       continue;
     }
-    if (!m || top === null) continue;
+    if (top === null) continue;
+    // A flow mapping on the line after its key (`catalog:\n  { lodash: 4.17.20 }`).
+    if (/^[{[]/.test(trimmed)) {
+      openFlow(trimmed, top === "catalogs" && catalog !== null && indent > catalogIndent ? `catalogs.${catalog}` : top);
+      continue;
+    }
+    if (!m) continue;
     const key = m[1] ?? m[2] ?? m[3];
     const value = yamlScalar(m[4]);
     if (top === "catalogs" && value === null) {
       catalog = key;
       catalogIndent = indent;
-      if (flowStart(m[4])) {
-        unread(line);
-        flow = Math.max(flowBrackets(m[4]), 0);
-      }
+      if (flowStart(m[4])) openFlow(m[4], `catalogs.${catalog}`);
       continue;
     }
     if (value === null) continue;
@@ -1000,9 +1071,20 @@ function goDirectives(text, block = null) {
 function put(out, name, section, spec) {
   const key = section === null || section === undefined ? name : `${name}\0${section}`;
   const list = out.get(key);
-  if (!list) out.set(key, [spec]);
-  else if (!list.includes(spec)) list.push(spec);
+  if (!list) {
+    out.set(key, [spec]);
+    PUT_SEEN.set(out.get(key), new Set([spec]));
+    return;
+  }
+  // Looked up in a Set: `list.includes` per entry was quadratic on one key with many specs (12,000
+  // flow-mapping entries took over 2 s; blind check of the a1125 hook lane).
+  const seen = PUT_SEEN.get(list);
+  if (seen.has(spec)) return;
+  seen.add(spec);
+  list.push(spec);
 }
+/** For each list put() made, the specs in it. */
+const PUT_SEEN = new WeakMap();
 
 /** The TOML table a snippet starts in, from where it sits in the file on disk: its parts, [] above the first header, null when not known. */
 function snippetTable(disk, place) {
