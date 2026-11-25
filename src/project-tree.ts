@@ -1114,7 +1114,7 @@ export function discoveryFor(root: string): TreeDiscovery {
 }
 
 /** A lockfile problem as the notes read it (lockfile-types.ts LockfileProblem). */
-export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true; mergeConflict?: true };
+export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true; mergeConflict?: true; behindManifest?: true };
 
 /**
  * The kinds, kept apart: a file that could not be read (UNREADABLE), one read
@@ -1183,12 +1183,18 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
     );
   }
   const skippedEntries = partial.filter((p) => !p.partial);
-  const damaged = partial.filter((p) => p.partial);
+  // Whole as far as it goes and only lacking what its manifest declares: older than the manifest,
+  // never "not read to the end" (audit 2026-11-25; the error names the manifest and the names).
+  const behind = partial.filter((p) => p.partial && p.behindManifest);
+  const damaged = partial.filter((p) => p.partial && !p.behindManifest);
   if (skippedEntries.length > 0) {
     notes.push(`PARTIAL: ${skippedEntries.length} lockfile${skippedEntries.length === 1 ? " was" : "s were"} read with entries skipped: ${listed(skippedEntries)}.`);
   }
   if (damaged.length > 0) {
     notes.push(`PARTIAL: ${damaged.length} lockfile${damaged.length === 1 ? " was" : "s were"} NOT read to the end: ${listed(damaged)}.`);
+  }
+  if (behind.length > 0) {
+    notes.push(`PARTIAL: ${behind.length} lockfile${behind.length === 1 ? " is older than its manifest" : "s are older than their manifests"}: ${listed(behind)}.`);
   }
   if (refused.length > 0) {
     notes.push(`REFUSED: ${refused.length} requirements include${refused.length === 1 ? " was" : "s were"} not read: ${listed(refused)}.`);
@@ -1199,7 +1205,7 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
     );
   }
   if (uncrossed.length > 0) {
-    notes.push(`NOT CROSS-CHECKED: ${uncrossed.length} lockfile${uncrossed.length === 1 ? " was" : "s were"} not cross-checked against the package.json files: ${listed(uncrossed)}.`);
+    notes.push(`NOT CROSS-CHECKED: ${uncrossed.length} lockfile${uncrossed.length === 1 ? " was" : "s were"} not cross-checked against the manifests that declare its dependencies: ${listed(uncrossed)}.`);
   }
   return notes;
 }

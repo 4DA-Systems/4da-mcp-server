@@ -315,6 +315,8 @@ function incompleteProblem(file: string, damage: LockDamage | null, undeclared: 
     file,
     partial: true,
     skipped: missing,
+    // Nothing damaged inside: it only lacks what package.json declares (lockfile-types.ts behindManifest).
+    ...(damage ? {} : { behindManifest: true as const }),
     error: `package.json declares ${declaredText(undeclared)}, but this lockfile has no entry for ${them}: it is truncated, or older than package.json${damage ? `; also, ${damage.reason}` : ""}. What it would install for ${them}, and anything past a cut, was not checked: reinstall to regenerate the lockfile`,
   };
 }

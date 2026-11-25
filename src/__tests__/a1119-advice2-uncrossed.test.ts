@@ -87,7 +87,7 @@ describe("a lockfile not cross-checked against its manifests says so", () => {
     expect(problems[0].error).toMatch(/packages\/b\/package\.json could not be read/);
     expect(problems[0].error).not.toMatch(NOT_DAMAGE);
     const notes = lockfileProblemNotes(problems, () => "yarn.lock");
-    expect(notes).toEqual([expect.stringMatching(/^NOT CROSS-CHECKED: 1 lockfile was not cross-checked against the package\.json files: yarn\.lock \(/)]);
+    expect(notes).toEqual([expect.stringMatching(/^NOT CROSS-CHECKED: 1 lockfile was not cross-checked against the manifests that declare its dependencies: yarn\.lock \(/)]);
     expect(notes[0]).not.toMatch(/UNREADABLE|PARTIAL/);
   });
 
@@ -140,7 +140,7 @@ describe("a lockfile not cross-checked against its manifests says so", () => {
     stubOsv([]);
     const dir = project(YARN_UNREAD);
     const scan = await scanProject(dir);
-    expect(scan.coverage.note).toMatch(/NOT CROSS-CHECKED: 1 lockfile was not cross-checked against the package\.json files: yarn\.lock \(/);
+    expect(scan.coverage.note).toMatch(/NOT CROSS-CHECKED: 1 lockfile was not cross-checked against the manifests that declare its dependencies: yarn\.lock \(/);
     expect(scan.coverage.not_cross_checked_lockfiles).toEqual([{ path: "yarn.lock", reason: expect.stringMatching(/ws-b \(dependencies\)/) }]);
     expect(scan.coverage.partial_lockfiles).toBeUndefined();
     expect(scan.coverage.unreadable_lockfiles).toBeUndefined();

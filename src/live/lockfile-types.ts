@@ -156,6 +156,12 @@ export interface LockfileProblem {
    * could not be read whole): not damage, and nothing in the file was left unread.
    */
   notCrossChecked?: true;
+  /**
+   * Set with `partial` for a file that is whole as far as it goes and only lacks what its manifest
+   * declares (written before the manifest changed, or cut cleanly between two entries): worded as
+   * older than its manifest, not as read up to damage.
+   */
+  behindManifest?: true;
   /** The ecosystem whose resolution reported it (stamped by resolveVersionSource), for ecosystem_filter. */
   ecosystem?: string;
 }
@@ -170,7 +176,7 @@ export function partialRead(file: string, reason: string, missing = 0, behindMan
   const consequence = behindManifest
     ? "What it holds was checked; the dependencies it does not hold were not: regenerate the lockfile"
     : "It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile";
-  return { file, partial: true, ...(missing > 0 ? { skipped: missing } : {}), error: `${reason}. ${consequence}` };
+  return { file, partial: true, ...(missing > 0 ? { skipped: missing } : {}), ...(behindManifest ? { behindManifest: true as const } : {}), error: `${reason}. ${consequence}` };
 }
 
 /** `could not be read (<the system's reason>)`: the wording for a file that exists and cannot be opened. */
