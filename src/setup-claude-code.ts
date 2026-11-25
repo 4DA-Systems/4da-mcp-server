@@ -244,9 +244,19 @@ export function claudeMcpAdd(version: string, scope: ClaudeScope = "user"): stri
   return `claude mcp add --scope ${scope} 4da -- npx ${NPX_OPTIONS.join(" ")} ${PACKAGE}@${version}`;
 }
 
-/** The plugin's update, for an install in `scope`. */
-function pluginUpdateCommands(install: ClaudePluginInstall): string[] {
-  const scope = install.scope && install.scope !== "user" ? ` --scope ${install.scope}` : "";
+/** A plugin or marketplace name safe to print inside a command a person pastes into a shell. */
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const SCOPES = new Set(["user", "project", "local", "managed"]);
+
+/**
+ * The plugin's update, for an install in `scope`, or null when a name in it is not one setup prints
+ * as a command: a marketplace's name comes from that marketplace's own manifest, third-party text.
+ */
+function pluginUpdateCommands(install: ClaudePluginInstall): string[] | null {
+  const at = install.id.lastIndexOf("@");
+  const names = at < 0 ? [install.id] : [install.id.slice(0, at), install.id.slice(at + 1)];
+  if (!names.every((n) => SAFE_NAME.test(n)) || !SCOPES.has(install.scope)) return null;
+  const scope = install.scope !== "user" ? ` --scope ${install.scope}` : "";
   return [
     ...(install.marketplace ? [`claude plugin marketplace update ${install.marketplace}`] : []),
     `claude plugin update ${install.id}${scope}`,
@@ -303,8 +313,13 @@ export function claudeCodeReport(state: ClaudeCodeState, version: string): strin
         continue;
       }
     }
-    out.push("  The plugin moves its pin when the plugin is updated (setup does not edit it). Run, then restart Claude Code:");
-    for (const command of pluginUpdateCommands(install)) out.push(`    ${command}`);
+    const commands = pluginUpdateCommands(install);
+    if (commands === null) {
+      out.push("  The plugin moves its pin when the plugin is updated (setup does not edit it): update it from Claude Code's /plugin menu, then restart Claude Code.");
+    } else {
+      out.push("  The plugin moves its pin when the plugin is updated (setup does not edit it). Run, then restart Claude Code:");
+      for (const command of commands) out.push(`    ${command}`);
+    }
     out.push(`  Do not add a second 4da server with claude mcp add: the plugin's is the one to update.`);
   }
 

