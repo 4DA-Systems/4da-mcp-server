@@ -880,7 +880,8 @@ function overrideTarget(key) {
 function npmWholeDependencies(text) {
   let doc;
   try {
-    doc = JSON.parse(text);
+    // A byte order mark, which npm and Bun skip, is no reason to read the file as anything but JSON.
+    doc = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch {
     return null;
   }
@@ -907,6 +908,23 @@ function npmWholeDependencies(text) {
   if (isObject(doc.overrides)) overrides(doc.overrides, "overrides", null, 0);
   if (isObject(doc.resolutions)) overrides(doc.resolutions, "resolutions", null, 0);
   if (isObject(doc.pnpm) && isObject(doc.pnpm.overrides)) overrides(doc.pnpm.overrides, "pnpm.overrides", null, 0);
+  // Bun's catalogs: `workspaces.catalog` and `workspaces.catalogs.<name>`, and the same two at the
+  // top level, which Bun also reads (audit 2026-11-25, D-M2: never read, while the server reads them).
+  const catalog = (obj, section) => {
+    for (const [name, spec] of Object.entries(obj)) {
+      const d = typeof spec === "string" ? npmDeclared(name, spec) : null;
+      if (d) out.push({ name: d.name, section, spec: d.spec });
+    }
+  };
+  for (const [holder, prefix] of [
+    [doc.workspaces, "workspaces."],
+    [doc, ""],
+  ]) {
+    if (!isObject(holder)) continue;
+    if (isObject(holder.catalog)) catalog(holder.catalog, `${prefix}catalog`);
+    if (!isObject(holder.catalogs)) continue;
+    for (const [named, entries] of Object.entries(holder.catalogs)) if (isObject(entries)) catalog(entries, `${prefix}catalogs.${named}`);
+  }
   return out;
 }
 

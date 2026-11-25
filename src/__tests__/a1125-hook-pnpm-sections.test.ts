@@ -123,8 +123,8 @@ describe("line endings, a byte order mark and size", () => {
     s.ledger([AVOID]);
     for (const [rel, text] of [
       ["a/pnpm-workspace.yaml", `catalog: # shared\n  lodash: 4.17.20\n`.replace(/\n/g, "\r\n")],
-      ["b/pnpm-workspace.yaml", `﻿catalog: # shared\n  lodash: 4.17.20\n`],
-      ["c/pnpm-workspace.yaml", `﻿catalog: { lodash: 4.17.20 }\r\n`],
+      ["b/pnpm-workspace.yaml", `\uFEFFcatalog: # shared\n  lodash: 4.17.20\n`],
+      ["c/pnpm-workspace.yaml", `\uFEFFcatalog: { lodash: 4.17.20 }\r\n`],
     ] as const) {
       expect(s.write(s.file(rel, ""), text).decision, rel).toBe("deny");
       const file = s.file(`same-${rel}`, text);

@@ -121,7 +121,7 @@ describe("line endings, a byte order mark and size", () => {
 
   it("a byte order mark before `overrides:` on the first line: held; re-saved unchanged not held", () => {
     s.ledger([AVOID]);
-    const bom = "﻿overrides:\n  'lodash@<4.17.21': 4.17.20\n";
+    const bom = "\uFEFFoverrides:\n  'lodash@<4.17.21': 4.17.20\n";
     expect(s.write(s.file("a/pnpm-workspace.yaml", ""), bom).decision).toBe("deny");
     const file = s.file("b/pnpm-workspace.yaml", bom);
     expect(s.write(file, bom).decision).toBe("allow");
