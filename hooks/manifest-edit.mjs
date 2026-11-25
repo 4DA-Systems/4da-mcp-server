@@ -742,7 +742,10 @@ function yamlScalar(raw) {
     const end = v.indexOf(q, 1);
     return end > 1 ? v.slice(1, end) : null;
   }
-  // The comment is found by a plain search (one blank, then `#`) and dropped before the bound.
+  // The comment is found by a plain search (one blank, then `#`) and dropped before the bound. A
+  // value that starts with `#` is all comment (`catalog: # shared versions` has no value; it hid
+  // the section: audit 2026-11-25, D-M1).
+  if (v.startsWith("#")) return null;
   const comment = v.search(/\s#/);
   if (comment >= 0) v = v.slice(0, comment);
   v = v.trim();
@@ -752,15 +755,111 @@ function yamlScalar(raw) {
 }
 
 /**
+ * A YAML line of a flow mapping, read once: the brackets it opens less those it closes (outside
+ * quotes) and its text before its comment.
+ */
+function flowBrackets(line) {
+  let n = 0;
+  let quote = "";
+  let i = 0;
+  for (; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+      else if (ch === "\\" && quote === '"') i++;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
+    else if (ch === "{" || ch === "[") n++;
+    else if (ch === "}" || ch === "]") n--;
+  }
+  return { n, text: line.slice(0, i) };
+}
+
+/**
+ * The entries of a whole flow mapping's text, each without blanks: what sits between the commas of
+ * its outer brackets (a nested mapping stays inside its entry). Compared as a set, so an entry
+ * moved, a blank or a trailing comma changes nothing, and `{}` has none.
+ */
+function flowEntries(text) {
+  const entries = [];
+  let cur = "";
+  let depth = 0;
+  let quote = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+      else if (ch === "\\" && quote === '"') cur += text[i++];
+      cur += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) continue;
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "{" || ch === "[") {
+      if (++depth === 1) {
+        if (cur) entries.push(cur);
+        cur = "";
+        continue;
+      }
+    } else if (ch === "}" || ch === "]") {
+      if (--depth === 0) {
+        if (cur) entries.push(cur);
+        cur = "";
+        continue;
+      }
+    } else if (ch === "," && depth === 1) {
+      if (cur) entries.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) entries.push(cur);
+  return entries;
+}
+
+/** A YAML value without its anchor and tag (`&c { ... }`, `!!map { ... }`), its comment dropped. */
+function withoutProperties(raw) {
+  let v = raw === undefined ? "" : flowBrackets(raw).text.trim();
+  for (let k = 0; k < 2; k++) v = v.replace(/^(?:&\S+|!\S*)(?:\s+|$)/, "");
+  return v;
+}
+
+/**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
  * name and section (the same package in two catalogs is two entries). Only plain `key: value`
- * lines are read; flow mappings and anchors are not.
+ * lines are read (a value `npm:name@version` as the package and version it names). A section or
+ * named catalog written as a flow mapping (`catalog: { lodash: 4.17.20 }`, on one line or more, on
+ * the line after its key, after an anchor or a tag) is not read: each of its entries is recorded
+ * as unread (UNREAD_LINE), which holds the edit as not read when an entry is new or changed, and
+ * never when none is (an entry moved, a comment or blank changed, `{}`). One that never closes is
+ * not YAML pnpm can read, and records nothing.
  */
 function pnpmWorkspaceVersions(text, out) {
   let top = null;
   let catalog = null;
   let catalogIndent = -1;
-  for (const raw of text.split("\n")) {
+  // How many brackets of a flow mapping are open: its lines run until they close (js-yaml, which
+  // pnpm reads this file with, takes continuation lines at any indent, column 0 included).
+  let flow = 0;
+  let flowText = [];
+  let flowWhere = "";
+  const flowStart = (raw) => /^[{[]/.test(withoutProperties(raw));
+  const flowDone = () => {
+    const name = `${UNREAD_LINE}a pnpm-workspace.yaml ${flowWhere.split(".")[0]} written as a flow mapping ({ ... }), which the hook does not read: write it as block lines, one "name: version" each`;
+    for (const entry of flowEntries(flowText.join("\n"))) put(out, name, null, `${flowWhere}:${entry}`);
+    flowText = [];
+  };
+  /** A flow mapping that opens with `value` (a line's text after its key, or a whole line) under `where`. */
+  const openFlow = (value, where) => {
+    flowWhere = where;
+    const read = flowBrackets(withoutProperties(value));
+    flowText = [read.text];
+    flow = Math.max(read.n, 0);
+    if (flow === 0) flowDone();
+  };
+  // A byte order mark is not part of the first key (`\uFEFFoverrides:` read as indented hid the section).
+  for (const raw of text.replace(/^\uFEFF/, "").split("\n")) {
     tick();
     const line = raw.replace(/\r$/, "");
     const trimmed = line.trim();
@@ -773,24 +872,55 @@ function pnpmWorkspaceVersions(text, out) {
     }
     const indent = line.length - line.trimStart().length;
     const m = /^\s*(?:'([^'\n]{1,214})'|"([^"\n]{1,214})"|([^\s:#'"][^:#\n]{0,213}?))\s*:(?:\s+(.*))?$/.exec(line);
-    if (indent === 0) {
-      top = m && yamlScalar(m[4]) === null && PNPM_VERSION_SECTIONS.has(m[3] ?? "") ? m[3] : null;
-      catalog = null;
+    if (flow > 0) {
+      const read = flowBrackets(line);
+      flowText.push(read.text);
+      flow += read.n;
+      if (flow <= 0) {
+        flow = 0;
+        flowDone();
+      }
       continue;
     }
-    if (!m || top === null) continue;
+    if (indent === 0) {
+      // A quoted key (`"catalog":`) is the same key (D-M1).
+      const key = m ? (m[1] ?? m[2] ?? m[3]) : "";
+      top = m && yamlScalar(m[4]) === null && PNPM_VERSION_SECTIONS.has(key) ? key : null;
+      catalog = null;
+      if (top !== null && flowStart(m[4])) openFlow(m[4], top);
+      continue;
+    }
+    if (top === null) continue;
+    // A flow mapping on the line after its key (`catalog:\n  { lodash: 4.17.20 }`).
+    if (/^[{[]/.test(trimmed)) {
+      openFlow(trimmed, top === "catalogs" && catalog !== null && indent > catalogIndent ? `catalogs.${catalog}` : top);
+      continue;
+    }
+    if (!m) continue;
     const key = m[1] ?? m[2] ?? m[3];
     const value = yamlScalar(m[4]);
     if (top === "catalogs" && value === null) {
       catalog = key;
       catalogIndent = indent;
+      if (flowStart(m[4])) openFlow(m[4], `catalogs.${catalog}`);
       continue;
     }
-    if (value === null || !/^[~^<>=*\dvxX]/.test(value)) continue;
-    // An override keyed by a selector ("foo@<2", "bar>qs") is not one package's version.
-    if (top === "overrides" && /.@|>/.test(key)) continue;
+    if (value === null) continue;
+    // An override keyed by a selector (`lodash@<4.17.21`, what `pnpm audit --fix` writes) or a
+    // parent path (`express>lodash`) sets the package the key ends in, as package.json's
+    // pnpm.overrides is read (audit 2026-11-25, D-B1: these keys were skipped and went ahead).
+    let name = top === "overrides" ? overrideTarget(key) : key;
+    let spec = value;
+    if (value.startsWith("npm:")) {
+      // An alias (`lodash: npm:lodash@4.17.20`) installs the package and version it names (D-M1).
+      const alias = npmDeclared(name ?? key, value);
+      if (!alias) continue;
+      name = alias.name;
+      spec = alias.spec;
+    } else if (!/^[~^<>=*\dvxX]/.test(value)) continue;
+    if (name === null) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
-    put(out, key, top === "catalogs" ? `catalogs.${catalog}` : top, value);
+    put(out, name, top === "catalogs" ? `catalogs.${catalog}` : top, spec);
   }
 }
 
@@ -798,9 +928,14 @@ function pnpmWorkspaceVersions(text, out) {
  * The package an npm override, pnpm override or Yarn resolution key sets: pnpm's `parent>child`
  * and Yarn's `**\/child`, `parent/child`, `parent/@scope/child` set `child`, and a version
  * selector after the name (`semver@<7`) is not part of it. Null for a name with a glob in it.
+ * The parent and child are split where pnpm splits them (@pnpm/parse-overrides): at a `>` that
+ * follows neither a blank, `|` nor `@`, so the `>` of a range (`lodash@>=4.0.0 <4.17.21`) stays in
+ * the selector.
  */
 function overrideTarget(key) {
-  const parts = key.split(">").at(-1).trim().split("/");
+  let start = 0;
+  for (let i = 1; i < key.length; i++) if (key[i] === ">" && !" \t|@".includes(key[i - 1])) start = i + 1;
+  const parts = key.slice(start).trim().split("/");
   let name = parts.length >= 2 && parts.at(-2).startsWith("@") ? parts.slice(-2).join("/") : parts.at(-1);
   const at = name.indexOf("@", 1);
   if (at > 0) name = name.slice(0, at);
@@ -816,7 +951,8 @@ function overrideTarget(key) {
 function npmWholeDependencies(text) {
   let doc;
   try {
-    doc = JSON.parse(text);
+    // A byte order mark, which npm and Bun skip, is no reason to read the file as anything but JSON.
+    doc = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch {
     return null;
   }
@@ -843,6 +979,25 @@ function npmWholeDependencies(text) {
   if (isObject(doc.overrides)) overrides(doc.overrides, "overrides", null, 0);
   if (isObject(doc.resolutions)) overrides(doc.resolutions, "resolutions", null, 0);
   if (isObject(doc.pnpm) && isObject(doc.pnpm.overrides)) overrides(doc.pnpm.overrides, "pnpm.overrides", null, 0);
+  // Bun's catalogs: `workspaces.catalog` and `workspaces.catalogs.<name>`, and the same two at the
+  // top level, which Bun also reads (audit 2026-11-25, D-M2: never read, while the server reads them).
+  const catalog = (obj, section) => {
+    for (const [name, spec] of Object.entries(obj)) {
+      const d = typeof spec === "string" ? npmDeclared(name, spec) : null;
+      if (d) out.push({ name: d.name, section, spec: d.spec });
+    }
+  };
+  // The top-level pair only in a workspace root (a `workspaces` field): elsewhere `catalog` is any
+  // tool's field (`{"catalog": {"title": "2 items"}}` was held; blind check of the a1125 hook lane).
+  for (const [holder, prefix] of [
+    [doc.workspaces, "workspaces."],
+    [doc.workspaces === undefined ? null : doc, ""],
+  ]) {
+    if (!isObject(holder)) continue;
+    if (isObject(holder.catalog)) catalog(holder.catalog, `${prefix}catalog`);
+    if (!isObject(holder.catalogs)) continue;
+    for (const [named, entries] of Object.entries(holder.catalogs)) if (isObject(entries)) catalog(entries, `${prefix}catalogs.${named}`);
+  }
   return out;
 }
 
@@ -916,9 +1071,20 @@ function goDirectives(text, block = null) {
 function put(out, name, section, spec) {
   const key = section === null || section === undefined ? name : `${name}\0${section}`;
   const list = out.get(key);
-  if (!list) out.set(key, [spec]);
-  else if (!list.includes(spec)) list.push(spec);
+  if (!list) {
+    out.set(key, [spec]);
+    PUT_SEEN.set(out.get(key), new Set([spec]));
+    return;
+  }
+  // Looked up in a Set: `list.includes` per entry was quadratic on one key with many specs (12,000
+  // flow-mapping entries took over 2 s; blind check of the a1125 hook lane).
+  const seen = PUT_SEEN.get(list);
+  if (seen.has(spec)) return;
+  seen.add(spec);
+  list.push(spec);
 }
+/** For each list put() made, the specs in it. */
+const PUT_SEEN = new WeakMap();
 
 /** The TOML table a snippet starts in, from where it sits in the file on disk: its parts, [] above the first header, null when not known. */
 function snippetTable(disk, place) {
@@ -985,6 +1151,14 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
   return out;
 }
 
+/**
+ * The start of a declaredVersions name that is no package: a line a reader could not read, the
+ * reason after it and the line's text as its spec. diffVersions holds the call as not read when
+ * such a line is new or changed, and passes over it when it is unchanged: a line the hook cannot
+ * read must not hold every later edit of a file that already has it.
+ */
+const UNREAD_LINE = "\u0001";
+
 /** The package name of a declaredVersions key (which may carry its section after a NUL). */
 const keyName = (key) => key.split("\0")[0];
 
@@ -1039,6 +1213,11 @@ function diffVersions(old, now, same = (spec) => spec) {
     const name = keyName(key);
     const prev = old.get(key) ?? [];
     const anywhere = before.get(name) ?? new Set();
+    // A line the reader could not read, new or changed in this edit: the edit is held as not read.
+    if (name.startsWith(UNREAD_LINE)) {
+      if (specs.some((spec) => !anywhere.has(spec))) refuse(name.slice(UNREAD_LINE.length));
+      continue;
+    }
     for (const spec of specs) {
       if (anywhere.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
       seen.add(`${name}\0${same(spec)}`);
@@ -1748,7 +1927,7 @@ function poetrySpec(word) {
 
 const JS_VALUES = {
   npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C", "--location", "--audit-level", "--fetch-retries", "--fetch-timeout", "--auth-type", "--workspace-concurrency"]),
-  pnpm: new Set(["--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
+  pnpm: new Set(["--prefix", "--global-dir", "--cache-dir", "--state-dir", "--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
   // The last five are `yarn workspaces foreach`'s (berry).
   yarn: new Set(["--cwd", "--network-timeout", "--mutex", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder", "--use-yarnrc", "-j", "--jobs", "--include", "--exclude", "--from"]),
   bun: new Set(["--cwd", "--config", "-c", "--backend", "--cache-dir", "--network-concurrency", "--concurrent-scripts"]),
@@ -1837,7 +2016,10 @@ const PWSH_VALUES = /^-(?:executionpolicy|ep|ex|windowstyle|w|workingdirectory|w
 const CARGO_VALUES = new Set(["-C", "-F", "--features", "--rename", "-p", "--package", "--manifest-path", "--target", "--config", "-Z", "--color", "--lockfile-path"]);
 const CARGO_REFUSE = new Set(["--git", "--path", "--registry", "--branch", "--tag", "--rev", "--index"]);
 const PY_INDEX = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links"]);
-const PIP_VALUES = new Set(["-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
+/** pip options that take a value, its general ones (`pip --help`: `--cert`, `--client-cert`, ...) first: they may stand before `install`. */
+const PIP_VALUES = new Set(["--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
+/** uv's global options that take a value, which may stand before its subcommand (uv help). */
+const UV_GLOBAL_VALUES = new Set(["--cache-dir", "--color", "--allow-insecure-host", "--directory", "--project", "--config-file", "--python-preference"]);
 const UV_ADD_VALUES = new Set(["--group", "--optional", "--extra", "--package", "--project", "--directory", "--python", "-p", "--marker", "-m", "--bounds", "--script", "--config-file", "--cache-dir", "-r", "--requirements", "-c", "--constraints", "--tag", "--branch", "--rev", "--refresh-package", "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package", "--exclude-newer", "--link-mode", "--keyring-provider", "--resolution", "--prerelease", "--fork-strategy", "--index-strategy", "--python-preference", "--color"]);
 const POETRY_VALUES = new Set(["--group", "-G", "--extras", "-E", "--python", "--platform", "--markers", "--directory", "-C", "--project", "-P", "--optional"]);
 const GO_VALUES = new Set(["-C", "-tags", "-modfile", "-ldflags", "-gcflags", "-asmflags", "-mod", "-o", "-p", "-pkgdir", "-toolexec"]);
@@ -1862,12 +2044,15 @@ const NPM_SHORT_VALUE = new Set(["C", "L", "c", "m", "w"]);
  */
 function npmOption(a, next) {
   if (a.includes("=")) return "switch";
-  if (/^-[^-]/.test(a)) return a.length === 2 && NPM_SHORT_VALUE.has(a[1]) ? "value" : "switch";
-  if (a.slice(2).startsWith("no-") && NPM_OPTIONS.includes(a.slice(5))) return "switch";
+  // A switch followed by `true` or `false` takes it as its value (nopt: `--audit false install`
+  // runs install; audit 2026-11-25, D minor). npm has no command named either word.
+  const bool = next === "true" || next === "false" ? "value" : "switch";
+  if (/^-[^-]/.test(a)) return a.length === 2 && NPM_SHORT_VALUE.has(a[1]) ? "value" : bool;
+  if (a.slice(2).startsWith("no-") && NPM_OPTIONS.includes(a.slice(5))) return bool;
   const name = npmOptionName(a.slice(2));
   if (name === null) return "unknown";
-  if (name === "color") return next === "always" ? "value" : "switch";
-  return NPM_VALUE_OPTIONS.has(name) ? "value" : "switch";
+  if (name === "color") return next === "always" ? "value" : bool;
+  return NPM_VALUE_OPTIONS.has(name) ? "value" : bool;
 }
 
 /** The npm option a long name (without `--`) names: itself, or the one option it is a unique prefix of; null otherwise. */
@@ -2258,7 +2443,9 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return [];
   }
   if (program === "uv") {
-    if (args[0] === "pip") return args[1] === "compile" ? upgradePackages(args.slice(2)) : pipInstalls(args.slice(1));
+    // uv's global options may stand before `pip` (`uv -q pip install`, `uv --directory sub pip install`).
+    const at = subcommandAt(args, UV_GLOBAL_VALUES);
+    if (at >= 0 && args[at] === "pip") return args[at + 1] === "compile" ? upgradePackages(args.slice(at + 2)) : pipInstalls(args.slice(at + 1));
     const all = operands(args, { values: UV_ADD_VALUES, refuse: PY_INDEX });
     if (!all) return [];
     // `uv lock` / `uv sync` / `uv add` move a package to the version `--upgrade-package x==v` names.
@@ -2622,6 +2809,16 @@ function denialFor(introduced, ledger, dir, what) {
     lines.push(
       `- ${named}: ${fresh.length === 0 ? "no proceed or review verdict" : "no dependency_check verdict"} in the last 24 hours. If ${one ? "it is the package" : "they are the packages"} you mean to add, call the 4da MCP tool dependency_check ${JSON.stringify({ items })}${batches}, and this ${what} will pass once that call answers proceed.`,
     );
+    // dependency_check reads Go modules and answers unknown for a package path, so a command that
+    // names one could never pass (audit 2026-11-25, D-M3). The hook cannot know where a module ends,
+    // and a verdict for one module never releases a longer path (a nested module starts with it):
+    // the way through is to name the module itself, which the exact-path rule then releases.
+    const goPaths = what === "command" ? unchecked.filter(({ c }) => c.ecosystem === "Go") : [];
+    if (goPaths.length > 0) {
+      lines.push(
+        `- ${goPaths.slice(0, 8).map(({ c }) => quotedChange(c)).join(", ")}${goPaths.length > 8 ? `, and ${goPaths.length - 8} more` : ""}: a Go path may be a package inside a module, and dependency_check reads modules: it answers unknown for a package path (golang.org/x/net/http2 is a package of the module golang.org/x/net). If so, check the module that contains the package and name that module in the command instead (go get golang.org/x/net@v0.23.0, not go get golang.org/x/net/http2@v0.23.0): this ${what} passes once dependency_check answers proceed for each path exactly as the ${what} names it. A verdict for a module never releases a longer path.`,
+      );
+    }
     lines.push(
       "dependency_check sends each name to its public registry and to OSV.dev unless this project's private rules cover it (an .npmrc scope mapped to a private registry, GOPRIVATE, a private Cargo or Python index, FOURDA_PRIVATE_PACKAGES); a name they cover is never sent, and any version of it then goes ahead. " +
         "A private package no such rule covers: add the rule first rather than make the call. A name not published on its public registry comes back unknown and stays blocked: correct the name or remove it rather than retrying.",
