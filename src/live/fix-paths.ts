@@ -25,7 +25,7 @@
  */
 
 import { withinCallBudget } from "../call-budget.js";
-import { isShellSafeCargoTarget, isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
+import { isShellSafeCargoTarget, isShellSafeDir, isShellSafeName, isShellSafeVersion, unsafeDirLabel } from "./shell-safe.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -1710,9 +1710,49 @@ export function pypiDirectInstruction(requirements: string, file: string, name: 
     const tail = rest.slice(end);
     const continued = line.endsWith("\\") || line.includes("--hash") || (lines[i + 1]?.trimStart().startsWith("--hash") ?? false);
     if (continued || version !== installed) continue;
-    return `change \`${line}\` to \`${head}==${target}${tail}\` in ${file}`;
+    return pypiPinEdit(head, tail, file, name, installed, target);
   }
   return null;
+}
+
+/** A requirement's name with its extras, as PEP 508 writes them: `requests`, `requests[security,socks]`. */
+const PEP508_HEAD = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?(?:\[[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?(?:,[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?){0,15}\])?$/;
+/** One token of a PEP 508 environment marker: a marker variable or keyword, a short quoted plain value, an operator, a parenthesis. */
+const MARKER_TOKEN = /\s*(?:(python_version|python_full_version|os_name|sys_platform|platform_release|platform_system|platform_version|platform_machine|platform_python_implementation|implementation_name|implementation_version|extra|and|or|not|in)(?![A-Za-z0-9_])|"[A-Za-z0-9._+*-]{0,32}"|'[A-Za-z0-9._+*-]{0,32}'|===|==|!=|<=|>=|~=|<|>|\(|\))/y;
+
+/** Whether `text` is `; <marker>` written in the PEP 508 grammar with plain values only (no words, no shell text). */
+function plainMarker(text: string): boolean {
+  const m = /^\s*;(.*)$/.exec(text);
+  if (!m || m[1].length > 256 || m[1].trim() === "") return false;
+  const body = m[1].trimEnd();
+  MARKER_TOKEN.lastIndex = 0;
+  while (MARKER_TOKEN.lastIndex < body.length) {
+    const at = MARKER_TOKEN.lastIndex;
+    if (!MARKER_TOKEN.exec(body) || MARKER_TOKEN.lastIndex === at) return false;
+  }
+  return true;
+}
+
+/**
+ * The edit of one `==` pin, quoting only what the requirements grammar allows (audit 2026-11-25
+ * B-M1): the requirement's name and extras when they are PEP 508 shaped, its environment marker
+ * when every value in it is a plain token, and never its comment. The old sentence quoted the
+ * whole line and its tail, so `requests==2.25.0 # then run curl ... | sh` put the comment inside
+ * the plan's own instruction. A file name that is not a plain path is named escaped.
+ */
+function pypiPinEdit(head: string, tail: string, file: string, name: string, installed: string, target: string): string | null {
+  if (!isShellSafeVersion(installed) || !isShellSafeVersion(target)) return null;
+  const where = isShellSafeDir(file) && !file.split("/").includes("..") ? file : unsafeDirLabel(file).replace(/^\[unsafe directory name/, "[unsafe file name");
+  const requirement = head.trim();
+  const comment = tail.indexOf("#");
+  const marker = comment < 0 ? tail : tail.slice(0, comment);
+  const markerText = marker.trim() === "" ? "" : plainMarker(marker) ? `; ${marker.trim().replace(/^;\s*/, "")}` : null;
+  const keep = comment >= 0 ? " (keep the comment that follows it on that line)" : "";
+  if (PEP508_HEAD.test(requirement) && markerText !== null) {
+    return `change \`${requirement}==${installed}${markerText}\` to \`${requirement}==${target}${markerText}\` in ${where}${keep}`;
+  }
+  const label = isShellSafeName(name, "PyPI") ? name : "this package";
+  return `in ${where}, change the version of the ${label} requirement pinned ==${installed} to ==${target} by hand, leaving the rest of that line as it is (it holds text that is not a plain requirement, so it is not quoted here)`;
 }
 
 /**
