@@ -345,23 +345,34 @@ export function detectAllNewPackages(task: string, deps: readonly ResolvedDepend
   return readTaskItems(normalizeVersionSyntax(screen.text), deps).packages.filter((p) => screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]) === null);
 }
 
-/** Whether a name is one the project already depends on (its own dependency set: nothing is asked to know it). */
-export function installedNames(deps: readonly ResolvedDependency[]): (name: string) => boolean {
-  const names = new Set<string>();
-  for (const d of deps) {
-    names.add(d.name.toLowerCase());
-    if (d.ecosystem === "PyPI") names.add(normalizePypiName(d.name));
-  }
-  return (name) => names.has(name.toLowerCase()) || names.has(normalizePypiName(name)) || installedGoModule(name, deps) !== null;
+/** A name as an ecosystem compares names: PEP 503 for PyPI, `-`/`_` alike for crates.io, case aside for npm; a Go module path as written. */
+function ecosystemKey(name: string, ecosystem: CheckEcosystem): string {
+  if (ecosystem === "PyPI") return normalizePypiName(name);
+  if (ecosystem === "crates.io") return name.toLowerCase().replace(/_/g, "-");
+  if (ecosystem === "npm") return name.toLowerCase();
+  return name;
 }
 
 /**
- * The ecosystems among `ecosystems` where the briefing itself may look `name` up: the project depends
- * on it, or it is exactly a name of that ecosystem's bundled lists (knownPublicName).
+ * Whether the project already depends on `name` in `ecosystem` (its own dependency set: nothing is asked
+ * to know it). Only inside that ecosystem, with its own name rule, and a Go module only by its full path:
+ * a private PyPI `zqx-pyonly` made "npm install zqx_pyonly" look npm up, and a go.mod module
+ * `git.x/team/zqx-pay-engine` made "npm install zqx-pay-engine" do the same (third blind check, item 3).
  */
-export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], installed: (name: string) => boolean): CheckEcosystem[] {
-  if (installed(name)) return [...ecosystems];
-  return ecosystems.filter((e) => knownPublicName(name, e));
+export function installedNames(deps: readonly ResolvedDependency[]): (name: string, ecosystem: CheckEcosystem) => boolean {
+  const keys = new Set<string>();
+  for (const d of deps) {
+    if (d.ecosystem === "npm" || d.ecosystem === "PyPI" || d.ecosystem === "crates.io" || d.ecosystem === "Go") keys.add(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`);
+  }
+  return (name, ecosystem) => keys.has(`${ecosystem}\0${ecosystemKey(name, ecosystem)}`);
+}
+
+/**
+ * The ecosystems among `ecosystems` where the briefing itself may look `name` up: the project depends on
+ * it there, or it is exactly a name of that ecosystem's bundled lists (knownPublicName).
+ */
+export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], installed: (name: string, ecosystem: CheckEcosystem) => boolean): CheckEcosystem[] {
+  return ecosystems.filter((e) => installed(name, e) || knownPublicName(name, e));
 }
 
 /** A word the briefing did not look up, as the answer names it. */
