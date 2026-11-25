@@ -1746,7 +1746,9 @@ function pypiPinEdit(head: string, tail: string, file: string, name: string, ins
   const requirement = head.trim();
   const comment = tail.indexOf("#");
   const marker = comment < 0 ? tail : tail.slice(0, comment);
-  const markerText = marker.trim() === "" ? "" : plainMarker(marker) ? `; ${marker.trim().replace(/^;\s*/, "")}` : null;
+  // The marker is quoted as written, blanks before the `;` included: the app and this server share
+  // the rule vector for this sentence (fc-050), and a quoted line the user can find is the point.
+  const markerText = marker.trim() === "" ? "" : plainMarker(marker) ? marker.replace(/[ 	]+$/, "") : null;
   const keep = comment >= 0 ? " (keep the comment that follows it on that line)" : "";
   if (PEP508_HEAD.test(requirement) && markerText !== null) {
     return `change \`${requirement}==${installed}${markerText}\` to \`${requirement}==${target}${markerText}\` in ${where}${keep}`;

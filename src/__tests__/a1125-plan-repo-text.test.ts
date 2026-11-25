@@ -30,7 +30,7 @@ describe("pypiDirectInstruction quotes the requirement, never its comment", () =
   it("extras and a plain environment marker are kept", () => {
     const body = 'requests[security,socks]==2.25.0 ; python_version >= "3.8" and sys_platform != "win32"\n';
     expect(pypiDirectInstruction(body, "requirements.txt", "requests", "2.25.0", "2.25.1")).toBe(
-      'change `requests[security,socks]==2.25.0; python_version >= "3.8" and sys_platform != "win32"` to `requests[security,socks]==2.25.1; python_version >= "3.8" and sys_platform != "win32"` in requirements.txt',
+      'change `requests[security,socks]==2.25.0 ; python_version >= "3.8" and sys_platform != "win32"` to `requests[security,socks]==2.25.1 ; python_version >= "3.8" and sys_platform != "win32"` in requirements.txt',
     );
   });
 
