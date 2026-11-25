@@ -25,6 +25,7 @@ describe("the screen is linear in a long line of key: value pairs", () => {
     const t0 = process.cpuUsage();
     screenTask(task);
     const used = process.cpuUsage(t0);
-    expect((used.user + used.system) / 1000).toBeLessThan(1000);
+    // About 0.5 s alone, more beside the rest of the suite; the quadratic one took 5 s.
+    expect((used.user + used.system) / 1000).toBeLessThan(2000);
   });
 });
