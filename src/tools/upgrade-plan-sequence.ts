@@ -181,7 +181,8 @@ const SET_FORMS: Array<[RegExp, string]> = [
 ];
 const REFRESH_FORMS: Array<[RegExp, string]> = [
   [/^npm update (\S+)$/, "npm"],
-  [/^pnpm update (?:-r )?(\S+) (?:--no-save|--depth Infinity)$/, "pnpm"],
+  // `--depth Infinity --no-save`: every edge of a copy pnpm keeps at a workspace root (upgrade-planner-shared-copy.ts).
+  [/^pnpm update (?:-r )?(\S+) (?:--no-save|--depth Infinity(?: --no-save)?)$/, "pnpm"],
   [/^yarn (?:upgrade|up -R) (\S+)$/, "yarn"],
   [/^uv lock --upgrade-package (\S+)$/, "uv"],
   [/^poetry update (\S+)$/, "poetry"],
