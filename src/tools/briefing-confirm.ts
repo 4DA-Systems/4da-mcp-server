@@ -226,7 +226,8 @@ const SECRET_WORDS = /^(?:keys?|secrets?|passwords?|passwd|pwd|passphrase|tokens
 export function cautionFor(task: string, word: string): string | undefined {
   const lower = task.toLowerCase();
   const target = word.toLowerCase();
-  for (let at = lower.indexOf(target); at >= 0; at = lower.indexOf(target, at + target.length)) {
+  // At most the first 50 places the word stands: a help, never worth a long scan of a hostile task.
+  for (let at = lower.indexOf(target), seen = 0; at >= 0 && seen < 50; at = lower.indexOf(target, at + target.length), seen++) {
     const before = lower.slice(Math.max(0, at - 60), at).split(/[^a-z0-9_-]+/).filter(Boolean).slice(-3);
     const after = lower.slice(at + target.length, at + target.length + 60).split(/[^a-z0-9_-]+/).filter(Boolean).slice(0, 3);
     if ([...before, ...after].some((w) => SECRET_WORDS.test(w))) return "the task calls this a key, a secret, a password or a token: confirm it only if it really is a package";
