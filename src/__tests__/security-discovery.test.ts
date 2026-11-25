@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getEmbeddingConfig } from "../embeddings.js";
 import { FourDADatabase, standaloneDbPath } from "../db.js";
+import { openDatabase } from "../sqlite-driver.js";
 
 const ENV = ["FOURDA_SETTINGS_PATH", "FOURDA_DB_PATH", "FOURDA_DATA_DIR", "APPDATA", "XDG_DATA_HOME", "HOME", "USERPROFILE", "FOURDA_MCP_HOME", "FOURDA_EMBED_PROVIDER", "FOURDA_OFFLINE"];
 let saved: Record<string, string | undefined>;
@@ -158,7 +159,10 @@ describe("database discovery", () => {
   it("still opens an existing database through a relative FOURDA_DB_PATH (the 4DA repo's .mcp.json)", () => {
     const file = path.join(repo, "data", "4da.db");
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    new FourDADatabase(file).close();
+    // The app's (set-up) database: a store of this server's format there is never adopted (audit 2026-11-25, G-1).
+    const app = openDatabase(file);
+    app.exec("CREATE TABLE schema_version (version INTEGER PRIMARY KEY); INSERT INTO schema_version VALUES (131); CREATE TABLE kv_store (key TEXT PRIMARY KEY, value)");
+    app.close();
     process.env.FOURDA_DB_PATH = "./data/4da.db";
     const db = new FourDADatabase();
     try {

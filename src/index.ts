@@ -608,6 +608,7 @@ async function main() {
 
   if (validation.valid && validation.standalone) {
     // The own store's schema is completed by the first open, whatever a killed or concurrent first start left.
+    if (validation.note) console.error(`[4DA] ${validation.note}`);
     console.error(`[4DA] Standalone mode: the server's own database is ${validation.path}.`);
   } else if (validation.valid) {
     console.error(`[4DA] The 4DA app's database: ${validation.path} (${validation.tables?.length ?? 0} tables, read-only).`);
