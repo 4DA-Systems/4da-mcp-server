@@ -309,7 +309,9 @@ const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Par
 describe("what_should_i_know: the audit's phrasings (all came back with something unchecked)", () => {
   it('"bring in rustdecimal" in an npm project: crates.io\'s malware is found, though npm has no such name (it was safe_to_delegate)', async () => {
     const r = await brief("bring in rustdecimal");
-    expect(r.new_packages).toMatchObject([{ name: "rustdecimal", ecosystem: "crates.io", malicious: true, verdict: "avoid", also_checked: [{ ecosystem: "npm", verdict: "not_found" }] }]);
+    // Re-check of the 2026-11-25 fixes, item 2: rustdecimal is a known malicious crates.io name, so it is
+    // looked up there; npm's rustdecimal is nothing this server knows, so it is not asked.
+    expect(r.new_packages).toMatchObject([{ name: "rustdecimal", ecosystem: "crates.io", malicious: true, verdict: "avoid" }]);
     expect(r.delegation_assessment.level).toBe("human_only");
   });
 
@@ -372,7 +374,9 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
   });
 
   it("a clean list stays safe_to_delegate, every item checked", async () => {
-    const r = await brief("add left-pad 1.3.0, chalk 5.6.2 and express 5.1.0");
+    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
+    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
+    const r = await brief("npm install left-pad@1.3.0 chalk@5.6.2 express@5.1.0");
     expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["left-pad@1.3.0=proceed", "chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
     expect(r.delegation_assessment.level).toBe("safe_to_delegate");
   });
@@ -402,9 +406,12 @@ describe("a task naming more packages than the briefing checks fails closed", ()
   });
 
   it("a prose list past eight fails closed the same way", async () => {
+    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
+    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
     const r = await brief(`add ${many(8).join(", ")} and pkg-9`);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(r.delegation_assessment.reason).toContain("NOT CHECKED: 1 more package named in the task (pkg-9)");
+    expect(r.withheld_from_task?.map((w) => w.shown)).toEqual(many(9));
+    expect(ASKED.some((u) => /pkg-\d/.test(u))).toBe(false);
   });
 
   it("exactly eight clean packages: all checked, safe_to_delegate, nothing said NOT CHECKED", async () => {
@@ -430,7 +437,9 @@ describe("what was already right stays right", () => {
     ["add error handling, then update the docs", "safe_to_delegate"],
     ["add tests, logging and retries", "safe_to_delegate"],
     ["upgrade lodash to 4.17.21", "safe_to_delegate"],
-    ["add the left-pad package", "safe_to_delegate"],
+    ["npm install left-pad", "safe_to_delegate"],
+    // Re-check of the 2026-11-25 fixes, item 2: left-pad is not on the bundled popular list, so in prose it is held.
+    ["add the left-pad package", "review_needed"],
   ] as const)("%s: %s", async (task, level) => {
     NPM.lodahs = { latest: "0.0.1-security", versions: ["0.0.1-security"] };
     OSV.push(advisory("MAL-2025-25502", "lodahs", "CRITICAL", {}, "npm", true));
@@ -441,9 +450,12 @@ describe("what was already right stays right", () => {
   it("a word that is prose is looked up nowhere, and a bare name no registry has is still dropped", async () => {
     await brief("add tests, logging and retries");
     expect(ASKED.some((u) => /tests|logging|retries/.test(u))).toBe(false);
+    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
+    // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
     const r = await brief("add frobnicator");
     expect(r.new_packages).toBeUndefined();
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(ASKED.some((u) => u.includes("frobnicator"))).toBe(false);
+    expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
   it("a private name in a list is looked up nowhere, in any ecosystem; the public ones still are", async () => {
@@ -451,10 +463,11 @@ describe("what was already right stays right", () => {
       privateReason: (_eco: string, name: string) => (name.toLowerCase() === "acme-vault" ? "private by .npmrc @acme registry" : null),
     });
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
-    // left-pad is listed beside a name that is certainly a package, so it is said (clean), not dropped
-    // as prose (r8: a long list dropped its clean bare names without a word); electorn is malware.
-    expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["left-pad=proceed", "electorn=avoid"]);
-    expect(ASKED.some((u) => u === "https://registry.npmjs.org/left-pad")).toBe(true);
+    // electorn, a near-miss of electron, is looked up and is malware; left-pad is nothing this server knows in
+    // prose, so it is held by name, not dropped (re-check of the 2026-11-25 fixes, item 2).
+    expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["electorn=avoid"]);
+    expect(r.withheld_from_task?.map((w) => w.shown)).toContain("left-pad");
+    expect(ASKED.some((u) => u === "https://registry.npmjs.org/left-pad")).toBe(false);
     expect(r.delegation_assessment.level).toBe("human_only");
   });
 

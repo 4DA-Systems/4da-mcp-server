@@ -135,10 +135,10 @@ export function normalizeVersionSyntax(task: string): string {
     task
       // A manifest entry written into the task (pre-publish audit of 5d709ff): `"dbg": "npm:debug@4.4.2"`
       // installs debug 4.4.2 under the name dbg, and was read as the packages dbg and npm, both clean.
-      .replace(JSON_ALIAS_ENTRY, (_m, _q1, _key, _q2, name: string, spec: string | undefined) => (spec ? `${name}@${joinSpec(spec)}` : name))
+      .replace(JSON_ALIAS_ENTRY, (_m, _q1, _key, _q2, name: string, spec: string | undefined) => (spec ? `${JSON_MARK}${name}@${joinSpec(spec)}` : `${JSON_MARK}${name}`))
       // `"lodash": "^4.17.20"`, `"minimist": ">=1.2.5 <1.2.6"`: the whole range is the package's (r8, B2:
       // only `<1.2.6` was read, and judged as the release 1.2.6).
-      .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${name}@${joinSpec(spec)}`))
+      .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${JSON_MARK}${name}@${joinSpec(spec)}`))
       // Cargo.toml / Poetry: `serde = { version = "1.0.200", features = [...] }`. Marked as a TOML entry
       // (TOML_MARK), so both readers file it under crates.io or PyPI, never npm (pre-publish round 10, W3:
       // the clause reader filed `smallvec = { version = ">=1.6.0, <1.6.1" }` under crates.io and the
@@ -196,6 +196,18 @@ export function isTomlEntry(task: string, start: number): boolean {
 }
 
 /**
+ * Put before the name of a JSON manifest entry written in the task (`"name": "^1.2"`): a key of a
+ * manifest, which counts as structural evidence that the name is a package (briefing-task-screen.ts
+ * lookupEvidence, rule iii). Private-use, outside every token, as TOML_MARK.
+ */
+export const JSON_MARK = "";
+
+/** Whether the token that starts at `start` of a normalized task is the key of a manifest entry (JSON or TOML). */
+export function isManifestEntry(task: string, start: number): boolean {
+  return start > 0 && (task[start - 1] === TOML_MARK || task[start - 1] === JSON_MARK);
+}
+
+/**
  * A constraint in the form dependency_check reads it in for that ecosystem, or null when it has no
  * reading there. npm (and Go) join comparators with spaces and read no comma, PyPI joins them with
  * commas and reads no space, Cargo reads both: "add minimist >= 1.2.0, < 1.2.6" went to dependency_check
@@ -239,7 +251,7 @@ const BARE_VERSION = String.raw`v?\d[\w.*+-]*`;
  * ` - version` (a hyphen range). A single operator version is joined too (`<1.2.6`, `>= 2`).
  */
 const PROSE_CHAIN = new RegExp(
-  String.raw`(?:(?<![-=])${OP_VERSION}|(?<![\w.])${BARE_VERSION}(?=(?:\s*\|\|\s*|\s+|\s*,\s*)(?:[<>=~^!]|v?\d)|\s+-\s+v?\d))(?:\s*\|\|\s*(?:${OP_VERSION}|${BARE_VERSION})|\s*,\s*${OP_VERSION}|\s+${OP_VERSION}|\s+-\s+${BARE_VERSION})*`,
+  String.raw`(?:(?<![-=])${OP_VERSION}|(?<![\w.])${BARE_VERSION}(?=(?:\s*\|\|\s*|\s+|\s*,\s*)(?:[<>=~^!]|v?\d)|\s+-\s+v?\d))(?:\s*\|\|\s*(?:${OP_VERSION}|${BARE_VERSION})|\s*,\s*${OP_VERSION}|\s+${OP_VERSION}|\s+-\s+${BARE_VERSION}){0,20}`,
   "g",
 );
 

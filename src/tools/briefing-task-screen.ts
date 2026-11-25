@@ -27,7 +27,11 @@
  * reported (redacted) only when a reader would otherwise have taken a name from it.
  */
 
+import { POPULAR_NPM } from "../live/popular-npm.js";
+import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
+import { closestPopularPypi, normalizePypiName } from "./briefing-names.js";
+import { nearMissOf } from "./dependency-check-nearmiss.js";
 
 /**
  * The longest word read from a task. npm allows 214 characters, crates.io 64, PyPI no more in
@@ -152,6 +156,7 @@ export function specSource(spec: string, family: Family | null): string | null {
   const value = after && !/^(?:npm:|v?\d|[~^<>=*]|latest$|next$)/i.test(after) ? after : s;
   if (/^(?:git\+|git:|github:|gitlab:|bitbucket:|gist:|ssh:)/i.test(value)) return "git";
   if (/^(?:file:|link:|portal:)/i.test(value)) return "a path";
+  if (/^catalog:/i.test(value)) return "a catalog";
   if (/^workspace:/i.test(value)) return "a workspace";
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return "a URL";
   // scp-style `git@host.tld:org/repo` (a dotted host: `alias@npm:target@1.0` is an npm alias, not a remote).
@@ -176,6 +181,8 @@ const SECRET_SHAPES =
   /\b(?:gh[pousr]_[A-Za-z0-9]{10,}|github_pat_\w{10,}|(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{12,}|[rs]k_(?:live|test)_\w{6,}|pk_live_\w{6,}|whsec_\w{10,}|xox[abposre]-[\w-]{6,}|npm_[A-Za-z0-9]{10,}|glpat-[\w-]{10,}|sk-(?:proj|ant|svcacct|admin)-[\w-]{6,}|sk-[A-Za-z0-9]{20,}|AIza[\w-]{20,}|hf_[A-Za-z0-9]{10,}|pypi-[\w-]{20,}|SG\.[\w-]{10,}\.[\w-]{10,}|shp(?:at|ss|ca|pa)_[a-fA-F0-9]{16,}|dop_v1_[a-f0-9]{20,}|eyJ[\w-]{8,}\.[\w-]{8,}(?:\.[\w-]*)?)/g;
 /** The value of an assignment to a credential-named setting: `GITHUB_TOKEN=...`, `_authToken=...`, `"api_key": "..."`. */
 const SECRET_ASSIGNMENT = /(?:\b[A-Za-z][\w.-]{0,60}?(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|auth)\w{0,30}|\b_auth)(?:["'`]\s{0,4}:|\s{0,4}=)\s{0,4}["'`]?([^\s"'`]{4,})/gi;
+/** A value that is a version or a version constraint (`=3.2.0` after `oauthlib=`, `8.5.1`, `^4.10`, `>=2,<3`, `~=1.4`): an entry, not a secret. */
+const SPEC_VALUE = /^(?:[=~<>!^]|v?\d+(?:\.(?:\d+|x|\*))+(?:[-+][\w.]+)?[,;)]?$|\*$|latest$)/i;
 const PEM = /-----BEGIN [A-Z ]{0,40}-----[\s\S]{0,8000}?(?:-----END [A-Z ]{0,40}-----|$)/g;
 
 /** A word shaped like a generated credential rather than a package name. */
@@ -366,6 +373,8 @@ export function screenTask(task: string): TaskScreen {
       if (named) holdPackage(named, kind, o.start, o.end);
       else hold(bare(o.text).slice(0, 80), `not looked up: the task installs it from ${kind}, not by a registry name`, o.start, o.end, true);
     }
+    // Each word belongs to one command: "npm npm npm ..." was parsed forty words at a time from every word (re-check, item 3).
+    i = Math.max(i, last);
   }
 
   // 5. URLs, scp-style git remotes and email addresses: never a name (a user name or token inside one included).
@@ -385,6 +394,10 @@ export function screenTask(task: string): TaskScreen {
   // 6. Credentials.
   for (const m of task.matchAll(PEM)) hold("a private key block", `not read: it looks like a credential; ${NOT_SENT}`, m.index!, m.index! + m[0].length, false);
   for (const m of task.matchAll(SECRET_ASSIGNMENT)) {
+    // A requirement or manifest entry is not a credential setting, whatever its name holds:
+    // `oauthlib==3.2.0`, `"jsonwebtoken": "8.5.1"`, `google-auth = ">=2"` named a package whose
+    // version was blanked and then judged at latest (re-check of the 2026-11-25 fixes, item 1).
+    if (SPEC_VALUE.test(m[1])) continue;
     const start = m.index! + m[0].length - m[1].length;
     if (free(start, start + m[1].length)) hold(redact(m[1]), `not read: it is the value of a credential setting; ${NOT_SENT}`, start, start + m[1].length, false);
   }
@@ -417,4 +430,236 @@ export function screenedOut(screen: TaskScreen, name: string, ecosystems: readon
     if (why) return `not looked up: the task takes ${e} packages from ${why}`;
   }
   return null;
+}
+
+/*
+ * What may be looked up (re-check of the 2026-11-25 fixes, item 2). The screen above is a block-list,
+ * and every spelling it did not know (`$env:NPM_CONFIG_REGISTRY`, a pasted requirements.txt led by
+ * `--index-url`, a UUID or a base64 secret after "add") still reached the registries. So it is turned
+ * around: a word from the task is looked up on a public registry only on positive evidence that it is
+ * a public package there (lookupEvidence). The screen stays as a second layer in front of rule (iii).
+ */
+
+/** Hosts of each ecosystem's public registry, index or proxy (and their public mirrors). */
+const PUBLIC_HOSTS: Record<CheckEcosystem, readonly string[]> = {
+  npm: ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com", "npmjs.com", "www.npmjs.com"],
+  PyPI: ["pypi.org", "pypi.python.org", "files.pythonhosted.org"],
+  "crates.io": ["crates.io", "index.crates.io", "static.crates.io"],
+  Go: ["proxy.golang.org", "sum.golang.org", "pkg.go.dev"],
+};
+const ALL_PUBLIC = new Set(Object.values(PUBLIC_HOSTS).flat());
+
+/** The hosts of the URLs in a value or a text. */
+function hostsIn(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/(?:[a-z][a-z0-9+.-]{0,30}:)?\/\/(?:[^\s/@"'`]{0,200}@)?([a-z0-9.-]{1,253})/gi)) out.push(m[1].toLowerCase().replace(/\.+$/, ""));
+  return out;
+}
+
+/** Whether a value (an option's, a setting's) names only the public registry of `eco`. */
+function onlyPublic(eco: CheckEcosystem, value: string): boolean {
+  const v = strip(value, "\"'`", "\"'`,;");
+  if (eco === "crates.io" && v === "crates-io") return true;
+  if (eco === "Go" && /^(?:(?:https:\/\/proxy\.golang\.org\/?|direct|off)(?:[,|]|$))+$/i.test(v)) return true;
+  const hosts = hostsIn(v);
+  return hosts.length > 0 && hosts.every((h) => PUBLIC_HOSTS[eco].includes(h));
+}
+
+/**
+ * Settings and options that name a registry, index, source, proxy or mirror, per ecosystem, with the
+ * value after them (case-insensitive, any spelling of the separator). Their value is public only when
+ * it names the public registry itself; anything else, or no value at all, is a signal.
+ */
+const SIGNAL_KEYS: Array<{ eco: readonly CheckEcosystem[]; key: RegExp }> = [
+  {
+    eco: ["npm"],
+    key: /(?:--?(?:config\.)?registry\b|npm_config_registry|npm_config_@[\w.-]{1,214}:registry|yarn_npm_registry_server|yarn_npm_scopes|bun_config_registry|npmregistryserver|npmscopes|@[\w.-]{1,214}:registry|(?:^|[\s"'`;$:])registry\b|always-auth|_authtoken|\b_auth\b|install\.scopes|\.npmrc\b|\.yarnrc(?:\.yml)?\b|bunfig(?:\.toml)?\b)/gi,
+  },
+  {
+    eco: ["PyPI"],
+    key: /(?:--(?:index-url|extra-index-url|default-index|index|find-links|trusted-host|pip-args|source)\b|(?:^|[\s"'`])-[if](?=\s)|pip_(?:extra_)?index_url|pip_find_links|uv_(?:extra_)?index(?:_url)?|uv_default_index|(?:^|[\s"'`])(?:extra-)?index-url\b|(?:^|[\s"'`{,])index\s{0,4}=|\[\[tool\.poetry\.source\]\]|\[\[tool\.uv\.index\]\]|\[tool\.uv\.sources\]|\[\[source\]\]|pip\.conf\b|pip\.ini\b|poetry\s+source\s+add)/gi,
+  },
+  { eco: ["crates.io"], key: /(?:\bcargo\b[^\n;|&]{0,200}?--(?:registry|index|git|path)\b|\[registries|\[source\b|replace-with|cargo_registr\w*|\bregistry\s{0,4}=|\.cargo\/config)/gi },
+  { eco: ["Go"], key: /(?:\bgoprivate\b|\bgoproxy\b|\bgonosumdb\b|\bgonoproxy\b|\bgoflags\b|\bgoinsecure\b|=>)/gi },
+  // Credentials given to a command or a setting: an authenticated, so private, source (when in doubt it is a signal).
+  { eco: ["npm", "PyPI", "crates.io", "Go"], key: /(?:(?:^|[\s"'`])--?(?:password|passwd|pass|token|auth[\w-]*|username|user-name|client-cert|cert|keyring[\w-]*|trusted-host|netrc)\b|\.netrc\b)/gi },
+];
+
+/** Spellings of a source that is not a registry at all (a path, git, a file, a workspace), per ecosystem. */
+const SOURCE_SPELLINGS: Array<{ eco: readonly CheckEcosystem[]; re: RegExp }> = [
+  { eco: ["npm"], re: /(?:\b(?:file|link|workspace|portal|catalog|github|gitlab|bitbucket|gist):|\bgit\+[a-z]+:|\bgit:\/\/|\.tgz\b|\bnpm\.pkg\.github\.com\b)/i },
+  { eco: ["PyPI"], re: /(?:\s@\s{0,4}(?:git\+|https?:|file:|ssh:)|\bgit\+[a-z]+:|\bfile:\/\/|(?:^|\s)-e\s|--editable\b|\.whl\b|\bpath\s{0,4}=|\bgit\s{0,4}=|\beditable\s{0,4}=)/i },
+  { eco: ["crates.io"], re: /(?:\bgit\s{0,4}=|\bpath\s{0,4}=|\bgit\+[a-z]+:)/i },
+  { eco: ["Go"], re: /(?:^|\s)replace\s+[\w./-]{1,300}(?:\s+v[\w.+-]{1,100})?\s{0,4}=>|=>\s{0,4}(?:\.{1,2}\/|\/)/im },
+];
+
+/** Prose that names a registry, index, mirror or feed: with any URL that is not a public registry's, a signal for every ecosystem. */
+const PROSE_REGISTRY = /\b(?:registry|registries|index|mirror|proxy|feed|repository|artifactory|nexus|verdaccio|codeartifact|gemfury|jfrog|cloudsmith|private|internal|self-hosted|on-prem|from)\b/i;
+
+/**
+ * The ecosystems for which the task configures or names a registry, index, source, proxy or mirror
+ * other than the public one, or a path, git, file or workspace source, with why. When in doubt it is a
+ * signal: new names of that ecosystem from the task are then not looked up at all.
+ */
+export function privateSignals(task: string): Map<CheckEcosystem, string> {
+  const out = new Map<CheckEcosystem, string>();
+  const text = boundWords(task);
+  for (const { eco, key } of SIGNAL_KEYS) {
+    for (const m of text.matchAll(key)) {
+      if (eco.every((e) => out.has(e))) break;
+      // The value: what follows the key on its line (after `=`, `:`, blanks or quotes).
+      const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 300).split("\n")[0];
+      const value = /^\s{0,4}[:=]?\s{0,4}["'`]?(\S{1,300})/.exec(after)?.[1] ?? "";
+      for (const e of eco) if (!onlyPublic(e, value) && !out.has(e)) out.set(e, `the task names a registry, index, source or proxy for ${e} ("${m[0].trim().slice(0, 40)}")`);
+    }
+  }
+  for (const { eco, re } of SOURCE_SPELLINGS) {
+    const m = re.exec(text);
+    if (m) for (const e of eco) if (!out.has(e)) out.set(e, `the task names a source other than the ${e} registry ("${m[0].trim().slice(0, 40)}")`);
+  }
+  const foreign = hostsIn(text).filter((h) => !ALL_PUBLIC.has(h));
+  if (foreign.length > 0 && PROSE_REGISTRY.test(text)) {
+    for (const e of ["npm", "PyPI", "crates.io", "Go"] as const) {
+      if (!out.has(e)) out.set(e, `the task names a host that is not a public registry's (${foreign[0].slice(0, 60)}) beside a registry, index or source`);
+    }
+  }
+  return out;
+}
+
+/** Why a name of the task may be looked up: (i) installed, (ii) popular or a near-miss of a popular name, (iii) an install command's operand or a manifest entry's key. */
+export type Evidence = "installed" | "popular" | "command";
+
+/**
+ * The evidence that `name` is a public package of `eco`: (i) the project already depends on it; (ii)
+ * it is on the bundled popular list of that ecosystem or a near-miss of one by the product's own rule
+ * (so typosquats like crossenv are still looked up and flagged); (iii) it stands as an operand of an
+ * install command or a key of a manifest entry in the task (`structural`). Rules (ii) and (iii) never
+ * hold where the task signals a private source for `eco`. Null: not looked up.
+ */
+export function lookupEvidence(
+  name: string,
+  eco: CheckEcosystem,
+  ctx: { installed: (name: string) => boolean; structural: ReadonlySet<string>; signals: ReadonlyMap<CheckEcosystem, string> },
+): Evidence | null {
+  if (ctx.installed(name)) return "installed";
+  if (ctx.signals.has(eco)) return null;
+  if (popularOrNearMiss(name, eco)) return "popular";
+  if (ctx.structural.has(`${eco}\0${name.toLowerCase()}`)) return "command";
+  return null;
+}
+
+const POPULAR_NPM_SET = new Set(POPULAR_NPM);
+const POPULAR_PYPI_SET = new Set(POPULAR_PYPI.map(normalizePypiName));
+
+/**
+ * Public names that have shipped a malicious or hijacked release (public incident history): looking
+ * one up names nothing private, and is what the briefing exists for ("bring in ua-parser-js 0.7.29",
+ * "pull in node-ipc 10.1.1", "add ctx" in a Python project, "bring in rustdecimal"). Part of rule (ii).
+ */
+const KNOWN_COMPROMISED: Record<CheckEcosystem, ReadonlySet<string>> = {
+  npm: new Set([
+    "ua-parser-js", "node-ipc", "coa", "rc", "colors", "faker", "event-stream", "flatmap-stream", "eslint-scope", "eslint-config-eslint", "getcookies",
+    "electron-native-notify", "bootstrap-sass", "purescript-installer", "peacenotwar", "crossenv", "@ctrl/tinycolor", "nx", "chalk", "debug",
+    "ansi-styles", "strip-ansi", "color-convert", "supports-color", "is-arrayish", "error-ex", "duckdb", "@duckdb/node-api", "eslint-config-prettier",
+    "eslint-plugin-prettier", "synckit", "@pkgr/core", "napi-postinstall", "is", "got-fetch", "rspack", "@rspack/core", "vant", "lottie-player",
+    "@lottiefiles/lottie-player", "@solana/web3.js", "web3-utils",
+  ]),
+  PyPI: new Set(["ctx", "phpass", "jeilyfish", "python3-dateutil", "colourama", "ultralytics", "num2words", "aiocpa", "fastapi-toolkit", "pytorch-triton", "torchtriton"]),
+  "crates.io": new Set(["rustdecimal", "faster_log", "async_println", "evm-units", "uniswap-utils"]),
+  Go: new Set(),
+};
+
+function popularOrNearMiss(name: string, eco: CheckEcosystem): boolean {
+  const lower = name.toLowerCase();
+  if (KNOWN_COMPROMISED[eco].has(eco === "PyPI" ? normalizePypiName(lower) : lower)) return true;
+  if (eco === "npm") return POPULAR_NPM_SET.has(lower) || nearMissOf(lower) !== null;
+  if (eco === "PyPI") return POPULAR_PYPI_SET.has(normalizePypiName(lower)) || closestPopularPypi(lower) !== null;
+  return false;
+}
+
+/** The reason given for a name nothing says is a public package. */
+export const NOT_KNOWN = "not looked up: not a package this server knows; call dependency_check on it if it is a public package";
+
+/**
+ * Options known to take no value, per package manager (re-check of the 2026-11-25 fixes, item 2): after
+ * any other option the next word may be that option's value (`--prefix ./x`, `--userconfig f`,
+ * `pnpm -C dir`, `pip -t dir`, `cargo install --root d`), so it is never read as a package name.
+ */
+const SWITCHES: Record<string, ReadonlySet<string>> = (() => {
+  const js = ["-D", "--save-dev", "-S", "--save", "-P", "--save-prod", "-O", "--save-optional", "--save-peer", "-E", "--save-exact", "-g", "--global", "--no-save", "--legacy-peer-deps", "--strict-peer-deps", "--force", "-f", "--ignore-scripts", "--no-audit", "--no-fund", "--dry-run", "--prefer-offline", "--prefer-online", "--offline", "--production", "--no-package-lock", "--package-lock-only", "--no-optional", "-B", "--save-bundle", "--install-links", "--foreground-scripts", "-q", "--quiet", "-s", "--silent", "--verbose", "-d", "--dev", "--peer", "--optional", "--exact", "-T", "--tilde", "-W", "--ignore-workspace-root-check", "--workspace-root", "--frozen-lockfile", "--no-frozen-lockfile", "--prod", "--trust", "-y", "--yes", "--interactive", "--recursive", "--latest"];
+  const py = ["-U", "--upgrade", "--user", "--no-deps", "--pre", "-q", "--quiet", "-v", "--verbose", "--force-reinstall", "--no-cache-dir", "--break-system-packages", "-I", "--ignore-installed", "--no-build-isolation", "--require-hashes", "--no-input", "--isolated", "--dev", "-d", "--raw", "--raw-sources", "--frozen", "--locked", "--no-sync", "--no-install-project", "--editable-false", "--system", "--compile", "--compile-bytecode", "--allow-prereleases", "--lock", "--dry-run", "--no-binary-all", "--prefer-binary", "-e", "--editable", "--all-extras", "--refresh", "--reinstall", "--upgrade-all"];
+  const cargo = ["--dev", "--build", "--optional", "--no-optional", "--no-default-features", "--default-features", "--offline", "--dry-run", "-q", "--quiet", "-v", "--verbose", "--locked", "--frozen", "--force", "-f", "--no-track", "--debug", "--all-features", "--list"];
+  const go = ["-u", "-t", "-d", "-x", "-v", "-insecure", "-u=patch", "-n", "-a", "-race"];
+  const set = (a: string[]) => new Set(a);
+  const out: Record<string, ReadonlySet<string>> = {};
+  for (const m of ["npm", "pnpm", "yarn", "bun"]) out[m] = set(js);
+  for (const m of ["pip", "pip3", "uv", "poetry", "pipenv", "pdm", "pipx", "rye"]) out[m] = set(py);
+  out.cargo = set(cargo);
+  out.go = set(go);
+  return out;
+})();
+
+/** Whether `flag` of a `manager` command is known to take no value: only then is the next word read as an operand. */
+export function isKnownSwitch(manager: string, flag: string): boolean {
+  return SWITCHES[manager.toLowerCase()]?.has(flag) ?? false;
+}
+
+/**
+ * Whether an operand is a path, a URL, a GitHub shorthand or anything else no registry name looks like:
+ * a leading `.`, `/` or `~`, a drive letter, a `\`, or a `/` that is not an npm scope's or a Go module path's.
+ */
+export function pathLikeOperand(token: string, ecosystem: CheckEcosystem): boolean {
+  const t = strip(token, "\"'`(", "\"'`,;:)");
+  if (/^[./~]|^[a-z]:|\|:\/\//i.test(t)) return true;
+  if (!t.includes("/")) return false;
+  if (ecosystem === "Go") return !/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\//i.test(t);
+  if (ecosystem === "npm") return !/^@[^/@\s]+\/[^/\s]+$/.test(t.replace(/(?<=.)@[^@/]*$/, ""));
+  return true;
+}
+
+/** The name-like pieces of a stretch of text, in lower case (`oauthlib==3.2.0` gives `oauthlib`, `3.2.0`; `x@1` gives `x@1`, `x`). */
+export function namePieces(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/[A-Za-z0-9@._/~-]{1,300}/g)) {
+    const piece = strip(m[0], "", ".:-").toLowerCase();
+    if (!piece) continue;
+    out.push(piece);
+    const at = piece.indexOf("@", 1);
+    if (at > 0) out.push(piece.slice(0, at));
+  }
+  return out;
+}
+
+/**
+ * The names a span the screen withheld for what it looked like (a credential, a URL, an address)
+ * touches: the pieces of the whitespace word it sits in, and for a credential's value the word before it. A package read
+ * beside one (its name, its version or its specifier blanked) is not read whole and is not looked up:
+ * `oauthlib==3.2.0` with `=3.2.0` blanked was judged at latest (re-check of the 2026-11-25 fixes, item 1).
+ */
+export function touchedNames(task: string, screen: TaskScreen): Set<string> {
+  const out = new Set<string>();
+  const isSpace = (c: string | undefined) => c === undefined || /\s/.test(c);
+  for (const w of screen.withheld) {
+    if (w.always) continue;
+    // The word around the span, then one word either side (each scan stops at the next blank run).
+    let a = w.start;
+    while (a > 0 && !isSpace(task[a - 1])) a--;
+    let b = w.end;
+    while (b < task.length && !isSpace(task[b])) b++;
+    // A credential's value may be the version of the name before it (`"jsonwebtoken": "8.5.1"`): that word
+    // too. A URL or an address is one word of its own.
+    let a2 = a;
+    if (w.why.includes("credential")) {
+      while (a2 > 0 && isSpace(task[a2 - 1]) && a - a2 < 8) a2--;
+      while (a2 > 0 && !isSpace(task[a2 - 1]) && a - a2 < MAX_TASK_WORD + 8) a2--;
+    }
+    for (const piece of namePieces(task.slice(a2, b))) out.add(piece);
+  }
+  return out;
+}
+
+/** The conditional spans (credential, URL, address) a lost name sits in: linear in the spans' text. */
+export function spansHolding(task: string, screen: TaskScreen, lost: ReadonlySet<string>): Withheld[] {
+  if (lost.size === 0) return [];
+  return screen.withheld.filter((w) => !w.always && namePieces(task.slice(w.start, w.end)).some((p) => lost.has(p)));
 }

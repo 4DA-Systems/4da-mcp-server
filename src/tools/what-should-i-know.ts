@@ -21,7 +21,7 @@
  */
 
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
-import { checkRequestedVersions, MAX_REQUESTED, readTaskVersions, sayRequested, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
+import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, readTaskVersions, sayRequested, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
 import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
 import type { FourDADatabase } from "../db.js";
@@ -438,17 +438,22 @@ export async function executeWhatShouldIKnow(
     return kept;
   };
   const NAME_ECOSYSTEMS = ["npm", "crates.io", "PyPI"] as const;
-  const named = registryPrivate(detectAllNewPackages(task, ecosystemDeps()).filter(notPrivate)).map((p) => {
+  // The names the task gives, past the project's own private rules; then only those something says are
+  // public packages are looked up (gateTaskNames; re-check of the 2026-11-25 fixes, items 1 and 2): a
+  // word after "add" that is neither installed, popular, nor an install command's operand in a task with
+  // no private-source signal is held, said, and never sent.
+  const taskVersions = readTaskVersions(task, ecosystemDeps());
+  const gated = gateTaskNames(task, ecosystemDeps(), registryPrivate(detectAllNewPackages(task, ecosystemDeps()).filter(notPrivate)), registryPrivate(taskVersions.requested.filter(notPrivate)));
+  const named = gated.packages.map((p) => {
     const closed = NAME_ECOSYSTEMS.filter((e) => e !== p.ecosystem && registryReason(e, p.name) !== null);
-    return closed.length > 0 ? { ...p, closed } : p;
+    return closed.length > 0 ? { ...p, closed: [...new Set([...(p.closed ?? []), ...closed])] } : p;
   });
   const newPackages = await checkNewPackages(liveIntel, named.slice(0, MAX_NEW_PACKAGES));
   // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14). Past their
   // own cap they are named NOT CHECKED too: the sixth version a task named was dropped without a word (r8).
-  const taskVersions = readTaskVersions(task, ecosystemDeps());
-  const wantedVersions = registryPrivate(taskVersions.requested.filter(notPrivate));
+  const wantedVersions = gated.requested;
   const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions.slice(0, MAX_REQUESTED));
   const uncheckedPackages = [
     ...new Set([
@@ -461,7 +466,7 @@ export async function executeWhatShouldIKnow(
     ]),
   ];
   // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
-  const withheldWords = taskVersions.withheld ?? [];
+  const withheldWords = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason))];
   // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
   const unreadVersions = taskVersions.unread;
   const vulns = scan?.vulnerabilities ?? [];

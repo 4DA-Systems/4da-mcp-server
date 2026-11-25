@@ -20,7 +20,7 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, lookupContext, lookupEcosystems, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -35,7 +35,7 @@ import {
   specText,
 } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
-import { boundWords, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { boundWords, screenedOut, screenTask, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
@@ -66,6 +66,10 @@ export interface RequestedVersionFinding extends RequestedVersion {
   critical?: string[];
 }
 
+/** How many names a list paired with a list of versions is read for ("a, b, c to 1.0, 2.0, 3.0"). */
+const PAIRED_LIST = 20;
+/** How many withheld words an answer names one by one; the rest are counted (a 199,000-character task made a 0.66 MB answer). */
+const MAX_HELD_SHOWN = 30;
 /** How many named versions a briefing checks; past it the rest are NOT CHECKED, by name (what-should-i-know.ts). */
 export const MAX_REQUESTED = 8;
 const CHECK_BUDGET_MS = 10_000;
@@ -207,6 +211,8 @@ export interface TaskVersions {
    * is shown (redacted) and why: never looked up, never sent (briefing-task-screen.ts).
    */
   withheld?: TaskWordWithheld[];
+  /** More names or versions than a briefing reads: the rest of the task was not read. */
+  truncated?: true;
 }
 
 /** A word of the task the briefing did not look up: how it is shown, and why. */
@@ -216,8 +222,10 @@ export interface TaskWordWithheld {
 }
 
 /** The (package, version) pairs a task names, in the order named (uncapped: the briefing checks MAX_REQUESTED and names the rest NOT CHECKED). */
+/** What the reader takes for (package, version) pairs (screened), before the lookup rule readTaskVersions applies. */
 export function detectRequestedVersions(task: string, deps: readonly ResolvedDependency[]): RequestedVersion[] {
-  return readTaskVersions(task, deps).requested;
+  const screen = screenTask(task);
+  return readVersionsOf(screen.text, deps).requested.filter((r) => screenedOut(screen, r.name, [r.ecosystem, ...(r.alternatives ?? [])]) === null);
 }
 
 /**
@@ -249,42 +257,131 @@ const popularName = (lower: string) => POPULAR.has(lower) || POPULAR.has(normali
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
   // Credentials, URLs, over-long words and whatever the task takes from a private registry, an index,
   // git, a path or a URL are blanked before anything is read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
+  // What may then be looked up is gateTaskNames's, after the project's own private rules.
   const screen = screenTask(task);
   const read = readVersionsOf(screen.text, deps);
   const all = readTaskItems(normalizeVersionSyntax(screen.text), deps);
-  const items = all.packages;
   const notes: string[] = [];
-  if (all.truncated) notes.push(`every package after the first ${MAX_READ_PACKAGES} the task names (not read: the task names more packages than a briefing reads)`);
+  if (all.truncated || read.truncated) notes.push(`every package after the first ${MAX_READ_PACKAGES} the task names (not read: the task names more packages than a briefing reads)`);
   const withheld: TaskWordWithheld[] = [];
+  const seen = new Set<string>();
+  let beyond = 0;
   const holdWord = (shown: string, reason: string) => {
-    if (!withheld.some((w) => w.shown === shown && w.reason === reason)) withheld.push({ shown, reason });
+    const key = `${shown}\n${reason}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (withheld.length < MAX_HELD_SHOWN) withheld.push({ shown, reason });
+    else beyond++;
   };
   const requested = read.requested.filter((r) => {
     const why = screenedOut(screen, r.name, [r.ecosystem, ...(r.alternatives ?? [])]);
     if (why && !screen.names.has(r.name.toLowerCase())) holdWord(r.name, why);
     return why === null;
   });
-  for (const p of items) {
+  for (const p of all.packages) {
     const why = screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]);
     if (why && !screen.names.has(p.name.toLowerCase())) holdWord(p.name, why);
   }
+  for (const u of all.unreadWords) holdWord(u.shown, u.reason);
   // A credential, URL or address is named (redacted) only where a reader would have taken a name from it:
-  // a name the unscreened task gives that the screened one does not, inside that span.
-  const conditional = screen.withheld.filter((w) => !w.always);
-  let lostTo: typeof conditional = [];
-  if (conditional.length > 0) {
+  // a name the unscreened task gives that the screened one does not, inside that span. Linear: each
+  // span's pieces are looked up in the set of lost names (re-check, item 3: it was quadratic).
+  let lostTo: Withheld[] = [];
+  if (screen.withheld.some((w) => !w.always)) {
     const plain = boundWords(task);
-    const before = new Set([...readTaskItems(normalizeVersionSyntax(plain), deps).packages.map((p) => p.name.toLowerCase()), ...readVersionsOf(plain, deps).requested.map((r) => r.name.toLowerCase())]);
-    const after = new Set([...items.map((p) => p.name.toLowerCase()), ...read.requested.map((r) => r.name.toLowerCase())]);
-    const lost = [...before].filter((n) => !after.has(n) && n.length > 1);
-    lostTo = conditional.filter((w) => {
-      const span = task.slice(w.start, w.end).toLowerCase();
-      return lost.some((n) => span.includes(n));
-    });
+    const after = new Set([...all.packages.map((p) => p.name.toLowerCase()), ...read.requested.map((r) => r.name.toLowerCase())]);
+    const lost = new Set<string>();
+    for (const n of [...readTaskItems(normalizeVersionSyntax(plain), deps).packages.map((p) => p.name.toLowerCase()), ...readVersionsOf(plain, deps).requested.map((r) => r.name.toLowerCase())]) {
+      if (!after.has(n) && n.length > 1) lost.add(n);
+    }
+    lostTo = spansHolding(task, screen, lost);
   }
   for (const w of [...screen.withheld.filter((x) => x.always), ...lostTo].sort((a, b) => a.start - b.start)) holdWord(w.label, w.why);
+  if (beyond > 0) withheld.push({ shown: `${beyond} more word${beyond === 1 ? "" : "s"}`, reason: "not read or not looked up, as the ones above" });
   const foreign = [...new Set([...(read.foreign ?? []), ...notes])];
-  return { requested, unread: read.unread, ...(foreign.length > 0 ? { foreign } : {}), ...(withheld.length > 0 ? { withheld } : {}) };
+  return { requested, unread: read.unread.slice(0, MAX_HELD_SHOWN), ...(foreign.length > 0 ? { foreign } : {}), ...(withheld.length > 0 ? { withheld } : {}) };
+}
+
+/**
+ * What of the names a task gives may be looked up on a public registry (re-check of the 2026-11-25
+ * fixes, items 1 and 2), applied after the project's own private rules: a name is looked up only where
+ * something says it is a public package there (lookupEvidence: installed, popular or a near-miss of a
+ * popular name, or an install command's operand / a manifest entry's key in a task with no private-source
+ * signal for that ecosystem), and never when a span the screen withheld touches it (its version would
+ * otherwise be judged at latest). The others are held, with why: never looked up, never safe to delegate on.
+ */
+export function gateTaskNames<P extends { name: string; ecosystem: CheckEcosystem; alternatives?: CheckEcosystem[]; guessed?: true; closed?: CheckEcosystem[] }, R extends RequestedVersion>(
+  task: string,
+  deps: readonly ResolvedDependency[],
+  packages: readonly P[],
+  requested: readonly R[],
+): { packages: P[]; requested: R[]; held: TaskWordWithheld[] } {
+  const screen = screenTask(task);
+  const items = readTaskItems(normalizeVersionSyntax(screen.text), deps);
+  const ctx = lookupContext(task, deps, items.structural);
+  const touched = touchedNames(task, screen);
+  const held: TaskWordWithheld[] = [];
+  const seen = new Set<string>();
+  let beyondHeld = 0;
+  const hold = (shown: string, reason: string) => {
+    const key = `${shown}\n${reason}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (held.length < MAX_HELD_SHOWN) held.push({ shown, reason });
+    else beyondHeld++;
+  };
+  /** The ecosystems an item may be looked up in, or null (held). */
+  const gate = (shown: string, name: string, ecosystems: CheckEcosystem[], otherwise: CheckEcosystem[] = []) => {
+    if (touched.has(name.toLowerCase())) {
+      hold(shown, NOT_READ_WHOLE);
+      return null;
+    }
+    let verdict = lookupEcosystems(name, ecosystems, ctx);
+    if (verdict.allowed.length === 0 && otherwise.length > 0) {
+      const other = lookupEcosystems(name, otherwise, ctx);
+      if (other.allowed.length > 0) verdict = other;
+    }
+    if (verdict.allowed.length === 0) {
+      hold(shown, verdict.why);
+      return null;
+    }
+    return verdict;
+  };
+  const keptPackages: P[] = [];
+  for (const p of packages) {
+    // A name the task gives no ecosystem for may be a public package of another one (crates.io's
+    // rustdecimal in an npm project): when none of its own says it is, those where something does are tried.
+    const own: CheckEcosystem[] = [p.ecosystem, ...(p.alternatives ?? [])];
+    const others = p.guessed ? (["npm", "PyPI", "crates.io"] as const).filter((e) => !own.includes(e) && !p.closed?.includes(e)) : [];
+    const v = gate(p.name, p.name, own, [...others]);
+    if (!v) continue;
+    const [ecosystem, ...alternatives] = v.allowed;
+    const out = { ...p, ecosystem };
+    if (alternatives.length > 0) out.alternatives = alternatives;
+    else delete out.alternatives;
+    // A name known only from the task's own command is not looked for in the other ecosystems' records.
+    if (v.onlyStructural) delete out.guessed;
+    // Nor in an ecosystem the task signals a private source for.
+    const signalled = [...ctx.signals.keys()].filter((e) => e !== ecosystem);
+    if (signalled.length > 0) out.closed = [...new Set([...(out.closed ?? []), ...signalled])];
+    keptPackages.push(out);
+  }
+  const keptRequested: R[] = [];
+  for (const r of requested) {
+    const v = gate(`${r.name} ${r.to}`, r.name, [r.ecosystem, ...(r.alternatives ?? [])]);
+    if (!v) continue;
+    const [ecosystem, ...alternatives] = v.allowed;
+    const out = { ...r, ecosystem };
+    if (alternatives.length > 0) out.alternatives = alternatives;
+    else {
+      delete out.alternatives;
+      delete out.fallbackOnly;
+      delete out.preferOnTie;
+    }
+    keptRequested.push(out);
+  }
+  if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not looked up, as the ones above" });
+  return { packages: keptPackages, requested: keptRequested, held };
 }
 
 /** The versions a task names, read from text the screen has already blanked. */
@@ -351,7 +448,8 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
     // The versions after the connector.
     const versions: number[] = [];
     let v = i + 1;
-    while (v < raw.length && VERSIONISH.test(cleanToken(raw[v])) && !ignored.some((s) => overlaps(v, s))) {
+    // At most PAIRED_LIST of each: every pairing of two long lists is checked, so their product is bounded (re-check, item 3).
+    while (v < raw.length && versions.length < PAIRED_LIST && VERSIONISH.test(cleanToken(raw[v])) && !ignored.some((s) => overlaps(v, s))) {
       versions.push(v);
       if (joinedAfter(v)) v += 1;
       else if (v + 2 < raw.length && LIST_JOINERS.has(words[v + 1])) v += 2;
@@ -361,7 +459,7 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
     // The names before it, back to a verb.
     const names: Array<{ name: string; ecosystem: CheckEcosystem; guessed?: true }> = [];
     let k = i - 1;
-    while (k >= 0) {
+    while (k >= 0 && names.length < PAIRED_LIST) {
       const w = words[k];
       if (TIE_BOUNDARIES.has(w) || RUNTIMES.has(w) || SETTING_NOUNS.has(w) || ENGLISH_TASK_WORDS.has(w)) break;
       // Explicit: the list shape says these are packages ("debug" is a common word, not here).
@@ -401,7 +499,13 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
       ...(npmName === who.name ? { alternatives: span.alternatives, ...(span.fallbackOnly ? { fallbackOnly: true as const } : { preferOnTie: "npm" as const }) } : {}),
     };
   };
+  let truncated = false;
   for (let i = 0; i < raw.length; i++) {
+    // As many names as the clause reader reads, and as many unread versions: the rest is said, not read (item 3).
+    if (found.size >= MAX_READ_PACKAGES || unread.length >= MAX_READ_PACKAGES) {
+      truncated = true;
+      break;
+    }
     if (paired.has(i)) continue;
     const token = cleanToken(raw[i]);
     if (ignored.some((s) => overlaps(i, s))) continue;
@@ -488,7 +592,8 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
   }
   const requested = [...found.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...r }) => r);
   const notRead = foreign.filter((f) => f.name).map((f) => `${f.name} (${f.registry}: not read by this server)`);
-  return { requested, unread: [...new Set(unread)], ...(notRead.length > 0 ? { foreign: [...new Set(notRead)] } : {}) };
+  // A version is shown at most 100 characters long: a chain of constraints is one token, however long.
+  return { requested, unread: [...new Set(unread.map((u) => (u.length > 100 ? `${u.slice(0, 100)}...` : u)))], ...(notRead.length > 0 ? { foreign: [...new Set(notRead)] } : {}), ...(truncated ? { truncated: true as const } : {}) };
 }
 
 /**
