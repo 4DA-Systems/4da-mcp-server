@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { notReadWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -35,13 +36,13 @@ describe("a code span is read as ordinary text", () => {
   ])("%s: minimist at 1.2.5", async (task) => {
     const r = await brief(task);
     expect(r.requested_versions).toContainEqual(expect.objectContaining({ name: "minimist", to: "1.2.5" }));
-    expect(JSON.stringify(r.withheld_from_task ?? [])).not.toContain("shell expansion");
+    expect(JSON.stringify(notReadWords(r) ?? [])).not.toContain("shell expansion");
   });
 
   it("an expansion is still one: $NAME, ${, $( and %NAME%", async () => {
     for (const task of ["npm install $ZQX1", "npm install ${ZQX2}", "npm install $(cat zqx3)", "npm install %ZQX4%"]) {
       const r = await brief(task);
-      expect(JSON.stringify(r.withheld_from_task ?? [])).toContain("shell expansion");
+      expect(JSON.stringify(notReadWords(r) ?? [])).toContain("shell expansion");
     }
   });
 });

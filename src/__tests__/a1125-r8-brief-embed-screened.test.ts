@@ -28,6 +28,7 @@ import { LiveIntelligence } from "../live/index.js";
 import { clearLiveIntelligence, setLiveIntelligence } from "../live-singleton.js";
 import { dispatchTool } from "../tool-dispatch.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
+import { notReadWords } from "./helpers/a1127-task-packages.js";
 
 let scratch: string;
 let project: string;
@@ -117,7 +118,7 @@ describe("the embedding provider gets the screened task", () => {
     const brief = await call("what_should_i_know", { task });
     expect(toEmbedder().length).toBeGreaterThan(0);
     expect(promptsSent().filter((p) => p.includes(secret))).toEqual([]);
-    expect(JSON.stringify(brief.withheld_from_task ?? [])).not.toContain(secret);
+    expect(JSON.stringify(notReadWords(brief) ?? [])).not.toContain(secret);
   });
 
   it("the rest of the task is still embedded", async () => {

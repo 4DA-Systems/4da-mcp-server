@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { looksLikeSecret, screenTask } from "../tools/briefing-task-screen.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 let bodies: string[];
@@ -141,7 +142,7 @@ describe("E2: what the task's own command takes from elsewhere is never looked u
     const r = await brief("npm install --registry https://npm.zqxcorp.internal zqx-cli-tool; then add express");
     expect(leaked(/zqx/i)).toEqual([]);
     expect(looked("express").length).toBeGreaterThan(0);
-    expect(JSON.stringify(r.unverified_words ?? [])).not.toMatch(/zqx/);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/zqx/);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 

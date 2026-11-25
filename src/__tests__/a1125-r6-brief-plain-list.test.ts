@@ -3,7 +3,7 @@
  * Fourth blind check of the 2026-11-25 fixes, item 1: anything callable built from free text could be made
  * to carry a secret (`npm install lodash --auth admin:hunter2` put npm:hunter2 into check_these, the
  * ready-made dependency_check call). check_these is gone. Every name the briefing reads and does not look
- * up, from a command, a manifest entry or prose alike, is listed in `unverified_words` (word, read_as,
+ * up, from a command, a manifest entry or prose alike, is listed in `task_packages.to_confirm` (word, read_as,
  * the version as the task writes it), and the answer holds nothing shaped as tool arguments. Replaces the
  * round-4 check_these suite and the round-5 structured-only suite. Stubbed fetch.
  */
@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 let bodies: string[];
@@ -34,7 +35,7 @@ async function brief(task: string): Promise<Record<string, any>> {
 }
 
 const SENTENCE = (n: number) =>
-  `NOT ASSESSED: ${n} name${n === 1 ? "" : "s"} the task may mean as packages ${n === 1 ? "was" : "were"} not looked up by this briefing (it looks up only packages this project already uses and well-known names). Before writing any of them, call dependency_check for the ones that are public packages you mean to add; if it answers avoid or names malware, this task is human_only.`;
+  `CONFIRMATION NEEDED: ${n} name${n === 1 ? "" : "s"} the task may mean as packages ${n === 1 ? "was" : "were"} not looked up; task_packages.next_step says how to settle ${n === 1 ? "it" : "them"}.`;
 
 /** Nothing in the answer is shaped as tool arguments. */
 function callable(r: unknown): string[] {
@@ -62,13 +63,13 @@ describe("every name not looked up is a plain unverified word", () => {
     ["add qzpkg as the router", { word: "qzpkg", read_as: "npm" }],
   ])("%s", async (task, word) => {
     const r = await brief(task);
-    expect(r.unverified_words).toHaveLength(1);
-    expect(r.unverified_words[0]).toMatchObject(word);
+    expect(waitingWords(r)).toHaveLength(1);
+    expect(waitingWords(r)?.[0]).toMatchObject(word);
     expect(r.check_these).toBeUndefined();
     expect(callable(r)).toEqual([]);
     expect(sent().some((s) => s.includes(word.word))).toBe(false);
-    expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toMatch(/^NOT ASSESSED: /);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(r.delegation_assessment.reason).toMatch(/^1 name the task may mean as packages waits for your confirmation/);
     expect(r.delegation_assessment.reason).not.toMatch(/check_these/);
     expect(r.summary).toContain(SENTENCE(1));
     expect(r.summary).not.toMatch(/check_these/);
@@ -76,7 +77,7 @@ describe("every name not looked up is a plain unverified word", () => {
 
   it("the version is as the task writes it, and omitted when it cannot be read", async () => {
     const r = await brief("pip install qzpkg~=1.4 and npm install qzweb@75ebbd2c-2be9-4afe-b207-eab4e7dc3c3b");
-    const words = Object.fromEntries((r.unverified_words ?? []).map((w: { word: string }) => [w.word, w]));
+    const words = Object.fromEntries((waitingWords(r) ?? []).map((w: { word: string }) => [w.word, w]));
     expect(words.qzpkg).toMatchObject({ read_as: "PyPI", version: "~=1.4" });
     expect(JSON.stringify({ ...r, task: undefined })).not.toContain("75ebbd2c");
   });
@@ -86,23 +87,23 @@ describe("every name not looked up is a plain unverified word", () => {
     h.PYPI = { requests: { "2.31.0": {} }, h3: { "4.0.0": {} } };
     const r = await brief("add h3 as the server framework");
     expect(sent().some((s) => s.includes("pypi.org/pypi/h3/"))).toBe(true);
-    expect(r.unverified_words).toBeUndefined();
+    expect(waitingWords(r)).toBeUndefined();
     const both = await brief("add qzframe as the server framework");
-    expect(both.unverified_words).toEqual([{ word: "qzframe", read_as: "npm or PyPI" }]);
+    expect(waitingWords(both)).toEqual([{ word: "qzframe", read_as: "npm or PyPI" }]);
     const npm = await brief("npm i h3");
-    expect(npm.unverified_words).toEqual([{ word: "h3", read_as: "npm" }]);
+    expect(waitingWords(npm)).toEqual([{ word: "h3", read_as: "npm" }]);
   });
 
   it("at most 25 listed, the summary counts all", async () => {
     const names = Array.from({ length: 31 }, (_, i) => `qzpkg-${i + 1}`);
     const r = await brief(`npm install ${names.join(" ")}`);
-    expect(r.unverified_words).toHaveLength(25);
+    expect(waitingWords(r)).toHaveLength(25);
     expect(r.summary).toContain(SENTENCE(31));
   });
 
   it("paths, option values and other managers' non-names are never listed", async () => {
     const r = await brief("npm install ../qz-local @qz/ok qz.ok_2 --prefix ./qz-prefix zod; go get qznohost/path");
-    expect(JSON.stringify(r.unverified_words)).not.toMatch(/qz-local|qz-prefix|qznohost/);
+    expect(JSON.stringify(waitingWords(r))).not.toMatch(/qz-local|qz-prefix|qznohost/);
   });
 });
 
@@ -116,7 +117,7 @@ describe("the credential screen stays in front", () => {
     ["npm install @qztok/aB3dE9fG", /ab3de9fg/i],
   ])("%s", async (task, secret) => {
     const r = await brief(task);
-    expect(JSON.stringify(r.unverified_words ?? [])).not.toMatch(secret);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(secret);
     expect(sent().filter((s) => secret.test(s))).toEqual([]);
   });
 
@@ -157,7 +158,7 @@ describe("build metadata after a version is never a name", () => {
   it.each(G.map((c) => [c.task]))("%s", async (task) => {
     const after = /(?:\+|\|\||,|;)([A-Za-z0-9_-]{8,})/.exec(task)![1];
     const r = await brief(task);
-    expect(JSON.stringify(r.unverified_words ?? [])).not.toContain(after);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toContain(after);
     expect(sent().filter((s) => s.includes(after))).toEqual([]);
   });
 

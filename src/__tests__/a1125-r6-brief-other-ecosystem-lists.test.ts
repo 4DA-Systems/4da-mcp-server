@@ -5,12 +5,13 @@
  * logging module", "use pydantic v2", "add fastapi and uvicorn", "use pyjwt" answered safe_to_delegate
  * with nothing listed, where 6.5.1 said human_only (npm took loguru down as malware). A bundled-list
  * match counts only for an ecosystem the project uses or the task's own manager names; otherwise the
- * name is listed in unverified_words for the project's ecosystem, and the task is not safe. Stubbed fetch.
+ * name is listed in task_packages.to_confirm for the project's ecosystem, and the task is not safe. Stubbed fetch.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -33,7 +34,7 @@ describe("another ecosystem's bundled list is no evidence in an npm-only project
   ])("%s", async (task, words) => {
     const r = await brief(task);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect((r.unverified_words ?? []).map((w: { word: string; read_as: string }) => `${w.word}/${w.read_as}`)).toEqual(words.map((w) => `${w}/npm`));
+    expect((waitingWords(r) ?? []).map((w: { word: string; read_as: string }) => `${w.word}/${w.read_as}`)).toEqual(words.map((w) => `${w}/npm`));
     expect(h.requests.some((u) => /pypi\.org|crates\.io/.test(u) && words.some((w) => u.includes(w)))).toBe(false);
   });
 

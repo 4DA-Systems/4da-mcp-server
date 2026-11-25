@@ -6,12 +6,13 @@
  * git.zqxcorp.net/team/zqx-pay-engine, "npm install zqx-pay-engine" and "pip install zqx-pay-engine" were
  * looked up, and "npm install core" sent npm:core. The rule holds only inside the dependency's own
  * ecosystem, with its own name rule, and for Go only for the full module path; another manager's
- * operand is listed in unverified_words for THAT ecosystem. Stubbed fetch: nothing leaves the machine.
+ * operand is listed in task_packages.to_confirm for THAT ecosystem. Stubbed fetch: nothing leaves the machine.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 let bodies: string[];
@@ -53,7 +54,7 @@ describe("a dependency of one ecosystem is not evidence in another", () => {
   ] as const)("%s is not looked up; it is listed for %s", async (task, ecosystem, name) => {
     const r = await brief(task);
     expect(askedIn(ecosystem, name)).toEqual([]);
-    expect(r.unverified_words).toMatchObject([{ word: name, read_as: ecosystem }]);
+    expect(waitingWords(r)).toMatchObject([{ word: name, read_as: ecosystem }]);
   });
 
   it("inside its own ecosystem, with its name rule, a dependency is still looked up", async () => {

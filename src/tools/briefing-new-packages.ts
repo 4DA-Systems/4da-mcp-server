@@ -43,6 +43,7 @@
  * A name the project already depends on is the task-scope module's, not this one's.
  */
 
+import type { CheckedItem } from "../check-ledger.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
@@ -54,6 +55,7 @@ import {
   installedGoModule,
   isManifestFile,
   isTomlEntry,
+  JSON_MARK,
   isVersionSpec,
   MANIFEST_FIELDS,
   normalizePypiName,
@@ -61,6 +63,7 @@ import {
   NOT_A_PACKAGE_ADJECTIVES,
   PYTHON_STDLIB,
   SPEC_JOINERS,
+  TOML_MARK,
   specText,
 } from "./briefing-names.js";
 import { isNpmPackageName } from "../untrusted-text.js";
@@ -347,7 +350,7 @@ export function detectAllNewPackages(task: string, deps: readonly ResolvedDepend
 }
 
 /** A name as an ecosystem compares names: PEP 503 for PyPI, `-`/`_` alike for crates.io, case aside for npm; a Go module path as written. */
-function ecosystemKey(name: string, ecosystem: CheckEcosystem): string {
+export function ecosystemKey(name: string, ecosystem: CheckEcosystem): string {
   if (ecosystem === "PyPI") return normalizePypiName(name);
   if (ecosystem === "crates.io") return name.toLowerCase().replace(/_/g, "-");
   if (ecosystem === "npm") return name.toLowerCase();
@@ -385,6 +388,9 @@ export function dependencyOf(deps: readonly ResolvedDependency[]): (name: string
   const names = new Set(deps.map((d) => d.name.toLowerCase().replace(/[-_.]+/g, "-")));
   return (name) => names.has(name.toLowerCase().replace(/[-_.]+/g, "-"));
 }
+
+/** How a name was read from the task: an install command's operand, a manifest snippet's entry, or a word after an adding verb. */
+export type TaskWordSeen = "command" | "manifest" | "prose";
 
 /** A word the briefing did not look up, as the answer names it. */
 export interface HeldWord {
@@ -429,6 +435,8 @@ export interface TaskItems {
   truncated?: true;
   /** Words of a command that were not read (after an option that may take them as its value). */
   unreadWords: Array<{ shown: string; reason: string }>;
+  /** Where each name (lower case) was read: the strongest of an install command's operand, a manifest snippet's entry, a word after an adding verb. */
+  seen: Map<string, TaskWordSeen>;
 }
 
 /**
@@ -514,6 +522,13 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const ignored: TaskSpan[] = [];
   const fixed: TaskItems["fixed"] = [];
   const foreign: TaskItems["foreign"] = [];
+  const seen = new Map<string, TaskWordSeen>();
+  const SEEN_RANK: Record<TaskWordSeen, number> = { command: 3, manifest: 2, prose: 1 };
+  const saw = (name: string, how: TaskWordSeen) => {
+    const key = name.toLowerCase();
+    const had = seen.get(key);
+    if (!had || SEEN_RANK[how] > SEEN_RANK[had]) seen.set(key, how);
+  };
   const add =(name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false, version: string | null = null, loose = false): NewPackage | null => {
     if (!name || have.has(haveKey(ecosystem, name)) || isManifestFile(name)) return null;
     // A guessed name the project already has, in any ecosystem or as a Go module's short name
@@ -730,6 +745,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         const inline = inlineVersion(j, ecosystem);
         const tag = !inline && ecosystem === "npm" && NPM_TAG.test(after) && !/^[a-f\d]{7,}$/i.test(after) ? after : null;
         const pkg = add(name, ecosystem, false, false, inline ?? tag);
+        saw(name, "command");
         if (pkg && after && !inline && !tag && !/^(?:latest|\*)$/i.test(after)) pkg.versionUnread = true;
         lastAdded = pkg;
         if (separatorAfter(j) === "clause") break;
@@ -930,6 +946,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const pepFallbackOnly = pepAlternatives.length > 0 && projectEcosystems(deps).includes("PyPI");
       if (pep) fixed.push({ ...span(k), ecosystem: pep, ...(pepAlternatives.length > 0 ? { alternatives: pepAlternatives } : {}), ...(pepFallbackOnly ? { fallbackOnly: true as const } : {}) });
       const pkg = tomlEntry || pep ? add(name, itemEcosystem, false, false, version) : add(name, fallback, true, !strong && !installing, version, LOOSE_VERBS.has(word));
+      saw(name, tomlEntry || pep || task[starts[k] - 1] === JSON_MARK || task[starts[k] - 1] === TOML_MARK ? "manifest" : "prose");
       if (pkg && pep && pepAlternatives.length > 0) {
         pkg.alternatives = [...new Set([...(pkg.alternatives ?? []), ...pepAlternatives])];
         if (pepFallbackOnly) pkg.fallbackOnly = true;
@@ -960,7 +977,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
     }
   }
-  return { packages: found, bound, ignored, fixed, foreign, unreadWords, ...(truncated ? { truncated: true as const } : {}) };
+  return { packages: found, bound, ignored, fixed, foreign, unreadWords, seen, ...(truncated ? { truncated: true as const } : {}) };
 }
 
 export type NameCheckLive = Pick<LiveIntelligence, "isEnabled"> &
@@ -1018,7 +1035,7 @@ function badness(f: NewPackageFinding): number {
  * `ctx` is malware (PYSEC-2022-199; black-box audit of 60c9edc, 2026-11-14). The other
  * ecosystems' answers are listed in `also_checked`.
  */
-export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date): Promise<NewPackageFinding[]> {
+export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date, onAnswer?: (results: readonly CheckedItem[]) => void): Promise<NewPackageFinding[]> {
   if (packages.length === 0) return [];
   if (!liveIntel || !liveIntel.isEnabled()) return packages.map((p) => unchecked(p, "live lookups are disabled"));
   if (!liveIntel.getReleaseSources || !liveIntel.getFixPathSources || !liveIntel.queryAdvisories) {
@@ -1050,7 +1067,11 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
         { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: p.version ? (checkableSpec(p.ecosystem, p.version) ?? p.version) : "latest" })) },
         liveIntel as LiveIntelligence,
         now ? { now } : {},
-      ),
+      ).then((answer) => {
+        // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
+        onAnswer?.(answer.results as readonly CheckedItem[]);
+        return answer;
+      }),
     );
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {

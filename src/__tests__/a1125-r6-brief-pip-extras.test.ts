@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -25,7 +26,7 @@ async function brief(task: string): Promise<Record<string, any>> {
 describe("a PEP 508 extra is never a name, and the version stays bound", () => {
   it.each(['pip install "requests[security]==2.25.0"', 'pip install "requests[security,socks]==2.25.0"', "pip install requests[security, socks]==2.25.0"])("%s", async (task) => {
     const r = await brief(task);
-    expect(JSON.stringify(r.unverified_words ?? [])).not.toMatch(/security|socks/);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/security|socks/);
     expect(JSON.stringify(r.new_packages ?? [])).not.toMatch(/security|socks/);
     expect(h.requests.some((u) => /security|socks/.test(u))).toBe(false);
     expect(r.requested_versions).toMatchObject([{ name: "requests", to: "2.25.0", verdict: "avoid" }]);
@@ -34,6 +35,6 @@ describe("a PEP 508 extra is never a name, and the version stays bound", () => {
   it('poetry add "celery[redis]>=5.3": celery at >=5.3', async () => {
     const r = await brief('poetry add "celery[redis]>=5.3"');
     expect(r.requested_versions).toMatchObject([{ name: "celery", to: ">=5.3" }]);
-    expect(JSON.stringify(r.unverified_words ?? [])).not.toContain("redis");
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toContain("redis");
   });
 });

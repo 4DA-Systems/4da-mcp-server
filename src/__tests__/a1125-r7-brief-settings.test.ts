@@ -2,7 +2,7 @@
 /**
  * Fifth blind check of the 2026-11-25 fixes, item 2: a setting is not a package. `password==hunter2`,
  * `db_password==88419273`, `secret_token==tok`, `{"config":{"password":"2024.11.26"}}` were listed in
- * unverified_words with the secret as the version. An option is any word that starts with `-`
+ * task_packages.to_confirm with the secret as the version. An option is any word that starts with `-`
  * (`--_authToken x` listed x), and twelve or more hex digits are never a name. Stubbed fetch.
  */
 
@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { settingName } from "../tools/briefing-task-screen.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords, notReadWords } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 let bodies: string[];
@@ -43,15 +44,15 @@ describe("a setting is neither looked up nor listed, and its value is never show
     ["DB_PASSWORD=zqxpw1 npm install lodash", "DB_PASSWORD", "zqxpw1"],
   ])("%s", async (task, key, value) => {
     const r = await brief(task);
-    expect(JSON.stringify(r.unverified_words ?? [])).not.toContain(key);
+    expect((waitingWords(r) ?? []).map((w) => w.word)).not.toContain(key);
     expect(shown(r)).not.toContain(value);
-    expect(r.withheld_from_task).toContainEqual(expect.objectContaining({ shown: `a setting named ${key}` }));
+    expect(notReadWords(r)).toContainEqual(expect.objectContaining({ shown: `a setting named ${key}` }));
     expect(sent().some((s) => s.includes(value))).toBe(false);
   });
 
   it("prose with a colon is no setting", async () => {
     const r = await brief("Auth: switch to passport");
-    expect(JSON.stringify(r.withheld_from_task ?? [])).not.toContain("a setting named");
+    expect(JSON.stringify(notReadWords(r) ?? [])).not.toContain("a setting named");
   });
 
   it("no popular name the round-9 screen held is a setting name, nor a dependency of the project", () => {
@@ -71,8 +72,8 @@ describe("a setting is neither looked up nor listed, and its value is never show
     ['Add "js-tokens": "4.0.0" to package.json', "js-tokens"],
   ])("%s is still a package", async (task, name) => {
     const r = await brief(task);
-    expect(JSON.stringify(r.withheld_from_task ?? [])).not.toContain(name);
-    expect(JSON.stringify([...(r.new_packages ?? []), ...(r.unverified_words ?? []), ...(r.requested_versions ?? [])])).toContain(name);
+    expect(JSON.stringify(notReadWords(r) ?? [])).not.toContain(name);
+    expect(JSON.stringify([...(r.new_packages ?? []), ...(waitingWords(r) ?? []), ...(r.requested_versions ?? [])])).toContain(name);
   });
 });
 
@@ -93,7 +94,7 @@ describe("any word that starts with - is an option, and its value is never a nam
   it("cargo add hyper --vers 0.14.9 and --vers=0.14.9: still the version of hyper", async () => {
     for (const task of ["cargo add hyper --vers 0.14.9", "cargo add hyper --vers=0.14.9"]) {
       const r = await brief(task);
-      expect(r.unverified_words).toEqual([{ word: "hyper", read_as: "crates.io", version: "0.14.9" }]);
+      expect(waitingWords(r)).toEqual([{ word: "hyper", read_as: "crates.io", version: "0.14.9" }]);
     }
   });
 });
@@ -101,7 +102,7 @@ describe("any word that starts with - is an option, and its value is never a nam
 describe("twelve or more hex digits are never a name", () => {
   it("npm install lodash 9d962429c6eeafce", async () => {
     const r = await brief("npm install lodash 9d962429c6eeafce");
-    expect(JSON.stringify(r.unverified_words ?? [])).not.toContain("9d96");
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toContain("9d96");
     expect(shown(r)).not.toContain("9d962429c6eeafce");
     expect(sent().some((s) => s.includes("9d962429"))).toBe(false);
   });
@@ -114,7 +115,7 @@ describe("a setting-named key with a version-shaped value is read as a package (
   ])("%s", async (task, key, value) => {
     // Sixth blind check of the 2026-11-25 fixes, item 2: a version as its value makes a key a package.
     const r = await brief(task);
-    expect(r.unverified_words).toContainEqual(expect.objectContaining({ word: key, version: value }));
+    expect(waitingWords(r)).toContainEqual(expect.objectContaining({ word: key, version: value }));
     expect(sent().some((s) => s.includes(value))).toBe(false);
   });
 });

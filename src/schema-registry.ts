@@ -137,7 +137,7 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
 
   // --- Intelligence (mixed) ---
   what_should_i_know: {
-    summary: "Pre-task briefing for a task in one project: the dependencies and package families it names, installed versions, confirmed vulnerabilities, releases since, your decisions, a delegation verdict. Call BEFORE a non-trivial task, especially one that changes dependencies.",
+    summary: "Pre-task briefing: the dependencies and families a task names, installed versions, confirmed vulnerabilities, releases since, decisions, a delegation verdict. Call BEFORE a non-trivial task, with the packages it adds; on confirmation_needed, do task_packages.next_step.",
     definition: whatShouldIKnowTool,
     category: "intelligence",
     tags: ["briefing", "advisories", "pre-task", "delegation"],

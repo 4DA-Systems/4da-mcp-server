@@ -2,7 +2,7 @@
 /**
  * Fourth blind check of the 2026-11-25 fixes, item 4: an offline near-miss was a hold (human_only, "a human
  * decides once it has"), and a name itself on a bundled popular list could be one. Now a name on any
- * bundled list is never a near-miss; any other near-miss is listed in unverified_words with the note "one
+ * bundled list is never a near-miss; any other near-miss is listed in task_packages.to_confirm with the note "one
  * edit from <popular name>: check the spelling", the task review_needed with the NOT ASSESSED reason. A
  * known-malicious bundled name is still looked up and human_only. Stubbed fetch.
  */
@@ -14,6 +14,7 @@ import { knownPublicName, offlineNearMiss } from "../tools/briefing-task-screen.
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import { adv, createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords, nearMissHint } from "./helpers/a1127-task-packages.js";
 
 let h: Harness;
 beforeEach(() => {
@@ -57,9 +58,9 @@ describe("any other near-miss is a note, not a hold", () => {
     ["pip install reqeusts", "reqeusts", "requests"],
   ])("%s", async (task, word, of) => {
     const r = await brief(task);
-    expect(r.unverified_words).toMatchObject([{ word, note: `one edit from ${of}: check the spelling` }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toMatch(/^NOT ASSESSED: /);
+    expect(waitingWords(r)).toMatchObject([{ word, hint: nearMissHint(of) }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(r.delegation_assessment.reason).toMatch(/^1 name the task may mean as packages waits for your confirmation/);
     expect(r.delegation_assessment.reason).not.toContain("a human decides once it has");
     expect(r.new_packages).toBeUndefined();
     expect(h.requests.some((u) => u.includes(word))).toBe(false);
@@ -70,7 +71,7 @@ describe("any other near-miss is a note, not a hold", () => {
     h.ADVISORIES = { crossenv: [adv("MAL-2017-1", "crossenv", [{ introduced: "0" }], "npm", "CRITICAL")] };
     const r = await brief("npm install crossenv");
     expect(h.requests.some((u) => u.includes("crossenv"))).toBe(true);
-    expect(r.unverified_words).toBeUndefined();
+    expect(waitingWords(r)).toBeUndefined();
     expect(r.delegation_assessment.level).toBe("human_only");
   });
 });

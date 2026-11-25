@@ -24,10 +24,11 @@ import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
+import { waitingWords, nearMissHint } from "./helpers/a1127-task-packages.js";
 
 /** The dependency_check call an agent makes for the unverified words (fourth blind check: the answer itself holds no arguments). */
-const follow = (r: { unverified_words?: Array<{ word: string; read_as: string; version?: string }> }) => ({
-  items: (r.unverified_words ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: w.version ?? "latest" })),
+const follow = (r: unknown) => ({
+  items: (waitingWords(r) ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: w.version ?? "latest" })),
 });
 
 const NPM = [dep("lodash", "4.17.20")];
@@ -162,7 +163,7 @@ describe("2. a Cargo table entry is one package in one ecosystem", () => {
     // as crates.io's, at the constraint the entry writes; dependency_check judges it there.
     const r = await brief(`add ${ENTRY}`, NPM_AND_RUST);
     expect(r.new_packages).toBeUndefined();
-    expect(r.unverified_words).toMatchObject([{ word: "smallvec", read_as: "crates.io" }]);
+    expect(waitingWords(r)).toMatchObject([{ word: "smallvec", read_as: "crates.io" }]);
     const check = (await executeDependencyCheck(null, follow(r), stubIntel(NPM_AND_RUST, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
     expect(check.results).toMatchObject([{ verdict: "avoid" }]);
     expect(stub.asked.some((u) => u === "https://registry.npmjs.org/smallvec")).toBe(false);
@@ -251,8 +252,8 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     const r = await brief("use blueprints");
     expect(osvAsks("blueprints")).toHaveLength(0);
     expect(r.new_packages).toBeUndefined();
-    expect(r.unverified_words).toEqual([{ word: "blueprints", read_as: "npm" }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(waitingWords(r)).toEqual([{ word: "blueprints", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
   it("use pinguinlib: a name on no list is not asked by the briefing; dependency_check on the unverified word finds the malware", async () => {
@@ -260,8 +261,8 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     stub.osv.push(advisory("MAL-2026-pinguinlib", "pinguinlib", "CRITICAL", {}, "npm", true));
     const r = await brief("use pinguinlib");
     expect(osvAsks("pinguinlib")).toHaveLength(0);
-    expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.unverified_words).toEqual([{ word: "pinguinlib", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(waitingWords(r)).toEqual([{ word: "pinguinlib", read_as: "npm" }]);
     const cmd = await brief("npm install pinguinlib");
     const check = (await executeDependencyCheck(null, follow(cmd), stubIntel(NPM, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
     expect(check.results).toMatchObject([{ verdict: "avoid" }]);
@@ -275,15 +276,15 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
 
   it("use lodahs: a near-miss of lodash, noted offline, never asked", async () => {
     const r = await brief("use lodahs");
-    expect(r.unverified_words).toMatchObject([{ word: "lodahs", note: "one edit from lodash: check the spelling" }]);
+    expect(waitingWords(r)).toMatchObject([{ word: "lodahs", hint: nearMissHint("lodash") }]);
     expect(osvAsks("lodahs")).toHaveLength(0);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
   it("use memoizers: handed back, never dropped as prose", async () => {
     const r = await brief("use memoizers");
     expect(r.new_packages).toBeUndefined();
-    expect(r.unverified_words).toEqual([{ word: "memoizers", read_as: "npm" }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(waitingWords(r)).toEqual([{ word: "memoizers", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 });

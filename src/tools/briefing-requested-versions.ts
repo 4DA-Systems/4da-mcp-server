@@ -15,12 +15,13 @@
  * A named version that is not `proceed` keeps the briefing from safe_to_delegate.
  */
 
+import type { CheckedItem } from "../check-ledger.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, installedNames, screenFor, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, installedNames, screenFor, type TaskWordSeen, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -318,6 +319,8 @@ export interface UnverifiedWord {
   version?: string;
   /** A remark about the word itself (a near-miss of a popular name). */
   note?: string;
+  /** How the reader read it: an install command's operand, a manifest snippet's entry, a word after an adding verb. */
+  seen?: TaskWordSeen;
 }
 
 /**
@@ -344,7 +347,8 @@ export function gateTaskNames<
   // The ecosystems whose bundled lists count: the project's own, and those a command in the task installs
   // from or a manifest file it names. A language or manager word in prose ("the python side should use
   // ctx" in an npm project) decides nothing (fifth blind check, item 4).
-  const decided = new Set<CheckEcosystem>([...projectEcosystems(deps), ...readTaskItems(normalizeVersionSyntax(screen.text), deps).fixed.map((f) => f.ecosystem)]);
+  const items = readTaskItems(normalizeVersionSyntax(screen.text), deps);
+  const decided = new Set<CheckEcosystem>([...projectEcosystems(deps), ...items.fixed.map((f) => f.ecosystem)]);
   const lowered = screen.text.toLowerCase();
   if (/\bpackage(?:-lock)?\.json\b|\bpnpm-lock\.yaml\b|\byarn\.lock\b/.test(lowered)) decided.add("npm");
   if (/\brequirements[\w.-]*\.txt\b|\bpyproject\.toml\b|\bpipfile\b|\bsetup\.py\b/.test(lowered)) decided.add("PyPI");
@@ -368,7 +372,7 @@ export function gateTaskNames<
     const key = name.toLowerCase();
     const written = unreadVersion ? undefined : version;
     const had = unverified.get(key);
-    if (!had) unverified.set(key, { word: name, read_as: readAs.join(" or "), ...(written ? { version: written } : {}) });
+    if (!had) unverified.set(key, { word: name, read_as: readAs.join(" or "), ...(written ? { version: written } : {}), seen: items.seen.get(key) ?? "prose" });
     else {
       if (!had.version && written) had.version = written;
       const ecos = new Set([...had.read_as.split(" or "), ...readAs]);
@@ -435,8 +439,9 @@ export function gateTaskNames<
     keptRequested.push(out);
   }
   if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not read whole, as the ones above" });
+  // Every word, unsliced: the caller's declarations settle words past the first MAX_UNVERIFIED_WORDS as well.
   const words = [...unverified.values()];
-  return { packages: keptPackages, requested: keptRequested, held, unverified: words.slice(0, MAX_UNVERIFIED_WORDS), unverifiedTotal: words.length };
+  return { packages: keptPackages, requested: keptRequested, held, unverified: words, unverifiedTotal: words.length };
 }
 
 
@@ -658,7 +663,7 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
  * dependency_check's verdict for each named version, within the briefing's budget. Offline or past
  * the budget a version is `unknown`: never read as safe.
  */
-export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date): Promise<RequestedVersionFinding[]> {
+export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date, onAnswer?: (results: readonly CheckedItem[]) => void): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
   const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
@@ -683,7 +688,11 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
           { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: checkableSpec(r.ecosystem, r.to) ?? r.to, ...(r.from ? { from: r.from } : {}) })) },
           liveIntel as LiveIntelligence,
           now ? { now } : {},
-        ),
+        ).then((answer) => {
+          // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
+          onAnswer?.(answer.results as readonly CheckedItem[]);
+          return answer;
+        }),
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
         }),

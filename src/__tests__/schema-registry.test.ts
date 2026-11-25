@@ -65,7 +65,8 @@ describe("tool registry", () => {
   it("the whole tools/list stays within a ~5k-token budget", () => {
     const chars = JSON.stringify(getSlimToolList()).length;
     // 20,000 until upgrade_planner's description grew by ~240 characters (audit 2026-11-25).
-    expect(chars, `tools/list is ${chars} chars`).toBeLessThanOrEqual(20_300);
+    // 21,300 from wave 2: what_should_i_know takes `packages` and `not_packages` (the package confirmation loop), ~1,000 characters.
+    expect(chars, `tools/list is ${chars} chars`).toBeLessThanOrEqual(21_300);
   });
 
   it("every tool has a title and honest read/write annotations", () => {

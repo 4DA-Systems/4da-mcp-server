@@ -200,6 +200,16 @@ const SECRET_ASSIGNMENT = /(?:\b[A-Za-z][\w.-]{0,60}?(?:token|secret|passw(?:or)
 const SPEC_VALUE = /^(?:[=~<>!^]|v?\d+(?:\.(?:\d+|x|\*))+(?:[-+][\w.]+)?[,;)]?$|\*$|latest$)/i;
 const PEM = /-----BEGIN [A-Z ]{0,40}-----[\s\S]{0,8000}?(?:-----END [A-Z ]{0,40}-----|$)/g;
 
+/**
+ * A declared package name that is a credential's shape beyond doubt (wave 2, step 3 of a `public: true`
+ * entry): a known token prefix, a JWT, a PEM header, a UUID or twelve or more hex digits. Only the
+ * high-precision shapes: a real package name never has one.
+ */
+export function credentialShape(name: string): boolean {
+  const w = name.trim();
+  return new RegExp(SECRET_SHAPES.source).test(w) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(w) || /^[0-9a-f]{12,}$/i.test(w) || w.includes("-----BEGIN ");
+}
+
 /** A word shaped like a generated credential rather than a package name. */
 export function looksLikeSecret(word: string): boolean {
   const w = strip(word, LEAD_WRAP, TRAIL_WRAP);
