@@ -61,7 +61,7 @@ import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
 import type { Verdict } from "./dependency-check-signals.js";
 import { parseTarget, rangeAdmits } from "./dependency-check-versions.js";
-import { lengthProblem } from "../tool-args.js";
+import { cleanText, lengthProblem } from "../tool-args.js";
 import { UNTRUSTED_TEXT_FIELDS, quoteThirdParty } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
 import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, type NpmWhy } from "./dependency-check-resolution.js";
@@ -483,7 +483,7 @@ function validateItem(r: unknown, i: number): Requested {
   if (typeof r === "object" && r !== null && !Array.isArray(r)) {
     const unknown = Object.keys(o).find((k) => !ITEM_FIELDS.has(k));
     if (unknown !== undefined) {
-      throw new Error(`${where}: unknown field ${JSON.stringify(quoteThirdParty(unknown, 40))}: this tool reads only the public registry and defines only ecosystem, package, to and from; nothing was sent`);
+      throw new Error(`${where}: unknown field ${fieldName(unknown)}: this tool reads only the public registry and defines only ecosystem, package, to and from; nothing was sent`);
     }
   }
   // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
@@ -533,6 +533,18 @@ function validateItem(r: unknown, i: number): Requested {
 
 /** The fields a dependency_check item may have. */
 const ITEM_FIELDS = new Set(["ecosystem", "package", "to", "from"]);
+
+/**
+ * A field name as the refusal shows it: quoted with its blanks kept, and the blanks named, so `" to"`
+ * never reads as `"to"`, a field the tool defines (wave 2 review). Capped; invisible characters
+ * dropped and "|" (the reason's separator) shown as "/", as quoteThirdParty does.
+ */
+function fieldName(name: string): string {
+  const shown = JSON.stringify(cleanText(name).slice(0, 40).replace(/\|/g, "/"));
+  const lead = /^\s/.test(name);
+  const trail = /\s$/.test(name);
+  return `${shown}${lead && trail ? " (with a leading and a trailing blank)" : lead ? " (with a leading blank)" : trail ? " (with a trailing blank)" : ""}`;
+}
 
 /** A version's build metadata (`+build.5`) after its last digit: Cargo ignores it. Linear: one character class each side. */
 const CARGO_BUILD_METADATA = /(\d)\+[0-9A-Za-z.-]*/g;
