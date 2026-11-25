@@ -278,23 +278,115 @@ function tableNames(db: SqliteDatabase): string[] {
 }
 
 /**
- * Whether an EXISTING database at a path other than the own store's
- * (isOwnStorePath) is of this server's format: an explicit path a test or tool
- * opened, or a copy. The marker decides; a database created before the marker
- * existed is recognised by its minimal schema (schema_version 1, a few dozen
- * tables): the desktop app's database carries 140+ tables and a schema version
- * past 100. A database with no tables is neither (see the constructor).
+ * Tables only the desktop app creates, in its very first batch (migrations.rs, schema_version 1).
+ * This server's schema has never had any of them, so a file holding one is the app's.
+ */
+const APP_ONLY_TABLES: readonly string[] = ["kv_store", "migration_history", "context_chunks"];
+
+/** What an existing database file holds, as far as telling the app's from this server's format goes. */
+interface DbShape {
+  tableCount: number;
+  marker: boolean;
+  hasSchemaVersion: boolean;
+  /** MAX(schema_version.version), null when the table is absent or empty. */
+  version: number | null;
+  appOnly: boolean;
+}
+
+/** Throws for a damaged or non-SQLite file (reading the schema does). */
+function shapeOf(db: SqliteDatabase): DbShape {
+  const tables = tableNames(db);
+  const hasSchemaVersion = tables.includes("schema_version");
+  let version: number | null = null;
+  if (hasSchemaVersion) {
+    try {
+      const row = db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null } | undefined;
+      version = typeof row?.v === "number" ? row.v : null;
+    } catch {
+      version = null;
+    }
+  }
+  return {
+    tableCount: tables.length,
+    marker: tables.includes(STANDALONE_MARKER),
+    hasSchemaVersion,
+    version,
+    appOnly: APP_ONLY_TABLES.some((t) => tables.includes(t)),
+  };
+}
+
+/**
+ * The desktop app's database after its first migration: a schema version past 1, or the app's
+ * many tables (140+; this server's format has ~25). The `mcp_standalone` marker does not change
+ * that: 6.5.1 wrote it into app databases it adopted in their first-run state (audit 2026-11-25, G-1).
+ */
+function appIsSetUp(shape: DbShape): boolean {
+  return (shape.version !== null && shape.version > 1) || shape.tableCount >= 40;
+}
+
+/**
+ * The shapes 6.5.1 adopted as its own store: the marker, or schema_version 1 (or none yet) with a
+ * few dozen tables. On any path other than the own store's this is the desktop app's database in
+ * its first-run state (before migration 1 -> 2), or a copy of a store of this server's format.
+ */
+function notSetUp(shape: DbShape): boolean {
+  return !appIsSetUp(shape) && (shape.marker || (shape.hasSchemaVersion && (shape.version ?? 0) <= 1));
+}
+
+/**
+ * Whether an EXISTING database at an explicit `dbPath` argument other than the own store's
+ * (tests, a copy) is of this server's format, and so opened writable. Never a file with a table
+ * only the app creates, and never an app database that is set up, marker or not. A file reached
+ * through FOURDA_DB_PATH or the app's data folder is never of this server's format, whatever it
+ * holds (the constructor; notSetUpMessage).
  */
 function detectStandalone(db: SqliteDatabase): boolean {
   try {
-    const tables = tableNames(db);
-    if (tables.includes(STANDALONE_MARKER)) return true;
-    if (!tables.includes("schema_version") || tables.length >= 40) return false;
-    const row = db.prepare("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null } | undefined;
-    return row?.v === 1;
+    const shape = shapeOf(db);
+    return notSetUp(shape) && !shape.appOnly;
   } catch {
     return false;
   }
+}
+
+/**
+ * Why the database at `file` (reached through FOURDA_DB_PATH or the desktop app's data folder, not
+ * the own store) is not used, or null when it is the app's set-up database (or cannot be read: the
+ * normal open reports that). The server never adopts, migrates or creates tables in such a file:
+ * 6.5.1 did, for an app database in its first-run state, and from then on wrote its scan rows and
+ * interests into the app's data and hid the desktop tools (audit 2026-11-25, G-1).
+ */
+function notSetUpMessage(file: string): string | null {
+  let raw: SqliteDatabase | null = null;
+  let shape: DbShape;
+  try {
+    raw = openDatabase(file, { readonly: true, fileMustExist: true });
+    shape = shapeOf(raw);
+  } catch {
+    return null;
+  } finally {
+    try {
+      raw?.close();
+    } catch {
+      // Nothing to close.
+    }
+  }
+  if (shape.tableCount === 0 || !notSetUp(shape)) return null;
+  const own = standaloneDbPath();
+  const after =
+    `This server did not use it and changed nothing in it; until then it runs on its own database (${own}), ` +
+    `so the desktop app's data and tools are not available. The dependency tools still read the project's files on disk.`;
+  if (shape.appOnly || !shape.marker) {
+    return (
+      `The 4DA desktop app's database at ${file} has not finished setting up (schema version ${shape.version ?? "none"}, ` +
+      `before the app's first migration): start the 4DA app and let it finish starting. ${after}`
+    );
+  }
+  return (
+    `The database at ${file} is in this server's own format but is not its own database (${own}), so it was not used ` +
+    `and nothing in it was changed. Point FOURDA_DB_PATH at the 4DA desktop app's database, or unset it. ` +
+    `The dependency tools still read the project's files on disk.`
+  );
 }
 
 /**
@@ -759,8 +851,10 @@ export interface DatabaseValidationResult {
   tables?: string[];
   /** True for the server's own store (its path, created or completed on first use) or a database of its format. */
   standalone?: boolean;
-  /** The file probed. */
+  /** The file probed (the own store's when the one probed is not used, see `note`). */
   path?: string;
+  /** Why the database probed is not used and the own store is (an app database not yet set up, G-1). */
+  note?: string;
 }
 
 /**
@@ -806,12 +900,25 @@ export interface DataFreshness {
 /** Minutes a feed may go without a fetch before DB-backed tools flag it stale. */
 const STALE_AFTER_MINUTES = 60;
 
-/** Whole minutes between a UTC `YYYY-MM-DD HH:MM:SS` timestamp and now, or null if unparseable. */
-function minutesSince(ts: string | null): number | null {
+/** How far ahead of this machine's clock a timestamp may be and still read as "now" (clock skew). */
+export const FUTURE_SKEW_MINUTES = 5;
+
+/**
+ * Whole minutes between a UTC `YYYY-MM-DD HH:MM:SS` timestamp and now, or null if unparseable.
+ * Negative for a timestamp ahead of this clock: the caller decides (futureTimestamp). It was
+ * clamped to 0, so a timestamp in the future read as fetched this minute, forever (audit
+ * 2026-11-25, G-5).
+ */
+export function minutesSince(ts: string | null, now: number = Date.now()): number | null {
   if (!ts) return null;
   const ms = Date.parse(ts.replace(" ", "T") + "Z");
   if (Number.isNaN(ms)) return null;
-  return Math.max(0, Math.round((Date.now() - ms) / 60000));
+  return Math.round((now - ms) / 60000);
+}
+
+/** Whether an age from minutesSince is a timestamp too far in the future to be believed (more than the skew). */
+export function futureTimestamp(ageMinutes: number | null): boolean {
+  return ageMinutes !== null && ageMinutes < -FUTURE_SKEW_MINUTES;
 }
 
 /** Filler words ignored when comparing titles for near-duplicate collapsing. */
@@ -918,9 +1025,20 @@ export class FourDADatabase {
     const resolvedPath = dbPath || getDefaultDbPath();
 
     // Resolve path - if relative, resolve from cwd
-    const absolutePath = path.isAbsolute(resolvedPath)
+    let absolutePath = path.isAbsolute(resolvedPath)
       ? resolvedPath
       : path.resolve(process.cwd(), resolvedPath);
+
+    // A database reached through FOURDA_DB_PATH or the app's data folder is never adopted: one the
+    // app has not finished setting up is left as it is, and the server runs on its own store (G-1).
+    let notSetUpNote: string | null = null;
+    if (!dbPath && !isOwnStorePath(absolutePath) && fs.existsSync(absolutePath)) {
+      notSetUpNote = notSetUpMessage(absolutePath);
+      if (notSetUpNote) {
+        console.error(`[4DA] ${notSetUpNote}`);
+        absolutePath = standaloneDbPath();
+      }
+    }
 
     const exists = fs.existsSync(absolutePath);
     const ownFormat = isOwnStorePath(absolutePath) || (!exists && Boolean(dbPath));
@@ -930,6 +1048,7 @@ export class FourDADatabase {
       this.creationNote = `Created a new standalone database at ${absolutePath}: this server's own store, which FOURDA_DB_PATH names.`;
       console.error(`[4DA] ${this.creationNote}`);
     }
+    if (notSetUpNote) this.creationNote = notSetUpNote;
 
     let opened: SqliteDatabase | null = null;
     let standalone = ownFormat;
@@ -942,7 +1061,9 @@ export class FourDADatabase {
         // makes a damaged or non-SQLite file fail now, with the message below.
         opened = openDatabase(absolutePath, { readonly: true, fileMustExist: true });
         if (tableNames(opened).length === 0) throw notAppDatabaseError(absolutePath);
-        standalone = detectStandalone(opened);
+        // Only an explicit path argument (tests, a copy) can be of this server's format; a file
+        // reached through FOURDA_DB_PATH or the app's data folder is the app's, read-only (G-1).
+        standalone = Boolean(dbPath) && detectStandalone(opened);
         if (standalone) {
           // A database of this server's format: reopen it writable.
           opened.close();
@@ -1140,7 +1261,12 @@ export class FourDADatabase {
       if (tables.length === 0) {
         return { valid: false, tables, standalone: false, path: absolutePath, error: notAppDatabaseMessage(absolutePath) };
       }
-      return { valid: true, tables, standalone: detectStandalone(testDb), path: absolutePath };
+      // Never adopted (G-1): an app database not yet set up leaves the server on its own store.
+      testDb.close();
+      testDb = null;
+      const note = notSetUpMessage(absolutePath);
+      if (note) return { valid: true, standalone: true, path: standaloneDbPath(), note };
+      return { valid: true, tables, standalone: false, path: absolutePath };
     } catch (error) {
       const unreadable = isUnreadableDbError(error);
       const detail = error instanceof Error ? error.message : String(error);
@@ -1360,11 +1486,19 @@ export class FourDADatabase {
       // engine_runs may not exist on an older desktop-app DB — its absence is itself a stale signal.
     }
 
-    const ageMinutes = minutesSince(lastFetchAt);
+    const rawAge = minutesSince(lastFetchAt);
+    // A last fetch ahead of this clock (a clock change, a database copied from another machine)
+    // tells nothing about the feed's age: stale, and said, never "fresh" (G-5).
+    const inFuture = futureTimestamp(rawAge);
+    const ageMinutes = rawAge === null || inFuture ? null : Math.max(0, rawAge);
     const isStale = ageMinutes === null || ageMinutes > STALE_AFTER_MINUTES;
     let note = isStale
       ? `Feed data ${
-          ageMinutes === null ? "has never been fetched" : `is ~${ageMinutes} min old`
+          inFuture
+            ? `has a last fetch time in the future (${lastFetchAt} UTC), so its age cannot be told`
+            : ageMinutes === null
+              ? "has never been fetched"
+              : `is ~${ageMinutes} min old`
         } and may be stale: the MCP server reads the database but does not fetch. Run ` +
         "`fourda-engine --once` (or open the 4DA app) to refresh."
       : `Feed data is ~${ageMinutes} min old (fresh).`;
