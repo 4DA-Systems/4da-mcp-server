@@ -59,6 +59,8 @@ export function readGemfileLock(content: string): {
   uncheckable: Array<{ name: string; version: string; kind: "git" }>;
   /** Every gem name the file holds a spec for, in any section, lower-cased. */
   specs: Set<string>;
+  /** The sections (`GEM`, `GIT`, `PATH`) each spec name is held in, lower-cased: where the lock installs it from. */
+  specSections: Map<string, Set<string>>;
   /** Gems a spec depends on that have no spec anywhere in the file (F4). */
   dangling: string[];
 } {
@@ -68,6 +70,7 @@ export function readGemfileLock(content: string): {
   const privateIndex: Array<{ name: string; version: string; registry: string }> = [];
   const uncheckable: Array<{ name: string; version: string; kind: "git" }> = [];
   const specs = new Set<string>();
+  const specSections = new Map<string, Set<string>>();
   const required = new Set<string>();
   let section = "";
   let inSpecs = false;
@@ -123,6 +126,7 @@ export function readGemfileLock(content: string): {
     const version = line.slice(open + 2, -1).split("-")[0].trim();
     if (!name || name.includes(" ") || !version) continue;
     specs.add(name.toLowerCase());
+    specSections.set(name.toLowerCase(), (specSections.get(name.toLowerCase()) ?? new Set<string>()).add(section));
     if (section === "GIT") {
       if (!uncheckable.some((u) => u.name === name)) uncheckable.push({ name, version, kind: "git" });
       continue;
@@ -134,7 +138,7 @@ export function readGemfileLock(content: string): {
   }
   closeGemSection();
   const dangling = [...required].filter((n) => !specs.has(n)).sort();
-  return { instances, versions, direct, privateIndex, uncheckable, specs, dangling };
+  return { instances, versions, direct, privateIndex, uncheckable, specs, specSections, dangling };
 }
 
 /** A gem name: what `gem '<name>'` must hold to be compared (no interpolation, no spaces). */
@@ -143,77 +147,190 @@ const GEM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const RECORDED_BLOCKS = new Set(["group", "groups", "platforms", "platform", "source", "git", "path", "github", "gitlab", "bitbucket"]);
 /** A Gemfile larger than this is not compared (it is no Gemfile). */
 const MAX_GEMFILE_BYTES = 1024 * 1024;
+/** Openers and `end` in a statement's code: `end`, `do`, `def`, `class` / `module`, and the keywords that open a block when they start an expression. */
+const BLOCK_TOKEN = /(?<![\w.:@$])(?:(end)|(do)|(def)|(class|module)|(if|unless|case|while|until|begin|for))(?![\w?!:])/g;
 
-/** A Ruby line with string contents emptied and its comment dropped, so keywords are only found in code. */
-function rubyCode(line: string): string {
-  let out = "";
+/**
+ * A Ruby line cut into statements at `;`, each with its string contents emptied and its comment
+ * dropped (`code`), so keywords are only found in code, beside the statement as written (`raw`).
+ */
+function rubyStatements(line: string): Array<{ raw: string; code: string }> {
+  const out: Array<{ raw: string; code: string }> = [];
+  let raw = "";
+  let code = "";
   let quote: string | null = null;
+  const flush = () => {
+    if (code.trim() !== "") out.push({ raw: raw.trim(), code: code.trim() });
+    raw = "";
+    code = "";
+  };
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     if (quote) {
-      if (c === "\\") i++;
+      raw += c;
+      if (c === "\\" && i + 1 < line.length) raw += line[++i];
       else if (c === quote) {
         quote = null;
-        out += c;
+        code += c;
       }
       continue;
     }
     if (c === "#") break;
+    if (c === ";") {
+      flush();
+      continue;
+    }
+    // A percent literal (`%w[a b]`, `%q{ if }`, `%(x)`): its contents are no code.
+    const percent = c === "%" ? /^%[qQwWiIs]?([([{<|!/])/.exec(line.slice(i, i + 3)) : null;
+    if (percent) {
+      const openCh = percent[1];
+      const closeCh = ({ "(": ")", "[": "]", "{": "}", "<": ">" } as Record<string, string>)[openCh] ?? openCh;
+      let depth = 1;
+      let j = i + percent[0].length;
+      for (; j < line.length && depth > 0; j++) {
+        if (line[j] === "\\") j++;
+        else if (line[j] === closeCh) depth--;
+        else if (line[j] === openCh && closeCh !== openCh) depth++;
+      }
+      raw += line.slice(i, j);
+      code += "%()";
+      i = j - 1;
+      continue;
+    }
     if (c === '"' || c === "'") quote = c;
-    out += c;
+    raw += c;
+    code += c;
   }
-  return out.trim();
+  flush();
+  return out;
+}
+
+/** The kind of an open block: one Bundler records (`group`, `platforms`, `source`, `git`, `path`), or any other. */
+type BlockKind = "group" | "platforms" | "source" | "git" | "path" | "other";
+
+/** What a Gemfile declares (gemfileDeclared). */
+export interface GemfileDeclared {
+  /** Gems Bundler always records in DEPENDENCIES, as written. */
+  names: string[];
+  /** Of `names`, those restricted to some platforms (`platforms:` / `platform:`, a `platforms` block): a lock may hold no spec for them. */
+  platformOnly: Set<string>;
+  /** Gems declared behind a condition or in a block not followed, lower-cased: not compared, and a lock may hold no spec for them (`gem "wdm" if Gem.win_platform?`). */
+  conditional: Set<string>;
+  /** Of `names`, where each is installed from: the registry, a git repository or a local path. */
+  sourceOf: Map<string, "registry" | "git" | "path">;
+}
+
+function blockKind(head: string): BlockKind {
+  if (!RECORDED_BLOCKS.has(head)) return "other";
+  if (head === "group" || head === "groups") return "group";
+  if (head.startsWith("platform")) return "platforms";
+  if (head === "source" || head === "path") return head;
+  return "git";
 }
 
 /**
  * The gems a Gemfile (or gems.rb) declares that Bundler always records in the lockfile's
  * DEPENDENCIES, or why the file could not be followed. Not a Ruby parser: it reads `gem '<name>'`
- * statements at the start of a line, at the top level or inside the blocks Bundler records whatever
- * the platform (`group`, `platforms`, `source`, `git`, `path`). A gem behind a condition (`if` /
- * `unless`, a modifier, `case`, `install_if`, `env`, a loop) may legitimately be left out of the
- * lockfile, so it is not compared; neither is a name built at run time, nor what `gemspec` or
- * `eval_gemfile` brings in. More `end`s than blocks, or a block never closed, is a file this does
- * not follow: null names, and the reason.
+ * statements (a line may hold several, `;`-separated), at the top level or inside the blocks
+ * Bundler records whatever the platform (`group`, `platforms`, `source`, `git`, `path`). A gem
+ * behind a condition (`if` / `unless`, a modifier, `case`, `install_if`, `env`, a loop, a method)
+ * may legitimately be left out of the lockfile, so it is not compared; neither is a name built at
+ * run time, nor what `gemspec` or `eval_gemfile` brings in. Blocks are counted by their openers (a
+ * keyword where an expression starts, `x = if ...`, a `do`) and their `end`s, so `x = case ... end`,
+ * a one-line `if a then b end`, an endless `def x = 1` and a heredoc are followed. More `end`s than
+ * blocks, or a block never closed, is a file this does not follow: no names, and the reason.
  */
-export function gemfileDeclared(content: string): { names: string[] } | { error: string } {
+export function gemfileDeclared(content: string): GemfileDeclared | { error: string } {
   if (content.length > MAX_GEMFILE_BYTES) return { error: "it is larger than any Gemfile this server compares" };
   const names: string[] = [];
-  /** Open blocks: true when Bundler records the gems inside whatever happens at run time. */
-  const blocks: boolean[] = [];
-  /** How many of the open blocks are conditional: a count, so a deep nest costs nothing per gem. */
-  let conditional = 0;
+  const platformOnly = new Set<string>();
+  const conditional = new Set<string>();
+  const sourceOf = new Map<string, "registry" | "git" | "path">();
+  const blocks: BlockKind[] = [];
+  /** Open blocks of each kind: counts, so a deep nest costs nothing per gem. */
+  const open = { group: 0, platforms: 0, source: 0, git: 0, path: 0, other: 0 };
+  const push = (kind: BlockKind) => {
+    blocks.push(kind);
+    open[kind]++;
+  };
+  /** `git_source(:name)` declares a keyword that installs from git (`gem "x", name: "repo"`). */
+  const gitKeys = new Set(["git", "github", "gitlab", "bitbucket"]);
   let inComment = false;
-  for (const raw of content.split(/\r?\n/)) {
-    if (raw.length > MAX_LINE) continue;
-    if (inComment) {
-      if (/^=end\b/.test(raw)) inComment = false;
+  let heredoc: string | null = null;
+  let pending = "";
+  for (const line of content.split(/\r?\n/)) {
+    if (line.length > MAX_LINE) continue;
+    if (heredoc !== null) {
+      if (line.trim() === heredoc) heredoc = null;
       continue;
     }
-    if (/^=begin\b/.test(raw)) {
+    if (inComment) {
+      if (/^=end\b/.test(line)) inComment = false;
+      continue;
+    }
+    if (/^=begin\b/.test(line)) {
       inComment = true;
       continue;
     }
-    const code = rubyCode(raw);
-    if (code === "") continue;
-    if (/^end\b/.test(code)) {
-      if (blocks.length === 0) return { error: "it has an `end` with no block open, so its structure could not be followed" };
-      if (blocks.pop() === false) conditional--;
-      continue;
+    // A statement continued on the next line (`gem 'x',` then `  path: 'y'`) is read as one.
+    const statements = rubyStatements(pending ? `${pending} ${line}` : line);
+    pending = "";
+    const last = statements[statements.length - 1];
+    if (last && /[,(\\]$/.test(last.code) && last.raw.length < MAX_LINE) {
+      pending = last.raw.replace(/\\$/, "");
+      statements.pop();
     }
-    if (/^(?:else|elsif|when|in|rescue|ensure)\b/.test(code)) continue;
-    const opensKeyword = /^(?:if|unless|case|while|until|for|begin|def|class|module)\b/.test(code) && !/\bend\s*$/.test(code);
-    // No two adjacent `\s*` in either pattern: a long run of spaces costs one pass, never its square (`code` is trimmed).
-    const opensDo = /\bdo(?:\s*\|[^|]*\|)?$/.test(code);
-    const gem = /^gem(?:\s+|\s*\(\s*)(['"])([^'"]*)\1/.exec(raw.trim());
-    if (gem && GEM_NAME.test(gem[2]) && !/\b(?:if|unless)\b/.test(code) && conditional === 0) names.push(gem[2]);
-    const opened = opensKeyword ? false : opensDo ? RECORDED_BLOCKS.has(/^([a-z_]+)/.exec(code)?.[1] ?? "") : null;
-    if (opened !== null) {
-      blocks.push(opened);
-      if (!opened) conditional++;
+    for (const { raw, code } of statements) {
+      // `<<~EOS` starts a heredoc: its body, up to the terminator, is no code.
+      const doc = /<<[~-]?(['"]?)([A-Za-z_]\w*)\1/.exec(code);
+      if (doc) heredoc = doc[2];
+      const declaredKey = /^git_source\s*\(?\s*:(\w+)/.exec(code);
+      if (declaredKey) gitKeys.add(declaredKey[1]);
+      const gem = /^gem(?:\s+|\s*\(\s*)(['"])([^'"]*)\1/.exec(raw);
+      const guarded = /(?<![\w.:])(?:if|unless)(?![\w?!:])/.test(code) || open.other > 0;
+      if (gem && guarded) conditional.add(gem[2].toLowerCase());
+      if (gem && GEM_NAME.test(gem[2]) && !guarded) {
+        names.push(gem[2]);
+        if (open.platforms > 0 || /(?<![\w.:])platforms?\s*:|:platforms?\s*=>/.test(code)) platformOnly.add(gem[2].toLowerCase());
+        const keys = [...code.matchAll(/(?<![\w:])(\w+)\s*:(?!:)|:(\w+)\s*=>/g)].map((m) => m[1] ?? m[2]);
+        sourceOf.set(gem[2], keys.includes("path") || open.path > 0 ? "path" : keys.some((k) => gitKeys.has(k)) || open.git > 0 ? "git" : "registry");
+      }
+      // Openers and `end`s in this statement, in order.
+      let firstDo = true;
+      let loopDo = false;
+      for (const t of code.matchAll(BLOCK_TOKEN)) {
+        const at = t.index ?? 0;
+        if (t[1]) {
+          const kind = blocks.pop();
+          if (kind === undefined) return { error: "it has an `end` with no block open, so its structure could not be followed" };
+          open[kind]--;
+        } else if (t[2]) {
+          // `while x do`: the `do` belongs to the loop already open.
+          if (loopDo) loopDo = false;
+          else push(firstDo ? blockKind(/^([a-z_]+)/.exec(code)?.[1] ?? "") : "other");
+          firstDo = false;
+        } else if (t[3]) {
+          // An endless `def x = 1` / `def x(a) = a` opens nothing.
+          if (!/^def\s+[^\s(=]+(?:\([^)]*\))?\s*=(?![=~>])/.test(code.slice(at))) push("other");
+        } else if (t[4]) {
+          push("other");
+        } else {
+          // A keyword opens a block only where an expression starts: the statement's start, or after
+          // `=`, `(`, `,`, `||`, `&&`, `!`, `[`, `{` or a word that ends an expression's left side.
+          // Elsewhere it is a modifier (`gem "x" if y`, `i += 1 while i < 3`), which opens nothing.
+          // Only the few characters before it are looked at, so a long line of keywords costs one pass.
+          let j = at - 1;
+          while (j >= 0 && (code[j] === " " || code[j] === "\t")) j--;
+          if (j < 0 || /(?:[=(,|&!{[]|(?<![\w.])(?:return|then|do|else|and|or|not))$/.test(code.slice(Math.max(0, j - 7), j + 1))) {
+            push("other");
+            if (t[5] === "while" || t[5] === "until" || t[5] === "for") loopDo = true;
+          }
+        }
+      }
     }
   }
   if (blocks.length > 0) return { error: "a block in it is never closed, so its structure could not be followed" };
-  return { names: [...new Set(names)] };
+  return { names: [...new Set(names)], platformOnly, conditional, sourceOf };
 }
 
 /** "x", "x and y", "x, y, z and 2 more": a few names of a list, as every lockfile reason words them. */
@@ -227,9 +344,9 @@ function someNames(names: string[]): string {
  * 2026-11-25, F1; npm and uv said it already): PARTIAL, behind the manifest. `damage`, when the
  * file is also damaged inside, makes it damage (the cut wording) rather than only out of date.
  */
-export function manifestAheadProblem(lockPath: string, manifest: string, missing: string[], damage: { reason: string; missing: number } | null = null): LockfileProblem {
+export function manifestAheadProblem(lockPath: string, manifest: string, missing: string[], damage: { reason: string; missing: number; interior?: true } | null = null): LockfileProblem {
   const behind = manifestAheadText(manifest, missing);
-  if (damage) return partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + missing.length);
+  if (damage) return partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + missing.length, damage.interior ? "interior" : false);
   return partialRead(lockPath, behind, missing.length, true);
 }
 
@@ -249,11 +366,15 @@ export function notComparedProblem(lockPath: string, manifest: string, why: stri
 }
 
 /** A lockfile's damage from entries it depends on and holds no entry for (F4), worded as uv.lock's. */
-export function danglingDamage(dangling: string[], entry: string): { reason: string; missing: number } | null {
+export function danglingDamage(dangling: string[], entry: string): { reason: string; part: string; missing: number; interior: true } | null {
   if (dangling.length === 0) return null;
   const one = dangling.length === 1;
-  return { reason: `it is truncated or damaged: ${dangling.length} package${one ? "" : "s"} named as ${one ? "a dependency has" : "dependencies have"} no ${entry} (${someNames(dangling)})`, missing: dangling.length };
+  const part = `${dangling.length} package${one ? "" : "s"} named as ${one ? "a dependency has" : "dependencies have"} no ${entry} (${someNames(dangling)})`;
+  return { reason: `${INTERIOR_DAMAGE}: ${part}`, part, missing: dangling.length, interior: true };
 }
+
+/** How a file read whole but lacking an entry another package needs is introduced (review item 5: never "read up to the damage"). */
+export const INTERIOR_DAMAGE = "an entry another package needs is missing";
 
 interface ComposerPackage {
   name?: unknown;
@@ -421,22 +542,42 @@ export function resolveRuby(cwd: string): VersionSource {
   const problems: LockfileProblem[] = [];
   // gems.rb's pair was read: a Gemfile.lock left beside it is not what Bundler installs, and is said.
   const passedOver = path.join(cwd, "Gemfile.lock");
-  if (lockPath !== passedOver && fs.existsSync(passedOver)) {
+  /** A Gemfile.lock that is a copy of the gems.locked read: read too, so it is never named unread. */
+  const copy = lockPath !== passedOver && fs.existsSync(passedOver) && sameText(passedOver, content);
+  if (lockPath !== passedOver && fs.existsSync(passedOver) && !copy) {
     problems.push({ file: passedOver, conflict: true, error: "gems.locked was read instead: with a gems.rb present Bundler uses gems.rb and gems.locked, so this file is not what gets installed" });
   }
-  // A spec's dependency with no spec of its own: the file is damaged inside (F4).
-  const inner = danglingDamage(read.dangling, "spec");
-  const damage = cut && inner ? { reason: `${cut}; ${inner.reason.replace(/^it is truncated or damaged: /, "")}`, missing: inner.missing } : cut ? { reason: cut, missing: 0 } : inner;
   // The Gemfile beside it, against what the file records (F1): DEPENDENCIES and every spec.
   const manifestName = path.basename(lockPath) === "gems.locked" ? "gems.rb" : "Gemfile";
   const manifest = readManifest(path.join(cwd, manifestName));
   let ahead: string[] = [];
+  /** DEPENDENCIES entries with no spec anywhere in the file (review item 3), known only with the Gemfile followed. */
+  let unspecced: string[] = [];
+  /** Gems installed from another source than the lock records (review item 4). */
+  const moved: string[] = [];
   if (manifest.state === "read") {
     const declared = gemfileDeclared(manifest.text);
     const recorded = new Set([...read.specs, ...read.direct.map((n) => n.toLowerCase())]);
     if ("error" in declared) problems.push(notComparedProblem(lockPath, manifestName, declared.error));
-    else ahead = declared.names.filter((n) => !recorded.has(n.toLowerCase()));
+    else {
+      ahead = declared.names.filter((n) => !recorded.has(n.toLowerCase()));
+      // A gem the Gemfile now installs from elsewhere than the lock records (a path or git gem moved
+      // to the registry, rb22): what the lock holds for it is not what the Gemfile installs.
+      const section = { registry: "GEM", git: "GIT", path: "PATH" } as const;
+      const where = { GEM: "the registry", GIT: "git", PATH: "a local path" } as Record<string, string>;
+      for (const [name, from] of declared.sourceOf) {
+        const held = read.specSections.get(name.toLowerCase());
+        if (held && !held.has(section[from])) moved.push(`${manifestName} installs ${name} from ${where[section[from]]}, but this lockfile holds it from ${[...held].map((h) => where[h]).join(" and ")}`);
+      }
+      // Bundler writes a spec for every DEPENDENCIES entry, except a gem the Gemfile restricts to
+      // other platforms (`tzinfo-data`, platforms: windows) or declares behind a condition (`wdm` if
+      // Gem.win_platform?), and bundler itself. Any other entry with no spec: a spec was lost.
+      unspecced = [...new Set(read.direct.map((n) => n.toLowerCase()))].filter((n) => n !== "bundler" && !read.specs.has(n) && !declared.platformOnly.has(n) && !declared.conditional.has(n)).sort();
+    }
   } else if (manifest.state === "unreadable") problems.push(notComparedProblem(lockPath, manifestName, manifest.reason));
+  // A spec's dependency (F4) or a DEPENDENCIES entry (item 3) with no spec of its own: damaged inside.
+  const inner = danglingDamage([...new Set([...read.dangling, ...unspecced])].sort(), "spec");
+  const damage: { reason: string; missing: number; interior?: true } | null = cut && inner ? { reason: `${cut}; ${inner.part}`, missing: inner.missing } : cut ? { reason: cut, missing: 0 } : inner;
   const uncheckable = read.uncheckable.map((u) => ({ ...u, file: lockPath }));
   if (read.instances.size === 0) {
     // Nothing was read and the file says why: named, never taken for a project with no gems.
@@ -445,15 +586,29 @@ export function resolveRuby(cwd: string): VersionSource {
     const extra = { ...(problems.length > 0 ? { problems } : {}), ...(uncheckable.length > 0 ? { uncheckable } : {}) };
     return { ...emptySource(), ...extra };
   }
-  if (ahead.length > 0) problems.push(manifestAheadProblem(lockPath, manifestName, ahead, damage));
-  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing));
+  if (ahead.length > 0 || moved.length > 0) {
+    const behind = [...(ahead.length > 0 ? [manifestAheadText(manifestName, ahead)] : []), ...moved.slice(0, 3)].join("; ");
+    const count = ahead.length + moved.length;
+    problems.push(damage ? partialRead(lockPath, `${damage.reason}; also, ${behind}`, damage.missing + count, damage.interior ? "interior" : false) : partialRead(lockPath, behind, count, true));
+  }
+  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing, damage.interior ? "interior" : false));
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
   return found(read.versions, read.instances, lockPath, "lockfile", {
     direct: { deps: read.direct, devDeps: [] },
+    ...(copy ? { extraSources: [passedOver] } : {}),
     ...(privateIndex.length > 0 ? { privateIndex } : {}),
     ...(uncheckable.length > 0 ? { uncheckable } : {}),
     ...(problems.length > 0 ? { problems } : {}),
   });
+}
+
+/** Whether `file` holds `text` (line endings aside): a copy of the lockfile read is no conflict with it. Unreadable is not the same. */
+function sameText(file: string, text: string): boolean {
+  try {
+    return readTextFile(file).replace(/\r\n/g, "\n") === text.replace(/\r\n/g, "\n");
+  } catch {
+    return false;
+  }
 }
 
 /** A manifest beside a lockfile: read, absent, or there and not readable (said, never taken for absent). */
@@ -481,6 +636,12 @@ export function resolvePhp(cwd: string): VersionSource {
   const problems: LockfileProblem[] = [];
   // composer.json against what the lock holds (F1); an entry's requirement with no entry (F4).
   const ahead = manifest.state === "read" ? composerManifestAhead(manifest.json, lock as Record<string, unknown>, read.names) : [];
+  // A lock with no dev package beside a require-dev it lacks: written with --no-dev, or before the
+  // require-dev was added. Which is not known, so require-dev is not compared, and that is said.
+  const devUnlocked = manifest.state === "read" && !(Array.isArray(lock["packages-dev" as keyof typeof lock]) && (lock["packages-dev" as keyof typeof lock] as unknown[]).length > 0)
+    ? composerKeys(manifest.json["require-dev"]).filter((n) => !isComposerPlatform(n) && !read.names.has(n))
+    : [];
+  if (devUnlocked.length > 0) problems.push(notComparedProblem(lockPath, "composer.json", `the lock holds no dev package, so require-dev (${someNames(devUnlocked)}) was not compared: it was written with --no-dev, or before require-dev changed`));
   if (manifest.state === "unreadable") problems.push(notComparedProblem(lockPath, "composer.json", manifest.reason));
   // The root package provides or replaces some names itself (symfony-demo replaces symfony/polyfill-php70,
   // which its locked packages require): without composer.json read, which ones is not known, so no
@@ -495,7 +656,7 @@ export function resolvePhp(cwd: string): VersionSource {
     return { ...emptySource(), ...(problems.length > 0 ? { problems } : {}), ...(uncheckable.length > 0 ? { uncheckable } : {}) };
   }
   if (ahead.length > 0) problems.push(manifestAheadProblem(lockPath, "composer.json", ahead, damage));
-  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing));
+  else if (damage) problems.push(partialRead(lockPath, damage.reason, damage.missing, "interior"));
   const privateIndex: PrivateIndexEntry[] = read.privateIndex.map((p) => ({ ...p, file: lockPath }));
   return found(read.versions, read.instances, lockPath, "lockfile", {
     direct: composerDirect(cwd),

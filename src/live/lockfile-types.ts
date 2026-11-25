@@ -162,6 +162,12 @@ export interface LockfileProblem {
    * older than its manifest, not as read up to damage.
    */
   behindManifest?: true;
+  /**
+   * Set with `partial` for a file read whole in which an entry another package needs is missing (a
+   * package named as a dependency with no entry of its own): worded as that, never as read up to a
+   * cut (review of the 2026-11-25 fix round, item 5).
+   */
+  interior?: true;
   /** The ecosystem whose resolution reported it (stamped by resolveVersionSource), for ecosystem_filter. */
   ecosystem?: string;
 }
@@ -172,11 +178,15 @@ export interface LockfileProblem {
  * whole as far as it goes and only lacks what the manifest beside it declares (cut cleanly
  * between two entries, or written before the manifest changed).
  */
-export function partialRead(file: string, reason: string, missing = 0, behindManifest = false): LockfileProblem {
-  const consequence = behindManifest
-    ? "What it holds was checked; the dependencies it does not hold were not: regenerate the lockfile"
-    : "It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile";
-  return { file, partial: true, ...(missing > 0 ? { skipped: missing } : {}), ...(behindManifest ? { behindManifest: true as const } : {}), error: `${reason}. ${consequence}` };
+export function partialRead(file: string, reason: string, missing = 0, behindManifest: boolean | "interior" = false): LockfileProblem {
+  const consequence =
+    behindManifest === "interior"
+      ? "The whole file was read and what it holds was checked; what the missing entries would install was not: regenerate the lockfile"
+      : behindManifest
+        ? "What it holds was checked; the dependencies it does not hold were not: regenerate the lockfile"
+        : "It was read up to the damage only, so the packages after it were not checked: regenerate the lockfile";
+  const kind = behindManifest === "interior" ? { interior: true as const } : behindManifest ? { behindManifest: true as const } : {};
+  return { file, partial: true, ...(missing > 0 ? { skipped: missing } : {}), ...kind, error: `${reason}. ${consequence}` };
 }
 
 /** `could not be read (<the system's reason>)`: the wording for a file that exists and cannot be opened. */

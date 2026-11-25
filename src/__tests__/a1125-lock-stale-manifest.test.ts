@@ -304,7 +304,8 @@ BUNDLED WITH
         composerPkg("symfony/polyfill", "1.0.0", { replace: { "symfony/polyfill-php80": "self.version" } }),
       ]),
     });
-    expect(problems("Packagist")).toEqual([]);
+    // A lock with no dev package beside a require-dev: not compared, and said as a note, never PARTIAL (review item 4, php05).
+    expect(problems("Packagist").map((p) => p.notCrossChecked === true)).toEqual([true]);
   });
 
   it("composer.json that is not JSON: the lock is not compared, and that is said, never PARTIAL", () => {
@@ -386,7 +387,8 @@ BUNDLED WITH
       ].join("\n"),
       "pdm.lock": PDM_LOCK([["anyio", "4.1.0"], ["jinja2", "3.1.2"]], '["default", "full"]'),
     });
-    expect(problems("PyPI")).toEqual([]);
+    // The groups the lock does not record (docs, lint) are said as not compared: a note, never PARTIAL (review item 4).
+    expect(problems("PyPI").map((p) => [p.notCrossChecked === true, /groups docs, lint/.test(p.error)])).toEqual([[true, true]]);
   });
 
   it("pdm: a group the lock says it holds is compared", () => {
@@ -408,7 +410,7 @@ describe("F1: the comparison is bounded on a manifest an attacker writes", () =>
   // Each just under the 1 MB a Gemfile is compared up to, and followed whole (no "not compared" problem).
   it("a Gemfile of runs of spaces (a pattern with two adjacent \\s* costs their square)", () => {
     const spaces = " ".repeat(4000);
-    const lines = [...Array.from({ length: 120 }, () => `gem${spaces}x`), ...Array.from({ length: 120 }, () => `rake do${spaces}x`), "gem 'rake'"];
+    const lines = [...Array.from({ length: 120 }, () => `gem${spaces}x`), ...Array.from({ length: 120 }, () => `rake do${spaces}end`), "gem 'rake'"];
     write({ Gemfile: lines.join("\n"), "Gemfile.lock": GEMFILE_LOCK_RAKE });
     expect(timed(() => read("RubyGems"))).toBeLessThan(1500);
     expect(problems("RubyGems")).toEqual([]);
