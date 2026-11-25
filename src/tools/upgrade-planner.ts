@@ -53,13 +53,14 @@ import { discoveryNote, exclusionNotes, incompleteLockfiles, unreadableNotes } f
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { registryQuote } from "../untrusted-text.js";
-import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
+import type { ResolvedDependency, VulnerabilityCoverage, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 import { AFTER_RUN, protocolOf } from "./upgrade-plan-protocol.js";
-import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
+import { cargoDependencyReader, hasCargoPrecondition, withCargoStepPreconditions } from "./upgrade-planner-cargo-steps.js";
+import { explainCommandlessRows, NO_COMMAND_REASON_START } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
-import { declaredNpmOperator, hasUnsafeDir, withheldStepsOf, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { declaredNpmOperator, hasUnsafeDir, withheldStepsOf, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, hasSelfRequiringTarget, withoutSelfRequiringTargets, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
 import { escapeUnsafeDirs, isShellSafeCargoTarget, isShellSafeDir, liveUnsafeDirs } from "../live/shell-safe.js";
 import { walkNotReadNote } from "./what-should-i-know.js";
 import * as path from "node:path";
@@ -268,6 +269,12 @@ export interface UpgradePlanResult {
 const OFFER_CHECK_BUDGET_MS = 10_000;
 /** Time run_order may spend reading the go.mod of the `go get` targets it combines. */
 const SEQUENCE_BUDGET_MS = 3_000;
+/** How the reason starts for a row whose target clears none of its advisories. */
+const NOT_A_FIX_START = `${NO_COMMAND_REASON_START}: it is NOT a fix, `;
+/** Time the check that a target clears any of its row's advisories may take. */
+const NOT_A_FIX_BUDGET_MS = 4_000;
+/** Time the Cargo steps may spend reading what their targets require (upgrade-planner-cargo-steps.ts). */
+const CARGO_STEP_BUDGET_MS = 6_000;
 /** Time the Cargo rows may spend reading the rust-version of releases not already in the cache. */
 const RUST_VERSION_BUDGET_MS = 4_000;
 
@@ -912,8 +919,17 @@ async function executeStandalonePlanner(
   withoutOwnPackageUpgrades(limited, workspaceOwnNames(root, uvSpaces));
   withYarnClassicResolutions(limited, root);
   await withPythonSupport(limited, root, liveIntel.getFixPathSources());
+  // A uv target that requires the project itself at another version cannot lock (upgrade-plan-runnable.ts).
+  await withoutSelfRequiringTargets(limited, root, liveIntel.getFixPathSources());
   // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
   await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
+  // A Cargo step's preconditions, read before it is named: the pre-update a `--precise` needs, and
+  // a `cargo add` whose two lines would link one native library (upgrade-planner-cargo-steps.ts).
+  await withCargoStepPreconditions(limited, root, liveIntel.getFixPathSources(), Date.now() + withinCallBudget(CARGO_STEP_BUDGET_MS, 500));
+  // A target that clears none of the row's advisories is not a fix: no step serves it and it is not
+  // counted as fixed (gh cli v2.14.0: gorilla/websocket v1.4.2 -> v1.5.3 was listed under a go get's
+  // `fixes`; GO-2026-6278 affects 1.5.3 again). Asked of OSV.dev for the target itself (cached).
+  await markTargetsThatFixNothing(limited, (r) => (vulnsByPackage.get(instanceKey(r.ecosystem, r.package, r.currentVersion)) ?? []).filter((v) => v.platformActive), (deps) => liveIntel.queryAdvisories(deps), withinCallBudget(NOT_A_FIX_BUDGET_MS, 500));
   // A directory name comes from the repository: a step in one that is not a plain path names no
   // command and no directory, only words (audit 2026-11-25 B-B1; shell-safe.ts isShellSafeDir).
   const unsafeDirs = withholdUnsafeDirs(limited, installDirsOf);
@@ -925,9 +941,10 @@ async function executeStandalonePlanner(
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
+  const notAFix = (r: (typeof limited)[number]) => r.reasons.some((x) => x.startsWith(NOT_A_FIX_START));
   const heldRows = limited.filter(heldUnclean);
   // Not counted as fixed: a target that is not a clean fix, or a step in a directory whose name is not safe in a command.
-  const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || hasUnsafeDir(r);
+  const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || notAFix(r) || hasUnsafeDir(r) || hasCargoPrecondition(r) || hasSelfRequiringTarget(r);
   const unsafeRows = limited.filter(hasUnsafeDir);
   const withheldTotal = unsafeRows.reduce((n, r) => n + withheldStepsOf(r), 0);
   // The rows shown as one script safe to run top to bottom (upgrade-plan-sequence.ts).
@@ -938,11 +955,12 @@ async function executeStandalonePlanner(
   );
   const sequence = await sequencePlan(limited, {
     totalRows: filtered.length,
-    heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x)),
+    heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x) || x.startsWith(NOT_A_FIX_START)),
     goSource: liveIntel.getReleaseSources().Go,
     peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
     declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
     withheldSteps: withheldStepsOf,
+    cargoDependsOn: cargoDependencyReader(root),
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
@@ -1246,4 +1264,48 @@ function vulnerabilitiesReason(groups: ReturnType<typeof groupAdvisories>): stri
 /** Before the fix path is checked; verifyFixPaths rewrites it once the target is known (M2). */
 function noFixReason(n: number): string {
   return `${n} of them ${n === 1 ? "has" : "have"} no published fix`;
+}
+
+/**
+ * Rows with a step whose target is still affected by every advisory on the installed copy: no step
+ * is given for them (their commands go) and the reason says why; a row whose target's advisories
+ * could not be read keeps its step.
+ */
+async function markTargetsThatFixNothing(
+  rows: UpgradeRecommendation[],
+  vulnsOf: (r: UpgradeRecommendation) => VulnerabilityEntry[],
+  query: (deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>,
+  budgetMs: number,
+): Promise<void> {
+  const stepped = (r: UpgradeRecommendation) =>
+    Boolean(r.upgradeCommands?.length || r.refreshCommands?.length || r.parentUpgrades?.some((u) => u.refreshCommands?.length || u.levers.some((l) => l.commands?.length)));
+  const asked = rows.filter((r) => r.targetVersion && r.targetVersion !== r.currentVersion && vulnsOf(r).length > 0 && stepped(r));
+  if (asked.length === 0) return;
+  const deps: ResolvedDependency[] = asked.map((r) => ({ name: r.package, version: r.targetVersion, ecosystem: r.ecosystem as ResolvedDependency["ecosystem"], isDev: false, isDirect: false, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, budgetMs));
+    timer.unref?.();
+  });
+  const answer = await Promise.race([query(deps).catch(() => null), late]);
+  clearTimeout(timer);
+  if (!answer) return;
+  const unanswered = new Set(answer.uncheckedDependencies ?? []);
+  for (const r of asked) {
+    const key = `${r.ecosystem}\0${r.package}\0${r.targetVersion}`;
+    if (unanswered.has(key)) continue;
+    const atTarget = answer.vulnerabilities.filter((v) => v.ecosystem === r.ecosystem && v.package === r.package && v.currentVersion === r.targetVersion);
+    const named = new Set(atTarget.flatMap((v) => [v.vulnId, ...v.aliases]));
+    const own = vulnsOf(r);
+    if (own.length === 0 || !own.every((v) => named.has(v.vulnId) || v.aliases.some((a) => named.has(a)))) continue;
+    const ids = [...new Set(own.map((v) => v.vulnId))];
+    const text = `${NOT_A_FIX_START}since ${r.package} ${r.targetVersion} is still affected by ${ids.join(", ")}, every advisory on ${r.package} ${r.currentVersion ?? ""}`.trimEnd() + ": no step is given for it and it is not counted as fixed";
+    if (!r.reasons.includes(text)) r.reasons.push(text);
+    delete r.upgradeCommands;
+    delete r.refreshCommands;
+    for (const u of r.parentUpgrades ?? []) {
+      delete u.refreshCommands;
+      for (const l of u.levers) delete l.commands;
+    }
+  }
 }

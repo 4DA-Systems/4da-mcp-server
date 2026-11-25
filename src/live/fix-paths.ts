@@ -135,6 +135,12 @@ export interface CratesSparse {
    * cached before it was read: such a record is read again (upgrade-planner-rust-version.ts).
    */
   rustVersions?: Record<string, string>;
+  /**
+   * version -> the native library that release links (the index's `links`, Cargo allows one package
+   * per value in a build); a release that links none is absent. The whole field is absent on a record
+   * cached before it was read: such a record is read again (upgrade-planner-cargo-steps.ts).
+   */
+  links?: Record<string, string>;
 }
 
 /** npm's abbreviated document: per version, the fields fix paths read. */
@@ -470,7 +476,7 @@ export class FixPathSources {
     try {
       const res = await fetchWithTimeout(sparseIndexUrl(name), { headers: { "User-Agent": CRATES_USER_AGENT } }, TIMEOUT_MS);
       if (!res.ok) return null;
-      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {} };
+      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {}, links: {} };
       for (const line of (await res.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -481,6 +487,7 @@ export class FixPathSources {
             features?: unknown;
             features2?: unknown;
             rust_version?: unknown;
+            links?: unknown;
           };
           if (!entry.yanked) out.versions.push(entry.vers);
           else out.yanked!.push(entry.vers);
@@ -488,6 +495,7 @@ export class FixPathSources {
           if (offered) (out.features ??= {})[entry.vers] = offered;
           // A Rust version as Cargo writes one ("1.64", "1.67.1"); anything else is not kept.
           if (typeof entry.rust_version === "string" && /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(entry.rust_version.trim())) out.rustVersions![entry.vers] = entry.rust_version.trim();
+          if (typeof entry.links === "string" && entry.links.length > 0 && entry.links.length <= 128) out.links![entry.vers] = entry.links;
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
