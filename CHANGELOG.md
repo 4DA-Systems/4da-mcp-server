@@ -9,7 +9,7 @@
 ### Tests and gates
 
 - A CI run whose only failures are jobs that never got a runner (cancelled with no runner and no step, in practice macOS install smokes: three times on 2026-11-24) is run again by `rerun-unstarted.yml`, at most twice; a job that ran a step and failed is left for a person. The release workflow's "CI passed on the tagged commit" check now looks again for two minutes before it believes a failure, so such a re-run no longer stops a release.
-- The guard hook's timing rows allow for the machine's load at that moment (the hook answering a trivial call, against 60 ms, up to four times the bound). The flat bound failed once on a loaded CI runner at 1,095 ms against 1,000 with nothing wrong in the hook; under twice as many busy processes as cores the old rows fail at about 1.8 s against 500 ms and the new ones pass. The inputs these rows were written for took 3 to 21 s.
+- The guard hook's timing rows are judged on the hook's own CPU time when the wall clock is over its bound: a row passes inside 500 ms of wall clock (1,000 ms for the two rows that read 8 MB of ledger), or with the hook's CPU time inside twice that. The wall-clock bound failed twice on loaded CI runners with nothing wrong in the hook (1,095 ms, then 1,418 ms, against 1,000), the second time through a bound scaled by how long a trivial call took at that moment. With 32 busy processes on 16 cores a ledger row went from 390 ms to 4,600 ms of wall clock and from 450 ms to 660 ms of CPU time; all 91 tests pass under that load, and fail when the hook is made to burn 2.5 s. The inputs these rows were written for took 1.5 s to 21 s.
 
 ## 6.5.1 — 2026-11-24
 
