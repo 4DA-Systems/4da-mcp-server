@@ -341,7 +341,7 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
   ])("%s: the later package is not lost: listed malware is human_only, a near-miss is flagged offline", async (task, deps, bad) => {
     NPM["lodash-es"] = { latest: "4.17.21", versions: ["4.17.21"] };
     // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
-    // exactly a name of a bundled list; any other name is handed back in check_these, never sent by it, and a
+    // exactly a name of a bundled list; any other name is listed in unverified_words, never sent by it, and a
     // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief(task, deps);
     if (bad === "electorn") {
@@ -384,7 +384,7 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
 
   it("a clean list: every item is checked or handed back at its own version", async () => {
     // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
-    // exactly a name of a bundled list; any other name is handed back in check_these, never sent by it, and a
+    // exactly a name of a bundled list; any other name is listed in unverified_words, never sent by it, and a
     // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief("add left-pad 1.3.0, chalk 5.6.2 and express 5.1.0");
     expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
@@ -407,19 +407,19 @@ describe("a task naming more packages than the briefing checks fails closed", ()
 
   it("ten clean packages: the first eight are checked, the other two are NOT CHECKED by name, and it is not safe_to_delegate (it was, silently)", async () => {
     // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
-    // exactly a name of a bundled list; any other name is handed back in check_these, never sent by it, and a
+    // exactly a name of a bundled list; any other name is listed in unverified_words, never sent by it, and a
     // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief(`npm install ${many(10).join(" ")}`);
     expect(r.new_packages).toBeUndefined();
-    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(many(10));
+    expect(r.unverified_words?.map((w) => w.word)).toEqual(many(10));
     expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.summary).toContain("NOT CHECKED: 10 packages named in the task were not looked up by this briefing");
+    expect(r.summary).toContain("NOT ASSESSED: 10 names the task may mean as packages were not looked up by this briefing");
     expect(ASKED.some((u) => /pkg-\d/.test(u))).toBe(false);
-    // Past dependency_check's own limit of 25 items, the rest is counted, not listed.
+    // Past 25 names the rest is counted, not listed.
     for (let i = 13; i <= 30; i++) NPM[`pkg-${i}`] = { latest: "1.0.0", versions: ["1.0.0"] };
     const more = await brief(`npm install ${Array.from({ length: 30 }, (_, i) => `pkg-${i + 1}`).join(" ")}`);
-    expect(more.check_these?.arguments.items).toHaveLength(25);
-    expect(more.check_these?.not_listed).toBe(5);
+    expect(more.unverified_words).toHaveLength(25);
+    expect(more.summary).toContain("NOT ASSESSED: 30 names");
   });
 
   it("a prose list past eight fails closed the same way", async () => {
@@ -436,14 +436,14 @@ describe("a task naming more packages than the briefing checks fails closed", ()
     for (const name of eight) NPM[name] ??= { latest: "1.0.0", versions: ["1.0.0"] };
     const r = await brief(`npm install ${eight.join(" ")}`);
     expect(r.new_packages).toHaveLength(8);
-    expect(r.check_these).toBeUndefined();
+    expect(r.unverified_words).toBeUndefined();
     expect(r.summary).not.toContain("NOT CHECKED");
   });
 
   it("a private name never takes a checked slot, and is never named as unchecked", async () => {
     const r = await brief(`npm install acme-vault ${many(8).join(" ")}`, NPM_PROJECT, { privateReason: (_e: string, n: string) => (n === "acme-vault" ? "private by .npmrc" : null) });
-    expect(r.check_these?.arguments.items.map((i) => i.package)).toEqual(many(8));
-    expect(JSON.stringify(r.check_these)).not.toContain("acme-vault");
+    expect(r.unverified_words?.map((w) => w.word)).toEqual(many(8));
+    expect(JSON.stringify(r.unverified_words)).not.toContain("acme-vault");
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
   });
 });
@@ -457,7 +457,7 @@ describe("what was already right stays right", () => {
     ["add error handling, then update the docs", "safe_to_delegate"],
     ["add tests, logging and retries", "safe_to_delegate"],
     ["upgrade lodash to 4.17.21", "safe_to_delegate"],
-    // left-pad is on no bundled list: handed back in check_these, so review_needed.
+    // left-pad is on no bundled list: listed in unverified_words, so review_needed.
     ["add the left-pad package", "review_needed"],
   ] as const)("%s: %s", async (task, level) => {
     NPM.lodahs = { latest: "0.0.1-security", versions: ["0.0.1-security"] };

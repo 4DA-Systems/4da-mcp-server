@@ -136,7 +136,6 @@ describe("3. an ecosystem with no such release, or a namesake's near-miss, is no
     for (const p of r.new_packages ?? []) expect(p).toMatchObject({ ecosystem: "PyPI", verdict: "proceed" });
     // Decided on PyPI (a popular name there): npm's namesake is not listed (third blind check, item 4).
     expect(r.unverified_words).toBeUndefined();
-    expect(r.check_these).toBeUndefined();
   });
 
   it("malware from an ecosystem that has the name and release still wins in a mixed project", async () => {

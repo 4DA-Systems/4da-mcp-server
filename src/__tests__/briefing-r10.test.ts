@@ -25,6 +25,11 @@ import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
 
+/** The dependency_check call an agent makes for the unverified words (fourth blind check: the answer itself holds no arguments). */
+const follow = (r: { unverified_words?: Array<{ word: string; read_as: string; version?: string }> }) => ({
+  items: (r.unverified_words ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: w.version ?? "latest" })),
+});
+
 const NPM = [dep("lodash", "4.17.20")];
 const RUST = [dep("tokio", "1.40.0", "crates.io")];
 /** package.json beside Cargo.toml, npm the larger: the case that gave two rows. */
@@ -157,8 +162,8 @@ describe("2. a Cargo table entry is one package in one ecosystem", () => {
     // as crates.io's, at the constraint the entry writes; dependency_check judges it there.
     const r = await brief(`add ${ENTRY}`, NPM_AND_RUST);
     expect(r.new_packages).toBeUndefined();
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "crates.io", package: "smallvec", to: ">=1.6.0,<1.6.1" }]);
-    const check = (await executeDependencyCheck(null, r.check_these!.arguments, stubIntel(NPM_AND_RUST, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    expect(r.unverified_words).toMatchObject([{ word: "smallvec", read_as: "crates.io" }]);
+    const check = (await executeDependencyCheck(null, follow(r), stubIntel(NPM_AND_RUST, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
     expect(check.results).toMatchObject([{ verdict: "avoid" }]);
     expect(stub.asked.some((u) => u === "https://registry.npmjs.org/smallvec")).toBe(false);
   });
@@ -250,7 +255,7 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
-  it("use pinguinlib: a name on no list is not asked by the briefing; dependency_check on check_these finds the malware", async () => {
+  it("use pinguinlib: a name on no list is not asked by the briefing; dependency_check on the unverified word finds the malware", async () => {
     stub.npm.pinguinlib = { latest: "0.0.1-security", versions: ["0.0.1-security"] };
     stub.osv.push(advisory("MAL-2026-pinguinlib", "pinguinlib", "CRITICAL", {}, "npm", true));
     const r = await brief("use pinguinlib");
@@ -258,7 +263,7 @@ describe("5. a word in prose is looked up only when it is a listed name (final d
     expect(r.delegation_assessment.level).toBe("review_needed");
     expect(r.unverified_words).toEqual([{ word: "pinguinlib", read_as: "npm" }]);
     const cmd = await brief("npm install pinguinlib");
-    const check = (await executeDependencyCheck(null, cmd.check_these!.arguments, stubIntel(NPM, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    const check = (await executeDependencyCheck(null, follow(cmd), stubIntel(NPM, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
     expect(check.results).toMatchObject([{ verdict: "avoid" }]);
   });
 

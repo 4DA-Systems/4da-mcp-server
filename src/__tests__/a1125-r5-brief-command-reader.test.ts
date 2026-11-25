@@ -26,34 +26,32 @@ async function brief(task: string): Promise<Record<string, any>> {
 describe("the command reader", () => {
   it("an option's value is never a package", async () => {
     const r = await brief("yarn add qzws@7.4.5 --network-timeout 100000");
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "qzws", to: "7.4.5" }]);
+    expect(r.unverified_words).toEqual([{ word: "qzws", read_as: "npm", version: "7.4.5" }]);
     expect(JSON.stringify(r)).not.toMatch(/"(?:word|package)":"network-timeout"/);
   });
 
   it.each(["cargo add hyper --vers 0.14.9", "cargo add hyper --version 0.14.9", "cargo add hyper --vers=0.14.9"])("%s: the version of hyper", async (task) => {
     const r = await brief(task);
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "crates.io", package: "hyper", to: "0.14.9" }]);
-    expect(r.unverified_words).toBeUndefined();
+    expect(r.unverified_words).toEqual([{ word: "hyper", read_as: "crates.io", version: "0.14.9" }]);
   });
 
   it("an npm dist-tag is kept as written", async () => {
     const r = await brief("npm install qzstand@next");
-    expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: "qzstand", to: "next" }]);
+    expect(r.unverified_words).toEqual([{ word: "qzstand", read_as: "npm", version: "next" }]);
   });
 
   it("npm install qzstand@<uuid>: the word is a credential shape: held, redacted, never listed at latest", async () => {
     const r = await brief("npm install qzstand@98e62aac-d9e2-44a1-946d-1fbf082c44aa");
-    expect(r.check_these).toBeUndefined();
+    expect(r.unverified_words).toBeUndefined();
     expect(JSON.stringify(r.withheld_from_task)).toMatch(/qzst... .*credential/);
   });
 
   it.each(["npm install qzstand@9d962429c6eeafce", "npm install zustand@9d962429c6eeafce"])(
-    "%s: listed with no `to`, never as latest",
+    "%s: listed with no version, never as latest",
     async (task) => {
       const r = await brief(task);
       const name = task.split(" ")[2].split("@")[0];
-      expect(r.check_these?.arguments.items).toEqual([{ ecosystem: "npm", package: name }]);
-      expect(r.check_these?.note).toContain(`the version the task writes for ${name} could not be read`);
+      expect(r.unverified_words).toEqual([{ word: name, read_as: "npm" }]);
       expect(JSON.stringify(r)).not.toMatch(/"to":"latest"/);
     },
   );

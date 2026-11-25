@@ -213,6 +213,11 @@ function redact(word: string): string {
 
 const NOT_SENT = "nothing about it was sent";
 
+/** A URL's user info (`https://user:secret@host/x.tgz`) is never repeated in what the answer shows (fourth blind check). */
+function withoutUserInfo(text: string): string {
+  return text.replace(/(\/\/)[^/@\s]{1,300}@/g, "$1(user info withheld)@");
+}
+
 /** Words that end a command in prose ("then", "&&", ";"), and verbs that start the next clause after "and". */
 const COMMAND_ENDS = new Set(["then", "&&", "||", ";", "|", "and", "or", "but", "after", "before", "so"]);
 
@@ -375,7 +380,7 @@ export function screenTask(task: string): TaskScreen {
       // `name@file:../x` names the package; a bare path or URL names only the source.
       const named = /^(?:@[^@/\s]+\/)?[^@/\s:]+@/.test(bare(o.text)) ? operandName(o.text) : null;
       if (named) holdPackage(named, kind, o.start, o.end);
-      else hold(bare(o.text).slice(0, 80), `not looked up: the task installs it from ${kind}, not by a registry name`, o.start, o.end, true);
+      else hold(withoutUserInfo(bare(o.text)).slice(0, 80), `not looked up: the task installs it from ${kind}, not by a registry name`, o.start, o.end, true);
     }
     // Each word belongs to one command: "npm npm npm ..." was parsed forty words at a time from every word (re-check, item 3).
     i = Math.max(i, last);

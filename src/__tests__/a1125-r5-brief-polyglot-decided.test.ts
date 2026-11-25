@@ -29,7 +29,6 @@ async function brief(task: string): Promise<Record<string, any>> {
 describe("a name decided in one ecosystem is not listed in the others", () => {
   it.each(["use crossenv", "add express", "upgrade express to 5", "add the lodash package"])("%s", async (task) => {
     const r = await brief(task);
-    expect(r.check_these).toBeUndefined();
     expect(r.unverified_words).toBeUndefined();
     expect(h.requests.some((u) => /pypi\.org\/pypi\/(?:crossenv|express|lodash)\/|index\.crates\.io\/.*(?:crossenv|express|lodash)/.test(u))).toBe(false);
   });

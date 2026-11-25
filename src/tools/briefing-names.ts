@@ -201,15 +201,10 @@ export function isTomlEntry(task: string, start: number): boolean {
 
 /**
  * Put before the name of a JSON manifest entry written in the task (`"name": "^1.2"`): a key of a
- * manifest, so a name read from structured syntax (the briefing's check_these takes only those).
+ * manifest, so the readers take its key as a package name and its value as the version.
  * Private-use, outside every token, as TOML_MARK.
  */
 export const JSON_MARK = "\uE004";
-
-/** Whether the token that starts at `start` of a normalized task is the key of a manifest entry (JSON or TOML). */
-export function isManifestEntry(task: string, start: number): boolean {
-  return start > 0 && (task[start - 1] === TOML_MARK || task[start - 1] === JSON_MARK);
-}
 
 
 /**

@@ -196,7 +196,7 @@ describe("B1 in the briefing: the malware after a prose item is found (each was 
     ["add zod, lodahs", NPM_PROJECT, "lodahs"],
   ])("%s: never safe on %s (a listed malicious name is human_only, a near-miss is flagged offline)", async (task, deps, bad) => {
     // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
-    // exactly a name of a bundled list; any other name is handed back in check_these (not sent by the briefing),
+    // exactly a name of a bundled list; any other name is listed in unverified_words (not sent by the briefing),
     // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await brief(task, deps);
     if (bad === "electorn" || bad === "lodahs") {
@@ -269,7 +269,7 @@ describe("nothing past a cap is dropped without a word", () => {
     // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
     // held (withheld_from_task) and the task is review_needed. An install command's operand is looked up.
     // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
-    // exactly a name of a bundled list; any other name is handed back in check_these (not sent by the briefing),
+    // exactly a name of a bundled list; any other name is listed in unverified_words (not sent by the briefing),
     // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await brief("add zod, valibot, superstruct, io-ts and is-even");
     expect(r.new_packages?.map((p) => p.name)).toEqual(["zod"]);
