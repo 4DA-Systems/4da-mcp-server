@@ -20,7 +20,7 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, installedNames, lookupEcosystems, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, installedNames, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -35,7 +35,7 @@ import {
   specText,
 } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
-import { boundWords, offlineNearMiss, screenedOut, screenTask, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
+import { boundWords, knownPublicName, offlineNearMiss, screenedOut, screenTask, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
@@ -341,6 +341,15 @@ export function gateTaskNames<
   const screen = screenTask(task);
   const touched = touchedNames(task, screen);
   const installed = installedNames(deps);
+  // The ecosystems whose bundled lists count: the project's own, and those a command in the task installs
+  // from or a manifest file it names. A language or manager word in prose ("the python side should use
+  // ctx" in an npm project) decides nothing (fifth blind check, item 4).
+  const decided = new Set<CheckEcosystem>([...projectEcosystems(deps), ...readTaskItems(normalizeVersionSyntax(screen.text), deps).fixed.map((f) => f.ecosystem)]);
+  const lowered = screen.text.toLowerCase();
+  if (/\bpackage(?:-lock)?\.json\b|\bpnpm-lock\.yaml\b|\byarn\.lock\b/.test(lowered)) decided.add("npm");
+  if (/\brequirements[\w.-]*\.txt\b|\bpyproject\.toml\b|\bpipfile\b|\bsetup\.py\b/.test(lowered)) decided.add("PyPI");
+  if (/\bcargo\.(?:toml|lock)\b/.test(lowered)) decided.add("crates.io");
+  if (/\bgo\.(?:mod|sum)\b/.test(lowered)) decided.add("Go");
   const held: TaskWordWithheld[] = [];
   const seen = new Set<string>();
   let beyondHeld = 0;
@@ -381,7 +390,7 @@ export function gateTaskNames<
       hold(shown, NOT_READ_WHOLE);
       return null;
     }
-    const allowed = lookupEcosystems(name, own, installed);
+    const allowed = own.filter((e) => installed(name, e) || (decided.has(e) && knownPublicName(name, e)));
     // Decided in an ecosystem (a dependency there, or a bundled-list name there): its namesakes in the other
     // ecosystems are not listed. Listing them made 33 of 190 ordinary tasks review_needed, and following them
     // judged the wrong registry ("use crossenv": PyPI's crossenv, proceed; third blind check, item 4).
