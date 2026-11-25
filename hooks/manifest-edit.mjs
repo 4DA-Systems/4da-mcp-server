@@ -916,9 +916,11 @@ function npmWholeDependencies(text) {
       if (d) out.push({ name: d.name, section, spec: d.spec });
     }
   };
+  // The top-level pair only in a workspace root (a `workspaces` field): elsewhere `catalog` is any
+  // tool's field (`{"catalog": {"title": "2 items"}}` was held; blind check of the a1125 hook lane).
   for (const [holder, prefix] of [
     [doc.workspaces, "workspaces."],
-    [doc, ""],
+    [doc.workspaces === undefined ? null : doc, ""],
   ]) {
     if (!isObject(holder)) continue;
     if (isObject(holder.catalog)) catalog(holder.catalog, `${prefix}catalog`);

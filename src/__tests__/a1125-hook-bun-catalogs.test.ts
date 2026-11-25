@@ -60,6 +60,15 @@ describe("each place Bun reads a catalog from", () => {
     expect(run.text).toContain("answered avoid");
   });
 
+  it("a top-level catalog in a package.json that is no workspace root (no `workspaces` field) is another tool's field: not held", () => {
+    s.ledger([AVOID]);
+    const file = s.file("package.json", "{}\n");
+    expect(s.write(file, json({ name: "shop", catalog: { title: "2 items", lodash: "4.17.20" } })).decision).toBe("allow");
+    expect(s.write(file, json({ name: "shop", catalogs: { winter: { coats: "3.0.0" } } })).decision).toBe("allow");
+    // With a workspaces field it is Bun's.
+    expect(s.write(file, json({ name: "shop", workspaces: ["p/*"], catalog: { lodash: "4.17.20" } })).decision).toBe("deny");
+  });
+
   it("a catalog: dependency itself names no version, and a workspaces array is not a catalog", () => {
     s.ledger([AVOID]);
     const file = s.file("package.json", json({ name: "r", workspaces: { packages: ["p/*"], catalog: { lodash: "4.17.20" } } }));
