@@ -73,3 +73,15 @@ describe("2: crates.io build metadata is ignored, as Cargo ignores it, and never
   });
 });
 
+describe("3: an npm alias in `to` names the package actually checked first", () => {
+  it('{lodash, "npm:zqx-alias-to@1.0.0"} leads with the alias target, never reads as lodash', async () => {
+    const { results } = await check([{ ecosystem: "npm", package: "lodash", to: "npm:zqx-alias-to@1.0.0" }]);
+    expect(results[0].package).toBe("zqx-alias-to");
+    expect(results[0].reason).toMatch(/^Checked zqx-alias-to@1\.0\.0, the package this alias installs, not lodash\. \| /);
+  });
+
+  it("an alias naming the same package adds nothing", async () => {
+    const { results } = await check([{ ecosystem: "npm", package: "lodash", to: "npm:lodash@4.17.21" }]);
+    expect(results[0].reason).not.toMatch(/the package this alias installs/);
+  });
+});

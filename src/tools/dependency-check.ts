@@ -521,7 +521,12 @@ function validateItem(r: unknown, i: number): Requested {
     }
     from = f.version;
   }
+  // An alias in `to` is the caller's explicit request to check the package it installs: named first,
+  // so the verdict is never read as the one for `package` (pre-publish review 2026-11-26).
   const asked = unquotePackageName(o.package);
+  if (alias && alias[1] !== asked) {
+    notes.push(`Checked ${alias[1]}@${alias[2] ?? "latest"}, the package this alias installs, not ${quoteThirdParty(asked, 80)}.`);
+  }
   // The same reading of a name every tool uses (package-name.ts): quotes around it are not part of it (r7).
   return { ecosystem, package: alias ? alias[1] : asked, raw: rawTo, target, ...(from ? { from } : {}), ...(notes.length > 0 ? { notes } : {}) };
 }
