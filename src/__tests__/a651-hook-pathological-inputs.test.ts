@@ -91,39 +91,69 @@ const CASES: Array<[string, unknown, "deny" | null]> = [
   ["Poetry value with 30 KB of blanks", write("pyproject.toml", `[tool.poetry.dependencies]\nx = "1${" ".repeat(30_000)}!"\nlodash = "4.17.20"\n`), "deny"],
 ];
 
-function run(payload: unknown, ledgerHome: string = home): { ms: number; decision: string; status: number | null } {
+/**
+ * Loaded into the child before the hook: at exit it writes the process's own CPU time (user and
+ * system, every thread) to stderr. The hook is run unchanged.
+ */
+const CPU_AT_EXIT =
+  "data:text/javascript," +
+  encodeURIComponent(
+    "import { writeSync } from 'node:fs'; process.on('exit', () => { const u = process.cpuUsage(); try { writeSync(2, '\\n@@cpu_ms=' + (u.user + u.system) / 1000 + '@@\\n'); } catch { /* stderr closed */ } });",
+  );
+
+interface Run {
+  /** Wall-clock time of the child, start to exit. */
+  ms: number;
+  /** The child's own CPU time; NaN when it wrote none (killed, or stderr lost). */
+  cpu: number;
+  decision: string;
+  status: number | null;
+}
+
+function run(payload: unknown, ledgerHome: string = home): Run {
   const env: Record<string, string | undefined> = { ...process.env, FOURDA_MCP_HOME: ledgerHome };
   delete env.FOURDA_GUARD;
   const t0 = performance.now();
-  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(payload), encoding: "utf8", timeout: 15_000, env, maxBuffer: 1 << 26 });
+  const r = spawnSync(process.execPath, ["--import", CPU_AT_EXIT, HOOK], { input: JSON.stringify(payload), encoding: "utf8", timeout: 15_000, env, maxBuffer: 1 << 26 });
   const ms = performance.now() - t0;
+  const cpu = Number(/@@cpu_ms=([0-9.]+)@@/.exec(r.stderr ?? "")?.[1] ?? Number.NaN);
   const decision = r.stdout ? ((JSON.parse(r.stdout) as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision ?? "other") : "allow";
-  return { ms, decision, status: r.status };
-}
-
-/** What the hook takes to answer a call with nothing to read, on an idle machine. */
-const IDLE_MS = 60;
-
-/**
- * How loaded this machine is right now: the hook answering a trivial call, against IDLE_MS (never
- * under 1; never over 4, where the hook could no longer keep its own 2 s read budget and the test
- * should fail).
- */
-function load(): number {
-  const ms = Math.min(run(bash("npm ci")).ms, run(bash("npm ci")).ms);
-  return Math.min(4, Math.max(1, ms / IDLE_MS));
+  return { ms, cpu, decision, status: r.status };
 }
 
 /**
- * `ms` is inside `limit`, or inside it once the machine's load at this moment is allowed for. The
- * suite runs hundreds of files at once, and the flat bound failed on a loaded CI runner (1,095 ms
- * against 1,000 for a 4 MB-ledger row, on the 6.5.1 release PR) with nothing wrong in the hook. A
- * pathological input is slower by ten times or more whatever the load (3 s, 10 s and 21 s were the
- * rows this file was written for), so the scaled bound still catches one.
+ * The best of up to three runs of `payload`: it runs again while the wall clock is over `limit`,
+ * and keeps the fastest wall time and the smallest CPU time seen (a pathological input is slow on
+ * both, every time: the blocker took 16 to 21 s).
  */
-function expectWithin(ms: number, limit: number): void {
-  if (ms < limit) return;
-  expect(ms).toBeLessThan(limit * load());
+function best(payload: unknown, ledgerHome?: string, limit: number = LIMIT_MS): Run {
+  let r = run(payload, ledgerHome);
+  for (let tries = 1; tries < 3 && r.ms >= limit; tries++) {
+    const again = run(payload, ledgerHome);
+    const cpu = Math.min(Number.isNaN(r.cpu) ? Infinity : r.cpu, Number.isNaN(again.cpu) ? Infinity : again.cpu);
+    r = { ...(again.ms < r.ms ? again : r), cpu: cpu === Infinity ? Number.NaN : cpu };
+  }
+  return r;
+}
+
+/**
+ * The hook answered inside `limit` on the wall clock, or its own work took less than twice `limit`
+ * of CPU time. The wall clock is what Claude Code's timeout counts, but on a shared machine it mostly
+ * measures the wait for a core, not the hook: with 32 busy processes on 16 cores a trivial call
+ * went from 52 ms to 2,000 ms and a 4 MB-ledger row from 390 ms to 4,600 ms, while their CPU time
+ * went from 46 to 61 ms and from 450 to 660 ms (measured 2026-11-25). The wall-clock bound failed
+ * twice on loaded CI runners with nothing wrong in the hook (1,095 ms and 1,418 ms against 1,000
+ * for a 4 MB-ledger row), the second time through a bound scaled by how long a trivial call took at
+ * that moment: a trivial call does not slow down the way 8 MB of ledger does. A pathological input
+ * is slow in CPU time too (1.5 s, 2.6 s, 3 s, 10 s and 21 s were the rows this file was written
+ * for, against 0.14 s here for the slowest 500 ms row and 0.55 s for a ledger row), so the CPU bound
+ * catches one on any machine. Twice the bound, not the bound: CPU time is steadier than the wall
+ * clock, not constant (a slower runner core, a busy sibling thread: up to 1.5 times here under
+ * load). A run that reports no CPU time fails.
+ */
+function expectWithin(r: Run, limit: number): void {
+  if (r.ms < limit) return;
+  expect(r.cpu, `the hook's CPU time (wall clock ${r.ms.toFixed(0)} ms against ${limit} ms)`).toBeLessThan(2 * limit);
 }
 
 describe("a call that could not be read in time is held, never let through", () => {
@@ -147,17 +177,10 @@ describe(`every pathological input is answered within ${LIMIT_MS} ms, as a child
   // One run first: the first spawn pays for warming the file cache.
   beforeAll(() => run(bash("npm ci")));
 
-  // The best of up to three runs: the full suite runs many files at once, and a loaded machine can
-  // add hundreds of milliseconds to starting Node. A pathological input is slow every time (the
-  // blocker took 16 to 21 s), so the fastest run still says whether the hook itself is slow.
   it.each(CASES)("%s", (_label, payload, mustBe) => {
-    let r = run(payload);
-    for (let tries = 1; tries < 3 && r.ms >= LIMIT_MS; tries++) {
-      const again = run(payload);
-      if (again.ms < r.ms) r = again;
-    }
+    const r = best(payload);
     expect(r.status).toBe(0);
-    expectWithin(r.ms, LIMIT_MS);
+    expectWithin(r, LIMIT_MS);
     if (mustBe) expect(r.decision).toBe(mustBe);
   });
 });
@@ -166,7 +189,7 @@ describe(`every pathological input is answered within ${LIMIT_MS} ms, as a child
  * The rows of the round-3 checker's timing table that took over a second (a 4 MB MultiEdit took
  * 21 s and Claude Code let the call through; 25 versions against 4 MB ledgers took 3 s; TOML
  * nested about 7,400 deep threw and the call went ahead), each now a fast deny. The two 4 MB-ledger
- * rows read 8 MB of ledger and are given 1,000 ms; the others 500 ms.
+ * rows read 8 MB of ledger and are given 1,000 ms; the others 500 ms (expectWithin says of what).
  */
 describe("the checker's slow rows are fast denials (round 3 of the hook review)", { timeout: 60_000 }, () => {
   const recent = () => new Date(Date.now() - 60_000).toISOString();
@@ -186,15 +209,6 @@ describe("the checker's slow rows are fast denials (round 3 of the hook review)"
     }
     return h;
   }
-  const best = (payload: unknown, ledgerHome?: string) => {
-    let r = run(payload, ledgerHome);
-    for (let tries = 1; tries < 3 && r.ms >= LIMIT_MS; tries++) {
-      const again = run(payload, ledgerHome);
-      if (again.ms < r.ms) r = again;
-    }
-    return r;
-  };
-
   it("a MultiEdit of a 4 MB requirements.txt with 8,000 edits", () => {
     const lines = 200_000;
     const file = join(dir, "requirements.txt");
@@ -203,25 +217,25 @@ describe("the checker's slow rows are fast denials (round 3 of the hook review)"
     edits.push({ old_string: `pkg${lines - 1}==1.0.${lines - 1}`, new_string: `pkg${lines - 1}==2.0.0` });
     const r = best({ hook_event_name: "PreToolUse", tool_name: "MultiEdit", cwd: dir, tool_input: { file_path: file, edits } });
     expect(r.decision).toBe("deny");
-    expectWithin(r.ms, LIMIT_MS);
+    expectWithin(r, LIMIT_MS);
   });
 
   it("a Write of a manifest whose payload is over 8 MB", () => {
     const r = best(write("requirements.txt", "requests==2.0.0\n#" + " ".repeat(8 * 1024 * 1024 + 100) + "\n"));
     expect(r.decision).toBe("deny");
-    expectWithin(r.ms, LIMIT_MS);
+    expectWithin(r, LIMIT_MS);
   });
 
   it("an install command with a 70 KB comment", () => {
     const r = best(bash("npm i lodash@4.17.20 # " + "x".repeat(70 * 1024)));
     expect(r.decision).toBe("deny");
-    expectWithin(r.ms, LIMIT_MS);
+    expectWithin(r, LIMIT_MS);
   });
 
   it("a Cargo.toml nested 40,000 deep beside a pin", () => {
     const r = best(write("Cargo.toml", `[package]\nname = "a"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1.0.0"\n\n[package.metadata]\nx = ${"[".repeat(40_000)}${"]".repeat(40_000)}\n`));
     expect(r.decision).toBe("deny");
-    expectWithin(r.ms, LIMIT_MS);
+    expectWithin(r, LIMIT_MS);
   });
 
   it.each([
@@ -230,9 +244,9 @@ describe("the checker's slow rows are fast denials (round 3 of the hook review)"
   ])("25 versions against 4 MB ledgers of %s", (label, make) => {
     const h = bigLedger(label.replace(/[^a-z]/gi, "").slice(0, 20), make);
     const vers = Array.from({ length: 25 }, (_, i) => `requests==2.0.${i}.post1.dev3`).join(" ");
-    const r = best(bash(`pip install ${vers}`), h);
+    const r = best(bash(`pip install ${vers}`), h, 2 * LIMIT_MS);
     expect(r.decision).toBe("deny");
-    expectWithin(r.ms, 2 * LIMIT_MS);
+    expectWithin(r, 2 * LIMIT_MS);
   });
 });
 
@@ -251,14 +265,6 @@ describe("a replace_all edit that would build a huge manifest is held fast (roun
     writeFileSync(path, disk);
     return { hook_event_name: "PreToolUse", tool_name: "Edit", cwd: sub, tool_input: { file_path: path, old_string: "Q", new_string: newString, replace_all: true } };
   }
-  const best = (payload: unknown) => {
-    let r = run(payload);
-    for (let tries = 1; tries < 3 && r.ms >= LIMIT_MS; tries++) {
-      const again = run(payload);
-      if (again.ms < r.ms) r = again;
-    }
-    return r;
-  };
   it.each([
     ["pyproject.toml, 12,000 hits", "pyproject.toml", `[project]\nname = "x"\nversion = "0.1.0"\ndependencies = ["requests==2.31.0"${"Q".repeat(12_000)}]\n`, `, "urllib3==1.0.0"` + ", 1".repeat(1500)],
     ["pyproject.toml, 20,000 hits", "pyproject.toml", `[project]\nname = "x"\nversion = "0.1.0"\ndependencies = ["requests==2.31.0"${"Q".repeat(20_000)}]\n`, `, "urllib3==1.0.0"` + ", 1".repeat(1500)],
@@ -271,6 +277,6 @@ describe("a replace_all edit that would build a huge manifest is held fast (roun
     const r = best(replaceAll(file, disk, newString));
     expect(r.status).toBe(0);
     expect(r.decision).toBe("deny");
-    expectWithin(r.ms, LIMIT_MS);
+    expectWithin(r, LIMIT_MS);
   });
 });
