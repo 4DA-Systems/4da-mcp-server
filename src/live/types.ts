@@ -456,7 +456,8 @@ export interface DependencyHealthResult {
    * lockfile could not be read, or nothing was resolved at all. Absent when
    * there is a score.
    */
-  withheldReason?: "vulnerability_data_incomplete" | "lockfile_unreadable" | "nothing_checked" | "no_lockfile";
+  /** `lockfile_partial`: a lockfile was read only in part (older than its manifest, truncated, entries skipped) or conflicts with the one read. */
+  withheldReason?: "vulnerability_data_incomplete" | "lockfile_unreadable" | "nothing_checked" | "no_lockfile" | "lockfile_partial";
   /**
    * Present when the score is over the checked part only: a lockfile read with
    * entries skipped (PARTIAL) or a requirements include refused (REFUSED).

@@ -146,7 +146,10 @@ describe("F2: a lockfile read in part leads the scan answer, as the planner says
     const plan = await call("upgrade_planner", {});
     expect(plan.vulnerabilityDataAvailable).toBe(false);
     const health = await call("dependency_health", {});
-    expect(health.scoreCoverage?.complete).toBe(false);
+    // Audit 2026-11-25 (integration): a partial lockfile withholds the score, never "100/100 over the checked part".
+    expect(health.healthScore).toBeNull();
+    expect(health.withheldReason).toBe("lockfile_partial");
+    expect(health.summary).toMatch(/^NOT CHECKED/);
     expect(health.summary).toContain("Gemfile.lock");
   });
 

@@ -7,7 +7,7 @@
  * declares lodash beside a package-lock.json that holds only minimist got "Health: 100/100 ... all
  * healthy" from dependency_health, `coverage.complete: true` from vulnerability_scan and
  * `vulnerabilityDataAvailable: true` from upgrade_planner, with lodash checked by none of them.
- * Now the lockfile is a partial read: the health score is given for the checked part only and says
+ * Now the lockfile is a partial read: the health score is withheld (since audit 2026-11-25) and the summary says
  * so, the scan's coverage is not complete, and the plan is not CVE-aware.
  */
 
@@ -28,13 +28,14 @@ afterEach(() => h.dispose());
 const health = async () => (await executeDependencyHealth(null, {}, await h.live())) as unknown as Record<string, any>;
 
 describe("an npm lockfile older than its package.json", () => {
-  it("a declared dependency with no entry: the health score covers the checked part only, and says so", async () => {
+  it("a declared dependency with no entry: the health score is withheld, and the summary leads with why", async () => {
     h.npmProject({ minimist: "1.2.8", lodash: "^4.17.21" }, {}, { minimist: { version: "1.2.8" } });
     const r = await health();
     expect(r.summary).not.toMatch(/all healthy/);
-    expect(r.summary).toMatch(/over the checked part only/);
-    expect(r.scoreCoverage?.complete).toBe(false);
-    expect(JSON.stringify(r.scoreCoverage?.notes)).toMatch(/package\.json declares lodash .*no entry/);
+    // Audit 2026-11-25: a score beside an unread declared dependency read as reassurance; withheld since.
+    expect(r.healthScore).toBeNull();
+    expect(r.withheldReason).toBe("lockfile_partial");
+    expect(r.summary).toMatch(/^NOT CHECKED: PARTIAL: 1 lockfile is older than its manifest: .*package\.json declares lodash .*no entry/);
   });
 
   it("the scan's coverage is not complete and the plan is not CVE-aware", async () => {
@@ -49,7 +50,8 @@ describe("an npm lockfile older than its package.json", () => {
     h.write("package.json", JSON.stringify({ name: "x", version: "1.0.0", dependencies: { minimist: "1.2.8", lodash: "^4.17.21" } }));
     h.write("package-lock.json", JSON.stringify({ name: "x", version: "1.0.0", lockfileVersion: 1, requires: true, dependencies: { minimist: { version: "1.2.8" } } }));
     const r = await health();
-    expect(r.scoreCoverage?.complete).toBe(false);
+    expect(r.healthScore).toBeNull();
+    expect(r.withheldReason).toBe("lockfile_partial");
   });
 
   it("controls: every declared dependency has an entry (an alias included): complete", async () => {

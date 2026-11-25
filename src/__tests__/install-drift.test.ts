@@ -417,7 +417,9 @@ describe("dependency_health and upgrade_planner show the installed version", () 
     const hono = result.dependencies.find((d) => d.name === "hono");
     expect(hono?.currentVersion).toBe("4.13.5");
     expect(hono?.installedVersion).toBe("4.13.1");
-    expect(result.vulnerableCount).toBe(1);
+    // This fixture's pnpm-lock.yaml has no snapshots section, a partial read: the count is withheld (audit 2026-11-25), the finding still said.
+    expect(result.vulnerableCount).toBeNull();
+    expect(result.summary).toContain("at least 1 vulnerable package");
     expect(result.summary).toContain("installed at a different version than the lockfile pins");
     expect(result.summary).not.toContain("all healthy");
   });
