@@ -1619,10 +1619,28 @@ export function simpleCommands(line, dialect) {
     if (word !== null) words.push(word);
     word = null;
   };
+  // PowerShell: the simple command being read holds a bare comma or the stop-parsing token, which
+  // this reader does not take apart (see the comma branch); `cmdStart` and `pos` bound its text.
+  let unreadCommand = null;
+  let cmdStart = 0;
+  let pos = 0;
+  let held = false;
   const endCommand = () => {
     endWord();
-    if (words.length > 0) commands.push(words);
+    if (unreadCommand !== null) {
+      // Not read. When the quick look sees an install in it, the call is held as not read, with a
+      // remedy that releases it; otherwise it installs nothing and the rest of the line is read.
+      if (namesInstall(line.slice(cmdStart, pos), "powershell")) {
+        held = true;
+        refuse(
+          `${unreadCommand} in a PowerShell command that installs`,
+          "Run the install as a command of its own, each package a separate argument, with no comma and no --%: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs.",
+        );
+      }
+      unreadCommand = null;
+    } else if (words.length > 0) commands.push(words);
     words = [];
+    cmdStart = pos;
   };
   // Subshells (bash) and groups or script blocks open and not yet closed.
   let parens = 0;
@@ -1630,6 +1648,7 @@ export function simpleCommands(line, dialect) {
   /** True when a `}` at `i` stands alone: what follows it ends a word. */
   const closesAt = (i) => i + 1 >= line.length || /[\s;&|)}]/.test(line[i + 1]);
   for (let i = 0; i < line.length; i++) {
+    pos = i;
     const ch = line[i];
     if (ch === "'") {
       const end = line.indexOf("'", i + 1);
@@ -1710,17 +1729,33 @@ export function simpleCommands(line, dialect) {
       const m = /^@[A-Za-z_][A-Za-z0-9_]*/.exec(line.slice(i, i + 216));
       word = m[0];
       i += m[0].length - 1;
-    } else if (dialect === "powershell" && ((ch === "@" && word === null && !SCOPED_WORD.test(line.slice(i, i + 216))) || ch === "," || (ch === "-" && word === null && line.startsWith("--%", i)))) {
-      // PowerShell reads `@(`, `@{`, `@'` and `@"` as an array, a hashtable or a here-string, and
-      // `a,b` as an array. A scoped package (`@types/node@20.0.0`) is passed as written
-      // (PowerShell 7.5.1 and 5.1: `Write-Output @h/x` prints `@h/x`).
+    } else if (dialect === "powershell" && ch === "@" && word === null && !SCOPED_WORD.test(line.slice(i, i + 216))) {
+      // PowerShell reads `@(`, `@{`, `@'` and `@"` as an array, a hashtable or a here-string. A
+      // scoped package (`@types/node@20.0.0`) is passed as written (PowerShell 7.5.1 and 5.1:
+      // `Write-Output @h/x` prints `@h/x`).
       return null;
+    } else if (dialect === "powershell" && ch === ",") {
+      // `a,b` is an array, which PowerShell passes to a program differently by version (7.5.1:
+      // `a@1,b@2` as one argument and `a@1, b@2` as "a@1," and "b@2"; 5.1: `a@1, b@2` as two):
+      // this command is not read (endCommand holds it when it installs). Read to its end as usual.
+      unreadCommand ??= "a comma outside quotes";
+      word = (word ?? "") + ch;
+    } else if (dialect === "powershell" && ch === "-" && word === null && line.startsWith("--%", i)) {
+      // The stop-parsing token: the rest of the line up to a newline or a pipe is passed as written,
+      // a `;` included. Not read: the rest of the line goes with this command (endCommand holds it
+      // when it installs, the text after a pipe included).
+      unreadCommand ??= "the stop-parsing token --%";
+      const nl = line.indexOf("\n", i);
+      i = (nl < 0 ? line.length : nl) - 1;
     } else {
       word = (word ?? "") + ch;
     }
   }
+  pos = line.length;
   endCommand();
   if (parens !== 0 || braces !== 0) return null;
+  // A command that installs was not read: the line is not read (the call is held as not read).
+  if (held) return null;
   return commands;
 }
 

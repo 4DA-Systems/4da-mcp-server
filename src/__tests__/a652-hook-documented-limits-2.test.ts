@@ -92,9 +92,9 @@ describe("forms the hook still does not read", () => {
     expect(edit("pyproject.toml", poetry, `${poetry}[tool.poetry.dependencies]\nrequests = "2.25.0"\n`)).toBe("no verdict");
     expect(edit("pyproject.toml", poetry, `${poetry}dependencies = { requests = "2.25.0" }\n`)).toBe("no verdict");
   });
-  it("a PowerShell comma list and --% go ahead", () => {
+  it("a PowerShell install with a comma list or --% is held as not read (wave 2; no longer a limit)", () => {
     expect(pwsh("npm i lodash@4.17.20")).toBe("no verdict");
-    expect(pwsh("npm i lodash@4.17.20,ms@2.0.0")).toBe("allow");
-    expect(pwsh("npm --% i lodash@4.17.20")).toBe("allow");
+    expect(pwsh("npm i lodash@4.17.20,ms@2.0.0")).toBe("not read");
+    expect(pwsh("npm --% i lodash@4.17.20")).toBe("not read");
   });
 });
