@@ -689,10 +689,15 @@ function pyprojectDependencies(entries, local = new Set()) {
  */
 function poetryDependencies(entries) {
   const poetry = new Map();
-  for (const { table, keys, value } of entries) {
-    if (!keys || table === null) continue;
-    const at = poetryDependencyAt([...table, ...keys]);
-    if (!at || at.name.toLowerCase() === "python") continue;
+  const walk = (path, value) => {
+    const at = poetryDependencyAt(path);
+    if (!at) {
+      // Not yet at a dependency: an inline table's keys go on the path, as Poetry reads them
+      // (`[tool.poetry]` with `dependencies = { requests = "2.19.0" }`; audit 2026-11-25, D minors).
+      if (value.t && path.length < MAX_NESTING) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], v);
+      return;
+    }
+    if (at.name.toLowerCase() === "python") return;
     const key = `${at.section}\0${at.name}`;
     const d = poetry.get(key) ?? { section: at.section, name: at.name, fields: Object.create(null), list: null };
     if (at.field) d.fields[at.field] = value;
@@ -700,6 +705,10 @@ function poetryDependencies(entries) {
     else if (value.a) d.list = value.a.map((v) => v.t ?? Object.create(null));
     else d.fields.version = value;
     poetry.set(key, d);
+  };
+  for (const { table, keys, value } of entries) {
+    if (!keys || table === null) continue;
+    walk([...table, ...keys], value);
   }
   for (const d of poetry.values()) d.alternatives = d.list ?? [d.fields];
   return poetry;

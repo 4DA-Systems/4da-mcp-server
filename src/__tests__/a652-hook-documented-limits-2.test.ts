@@ -87,10 +87,10 @@ describe("forms the hook still does not read", () => {
     expect(edit("Cargo.toml", CARGO, `${CARGO}[dev_dependencies]\nserde = "1.0.100"\n`)).toBe("no verdict");
     expect(edit("Cargo.toml", CARGO, `${CARGO}[build_dependencies]\nserde = "1.0.100"\n`)).toBe("no verdict");
   });
-  it("a Poetry inline dependencies table goes ahead", () => {
+  it("a Poetry inline dependencies table is read (wave 2; no longer a limit)", () => {
     const poetry = '[tool.poetry]\nname = "a"\n';
     expect(edit("pyproject.toml", poetry, `${poetry}[tool.poetry.dependencies]\nrequests = "2.25.0"\n`)).toBe("no verdict");
-    expect(edit("pyproject.toml", poetry, `${poetry}dependencies = { requests = "2.25.0" }\n`)).toBe("allow");
+    expect(edit("pyproject.toml", poetry, `${poetry}dependencies = { requests = "2.25.0" }\n`)).toBe("no verdict");
   });
   it("a PowerShell comma list and --% go ahead", () => {
     expect(pwsh("npm i lodash@4.17.20")).toBe("no verdict");
