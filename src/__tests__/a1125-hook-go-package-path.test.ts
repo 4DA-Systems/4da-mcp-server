@@ -104,6 +104,15 @@ describe("a package path is released by the verdict for the module that contains
     expect(s.run(bash("npm i @scope/pkg@1.0.0")).decision).toBe("deny");
   });
 
+  it("a go.mod require names a module: a nested module is not released by its parent's verdict, and no module call is offered", () => {
+    s.ledger([{ ecosystem: "Go", package: "github.com/aws/aws-sdk-go-v2", version: "v1.30.0", verdict: "proceed" }]);
+    const file = s.file("go.mod", "module example.com/demo\n\ngo 1.22\n");
+    const run = s.edit(file, "go 1.22\n", "go 1.22\n\nrequire github.com/aws/aws-sdk-go-v2/service/s3 v1.30.0\n");
+    expect(run.decision).toBe("deny");
+    expect(calls(run.text)).toEqual([[{ ecosystem: "Go", package: "github.com/aws/aws-sdk-go-v2/service/s3", to: "v1.30.0" }]]);
+    expect(run.text).not.toContain("check the module that contains this package");
+  });
+
   it("go.mod edits that change no version are not held, with a package-path verdict on record", () => {
     s.ledger([{ ecosystem: "Go", package: "golang.org/x/net", version: "v0.17.0", verdict: "avoid", reason: "x" }]);
     const text = "module example.com/demo\r\n\r\ngo 1.22\r\n\r\nrequire golang.org/x/net v0.17.0\r\n";

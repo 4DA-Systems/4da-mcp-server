@@ -2607,7 +2607,7 @@ const isPrivateRule = (e) => e.not_checked === "private" && !isUnreadable(e);
  * from elsewhere is dependency confusion (round 3 of the hook review: `"acme-utils":
  * "github:acme/acme-utils"`, then `npm i acme-utils@9.9.9`).
  */
-function judge(index, c) {
+function judge(index, c, what = "command") {
   const eco = c.ecosystem;
   const forPackage = index.get(`${eco}\0${nameKey(eco, c.name)}`) ?? [];
   const exactVersion = exactFor(eco, c.spec);
@@ -2641,7 +2641,8 @@ function judge(index, c) {
   // module ends. So the decisive answer for the longest path prefix at the same version or
   // constraint decides (Go builds a package from the module with the longest matching path): the
   // agent checked the module that contains the package. No verdict, no release (audit 2026-11-25, D-M3).
-  if (eco === "Go") {
+  // Commands only: a go.mod require names a module, never a package, so its own verdict decides.
+  if (eco === "Go" && what === "command") {
     const parts = c.name.split("/");
     for (let n = parts.length - 1; n >= 1; n--) {
       const module = (index.get(`Go\0${parts.slice(0, n).join("/")}`) ?? []).filter(
@@ -2708,7 +2709,7 @@ function denialFor(introduced, ledger, dir, what) {
   for (const c of introduced) {
     // Past the budget the call is held as not read (judgeCall), whatever is left to judge.
     if (overBudget()) break;
-    const verdict = judge(index, c);
+    const verdict = judge(index, c, what);
     if (verdict === "allow") continue;
     if (verdict.deny) held.push({ c, entry: verdict.deny });
     else if (verdict.unreadable) unreadable.push({ c, entry: verdict.unreadable });
@@ -2755,7 +2756,7 @@ function denialFor(introduced, ledger, dir, what) {
     );
     // A Go path longer than a module path usually is may name a package inside a module, which
     // dependency_check answers unknown for: name the module call that releases it (judge).
-    for (const { c } of unchecked.filter(({ c }) => c.ecosystem === "Go").slice(0, 10)) {
+    for (const { c } of what === "command" ? unchecked.filter(({ c }) => c.ecosystem === "Go").slice(0, 10) : []) {
       const module = goModuleExample(c.name);
       if (!module) continue;
       const example = JSON.stringify({ items: [{ ecosystem: "Go", package: module, to: callTarget("Go", c.spec) }] });
