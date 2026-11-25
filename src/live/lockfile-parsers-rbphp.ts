@@ -143,77 +143,176 @@ const GEM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const RECORDED_BLOCKS = new Set(["group", "groups", "platforms", "platform", "source", "git", "path", "github", "gitlab", "bitbucket"]);
 /** A Gemfile larger than this is not compared (it is no Gemfile). */
 const MAX_GEMFILE_BYTES = 1024 * 1024;
+/** Openers and `end` in a statement's code: `end`, `do`, `def`, `class` / `module`, and the keywords that open a block when they start an expression. */
+const BLOCK_TOKEN = /(?<![\w.:@$])(?:(end)|(do)|(def)|(class|module)|(if|unless|case|while|until|begin|for))(?![\w?!:])/g;
 
-/** A Ruby line with string contents emptied and its comment dropped, so keywords are only found in code. */
-function rubyCode(line: string): string {
-  let out = "";
+/**
+ * A Ruby line cut into statements at `;`, each with its string contents emptied and its comment
+ * dropped (`code`), so keywords are only found in code, beside the statement as written (`raw`).
+ */
+function rubyStatements(line: string): Array<{ raw: string; code: string }> {
+  const out: Array<{ raw: string; code: string }> = [];
+  let raw = "";
+  let code = "";
   let quote: string | null = null;
+  const flush = () => {
+    if (code.trim() !== "") out.push({ raw: raw.trim(), code: code.trim() });
+    raw = "";
+    code = "";
+  };
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     if (quote) {
-      if (c === "\\") i++;
+      raw += c;
+      if (c === "\\" && i + 1 < line.length) raw += line[++i];
       else if (c === quote) {
         quote = null;
-        out += c;
+        code += c;
       }
       continue;
     }
     if (c === "#") break;
+    if (c === ";") {
+      flush();
+      continue;
+    }
+    // A percent literal (`%w[a b]`, `%q{ if }`, `%(x)`): its contents are no code.
+    const percent = c === "%" ? /^%[qQwWiIs]?([([{<|!/])/.exec(line.slice(i, i + 3)) : null;
+    if (percent) {
+      const openCh = percent[1];
+      const closeCh = ({ "(": ")", "[": "]", "{": "}", "<": ">" } as Record<string, string>)[openCh] ?? openCh;
+      let depth = 1;
+      let j = i + percent[0].length;
+      for (; j < line.length && depth > 0; j++) {
+        if (line[j] === "\\") j++;
+        else if (line[j] === closeCh) depth--;
+        else if (line[j] === openCh && closeCh !== openCh) depth++;
+      }
+      raw += line.slice(i, j);
+      code += "%()";
+      i = j - 1;
+      continue;
+    }
     if (c === '"' || c === "'") quote = c;
-    out += c;
+    raw += c;
+    code += c;
   }
-  return out.trim();
+  flush();
+  return out;
+}
+
+/** The kind of an open block: one Bundler records (`group`, `platforms`, `source`, `git`, `path`), or any other. */
+type BlockKind = "group" | "platforms" | "source" | "git" | "path" | "other";
+
+/** What a Gemfile declares (gemfileDeclared). */
+export interface GemfileDeclared {
+  /** Gems Bundler always records in DEPENDENCIES, as written. */
+  names: string[];
+  /** Of `names`, those restricted to some platforms (`platforms:` / `platform:`, a `platforms` block): a lock may hold no spec for them. */
+  platformOnly: Set<string>;
+  /** Of `names`, where each is installed from: the registry, a git repository or a local path. */
+  sourceOf: Map<string, "registry" | "git" | "path">;
+}
+
+function blockKind(head: string): BlockKind {
+  if (!RECORDED_BLOCKS.has(head)) return "other";
+  if (head === "group" || head === "groups") return "group";
+  if (head.startsWith("platform")) return "platforms";
+  if (head === "source" || head === "path") return head;
+  return "git";
 }
 
 /**
  * The gems a Gemfile (or gems.rb) declares that Bundler always records in the lockfile's
  * DEPENDENCIES, or why the file could not be followed. Not a Ruby parser: it reads `gem '<name>'`
- * statements at the start of a line, at the top level or inside the blocks Bundler records whatever
- * the platform (`group`, `platforms`, `source`, `git`, `path`). A gem behind a condition (`if` /
- * `unless`, a modifier, `case`, `install_if`, `env`, a loop) may legitimately be left out of the
- * lockfile, so it is not compared; neither is a name built at run time, nor what `gemspec` or
- * `eval_gemfile` brings in. More `end`s than blocks, or a block never closed, is a file this does
- * not follow: null names, and the reason.
+ * statements (a line may hold several, `;`-separated), at the top level or inside the blocks
+ * Bundler records whatever the platform (`group`, `platforms`, `source`, `git`, `path`). A gem
+ * behind a condition (`if` / `unless`, a modifier, `case`, `install_if`, `env`, a loop, a method)
+ * may legitimately be left out of the lockfile, so it is not compared; neither is a name built at
+ * run time, nor what `gemspec` or `eval_gemfile` brings in. Blocks are counted by their openers (a
+ * keyword where an expression starts, `x = if ...`, a `do`) and their `end`s, so `x = case ... end`,
+ * a one-line `if a then b end`, an endless `def x = 1` and a heredoc are followed. More `end`s than
+ * blocks, or a block never closed, is a file this does not follow: no names, and the reason.
  */
-export function gemfileDeclared(content: string): { names: string[] } | { error: string } {
+export function gemfileDeclared(content: string): GemfileDeclared | { error: string } {
   if (content.length > MAX_GEMFILE_BYTES) return { error: "it is larger than any Gemfile this server compares" };
   const names: string[] = [];
-  /** Open blocks: true when Bundler records the gems inside whatever happens at run time. */
-  const blocks: boolean[] = [];
-  /** How many of the open blocks are conditional: a count, so a deep nest costs nothing per gem. */
-  let conditional = 0;
+  const platformOnly = new Set<string>();
+  const sourceOf = new Map<string, "registry" | "git" | "path">();
+  const blocks: BlockKind[] = [];
+  /** Open blocks of each kind: counts, so a deep nest costs nothing per gem. */
+  const open = { group: 0, platforms: 0, source: 0, git: 0, path: 0, other: 0 };
+  const push = (kind: BlockKind) => {
+    blocks.push(kind);
+    open[kind]++;
+  };
+  /** `git_source(:name)` declares a keyword that installs from git (`gem "x", name: "repo"`). */
+  const gitKeys = new Set(["git", "github", "gitlab", "bitbucket"]);
   let inComment = false;
-  for (const raw of content.split(/\r?\n/)) {
-    if (raw.length > MAX_LINE) continue;
-    if (inComment) {
-      if (/^=end\b/.test(raw)) inComment = false;
+  let heredoc: string | null = null;
+  for (const line of content.split(/\r?\n/)) {
+    if (line.length > MAX_LINE) continue;
+    if (heredoc !== null) {
+      if (line.trim() === heredoc) heredoc = null;
       continue;
     }
-    if (/^=begin\b/.test(raw)) {
+    if (inComment) {
+      if (/^=end\b/.test(line)) inComment = false;
+      continue;
+    }
+    if (/^=begin\b/.test(line)) {
       inComment = true;
       continue;
     }
-    const code = rubyCode(raw);
-    if (code === "") continue;
-    if (/^end\b/.test(code)) {
-      if (blocks.length === 0) return { error: "it has an `end` with no block open, so its structure could not be followed" };
-      if (blocks.pop() === false) conditional--;
-      continue;
-    }
-    if (/^(?:else|elsif|when|in|rescue|ensure)\b/.test(code)) continue;
-    const opensKeyword = /^(?:if|unless|case|while|until|for|begin|def|class|module)\b/.test(code) && !/\bend\s*$/.test(code);
-    // No two adjacent `\s*` in either pattern: a long run of spaces costs one pass, never its square (`code` is trimmed).
-    const opensDo = /\bdo(?:\s*\|[^|]*\|)?$/.test(code);
-    const gem = /^gem(?:\s+|\s*\(\s*)(['"])([^'"]*)\1/.exec(raw.trim());
-    if (gem && GEM_NAME.test(gem[2]) && !/\b(?:if|unless)\b/.test(code) && conditional === 0) names.push(gem[2]);
-    const opened = opensKeyword ? false : opensDo ? RECORDED_BLOCKS.has(/^([a-z_]+)/.exec(code)?.[1] ?? "") : null;
-    if (opened !== null) {
-      blocks.push(opened);
-      if (!opened) conditional++;
+    for (const { raw, code } of rubyStatements(line)) {
+      // `<<~EOS` starts a heredoc: its body, up to the terminator, is no code.
+      const doc = /<<[~-]?(['"]?)([A-Za-z_]\w*)\1/.exec(code);
+      if (doc) heredoc = doc[2];
+      const declaredKey = /^git_source\s*\(?\s*:(\w+)/.exec(code);
+      if (declaredKey) gitKeys.add(declaredKey[1]);
+      const gem = /^gem(?:\s+|\s*\(\s*)(['"])([^'"]*)\1/.exec(raw);
+      if (gem && GEM_NAME.test(gem[2]) && !/(?<![\w.:])(?:if|unless)(?![\w?!:])/.test(code) && open.other === 0) {
+        names.push(gem[2]);
+        if (open.platforms > 0 || /(?<![\w.:])platforms?\s*:|:platforms?\s*=>/.test(code)) platformOnly.add(gem[2]);
+        const keys = [...code.matchAll(/(?<![\w:])(\w+)\s*:(?!:)|:(\w+)\s*=>/g)].map((m) => m[1] ?? m[2]);
+        sourceOf.set(gem[2], keys.includes("path") || open.path > 0 ? "path" : keys.some((k) => gitKeys.has(k)) || open.git > 0 ? "git" : "registry");
+      }
+      // Openers and `end`s in this statement, in order.
+      let firstDo = true;
+      let loopDo = false;
+      for (const t of code.matchAll(BLOCK_TOKEN)) {
+        const at = t.index ?? 0;
+        if (t[1]) {
+          const kind = blocks.pop();
+          if (kind === undefined) return { error: "it has an `end` with no block open, so its structure could not be followed" };
+          open[kind]--;
+        } else if (t[2]) {
+          // `while x do`: the `do` belongs to the loop already open.
+          if (loopDo) loopDo = false;
+          else push(firstDo ? blockKind(/^([a-z_]+)/.exec(code)?.[1] ?? "") : "other");
+          firstDo = false;
+        } else if (t[3]) {
+          // An endless `def x = 1` / `def x(a) = a` opens nothing.
+          if (!/^def\s+[^\s(=]+(?:\([^)]*\))?\s*=(?![=~>])/.test(code.slice(at))) push("other");
+        } else if (t[4]) {
+          push("other");
+        } else {
+          // A keyword opens a block only where an expression starts: the statement's start, or after
+          // `=`, `(`, `,`, `||`, `&&`, `!`, `[`, `{` or a word that ends an expression's left side.
+          // Elsewhere it is a modifier (`gem "x" if y`, `i += 1 while i < 3`), which opens nothing.
+          // Only the few characters before it are looked at, so a long line of keywords costs one pass.
+          let j = at - 1;
+          while (j >= 0 && (code[j] === " " || code[j] === "\t")) j--;
+          if (j < 0 || /(?:[=(,|&!{[]|(?<![\w.])(?:return|then|do|else|and|or|not))$/.test(code.slice(Math.max(0, j - 7), j + 1))) {
+            push("other");
+            if (t[5] === "while" || t[5] === "until" || t[5] === "for") loopDo = true;
+          }
+        }
+      }
     }
   }
   if (blocks.length > 0) return { error: "a block in it is never closed, so its structure could not be followed" };
-  return { names: [...new Set(names)] };
+  return { names: [...new Set(names)], platformOnly, sourceOf };
 }
 
 /** "x", "x and y", "x, y, z and 2 more": a few names of a list, as every lockfile reason words them. */

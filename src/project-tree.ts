@@ -1217,8 +1217,10 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
  * cannot disagree about a lockfile (they did for a conflicted go.sum: review of 6.5.1, 2026-11-24).
  */
 export function incompleteLockfiles(problems: LockfileProblemLike[]): string[] {
-  if (lockfileProblemNotes(problems).length === 0) return [];
-  return [...new Set(problems.map((p) => p.file))];
+  // A lockfile read whole and only not compared with its manifest left nothing unread: a note, not a gap.
+  const gaps = problems.filter((p) => !(p.notCrossChecked && !p.refused && !p.conflict && !p.mergeConflict));
+  if (lockfileProblemNotes(gaps).length === 0) return [];
+  return [...new Set(gaps.map((p) => p.file))];
 }
 
 /** Kept for its importers (upgrade_planner): lockfileProblemNotes. */

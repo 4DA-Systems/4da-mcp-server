@@ -408,7 +408,7 @@ describe("F1: the comparison is bounded on a manifest an attacker writes", () =>
   // Each just under the 1 MB a Gemfile is compared up to, and followed whole (no "not compared" problem).
   it("a Gemfile of runs of spaces (a pattern with two adjacent \\s* costs their square)", () => {
     const spaces = " ".repeat(4000);
-    const lines = [...Array.from({ length: 120 }, () => `gem${spaces}x`), ...Array.from({ length: 120 }, () => `rake do${spaces}x`), "gem 'rake'"];
+    const lines = [...Array.from({ length: 120 }, () => `gem${spaces}x`), ...Array.from({ length: 120 }, () => `rake do${spaces}end`), "gem 'rake'"];
     write({ Gemfile: lines.join("\n"), "Gemfile.lock": GEMFILE_LOCK_RAKE });
     expect(timed(() => read("RubyGems"))).toBeLessThan(1500);
     expect(problems("RubyGems")).toEqual([]);
