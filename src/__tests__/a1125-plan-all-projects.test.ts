@@ -101,6 +101,43 @@ describe('upgrade_planner "*" when the app\'s stored plan cannot be read', () =>
   });
 });
 
+describe("no project_path: the answer is what it was before the G-3 lead, whatever the scope resolver says", () => {
+  let prior: string | undefined;
+  beforeEach(() => {
+    prior = process.env.FOURDA_PROJECT_DIR;
+  });
+  afterEach(() => {
+    if (prior === undefined) delete process.env.FOURDA_PROJECT_DIR;
+    else process.env.FOURDA_PROJECT_DIR = prior;
+  });
+
+  it("a folder holding npm sub-projects and no root manifest: planned, no all-projects lead", async () => {
+    const lock = (n: string) => JSON.stringify({ name: n, version: "1.0.0", lockfileVersion: 3, packages: { "": { name: n, version: "1.0.0", dependencies: { lodash: "4.17.21" } }, "node_modules/lodash": { version: "4.17.21" } } });
+    for (const d of ["one", "two"]) {
+      h.write(`${d}/package.json`, JSON.stringify({ name: d, version: "1.0.0", dependencies: { lodash: "4.17.21" } }));
+      h.write(`${d}/package-lock.json`, lock(d));
+    }
+    fs.rmSync(path.join(h.dir, "package.json"));
+    fs.rmSync(path.join(h.dir, "package-lock.json"));
+    process.env.FOURDA_PROJECT_DIR = h.dir;
+    const plan = (await executeUpgradePlanner(null, {}, live())) as UpgradePlanResult;
+    expect(plan.summary).not.toMatch(/every project|NOT CHECKED/);
+    expect(plan.allProjects).toBeUndefined();
+    expect(plan.vulnerabilityDataAvailable).toBe(true);
+  });
+
+  it("a root whose manifests are Ruby's: no all-projects lead", async () => {
+    fs.rmSync(path.join(h.dir, "package.json"));
+    fs.rmSync(path.join(h.dir, "package-lock.json"));
+    h.write("Gemfile", ['source "https://rubygems.org"', 'gem "rack", "2.2.3"', ""].join("\n"));
+    h.write("Gemfile.lock", ["GEM", "  remote: https://rubygems.org/", "  specs:", "    rack (2.2.3)", "", "PLATFORMS", "  ruby", "", "DEPENDENCIES", "  rack (= 2.2.3)", ""].join("\n"));
+    process.env.FOURDA_PROJECT_DIR = h.dir;
+    const plan = (await executeUpgradePlanner(null, {}, live())) as UpgradePlanResult;
+    expect(plan.summary).not.toMatch(/every project|covers only/);
+    expect(plan.allProjects).toBeUndefined();
+  });
+});
+
 describe("the app's plan never calls an unverified target fixed, nor prints a no-op move", () => {
   const step = (lines: Array<{ installed: string; target: string | null }>, mechanism: AppPlanStepView["mechanism"] = "lockfile_refresh"): AppPlanStepView => ({
     item_id: "upgrade-plan:npm:esbuild",

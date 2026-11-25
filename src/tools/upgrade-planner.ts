@@ -39,7 +39,7 @@ import { checkAllProjectsPlan, checkProjectPlan, planFormatNote, serverPlanFacts
 import { dirsLabel, driftFor } from "./install-drift-notes.js";
 import { emptyAnswerNote } from "./package-presence.js";
 import { relativeDir } from "./vulnerability-scan-format.js";
-import { liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
+import { ALL_PROJECTS, liveIntelFor, resolveProjectScope, serverDirectoryRefusal, systemDirectoryProblem } from "./project-scope.js";
 import { FIX_PATH_UNDETERMINED, judgeDirectRequirements, reconcileDirectTargets, settleTransitiveBreaking, verifyFixPaths, type FixPathInput, type ParentUpgrade } from "./upgrade-planner-fixpaths.js";
 import { builtDirs, fixInputOf, TRANSITIVE_PENDING } from "./fix-verdicts.js";
 import { groupAdvisories } from "../live/advisory-groups.js";
@@ -399,7 +399,9 @@ export async function executeUpgradePlanner(
   const result: UpgradePlanResult = { ...plan, projectScope: scopePath ?? plan.projectPath };
   // Every project was asked for and only this one is planned: said first, never a silent narrowing
   // (the desktop app's Brief hand-off relies on "*" meaning every project; audit 2026-11-25 G-3).
-  if (scope.kind === "all") {
+  // Only when the caller asked for every project ("*"): a server started outside a project (or in a
+  // folder of sub-projects, or a root whose manifests this server does not read) answers as before.
+  if (scope.kind === "all" && params.project_path?.trim() === ALL_PROJECTS) {
     const why = !app
       ? "the 4DA desktop app's database is not attached, so there is no stored plan to read"
       : appPlan?.kind === "absent" && appPlan.cause === "format"
