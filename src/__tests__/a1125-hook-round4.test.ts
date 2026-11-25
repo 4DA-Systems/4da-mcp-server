@@ -51,3 +51,54 @@ describe("a lone CR ends a line", () => {
     expect(s.edit(file, "'packages/*'", "'apps/*'").decision).toBe("allow");
   });
 });
+
+describe("a narrow key is judged, but declares no version for the whole tree", () => {
+  it.each([
+    ["selector", `${H}overrides:\n  "lodash@<4": 3.10.1\ncatalog:\n  lodash: ^4.17.21\n`, "lodash: ^4.17.21", "lodash: 3.10.1"],
+    ["parent path", `${H}overrides:\n  "foo>lodash": 3.10.1\ncatalog:\n  lodash: ^4.17.21\n`, "lodash: ^4.17.21", "lodash: 3.10.1"],
+    ["alias under another name", `${H}catalog:\n  old-lodash: npm:lodash@3.10.1\noverrides:\n  lodash: ^4.17.21\n`, "lodash: ^4.17.21", "lodash: 3.10.1"],
+  ])("pnpm-workspace.yaml, %s on disk: the same version put on the plain name is held, empty ledger", (_label, text, from, to) => {
+    const file = s.file("pnpm-workspace.yaml", text);
+    const run = s.edit(file, from, to);
+    expect(run.decision).toBe("deny");
+    expect(run.items).toEqual([{ ecosystem: "npm", package: "lodash", to: "3.10.1" }]);
+    expect(s.write(file, text).decision).toBe("allow");
+  });
+
+  it("pnpm-workspace.yaml, the other direction: a plain declaration still covers a narrow key that repeats its version; a changed narrow value is held", () => {
+    const text = `${H}catalog:\n  lodash: 3.10.1\noverrides:\n  "foo>lodash": 3.10.0\n`;
+    const file = s.file("pnpm-workspace.yaml", text);
+    expect(s.edit(file, "catalog:\n", "overrides2: x\ncatalog:\n").decision).toBe("allow");
+    expect(s.edit(file, '"foo>lodash": 3.10.0', '"foo>lodash": 3.10.1').decision).toBe("allow");
+    expect(s.edit(file, '"foo>lodash": 3.10.0', '"foo>lodash": 3.10.2').items).toEqual([{ ecosystem: "npm", package: "lodash", to: "3.10.2", from: "3.10.0" }]);
+    expect(s.edit(file, '"foo>lodash": 3.10.0', '"bar>lodash": 3.10.0').decision).toBe("deny");
+  });
+
+  it("pnpm-workspace.yaml: a plain override key is a declaration as before", () => {
+    const file = s.file("pnpm-workspace.yaml", `${H}overrides:\n  lodash: 3.10.1\ncatalog:\n  lodash: ^4.17.21\n`);
+    expect(s.edit(file, "lodash: ^4.17.21", "lodash: 3.10.1").decision).toBe("allow");
+  });
+
+  it.each([
+    ["pnpm.overrides parent path", { pnpm: { overrides: { "foo>lodash": "3.10.1" } } }],
+    ["pnpm.overrides selector", { pnpm: { overrides: { "lodash@<4": "3.10.1" } } }],
+    ["npm overrides under a parent", { overrides: { foo: { lodash: "3.10.1" } } }],
+    ["Yarn resolutions path", { resolutions: { "**/lodash": "3.10.1" } }],
+    ["npm overrides alias", { overrides: { lodash: "npm:other-lodash@3.10.1" } }],
+  ])("package.json, %s on disk: the same version put in dependencies is held (6.5.1 let it through)", (_label, extra) => {
+    const name = Object.keys(extra)[0] === "overrides" && JSON.stringify(extra).includes("other-lodash") ? "other-lodash" : "lodash";
+    const before = json({ name: "r", ...extra, dependencies: { [name]: "^4.17.21" } });
+    const file = s.file("package.json", before);
+    const run = s.edit(file, `"${name}": "^4.17.21"`, `"${name}": "3.10.1"`);
+    expect(run.decision).toBe("deny");
+    expect(run.items).toEqual([{ ecosystem: "npm", package: name, to: "3.10.1" }]);
+    expect(s.write(file, before).decision).toBe("allow");
+  });
+
+  it("package.json: a plain override is a declaration as before, and an unchanged narrow key holds nothing", () => {
+    const before = json({ name: "r", overrides: { lodash: "3.10.1", foo: { qs: "6.11.0" } }, pnpm: { overrides: { "a>b": "1.0.0" } }, dependencies: { lodash: "^4.17.21" } });
+    const file = s.file("package.json", before);
+    expect(s.edit(file, '"lodash": "^4.17.21"', '"lodash": "3.10.1"').decision).toBe("allow");
+    expect(s.edit(file, '"name": "r"', '"name": "s"').decision).toBe("allow");
+  });
+});

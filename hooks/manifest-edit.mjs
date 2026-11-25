@@ -834,7 +834,9 @@ function pnpmWorkspaceVersions(text, out) {
     } else if (!/^[~^<>=*\dvxX]/.test(value)) continue;
     if (name === null) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
-    put(out, name, top === "catalogs" ? `catalogs.${catalog}` : top, spec);
+    const section = top === "catalogs" ? `catalogs.${catalog}` : top;
+    // A selector, parent-path or alias key is judged, but declares no version of the name (NARROW).
+    put(out, name, name === key ? section : `${section}${NARROW}${key}`, spec);
   }
 }
 
@@ -886,7 +888,8 @@ function npmWholeDependencies(text) {
       if (!name) continue;
       if (typeof value === "string") {
         const d = npmDeclared(name, value);
-        if (d) out.push({ name: d.name, section, spec: d.spec });
+        // Under a parent, behind a selector or parent path, or an alias: judged, but no declaration of the name (NARROW).
+        if (d) out.push({ name: d.name, section: depth > 0 || name !== key || d.name !== name ? `${section}${NARROW}${key}` : section, spec: d.spec });
       } else if (isObject(value) && depth < 32) overrides(value, `${section}/${key}`, name, depth + 1);
     }
   };
@@ -1068,6 +1071,14 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
 /** The package name of a declaredVersions key (which may carry its section after a NUL). */
 const keyName = (key) => key.split("\0")[0];
 
+/**
+ * Marks a declaredVersions section as narrow: an override under one parent, behind a version
+ * selector or parent path, or an alias under another name. Its own key's old value still counts
+ * as unchanged, but it declares no version of the name for diffVersions' "declared elsewhere" rule
+ * (fourth blind check of the a1125 hook lane: `"lodash@<4": 3.10.1` let `catalog: lodash 3.10.1` pass).
+ */
+const NARROW = "\u0002";
+
 /** Changed or added dependency versions between two snippets of one manifest. */
 function versionChanges(file, before, after, disk) {
   if (typeof after !== "string") return [];
@@ -1107,6 +1118,8 @@ function diffVersions(old, now, same = (spec) => spec) {
   const before = new Map();
   for (const [key, specs] of old) {
     tick();
+    // A narrow entry (one parent, a selector's range, another name) is no declaration for the whole tree.
+    if (key.includes(NARROW)) continue;
     const name = keyName(key);
     const all = before.get(name) ?? new Set();
     for (const spec of specs) all.add(same(spec));
@@ -1119,8 +1132,9 @@ function diffVersions(old, now, same = (spec) => spec) {
     const name = keyName(key);
     const prev = old.get(key) ?? [];
     const anywhere = before.get(name) ?? new Set();
+    const own = new Set(prev.map((spec) => same(spec)));
     for (const spec of specs) {
-      if (anywhere.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
+      if (anywhere.has(same(spec)) || own.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
       seen.add(`${name}\0${same(spec)}`);
       const from = prev.length === 1 ? prev[0] : prev.length === 0 && anywhere.size === 1 ? [...anywhere][0] : null;
       changes.push({ name, from, to: spec });
