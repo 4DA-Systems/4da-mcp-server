@@ -219,6 +219,13 @@ describe("C-2: an advisory graded only through an alias that could not be read c
     expect(results[0].reason).toMatch(/severity NOT CHECKED: .*GHSA-h5c8-rqwp-cp95 could not be read/);
   });
 
+  it("an alias OSV.dev holds no record for (404) grades nothing: review, as before (RUSTSEC-2021-0157's GHSA-69v2-w9vg-4g83)", async () => {
+    OSV.pop();
+    const { results } = await run(item);
+    expect(results[0].verdict).toBe("review");
+    expect(results[0].reason).not.toMatch(/severity NOT CHECKED/);
+  });
+
   it("an alias read that answers with a moderate grade is review, not avoid (no over-withholding)", async () => {
     OSV[OSV.length - 1] = record("GHSA-h5c8-rqwp-cp95", "PyPI", "jinja2-other", [{ introduced: "0" }], "MODERATE", { aliases: ["PYSEC-2024-1"] });
     const { results } = await run(item);

@@ -12,7 +12,7 @@ import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.j
 import type { CheckEcosystem, PackageReleaseIndex } from "../live/release-metadata.js";
 import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { isConcreteVersion } from "../live/release-version.js";
-import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
+import { isSecurityHoldingRelease, type AliasReadReport } from "../live/osv-scanner.js";
 import { unaccountedIds } from "../live/batch-confirm.js";
 import { noteScanFacts } from "./dependency-check-facts.js";
 import type { AdvisoryFacts, AdvisoryRef, CheckItem } from "./dependency-check-signals.js";
@@ -135,8 +135,11 @@ export function advisoryFacts(
 ): (item: CheckItem) => AdvisoryFacts {
   const { known, scan, byInstance } = batch;
   // GHSA aliases whose record could not be read: an advisory graded only through one is not known
-  // to be less than high (C-2).
-  const aliasUnread = new Set(scan.aliasSeverity?.unresolved ?? []);
+  // to be less than high (C-2). One OSV.dev holds no record for (404, `absent`) was answered: it
+  // grades nothing, as an unrated record does (RUSTSEC-2021-0157's GHSA-69v2-w9vg-4g83).
+  const report = scan.aliasSeverity as AliasReadReport | undefined;
+  const absent = new Set(report?.absent ?? []);
+  const aliasUnread = new Set((report?.unresolved ?? []).filter((id) => !absent.has(id)));
   // A pre-install check needs a current answer: an expired cached one (OSV failed) can predate
   // the advisory that matters, and read as `proceed` (audit 6.2.5 B-2).
   const advisoriesFor = (item: CheckItem): AdvisoryFacts => {
