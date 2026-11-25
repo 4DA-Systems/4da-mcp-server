@@ -66,7 +66,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
-import { isKnownSwitch, knownPublicName, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { isKnownSwitch, knownPublicName, MAX_TASK_WORD, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -454,6 +454,26 @@ export function taskVersionText(token: string, ecosystem?: CheckEcosystem): stri
 /** A specifier only PyPI writes right after the name: `requests~=2.31`, `flask<2.2.5`, `x===1.0`, `x==2.*`. */
 const PEP440_INLINE = /^[A-Za-z0-9][\w.-]*(?:~=|===|==|!=|>=|<=|<|>)\S/;
 
+/**
+ * What ends a command's operands, between two tokens: a shell operator or redirection, a comment, a new
+ * line, a comma before a blank, a parenthesis, a brace, a dash between clauses, a backtick, `$(`.
+ */
+const OPERANDS_END = /[&|;<>#\n(){}–—`]|\/\/|,\s|\$\(|(?:^|\s)-(?:\s|$)/;
+
+/**
+ * Whether the blank-delimited word around `at` has a colon followed by more of it (`admin:hunter2`,
+ * `user:pass@host`): never a package name. A spec source the screen names (`npm:`, `file:`, `git+ssh:`)
+ * is read there, so it is not one of these.
+ */
+function colonWord(task: string, at: number): boolean {
+  let a = at;
+  while (a > 0 && !/\s/.test(task[a - 1]) && at - a < MAX_TASK_WORD) a--;
+  let b = at;
+  while (b < task.length && !/\s/.test(task[b]) && b - at < MAX_TASK_WORD) b++;
+  const word = task.slice(a, b);
+  return /:[^\s/]/.test(word) && !/^(?:[\w.@/-]*@)?(?:npm|jsr|file|link|portal|workspace|catalog|patch|git(?:\+[a-z]+)?|github|gitlab|bitbucket|https?):/i.test(word);
+}
+
 export function readTaskItems(task: string, deps: readonly ResolvedDependency[]): TaskItems {
   const quoted = new Set((task.match(/`([^`\s]+)`/g) ?? []).map((q) => q.slice(1, -1).toLowerCase()));
   // Word-ish tokens that keep package punctuation; a leading "-" marks a command flag; a version may
@@ -617,6 +637,19 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           truncated = true;
           break;
         }
+        // A shell or sentence separator ends the operands (`&& git push origin x` listed git, push, origin;
+        // fourth blind check, item 2); a shell variable or expansion (`$X`, `%X%`, `${X}`) is never a name,
+        // nor is a word with a colon inside (`--auth admin:hunter2` listed hunter2). A dash standing alone
+        // is a dash between clauses (an em dash is folded to one).
+        const before = task.slice(span(j - 1).end, starts[j]);
+        const expands = /\$\(|\$\{?$/.test(before) || /%$/.test(before);
+        if (expands) unreadWords.push({ shown: `${before.trim().slice(-2)}${raw[j].slice(0, 20)}`, reason: "not read: a shell expansion, whose value the task does not give" });
+        if (/\$\(/.test(before) || (!before.startsWith("|") && OPERANDS_END.test(before)) || (raw[j] === "-" && /\s$/.test(before))) break;
+        if (expands) continue;
+        if (colonWord(task, starts[j])) {
+          unreadWords.push({ shown: "a word with a colon inside", reason: "not read: a user and password or a host and port is no package name (it is never repeated: it may be a secret)" });
+          continue;
+        }
         if (words[j].startsWith("-")) {
           // An option's value (`--tag next`, `-w packages/api`, `--prefix ./x`) is never a package (E2).
           // `--opt=value` is a value. After `--opt`, the next word is read as an operand only when the
@@ -637,7 +670,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           if (/^=\S*$/.test(gap)) j++;
           // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
           else if (/^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && !words[j + 1].startsWith("-")) {
-            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: raw[j + 1].replace(/[.,;:)]+$/, "").slice(0, 80), reason: `not read: it follows the option ${flag.slice(0, 40)}, which may take it as its value` });
+            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: `the word after ${flag.slice(0, 40)}`, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)" });
             j++;
           }
           continue;

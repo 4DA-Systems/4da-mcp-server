@@ -130,8 +130,13 @@ export function optionTakesValue(manager: string, flag: string): boolean {
 /** The kind of source a command's option names, or null when it names none (or the public one). */
 function sourceOption(family: Family, flag: string, value: string | undefined): string | null {
   if (family === "js") {
-    if (flag === "--registry") return publicNpm(value) ? null : "a registry named in its command";
+    // npm takes an option by any unambiguous prefix (`--reg URL`), and a URL may be glued to a short one
+    // (`-ihttps://...`): any option but a proxy whose value is a registry URL other than npm's names one
+    // (fourth blind check).
+    if (/^--reg(?:i(?:s(?:t(?:r(?:y)?)?)?)?)?$/i.test(flag)) return publicNpm(value) ? null : "a registry named in its command";
     if (/^--@[^:]+:registry$/i.test(flag)) return "a registry named in its command";
+    const url = flag.includes("://") ? flag.replace(/^-{1,2}[A-Za-z]?/, "") : value;
+    if (!/proxy/i.test(flag) && url && /^(?:https?:)?\/\//i.test(url) && !publicNpm(url)) return "a registry named in its command";
     return null;
   }
   if (family === "py") {
@@ -285,7 +290,7 @@ export function screenTask(task: string): TaskScreen {
     scopes.add(m[2].toLowerCase());
     blank(m.index! + m[1].length, m.index! + m[0].length);
   }
-  for (const m of task.matchAll(/(^|[\s"'`])((?:npm_config_|NPM_CONFIG_)?registry|npmRegistryServer)\s{0,4}[=\s]\s{0,4}["'`]?((?:https?:)?\/\/\S{1,2000})/gm)) {
+  for (const m of task.matchAll(/(^|[\s"'`])((?:npm_config_|NPM_CONFIG_|BUN_CONFIG_|YARN_NPM_)?(?:registry|REGISTRY)|YARN_REGISTRY|YARN_NPM_REGISTRY_SERVER|npmRegistryServer)\s{0,4}[=\s]\s{0,4}["'`]?((?:https?:)?\/\/\S{1,2000})/gm)) {
     if (!publicNpm(m[3])) closeEcosystem("npm", "a registry the task sets for npm", m.index! + m[1].length, m.index! + m[0].length);
   }
   for (const m of task.matchAll(/(^|[\s"'`])((?:PIP_|UV_)?(?:EXTRA_)?(?:INDEX_URL|DEFAULT_INDEX|INDEX)|(?:global\.)?(?:extra-)?index-url|index_url)\s{0,4}[=\s]\s{0,4}["'`]?(\S{1,2000})/gim)) {
@@ -311,7 +316,11 @@ export function screenTask(task: string): TaskScreen {
     for (; j < words.length && j - i <= 40; j++) {
       const w = words[j].text;
       if (COMMAND_ENDS.has(w.toLowerCase())) break;
+      // A shell or sentence separator ends the command too (fourth blind check, item 2): `&`, `|`, a
+      // redirection, a comment, a new line, a parenthesis, a lone dash (an em dash folded), `$(`, a backtick.
+      if (/^(?:[&|<>#(]|\d?>|\/\/|-$|\$\()/.test(w) || /\n/.test(task.slice(words[j - 1].end, words[j].start))) break;
       last = j;
+      if (/[,()]["')]*$/.test(w)) break;
       // A sentence or clause ends with this word ("x.", "x;", "x`").
       if (/[;!?`]["')]*$/.test(w) || /[A-Za-z0-9"'`)]\.["')]*$/.test(w)) break;
     }
