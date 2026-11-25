@@ -67,7 +67,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
-import { isKnownSwitch, lookupEvidence, MAX_TASK_WORD, NOT_KNOWN, optionTakesValue, pathLikeOperand, privateSignals, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { isKnownSwitch, lookupEvidence, MAX_TASK_WORD, notKnownReason, optionTakesValue, pathLikeOperand, privateSignals, proseCues, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -348,6 +348,7 @@ export interface LookupContext {
   installed: (name: string) => boolean;
   structural: ReadonlySet<string>;
   signals: ReadonlyMap<CheckEcosystem, string>;
+  prose: (name: string, eco: CheckEcosystem, primary: CheckEcosystem) => boolean;
 }
 
 export function lookupContext(task: string, deps: readonly ResolvedDependency[], structural: ReadonlySet<string>): LookupContext {
@@ -360,24 +361,25 @@ export function lookupContext(task: string, deps: readonly ResolvedDependency[],
     installed: (name) => names.has(name.toLowerCase()) || names.has(normalizePypiName(name)) || installedGoModule(name, deps) !== null,
     structural,
     signals: privateSignals(task),
+    prose: proseCues(task),
   };
 }
 
 /**
  * The ecosystems among `ecosystems` where `name` may be looked up (the first one kept first), or the
- * reason it is looked up in none: the task's private-source signal for its ecosystem, else NOT_KNOWN.
+ * reason it is looked up in none: the task's private-source signal for its ecosystem, else notKnownReason.
  */
-export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], ctx: LookupContext): { allowed: CheckEcosystem[]; onlyStructural: boolean; why: string } {
+export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], ctx: LookupContext, primary: CheckEcosystem = ecosystems[0]): { allowed: CheckEcosystem[]; onlyStructural: boolean; why: string } {
   const allowed: CheckEcosystem[] = [];
   let onlyStructural = true;
   for (const e of ecosystems) {
-    const ev = lookupEvidence(name, e, ctx);
+    const ev = lookupEvidence(name, e, ctx, primary);
     if (ev === null) continue;
     allowed.push(e);
-    if (ev !== "command") onlyStructural = false;
+    if (ev !== "command" && ev !== "cue") onlyStructural = false;
   }
   const signal = ctx.signals.get(ecosystems[0]);
-  return { allowed, onlyStructural, why: signal ? `not looked up: ${signal}` : NOT_KNOWN };
+  return { allowed, onlyStructural, why: signal ? `not looked up: ${signal}` : notKnownReason(name, ecosystems[0]) };
 }
 
 /** A word the briefing did not look up, as the answer names it. */

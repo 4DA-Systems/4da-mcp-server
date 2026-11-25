@@ -257,46 +257,31 @@ describe("what_should_i_know: a task that adds a package", () => {
   });
 
   it("a name the registry does not have is review_needed (a private package, a typo, or a hallucinated name)", async () => {
-    // Re-check of the 2026-11-25 fixes, item 2: a word of the task is looked up only where something says
-    // it is a public package (installed, popular or a near-miss of one, or an install command's operand);
-    // a word in prose that nothing knows is held (withheld_from_task), never sent, and never safe_to_delegate.
     const r = await executeWhatShouldIKnow(db, { task: "add the frobnicate-internal package" }, intel());
     expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.new_packages).toBeUndefined();
-    expect(r.withheld_from_task).toMatchObject([{ shown: "frobnicate-internal", reason: expect.stringContaining("not a package this server knows") }]);
-    expect(ASKED.some((u) => u.includes("frobnicate-internal"))).toBe(false);
-    // Given to an install command, the same name is looked up, and the registry does not have it.
-    const cmd = await executeWhatShouldIKnow(db, { task: "npm install frobnicate-internal" }, intel());
-    expect(cmd.delegation_assessment.level).toBe("review_needed");
-    expect(cmd.new_packages).toMatchObject([{ name: "frobnicate-internal", verdict: "unknown", malicious: false }]);
-    expect(cmd.new_packages![0].reason).toContain("is not on the public npm registry");
+    expect(r.new_packages).toMatchObject([{ name: "frobnicate-internal", verdict: "unknown", malicious: false }]);
+    expect(r.new_packages![0].reason).toContain("is not on the public npm registry");
   });
 
   it("a clean new package changes nothing: safe_to_delegate, and it is listed as proceed", async () => {
-    // Re-check of the 2026-11-25 fixes, item 2: a word of the task is looked up only where something says
-    // it is a public package (installed, popular or a near-miss of one, or an install command's operand);
-    // a word in prose that nothing knows is held (withheld_from_task), never sent, and never safe_to_delegate.
-    const r = await executeWhatShouldIKnow(db, { task: "npm install left-pad" }, intel());
+    const r = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel());
     expect(r.new_packages).toMatchObject([{ name: "left-pad", verdict: "proceed", latest: "1.3.0", malicious: false, name_finding: null }]);
     expect(r.delegation_assessment.level).toBe("safe_to_delegate");
-    const prose = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel());
-    expect(prose.new_packages).toBeUndefined();
-    expect(prose.delegation_assessment.level).toBe("review_needed");
   });
 
   it("a check that cannot run is never safe: registry down, lookups disabled, or no registry access in the session", async () => {
     REGISTRY_DOWN = true;
-    const down = await executeWhatShouldIKnow(db, { task: "npm install left-pad" }, intel());
+    const down = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel());
     expect(down.new_packages).toMatchObject([{ name: "left-pad", verdict: "unknown" }]);
     expect(down.delegation_assessment.level).toBe("review_needed");
 
     REGISTRY_DOWN = false;
-    const offline = await executeWhatShouldIKnow(db, { task: "npm install left-pad" }, intel(READY_SCAN, { isEnabled: () => false }));
+    const offline = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel(READY_SCAN, { isEnabled: () => false }));
     expect(offline.new_packages).toMatchObject([{ name: "left-pad", verdict: "unknown" }]);
     expect(offline.new_packages![0].reason).toContain("live lookups are disabled");
     expect(offline.delegation_assessment.level).not.toBe("safe_to_delegate");
 
-    const bare = await executeWhatShouldIKnow(db, { task: "npm install left-pad" }, intel(READY_SCAN, { getReleaseSources: undefined }));
+    const bare = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel(READY_SCAN, { getReleaseSources: undefined }));
     expect(bare.new_packages).toMatchObject([{ name: "left-pad", verdict: "unknown" }]);
     expect(bare.delegation_assessment.level).toBe("review_needed");
   });
@@ -327,26 +312,15 @@ describe("round 5: a task that adds malware is never safe_to_delegate", () => {
     NPM["flatmap-stream"] = { latest: "0.0.1-security", versions: { "0.0.1-security": "2018-11-26T00:00:00.000Z" } };
   });
 
-  // Re-check of the 2026-11-25 fixes, item 2: PyPI's ctx is a known malicious name (looked up from prose);
-  // extrahtml and logger-libs are nothing this server knows, so only an install command's operand is looked up.
-  it.each(["add ctx", "add ctx to requirements.txt", "pip install extrahtml", "pip install logger-libs", "pip install extrahtml ctx"])(
+  // Re-check of the 2026-11-25 fixes: extrahtml and logger-libs are on no bundled list, so in prose only a package cue
+  // ("as a dependency", "the X package") gets them looked up; without one they are held (a1125-r2-brief-lookup-rule).
+  it.each(["add ctx", "add ctx to requirements.txt", "add extrahtml as a dependency", "add the logger-libs package", "add extrahtml and ctx"])(
     "a PyPI project: %s is human_only (it was safe_to_delegate with no new package)",
     async (task) => {
       const r = await executeWhatShouldIKnow(db, { task }, intel(READY_SCAN, { getResolvedDeps: () => PY }));
       expect(r.delegation_assessment.level).toBe("human_only");
       expect(r.new_packages?.length).toBeGreaterThan(0);
       expect(r.new_packages!.every((p) => p.ecosystem === "PyPI" && p.verdict === "avoid" && p.malicious)).toBe(true);
-    },
-  );
-
-  it.each(["add extrahtml to requirements.txt", "add logger-libs", "add ctx to package.json"])(
-    "%s: a name nothing knows in that ecosystem is held, never sent, and review_needed (re-check of the 2026-11-25 fixes, item 2)",
-    async (task) => {
-      const r = await executeWhatShouldIKnow(db, { task }, intel(READY_SCAN, { getResolvedDeps: () => (task.includes("package.json") ? MIXED : PY) }));
-      expect(r.delegation_assessment.level).toBe("review_needed");
-      expect(r.new_packages).toBeUndefined();
-      expect(r.withheld_from_task?.length).toBeGreaterThan(0);
-      expect(ASKED.some((u) => /extrahtml|logger-libs|registry\.npmjs\.org\/ctx/.test(u))).toBe(false);
     },
   );
 
@@ -399,15 +373,13 @@ describe("round 5: a task that adds malware is never safe_to_delegate", () => {
   it("a bare name no registry has and no malware record covers was prose: dropped, the task judged as before", async () => {
     // "add frobnicator" with nothing else saying it is a package: the registry has no such name.
     expect(detectNewPackages("add frobnicator", DEPS)).toMatchObject([{ name: "frobnicator", ecosystem: "npm", weak: true }]);
-    // Re-check of the 2026-11-25 fixes, item 2: a word of the task is looked up only where something says
-    // it is a public package (installed, popular or a near-miss of one, or an install command's operand);
-    // a word in prose that nothing knows is held (withheld_from_task), never sent, and never safe_to_delegate.
+    // Re-check of the 2026-11-25 fixes: with no package cue the word is not looked up at all; it is held and said.
     const r = await executeWhatShouldIKnow(db, { task: "add frobnicator" }, intel());
     expect(r.new_packages).toBeUndefined();
     expect(r.withheld_from_task).toMatchObject([{ shown: "frobnicator" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
-    // Given to an install command, the same name is looked up and reported as one the registry does not have.
-    const said = await executeWhatShouldIKnow(db, { task: "npm install frobnicator" }, intel());
+    // Said to be a package, the same name is still reported as one the registry does not have.
+    const said = await executeWhatShouldIKnow(db, { task: "add frobnicator as a dependency" }, intel());
     expect(said.new_packages).toMatchObject([{ name: "frobnicator", verdict: "unknown" }]);
     expect(said.delegation_assessment.level).toBe("review_needed");
     // And a check that could not run is never dropped as prose.
@@ -455,14 +427,14 @@ describe("a name the task gives no ecosystem for is checked in every ecosystem t
     expect(r.delegation_assessment.level).toBe("human_only");
     expect(r.new_packages).toMatchObject([{ name: "ctx", ecosystem: "PyPI", verdict: "avoid", malicious: true }]);
     expect(askedFor("ctx", "PyPI")).toBe(true);
-    // Re-check of the 2026-11-25 fixes, item 2: a name is looked up only where something says it is a
-    // public package; PyPI's ctx is a known malicious name, npm's ctx is nothing this server knows.
-    expect(askedFor("ctx", "npm")).toBe(false);
+    // Re-check of the 2026-11-25 fixes: npm's ctx is on no list and has no package cue here, so it is not asked ("the ctx module" is a cue: then it is).
+    expect(askedFor("ctx", "npm")).toBe(task.includes("module"));
   });
 
   it.each([
     ["npm i ctx", "npm"],
     ["npm install ctx", "npm"],
+    ["add the ctx package to package.json", "npm"],
     ["pip install ctx", "PyPI"],
     ["add ctx to requirements.txt", "PyPI"],
   ] as const)("a task that names the ecosystem is checked there only: %s", async (task, ecosystem) => {
@@ -475,15 +447,11 @@ describe("a name the task gives no ecosystem for is checked in every ecosystem t
   });
 
   it("a clean name in the same project is judged as before: safe_to_delegate, the other registry's miss listed", async () => {
-    // Re-check of the 2026-11-25 fixes, item 2: a word of the task is looked up only where something says
-    // it is a public package (installed, popular or a near-miss of one, or an install command's operand);
-    // a word in prose that nothing knows is held (withheld_from_task), never sent, and never safe_to_delegate.
-    // An install command fixes the ecosystem: npm's left-pad only, PyPI never asked.
-    const r = await executeWhatShouldIKnow(db, { task: "npm install left-pad" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    const r = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    // A package cue ties the name to its own ecosystem only (re-check of the 2026-11-25 fixes): PyPI is not asked.
     expect(r.new_packages).toMatchObject([{ name: "left-pad", ecosystem: "npm", verdict: "proceed" }]);
-    expect(askedFor("left-pad", "PyPI")).toBe(false);
     expect(r.delegation_assessment.level).toBe("safe_to_delegate");
-    // A bare word nothing knows is looked up nowhere, and said.
+    // A bare word with no package cue is looked up nowhere, and held by name (re-check of the 2026-11-25 fixes).
     const prose = await executeWhatShouldIKnow(db, { task: "add frobnicator" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
     expect(prose.new_packages).toBeUndefined();
     expect(prose.withheld_from_task).toMatchObject([{ shown: "frobnicator" }]);
@@ -492,7 +460,7 @@ describe("a name the task gives no ecosystem for is checked in every ecosystem t
 
   it("a check that could not run in one ecosystem is never outvoted by a miss in another", async () => {
     REGISTRY_DOWN = true;
-    const r = await executeWhatShouldIKnow(db, { task: "npm install left-pad" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
+    const r = await executeWhatShouldIKnow(db, { task: "add the left-pad package" }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
     expect(r.new_packages).toMatchObject([{ name: "left-pad", verdict: "unknown" }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });

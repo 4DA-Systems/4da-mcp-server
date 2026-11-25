@@ -338,7 +338,7 @@ export function gateTaskNames<P extends { name: string; ecosystem: CheckEcosyste
     }
     let verdict = lookupEcosystems(name, ecosystems, ctx);
     if (verdict.allowed.length === 0 && otherwise.length > 0) {
-      const other = lookupEcosystems(name, otherwise, ctx);
+      const other = lookupEcosystems(name, otherwise, ctx, ecosystems[0]);
       if (other.allowed.length > 0) verdict = other;
     }
     if (verdict.allowed.length === 0) {

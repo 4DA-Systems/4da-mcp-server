@@ -126,7 +126,7 @@ describe("2. a word is looked up only on evidence that it is a public package", 
   it("a word in prose nothing knows is held by name, with the reason, and the task is review_needed", async () => {
     const r = await brief("add left-pad-ng to the project");
     expect(looked("left-pad-ng")).toEqual([]);
-    expect(r.withheld_from_task).toMatchObject([{ shown: "left-pad-ng", reason: expect.stringContaining("call dependency_check on it if it is a public package") }]);
+    expect(r.withheld_from_task).toMatchObject([{ shown: "left-pad-ng", reason: expect.stringContaining("nothing in the task shows left-pad-ng is a public package; if it is one, call dependency_check {ecosystem: \"npm\", package: \"left-pad-ng\", to: \"latest\"}") }]);
     expect(r.delegation_assessment.level).toBe("review_needed");
   });
 
