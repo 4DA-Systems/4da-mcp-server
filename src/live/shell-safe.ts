@@ -46,46 +46,49 @@ export function isShellSafeCargoTarget(target: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * A character a directory name may hold and still be a plain path on bash, cmd.exe and
- * PowerShell: a letter, a combining mark or a digit in any script, `.`, `_`, `-`, `+`, `@` and the
- * ASCII space (a name with a space breaks an unquoted `cd` and nothing else). Not parentheses:
- * PowerShell runs an unquoted `(x86)` as a subexpression (`cd Program Files (x86)` runs `x86`), so
- * a "Program Files (x86)"-style directory inside a project gets words, not a command. Not `~`,
- * `,`, `=`, `#`, `[`, `]`, `{`, `}`, quotes, `$`, backticks, `%`, `!`, `^`, `&`, `|`, `;`, `<`,
- * `>`, `*`, `?`, `:` or `\`, and no other punctuation: PowerShell reads the Unicode dashes and
- * curly quotes as its own `-` and `'`.
+ * Which directory names may be named as the directory a command runs in (audit 2026-11-25 B-B1,
+ * reconsidered after the blind check). Assumed: an agent may paste the name unquoted
+ * (`cd packages/web && npm ci`), or inside double quotes after `cd`, in bash, cmd.exe or
+ * PowerShell. Refused is every character that executes, expands or opens a quote in either form:
+ * `$` and backticks (bash and PowerShell substitution, also inside double quotes), `"` and `'`
+ * (and the curly quotes U+2018-U+201F, which PowerShell reads as quotes), `%` (cmd expands it, also
+ * quoted), `!` (cmd delayed expansion, bash history expansion), `\` (an escape in bash and
+ * PowerShell), `;`, `&`, `|`, `<` and `>` (separators and redirects unquoted), `(` and `)`
+ * (PowerShell runs an unquoted `(x86)` as a subexpression), `{` and `}` (a PowerShell script block),
+ * `*` and `?` (a wildcard picks another directory, even quoted, in PowerShell's Set-Location), `:`
+ * past a drive (PowerShell reads `a:b` as a drive), control, format and invisible characters and
+ * any space but U+0020. At the start of the path only: `-` and the Unicode dashes (an option), `~`
+ * (bash expands `~tmp` to a user's home), `#` (a comment unquoted) and a bare `@name` (PowerShell
+ * splats `@name` unquoted; `@scope/pkg` is literal). Allowed: letters, marks, digits, spaces and
+ * `. _ - + @ # ~ , = [ ] ^` inside the name, which at worst make an unquoted `cd` fail.
  */
-const DIR_CHAR = /^[\p{L}\p{M}\p{N}._+@ -]$/u;
-/** Letters and marks that render as nothing: Hangul fillers, variation selectors. */
-const INVISIBLE = /[\u115f\u1160\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/u;
+const REFUSED_CHAR = /[$`"'\\%!;&|<>(){}*?\u2018-\u201f\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\u115f\u1160\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/u;
+/** Refused as the first character of the path (after a drive or root). */
+const REFUSED_FIRST = /^[-\u2010-\u2015\u2212~#]/u;
 /** A leading drive (`C:/`) or root (`/`): the one place `:` and an empty first segment are allowed. */
 const DIR_ROOT = /^(?:[A-Za-z]:\/|\/)/;
 const MAX_DIR_LENGTH = 1024;
 
 /**
  * Whether `dir` (a project-relative directory as the plans write it, `/`-separated, or "." for the
- * root) may be named as the directory a command runs in: no character a shell reads specially, no
- * control or invisible character, no segment that starts with `-` (read as an option), no leading
- * `@` (PowerShell splatting), no empty segment and no space at either end of a segment. A directory
- * that fails it comes from the repository and is named only escaped, in words (unsafeDirLabel).
+ * root) may be named as the directory a command runs in; see REFUSED_CHAR for what is refused and
+ * why. A directory that fails it comes from the repository and is named only escaped, in words
+ * (unsafeDirLabel).
  */
 export function isShellSafeDir(dir: string): boolean {
   if (dir === ".") return true;
   if (dir.length === 0 || dir.length > MAX_DIR_LENGTH) return false;
   const rest = dir.replace(DIR_ROOT, "");
-  if (rest.startsWith("@") || INVISIBLE.test(rest)) return false;
-  for (const segment of rest.split("/")) {
-    if (segment === "" || segment.startsWith("-") || segment !== segment.trim()) return false;
-    for (const ch of segment) if (!DIR_CHAR.test(ch)) return false;
-  }
-  return true;
+  if (rest === "" || REFUSED_FIRST.test(rest) || REFUSED_CHAR.test(rest) || rest.includes(":")) return false;
+  if (/^@[^/]*$/.test(rest)) return false;
+  return rest.split("/").every((segment) => segment !== "");
 }
 
 const hex = (cp: number) => (cp > 0xffff ? `\\U${cp.toString(16).toUpperCase().padStart(8, "0")}` : `\\u${cp.toString(16).toUpperCase().padStart(4, "0")}`);
 
 /**
  * How a directory is named in words: as it is when it is a plain path, otherwise escaped, every
- * character that is not plain written as `\uXXXX`, inside a marker
+ * refused character written as `\uXXXX`, inside a marker
  * (`[unsafe directory name, escaped: a\u0024\u0028PWN1\u0029]`). Pasted into any shell the label
  * expands nothing, runs nothing and is not a valid package name or option.
  */
@@ -93,13 +96,12 @@ export function unsafeDirLabel(dir: string): string {
   if (isShellSafeDir(dir)) return dir;
   const shown = dir.length > MAX_DIR_LENGTH ? dir.slice(0, MAX_DIR_LENGTH) : dir;
   let out = "";
-  let segmentStart = true;
+  let first = true;
   for (const ch of shown) {
-    const cp = ch.codePointAt(0)!;
     // `@` is escaped wherever it stands in an unsafe name: after a space it would start a token.
-    const plain = DIR_CHAR.test(ch) && !INVISIBLE.test(ch) && ch !== "@" && !(segmentStart && (ch === "-" || ch === " "));
-    out += ch === "/" ? "/" : plain ? ch : hex(cp);
-    segmentStart = ch === "/";
+    const refused = REFUSED_CHAR.test(ch) || ch === ":" || ch === "@" || (first && REFUSED_FIRST.test(ch));
+    out += refused ? hex(ch.codePointAt(0)!) : ch;
+    first = false;
   }
   return `[unsafe directory name, escaped: ${out}${dir.length > MAX_DIR_LENGTH ? "..." : ""}]`;
 }
@@ -136,7 +138,11 @@ export function escapeUnsafeDirs<T>(value: T, dirs: Iterable<string>, opts: { ve
   const spellings = [...label.keys()].sort((a, b) => b.length - a.length);
   const ticked = spellings.filter((s) => s.includes("`"));
   const plain = spellings.filter((s) => !s.includes("`"));
-  const pattern = (list: string[]) => (list.length > 0 ? new RegExp(`(?<!${NAME_START.source})(?:${list.map(escapeRegExp).join("|")})`, "gu") : null);
+  // A name unsafe only as a whole path (a bare `@scope`) is plain as the start of a longer one
+  // (`@scope/pkg`): matched only where no path segment follows it.
+  const wholeOnly = (spelling: string) => isShellSafeDir(`${spelling.replace(/\\/g, "/")}/x`);
+  const alternative = (spelling: string) => `${escapeRegExp(spelling)}${wholeOnly(spelling) ? "(?![/\\\\])" : ""}`;
+  const pattern = (list: string[]) => (list.length > 0 ? new RegExp(`(?<!${NAME_START.source})(?:${list.map(alternative).join("|")})`, "gu") : null);
   const all = pattern(ticked);
   const outside = pattern(plain);
   const rewrite = (text: string): string => {
@@ -145,7 +151,8 @@ export function escapeUnsafeDirs<T>(value: T, dirs: Iterable<string>, opts: { ve
     return s;
   };
   const walk = (v: unknown, key: string | null): unknown => {
-    if (typeof v === "string") return key !== null && verbatim.has(key) ? v : rewrite(v);
+    // A `dir` that is a plain path is a command's directory: kept exactly (an unsafe one is rewritten).
+    if (typeof v === "string") return key !== null && (verbatim.has(key) || (key === "dir" && isShellSafeDir(v))) ? v : rewrite(v);
     if (Array.isArray(v)) return v.map((x) => walk(x, key));
     if (v && typeof v === "object") {
       const out: Record<string, unknown> = {};
@@ -244,7 +251,8 @@ function unsafeDirsOnDisk(root: string): string[] {
         seen++;
         const child = rel === "" ? e.name : `${rel}/${e.name}`;
         if (!isShellSafeDir(child)) out.push(child);
-        else next.push(child);
+        // Below a name unsafe only on its own (a bare `@scope`), the longer paths are plain: read on.
+        if (isShellSafeDir(`${child}/x`)) next.push(child);
       }
     }
     queue = next;

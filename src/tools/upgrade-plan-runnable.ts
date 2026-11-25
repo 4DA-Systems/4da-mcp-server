@@ -394,6 +394,12 @@ export const UNSAFE_DIR_REASON_START = "NOT RUNNABLE HERE: ";
 const UNSAFE_DIR_REASON = /^NOT RUNNABLE HERE: the directory /;
 
 /** Whether the row has a step in a directory whose name is not safe in a command: never counted as fixed, never in run_order. */
+/** How many steps (commands, instructions, reinstalls) withholdUnsafeDirs took off a row. */
+const WITHHELD = new WeakMap<object, number>();
+export function withheldStepsOf(row: object): number {
+  return WITHHELD.get(row) ?? 0;
+}
+
 export function hasUnsafeDir(row: { reasons: string[] }): boolean {
   return row.reasons.some((r) => UNSAFE_DIR_REASON.test(r));
 }
@@ -412,9 +418,14 @@ export function withholdUnsafeDirs<R extends RunnableRow & { installFix?: string
   const found = new Set<string>();
   for (const r of rows) {
     const bad = new Set<string>();
+    let withheld = 0;
     const keep = <T extends DirField>(list: T[] | undefined): T[] | undefined => {
       if (!list) return list;
-      for (const c of list) if (!isShellSafeDir(c.dir)) bad.add(c.dir);
+      for (const c of list) {
+        if (isShellSafeDir(c.dir)) continue;
+        bad.add(c.dir);
+        withheld++;
+      }
       return list.filter((c) => isShellSafeDir(c.dir));
     };
     const set = <K extends "upgradeCommands" | "upgradeInstructions" | "refreshCommands">(key: K) => {
@@ -445,10 +456,18 @@ export function withholdUnsafeDirs<R extends RunnableRow & { installFix?: string
         }
       }
     }
-    for (const c of overrideCommandsOf(r)) if (!isShellSafeDir(c.dir)) bad.add(c.dir);
+    for (const c of overrideCommandsOf(r)) {
+      if (isShellSafeDir(c.dir)) continue;
+      bad.add(c.dir);
+      withheld++;
+    }
     const reinstall = installDirs.get(r);
     if (reinstall) {
-      for (const d of reinstall) if (!isShellSafeDir(d)) bad.add(d);
+      for (const d of reinstall) {
+        if (isShellSafeDir(d)) continue;
+        bad.add(d);
+        withheld++;
+      }
       const safe = reinstall.filter((d) => isShellSafeDir(d));
       if (safe.length > 0) installDirs.set(r, safe);
       else if (reinstall.length > 0) {
@@ -458,9 +477,10 @@ export function withholdUnsafeDirs<R extends RunnableRow & { installFix?: string
       }
     }
     if (bad.size === 0) continue;
+    WITHHELD.set(r, withheld);
     for (const d of [...bad].sort()) {
       found.add(d);
-      const why = `${UNSAFE_DIR_REASON_START}${unsafeDirWords(d)}. This row is not counted as fixed and is not in run_order`;
+      const why = `${UNSAFE_DIR_REASON_START}${unsafeDirWords(d)}. That step is withheld; the row's steps in other directories stay in its commands and in run_order, and the row is not counted as fixed`;
       if (!r.reasons.includes(why)) r.reasons.push(why);
     }
   }

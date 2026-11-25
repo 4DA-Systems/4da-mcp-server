@@ -13,6 +13,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LiveIntelligence } from "../live/index.js";
+import { isShellSafeDir } from "../live/shell-safe.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { executeDependencyHealth } from "../tools/dependency-health.js";
 import { executeUpgradeImpact } from "../tools/upgrade-impact.js";
@@ -22,6 +23,7 @@ import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 
 const HOSTILE = ["a$(PWN1)", "b`PWN2`", "c;PWN3", "--registry=PWN4", "e'PWN5'", "f %PWN6%"];
+// `packages/--registry=PWN4` is a plain path (a leading "-" only matters at the start of the path) and may be named as is.
 /** Data fields that may hold a path verbatim: upgrade_impact's file list. */
 const DATA_KEYS = new Set(["path"]);
 
@@ -66,7 +68,7 @@ function rawHits(value: unknown): string[] {
   const walk = (v: unknown, key: string | null, at: string) => {
     if (typeof v === "string") {
       if (key !== null && DATA_KEYS.has(key)) return;
-      for (const d of HOSTILE) if (v.includes(d)) hits.push(`${at}: ${v.slice(0, 200)}`);
+      for (const d of HOSTILE) if (!isShellSafeDir(`packages/${d}`) && v.includes(d)) hits.push(`${at}: ${v.slice(0, 200)}`);
     } else if (Array.isArray(v)) v.forEach((x, i) => walk(x, key, `${at}[${i}]`));
     else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, k, `${at}.${k}`);
   };
