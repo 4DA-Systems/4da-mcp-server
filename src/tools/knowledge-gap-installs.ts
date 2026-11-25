@@ -75,8 +75,9 @@ interface LockRow {
 }
 
 /**
- * Resolves the install each declaring project carries: the manifest's own
- * version when it is a real version; else the lockfile-resolved one in
+ * Resolves the install each declaring project carries: the version the live
+ * resolver read from the lockfile in that project's directory on disk; else the
+ * manifest's own version when it is a real version; else the lockfile-resolved one in
  * `user_dependencies` (the same project and ecosystem family, then a lockfile
  * under the same active repo root — a workspace member resolved by the
  * workspace lockfile); else the live resolver's version for that project.
@@ -131,6 +132,10 @@ export class InstallResolver {
   }
 
   private versionOf(row: DeclaringRow): string | null {
+    // The lockfile on disk first: the server's own resolution for THIS project. The app's
+    // records below can be older than the lockfile (audit 2026-11-25, G-4).
+    const onDisk = this.fromDisk(row);
+    if (onDisk) return onDisk;
     // A manifest records a RANGE when it records anything ("^4.1.5"); only a
     // real version is an install.
     if (row.version && parseSemverPrecedence(row.version) !== null) return row.version;
@@ -163,14 +168,23 @@ export class InstallResolver {
    * mode, one project) the resolver's version for the package is the install.
    */
   private fromResolver(row: DeclaringRow): string | null {
+    const own = this.fromDisk(row);
+    if (own) return own;
+    return this.lockStmt === null ? (this.resolvedMatches(row)[0]?.version ?? null) : null;
+  }
+
+  /** The live resolver's version from the lockfile in THIS project's directory, or null. */
+  private fromDisk(row: DeclaringRow): string | null {
+    const here = normPath(row.project_path);
+    const own = this.resolvedMatches(row).find((d) => (d.sourceDirs ?? []).some((dir) => normPath(dir) === here));
+    return own?.version ?? null;
+  }
+
+  private resolvedMatches(row: DeclaringRow): ResolvedDependency[] {
     const ecosystem = osvEcosystem(row.language);
-    if (ecosystem === null) return null;
-    const matches = this.resolved.filter(
+    if (ecosystem === null) return [];
+    return this.resolved.filter(
       (d) => d.version && sameEcosystem(d.ecosystem, ecosystem) && denotes(d.name, ecosystem, row.package_name),
     );
-    const here = normPath(row.project_path);
-    const own = matches.find((d) => (d.sourceDirs ?? []).some((dir) => normPath(dir) === here));
-    if (own) return own.version;
-    return this.lockStmt === null ? (matches[0]?.version ?? null) : null;
   }
 }
