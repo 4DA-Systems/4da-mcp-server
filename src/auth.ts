@@ -81,7 +81,11 @@ const SEGMENT = /^[A-Za-z0-9_-]+$/;
 
 /** A value from an unverified token, as a log may show it: quoted, escaped (no newline forges a line), at most 40 characters. */
 function shown(value: unknown): string {
-  return JSON.stringify(String(value).slice(0, 40));
+  // Only a string is shown as itself: String() on an object from the token calls its own
+  // toString, and `{"alg":{"toString":1}}` threw (a 500 where a 401 belongs; audit 2026-11-25 re-check).
+  if (typeof value === "string") return JSON.stringify(value.slice(0, 40));
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) return JSON.stringify(String(value));
+  return `(a JSON ${Array.isArray(value) ? "array" : "object"})`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
