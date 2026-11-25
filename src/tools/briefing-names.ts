@@ -244,13 +244,17 @@ const PROSE_CHAIN = new RegExp(
 );
 
 /** A package name as a manifest key: `lodash`, `@scope/name`. */
-const KEY = String.raw`@?[\w.~-]+(?:\/[\w.~-]+)?`;
-/** A version or range a manifest entry gives: `4.17.20`, `^1.2`, `~2.0.1`, `>=2`, `=1.0.0`, `7.x`, `>=1.2.5 <1.2.6`, `>=1.0, <2`. */
-const SPEC = String.raw`(?:[~^]|[<>]=?|={1,2})?\s*v?\d[\w.*+<>=~^!|,\s-]*?`;
+const KEY = String.raw`@?[\w.~-]{1,214}(?:\/[\w.~-]{1,214})?`;
+/**
+ * A version or range a manifest entry gives: `4.17.20`, `^1.2`, `~2.0.1`, `>=2`, `=1.0.0`, `7.x`, `>=1.2.5 <1.2.6`, `>=1.0, <2`.
+ * Every run in these entry patterns is bounded: an unbounded lazy run rescanned the rest of the task
+ * from every `name = {` (pre-publish audit 2026-11-25, F-M3). No real name, version or inline table is longer.
+ */
+const SPEC = String.raw`(?:[~^]|[<>]=?|={1,2})?\s{0,8}v?\d[\w.*+<>=~^!|,\s-]{0,200}?`;
 const JSON_ALIAS_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])npm:(${KEY})(?:@([^"'\s]+))?\3`, "g");
 const JSON_VERSION_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])(${SPEC})\3`, "g");
-const TOML_TABLE_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]*)\s*=\s*\{[^}]*?\bversion\s*=\s*(["'])(${SPEC})\3[^}]*\}`, "gm");
-const TOML_VERSION_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]*)\s*=\s*(["'])(${SPEC})\3`, "gm");
+const TOML_TABLE_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]{0,213})\s{0,8}=\s{0,8}\{[^}]{0,400}?\bversion\s{0,8}=\s{0,8}(["'])(${SPEC})\3[^}]{0,400}\}`, "gm");
+const TOML_VERSION_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]{0,213})\s{0,8}=\s{0,8}(["'])(${SPEC})\3`, "gm");
 const TOML_MANIFEST = /\b(?:cargo\.toml|pyproject\.toml|crates?|cargo|poetry)\b/i;
 /** Manifest fields that hold a version but are not a dependency (`"version": "1.2.3"`, engines' `"node": ">=18"`, `edition = "2021"`). */
 const NOT_DEPENDENCY_FIELDS: ReadonlySet<string> = new Set([

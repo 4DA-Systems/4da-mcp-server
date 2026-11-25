@@ -11,6 +11,7 @@
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { detectTaskPackages } from "./briefing-task-scope.js";
+import { boundWords, MAX_TASK_WORD } from "./briefing-task-screen.js";
 
 export interface PrivateTaskPackage {
   package: string;
@@ -39,6 +40,9 @@ const ECOSYSTEMS = ["npm", "crates.io", "PyPI", "Go", "RubyGems", "Packagist"];
 /** The private packages a task names: installed private dependencies it touches, and any name the private rules cover. */
 export function privateTaskPackages(task: string, files: string[], live: PrivateLookup | null): PrivateTaskPackage[] {
   if (!live) return [];
+  // No package name is longer than MAX_TASK_WORD, and no reader reads a longer word (briefing-task-screen.ts):
+  // the forms of a 199,000-character word took 89 s (pre-publish audit 2026-11-25, F-M3).
+  task = boundWords(task);
   const out = new Map<string, PrivateTaskPackage>();
   const why = new Map((live.getPrivateDependencies?.() ?? []).map((p) => [`${p.ecosystem}\0${p.name}`, p.why]));
   const unread = new Map((live.getPrivateDependencies?.() ?? []).filter((p) => p.unreadable_file).map((p) => [`${p.ecosystem}\0${p.name}`, p.unreadable_file!]));
@@ -77,7 +81,10 @@ export function privateTaskPackages(task: string, files: string[], live: Private
     });
   }
   if (live.privateReason) {
-    for (const token of task.match(NAME_TOKEN) ?? []) {
+    // Each distinct word once: "x@y.x@y.x@y..." is 20,000 words of one spelling, each asked of every
+    // ecosystem's rules (1.4 s at 80,000 characters).
+    for (const token of new Set(task.match(NAME_TOKEN) ?? [])) {
+      if (token.length > MAX_TASK_WORD) continue;
       const name = token.replace(/[.,;:]+$/, "");
       for (const asked of ECOSYSTEMS) {
         // The ecosystem that makes it private, not the first one asked (blind audit round 5, 5).
