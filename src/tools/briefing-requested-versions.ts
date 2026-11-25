@@ -35,7 +35,7 @@ import {
   specText,
 } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
-import { boundWords, knownPublicName, offlineNearMiss, screenedOut, screenTask, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
+import { boundWords, offlineNearMiss, screenedOut, screenTask, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
@@ -408,7 +408,7 @@ export function gateTaskNames<
     }
   };
   /** The ecosystems an item may be looked up in by the briefing, or null (handed back, or held). */
-  const gate = (shown: string, name: string, own: CheckEcosystem[], others: CheckEcosystem[], version: string | undefined, unreadVersion = false): CheckEcosystem[] | null => {
+  const gate = (shown: string, name: string, own: CheckEcosystem[], version: string | undefined, unreadVersion = false): CheckEcosystem[] | null => {
     if (touched.has(name.toLowerCase())) {
       hold(shown, NOT_READ_WHOLE);
       return null;
@@ -418,9 +418,9 @@ export function gateTaskNames<
     // ecosystems are not listed. Listing them made 33 of 190 ordinary tasks review_needed, and following them
     // judged the wrong registry ("use crossenv": PyPI's crossenv, proceed; third blind check, item 4).
     if (allowed.length > 0) return allowed;
-    // A name the task gives no ecosystem for may be a listed name of another one (crates.io's rustdecimal in an npm project).
-    const elsewhere = lookupEcosystems(name, others, installed).filter((e) => knownPublicName(name, e));
-    if (elsewhere.length > 0) return elsewhere;
+    // A bundled-list name of an ecosystem the project does not use and the task names no manager of is no
+    // evidence: judged there it vanished ("use loguru ..." in an npm project answered safe_to_delegate where
+    // 6.5.1 said npm took loguru down as malware; fourth blind check, item 3). It is listed for the project's own.
     offer(name, own, version, true, unreadVersion);
     return null;
   };
@@ -428,14 +428,13 @@ export function gateTaskNames<
   for (const p of packages) {
     // When the task names no manager or file, every ecosystem the project uses that may have the name.
     const own: CheckEcosystem[] = p.fallbackOnly ? [p.ecosystem] : [p.ecosystem, ...(p.alternatives ?? [])];
-    const others = p.guessed ? (["npm", "PyPI", "crates.io"] as const).filter((e) => !own.includes(e) && !p.closed?.includes(e)) : [];
     // A version the task writes that could not be read: never looked up at latest, listed with no `to`.
     if (p.versionUnread) {
       if (touched.has(p.name.toLowerCase())) hold(p.name, NOT_READ_WHOLE);
       else offer(p.name, own, undefined, true, true);
       continue;
     }
-    const allowed = gate(p.name, p.name, own, [...others], p.version, p.versionUnread === true);
+    const allowed = gate(p.name, p.name, own, p.version, p.versionUnread === true);
     if (!allowed) continue;
     const [ecosystem, ...alternatives] = allowed;
     const out = { ...p, ecosystem };
@@ -446,7 +445,7 @@ export function gateTaskNames<
   const keptRequested: R[] = [];
   for (const r of requested) {
     const own: CheckEcosystem[] = r.fallbackOnly ? [r.ecosystem] : [r.ecosystem, ...(r.alternatives ?? [])];
-    const allowed = gate(`${r.name} ${r.to}`, r.name, own, [], r.to === "latest" ? undefined : r.to);
+    const allowed = gate(`${r.name} ${r.to}`, r.name, own, r.to === "latest" ? undefined : r.to);
     if (!allowed) continue;
     const [ecosystem, ...alternatives] = allowed;
     const out = { ...r, ecosystem };

@@ -309,10 +309,10 @@ const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Par
 describe("what_should_i_know: the audit's phrasings (all came back with something unchecked)", () => {
   it('"bring in rustdecimal" in an npm project: crates.io\'s malware is found, though npm has no such name (it was safe_to_delegate)', async () => {
     const r = await brief("bring in rustdecimal");
-    // Re-check of the 2026-11-25 fixes, item 2: rustdecimal is a known malicious crates.io name, so it is
-    // looked up there; npm's rustdecimal is nothing this server knows, so it is not asked.
-    expect(r.new_packages).toMatchObject([{ name: "rustdecimal", ecosystem: "crates.io", malicious: true, verdict: "avoid" }]);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    // Fourth blind check of the 2026-11-25 fixes, item 3: a bundled-list name of an ecosystem the project does
+    // not use is no evidence there: rustdecimal is listed as an unverified npm word, and the task is not safe.
+    expect(r.unverified_words).toMatchObject([{ word: "rustdecimal", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
   it.each([
