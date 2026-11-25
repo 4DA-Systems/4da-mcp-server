@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
 import { pypiCompileCommand } from "../live/pypi-advice.js";
 import type { ReleaseMetadataSource } from "../live/release-metadata.js";
-import { isShellSafeName, isShellSafeVersion } from "../live/shell-safe.js";
+import { isShellSafeDir, isShellSafeName, isShellSafeVersion, unsafeDirLabel } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { overrideCommandsOf } from "./upgrade-plan-overrides.js";
 import { peerConflictReader, type PeerContext } from "./upgrade-plan-peers.js";
@@ -83,7 +83,8 @@ export interface CommandContext {
 export function rowCommands(row: CommandRow, ctx: CommandContext): PlanCommand[] {
   const out: PlanCommand[] = [];
   const add = (dir: string, command: string) => {
-    if (isManualStep(command)) return;
+    // A directory whose name is not a plain path gets no command (audit 2026-11-25 B-B1): the row's reasons say it in words.
+    if (isManualStep(command) || !isShellSafeDir(dir)) return;
     for (const run of splitCompound(command)) if (!out.some((c) => c.dir === dir && c.run === run)) out.push({ dir, run });
   };
   for (const c of row.upgradeCommands ?? []) add(c.dir, c.command);
@@ -257,6 +258,8 @@ export interface RunOrderOptions {
   peerConflict?: (dir: string, pkg: string, version: string) => PeerConflict | null;
   /** The operator of `name`'s declaration in `dir`/package.json ("^", "~", "" for an exact pin); null when it is not declared there or not read. */
   declaredOperator?: (dir: string, name: string) => string | null;
+  /** Rows with a step in a directory whose name is not safe in a command: left out, and said (upgrade-plan-runnable.ts withholdUnsafeDirs). */
+  notRunnableHere?: (row: SequencedRow) => boolean;
 }
 
 export interface PeerConflict {
@@ -279,7 +282,8 @@ export interface RunOrder {
 const FIX_ACTIONS = new Set(["upgrade_direct", "lockfile_refresh", "upgrade_parent", "reinstall"]);
 
 /** A row whose commands are its whole fix on this host: a fix action, or an override whose snippet is written as commands (not one whose only commands are a parent lever that leaves other paths). */
-const isRunnable = (opts: Pick<RunOrderOptions, "heldUnclean">) => (r: SequencedRow) =>
+const isRunnable = (opts: Pick<RunOrderOptions, "heldUnclean" | "notRunnableHere">) => (r: SequencedRow) =>
+  !(opts.notRunnableHere?.(r) ?? false) &&
   (FIX_ACTIONS.has(r.action) || (r.action === "override_or_replace" && r.breaking !== true && overrideCommandsOf(r).length > 0)) && !opts.heldUnclean(r) && wholeByCommand(r) && (r.action !== "upgrade_direct" || r.targetVersion !== null);
 
 /** A row left out because part of its fix is done by hand: a manifest or lockfile edit, an override, a lever with no command. */
@@ -340,7 +344,11 @@ export function buildRunOrder(opts: RunOrderOptions): RunOrder {
       extra.filter((e) => e.rows.some((r) => !peerBlocked.has(r))),
     );
   }
-  const steps = graph.order().map((n, i) => ({ n: i + 1, dir: n.dir, run: n.run, fixes: [...n.fixes].sort() }));
+  // Never a step in a directory whose name is not a plain path, whatever produced it.
+  const steps = graph
+    .order()
+    .filter((n) => isShellSafeDir(n.dir))
+    .map((n, i) => ({ n: i + 1, dir: n.dir, run: n.run, fixes: [...n.fixes].sort() }));
   const note = runOrderNote(opts, runnable, peerBlocked, steps.length, graph.notes);
   return { run_order: steps, run_order_note: note, peerBlocked };
 }
@@ -696,7 +704,7 @@ function topological(nodes: Map<string, Node>, edges: Map<string, Set<string>>):
 }
 
 function dirWords(dir: string): string {
-  return dir === "." ? "the project root" : dir;
+  return dir === "." ? "the project root" : unsafeDirLabel(dir);
 }
 
 function andList(items: string[]): string {
@@ -711,6 +719,8 @@ export interface SequenceContext {
   peers?: PeerContext;
   /** RunOrderOptions.declaredOperator. */
   declaredOperator?: RunOrderOptions["declaredOperator"];
+  /** RunOrderOptions.notRunnableHere. */
+  notRunnableHere?: RunOrderOptions["notRunnableHere"];
   /** Time the go.mod reads may take. */
   budgetMs: number;
 }
@@ -760,7 +770,7 @@ async function goRequirements(rows: SequencedRow[], source: SequenceContext["goS
  */
 export async function sequencePlan(rows: SequencedRow[], ctx: SequenceContext): Promise<{ run_order: RunOrderStep[]; run_order_note: string }> {
   const goRequires = await goRequirements(rows, ctx.goSource, Date.now() + ctx.budgetMs);
-  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined, declaredOperator: ctx.declaredOperator });
+  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined, declaredOperator: ctx.declaredOperator, notRunnableHere: ctx.notRunnableHere });
   for (const [row, why] of result.peerBlocked) if (!row.reasons.includes(why)) row.reasons.push(why);
   return { run_order: result.run_order, run_order_note: result.run_order_note };
 }
@@ -792,19 +802,23 @@ function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlock
   const forced = ran.filter((r) => overrideCommandsOf(r).length > 0);
   if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override or resolution written by \`npm pkg set\` (${named(forced)}): it applies to every copy its key names, so re-scan after running`);
   const inScript = new Set(runnable);
+  const unsafe = opts.rows.filter((r) => opts.notRunnableHere?.(r) ?? false);
+  // Each row is named once, in the first group that holds it: one in an unsafe directory there.
+  const rows = opts.rows.filter((r) => !unsafe.includes(r));
   const eligible = (r: SequencedRow) => !inScript.has(r) && !opts.heldUnclean(r) && (FIX_ACTIONS.has(r.action) || r.action === "override_or_replace") && (r.action !== "upgrade_direct" || r.targetVersion !== null);
-  const hand = opts.rows.filter((r) => eligible(r) && isHandEdit(r));
+  const hand = rows.filter((r) => eligible(r) && isHandEdit(r));
   // The script alone does not finish the job: what is left to edit by hand is counted and named.
   if (hand.length > 0) parts.push(`${hand.length} row${hand.length === 1 ? " is a hand edit" : "s are hand edits"} and ${hand.length === 1 ? "is" : "are"} not in this script: ${named(hand)} (a manifest or lockfile edit, or an override that crosses a major; ${hand.length === 1 ? "its reasons say" : "their reasons say"} what to edit)`);
   const groups: Array<[string, SequencedRow[]]> = [
-    ["name no command for their fix (their reasons say why)", opts.rows.filter((r) => eligible(r) && !isHandEdit(r) && r.action !== "override_or_replace")],
-    ["name no confirmed target (NOT CHECKED; their reasons say why)", opts.rows.filter((r) => r.action === "upgrade_direct" && r.targetVersion === null && !opts.heldUnclean(r))],
-    ["have a target that is NOT a clean fix (it holds an affected dependency; see their reasons)", opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && opts.heldUnclean(r))],
-    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", opts.rows.filter((r) => (r.action === "override_or_replace" && !inScript.has(r) && !hand.includes(r)) || r.action === "upgrade_parent_unverified")],
-    ["apply where the code is built, not on this host (not_built_on_this_host)", opts.rows.filter((r) => r.action === "not_built_on_this_host")],
+    ["have a step in a directory whose name is not safe to put in a command (handled by hand; their reasons name it, escaped)", unsafe],
+    ["name no command for their fix (their reasons say why)", rows.filter((r) => eligible(r) && !isHandEdit(r) && r.action !== "override_or_replace")],
+    ["name no confirmed target (NOT CHECKED; their reasons say why)", rows.filter((r) => r.action === "upgrade_direct" && r.targetVersion === null && !opts.heldUnclean(r))],
+    ["have a target that is NOT a clean fix (it holds an affected dependency; see their reasons)", rows.filter((r) => FIX_ACTIONS.has(r.action) && opts.heldUnclean(r))],
+    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", rows.filter((r) => (r.action === "override_or_replace" && !inScript.has(r) && !hand.includes(r)) || r.action === "upgrade_parent_unverified")],
+    ["apply where the code is built, not on this host (not_built_on_this_host)", rows.filter((r) => r.action === "not_built_on_this_host")],
     [
       "have nothing to run (waiting on upstream, no fix, not determined, not checked, hold, or remove)",
-      opts.rows.filter((r) => !FIX_ACTIONS.has(r.action) && !["override_or_replace", "upgrade_parent_unverified", "not_built_on_this_host"].includes(r.action)),
+      rows.filter((r) => !FIX_ACTIONS.has(r.action) && !["override_or_replace", "upgrade_parent_unverified", "not_built_on_this_host"].includes(r.action)),
     ],
     ["break a peer range an installed dependency declares (their reasons say which and what to upgrade with them)", [...peerBlocked.keys()]],
   ];

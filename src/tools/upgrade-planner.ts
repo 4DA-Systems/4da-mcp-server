@@ -58,7 +58,9 @@ import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
-import { declaredNpmOperator, staleLocksNote, uvWorkspaces, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { declaredNpmOperator, hasUnsafeDir, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { escapeUnsafeDirs, isShellSafeDir } from "../live/shell-safe.js";
+import * as path from "node:path";
 
 export interface UpgradePlannerParams {
   include_dev?: boolean;
@@ -882,6 +884,9 @@ async function executeStandalonePlanner(
   await withPythonSupport(limited, root, liveIntel.getFixPathSources());
   // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
   await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
+  // A directory name comes from the repository: a step in one that is not a plain path names no
+  // command and no directory, only words (audit 2026-11-25 B-B1; shell-safe.ts isShellSafeDir).
+  const unsafeDirs = withholdUnsafeDirs(limited, installDirsOf);
   // Every command a row names, as data, from the fields its words were built from (all passes done).
   attachCommands(limited, (r) => ({ root, installDirs: installDirsOf.get(r) }));
   // A direct upgrade with nothing to run says why, and the hand step that takes it.
@@ -891,6 +896,9 @@ async function executeStandalonePlanner(
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
   const heldRows = limited.filter(heldUnclean);
+  // Not counted as fixed: a target that is not a clean fix, or a step in a directory whose name is not safe in a command.
+  const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || hasUnsafeDir(r);
+  const unsafeRows = limited.filter(hasUnsafeDir);
   // The rows shown as one script safe to run top to bottom (upgrade-plan-sequence.ts).
   const declaredNpm = new Set(
     [...liveIntel.getResolvedDeps(), ...(liveIntel.getAuditDeps() as Array<{ ecosystem: string; name: string; version: string | null; isDirect?: boolean }>)]
@@ -903,11 +911,12 @@ async function executeStandalonePlanner(
     goSource: liveIntel.getReleaseSources().Go,
     peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
     declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
+    notRunnableHere: hasUnsafeDir,
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
   const sharedLeft = (r: (typeof limited)[number]) => r.reasons.some((x) => SHARED_COPY_REASON.test(x));
-  const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !heldUnclean(r) && r.targetVersion !== null);
+  const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !notCounted(r) && r.targetVersion !== null);
   const upgrades = directRows.filter((r) => !sharedLeft(r));
   const partlyDirect = directRows.length - upgrades.length;
   // Rows whose advisories OSV.dev did not answer for, or whose newer release was not confirmed (r7).
@@ -920,12 +929,12 @@ async function executeStandalonePlanner(
   const partlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && (r.bundledCopies?.length ?? 0) > 0).length;
   const waitingOnUpstream = limited.filter((r) => r.action === "waiting_on_upstream").length + partlyBundled;
   const fixPathNotDetermined = limited.filter((r) => r.action === "not_determined").length;
-  const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r)).length;
-  const refreshesPartlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && !heldUnclean(r) && (r.bundledCopies?.length ?? 0) > 0).length;
-  const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent" && !heldUnclean(r)).length;
+  const lockfileRefreshes = limited.filter((r) => r.action === "lockfile_refresh" && !notCounted(r)).length;
+  const refreshesPartlyBundled = limited.filter((r) => r.action === "lockfile_refresh" && !notCounted(r) && (r.bundledCopies?.length ?? 0) > 0).length;
+  const parentUpgradeSteps = limited.filter((r) => r.action === "upgrade_parent" && !notCounted(r)).length;
   const devOnly = limited.filter((r) => r.isDev).length;
   const overrides = limited.filter((r) => r.action === "override_or_replace").length;
-  const reinstalls = limited.filter((r) => r.action === "reinstall").length;
+  const reinstalls = limited.filter((r) => r.action === "reinstall" && !hasUnsafeDir(r)).length;
   const noFix = limited.filter((r) => r.action === "no_fix_available").length;
   const inactive = limited.filter((r) => r.action === "not_built_on_this_host").length;
   const unverifiedParents = limited.filter((r) => r.action === "upgrade_parent_unverified").length;
@@ -986,6 +995,11 @@ async function executeStandalonePlanner(
       `${requiresUnexamined.length} target${requiresUnexamined.length !== 1 ? "s" : ""} whose own requirements were not examined${capped > 0 ? ` (${capped} past the ${MAX_REQUIRED_TARGETS} a call examines)` : ""}: not a clean fix until dependency_check examines ${requiresUnexamined.length === 1 ? "it" : "them"}`,
     );
   }
+  if (unsafeRows.length > 0) {
+    parts.push(
+      `${unsafeRows.length} with a step in a directory whose name is not safe to put in a command (it holds characters a shell reads as code): no command or directory is named there, the reasons name it escaped, and ${unsafeRows.length === 1 ? "it is" : "they are"} not counted as fixed and not in run_order`,
+    );
+  }
   const newerRust = rustVersionSummary(limited);
   if (newerRust) parts.push(newerRust);
   if (unverified > 0) parts.push(`${unverified} fix target${unverified !== 1 ? "s" : ""} checked only against the installed version's advisories (offline, or OSV or the registry did not answer in time; see fixPathChecked)`);
@@ -1036,7 +1050,7 @@ async function executeStandalonePlanner(
     pushAll(parts, rest);
   }
 
-  return {
+  const answer: UpgradePlanResult = {
     generatedAt: new Date().toISOString(),
     projectPath: liveIntel.getProjectRoot() ?? vulnResult?.projectPath ?? process.cwd(),
     totalDeps: deps.length,
@@ -1056,6 +1070,19 @@ async function executeStandalonePlanner(
       .join(" "),
     provenance: { mode: "lockfile_engine", note: PROVENANCE_NOTE },
   };
+  // Every unsafe directory the answer can name in prose (a reason, a note, a lockfile problem) is
+  // named escaped; command fields are left alone (none is named in such a directory).
+  const proseDirs = new Set(unsafeDirs);
+  const addDir = (dir: string) => {
+    const rel = relativeDir(dir, root);
+    if (!isShellSafeDir(rel)) proseDirs.add(rel);
+  };
+  for (const d of auditAtStart) for (const s of d.sourceDirs ?? []) addDir(s);
+  for (const v of vulnResult?.vulnerabilities ?? []) for (const s of [...(v.sourceDirs ?? []), ...(v.platformInactiveDirs ?? [])]) addDir(s);
+  for (const r of drift) addDir(r.dir);
+  for (const p of problemsAtStart) addDir(path.dirname(p.file));
+  for (const s of [...(discoveryAtStart?.skipped ?? []), ...(discoveryAtStart?.unlockedManifests ?? []), ...(discoveryAtStart?.notCovered ?? [])]) addDir(path.posix.dirname(s.path.replace(/\\/g, "/")));
+  return escapeUnsafeDirs(answer, proseDirs);
 }
 
 /** A summary sentence that marks the answer incomplete. */
