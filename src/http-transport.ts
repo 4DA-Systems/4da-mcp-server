@@ -28,6 +28,7 @@
 
 import { createServer, IncomingMessage, ServerResponse, type Server as HttpServer } from "node:http";
 import { readFileSync } from "node:fs";
+import { isIPv4 } from "node:net";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -84,10 +85,14 @@ function normalizeHostname(host: string): string {
   return host.trim().replace(/^\[|\]$/g, "").split("%")[0].toLowerCase();
 }
 
-/** Loopback bind addresses — everything else reaches the network. */
+/**
+ * Loopback bind addresses — everything else reaches the network. Only `localhost`, `::1` and a
+ * dotted-quad IPv4 address in 127.0.0.0/8: `127.evil.example` is a hostname that resolves wherever
+ * its owner says, and was treated as loopback, so authentication was not forced (audit 2026-11-25).
+ */
 export function isLoopbackBind(host: string): boolean {
   const h = normalizeHostname(host);
-  return h === "localhost" || h === "::1" || /^127\./.test(h);
+  return h === "localhost" || h === "::1" || (isIPv4(h) && h.startsWith("127."));
 }
 
 /**

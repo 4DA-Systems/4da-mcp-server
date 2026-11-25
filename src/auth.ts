@@ -72,6 +72,18 @@ function decodeSegment(segment: string): unknown {
   return JSON.parse(json) as unknown;
 }
 
+/**
+ * A segment as a JWT writes it: base64url letters only, no padding. Buffer's decoder skips what it
+ * does not read, so junk appended to a valid signature (`<sig>!!`, `<sig>.` inside a segment, a
+ * space) decoded to the same bytes and was accepted (audit 2026-11-25).
+ */
+const SEGMENT = /^[A-Za-z0-9_-]+$/;
+
+/** A value from an unverified token, as a log may show it: quoted, escaped (no newline forges a line), at most 40 characters. */
+function shown(value: unknown): string {
+  return JSON.stringify(String(value).slice(0, 40));
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -113,6 +125,9 @@ export function verifyToken(token: string, nowMs: number = Date.now()): TeamClai
   if (parts.length !== 3 || parts.some((p) => p.length === 0)) {
     return reject("malformed token (expected three non-empty segments)");
   }
+  if (!parts.every((p) => SEGMENT.test(p))) {
+    return reject("malformed token (a segment holds characters that are not base64url)");
+  }
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
 
   // --- 1. Header: pin the algorithm BEFORE doing any crypto ---------------
@@ -124,10 +139,10 @@ export function verifyToken(token: string, nowMs: number = Date.now()): TeamClai
   }
   if (!isPlainObject(header)) return reject("header is not a JSON object");
   if (header.alg !== ACCEPTED_ALG) {
-    return reject(`unsupported alg '${String(header.alg)}' (only ${ACCEPTED_ALG} is accepted)`);
+    return reject(`unsupported alg ${shown(header.alg)} (only ${ACCEPTED_ALG} is accepted)`);
   }
   if (header.typ !== undefined && header.typ !== "JWT") {
-    return reject(`unsupported typ '${String(header.typ)}'`);
+    return reject(`unsupported typ ${shown(header.typ)}`);
   }
   if (header.crit !== undefined) {
     // `crit` marks header params a verifier MUST understand. We understand
@@ -139,7 +154,9 @@ export function verifyToken(token: string, nowMs: number = Date.now()): TeamClai
   const signingInput = `${encodedHeader}.${encodedPayload}`;
   const expected = createHmac("sha256", secret).update(signingInput).digest();
   const provided = Buffer.from(encodedSignature, "base64url");
-  if (!constantTimeEquals(expected, provided)) {
+  // Only the canonical spelling of the signature: the unused low bits of its last character would
+  // otherwise give four spellings of one signature.
+  if (provided.toString("base64url") !== encodedSignature || !constantTimeEquals(expected, provided)) {
     return reject("signature verification failed");
   }
 
