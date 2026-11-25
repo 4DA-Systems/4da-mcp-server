@@ -2628,7 +2628,35 @@ function judge(index, c) {
     if (isPrivateRule(withheld)) return "allow";
     return isUnreadable(withheld) ? { unreadable: withheld } : { localSource: withheld };
   }
+  // A Go package path (`go get golang.org/x/net/http2@v0.23.0`) with no verdict of its own: the
+  // server reads modules and answers unknown for a package path, and the hook cannot know where the
+  // module ends. So the decisive answer for the longest path prefix at the same version or
+  // constraint decides (Go builds a package from the module with the longest matching path): the
+  // agent checked the module that contains the package. No verdict, no release (audit 2026-11-25, D-M3).
+  if (eco === "Go") {
+    const parts = c.name.split("/");
+    for (let n = parts.length - 1; n >= 1; n--) {
+      const module = (index.get(`Go\0${parts.slice(0, n).join("/")}`) ?? []).filter(
+        (e) => !isWithheld(e) && (exactVersion ? e.vk === want : e.ak === constraint) && (HOLDS.has(e.verdict) || PASSES.has(e.verdict)),
+      );
+      const answer = module.at(-1);
+      if (answer) return HOLDS.has(answer.verdict) ? { deny: answer } : "allow";
+    }
+  }
   return { check: last ?? null };
+}
+
+/**
+ * For a Go path that may name a package inside a module, an example of the module that contains it
+ * (the hook cannot know; this is only the example a denial offers): three parts on github.com,
+ * gitlab.com, bitbucket.org and golang.org/x, else two, and a `/vN` major-version part after them.
+ * Null when the path is no longer than that.
+ */
+function goModuleExample(path) {
+  const parts = path.split("/");
+  let n = /^(?:github\.com|gitlab\.com|bitbucket\.org|golang\.org)$/.test(parts[0]) ? 3 : 2;
+  if (/^v\d+$/.test(parts[n] ?? "")) n++;
+  return parts.length > n ? parts.slice(0, n).join("/") : null;
 }
 
 /** Server text repeated in a denial: one line, capped. */
@@ -2717,6 +2745,16 @@ function denialFor(introduced, ledger, dir, what) {
     lines.push(
       `- ${named}: ${fresh.length === 0 ? "no proceed or review verdict" : "no dependency_check verdict"} in the last 24 hours. If ${one ? "it is the package" : "they are the packages"} you mean to add, call the 4da MCP tool dependency_check ${JSON.stringify({ items })}${batches}, and this ${what} will pass once that call answers proceed.`,
     );
+    // A Go path longer than a module path usually is may name a package inside a module, which
+    // dependency_check answers unknown for: name the module call that releases it (judge).
+    for (const { c } of unchecked.filter(({ c }) => c.ecosystem === "Go").slice(0, 10)) {
+      const module = goModuleExample(c.name);
+      if (!module) continue;
+      const example = JSON.stringify({ items: [{ ecosystem: "Go", package: module, to: callTarget("Go", c.spec) }] });
+      lines.push(
+        `- ${quotedChange(c)} may be a package inside a module: dependency_check reads modules and answers unknown for a package path. If so, check the module that contains this package at this version, e.g. dependency_check ${example}: this ${what} passes once dependency_check answers proceed or review for a module whose path this path starts with, at ${quoted(c.spec)}.`,
+      );
+    }
     lines.push(
       "dependency_check sends each name to its public registry and to OSV.dev unless this project's private rules cover it (an .npmrc scope mapped to a private registry, GOPRIVATE, a private Cargo or Python index, FOURDA_PRIVATE_PACKAGES); a name they cover is never sent, and any version of it then goes ahead. " +
         "A private package no such rule covers: add the rule first rather than make the call. A name not published on its public registry comes back unknown and stays blocked: correct the name or remove it rather than retrying.",
