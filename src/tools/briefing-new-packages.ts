@@ -66,7 +66,7 @@ import {
 import { isNpmPackageName } from "../untrusted-text.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
 import { executeDependencyCheck } from "./dependency-check.js";
-import { isKnownSwitch, knownPublicName, MAX_TASK_WORD, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
+import { isKnownSwitch, MAX_TASK_WORD, optionTakesValue, pathLikeOperand, screenedOut, screenTask } from "./briefing-task-screen.js";
 import { nearMissOf } from "./dependency-check-nearmiss.js";
 import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.js";
 
@@ -342,7 +342,7 @@ export function detectAllNewPackages(task: string, deps: readonly ResolvedDepend
   // git, a path or a URL are never read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
   // What may then be looked up is decided by gateTaskNames (briefing-requested-versions.ts), after the
   // project's own private rules.
-  const screen = screenTask(task);
+  const screen = screenTask(task, dependencyOf(deps));
   return readTaskItems(normalizeVersionSyntax(screen.text), deps).packages.filter((p) => screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]) === null);
 }
 
@@ -368,12 +368,10 @@ export function installedNames(deps: readonly ResolvedDependency[]): (name: stri
   return (name, ecosystem) => keys.has(`${ecosystem}\0${ecosystemKey(name, ecosystem)}`);
 }
 
-/**
- * The ecosystems among `ecosystems` where the briefing itself may look `name` up: the project depends on
- * it there, or it is exactly a name of that ecosystem's bundled lists (knownPublicName).
- */
-export function lookupEcosystems(name: string, ecosystems: readonly CheckEcosystem[], installed: (name: string, ecosystem: CheckEcosystem) => boolean): CheckEcosystem[] {
-  return ecosystems.filter((e) => installed(name, e) || knownPublicName(name, e));
+/** Whether a word names one of the project's own dependencies, in any ecosystem: never a setting. */
+export function dependencyOf(deps: readonly ResolvedDependency[]): (name: string) => boolean {
+  const names = new Set(deps.map((d) => d.name.toLowerCase().replace(/[-_.]+/g, "-")));
+  return (name) => names.has(name.toLowerCase().replace(/[-_.]+/g, "-"));
 }
 
 /** A word the briefing did not look up, as the answer names it. */
@@ -491,7 +489,10 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   // A Python standard-library name is English, except one npm's popular list has in a project that does
   // not install from PyPI: "add uuid and electorn" in an npm project ended the list at `uuid` (r8, B1).
   const stdlib = (n: string) => PYTHON_STDLIB.has(n) && (guessed.has("PyPI") || !POPULAR.has(n));
-  const have = new Set(deps.map((d) => `${d.ecosystem}\0${d.name.toLowerCase()}`));
+  // Keyed by each ecosystem's own name rule: requirements' `zqx_tools` is the scan's `zqx-tools`, so the
+  // project's own dependency was read as new and looked up a second time (fifth blind check, item 1).
+  const haveKey = (ecosystem: CheckEcosystem, name: string) => `${ecosystem}\0${ecosystemKey(name, ecosystem)}`;
+  const have = new Set(deps.map((d) => haveKey(d.ecosystem as CheckEcosystem, d.name)));
   const installedName = (name: string) => deps.some((d) => d.name.toLowerCase() === name.toLowerCase()) || installedGoModule(name, deps) !== null;
   const found: NewPackage[] = [];
   /** Where each (ecosystem, name) is in `found`: a list of thousands of names was quadratic (F-M3). */
@@ -502,7 +503,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const fixed: TaskItems["fixed"] = [];
   const foreign: TaskItems["foreign"] = [];
   const add =(name: string | null, ecosystem: CheckEcosystem, guess = false, weak = false, version: string | null = null, loose = false): NewPackage | null => {
-    if (!name || have.has(`${ecosystem}\0${name.toLowerCase()}`) || isManifestFile(name)) return null;
+    if (!name || have.has(haveKey(ecosystem, name)) || isManifestFile(name)) return null;
     // A guessed name the project already has, in any ecosystem or as a Go module's short name
     // ("install gin" with github.com/gin-gonic/gin in go.mod), is not new (blind audit round 4).
     if (guess && installedName(name)) return null;
@@ -644,33 +645,49 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (expands) unreadWords.push({ shown: `${before.trim().slice(-2)}${raw[j].slice(0, 20)}`, reason: "not read: a shell expansion, whose value the task does not give" });
         if (/\$\(/.test(before) || (!before.startsWith("|") && OPERANDS_END.test(before)) || (raw[j] === "-" && /\s$/.test(before))) break;
         if (expands) continue;
-        if (colonWord(task, starts[j])) {
-          unreadWords.push({ shown: "a word with a colon inside", reason: "not read: a user and password or a host and port is no package name (it is never repeated: it may be a secret)" });
-          continue;
-        }
-        if (words[j].startsWith("-")) {
+        // The blank-delimited word this token is in: a word that starts with `-` is an option whatever follows
+        // (`--_authToken`, `-_auth`, `--@scope:_authToken`, `--token:`; fifth blind check, item 2).
+        let ws = starts[j];
+        while (ws > 0 && !/\s/.test(task[ws - 1]) && starts[j] - ws < MAX_TASK_WORD) ws--;
+        let we = starts[j];
+        while (we < task.length && !/\s/.test(task[we]) && we - starts[j] < MAX_TASK_WORD) we++;
+        if (task[ws] === "-") {
           // An option's value (`--tag next`, `-w packages/api`, `--prefix ./x`) is never a package (E2).
           // `--opt=value` is a value. After `--opt`, the next word is read as an operand only when the
           // option is known to take no value (`-D`, `-U`); after any other option it may be that option's
           // value, so it is not read, and is named as not read unless the option is known to take one
           // (re-check of the 2026-11-25 fixes, item 2). A long blank is a value the screen withheld.
-          const flag = raw[j].replace(/[.,;:)]+$/, "");
-          const gap = j + 1 < raw.length ? task.slice(span(j).end, starts[j + 1]) : "";
+          const flag = task.slice(ws, we).replace(/[.,;:)]+$/, "");
+          // Past every token of the option's own word.
+          while (j + 1 < raw.length && starts[j + 1] < we) j++;
+          const gap = j + 1 < raw.length ? task.slice(we, starts[j + 1]) : "";
           // `cargo add hyper --vers 0.14.9`: the version of the crate before it, never a crate called "vers"
           // (third blind check, item 5).
-          if (ecosystem === "crates.io" && (flag === "--vers" || flag === "--version") && lastAdded && j + 1 < raw.length && /^(?:[ \t]{1,3}|=)?$/.test(gap) && isVersionSpec(raw[j + 1].replace(/[.,;:)]+$/, "").replace(/^=(?!=)/, ""))) {
-            const version = taskVersionText(raw[j + 1].replace(/[.,;:)]+$/, "").replace(/^=(?!=)/, ""), ecosystem);
+          if (ecosystem === "crates.io" && (flag === "--vers" || flag === "--version") && lastAdded && j + 1 < raw.length && /^[ \t]{1,3}$/.test(gap) && isVersionSpec(raw[j + 1].replace(/[.,;:)]+$/, ""))) {
+            const version = taskVersionText(raw[j + 1].replace(/[.,;:)]+$/, ""), ecosystem);
             lastAdded.version = version;
             bound.push({ name: lastAdded.name, version, ...span(j + 1) });
             j++;
             continue;
           }
-          if (/^=\S*$/.test(gap)) j++;
-          // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
-          else if (/^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && !words[j + 1].startsWith("-")) {
-            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: `the word after ${flag.slice(0, 40)}`, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)" });
-            j++;
+          const glued = /^--?(?:vers|version)=/.test(flag) ? flag.slice(flag.indexOf("=") + 1) : null;
+          if (ecosystem === "crates.io" && glued && lastAdded && isVersionSpec(glued.replace(/^=(?!=)/, ""))) {
+            const version = taskVersionText(glued.replace(/^=(?!=)/, ""), ecosystem);
+            lastAdded.version = version;
+            bound.push({ name: lastAdded.name, version, start: we - glued.length, end: we });
+            continue;
           }
+          // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
+          if (!flag.includes("=") && /^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && task[we + gap.length - gap.trimStart().length] !== "-") {
+            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: `the word after ${flag.slice(0, 40)}`, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)" });
+            let ve = starts[j + 1];
+            while (ve < task.length && !/\s/.test(task[ve]) && ve - starts[j + 1] < MAX_TASK_WORD) ve++;
+            while (j + 1 < raw.length && starts[j + 1] < ve) j++;
+          }
+          continue;
+        }
+        if (colonWord(task, starts[j])) {
+          unreadWords.push({ shown: "a word with a colon inside", reason: "not read: a user and password or a host and port is no package name (it is never repeated: it may be a secret)" });
           continue;
         }
         // A path, a URL or a GitHub shorthand is never a registry name (the screen names it).
@@ -798,7 +815,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (stated) return stated;
         const bare = raw[k].replace(/(?:[=~<>!]=?).*$/, "").toLowerCase();
         const other = deps.find((d) => d.name.toLowerCase() === bare && d.ecosystem !== "PyPI");
-        return other && !have.has(`PyPI\0${bare}`) ? null : "PyPI";
+        return other && !have.has(haveKey("PyPI", bare)) ? null : "PyPI";
       };
       const pep = pepEcosystem();
       const itemEcosystem: CheckEcosystem = tomlEntry ? toml : (pep ?? fallback);
@@ -963,8 +980,6 @@ const notFound = (f: NewPackageFinding) => nameNotFound(f) || (Boolean(f.version
 /** Findings whose "review" is only a near-miss of the name in that ecosystem, and those whose name check is clean (nameOnlyReview, nameClean). */
 const NAME_ONLY = new WeakSet<NewPackageFinding>();
 const NAME_CLEAN = new WeakSet<NewPackageFinding>();
-/** The checkable ecosystems a bare name can be in (a Go module is a host path, never a bare name). */
-const NAME_ECOSYSTEMS: readonly CheckEcosystem[] = ["npm", "crates.io", "PyPI"];
 
 /**
  * How bad one ecosystem's answer for a name is: malware, then a name finding of avoid, then any
@@ -1077,24 +1092,8 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     const answerFor = (x: { i: number; q: NewPackage }) =>
       byName(x) ? (names ? nameFinding(x.q, names[named.indexOf(x)]) : unchecked(x.q, "the lookups did not finish in time")) : finding(x.q, answer.results[full.indexOf(x)]);
     const answered = packages.map((_p, i) => items.filter((x) => x.i === i).map(answerFor));
-    // A name the task gives no ecosystem for that none of the project's ecosystems has: the others'
-    // malicious-package records are read too. "bring in rustdecimal" in an npm project came back
-    // safe_to_delegate: npm has no such name, and crates.io's rustdecimal is malware
-    // (GHSA-7pwq-f4pq-78gm; pre-publish audit of 5d709ff). Only a malware answer there is kept.
-    const elsewhere = packages.flatMap((p, i) =>
-      p.guessed && answered[i].length > 0 && answered[i].every(nameNotFound)
-        ? NAME_ECOSYSTEMS.filter((e) => !answered[i].some((f) => f.ecosystem === e) && !p.closed?.includes(e) && asName(p.name, e) !== null).map((ecosystem) => ({ i, q: { name: p.name, ecosystem } as NewPackage }))
-        : [],
-    );
-    if (elsewhere.length > 0) {
-      const more = await run(elsewhere.map((x) => x.q)).catch(() => null);
-      if (more) {
-        elsewhere.forEach((x, k) => {
-          const f = finding(x.q, more.results[k]);
-          if (f.malicious || f.name_finding === "avoid") answered[x.i].push(f);
-        });
-      }
-    }
+    // No lookup outside the gate: the "rustdecimal fallback" looked a name its own registry did not have up in
+    // every other ecosystem, which is exactly what a private dependency gets (fifth blind check, item 1).
     const out = packages.map((p, i) => {
       let answers = answered[i];
       // A fallback ecosystem counts only when the task's own one has no such name or release (W16).
