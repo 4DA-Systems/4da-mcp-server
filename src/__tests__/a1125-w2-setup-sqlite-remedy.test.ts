@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import { nativeBindingCause, nativeBindingMessage, nativeBindingRemedy } from "../native-bindings.js";
-import { resolveSqliteDriver } from "../sqlite-driver.js";
+import { resolveSqliteDriver, type DriverLoaders } from "../sqlite-driver.js";
 
 const ABI = new Error(
   "The module '\\\\?\\C:\\app\\node_modules\\better-sqlite3\\build\\Release\\better_sqlite3.node'\n" +
@@ -91,7 +91,7 @@ describe("the driver problem says the remedy once", () => {
   };
   const abiBroken = (() => function () {
     throw ABI;
-  }) as unknown as Parameters<typeof resolveSqliteDriver>[0]["better"];
+  }) as unknown as DriverLoaders["better"];
 
   it("no driver: the cause of each, then one remedy", () => {
     const res = resolveSqliteDriver({ node: nodeMissing as never, better: abiBroken }, {});
