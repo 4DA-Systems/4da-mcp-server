@@ -11,6 +11,17 @@
 - A CI run whose only failures are jobs that never got a runner (cancelled with no runner and no step, in practice macOS install smokes: three times on 2026-11-24) is run again by `rerun-unstarted.yml`, at most twice; a job that ran a step and failed is left for a person. The release workflow's "CI passed on the tagged commit" check now looks again for two minutes before it believes a failure, so such a re-run no longer stops a release.
 - The guard hook's timing rows allow for the machine's load at that moment (the hook answering a trivial call, against 60 ms, up to four times the bound). The flat bound failed once on a loaded CI runner at 1,095 ms against 1,000 with nothing wrong in the hook; under twice as many busy processes as cores the old rows fail at about 1.8 s against 500 ms and the new ones pass. The inputs these rows were written for took 3 to 21 s.
 
+### Known limits
+
+An independent check of the 6.5.1 guard hook on 2026-11-25 found the spellings below. Each goes ahead without comment while the plain spelling beside it is held, each is in 6.5.1 as well, and `a652-hook-documented-limits.test.ts` holds every sentence. A fix for the third (a ninth clause held as not read) was written and withdrawn: its own check found it held every edit of a file that already had such a line, the edit that removes the line included.
+
+- A part past one of the hook's bounds holds a command only where the hook's quick look sees the install. Inside a quoted argument (`bash -c "pip install 'x==<a version over 80 characters>'"`), after a prefix option that takes an argument (`sudo -u root`), after `if`, `while` or `until`, or after a leading redirection (`2>/dev/null pip install ...`), the command goes ahead; the same install with a readable version is read and held in each of those places. The README's "a command that names an install, that it cannot read whole is held" is true of a plain command.
+- A requirement continued on the next line with a backslash is read as its first line: `requests<=2.31.0,\` followed by `!=2.31.0` goes ahead on a `proceed` for 2.31.0, the release the second line excludes. A pin whose continuation lines hold only `--hash` options (the form pip-compile writes) is read whole.
+- A pip requirement with more than eight version clauses (`x>=1,>=1,...,<2`) goes ahead unread in a command (`pip install`, `uv add`, `poetry add`) and in a `pyproject.toml` array, and is judged on its first eight clauses in a requirements file. 6.5.1's Known limits said "read by its first eight only" for both.
+- A requirement whose extras are over 200 characters (`requests[a,b,...]==2.31.0`) is read as naming no version, in a command and in a requirements file.
+- Two TOML spellings of a pyproject requirement are not decoded: a multi-line basic string broken with a line-ending backslash (`"""requests==\`, then `2.31.0"""`), and `project` written as an inline table at the root (`project = { dependencies = ["requests==2.31.0"] }`).
+- A Poetry constraint whose clauses are separated by a blank instead of a comma (`poetry add "requests@>=2.0 !=2.31.0"`) is not read.
+
 ## 6.5.1 — 2026-11-24
 
 ### What is scanned
