@@ -231,7 +231,23 @@ function withoutUserInfo(text: string): string {
 /** Words that end a command in prose ("then", "&&", ";"), and verbs that start the next clause after "and". */
 const COMMAND_ENDS = new Set(["then", "&&", "||", ";", "|", "and", "or", "but", "after", "before", "so"]);
 
-export function screenTask(task: string): TaskScreen {
+/**
+ * The name of a setting, not a package: one that is, or ends in `_` (or `-`, for the words no package
+ * name ends in) plus, password, passwd, pwd, secret, token, apikey, api_key, auth, credential(s) or key
+ * (fifth blind check, item 2: `password==hunter2`, `db_password==88419273`, `"password": "2024.11.26"`
+ * were listed with the secret as their version). Measured on the 27 popular names the round-9 screen held
+ * (google-auth, oauthlib, tiktoken, django-allauth ...): none is a setting name by this rule.
+ */
+const SETTING_NAME = /^(?:(?:[\w.-]*_)?(?:password|passwd|pwd|secret|token|apikey|api_key|auth|credentials?|key)|[\w.-]*-(?:password|passwd|pwd|secret|token|apikey|api-key|credentials?))$/i;
+
+/** Whether `key` names a setting: never a bundled-list name or a dependency of the project. */
+export function settingName(key: string, isDependency?: (name: string) => boolean): boolean {
+  if (!SETTING_NAME.test(key)) return false;
+  if ((["npm", "PyPI", "crates.io"] as const).some((e) => knownPublicName(key, e))) return false;
+  return !isDependency?.(key);
+}
+
+export function screenTask(task: string, isDependency?: (name: string) => boolean): TaskScreen {
   const chars = task.split("");
   const withheld: Withheld[] = [];
   const names = new Set<string>();
@@ -267,7 +283,6 @@ export function screenTask(task: string): TaskScreen {
     for (let k = start; k < end; k++) if (blanked[k]) return false;
     return true;
   };
-
   // 2. Manifest entries taken from git, a path, a workspace or a URL, written into the task.
   const JSON_SOURCE = /(["'])(@?[\w.~-]{1,214}(?:\/[\w.~-]{1,214})?)\1\s{0,8}:\s{0,8}(["'])([^"'\n]{1,500})\3/g;
   for (const m of task.matchAll(JSON_SOURCE)) {
@@ -287,6 +302,17 @@ export function screenTask(task: string): TaskScreen {
     const start = m.index! + m[1].length;
     const end = m.index! + m[0].length;
     if (free(start, end)) holdPackage(m[2], specSource(m[3], "py") ?? "a URL", start, end);
+  }
+
+  // 2b. Settings: `password==x`, `DB_PASSWORD=x`, `"secret_token": "x"`, `api_key = "x"`. A setting is not a
+  // package: neither read nor listed, and only its name is shown, never its value (fifth blind check, item 2).
+  for (const m of task.matchAll(/(?<=^|[\s"'`{,(])(["'`]?)([A-Za-z_][\w.-]{0,60})\1[ \t]{0,4}(={1,3}|:)[ \t]{0,4}(["'`]?)([^\s"'`,}]{1,300})\4/g)) {
+    const start = m.index!;
+    const end = m.index! + m[0].length;
+    // `key: value` only quoted (JSON) or alone on its line (YAML): "Auth: switch to passport" is prose.
+    const line = (at: number, dir: 1 | -1) => (dir < 0 ? task.slice(task.lastIndexOf("\n", at - 1) + 1, at) : task.slice(at, (task.indexOf("\n", at) + 1 || task.length + 1) - 1));
+    const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (/^[ \t-]*$/.test(line(start, -1)) && /^[ \t]*$/.test(line(end, 1)));
+    if (colonOk && settingName(m[2], isDependency) && free(start, end)) hold(`a setting named ${m[2].slice(0, 60)}`, `not read: a setting, not a package; its value is never repeated; ${NOT_SENT}`, start, end, true);
   }
 
   // 3. Registries the task sets: .npmrc / pip.conf lines, environment variables, config commands.
@@ -433,6 +459,12 @@ export function screenTask(task: string): TaskScreen {
   }
   for (const w of words) {
     if (!free(w.start, w.end)) continue;
+    // Twelve or more hex digits: a hash or a key, never a package name (fifth blind check, item 2).
+    const inner = bare(w.text);
+    if (/^[0-9a-f]{12,}$/i.test(inner)) {
+      hold(redact(inner), `not read: it looks like a credential; ${NOT_SENT}`, w.start, w.end, false);
+      continue;
+    }
     // Each part of a word joined by `=` or `:` (`GITHUB_TOKEN=ghp_...`), judged on its own.
     let offset = 0;
     for (const part of w.text.split(/([=:,])/)) {

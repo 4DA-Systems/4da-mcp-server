@@ -342,7 +342,7 @@ export function detectAllNewPackages(task: string, deps: readonly ResolvedDepend
   // git, a path or a URL are never read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
   // What may then be looked up is decided by gateTaskNames (briefing-requested-versions.ts), after the
   // project's own private rules.
-  const screen = screenTask(task);
+  const screen = screenTask(task, dependencyOf(deps));
   return readTaskItems(normalizeVersionSyntax(screen.text), deps).packages.filter((p) => screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]) === null);
 }
 
@@ -366,6 +366,12 @@ export function installedNames(deps: readonly ResolvedDependency[]): (name: stri
     if (d.ecosystem === "npm" || d.ecosystem === "PyPI" || d.ecosystem === "crates.io" || d.ecosystem === "Go") keys.add(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`);
   }
   return (name, ecosystem) => keys.has(`${ecosystem}\0${ecosystemKey(name, ecosystem)}`);
+}
+
+/** Whether a word names one of the project's own dependencies, in any ecosystem: never a setting. */
+export function dependencyOf(deps: readonly ResolvedDependency[]): (name: string) => boolean {
+  const names = new Set(deps.map((d) => d.name.toLowerCase().replace(/[-_.]+/g, "-")));
+  return (name) => names.has(name.toLowerCase().replace(/[-_.]+/g, "-"));
 }
 
 /** A word the briefing did not look up, as the answer names it. */
@@ -639,33 +645,49 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (expands) unreadWords.push({ shown: `${before.trim().slice(-2)}${raw[j].slice(0, 20)}`, reason: "not read: a shell expansion, whose value the task does not give" });
         if (/\$\(/.test(before) || (!before.startsWith("|") && OPERANDS_END.test(before)) || (raw[j] === "-" && /\s$/.test(before))) break;
         if (expands) continue;
-        if (colonWord(task, starts[j])) {
-          unreadWords.push({ shown: "a word with a colon inside", reason: "not read: a user and password or a host and port is no package name (it is never repeated: it may be a secret)" });
-          continue;
-        }
-        if (words[j].startsWith("-")) {
+        // The blank-delimited word this token is in: a word that starts with `-` is an option whatever follows
+        // (`--_authToken`, `-_auth`, `--@scope:_authToken`, `--token:`; fifth blind check, item 2).
+        let ws = starts[j];
+        while (ws > 0 && !/\s/.test(task[ws - 1]) && starts[j] - ws < MAX_TASK_WORD) ws--;
+        let we = starts[j];
+        while (we < task.length && !/\s/.test(task[we]) && we - starts[j] < MAX_TASK_WORD) we++;
+        if (task[ws] === "-") {
           // An option's value (`--tag next`, `-w packages/api`, `--prefix ./x`) is never a package (E2).
           // `--opt=value` is a value. After `--opt`, the next word is read as an operand only when the
           // option is known to take no value (`-D`, `-U`); after any other option it may be that option's
           // value, so it is not read, and is named as not read unless the option is known to take one
           // (re-check of the 2026-11-25 fixes, item 2). A long blank is a value the screen withheld.
-          const flag = raw[j].replace(/[.,;:)]+$/, "");
-          const gap = j + 1 < raw.length ? task.slice(span(j).end, starts[j + 1]) : "";
+          const flag = task.slice(ws, we).replace(/[.,;:)]+$/, "");
+          // Past every token of the option's own word.
+          while (j + 1 < raw.length && starts[j + 1] < we) j++;
+          const gap = j + 1 < raw.length ? task.slice(we, starts[j + 1]) : "";
           // `cargo add hyper --vers 0.14.9`: the version of the crate before it, never a crate called "vers"
           // (third blind check, item 5).
-          if (ecosystem === "crates.io" && (flag === "--vers" || flag === "--version") && lastAdded && j + 1 < raw.length && /^(?:[ \t]{1,3}|=)?$/.test(gap) && isVersionSpec(raw[j + 1].replace(/[.,;:)]+$/, "").replace(/^=(?!=)/, ""))) {
-            const version = taskVersionText(raw[j + 1].replace(/[.,;:)]+$/, "").replace(/^=(?!=)/, ""), ecosystem);
+          if (ecosystem === "crates.io" && (flag === "--vers" || flag === "--version") && lastAdded && j + 1 < raw.length && /^[ \t]{1,3}$/.test(gap) && isVersionSpec(raw[j + 1].replace(/[.,;:)]+$/, ""))) {
+            const version = taskVersionText(raw[j + 1].replace(/[.,;:)]+$/, ""), ecosystem);
             lastAdded.version = version;
             bound.push({ name: lastAdded.name, version, ...span(j + 1) });
             j++;
             continue;
           }
-          if (/^=\S*$/.test(gap)) j++;
-          // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
-          else if (/^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && !words[j + 1].startsWith("-")) {
-            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: `the word after ${flag.slice(0, 40)}`, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)" });
-            j++;
+          const glued = /^--?(?:vers|version)=/.test(flag) ? flag.slice(flag.indexOf("=") + 1) : null;
+          if (ecosystem === "crates.io" && glued && lastAdded && isVersionSpec(glued.replace(/^=(?!=)/, ""))) {
+            const version = taskVersionText(glued.replace(/^=(?!=)/, ""), ecosystem);
+            lastAdded.version = version;
+            bound.push({ name: lastAdded.name, version, start: we - glued.length, end: we });
+            continue;
           }
+          // The value may start with characters no token holds (`--prefix ./x`): the gap then ends inside its word.
+          if (!flag.includes("=") && /^[ \t]{1,3}\S*$/.test(gap) && !isKnownSwitch(commandWord, flag) && task[we + gap.length - gap.trimStart().length] !== "-") {
+            if (!optionTakesValue(commandWord, flag)) unreadWords.push({ shown: `the word after ${flag.slice(0, 40)}`, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)" });
+            let ve = starts[j + 1];
+            while (ve < task.length && !/\s/.test(task[ve]) && ve - starts[j + 1] < MAX_TASK_WORD) ve++;
+            while (j + 1 < raw.length && starts[j + 1] < ve) j++;
+          }
+          continue;
+        }
+        if (colonWord(task, starts[j])) {
+          unreadWords.push({ shown: "a word with a colon inside", reason: "not read: a user and password or a host and port is no package name (it is never repeated: it may be a secret)" });
           continue;
         }
         // A path, a URL or a GitHub shorthand is never a registry name (the screen names it).
