@@ -55,6 +55,7 @@ import type { RequirementEcosystem, RequirementOptions, RequirementSources } fro
 import { confirmTargets } from "./batch-confirm.js";
 import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
+import { osvCacheKey } from "./osv-scanner.js";
 
 const TIMEOUT_MS = 15_000;
 const ADVISORY_TTL = 6 * 3600;
@@ -215,6 +216,18 @@ export class FixPathSources {
   /** Local state only, no lookup: the list is asked for again by the next `packageAdvisories` for it. */
   readonly refreshAdvisoriesOnNextRead = (ecosystem: OsvEcosystem, name: string): void => {
     this.refreshDue.add(`fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`);
+  };
+
+  /**
+   * When OSV.dev's cached answers were fetched, from the cache rows alone (nothing is asked): per
+   * release, its batch answer (`answer`) and its package's advisory list (`list`), each null when the
+   * cache holds none. dependency_check states how old the data behind a verdict is (audit C-3).
+   * An arrow member, as every lookup here is (the private-guard test holds prototype lookups).
+   */
+  readonly advisoryFetchedAt = (releases: ReadonlyArray<{ ecosystem: OsvEcosystem; name: string; version: string }>): Array<{ answer: string | null; list: string | null }> => {
+    const listKey = (r: { ecosystem: OsvEcosystem; name: string }) => `fixpath:v${CACHE_VERSION}:osv-package:${r.ecosystem}:${r.name}`;
+    const rows = this.cache.getStaleMany<unknown>([...new Set(releases.flatMap((r) => [osvCacheKey(r), listKey(r)]))]);
+    return releases.map((r) => ({ answer: rows.get(osvCacheKey(r))?.fetchedAt ?? null, list: rows.get(listKey(r))?.fetchedAt ?? null }));
   };
 
   /** Every non-withdrawn OSV advisory for a package, as ranges; null when OSV could not be read. */

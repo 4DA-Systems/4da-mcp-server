@@ -656,7 +656,7 @@ export class OsvHttpSource implements AdvisorySource {
  * One dependency's cached OSV answer. v5 (blind audit round 4): answers cached before carried
  * line breaks in aliases/references and the old malware reading; an upgrade never reads them.
  */
-function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
+export function osvCacheKey(dep: Pick<ResolvedDependency, "ecosystem" | "name" | "version">): string {
   return `osv:v9:${dep.ecosystem}:${dep.name}:${dep.version}`;
 }
 
