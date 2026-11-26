@@ -130,8 +130,6 @@ describe("R2: index and registry options beside a named package", () => {
     "pip install --extra-index-url https://pypi.corp.example/simple six==1.17.0",
     "uv add --index https://pypi.corp.example/simple six==1.17.0",
     "pip install --no-index six==1.17.0",
-    "pip install -i https://pypi.org/simple six==1.17.0",
-    "cargo add --registry corp serde@1.0.200",
   ])("any other combination is held: %s", (command) => {
     expect(run(command).text).toContain("could not be read");
   });

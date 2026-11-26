@@ -68,14 +68,17 @@ describe("S2: a constraints or overrides file beside a named package", () => {
 // is the one source option on the line and its host is positively not public. A public index named
 // another way, and a Poetry source (a name, no host), are held as not read now (they were judged, or
 // let through, in round 10).
-describe("S3 (round 14): a source named by another name, or by a config name, is held", () => {
+// Round 16 (J3): one replacing source on a host not private by shape (or named by a config name) is judged.
+describe("S3 (round 16): a source named by another name, or by a config name, is judged", () => {
   it.each([
     "poetry add --source pypi requests==2.5.0",
     "poetry add --source corp requests==2.5.0",
     "cargo install serde@1.0.0 --index https://github.com/rust-lang/crates.io-index",
     "cargo install serde@1.0.0 --index sparse+https://index.crates.io/",
   ])("%s", (command) => {
-    expect(run(command).text).toContain("could not be read");
+    const r = run(command);
+    expect(r.text).not.toContain("could not be read");
+    expect(r.decision).toBe("deny");
   });
 });
 

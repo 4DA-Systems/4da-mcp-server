@@ -111,3 +111,44 @@ describe("J2: a range that bounds nothing, by meaning, is the request latest (ge
     expect(s.write(`${s.project}/package.json`, JSON.stringify({ dependencies: { vite: spec } })).text).toContain("could not be read");
   });
 });
+
+describe("J3: an index is the project's own only when private by shape; any other host's names are judged", () => {
+  it.each([
+    "npm install --registry http://localhost:4873 acme-widget@1.0.0",
+    "npm install --registry http://127.0.0.1:4873 acme-widget@1.0.0",
+    "npm install --registry https://10.1.2.3/npm acme-widget@1.0.0",
+    "npm install --registry https://172.20.0.5 acme-widget@1.0.0",
+    "npm install --registry https://192.168.1.10 acme-widget@1.0.0",
+    "npm install --registry http://[fd00::1]:4873 acme-widget@1.0.0",
+    "npm install --registry https://nexus acme-widget@1.0.0",
+    "npm install --registry https://npm.corp acme-widget@1.0.0",
+    "pip install -i https://pypi.internal/simple acme-widget==1.0.0",
+    "pip install -i https://pypi.mycorp.local/simple acme-widget==1.0.0",
+    "uv pip install --index-url https://repo.home.arpa/simple acme-widget==1.0.0",
+  ])("%s: the project's own source, goes ahead unjudged", (command) => {
+    expect(run(command).decision).toBe("allow");
+  });
+  it.each([
+    "npm install --registry https://npm.mycorp.com acme-widget@1.0.0",
+    "npm install --registry https://mirrors.tencent.com/npm acme-widget@1.0.0",
+    "pip install -i https://mirrors.ustc.edu.cn/pypi/simple acme-widget==1.0.0",
+    "pip install -i https://pypi.doubanio.com/simple acme-widget==1.0.0",
+    "cargo add --registry corp acme-widget@1.0.0",
+    "poetry add --source corp acme-widget==1.0.0",
+  ])("%s: judged on the ledger; the denial tells how a private name is released", (command) => {
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items?.[0]?.package).toBe("acme-widget");
+    expect(r.text).toContain("set FOURDA_PRIVATE_PACKAGES or the registry's configuration so the server records it private");
+  });
+  it.each(["npm install https://cdn.example.com/acme-widget-1.0.0.tgz", "pip install https://files.mycorp.com/acme_widget-1.0.0-py3-none-any.whl"])("a URL operand on a host not private by shape is held as not read: %s", (command) => {
+    expect(run(command).text).toContain("could not be read");
+  });
+  it("a URL operand on a private host goes ahead", () => {
+    expect(run("npm install http://localhost:8080/acme-widget-1.0.0.tgz").decision).toBe("allow");
+  });
+  it("a private record releases a name judged from another host", () => {
+    s.ledger([{ ecosystem: "npm", package: "acme-widget", version: "1.0.0", verdict: "unknown", not_checked: "private", reason: "a private-registry rule covers it" }]);
+    expect(run("npm install --registry https://npm.mycorp.com acme-widget@1.0.0").decision).toBe("allow");
+  });
+});

@@ -143,8 +143,9 @@ describe("H6: the registries' own aliases and public mirrors are public", () => 
     "pip install -i https://pypi.tuna.tsinghua.edu.cn/simple requests==2.19.0",
     "pip install -i https://mirrors.aliyun.com/pypi/simple requests==2.19.0",
     "npm install --registry https://registry.npmmirror.com lodash@4.17.20",
-  ])("a public mirror is no project's own source (one index that is public: held): %s", (command) => {
-    expect(run(command).text).toContain("could not be read");
+  ])("a public mirror is no project's own source (round 16, J3: judged): %s", (command) => {
+    expect(run(command).text).not.toContain("could not be read");
+    expect(run(command).decision).toBe("deny");
   });
   it("a file URL on a public host in a form this hook does not read stays held", () => {
     expect(run("pip install https://pypi.io/simple/requests/").decision).toBe("deny");

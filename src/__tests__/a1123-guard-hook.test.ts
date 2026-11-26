@@ -447,16 +447,15 @@ describe("install commands", () => {
     // (the request "latest", or the tag): a1125-w2-hook-bare-names.test.ts.
     "npm install github:lodash/lodash",
     "npm install ./local-pkg",
-    "npm install --registry https://npm.example.com lodash@4.17.20",
+    "npm install --registry https://npm.corp lodash@4.17.20",
     "npm install $PKG",
     "npm install lodash@$(cat version)",
     "npm install `echo lodash@4.17.20`",
     "pip install -r requirements.txt",
-    "pip install --index-url https://pypi.example.com/simple requests==2.31.0",
-    "uv add --index https://pypi.example.com/simple requests==2.31.0",
-    "cargo add mycrate@1.0.0 --registry corp",
+    // (round 16, J3: an index is the project's own only when private by shape: .corp, .internal ...)
+    "pip install --index-url https://pypi.internal/simple requests==2.31.0",
+    "uv add --index https://pypi.internal/simple requests==2.31.0",
     "cargo add mycrate@1.0.0 --git https://example.com/repo",
-    "poetry add requests@^2.31 --source corp",
     "go get ./...",
     "cat <<EOF > package.json",
     "echo npm install lodash@4.17.20",
@@ -467,7 +466,7 @@ describe("install commands", () => {
   });
 
   it("a command that installs nothing new from the public registry goes ahead, run as Claude Code runs the hook", () => {
-    for (const command of ["npm ci", "pip install --index-url https://pypi.example.com/simple requests==2.31.0"]) allowed(hook(bash(command)));
+    for (const command of ["npm ci", "pip install --index-url https://pypi.internal/simple requests==2.31.0"]) allowed(hook(bash(command)));
   });
 
   // Round 8 (R8-2): an install the hook cannot read (a variable) is held as not read, no longer let through.

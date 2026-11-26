@@ -963,7 +963,9 @@ function requirementLine(line) {
   const url = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@\s*)?(https?:\/\/\S+)$/.exec(text);
   if (url) {
     const file = registryFile(url[1]);
-    return file && file.ecosystem === "PyPI" ? { name: nameKey("PyPI", file.name), spec: file.spec } : null;
+    if (file && file.ecosystem === "PyPI") return { name: nameKey("PyPI", file.name), spec: file.spec };
+    if (sourceKind(url[1]) !== "private") refuse(`${JSON.stringify(url[1].slice(0, 120))}, a URL on a host that is not private by its shape, which this hook does not read`);
+    return null;
   }
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]\n]{0,200}\])?\s*\(?\s*/.exec(text);
   if (!m) return null;
@@ -1264,6 +1266,11 @@ function npmDeclared(name, value) {
   if (isDistTag(v)) return { name, spec: v };
   // Anything else that is no other form (`<*`, `>*`: they match nothing) is held as not read.
   // (`$name` in an override is the version the project declares for that name, judged where it is declared)
+  // J3: a tarball URL in a manifest is the project's own only on a host private by shape.
+  if (/^https?:\/\//i.test(v) && sourceKind(v) !== "private") {
+    refuse(`${JSON.stringify(name).slice(0, 120)}: ${JSON.stringify(v).slice(0, 120)}, a URL on a host that is not private by its shape, which this hook does not read`);
+    return null;
+  }
   if (v !== "-" && !v.startsWith("npm:") && !v.startsWith("$") && !NPM_OTHER_FORM.test(v)) {
     refuse(`${JSON.stringify(name).slice(0, 120)}: ${JSON.stringify(v).slice(0, 80)}, a specifier this hook does not read`);
     return null;
@@ -2470,10 +2477,10 @@ function publicSource(flag, value) {
   if (typeof value !== "string") return false;
   // S6: an extra index or find-links location keeps the public index in play: the names are judged as public names.
   if (flag === "--extra-index-url" || flag === "-f" || flag === "--find-links") return true;
-  if (["-i", "--index-url", "--index", "--default-index"].includes(flag)) return /^https:\/\/pypi\.org\/simple\/?$/i.test(value) || (flag === "--index" && CRATES_INDEX.test(value));
-  if (flag === "--registry") return value === "crates-io";
-  // S3: Poetry's source named pypi is the public index.
-  if (flag === "--source") return /^pypi$/i.test(value);
+  // J3: an index on a host that is not private by shape is read as the public index (its names judged).
+  if (["-i", "--index-url", "--index", "--default-index"].includes(flag)) return sourceKind(value.replace(/^[\w-]+=(?=[a-z][\w+.-]*:)/i, "")) !== "private";
+  // A Cargo registry and a Poetry source are named, not located: judged.
+  if (flag === "--registry" || flag === "--source") return true;
   return false;
 }
 
@@ -2641,16 +2648,11 @@ function isRunnerCommand(manager, word) {
   return manager === "npm" ? JS_RUNNERS.npm.has(npmCommand(word) ?? "") : JS_RUNNERS[manager].has(word);
 }
 
-/** The public npm registry and its public mirrors (src/live/private-hosts.ts PUBLIC_NPM_HOSTS). */
-const PUBLIC_NPM_HOSTS = new Set(["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com"]);
 
 /** Whether a `--registry` value names the public registry: installing from it is installing the public package. */
 function publicRegistry(value) {
-  try {
-    return typeof value === "string" && PUBLIC_NPM_HOSTS.has(new URL(value).hostname.toLowerCase());
-  } catch {
-    return false;
-  }
+  // J3: any registry not private by shape is read as the public one (its names judged).
+  return typeof value === "string" && sourceKind(value) !== "private" && sourceKind(value) !== "unknown";
 }
 
 /**
@@ -3158,7 +3160,7 @@ function uvToolInstall(args) {
   const read = quietly(() => readOptions(args, ACCOUNT_TABLES.uvtool));
   if (read.bad) return [];
   const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => read.values.get(k) ?? []);
-  if (read.values.has("--no-index") || index.some((v) => sourceKind(v) !== "public")) return [];
+  if (read.values.has("--no-index") || index.some((v) => sourceKind(v) === "private" || sourceKind(v) === "unknown")) return [];
   return [...read.positional.slice(0, 1), ...(read.values.get("--with") ?? [])].flatMap(pyOperand);
 }
 
@@ -3366,13 +3368,11 @@ const MANAGER_SETTING = /^(?:npm_config_|yarn_|bun_config|pip_|uv_|poetry_|cargo
 const GH_DATA = new Set(["pr", "issue", "release", "gist"]);
 const GH_DATA_VERBS = new Set(["create", "edit", "comment", "review", "view", "list", "close", "reopen"]);
 /** Public registry and index hosts (an index naming one installs the public package). */
-// Round 15 (H6): the registries' own aliases (pypi.io, www.pypi.io) and the public mirrors that serve
-// the public registry unchanged (npmmirror, the Tsinghua and Aliyun PyPI mirrors, goproxy.io,
-// goproxy.cn): public, so a name fetched from them is judged, never taken as the project's own source.
+// The registries' own hosts and aliases (pypi.io). A mirror needs no entry: since round 16 (J3) any
+// host that is not private by its shape is judged.
 const PUBLIC_INDEX_HOSTS = new Set([
-  "registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com",
-  "pypi.org", "pypi.python.org", "pypi.io", "www.pypi.io", "files.pythonhosted.org", "pypi.tuna.tsinghua.edu.cn", "mirrors.aliyun.com",
-  "index.crates.io", "crates.io", "static.crates.io", "proxy.golang.org", "sum.golang.org", "goproxy.io", "goproxy.cn",
+  "registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "pypi.org", "pypi.python.org", "pypi.io", "www.pypi.io", "files.pythonhosted.org",
+  "index.crates.io", "crates.io", "static.crates.io", "proxy.golang.org", "sum.golang.org",
 ]);
 const ACCOUNT_REMEDY =
   "Run the install as a plain command of its own, with its own options as you wrote them, not inside a wrapper, a heredoc, a variable or a substitution: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs (if it is held for a verdict, its denial names the call). If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.";
@@ -3463,7 +3463,15 @@ function detectsInWords(words) {
   return false;
 }
 
-/** An index or registry value: "public", "private" (positively not a public host) or "unknown". */
+/**
+ * Round 16 (J3, fourteenth independent check): a host name cannot show that an index is not public
+ * (Tencent, USTC, Huawei, Douban, Baidu, Taobao and rsproxy.cn mirror the public registries). An
+ * index or registry value is "private" only by shape: localhost or a loopback address, an IP
+ * literal in a private or link-local range, a single-label host, or a name under .internal,
+ * .local, .lan, .corp, .home.arpa, .test, .example, .invalid or .localhost. "public": the
+ * registries' own hosts. "other": any other host (its names are judged on the ledger like any
+ * public name). "unknown": a value that is no URL this hook reads.
+ */
 function sourceKind(value) {
   if (typeof value !== "string" || !value) return "unknown";
   if (CRATES_INDEX.test(value)) return "public";
@@ -3471,10 +3479,22 @@ function sourceKind(value) {
     const host = new URL(value.replace(/^(?:sparse|git|registry)\+/i, "")).hostname.toLowerCase().replace(/\.+$/, "");
     if (!host) return "unknown";
     if (PUBLIC_INDEX_HOSTS.has(host) || host.endsWith(".pypi.org") || host.endsWith(".npmjs.org") || host.endsWith(".pythonhosted.org")) return "public";
-    return host.includes(".") || host === "localhost" ? "private" : "unknown";
+    return privateHost(host) ? "private" : "other";
   } catch {
     return "unknown";
   }
+}
+/** J3: a host that is private by its shape. */
+function privateHost(host) {
+  const h = host.replace(/^\[|\]$/g, "");
+  if (h === "localhost" || /\.(?:internal|local|lan|corp|home\.arpa|test|example|invalid|localhost)$/.test(h)) return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const [p, q] = [Number(v4[1]), Number(v4[2])];
+    return p === 127 || p === 10 || (p === 172 && q >= 16 && q <= 31) || (p === 192 && q === 168) || (p === 169 && q === 254);
+  }
+  if (h.includes(":")) return h === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89ab][0-9a-f]?:/.test(h);
+  return !h.includes(".");
 }
 
 /**
@@ -3591,8 +3611,10 @@ function jsOperand(word) {
   const file = registryFile(word);
   if (file && file.ecosystem === "npm") return { name: file.name };
   if (publicUrl(word)) return null;
+  // J3: a tarball URL is the project's own only on a host private by shape; on any other host it is not read.
+  if (/^https?:\/\//i.test(word)) return sourceKind(word) === "private" ? "local" : null;
   if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/]|file:|link:|portal:|workspace:)/i.test(word) || /\.(?:tgz|tar\.gz|tar)$/i.test(word)) return "local";
-  if (/^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:|https?:\/\/)/i.test(word) || /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(word)) return "local";
+  if (/^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:)/i.test(word) || /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(word)) return "local";
   if (npmBareName(word)) return { name: word };
   const m = NPM_SPEC.exec(word);
   if (!m) return null;
@@ -3601,7 +3623,7 @@ function jsOperand(word) {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     const at = registryFile(raw);
     if (at && at.ecosystem === "npm") return { name: at.name };
-    return publicUrl(raw) ? null : "local";
+    return /^https?:/i.test(raw) ? (sourceKind(raw) === "private" ? "local" : null) : publicUrl(raw) ? null : "local";
   }
   if (/^(?:workspace:|file:|link:|portal:|git|github:|https?:)/i.test(raw)) return "local";
   if (raw.startsWith("npm:")) {
@@ -3623,8 +3645,9 @@ function pyOperandKind(word) {
   if (direct) {
     const at = registryFile(direct[1]);
     if (at && at.ecosystem === "PyPI") return { name: at.name };
-    return publicUrl(direct[1]) ? null : "local";
+    return /^https?:/i.test(direct[1]) ? (sourceKind(direct[1]) === "private" ? "local" : null) : publicUrl(direct[1]) ? null : "local";
   }
+  if (/^https?:\/\//i.test(word)) return sourceKind(word) === "private" ? "local" : null;
   if (/:\/\//.test(word) || /^(?:git\+|hg\+|svn\+|bzr\+)/i.test(word) || /\s@\s/.test(word)) return "local";
   // D8: a path with extras (`.[dev]`, `./pkg[test,docs]`) is a path.
   const path = word.replace(/\[[^\]]{0,200}\]$/, "");
@@ -4707,6 +4730,10 @@ function namedHeld(key, names) {
     const eq = w.indexOf("=");
     const name = eq > 0 ? w.slice(0, eq) : w;
     // uv's and pip's global options before the subcommand
+    if (name === accountSourceOption) {
+      if (eq < 0) i++;
+      continue;
+    }
     if (table.has(name)) {
       if (eq > 0 && table.get(name) === 0) return heldOption(w, names);
       if (eq < 0 && table.get(name) === 1) i++;
@@ -4738,6 +4765,10 @@ function heldOption(word, names) {
  * private one, `--no-index`, a registry named by its config name) is held. undefined: none stands.
  */
 const REPLACING_SOURCES = new Set(["-i", "--index-url", "--default-index", "--registry", "--source"]);
+/** J3: a call that installs a named package from an index on a host that is not private by shape (the denial adds the private-package advice). */
+let accountOtherSource = false;
+/** J3: that one source option, which the allow list then takes with its value. */
+let accountSourceOption = null;
 function sourceRule(values, keys, names, replacing = REPLACING_SOURCES) {
   if (names.length === 0) return undefined;
   const found = keys.flatMap((k) => (values.get(k) ?? []).map((v) => [k, String(v).replace(/^[\w-]+=(?=[a-z][\w+.-]*:)/i, "")]));
@@ -4745,6 +4776,17 @@ function sourceRule(values, keys, names, replacing = REPLACING_SOURCES) {
   // Only an option that replaces the public index counts: --extra-index-url, --find-links and uv's
   // --index add to it, so the public index stays in play beside them.
   if (found.length === 1 && replacing.has(found[0][0]) && sourceKind(found[0][1]) === "private") return null;
+  // J3: one replacing option on any other host: the named packages are judged on the ledger.
+  if (found.length === 1 && replacing.has(found[0][0]) && sourceKind(found[0][1]) !== "unknown") {
+    accountOtherSource = true;
+    accountSourceOption = found[0][0];
+    return undefined;
+  }
+  if (found.length === 1 && (found[0][0] === "--source" || (found[0][0] === "--registry" && replacing.has("--index")))) {
+    accountOtherSource = true;
+    accountSourceOption = found[0][0];
+    return undefined;
+  }
   const k = found[0][0];
   const written = accountWords.find((w) => w === k || w.startsWith(`${k}=`) || (/^-[A-Za-z]$/.test(k) && w.startsWith(k) && !w.startsWith("--"))) ?? k;
   return notReadAt(`the option ${written} beside the named package ${names[0]}: an install goes ahead unjudged only from exactly one index or registry that is positively not a public host`, written);
@@ -5051,6 +5093,8 @@ function accountCall(command, dialect) {
   fault("account");
   accountRemedy = null;
   accountToken = null;
+  accountOtherSource = false;
+  accountSourceOption = null;
   accountRaw = typeof command === "string" ? command : "";
   if (typeof command !== "string") return null;
   // R3: a blank the shell may split at that this hook's words do not (NBSP, U+2000-200A, U+3000,
@@ -5789,7 +5833,11 @@ function judgeCall(input, env, now) {
   const dir = dataDir(env);
   const ledger = readLedger(dir, now);
   if (ledger === null) return "";
-  const reason = unread() ? null : denialFor(changes, ledger, dir, found.what);
+  let reason = unread() ? null : denialFor(changes, ledger, dir, found.what);
+  // J3: from an index that is not private by its shape, a missing verdict may be a private name.
+  if (reason && found.what === "command" && accountOtherSource && /dependency_check {/.test(reason)) {
+    reason += ` If ${changes.map((c) => c.name).slice(0, 3).join(", ")} is your organisation's own package, set FOURDA_PRIVATE_PACKAGES or the registry's configuration so the server records it private; do not check a private name with dependency_check before that.`;
+  }
   if (unread()) return denyJson(notReadDenial(found.what, unreadPart));
   return reason ? denyJson(reason) : "";
 }
