@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * The guard hook limits that 6.5.2's changelog adds under "Known limits" (after the fix round of
+ * The guard hook limits that the 6.6.0 changelog's 6.5.2 draft added under "Known limits" (after the fix round of
  * 2026-11-25/26), held as they are. Each row pins a sentence of the changelog, beside the control
  * that shows the hook reads the plain form. A row that starts failing means the hook changed: fix
  * the changelog sentence with it.
