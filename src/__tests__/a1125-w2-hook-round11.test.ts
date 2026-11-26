@@ -164,3 +164,41 @@ describe("6: trailing dots and blanks in a path part, which PowerShell and Win32
     expect(run("cat ./README.md ../notes.txt").decision).toBe("allow");
   });
 });
+
+describe("7, 8: the header's sentences on files and config, each as written", () => {
+  it("a requirements file is read when it is written, not when it is installed", () => {
+    const req = `${s.project.replace(/\\/g, "/")}/requirements.txt`;
+    const w = s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: req, content: "requests==2.5.0\n" } });
+    expect(w.decision).toBe("deny");
+    expect(run("pip install -r requirements.txt").decision).toBe("allow");
+  });
+
+  it("files a later command reads are not read on a Write", () => {
+    for (const name of ["constraints.txt", "requirements.in", "package-lock.json"]) {
+      const w = s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: `${s.project.replace(/\\/g, "/")}/${name}`, content: "requests==2.5.0\n" } });
+      expect(w.decision, name).toBe("allow");
+    }
+  });
+
+  it.each([
+    "npm config set before 2020-01-01 && npm i lodash",
+    "pnpm config set registry https://registry.npmjs.org/ && pnpm add lodash",
+    "pip config set global.index-url https://pypi.corp.example/simple && pip install requests",
+    "poetry source add corp https://pypi.corp.example/simple && poetry add requests",
+    "go env -w GOFLAGS=-mod=mod && go get rsc.io/quote",
+    "HOME=/tmp/other npm i lodash",
+    "CARGO_HOME=/tmp/other cargo add serde",
+  ])("a config writer or a config-path variable before the install: %s is read as if it were not there", (command) => {
+    s.ledger([
+      { ecosystem: "npm", package: "lodash", version: "4.17.21", requested: "latest", verdict: "proceed" },
+      { ecosystem: "PyPI", package: "requests", version: "2.32.3", requested: "latest", verdict: "proceed" },
+      { ecosystem: "Go", package: "rsc.io/quote", version: "v1.5.2", requested: "latest", verdict: "proceed" },
+      { ecosystem: "crates.io", package: "serde", version: "1.0.200", requested: "latest", verdict: "proceed" },
+    ]);
+    expect(run(command).decision, command).toBe("allow");
+  });
+
+  it.each(["NPM_CONFIG_USERCONFIG=/tmp/rc npm i lodash", "PIP_CONFIG_FILE=/tmp/pip.conf pip install requests"])("a manager's own setting is held: %s", (command) => {
+    expect(run(command).text).toContain("could not be read");
+  });
+});

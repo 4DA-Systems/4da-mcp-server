@@ -132,8 +132,13 @@
  *   decision is pending);
  * - settings that change what a name resolves to when they live in files (`.npmrc`, `pip.conf`,
  *   `uv.toml` or pyproject's [tool.uv], a lockfile written by hand and then installed with `npm
- *   ci`): an install under them is read as if they were not there (the operator's decision is
- *   pending).
+ *   ci`), including those a manager's own config-writing verb writes before an install in the
+ *   same call (`npm` / `pnpm` / `yarn` / `pip config set`, `poetry config`, `poetry source add`,
+ *   `go env -w`, `git config url.<x>.insteadOf`), and variables outside the managers' own names
+ *   that point a manager at other config files (HOME, USERPROFILE, XDG_CONFIG_HOME, APPDATA,
+ *   CARGO_HOME): an install under them is read as if they were not there (the operator's decision
+ *   is pending). A manager's own setting (NPM_CONFIG_USERCONFIG, PIP_CONFIG_FILE, any
+ *   `npm_config_*` / `PIP_*` / `UV_*` ...) before the install is held (WHAT IS HELD).
  * Since it denies only where a ledger exists, a removed ledger means no denials until the server
  * starts again.
  *
