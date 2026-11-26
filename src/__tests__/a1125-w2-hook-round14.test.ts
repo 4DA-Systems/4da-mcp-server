@@ -28,7 +28,6 @@ describe("R1 / R2: changes the round-14 cut makes to earlier rows", () => {
   it.each([
     "pnpm add --trust-policy no-downgrade lodash@4.17.21",
     "go get -u github.com/pkg/errors@upgrade",
-    "pip install --no-index --find-links ./wheels requests",
   ])("%s: held as not read (off the allow list, or more than one source)", (command) => {
     expect(run(command).text).toContain("could not be read");
   });

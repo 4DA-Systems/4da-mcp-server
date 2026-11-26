@@ -104,16 +104,20 @@ describe("S5: a ledger line naming a package that is not fully valid", () => {
 describe("S6: an extra index keeps the public index in play", () => {
   // Round 14 (R2): a public index named as such is no "project's own source": held as not read.
   it("pip install --extra-index-url https://pypi.corp.example/simple requests==2.5.0: held (PyPI stays in play beside an extra index)", () => {
-    expect(run("pip install --extra-index-url https://pypi.corp.example/simple requests==2.5.0").text).toContain("could not be read");
+    // Round 18 (M5): judged on the ledger (no verdict here: the dependency_check call), never held as not read.
+    const r = run("pip install --extra-index-url https://pypi.corp.example/simple requests==2.5.0");
+    expect(r.decision).toBe("deny");
+    expect(r.text).not.toContain("could not be read");
   });
   it("pip install --find-links https://pypi.org/simple requests==2.5.0: held as not read", () => {
-    expect(run("pip install --find-links https://pypi.org/simple requests==2.5.0").text).toContain("could not be read");
+    // Round 18 (M5): judged on the ledger.
+    expect(run("pip install --find-links https://pypi.org/simple requests==2.5.0").text).not.toContain("could not be read");
   });
   it("a private primary index is the project's own source", () => {
     expect(run("pip install -i https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
     expect(run("uv add --default-index https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
-    // uv's --index adds to PyPI (round 14, R2): held.
-    expect(run("uv add --index https://pypi.corp.example/simple requests==2.5.0").text).toContain("could not be read");
+    // uv's --index adds to PyPI: judged on the ledger (round 18, M5).
+    expect(run("uv add --index https://pypi.corp.example/simple requests==2.5.0").text).not.toContain("could not be read");
   });
 });
 

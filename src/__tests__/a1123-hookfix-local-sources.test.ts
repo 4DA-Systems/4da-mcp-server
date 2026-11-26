@@ -70,7 +70,8 @@ describe("npm: file, link, workspace, git and URL specifiers", () => {
 });
 
 describe("pyproject: direct references, [tool.uv.sources] and Poetry sources", () => {
-  it.each([["mylib @ file:///C:/src/mylib"], ["mylib @ git+https://github.com/acme/mylib@v0.3.0"], ["mylib @ https://example.com/mylib-0.3.0.tar.gz"]])("a direct reference: %s", (req) => {
+  // Round 18 (M2): the URL cases name a host private by its shape (files.corp); another host is held (round18).
+  it.each([["mylib @ file:///C:/src/mylib"], ["mylib @ git+https://github.com/acme/mylib@v0.3.0"], ["mylib @ https://files.corp/mylib-0.3.0.tar.gz"]])("a direct reference: %s", (req) => {
     const file = s.file("pyproject.toml", PYPROJECT);
     onlyReal(s.edit(file, '    "requests==2.32.3",\n', `    "requests==2.32.3",\n    "${req}",\n`), "mylib");
   });
@@ -96,7 +97,8 @@ describe("pyproject: direct references, [tool.uv.sources] and Poetry sources", (
   it.each([
     ['{ path = "../mylib", develop = true }'],
     ['{ git = "https://github.com/acme/mylib.git", tag = "v0.3.0" }'],
-    ['{ url = "https://example.com/mylib-0.3.0.tar.gz" }'],
+    // Round 18 (M2): a URL is the project's own only on a host private by its shape (example.com is not).
+    ['{ url = "https://files.corp/mylib-0.3.0.tar.gz" }'],
     ['{ version = "0.3.0", source = "corp" }'],
     ['[{ version = "0.3.0", python = "<3.11", source = "corp" }, { version = "0.4.0", python = ">=3.11" }]'],
   ])("Poetry mylib = %s", (value) => {

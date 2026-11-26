@@ -454,7 +454,7 @@ describe("install commands", () => {
     "pip install -r requirements.txt",
     // (round 16, J3: an index is the project's own only when private by shape: .corp, .internal ...)
     "pip install --index-url https://pypi.internal/simple requests==2.31.0",
-    "uv add --index https://pypi.internal/simple requests==2.31.0",
+    // (round 18, M5: uv's --index adds to PyPI, so `uv add --index https://pypi.internal/simple requests==2.31.0` is judged)
     "cargo add mycrate@1.0.0 --git https://example.com/repo",
     "go get ./...",
     "cat <<EOF > package.json",

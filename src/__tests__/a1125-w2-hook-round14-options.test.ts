@@ -129,8 +129,11 @@ describe("R2: index and registry options beside a named package", () => {
     "pip install -i https://pypi.corp.example/simple -f https://pypi.org/simple six==1.17.0",
     "pip install --extra-index-url https://pypi.corp.example/simple six==1.17.0",
     "uv add --index https://pypi.corp.example/simple six==1.17.0",
-    "pip install --no-index six==1.17.0",
-  ])("any other combination is held: %s", (command) => {
-    expect(run(command).text).toContain("could not be read");
+  ])("any other combination is judged on the ledger (round 18, M5; was held as not read): %s", (command) => {
+    const r = run(command);
+    expect(r.text).not.toContain("could not be read");
+  });
+  it("--no-index alone names no public release: goes ahead (round 18, M5)", () => {
+    expect(run("pip install --no-index six==1.17.0").decision).toBe("allow");
   });
 });

@@ -8,6 +8,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { realpathSync } from "node:fs";
+
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
 
 let s: Sandbox;
@@ -41,12 +43,12 @@ describe("L1 a: the folder is followed only where the hook resolves it", () => {
     "cd packages/app; npm install zod",
     "cd packages/app\nnpm install zod",
     "cd ./packages/app/ && pnpm add zod",
-    "cd packages && cd app && bun add zod",
     'cd "packages/app" && yarn add zod',
     "pushd packages/app && npm install zod",
     "builtin cd packages/app && npm install zod",
     "command cd packages/app && npm install zod",
     "cd packages/app || exit 1; npm install zod",
+    // (Round 18, M1 ii: `cd packages && cd app && bun add zod` is held: a cd after && is not followed.)
     "npm install zod --prefix packages/app",
     "pnpm add zod -C packages/app",
     "pnpm --dir packages/app add zod",
@@ -98,7 +100,13 @@ describe("L1 a: the folder is followed only where the hook resolves it", () => {
   });
   it("a Git Bash /c/... path is the Windows folder it names", () => {
     if (process.platform !== "win32") return;
-    const msys = `/${s.project[0].toLowerCase()}${s.project.slice(2).replace(/\\/g, "/")}/packages/app`;
+    // M8: from the fixture folder's own drive (CI runs on D:) and its long name (no 8.3 RUNNER~1 part).
+    const real = realpathSync.native(s.project);
+    const msys = `/${real[0].toLowerCase()}${real.slice(2).replace(/\\/g, "/")}/packages/app`;
+    expect(run(`cd /cygdrive/${real[0].toUpperCase()}${real.slice(2).replace(/\\/g, "/")}/packages/app && npm install zod`).decision).toBe("allow");
+    // The 8.3 spelling (a ~ inside a name) is followed too.
+    const short = s.project.replace(/\\/g, "/");
+    expect(run(`cd /${short[0].toLowerCase()}${short.slice(2)}/packages/app && npm install zod`).decision).toBe("allow");
     expect(run(`cd ${msys} && npm install zod`).decision).toBe("allow");
     expect(run(`cd /cygdrive${msys} && npm install zod`).decision).toBe("allow");
     expect(run(`npm install zod --prefix ${msys}`).decision).toBe("allow");

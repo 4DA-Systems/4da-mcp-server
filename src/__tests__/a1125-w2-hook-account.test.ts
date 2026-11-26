@@ -85,7 +85,7 @@ const NOT_READ: [string, string | null][] = [
   ["PIP_INDEX_URL=https://example.invalid/simple pip install requests", "pip install requests"],
   ["UV_PRERELEASE=allow uv add requests", "uv add requests"],
   ["bun add -c x.toml lodash", "bun add lodash"],
-  ["bun update --latest lodash", "bun update lodash"],
+  // (Round 18, M3: `bun update --latest lodash` is read as an add at the newest release; see round18.)
   ["pip install --pre requests", "pip install requests"],
   ["uv add --prerelease allow requests", "uv add requests"],
   ["uv lock --upgrade", "uv lock"],
