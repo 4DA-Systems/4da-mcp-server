@@ -2214,8 +2214,32 @@ function pyBareName(w) {
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?$/.exec(w);
   return m && /[A-Za-z]/.test(m[1]) && !/\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar|egg|txt|in|cfg|toml|lock|json|ya?ml|ini|md)$/i.test(m[1]) ? m[1] : null;
 }
+/**
+ * D7: a file on the public registry named by its URL, as the registry's own form names it: an npm
+ * tarball (`https://registry.npmjs.org/<name>/-/<name>-<version>.tgz`, a scope too), a PyPI wheel or
+ * sdist on files.pythonhosted.org or pypi.org (`requests-2.5.0-py2.py3-none-any.whl`,
+ * `requests-2.5.0.tar.gz`). { ecosystem, name, spec } or null.
+ */
+function registryFile(word) {
+  if (typeof word !== "string" || word.length > 2048) return null;
+  const npm = /^https?:\/\/(?:registry\.npmjs\.org|registry\.npmjs\.com|registry\.yarnpkg\.com|registry\.npmmirror\.com)\/((?:@[a-z0-9][a-z0-9._~-]*\/)?([a-z0-9._~][a-z0-9._~-]*))\/-\/(?:@[a-z0-9][a-z0-9._~-]*\/)?([a-z0-9._~][a-z0-9._~-]*)-(\d+\.\d+\.\d+(?:-[0-9a-z.-]+)?)\.tgz(?:[?#].*)?$/i.exec(word);
+  if (npm && npm[2].toLowerCase() === npm[3].toLowerCase()) return { ecosystem: "npm", name: npm[1].toLowerCase(), spec: npm[4] };
+  const py = /^https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org)\/[^?#]*\/([^/?#]+)(?:[?#].*)?$/i.exec(word);
+  if (!py) return null;
+  const file = decodeURIComponent(py[1]);
+  const wheel = /^([A-Za-z0-9][A-Za-z0-9._]*?)-(\d[A-Za-z0-9.!+]*)-[^-]+(?:-[^-]+){2,3}\.whl$/.exec(file);
+  const sdist = wheel ? null : /^([A-Za-z0-9][A-Za-z0-9._-]*?)-(\d[A-Za-z0-9.!+]*)\.(?:tar\.gz|zip|tar\.bz2)$/.exec(file);
+  const m = wheel ?? sdist;
+  return m ? { ecosystem: "PyPI", name: m[1].replace(/_/g, "-"), spec: `==${m[2]}` } : null;
+}
+
+/** Whether a URL's host is a public registry or index host (PUBLIC_INDEX_HOSTS). */
+const publicUrl = (word) => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) && sourceKind(word.replace(/^git\+/i, "")) === "public";
+
 /** A PyPI install operand: its requirement, or the name alone as the request "latest". */
 function pyOperand(w) {
+  const file = registryFile(w);
+  if (file) return [file];
   const r = pep508(w);
   if (r) return [{ ecosystem: "PyPI", name: r.name, spec: r.spec }];
   const bare = pyBareName(w);
@@ -2454,6 +2478,11 @@ function jsInstalls(manager, args) {
     (manager === "bun" && ["add", "a", "install", "i"].includes(sub));
   const out = [];
   for (const word of all.slice(1)) {
+    const file = registryFile(word);
+    if (file && file.ecosystem === "npm") {
+      out.push(file);
+      continue;
+    }
     const m = NPM_SPEC.exec(word);
     if (!m) {
       if (writesNewest && npmBareName(word)) out.push({ ecosystem: "npm", name: word, spec: LATEST });
@@ -3216,6 +3245,9 @@ function quietly(f) {
 
 /** A JS install operand: "local" (a path, tarball, git or URL source, a workspace protocol), { name } for a package the reader judges, or null. */
 function jsOperand(word) {
+  const file = registryFile(word);
+  if (file && file.ecosystem === "npm") return { name: file.name };
+  if (publicUrl(word)) return null;
   if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/]|file:|link:|portal:|workspace:)/i.test(word) || /\.(?:tgz|tar\.gz|tar)$/i.test(word)) return "local";
   if (/^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:|https?:\/\/)/i.test(word) || /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(word)) return "local";
   if (npmBareName(word)) return { name: word };
@@ -3234,6 +3266,9 @@ function jsOperand(word) {
 
 /** A Python install operand: "local", { name } for a requirement the reader judges, or null. */
 function pyOperandKind(word) {
+  const file = registryFile(word);
+  if (file && file.ecosystem === "PyPI") return { name: file.name };
+  if (publicUrl(word) || /\s@\s*https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org)\//i.test(word)) return null;
   if (/:\/\//.test(word) || /^(?:git\+|hg\+|svn\+|bzr\+)/i.test(word) || /\s@\s/.test(word)) return "local";
   if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(word) || /\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar)$/i.test(word)) return "local";
   const r = quietly(() => pyOperand(word));

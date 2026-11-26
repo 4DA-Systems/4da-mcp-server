@@ -424,3 +424,28 @@ describe("D3: a runner's manager@version", () => {
     expect(run("npx -y npm@10.9.2 install --@types:registry=https://registry.npmjs.org lodash@4.17.20").text).toContain("could not be read");
   });
 });
+
+/** D7: a URL on a public registry host is the public registry: read as name and version, or held. */
+describe("D7: a public-registry URL operand", () => {
+  it.each([
+    ["npm i https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz", { ecosystem: "npm", package: "lodash", to: "4.17.20" }],
+    ["npm i https://registry.npmjs.org/@types/node/-/node-20.11.0.tgz", { ecosystem: "npm", package: "@types/node", to: "20.11.0" }],
+    ["pip install https://files.pythonhosted.org/packages/aa/bb/requests-2.5.0-py2.py3-none-any.whl", { ecosystem: "PyPI", package: "requests", to: "2.5.0" }],
+    ["pip install https://files.pythonhosted.org/packages/aa/bb/requests-2.5.0.tar.gz", { ecosystem: "PyPI", package: "requests", to: "2.5.0" }],
+  ])("%s: read, held on its verdict, released by the call", (command, item) => {
+    s.ledger([]);
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items).toEqual([item]);
+    answerDenial(s, r, "proceed");
+    expect(run(command).decision).toBe("allow");
+  });
+
+  it.each(["npm i https://registry.npmjs.org/lodash", "pip install https://pypi.org/simple/requests/", "pip install 'requests @ https://files.pythonhosted.org/x/y'"])("%s: another form on a public host is held as not read", (command) => {
+    expect(run(command).text).toContain("could not be read");
+  });
+
+  it("a URL on another host is still a source of its own", () => {
+    expect(run("npm i https://npm.corp.example/lodash-4.17.20.tgz").decision).toBe("allow");
+  });
+});
