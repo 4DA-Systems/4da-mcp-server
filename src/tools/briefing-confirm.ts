@@ -222,7 +222,7 @@ const SEEN: Record<TaskWordSeen, ToConfirm["seen"]> = {
 };
 
 /** Words a task uses for a secret: a name beside one of them may be one. */
-const SECRET_WORDS = /^(?:keys?|secrets?|passwords?|passwd|pwd|passphrase|tokens?|credentials?|apikey|api[-_]key|pin|otp|salt)$/i;
+const SECRET_WORDS = /^(?:keys?|secrets?|passwords?|passwd|pwd|passphrase|tokens?|credentials?|apikey|api[-_]key|otp|salt)$/i;
 
 /**
  * A caution when the task calls the word a key, a secret, a password or a token (within three words of

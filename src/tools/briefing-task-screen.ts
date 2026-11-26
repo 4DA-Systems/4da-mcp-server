@@ -375,8 +375,11 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (aloneBefore(start) && aloneAfter(end));
     // A version or constraint as its value makes it a package (`"json-web-token": "3.0.1"`, `rusoto_credential =
     // "0.48.0"`), and an install command's operand is never a setting (sixth blind check, item 2).
+    // The cheap tests first: the version grammar runs only for a key that names a setting (each match ran four
+    // ecosystems' parsers: 1.4 s of CPU on 199 KB of " a:").
+    if (!colonOk || !settingName(m[2], isDependency) || !free(start, end)) continue;
     if (versionShaped(m[5]) || installOperand(start)) continue;
-    if (colonOk && settingName(m[2], isDependency) && free(start, end)) hold(`a setting named ${m[2].slice(0, 60)}`, `not read: a setting, not a package; its value is never repeated; ${NOT_SENT}`, start, end, true);
+    hold(`a setting named ${m[2].slice(0, 60)}`, `not read: a setting, not a package; its value is never repeated; ${NOT_SENT}`, start, end, true);
   }
 
   // 3. Registries the task sets: .npmrc / pip.conf lines, environment variables, config commands.
