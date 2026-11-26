@@ -214,7 +214,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
   it("cold start: an unavailable scan yields delegation unknown, never safe", async () => {
     // The live defect: the scan had not run, the cache read nothing, and the
     // verdict was safe_to_delegate.
-    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(null));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, stubIntel(null));
 
     expect(result.scan_status).toBe("unavailable");
     expect(result.delegation_assessment.level).toBe("unknown");
@@ -225,7 +225,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
 
   it("a ready scan holding a medium jsonwebtoken advisory surfaces it", async () => {
     const scan = scanOf([entry()]);
-    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(scan));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, stubIntel(scan));
 
     expect(result.scan_status).toBe("ready");
     const named = result.advisories.filter((a) => /jsonwebtoken/i.test(`${a.title} ${a.action}`));
@@ -239,7 +239,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
   });
 
   it("safe_to_delegate is only emitted over a ready, clean scan", async () => {
-    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(scanOf([])));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, stubIntel(scanOf([])));
 
     expect(result.scan_status).toBe("ready");
     expect(result.delegation_assessment.level).toBe("safe_to_delegate");
@@ -250,7 +250,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
   // about a Maven, Gradle or .NET manifest it cannot read.
   it("a clean scan of a project with unread manifests is never safe_to_delegate, and says NOT COVERED", async () => {
     const discovery = { notCoveredCount: 1, notCovered: [{ path: "pom.xml", ecosystem: "Maven" }] } as unknown as ReturnType<NonNullable<BriefingLiveIntel["getDiscovery"]>>;
-    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(scanOf([]), { getDiscovery: () => discovery }));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, stubIntel(scanOf([]), { getDiscovery: () => discovery }));
 
     expect(result.scan_status).toBe("ready");
     expect(result.delegation_assessment.level).toBe("review_needed");
@@ -261,20 +261,20 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
   it("disabled live intelligence reports scan_status disabled and delegation unknown", async () => {
     const offline = await executeWhatShouldIKnow(
       db,
-      { task: TASK },
+      { packages: [], task: TASK },
       stubIntel(null, { isEnabled: () => false }),
     );
     expect(offline.scan_status).toBe("disabled");
     expect(offline.delegation_assessment.level).toBe("unknown");
 
-    const absent = await executeWhatShouldIKnow(db, { task: TASK }, null);
+    const absent = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, null);
     expect(absent.scan_status).toBe("disabled");
     expect(absent.delegation_assessment.level).toBe("unknown");
   });
 
   it("a scan that resolved no dependency versions is unavailable, not ready", async () => {
     const empty = scanOf([], { totalScanned: 0, cleanCount: 0 });
-    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(empty));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, stubIntel(empty));
 
     expect(result.scan_status).toBe("unavailable");
     expect(result.delegation_assessment.level).toBe("unknown");
@@ -289,7 +289,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
       signal_priority: "critical",
     });
 
-    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(null));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, stubIntel(null));
 
     expect(result.scan_status).toBe("unavailable");
     expect(result.delegation_assessment.level).toBe("human_only");
@@ -300,7 +300,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
       entry({ package: "nix", vulnId: "GHSA-inactive", aliases: [], severity: "critical", platformActive: false, target: "cfg(unix)" }),
       entry({ package: "paste", vulnId: "RUSTSEC-2024-0436", aliases: [], severity: "unknown", summary: "paste - no longer maintained", fixedVersion: null }),
     ]);
-    const result = await executeWhatShouldIKnow(db, { task: "Upgrade nix and paste" }, stubIntel(scan));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: "Upgrade nix and paste" }, stubIntel(scan));
 
     expect(result.scan_status).toBe("ready");
     expect(result.advisories.some((a) => /\bnix\b|\bpaste\b/i.test(`${a.title} ${a.action}`))).toBe(false);
@@ -319,14 +319,14 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     });
 
     // No scan: the feed row is the only evidence, and it says so.
-    const unscanned = await executeWhatShouldIKnow(db, { task: "Upgrade hono in the API gateway" }, stubIntel(null));
+    const unscanned = await executeWhatShouldIKnow(db, { packages: [], task: "Upgrade hono in the API gateway" }, stubIntel(null));
     const row = unscanned.advisories.find((a) => a.title.includes("hono: middleware bypass"));
     expect(row?.version_confirmed).toBe(false);
     expect(row?.scope).toBe("task");
 
     // A ready scan that finds the installed hono clean is authoritative: the
     // unconfirmed row is not repeated as if it were a finding.
-    const scanned = await executeWhatShouldIKnow(db, { task: "Upgrade hono in the API gateway" }, stubIntel(scanOf([])));
+    const scanned = await executeWhatShouldIKnow(db, { packages: [], task: "Upgrade hono in the API gateway" }, stubIntel(scanOf([])));
     expect(scanned.advisories.some((a) => a.title.includes("hono: middleware bypass"))).toBe(false);
     expect(scanned.delegation_assessment.level).toBe("safe_to_delegate");
   });
@@ -349,7 +349,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     });
     const result = await executeWhatShouldIKnow(
       db,
-      { task: "Upgrade the fastembed crate from 5.x to 7.x" },
+      { packages: [], task: "Upgrade the fastembed crate from 5.x to 7.x" },
       stubIntel(scanOf([]), { getResolvedDeps: () => [...DEPS, dep("openai", "6.7.0", "npm")] }),
     );
     expect(result.advisories).toEqual([]);
@@ -368,18 +368,18 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
     // 2026-10-09 assessment: a plain major-number compare read 0.12 -> 0.13
     // as 0 majors crossed and answered safe_to_delegate.
     const intel = stubIntel(scanOf([]), { getResolvedDeps: () => [...DEPS, dep("reqwest", "0.12.24", "crates.io")] });
-    const named = await executeWhatShouldIKnow(db, { task: "Upgrade reqwest from 0.12 to 0.13" }, intel);
+    const named = await executeWhatShouldIKnow(db, { packages: [], task: "Upgrade reqwest from 0.12 to 0.13" }, intel);
     const reqwest = named.task_dependencies.find((d) => d.package === "reqwest");
     expect(reqwest?.majors_crossed).toBe(1);
     expect(named.delegation_assessment.level).toBe("review_needed");
 
     // Only the target named: the installed 0.12.24 is the "from".
-    const toOnly = await executeWhatShouldIKnow(db, { task: "Bump reqwest to 0.13.1" }, intel);
+    const toOnly = await executeWhatShouldIKnow(db, { packages: [], task: "Bump reqwest to 0.13.1" }, intel);
     expect(toOnly.task_dependencies.find((d) => d.package === "reqwest")?.majors_crossed).toBe(1);
     expect(toOnly.delegation_assessment.level).toBe("review_needed");
 
     // A patch on the same 0.x line crosses nothing.
-    const patch = await executeWhatShouldIKnow(db, { task: "Bump reqwest to 0.12.28" }, intel);
+    const patch = await executeWhatShouldIKnow(db, { packages: [], task: "Bump reqwest to 0.12.28" }, intel);
     expect(patch.task_dependencies.find((d) => d.package === "reqwest")?.majors_crossed).toBe(0);
     // No major crossed, but the version the task names (0.12.28) could not be judged in this stub
     // (no registry reads): a named version that is not `proceed` is never safe (requested_versions).
@@ -396,7 +396,7 @@ describe("what_should_i_know — the briefing never answers safe without a scan"
       signal_type: "security_alert",
       signal_priority: "critical",
     });
-    const result = await executeWhatShouldIKnow(db, { task: TASK }, stubIntel(scanOf([entry()])));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: TASK }, stubIntel(scanOf([entry()])));
 
     const dbRow = result.advisories.filter((a) => a.title.includes("jsonwebtoken: authorization bypass"));
     expect(dbRow).toHaveLength(1);
@@ -707,7 +707,7 @@ describe("the briefing and live signals grade by the shared rule and name instal
   });
 
   it("what_should_i_know no longer calls it critical", async () => {
-    const result = await executeWhatShouldIKnow(db, { task: "Tidy the README" }, stubIntel(scanOf([sandbox])));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: "Tidy the README" }, stubIntel(scanOf([sandbox])));
     const summaryRow = result.advisories.find((a) => a.title.includes("known vulnerabilities"));
     expect(summaryRow?.priority).toBe("high");
     expect(result.advisories.some((a) => /CRITICAL/.test(a.title))).toBe(false);
@@ -731,7 +731,7 @@ describe("the briefing and live signals grade by the shared rule and name instal
   });
 
   it("a vulnerable installed copy yields at least review_needed and names the reinstall, whatever the task", async () => {
-    const result = await executeWhatShouldIKnow(db, { task: "Tidy the README" }, stubIntel(scanOf([drifted])));
+    const result = await executeWhatShouldIKnow(db, { packages: [], task: "Tidy the README" }, stubIntel(scanOf([drifted])));
 
     expect(result.scan_status).toBe("ready");
     const drift = result.advisories.find((a) => a.title.startsWith("hono: the installed 4.13.1"));
@@ -755,7 +755,7 @@ describe("the briefing and live signals grade by the shared rule and name instal
     });
     const result = await executeWhatShouldIKnow(
       db,
-      { task: "Tidy the README" },
+      { packages: [], task: "Tidy the README" },
       stubIntel(scanOf([drifted, lockfileRow])),
     );
 
@@ -777,7 +777,7 @@ describe("the briefing and live signals grade by the shared rule and name instal
   it("the briefing's scan block says when the versions it covers were resolved", async () => {
     const result = await executeWhatShouldIKnow(
       db,
-      { task: TASK },
+      { packages: [], task: TASK },
       stubIntel(scanOf([entry()]), {
         refreshIfLockfilesChanged: () => true,
         getResolutionProvenance: () => ({ resolvedAt: "2026-09-10T21:43:00.000Z", sources: [] }),

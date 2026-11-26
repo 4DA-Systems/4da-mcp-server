@@ -220,6 +220,8 @@ export interface TaskVersions {
 export interface TaskWordWithheld {
   shown: string;
   reason: string;
+  /** It stands where a package stands (an install command's operand, a package name): it weighs on the level. Never output. */
+  standing?: true;
 }
 
 /** The (package, version) pairs a task names, in the order named (uncapped: the briefing checks MAX_REQUESTED and names the rest NOT CHECKED). */
@@ -267,11 +269,11 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   const withheld: TaskWordWithheld[] = [];
   const seen = new Set<string>();
   let beyond = 0;
-  const holdWord = (shown: string, reason: string) => {
+  const holdWord = (shown: string, reason: string, standing = true) => {
     const key = `${shown}\n${reason}`;
     if (seen.has(key)) return;
     seen.add(key);
-    if (withheld.length < MAX_HELD_SHOWN) withheld.push({ shown, reason });
+    if (withheld.length < MAX_HELD_SHOWN) withheld.push({ shown, reason, ...(standing ? { standing: true as const } : {}) });
     else beyond++;
   };
   const requested = read.requested.filter((r) => {
@@ -297,8 +299,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     }
     lostTo = spansHolding(task, screen, lost);
   }
-  for (const w of [...screen.withheld.filter((x) => x.always), ...lostTo].sort((a, b) => a.start - b.start)) holdWord(w.label, w.why);
-  if (beyond > 0) withheld.push({ shown: `${beyond} more word${beyond === 1 ? "" : "s"}`, reason: "not read or not looked up, as the ones above" });
+  for (const w of [...screen.withheld.filter((x) => x.always), ...lostTo].sort((a, b) => a.start - b.start)) holdWord(w.label, w.why, w.standing === true);
+  if (beyond > 0) withheld.push({ shown: `${beyond} more word${beyond === 1 ? "" : "s"}`, reason: "not read or not looked up, as the ones above", standing: true });
   const foreign = [...new Set([...(read.foreign ?? []), ...notes])];
   return { requested, unread: read.unread.slice(0, MAX_HELD_SHOWN), ...(foreign.length > 0 ? { foreign } : {}), ...(withheld.length > 0 ? { withheld } : {}) };
 }
@@ -361,7 +363,7 @@ export function gateTaskNames<
     const key = `${shown}\n${reason}`;
     if (seen.has(key)) return;
     seen.add(key);
-    if (held.length < MAX_HELD_SHOWN) held.push({ shown, reason });
+    if (held.length < MAX_HELD_SHOWN) held.push({ shown, reason, standing: true });
     else beyondHeld++;
   };
   const unverified = new Map<string, UnverifiedWord>();
@@ -438,7 +440,7 @@ export function gateTaskNames<
     }
     keptRequested.push(out);
   }
-  if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not read whole, as the ones above" });
+  if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not read whole, as the ones above", standing: true });
   // Every word, unsliced: the caller's declarations settle words past the first MAX_UNVERIFIED_WORDS as well.
   const words = [...unverified.values()];
   return { packages: keptPackages, requested: keptRequested, held, unverified: words, unverifiedTotal: words.length };

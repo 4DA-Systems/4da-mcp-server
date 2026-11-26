@@ -121,7 +121,7 @@ async function call(tool: string, args: Record<string, unknown>): Promise<Record
   }
 }
 
-const TASK = { task: "add a date picker to the settings page" };
+const TASK = { packages: [], task: "add a date picker to the settings page" };
 
 const PKG_JSON = JSON.stringify({ name: "app", version: "1.0.0", dependencies: { lodash: "4.17.20", minimist: "1.2.5" } }, null, 2);
 const REQUIREMENTS = "requests==2.25.0\nurllib3==1.26.4\n";
@@ -298,7 +298,7 @@ describe("an npm lockfile that is not valid JSON is said as unreadable, never as
 
   it("a task naming a withheld package says its lockfile could not be read, not that it is private", async () => {
     liveFor({ "package.json": PKG_JSON, "package-lock.json": GARBAGE, "requirements.txt": REQUIREMENTS });
-    const brief = await call("what_should_i_know", { task: "upgrade lodash to 4.17.21" });
+    const brief = await call("what_should_i_know", { packages: [], task: "upgrade lodash to 4.17.21" });
     expect(brief.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(brief.private_dependencies.map((p: { package: string; unreadable_file?: string }) => [p.package, path.basename(p.unreadable_file ?? "")])).toEqual([["lodash", "package-lock.json"]]);
     expect(brief.summary).toContain("NOT CHECKED (unreadable lockfile): the task touches lodash 4.17.20");

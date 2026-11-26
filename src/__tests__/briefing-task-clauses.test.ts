@@ -305,7 +305,7 @@ afterEach(() => {
   else process.env.FOURDA_OFFLINE = priorOffline;
 });
 
-const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Partial<BriefingLiveIntel> = {}) => executeWhatShouldIKnow(db, { task }, intel(deps, over));
+const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Partial<BriefingLiveIntel> = {}) => executeWhatShouldIKnow(db, { packages: [], task }, intel(deps, over));
 
 describe("what_should_i_know: the audit's phrasings (all came back with something unchecked)", () => {
   it('"bring in rustdecimal" in an npm project: crates.io\'s malware is found, though npm has no such name (it was safe_to_delegate)', async () => {

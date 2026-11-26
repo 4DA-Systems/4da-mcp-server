@@ -47,6 +47,12 @@ export interface Withheld {
   always: boolean;
   start: number;
   end: number;
+  /**
+   * It stands where a package stands: a package name the task takes from elsewhere, or a word among an
+   * install command's operands. Only such a word keeps the briefing from clearing the task (wave 2, change B):
+   * a setting or a value in prose is listed and weighs nothing.
+   */
+  standing?: true;
 }
 
 export interface TaskScreen {
@@ -285,9 +291,13 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     withheld.push({ label, why, always, start, end });
     blank(start, end);
   };
+  /** The operands of every install command (after the manager word), as [start, end) spans. */
+  const commandArgs: Array<[number, number]> = [];
+  const packageHolds = new Set<Withheld>();
   const holdPackage = (name: string, kind: string, start: number, end: number) => {
     names.add(name.toLowerCase());
     hold(name, `not looked up: the task takes it from ${kind}`, start, end, true);
+    packageHolds.add(withheld[withheld.length - 1]);
   };
   /** Spans the readers never read but `text` keeps: option values and colon words (blanked in `forEmbedding`). */
   const quiet: Array<{ start: number; end: number }> = [];
@@ -365,8 +375,11 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     const colonOk = m[3] !== ":" || m[1] !== "" || m[4] !== "" || (aloneBefore(start) && aloneAfter(end));
     // A version or constraint as its value makes it a package (`"json-web-token": "3.0.1"`, `rusoto_credential =
     // "0.48.0"`), and an install command's operand is never a setting (sixth blind check, item 2).
+    // The cheap tests first: the version grammar runs only for a key that names a setting (each match ran four
+    // ecosystems' parsers: 1.4 s of CPU on 199 KB of " a:").
+    if (!colonOk || !settingName(m[2], isDependency) || !free(start, end)) continue;
     if (versionShaped(m[5]) || installOperand(start)) continue;
-    if (colonOk && settingName(m[2], isDependency) && free(start, end)) hold(`a setting named ${m[2].slice(0, 60)}`, `not read: a setting, not a package; its value is never repeated; ${NOT_SENT}`, start, end, true);
+    hold(`a setting named ${m[2].slice(0, 60)}`, `not read: a setting, not a package; its value is never repeated; ${NOT_SENT}`, start, end, true);
   }
 
   // 3. Registries the task sets: .npmrc / pip.conf lines, environment variables, config commands.
@@ -410,6 +423,7 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
       if (/[;!?`]["')]*$/.test(w) || /[A-Za-z0-9"'`)]\.["')]*$/.test(w)) break;
     }
     const args = words.slice(i + 1, last + 1);
+    if (args.length > 0) commandArgs.push([args[0].start, args[args.length - 1].end]);
     // `npm config set registry <url>`, `npm config set @acme:registry <url>`, `pip config set global.index-url <url>`.
     const lowered = args.map((a) => bare(a.text).toLowerCase());
     const setAt = lowered[0] === "config" && lowered[1] === "set" ? 2 : lowered[0] === "set" && family === "js" ? 1 : -1;
@@ -549,6 +563,7 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     .replace(/(^|[\s"'`(])([A-Za-z0-9][\w.-]{0,200})\[[\w.,\s-]{1,400}\](\S{0,300})/g, (m: string, pre: string, name: string, rest: string) => `${pre}${name}${rest}${" ".repeat(m.length - pre.length - name.length - rest.length)}`);
   const embed = text.split("");
   for (const q of quiet) for (let k = Math.max(0, q.start); k < Math.min(q.end, embed.length); k++) if (embed[k] !== "\n") embed[k] = " ";
+  for (const w of withheld) if (packageHolds.has(w) || commandArgs.some(([a, b]) => w.start >= a && w.start < b)) w.standing = true;
   return { text, withheld, names, scopes, ecosystems, forEmbedding: embed.join("") };
 }
 

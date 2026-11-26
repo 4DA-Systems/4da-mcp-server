@@ -185,7 +185,7 @@ afterEach(() => {
 });
 
 const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Partial<BriefingLiveIntel> = {}, vulns: VulnerabilityEntry[] = []) =>
-  executeWhatShouldIKnow(db, { task }, stubIntel(deps, over, readyScan(vulns)));
+  executeWhatShouldIKnow(db, { packages: [], task }, stubIntel(deps, over, readyScan(vulns)));
 
 describe("B1 in the briefing: the malware after a prose item is found (each was safe_to_delegate)", () => {
   it.each([
