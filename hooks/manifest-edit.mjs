@@ -2734,6 +2734,27 @@ function npmPkgSet(words, json) {
   return out;
 }
 
+/** Node's options that take the next word as their value. */
+const NODE_VALUE_OPTIONS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions", "--env-file", "--input-type", "--title", "--inspect-port", "--openssl-config", "--icu-data-dir", "--redirect-warnings", "--watch-path", "--test-reporter", "--test-reporter-destination", "--stack-trace-limit", "--max-old-space-size", "--disable-warning", "--experimental-config-file"]);
+
+/**
+ * D2: `node <path>/npm-cli.js install x` (`pnpm.cjs`, `yarn.js`, a quoted path with spaces): the
+ * manager the script is, with its arguments; null when node runs anything else.
+ */
+function nodeManager(args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") return null;
+    if (a.startsWith("-")) {
+      if (!a.includes("=") && NODE_VALUE_OPTIONS.has(a)) i++;
+      continue;
+    }
+    const manager = managerWord(programName(a).toLowerCase());
+    return manager && PACKAGE_MANAGERS.has(manager) ? [manager, ...args.slice(i + 1)] : null;
+  }
+  return null;
+}
+
 /** Tools whose `run` runs the command after it. */
 const RUN_TOOLS = new Set(["poetry", "pipenv", "pdm", "rye", "hatch", "pixi"]);
 /** Python modules that are package managers this hook reads (`python -m uv add x`). */
@@ -2826,6 +2847,10 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return line === null ? [] : installsIn(line, "powershell", depth + 1);
   }
   if (PACKAGE_RUNNERS.has(program)) return runnerInstalls(args, depth);
+  if (program === "node") {
+    const managed = nodeManager(args);
+    return managed ? commandInstalls(managed, depth + 1, dialect) : [];
+  }
   if (PACKAGE_MANAGERS.has(program)) {
     const at = subcommandAt(args, JS_VALUES[program], program);
     // `pnpm -c exec '<line>'` / `pnpm --shell-mode exec '<line>'`: the line is a shell command line.
@@ -3384,6 +3409,10 @@ function accountCommand(words, dialect, depth) {
   }
   if (PACKAGE_RUNNERS.has(program)) return accountRunner(args, dialect, depth);
   if (program === "uvx") return accountToolRun(args, dialect, depth);
+  if (program === "node") {
+    const managed = nodeManager(args);
+    if (managed) return accountCommand(managed, dialect, depth + 1);
+  }
   if (RUN_TOOLS.has(program) && program !== "poetry") {
     const inner = runInner(program, args);
     if (inner === null) return `${program} with a command this hook does not read`;

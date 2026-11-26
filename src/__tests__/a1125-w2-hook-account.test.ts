@@ -387,3 +387,26 @@ describe("D6: a setting made earlier in the call", () => {
     expect(run(command, tool).decision).toBe("allow");
   });
 });
+
+/** D2: a manager at a quoted path with a space, or a manager script node runs, is that manager. */
+describe("D2: quoted manager paths and node <manager script>", () => {
+  it.each([
+    ['"C:/Program Files/nodejs/npm.cmd" install lodash@4.17.20', "Bash"],
+    ['& "C:/Program Files/nodejs/npm.cmd" install lodash@4.17.20', "PowerShell"],
+    ['node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js" install lodash@4.17.20', "Bash"],
+    ['node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js" install lodash@4.17.20', "PowerShell"],
+    ["node --max-old-space-size 4096 ./node_modules/pnpm/bin/pnpm.cjs add lodash@4.17.20", "Bash"],
+    ["node .yarn/releases/yarn.js add lodash@4.17.20", "Bash"],
+  ])("%s (%s): read as the manager, held, released by the call its denial names", (command, tool) => {
+    s.ledger([]);
+    const r = run(command, tool);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items, r.text).not.toBeNull();
+    answerDenial(s, r, "proceed");
+    expect(run(command, tool).decision).toBe("allow");
+  });
+
+  it("an option the account does not take, after a quoted manager path, is held as not read", () => {
+    expect(run('"C:/Program Files/nodejs/npm.cmd" install --@types:registry=https://registry.npmjs.org lodash@4.17.20').text).toContain("could not be read");
+  });
+});
