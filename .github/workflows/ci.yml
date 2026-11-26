@@ -36,7 +36,10 @@ jobs:
           # better-sqlite3 here (src/sqlite-driver.ts).
           - { os: ubuntu-latest, node: "22.12" }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The suite takes about 10 minutes on Linux, 19 on Windows and more than 20 on
+    # macOS since the vendored review sets (15,700 tests), and the Node 24 leg
+    # runs it twice (both SQLite drivers).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -73,7 +76,7 @@ jobs:
   checks:
     name: Checks (gates, audit, package, contract)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -135,7 +138,7 @@ jobs:
   contract-upstream:
     name: App-schema contract (4DA main)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
