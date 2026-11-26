@@ -54,7 +54,7 @@ describe("R8-1: the detector", () => {
     expect(detectsInstall(command)).toBe(true);
   });
 
-  it.each(["npm ci", "npm run build", "bunx tsc", "make install", "brew install node", "apt-get install -y python3-pip", "gem install bundler", "composer require x/y", "dotnet add package X", "npm\ninstall", "git commit -m 'docs: `npm install x`'", "make PIP=pip3 install", "pipenv install requests", "pdm install"])(
+  it.each(["npm ci", "npm run build", "bunx tsc", "make install", "brew install node", "apt-get install -y python3-pip", "gem install bundler", "composer require x/y", "dotnet add package X", "npm\ninstall", "pipenv install requests", "pdm install"])(
     "does not name %s",
     (command) => {
       expect(detectsInstall(command)).toBe(false);
@@ -160,16 +160,32 @@ describe("pipenv, pdm, rye, pixi, hatch and conda installs are not read (a state
   });
 });
 
-describe("a manager word inside another program's arguments is not a command word: it goes ahead", () => {
+describe("D5: a manager word in the arguments of a program known to take text as data goes ahead", () => {
   it.each([
     "make PIP=pip3 install",
     "sed -i 's/npm install/npm ci/' README.md",
     "awk '/pip install/ {print}' docs/setup.md",
     "node -e \"console.log('npm install')\"",
     "python -c \"print('pip install requests')\"",
-    "echo \"$HOME: npm install\"",
+    "git commit -m 'docs: `npm install x`'",
   ])("%s", (command) => {
+    expect(detectsInstall(command)).toBe(true);
     expect(run(command).decision).toBe("allow");
+  });
+
+  it("a line this hook cannot take apart is held, with a way through: single quotes", () => {
+    expect(run('echo "$HOME: npm install"').decision).toBe("deny");
+    expect(run("echo '$HOME: npm install'").decision).toBe("allow");
+  });
+});
+
+/** D5: unknown wrappers are held (not added one by one): each has the remedy's way through. */
+describe("D5: a hit inside a program this hook does not know is held", () => {
+  it.each(["start npm -ArgumentList 'i','lodash@4.17.20'", "mise exec -- npm i lodash@4.17.20", "gsudo npm i lodash@4.17.20", "concurrently 'npm i lodash@4.17.20'", "git submodule foreach 'npm i lodash@4.17.20'", "n\\pm i lodash@4.17.20", "np''m i lodash@4.17.20"])("%s", (command) => {
+    const r = run(command, command.startsWith("start ") ? "PowerShell" : "Bash");
+    expect(r.decision, r.text).toBe("deny");
+    s.ledger([]);
+    releases("npm i lodash@4.17.20");
   });
 });
 

@@ -2934,7 +2934,7 @@ const ACCOUNT_TABLES = {
   uvtool: optionTable("--allow-insecure-host= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --editable --extra-index-url= --find-links= --force --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --offline --overrides= --project= --python= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --upgrade-package= --verbose --version --with= --with-editable= --with-requirements= -C= -P= -V -c= -e -f= -h -i= -n -p= -q -v"),
   uvadd: optionTable("--active --all-extras --all-groups --all-packages --allow-insecure-host= --branch= --cache-dir= --check --check-exists --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --dev --directory= --dry-run --editable --extra= --extra-index-url= --find-links= --frozen --group= --help --index= --index-strategy= --index-url= --inexact --keyring-provider= --link-mode= --locked --managed-python --marker= --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-default-groups --no-dev --no-editable --no-extra= --no-group= --no-index --no-install-package= --no-install-project --no-install-workspace --no-managed-python --no-progress --no-python-downloads --no-sources --no-sync --offline --only-dev --only-group= --optional= --package= --project= --python= --quiet --raw-sources --refresh --refresh-package= --reinstall --reinstall-package= --requirements= --rev= --script= --tag= --upgrade-package= --verbose --version -C= -P= -V -c= -f= -h -i= -m= -n -p= -q -r= -v"),
   cargo: optionTable("--all-features --base= --bin --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
-  go: optionTable("-C= -u -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
+  go: optionTable("-C= -u -d -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
   yarn: optionTable("--all --audit --cache-folder= --cached --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --flat --focus --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interactive --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --pattern --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scope= --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --use-yarnrc= --verbose --version --worktree -A -C -D -E -L -O -P -R -S= -T -W -g -h -i -j= -p -s -t -v"),
   bun: optionTable("--analyze --backend= --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --interactive --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -E -a -d -g -h -i -p -r -y"),
@@ -2942,13 +2942,15 @@ const ACCOUNT_TABLES = {
 };
 /** npm's one-letter options: the switches, and (NPM_SHORT_VALUE) the five that take a value. */
 const NPM_SHORT_SWITCHES = new Set(["a", "B", "D", "d", "E", "f", "g", "h", "H", "l", "O", "p", "P", "q", "s", "S", "v", "y"]);
+/** npm's long shorthands, switches that set another option (npm 10 lib/utils/config/definitions.js shorthands). */
+const NPM_LONG_SHORTHANDS = new Set(["silent", "quiet", "verbose", "loud", "dd", "ddd", "desc", "porcelain", "help", "local", "global"]);
 const NPM_SHORT_WORDS = new Set(["-dd", "-ddd", "-ws", "-iwr", "-desc", "-reg"]);
 /** npm options that change which release a name resolves to: not taken (held). */
 const NPM_RESOLVING = new Set(["tag", "before"]);
 /** Environment settings before a manager that change where it installs from or what it resolves. */
 const MANAGER_SETTING = /^(?:npm_config_|yarn_|bun_config|pip_|uv_|poetry_|cargo_registr|cargo_source|goproxy|goflags|goprivate|gonoproxy|gonosumdb|goinsecure|gotoolchain)/i;
 /** Programs that take the words after them as data only (a line that mentions an install). */
-const DATA_PROGRAMS = new Set(["echo", "printf", "rg", "grep", "egrep", "fgrep", "select-string", "sls", "findstr", "cat", "write-output", "write-host", "docker", "podman", "true", ":"]);
+const DATA_PROGRAMS = new Set(["echo", "printf", "rg", "grep", "egrep", "fgrep", "select-string", "sls", "findstr", "cat", "write-output", "write-host", "sed", "gsed", "awk", "gawk", "mawk", "nawk", "make", "gmake", "docker", "podman", "true", ":"]);
 /** Git commands that take the words after them as data. */
 const GIT_DATA = new Set(["commit", "log", "grep", "show", "diff", "status", "tag", "notes"]);
 /** GitHub CLI commands whose words are text (a pull request's or an issue's title and body). */
@@ -2971,32 +2973,12 @@ const DETECT_VERBS = new Map([
   ["go", new Set(["get", "install", "edit"])],
 ]);
 
-/**
- * Words that run the command after them (prefixes, runners, wrappers): after one, any later word
- * of the simple command may be the package manager. pipenv, pdm, rye, hatch and pixi are here for
- * their `run`: their own installs are not read (a stated limit), a manager they run is.
- */
-const DETECT_WRAPPERS = new Set([
-  ...Object.keys(PREFIXES),
-  "npx", "bunx", "pnpx", "uvx", "stdbuf", "winpty", "cross-env", "flock", "doas", "setsid", "ionice", "chrt", "taskset", "unbuffer", "dotenv", "parallel", "find", "start-process", "invoke-command", "start-job", "foreach-object", "%", "&", ".",
-  "pipenv", "pdm", "rye", "hatch", "pixi",
-]);
-/** Wrappers that run a string as a command line: a quoted word after one is read as a line of its own. */
-const DETECT_STRING_RUNNERS = new Set([...SHELLS, "eval", "pwsh", "powershell", "invoke-expression", "iex", "cmd", "script", "su", "env", "watch", "wsl", "start-process", "invoke-command"]);
-/** A detector token: a separator, or a word (quoted parts kept inside it). */
-// A double-quoted part holds no `$` or backquote here: bash runs `cmd` and $(cmd) inside double
-// quotes (PowerShell its $(...) subexpression), so there the quote is not one word.
-// A plain run is one `[...]+` (one repetition per run, not per character: per character, an 8 MB
-// word overflowed the regular expression's stack).
-const DETECT_TOKEN = /<#|#>|[;&|(){}`\n\r]|(?:[^\s;&|(){}`\n\r'"<#]+|'[^'\n\r]*'|"[^"\n\r`$]*"|<(?!#)|#(?!>))+/g;
-const unquoteWord = (w) => w.replace(/['"]/g, "");
-
-/** The package manager a token names (`npm.cmd`, `pip3.12`, `yarnpkg`, `pnpm.cjs`, `npm-cli.js`), or null. */
+/** The package manager a token names (`npm.cmd`, `pip3.12`, `-mpip`, `yarnpkg`, `pnpm.cjs`, `npm-cli.js`), or null. */
 function managerWord(token) {
   let t = token.replace(/\.(?:exe|cmd|bat|ps1|js|cjs|mjs)$/, "");
   if (t === "yarnpkg") t = "yarn";
   if (/^(?:npm|pnpm|yarn)-cli$/.test(t)) t = t.slice(0, -4);
-  if (/^pip\d*(?:\.\d+)?$/.test(t)) return "pip";
+  if (/^pip\d*(?:\.\d+)?$/.test(t) || /^-[a-z]*mpip\d*(?:\.\d+)?$/.test(t)) return "pip";
   return t === "npm" || DETECT_VERBS.has(t) ? t : null;
 }
 
@@ -3006,98 +2988,48 @@ function isManagerVerb(manager, token) {
   return DETECT_VERBS.get(manager)?.has(token) ?? false;
 }
 
+/** A detector token: a run of name characters (`npm@10.9.2` is `npm` and `10.9.2`), or a line end. */
+const DETECT_TOKEN = /[a-z0-9._+-]+|[\n\r]/g;
+
 /**
- * R8-1: whether a text holds a package manager AS A COMMAND WORD followed later in that simple
- * command by one of its verbs. A command word is the first word of a simple command (after
- * `VAR=value` and shell keywords), any word after a wrapper (DETECT_WRAPPERS: sudo, env, npx,
- * stdbuf, find -exec ...), a line inside the quoted string a shell-like runner runs (`bash -c`,
- * `cmd /c`, `eval`, `pwsh -c`), `pip` after Python's `-m`, and the script `node` runs when it is a
- * manager (`node pnpm.cjs`). A manager word inside another program's arguments (`make PIP=pip3
- * install`, `sed 's/npm install/npm ci/'`, `node -e "...npm install..."`) is not a command word: a
- * script or program that runs an install is outside what this hook reads (a stated limit), never a
- * hold. One linear pass over the whole text, whatever its size, apart from the command reader.
+ * The detector's pass over one text: `seen` carries the managers met so far on the current line
+ * (a line end clears it). True on a manager word followed, later on the same line, by one of its
+ * verbs. Linear: one pass over the tokens.
  */
-export function detectsInstall(text, depth = 0) {
-  if (typeof text !== "string" || depth > MAX_WRAPS + 1) return false;
-  let first = true;
-  let mode = "";
-  let managers = [];
-  let pythonM = false;
-  let skipTarget = false;
-  for (const m of text.matchAll(DETECT_TOKEN)) {
+function detectIn(text, seen) {
+  for (const m of text.toLowerCase().matchAll(DETECT_TOKEN)) {
     tick();
-    const w = m[0];
-    if (w.length === 1 ? ";&|(){}`\n\r".includes(w) : w === "<#" || w === "#>") {
-      first = true;
-      mode = "";
-      managers = [];
+    const token = m[0];
+    if (token === "\n" || token === "\r") {
+      seen.length = 0;
       continue;
     }
-    if (w === "=") {
-      // PowerShell `$x = npm i y`: the command starts after the assignment.
-      first = true;
-      mode = "";
-      continue;
-    }
-    const lower = w.toLowerCase();
-    if (managers.length > 0) {
-      const parts = lower.split(/[\s'",=]+/);
-      for (const mgr of managers) for (const p of parts) if (p && isManagerVerb(mgr, p)) return true;
-    }
-    if (first) {
-      if (lower.startsWith("#")) {
-        mode = "comment";
-        first = false;
-        continue;
-      }
-      if (/^[a-z_][a-z0-9_]*=/.test(lower) || KEYWORDS.has(lower)) continue;
-      // A redirection before the command (`2>/dev/null npm i x`, `> log npm i x`): it and its target.
-      if (/^\d*[<>]/.test(lower)) {
-        skipTarget = /[<>&]$/.test(lower);
-        continue;
-      }
-      if (skipTarget) {
-        skipTarget = false;
-        continue;
-      }
-      first = false;
-      const prog = programName(unquoteWord(lower));
-      const mgr = managerWord(prog);
-      if (mgr) managers.push(mgr);
-      else if (DETECT_STRING_RUNNERS.has(prog)) mode = "string";
-      else if (DETECT_WRAPPERS.has(prog)) mode = "wrap";
-      else if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(prog)) mode = "python";
-      else if (prog === "node") mode = "node";
-      continue;
-    }
-    if (mode === "comment") continue;
-    if (mode === "string" && /['"]/.test(w) && detectsInstall(unquoteWord(w), depth + 1)) return true;
-    if (mode === "python") {
-      const glued = /^-[a-z]*m(pip\d*(?:\.\d+)?)?$/.exec(lower);
-      if (glued) {
-        if (glued[1]) managers.push("pip");
-        else pythonM = true;
-      } else if (pythonM) {
-        if (/^pip\d*(?:\.\d+)?$/.test(lower)) managers.push("pip");
-        pythonM = false;
-        mode = "";
-      } else if (!lower.startsWith("-")) mode = "";
-      continue;
-    }
-    if (mode === "node") {
-      if (lower.startsWith("-")) continue;
-      const mgr = managerWord(programName(unquoteWord(lower)));
-      if (mgr) managers.push(mgr);
-      mode = "";
-      continue;
-    }
-    if (mode === "wrap" || mode === "string" || managers.length > 0) {
-      const prog = programName(unquoteWord(lower));
-      const mgr = managerWord(prog);
-      if (mgr && !managers.includes(mgr) && managers.length < 8) managers.push(mgr);
-      else if (mode === "wrap" && DETECT_STRING_RUNNERS.has(prog)) mode = "string";
-    }
+    for (const s of seen) if (isManagerVerb(s, token)) return true;
+    const manager = managerWord(token);
+    if (manager && !seen.includes(manager) && seen.length < 16) seen.push(manager);
   }
+  return false;
+}
+
+/**
+ * R8-1 (seventh independent check, D5): whether a text holds, anywhere on one line, a package-manager
+ * word followed later on that line by one of its verbs. Recall is its only goal, whatever the text's
+ * size and wherever the words stand: a line it names goes ahead only when every simple command in
+ * it holding a hit is positively classified, read whole (accountCommand) or the arguments of a
+ * program that takes them as data (dataCommand). Round 8b had narrowed this to a manager in command
+ * position, and an unknown wrapper (`start npm i x`, `mise exec -- npm i x`) then went unread.
+ */
+export function detectsInstall(text) {
+  if (typeof text !== "string") return false;
+  // A second pass with the shell's escape and quote characters taken out: `n\pm`, `np''m`, `` n`pm ``
+  // are npm to the shell.
+  return detectIn(text, []) || (/[\\`'"]/.test(text) && detectIn(text.replace(/[\\`'"]/g, ""), []));
+}
+
+/** The detector over a parsed command's words, word by word (a quoted word keeps its spaces: never re-joined). */
+function detectsInWords(words) {
+  const seen = [];
+  for (const w of words) if (detectIn(w, seen)) return true;
   return false;
 }
 
@@ -3149,6 +3081,8 @@ function readOptions(args, table, mode = "", stop = false) {
     const name = eq > 0 ? a.slice(0, eq) : a;
     if (mode === "npm" && name.startsWith("--")) {
       const negated = name.startsWith("--no-");
+      // npm's long shorthands (`--silent` is `--loglevel=silent`): switches.
+      if (eq < 0 && NPM_LONG_SHORTHANDS.has(name.slice(2))) continue;
       const resolved = npmOptionName(name.slice(negated ? 5 : 2));
       if (resolved === null || NPM_RESOLVING.has(resolved)) return done(a);
       if (eq > 0 || negated || !NPM_VALUE_OPTIONS.has(resolved)) {
@@ -3258,13 +3192,12 @@ function accountLine(line, dialect, depth = 0) {
   for (const { text, readings } of dropped) {
     if (!detectsInstall(text)) continue;
     for (const words of readings) {
-      const why = words.length > 0 && detectsInstall(words.join(" ")) ? accountCommand(words, dialect, depth) : null;
+      const why = words.length > 0 ? accountCommand(words, dialect, depth) : null;
       if (why) return why;
     }
   }
   for (const words of commands) {
     tick();
-    if (!detectsInstall(words.join(" "))) continue;
     const why = accountCommand(words, dialect, depth);
     if (why) return why;
   }
@@ -3312,6 +3245,9 @@ function dataCommand(words) {
   if (start >= words.length) return true;
   const program = programName(words[start]);
   if (DATA_PROGRAMS.has(program)) return true;
+  // `node -e '...'` / `-p`, `python -c '...'`: code given as text (a program that runs an install is a stated limit).
+  if (program === "node" && /^(?:-e|-p|--eval|--print|-pe)$/.test(words[start + 1] ?? "")) return true;
+  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program) && words.slice(start + 1).find((a) => a === "-c" || !a.startsWith("-")) === "-c") return true;
   const subs = words.slice(start + 1).filter((a) => !a.startsWith("-"));
   if (program === "gh") return GH_DATA.has(subs[0] ?? "") && GH_DATA_VERBS.has(subs[1] ?? "");
   return program === "git" && GIT_DATA.has(subs[0] ?? "");
@@ -3329,6 +3265,8 @@ function accountCommand(words, dialect, depth) {
   tick();
   // Past the reader's own depth the command is not read (a runner chain of any length is held, never followed).
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
+  // A command with no hit has nothing to account for; one whose program takes the words as data neither.
+  if (!detectsInWords(words) || dataCommand(words)) return null;
   if (depth === 0 || accountTop === null) {
     let memo = null;
     accountTop = () => (memo ??= quietly(() => commandInstalls(words, depth, dialect)));
