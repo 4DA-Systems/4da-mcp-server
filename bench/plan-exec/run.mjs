@@ -48,7 +48,7 @@ import {
   totals,
   gateFindings,
   yarn1DeleteEntries,
-  yarnFlavorOf,
+  yarnFlavorFor,
 } from "./lib.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -221,8 +221,7 @@ function runLine(copy, dir, line, entry) {
       results.push({ dir, run: part.join(" "), refused: `directory ${dir} is not inside the project copy` });
       break;
     }
-    const lock = path.join(cwd, "yarn.lock");
-    const yarnFlavor = fs.existsSync(lock) ? yarnFlavorOf(fs.readFileSync(lock, "utf8")) : "classic";
+    const yarnFlavor = yarnFlavorFor(copy, cwd);
     const prepared = prepareCommand(part, { yarnFlavor });
     if ("refused" in prepared) {
       results.push({ dir, run: part.join(" "), refused: prepared.refused });

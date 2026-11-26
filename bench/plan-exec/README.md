@@ -65,13 +65,16 @@ raises the go directive has the go command download that toolchain), uv, and the
 ## What it runs, and what it never runs
 
 - Only lockfile and manifest changes: `npm install|update|uninstall|dedupe|pkg set`,
-  `pnpm install|up|add|remove|dedupe`, `yarn [install]|upgrade|up|add|remove|dedupe`,
+  `pnpm install|up|update|add|remove|dedupe`, `yarn [install]|upgrade|up|add|remove|dedupe` and
+  `yarn workspace <member> add` (the planner's command for a Yarn workspace member; no other
+  `yarn workspace` subcommand),
   `bun install|update|add|remove`, `cargo update|add|remove`, `uv lock|add|remove`,
   `go get`, `go mod tidy`. Anything else is refused and counted (`pip`, `poetry`, `npx`,
   `npm run`, builds, tests).
 - Scripts off: npm `--package-lock-only --ignore-scripts`, pnpm `--lockfile-only
   --ignore-scripts --ignore-pnpmfile`, Yarn classic `--ignore-scripts --ignore-engines`, Yarn
-  berry `--mode update-lockfile` with `YARN_ENABLE_SCRIPTS=false`, uv `UV_NO_BUILD=1` (and
+  berry `--mode update-lockfile` with `YARN_ENABLE_SCRIPTS=false` (the flavour is read from the
+  nearest `yarn.lock` at or above the step's directory, so a member's step gets its workspace's), uv `UV_NO_BUILD=1` (and
   `--no-sync`), Go `GOFLAGS=-mod=mod`. Cargo's update and add build nothing.
 - A project's own package-manager code is removed from the copy first: `yarnPath` / `yarn-path`
   and `plugins` in `.yarnrc.yml` / `.yarnrc`, `.yarn/releases`, `.yarn/plugins`, `.pnpmfile.cjs`.
@@ -108,6 +111,11 @@ allowed, summed over the corpus: `max_planned_but_remained` (vulnerable copies a
 were still there, `prediction.planned_but_remained`) and `max_new_vulnerable_copies` (vulnerable
 copies the run brought in). Both hold the candidate's recorded 22 and 24 until a run of the fixed
 build over the whole corpus sets them.
+
+A project can carry floors of its own under `projects.<id>` (`min_net_cleared_ratio`,
+`max_failed_steps`, `max_lowering_steps`, `max_refused_steps`, `max_planned_but_remained`), so a
+regression in one project is not hidden by the corpus total. A floor is never set below what the
+published release measured on that project; where one goes down, the reason stands beside it.
 
 This is not a pull-request job: it clones 14 repositories, resolves their trees against the
 live registries and takes about an hour of runner time. `.github/workflows/plan-exec.yml` runs
