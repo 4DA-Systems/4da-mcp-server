@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { runDependencyCheck } from "../tools/dependency-check.js";
 import { SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { CLEAN_COMMAND } from "../tools/briefing-command-check.js";
 import { validateToolArgs } from "../tool-args.js";
 import { whatShouldIKnowTool } from "../tools/what-should-i-know.js";
 import { serverDataDir } from "../db.js";
@@ -242,10 +243,11 @@ describe("7b-2 (K3): an unlisted option is said by the grammar, not as 'the word
 });
 
 describe("7b-3: a dismissed word of a command in a sentence says how to get a clean answer", () => {
-  it("npm i zqxok and add it as middleware", async () => {
+  // Round 8, m8: only where it helps: the command stands inside a sentence.
+  it("Then npm i zqxok and add it as middleware", async () => {
     npmProject();
-    const r = await brief({ task: "npm i zqxok and add it as middleware", packages: [{ ecosystem: "npm", name: "zqxok", public: true }], not_packages: ["and", "add", "it", "as", "middleware"] });
+    const r = await brief({ task: "Then npm i zqxok and add it as middleware", packages: [{ ecosystem: "npm", name: "zqxok", public: true }], not_packages: ["then", "and", "add", "it", "as", "middleware"] });
     expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toContain("For a clean answer, write the command on its own line or in a code span (`npm install x y`) with only package names after the verb, and call again.");
+    expect(r.delegation_assessment.reason).toContain(CLEAN_COMMAND);
   });
 });

@@ -51,11 +51,7 @@ describe("a separator ends the command's operands", () => {
     "npm install lodash > out.txt",
     "npm install lodash < in.txt",
     "npm install lodash # then commit",
-    "npm install lodash // the util",
     "npm install lodash\ngit push origin main",
-    "npm install lodash, then build it",
-    "npm install lodash (the util) and test",
-    "npm install lodash — the util",
     "run `npm install lodash` then `git push`",
     "npm install lodash 2>&1 zqx207",
     "npm install lodash 2> err.log",
@@ -73,6 +69,18 @@ describe("a separator ends the command's operands", () => {
   });
 });
 
+// Round 8, m10: a command not read whole (prose after its operands that is no shell separator, a comma, a colon word,
+// an unlisted option) is looked up by no reader, its bundled names included: nothing of it is offered, repeated or
+// looked up, and the level is review_needed at most.
+describe("round 8, m10: a command not read whole is looked up by no reader", () => {
+  it.each(["npm install lodash // the util", "npm install lodash, then build it", "npm install lodash (the util) and test", "npm install lodash — the util"])("%s", async (task) => {
+    const r = await brief(task);
+    expect(named(r)).toEqual([]);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(sent().some((s) => s.includes("lodash"))).toBe(false);
+  });
+});
+
 describe("shell expansions and colon words are never names, and never repeated", () => {
   it.each(["npm install $(cat pkgs.txt)", "npm install $PKG", "npm install %PKG%", "npm install ${PKG}"])("%s: not read, and not safe", async (task) => {
     const r = await brief(task);
@@ -82,7 +90,8 @@ describe("shell expansions and colon words are never names, and never repeated",
 
   it.each(["npm install lodash --auth admin:hunter2", "npm install lodash user:hunter2"])("%s", async (task) => {
     const r = await brief(task);
-    expect(named(r)).toEqual(["lodash"]);
+    // Round 8, m10: not read whole, so not even lodash is looked up.
+    expect(named(r)).toEqual([]);
     expect(JSON.stringify({ ...r, task: undefined })).not.toContain("hunter2");
     expect(sent().some((s) => s.includes("hunter2"))).toBe(false);
   });

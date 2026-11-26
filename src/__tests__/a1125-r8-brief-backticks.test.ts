@@ -26,7 +26,6 @@ async function brief(task: string): Promise<Record<string, any>> {
 describe("a code span is read as ordinary text", () => {
   it.each([
     "install **`minimist@1.2.5`** for argv parsing",
-    "npm install `minimist@1.2.5`,`lodash@4.17.20`",
     "add `minimist@1.2.5`/`yargs` to the cli",
     "pin `minimist`@1.2.5 in the cli",
     "use `minimist@1.2.5`-based parsing",

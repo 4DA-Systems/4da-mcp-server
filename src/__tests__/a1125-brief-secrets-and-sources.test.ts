@@ -135,10 +135,11 @@ describe("E2: what the task's own command takes from elsewhere is never looked u
     expect(looked("requests")).toEqual([]);
   });
 
-  it("an option's value is never a package, and the operands after it are still read", async () => {
+  // Round 8, m10: an option off npm's list makes the command not read whole: no reader looks any of it up.
+  it("an option's value is never a package, and nothing of a command not read whole is looked up", async () => {
     await brief("npm install --tag zqxtagvalue lodash");
     expect(leaked(/zqx/i)).toEqual([]);
-    expect(looked("lodash").length).toBeGreaterThan(0);
+    expect(looked("lodash")).toEqual([]);
   });
 
   it("a private command does not hide the next clause's popular package, and its own package is never listed (final design)", async () => {

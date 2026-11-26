@@ -110,8 +110,8 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     const comma = canonicalCommands("pip install requests, x")[0]!;
     expect(comma.canonical).toBe(false);
     expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe(`This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check. ${CLEAN_COMMAND}`);
-    expect(CLEAN_COMMAND).toBe("For a clean answer, write the command on its own line or in a code span (`npm install x y`) with only package names after the verb, and call again.");
-    expect(next).toContain(`the reason ends "${CLEAN_COMMAND}"`);
+    // Round 8, m8: reworded as advice about the `task` passed, the user's words kept (README/CHANGELOG follow).
+    expect(CLEAN_COMMAND).toBe("For a clean answer you may also pass the command on its own line or in a code span, with only package names after the verb (`npm install x y`), and call again: keep the user's words as the request and add the line, do not rewrite the request.");
     expect(next).toContain("(\"This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.\")");
     expect(canonicalCommands("npm create vite")[0]!.why).toBe("it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check");
     expect(next).toContain('"it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check"');
