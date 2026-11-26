@@ -69,6 +69,7 @@ import {
   type TaskPackages,
 } from "./briefing-confirm.js";
 import { credentialShape, knownCompromised } from "./briefing-task-screen.js";
+import { nameProblem } from "./dependency-check-screen.js";
 import { checkableSpec } from "./briefing-names.js";
 import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
@@ -576,6 +577,9 @@ export async function executeWhatShouldIKnow(
     const same = (e: string, n: string) => (x: { name?: string; word?: string; ecosystem?: string; read_as?: string }) =>
       (x.ecosystem === e || (x.read_as ?? "").split(" or ").includes(e)) && sameName(x.name ?? x.word ?? "", n, e as CheckEcosystem);
     if (unreadableWords.size > 0) gated.unverified = gated.unverified.filter((w) => !unreadableWords.has(w.word.toLowerCase()));
+    // Never offer what the declaration would refuse by its name grammar: a fragment such as ".abcDEF123" (what the
+    // screen left of a JWT) is no entry in any ecosystem (round 6, item 3; item 7's rule).
+    gated.unverified = gated.unverified.filter((w) => w.read_as.split(" or ").some((e) => nameProblem(e as CheckEcosystem, w.word) === null));
     // V4: a fragment ("github.com/") is never an entry.
     gated.unverified = gated.unverified.filter((w) => !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\/$/i.test(w.word));
     // A spec written on an operand counts only where dependency_check reads it (a tag or a hash does not).
@@ -585,7 +589,7 @@ export async function executeWhatShouldIKnow(
     // V6: a word that ends a command's operand run is no operand ("make pip install -e . work" offered "work").
     gated.unverified = gated.unverified.filter((w) => !(w.seen === "command" && isRunStop(w.word) && !evidence.pairs.some((p) => sameName(p.name, w.word, p.ecosystem))));
     for (const p of evidence.pairs) {
-      if (p.privateIndex || !notPrivate(p) || credentialShape(p.name)) continue;
+      if (p.privateIndex || !notPrivate(p) || credentialShape(p.name) || nameProblem(p.ecosystem, p.name) !== null) continue;
       // What the task itself takes from another registry (`YARN_REGISTRY=<private> yarn add X`) is the screen's.
       if (evidenceScreen.names.has(p.name.toLowerCase()) || evidenceScreen.ecosystems.has(p.ecosystem) || [...evidenceScreen.scopes].some((s) => p.name.toLowerCase().startsWith(`${s}/`))) continue;
       if (privateTask.some((x) => x.package.toLowerCase() === p.name.toLowerCase())) continue;
