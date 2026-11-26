@@ -53,6 +53,13 @@ describe("the data folder in another spelling is held", () => {
   });
 });
 
+describe("the folder as written still counts when a `..` follows it", () => {
+  it("rm -rf <folder>/.. is held (round 7 held it; resolving the text alone would not)", () => {
+    const r = cmd(`rm -rf '${H}/..'`);
+    expect(r.decision, r.text).toBe("deny");
+  });
+});
+
 describe("R8-7: the edit denial says what is true", () => {
   it("an unrelated project's docs/check-ledger.md: held for the file name, not said to be in the data folder", () => {
     const r = write(`${s.project.replace(/\\/g, "/")}/docs/check-ledger.md`);

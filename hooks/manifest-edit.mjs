@@ -3870,7 +3870,7 @@ const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "mo
  * `//localhost/c$/` share and the `/c/`, `/mnt/c/`, `/cygdrive/c/` forms read as `c:/`, every run of
  * `/` one `/`, `/./` dropped and `name/../` resolved as text.
  */
-function normaliseLedgerText(text) {
+function normaliseLedgerText(text, dots = true) {
   let t = text.toLowerCase().replace(/\\/g, "/");
   t = t.replace(/\/{2,}[?.]\/+(?:unc\/+)?/g, "//");
   t = t.replace(/\/{2,}(?:localhost|127\.0\.0\.1)\/+([a-z])\$\/+/g, "$1:/");
@@ -3878,8 +3878,17 @@ function normaliseLedgerText(text) {
   t = t.replace(/(^|[^a-z0-9._~$-])\/(?:mnt\/|cygdrive\/)?([a-z])(?=\/)/g, "$1$2:");
   t = t.replace(/\/(?:\.\/)+/g, "/");
   // `name/../` resolved as text, one pass with a stack per path (linear in the text's size).
-  if (t.includes("/..")) t = t.replace(/[^\s'"`;|&<>(){}]+/g, (path) => resolveDots(path));
+  if (dots && t.includes("/..")) t = t.replace(/[^\s'"`;|&<>(){}]+/g, (path) => resolveDots(path));
   return t;
+}
+
+/**
+ * The spellings of a call's text the ledger test reads: normalised, and when it holds `/..`, also
+ * normalised with every `name/..` resolved (`<folder>/..` names the folder as written; `x/../<folder>` once resolved).
+ */
+function ledgerSpellings(text) {
+  const raw = normaliseLedgerText(text, false);
+  return raw.includes("/..") ? [raw, normaliseLedgerText(text)] : [raw];
 }
 
 /** A path with every `name/..` step removed (a leading `..` is kept). */
@@ -3915,8 +3924,7 @@ function ledgerFolderMarks(env) {
 
 /** Whether a call's raw text names the ledger (LEDGER_MENTION, or a spelling of its folder). */
 function namesLedgerText(text, marks) {
-  const t = normaliseLedgerText(text);
-  return LEDGER_MENTION.test(t) || marks.some((m) => t.includes(m));
+  return ledgerSpellings(text).some((t) => LEDGER_MENTION.test(t) || marks.some((m) => t.includes(m)));
 }
 
 /**
@@ -3950,8 +3958,7 @@ function ledgerCall(input, env) {
   const path = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.notebook_path === "string" ? toolInput.notebook_path : null;
   if (path === null) return null;
   const inFolder = (p) => {
-    const t = normaliseLedgerText(p);
-    return marks.some((m) => t.includes(m));
+    return ledgerSpellings(p).some((t) => marks.some((m) => t.includes(m)));
   };
   if (inFolder(path)) return "edit";
   // Another spelling of the folder (an 8.3 name, a junction): the file's folder, resolved.
@@ -4383,7 +4390,7 @@ function oversized(head) {
   // The ledger, named anywhere in the first part as it arrives (JSON-escaped backslashes are runs of `/` once normalised).
   const marks = ledgerFolderMarks(process.env);
   if (tool && namesLedgerText(head, marks)) {
-    const normal = normaliseLedgerText(head);
+    const normal = ledgerSpellings(head).join("\n");
     const what = tool === "Bash" || tool === "PowerShell" ? "command" : marks.some((m) => normal.includes(m)) ? "edit" : "name";
     return denyJson(ledgerDenial(what, resolve(dataDir(process.env))));
   }
