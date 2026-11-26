@@ -35,8 +35,8 @@ describe("a call whose budget ends while the project is still being read (audit 
     const session = await stdioSession(dir, calls, { FOURDA_CALL_BUDGET_MS: "40", FOURDA_OFFLINE: "1" }, { requestTimeoutMs: 10_000 });
     const texts = session.results.map(resultText);
     // How many MB is said once the walk has found the lockfiles; a call that ran out before that says no size.
-    expect(texts[0]).toMatch(/^\{"error":"NOT CHECKED: this project's lockfiles (\(\d[\d,]* MB of lockfiles in 1 project\) )?were still being read when this call's 40 ms ran out/);
-    expect(texts.some((t) => /\(\d[\d,]* MB of lockfiles in 1 project\) were still being read/.test(t))).toBe(true);
+    expect(texts[0]).toMatch(/^\{"error":"NOT CHECKED: this project's lockfiles (\(\d[\d,]* MB in 1 project\) )?were still being read when this call's 40 ms ran out/);
+    expect(texts.some((t) => /\(\d[\d,]* MB in 1 project\) were still being read/.test(t))).toBe(true);
     expect(session.results[0].isError).toBe(true);
     expect(texts[0]).toContain("call again");
     // The init went on: a later call answered from the read project.

@@ -229,7 +229,7 @@ function lockfileBytes(groups: ReturnType<typeof treeResolutionGroups>): number 
 
 /** A call whose budget ended while the project's lockfiles were still being read (the init goes on). */
 function stillReadingAnswer(): { content: Array<{ type: "text"; text: string }>; isError: true } {
-  const what = loading ? ` (${Math.max(1, Math.round(loading.bytes / 1048576)).toLocaleString("en-US")} MB of lockfiles in ${loading.projects} project${loading.projects === 1 ? "" : "s"})` : "";
+  const what = loading ? ` (${Math.max(1, Math.round(loading.bytes / 1048576)).toLocaleString("en-US")} MB in ${loading.projects} project${loading.projects === 1 ? "" : "s"})` : "";
   const error =
     `NOT CHECKED: this project's lockfiles${what} were still being read when this call's ${secondsText(callBudgetMs())} ran out, ` +
     "so nothing was checked and nothing was stored. The server goes on reading them and answers pings meanwhile: call again in a minute for the full answer.";
