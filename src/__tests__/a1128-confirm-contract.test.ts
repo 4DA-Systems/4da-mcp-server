@@ -119,6 +119,12 @@ describe("V1-V7", () => {
     expect(r.delegation_assessment.level).toBe("human_only");
   });
 
+  it("V1: a pre-release or build label written on an operand is never sent by the operand check", async () => {
+    npmProject();
+    await brief({ task: "npm install lodash@4.17.21-zqx003", packages: [] });
+    expect(h.requests.filter((u) => /zqx003/.test(u))).toEqual([]);
+  });
+
   it("V2: a requirements file the task installs with -r holds task packages: its malware is human_only", async () => {
     h.write("requirements.txt", "flask==3.0.3\n");
     h.write("requirements-extra.txt", "zqxevilpy==1.0.0\n");

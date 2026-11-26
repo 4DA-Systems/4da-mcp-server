@@ -360,6 +360,9 @@ export function operandName(operand: string): string {
   return head.replace(/\[.*$/, "").replace(/(?:===?|~=|>=|<=|!=|>|<|\^|~).*$/, "");
 }
 
+/** A spec of release numbers and operators only: no pre-release or build label, no tag (what the detector may send). */
+export const plainSpec = (spec: string) => /^[v\d.*x^~<>=!,| ]+$/i.test(spec) && /\d/.test(spec);
+
 /** The version or constraint written ON an operand (V1): `x@4.17.20` 4.17.20, `x<2` <2, `x==1.0` ==1.0, `x[e]>=2` >=2. */
 export function operandSpec(operand: string, ecosystem: CheckEcosystem): string | undefined {
   const scoped = operand.startsWith("@");

@@ -114,7 +114,7 @@ import {
   type WisdomRecallMode,
 } from "./briefing-wisdom.js";
 import { maxOf, pushAll } from "../array-utils.js";
-import { isRunStop, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
+import { isRunStop, plainSpec, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
 import * as fs from "node:fs";
 
 // ============================================================================
@@ -554,7 +554,9 @@ export async function executeWhatShouldIKnow(
     // V4: a fragment ("github.com/") is never an entry.
     gated.unverified = gated.unverified.filter((w) => !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\/$/i.test(w.word));
     // A spec written on an operand counts only where dependency_check reads it (a tag or a hash does not).
-    const readable = (e: CheckEcosystem, v?: string) => v !== undefined && checkableSpec(e, v) !== null;
+    // A pre-release or build label on it (`4.17.21-zqx003`) may name a private build: the label is the reader's
+    // to screen, and the detector's copy of it is never sent (third check's canaries, round 4).
+    const readable = (e: CheckEcosystem, v?: string) => v !== undefined && plainSpec(v) && checkableSpec(e, v) !== null;
     // V6: a word that ends a command's operand run is no operand ("make pip install -e . work" offered "work").
     gated.unverified = gated.unverified.filter((w) => !(w.seen === "command" && isRunStop(w.word) && !evidence.pairs.some((p) => sameName(p.name, w.word, p.ecosystem))));
     for (const p of evidence.pairs) {
@@ -706,7 +708,7 @@ export async function executeWhatShouldIKnow(
     const knownWanted = wanted.filter(sameAs(d));
     // C2: EVERY version the task writes for the pair (each operand, each manifest entry), plus a declared one.
     const written = readVersions.requested.filter((r) => [r.ecosystem, ...(r.alternatives ?? [])].includes(d.ecosystem) && sameName(r.name, d.name, d.ecosystem)).map((r) => r.to);
-    const onOperand = evidence.pairs.filter((p) => p.ecosystem === d.ecosystem && sameName(p.name, d.name, d.ecosystem) && p.version && checkableSpec(p.ecosystem, p.version) !== null).map((p) => p.version);
+    const onOperand = evidence.pairs.filter((p) => p.ecosystem === d.ecosystem && sameName(p.name, d.name, d.ecosystem) && p.version && plainSpec(p.version) && checkableSpec(p.ecosystem, p.version) !== null).map((p) => p.version);
     const writtenVersions = [...words.map((w) => w.version), ...onOperand, ...written, ...knownNew.map((k) => k.version), ...knownWanted.map((k) => k.to)].filter((v): v is string => typeof v === "string" && v !== "");
     // A build or local label (`1.0.0+zqxlocalbuild`) can name a private build: it is not sent. The plain version
     // is checked, and the answer says so (the same screen the task text gets).
@@ -828,7 +830,7 @@ export async function executeWhatShouldIKnow(
   const maliciousWithheld = withheldByCaller.filter((w) => w.malicious);
   // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
   // V6: a version written ON a command's operand is tied to that operand (it is checked or waits with it).
-  const unreadVersions = taskVersions.unread.filter((u) => !evidence.pairs.some((p) => p.version && checkableSpec(p.ecosystem, p.version) !== null && (u === p.version || u.toLowerCase() === `${p.name}@${p.version}`.toLowerCase() || (u.toLowerCase().startsWith(p.name.toLowerCase()) && u.endsWith(p.version)))));
+  const unreadVersions = taskVersions.unread.filter((u) => !evidence.pairs.some((p) => p.version && plainSpec(p.version) && checkableSpec(p.ecosystem, p.version) !== null && (u === p.version || u.toLowerCase() === `${p.name}@${p.version}`.toLowerCase() || (u.toLowerCase().startsWith(p.name.toLowerCase()) && u.endsWith(p.version)))));
   const vulns = scan?.vulnerabilities ?? [];
   const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages.filter((t) => !isForbidden(t.name)), allDeps()) : null;
   const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns, latest));
