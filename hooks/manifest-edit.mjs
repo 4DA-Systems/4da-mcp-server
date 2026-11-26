@@ -28,10 +28,12 @@
  * - a name alone or `@latest`, the request "latest", which goes ahead on the verdict recorded for
  *   that request (the server records `requested: "latest"`), as do `pnpm up -L x`, `yarn up x` and
  *   `yarn upgrade x --latest`, which move it to the newest release;
- * - a form that names no public release: a requirements file (`-r`, `-Ur`, `-qr`, alone or with a
- *   constraints file), a path (with extras: `.[dev]`), a local tarball, a git source, a URL on a
- *   host that is not a public registry, a registry or index that is positively not a public host
- *   (THE LIMITS: such an index is not judged).
+ * - a requirements file named with `-r` (`-Ur`, `-qr`, alone or with a constraints file): it
+ *   names public releases, and it is read when it is written with the Edit, MultiEdit or Write
+ *   tool (below), not when it is installed;
+ * - a form that names no public release: a path (with extras: `.[dev]`), a local tarball, a git
+ *   source, a URL on a host that is not a public registry, a registry or index that is positively
+ *   not a public host (THE LIMITS: such an index is not judged).
  * A command with no package operand goes ahead without a verdict: for npm, pnpm, Yarn, Bun, pip,
  * uv and Poetry it installs the lockfile or the manifest's own ranges; what the manager then
  * chooses is a stated limit (THE LIMITS), not a check.
