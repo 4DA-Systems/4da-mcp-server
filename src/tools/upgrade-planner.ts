@@ -970,6 +970,8 @@ async function executeStandalonePlanner(
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
+  // A uv refresh with no version pinned, run inside the one `uv lock` of its lockfile: the resolver decides (upgrade-plan-sequence.ts).
+  unpinnedInMergedUvLock(limited, sequence.run_order);
   const sharedLeft = (r: (typeof limited)[number]) => r.reasons.some((x) => SHARED_COPY_REASON.test(x));
   const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !notCounted(r) && r.targetVersion !== null);
   const upgrades = directRows.filter((r) => !sharedLeft(r));
@@ -1313,5 +1315,32 @@ async function markTargetsThatFixNothing(
       delete u.refreshCommands;
       for (const l of u.levers) delete l.commands;
     }
+  }
+}
+
+/** How the reason unpinnedInMergedUvLock writes starts. */
+const UNPINNED_UV_START = "uv: no version is pinned for ";
+
+/**
+ * A PyPI row whose step is a plain `uv lock --upgrade-package <name>` (no version) that run_order
+ * merges into one `uv lock` with other upgrades: the version it lands on is the joint resolution's,
+ * which can stop below what a refresh on its own reaches (crewAI 0.86.0: cryptography landed on
+ * 45.0.7, the row's own refresh said 50.0.2). The row's words say so instead of naming an outcome
+ * the step cannot promise; the command is not changed.
+ */
+export function unpinnedInMergedUvLock(rows: UpgradeRecommendation[], runOrder: RunOrderStep[]): void {
+  const merged = runOrder.filter((s) => s.run.startsWith("uv lock ") && (s.run.match(/--upgrade-package /g) ?? []).length > 1);
+  if (merged.length === 0) return;
+  for (const r of rows) {
+    if (r.ecosystem !== "PyPI") continue;
+    const plain = `uv lock --upgrade-package ${r.package}`;
+    const step = merged.find((s) => s.fixes.includes(`PyPI:${r.package}`) && r.commands.some((c) => c.dir === s.dir && c.run === plain));
+    if (!step) continue;
+    const others = (step.run.match(/--upgrade-package /g) ?? []).length - 1;
+    const said = `${UNPINNED_UV_START}${r.package} in run_order's step ${step.n}: it runs in one \`uv lock\` with ${others} other upgrade${others === 1 ? "" : "s"}, where the resolver decides the version it lands on and can stop below what a refresh on its own reaches (another package's pin can cap it); vulnerability_scan after the run says where it landed, and upgrade_planner plans again from there`;
+    r.reasons = r.reasons.map((x) =>
+      x.replace(/ \(a refresh resolves it to ([^)]+)\)/g, " (on its own, a refresh resolves it to $1; in run_order the resolver decides, see below)").replace(/ \(a fresh resolve picks ([^)]+)\)/g, " (on its own, a fresh resolve picks $1; in run_order the resolver decides, see below)"),
+    );
+    if (!r.reasons.includes(said)) r.reasons.push(said);
   }
 }

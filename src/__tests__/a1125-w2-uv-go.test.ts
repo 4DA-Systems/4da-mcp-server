@@ -21,6 +21,7 @@ import { hasSelfRequiringTarget, withoutSelfRequiringTargets, withPythonFloorHol
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
 import type { VulnerabilityScanResult } from "../live/types.js";
 import { adv, createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { unpinnedInMergedUvLock } from "../tools/upgrade-planner.js";
 
 const uvRow = (pkg: string, run: string): SequencedRow => ({
   package: pkg,
@@ -207,5 +208,34 @@ describe("a uv pin whose requirement resolves to an affected release on the proj
     const q = row();
     await withPythonFloorHolds([q], root, sources, answer(true), Date.now() + 5_000);
     expect(q.reasons).toEqual([]);
+  });
+});
+
+describe("a uv refresh with no pin, inside the merged uv lock, never names an outcome it cannot promise", () => {
+  it("cryptography: the row's words say the resolver decides and the scan after the run checks; the command is unchanged", () => {
+    const row = {
+      package: "cryptography",
+      ecosystem: "PyPI",
+      reasons: ["Transitive dependency: ... so then run `uv lock --upgrade-package cryptography` in . (a refresh resolves it to 50.0.2)"],
+      commands: [{ dir: ".", run: "uv lock --upgrade-package cryptography" }],
+    };
+    const step = { n: 1, dir: ".", run: "uv lock --upgrade-package auth0-python==4.8.0 --upgrade-package cryptography", fixes: ["PyPI:auth0-python", "PyPI:cryptography"] };
+    unpinnedInMergedUvLock([row] as never, [step]);
+    expect(row.reasons[0]).toContain("(on its own, a refresh resolves it to 50.0.2; in run_order the resolver decides, see below)");
+    expect(row.reasons[0]).not.toMatch(/\(a refresh resolves it to 50\.0\.2\)/);
+    expect(row.reasons[1]).toMatch(/^uv: no version is pinned for cryptography in run_order's step 1: it runs in one `uv lock` with 1 other upgrade, where the resolver decides the version it lands on/);
+    expect(row.reasons[1]).toMatch(/vulnerability_scan after the run says where it landed/);
+    expect(row.commands).toEqual([{ dir: ".", run: "uv lock --upgrade-package cryptography" }]);
+  });
+
+  it("a pinned row, or a uv lock with one package, keeps its words", () => {
+    const pinned = { package: "anyio", ecosystem: "PyPI", reasons: ["x (a refresh resolves it to 4.14.2)"], commands: [{ dir: ".", run: "uv lock --upgrade-package anyio==4.14.2" }] };
+    const alone = { package: "idna", ecosystem: "PyPI", reasons: ["y (a refresh resolves it to 3.7)"], commands: [{ dir: ".", run: "uv lock --upgrade-package idna" }] };
+    unpinnedInMergedUvLock([pinned, alone] as never, [
+      { n: 1, dir: ".", run: "uv lock --upgrade-package anyio==4.14.2 --upgrade-package certifi", fixes: ["PyPI:anyio", "PyPI:certifi"] },
+      { n: 2, dir: "svc", run: "uv lock --upgrade-package idna", fixes: ["PyPI:idna"] },
+    ]);
+    expect(pinned.reasons).toEqual(["x (a refresh resolves it to 4.14.2)"]);
+    expect(alone.reasons).toEqual(["y (a refresh resolves it to 3.7)"]);
   });
 });
