@@ -2121,7 +2121,7 @@ function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--") {
-      out.push(...args.slice(i + 1));
+      for (let k = i + 1; k < args.length; k++) out.push(args[k]);
       break;
     }
     if (a.startsWith("-") && a.length > 1) {
@@ -2394,7 +2394,7 @@ function npmOperands(args) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--") {
-      out.push(...args.slice(i + 1));
+      for (let k = i + 1; k < args.length; k++) out.push(args[k]);
       break;
     }
     if (!a.startsWith("-") || a.length === 1) {
@@ -2977,13 +2977,13 @@ function readOptions(args, table, mode = "", stop = false) {
     let a = args[i];
     if (a === "--") {
       if (at < 0) at = i + 1;
-      positional.push(...args.slice(i + 1));
+      for (let k = i + 1; k < args.length; k++) positional.push(args[k]);
       break;
     }
     if (!a.startsWith("-") || a === "-") {
       if (at < 0) at = i;
       if (stop) {
-        positional.push(...args.slice(i));
+        for (let k = i; k < args.length; k++) positional.push(args[k]);
         break;
       }
       positional.push(a);

@@ -121,6 +121,12 @@ describe("R8-2: a detected command not read whole is held as not read, with one 
     expect(run("pip install -r requirements.txt --only-binary=:all:,numpy", "PowerShell").decision).toBe("allow");
   });
 
+  it("a line of 2 MB with hundreds of thousands of words is read, not ended by an error of the hook's own", () => {
+    const command = `pip install ${"-r req.txt ".repeat(190_000)}`;
+    const r = timedWithin(s.home, { hook_event_name: "PreToolUse", tool_name: "Bash", cwd: s.project, tool_input: { command } }, 3000);
+    expect(r.decision, r.text).toBe("allow");
+  });
+
   it("an over-size line with a hit is held; one past 2 MB is never read", () => {
     const r = run(`npm i lodash@4.17.21 # ${"x".repeat(2 * 1024 * 1024)}`);
     expect(r.decision).toBe("deny");
