@@ -212,11 +212,12 @@ describe(`review-confirm9 cases hold the invariants (${sets.join(", ")})`, () =>
       // a dismissed word after a manager name (P2, P3): never safe. k3rep: a dismissed word of a command this briefing
       // does not read is not repeated in the answer (P6).
       if (r && typeof args.task === "string" && /^(?:rep9|rep9b|rfile)$/.test(c.set)) expect(r.delegation_assessment.level, `${c.id}: ${args.task}`).not.toBe("safe_to_delegate");
-      // Round 11, P1: a safe reason ends resting on the declaration, and says the reading is best effort where the task
-      // holds a fenced block, a manifest file name or a command.
+      // Round 12, R3: a safe reason ends resting on the declaration, and carries the best-effort sentence exactly when the
+      // call declared at least one package.
       if (r && r.delegation_assessment.level === "safe_to_delegate") {
         expect(r.delegation_assessment.reason.endsWith(RESTS_ON_DECLARATION), c.id).toBe(true);
-        if (typeof args.task === "string" && (/^\s*(?:```|~~~)/m.test(args.task) || /\b(?:requirements[\w.-]*\.(?:txt|in)|pyproject\.toml|Cargo\.toml|package\.json|go\.mod)\b/i.test(args.task) || /\b(?:npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|go)\s+(?:install|i|add|get)\b/.test(args.task))) expect(r.delegation_assessment.reason, c.id).toContain(BEST_EFFORT_READING);
+        if (Array.isArray(args.packages) && args.packages.length > 0) expect(r.delegation_assessment.reason, c.id).toContain(BEST_EFFORT_READING);
+        else expect(r.delegation_assessment.reason, c.id).not.toContain(BEST_EFFORT_READING);
         safeSeen.n++;
       }
       if (r && c.set === "k3rep") {

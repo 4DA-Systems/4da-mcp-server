@@ -53,7 +53,7 @@ function statedSubjects(content: string | null): Subject[] {
   const out: Subject[] = [];
   const first = /^(\S+) \(([^)\n]+)\)\s*\n/.exec(text);
   if (first) out.push({ name: first[1], ecosystem: first[2] });
-  for (const m of text.matchAll(/^Affected: (\S+) \(([^)\n]+)\)\s*$/gm)) out.push({ name: m[1], ecosystem: m[2] });
+  for (const m of text.matchAll(/^Affected: (\S+) \(([^)\n]+)\)[ \t\r]*$/gm)) out.push({ name: m[1], ecosystem: m[2] });
   return out;
 }
 

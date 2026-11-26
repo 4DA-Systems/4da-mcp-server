@@ -29,7 +29,7 @@
  *   A popular npm name or a near-miss of one is always a package, English or not.
  *   dependency_check still judges the name when the agent asks before writing it.
  * - "we need X", "bring in X", "pull in X", "include X" read like "add X";
- * - the task is read clause by clause, and after the verb every item of a list counts: "add a, b and
+ * - the task is read clause by clause (best effort), and after the verb each item of a list it reads is a candidate: "add a, b and
  *   c", "a & b", "a + b", "a plus b", each item `name [version]` (readTaskItems). A version is bound to
  *   the item before it and the item is checked at that version: "replace request with axios 0.21.0"
  *   checks axios 0.21.0, not latest. Manifest entries written into the task read the same way
@@ -416,7 +416,7 @@ function runnerAt(words: readonly string[], i: number): { ecosystem: CheckEcosys
 }
 
 /** How a name was read from the task: an install command's operand, a manifest snippet's entry, or a word after an adding verb. */
-export type TaskWordSeen = "command" | "runner" | "manifest" | "form" | "prose";
+export type TaskWordSeen = "command" | "runner" | "manifest" | "form" | "prose" | "file";
 
 /** A word the briefing did not look up, as the answer names it. */
 export interface HeldWord {
@@ -549,7 +549,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const fixed: TaskItems["fixed"] = [];
   const foreign: TaskItems["foreign"] = [];
   const seen = new Map<string, TaskWordSeen>();
-  const SEEN_RANK: Record<TaskWordSeen, number> = { command: 5, runner: 4, manifest: 3, form: 2, prose: 1 };
+  const SEEN_RANK: Record<TaskWordSeen, number> = { command: 5, runner: 4, file: 3, manifest: 3, form: 2, prose: 1 };
   const saw = (name: string, how: TaskWordSeen) => {
     const key = name.toLowerCase();
     const had = seen.get(key);
@@ -830,7 +830,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         if (separatorAfter(j) === "clause") break;
       }
       // F3: "npm install ky and fastifyy": the command's operands end at the connective, and what the list goes
-      // on to name is read as prose after an install verb, so it waits in to_confirm (never silently dropped).
+      // on to name is read as prose after an install verb, so it waits in to_confirm.
       // Not after a closed code span, and not when another command follows ("and `npm install x`").
       const nextIsCommand = Object.hasOwn(MANAGERS, words[j + 1] ?? "");
       if (readName && !closedSpan && !nextIsCommand && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;

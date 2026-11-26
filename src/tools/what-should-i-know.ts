@@ -20,18 +20,18 @@
  *     and every package the caller declared public); whether anything still waits; and what this briefing noticed
  *     it could not read, each of which holds review_needed at least: a command or snippet it says it did not read
  *     whole (K3), a package-source spelling of the C3 list, a refused argument, a word the screen withheld where a
- *     package stands, a dismissed name (compared without its version or scope decoration) that stands where a
- *     package stands or after a package manager's name on its line, continued line or fenced block (D3), a command
+ *     package stands, a dismissed name (compared folded and without its version or scope decoration) that stands where a
+ *     package stands, or after a package manager's name anywhere earlier in the task (D3, round 12), a command
  *     of a tool it does not read (`xargs` before a manager name; a manager it does not read followed by its own
  *     install verb, such as `gem install`, `composer require`, `brew install`), more candidate names than one call
  *     can declare (m7), and a task longer than one call reads (too many snippets or distinct words, or the time
  *     budget spent: "split the task"). "A package manager's name" is one of the names of briefing-canonical.ts
- *     MANAGER_NAMES. A public entry without `version` leaves the declaration incomplete: confirmation_needed,
- *     whatever else holds (round 9, E1). `public: true` says the name is on the public registry, and it is sent
+ *     MANAGER_NAMES. A public entry without `version` leaves the declaration incomplete: never safe_to_delegate:
+ *     confirmation_needed, or a stricter or equal level another rule sets (round 9, E1; round 12, #14). `public: true` says the name is on the public registry, and it is sent
  *     there; `public: false` is for anything from a private registry, an index of its own, git or a path.
  *     `to_confirm` is what this briefing noticed, a prompt, never a complete reading. A safe_to_delegate reason ends
- *     "This rests on your declaration: a package you did not declare was not checked."; where the task holds a
- *     fenced block, a manifest file name or a command, it also says the versions read in them are best effort.
+ *     "This rests on your declaration: a package you did not declare was not checked."; in a call that declared at
+ *     least one package it is preceded, always, by the sentence that the versions read in the task are best effort.
  * K2. Task-text evidence, best effort (briefing-command-check.ts strictEvidence): the operands of a command the
  *     canonical grammar reads, the entries of a manifest snippet the snippet readers read (briefing-snippets.ts),
  *     and tokens that tie a version to a name, for example name@spec (bare or quoted), `alias@npm:name@spec` (tied
@@ -54,8 +54,8 @@
  *     private rules (its configuration on disk, FOURDA_PRIVATE_PACKAGES) override a public declaration as before.
  * C4/C6. A declared public package is checked as dependency_check would be asked for it: at its declared `version`,
  *     and in addition at any spec the briefing happens to read on that exact pair (best effort). Without `version`
- *     it is checked at those specs, else at latest, and the declaration is incomplete: confirmation_needed until each
- *     public entry states its version; that completeness depends on the declaration alone (round 9, E1). The worst
+ *     it is checked at those specs, else at latest, and the declaration is incomplete: never safe_to_delegate
+ *     (confirmation_needed, or a stricter or equal level another rule sets) until each public entry states its version; that completeness depends on the declaration alone (round 9, E1). The worst
  *     answer stands, and the ledger gets dependency_check's line for each check. Build metadata and a local label
  *     (`+x`) are dropped by dependency_check itself before any lookup (Go's `+incompatible` is kept).
  * Privacy. A declaration keeps the briefing from looking a name up for the task; it does not change this
@@ -412,7 +412,7 @@ export const whatShouldIKnowTool = {
         type: "array",
         maxItems: 100,
         description:
-          "Packages this task adds or changes, at most 100, each with the `version` the task writes (or \"latest\"): the level rests on this, and without it the answer is confirmation_needed. Versions it happens to read in the task (e.g. name@1.2.3) are checked too, best effort: a spelling it does not read is not checked.",
+          "Packages this task adds or changes, at most 100, each with the `version` the task writes (or \"latest\"): the level rests on this, and without it the answer is never safe_to_delegate. Versions it happens to read in the task (e.g. name@1.2.3) are checked too, best effort: a spelling it does not read is not checked.",
         items: {
           type: "object",
           properties: {
@@ -506,18 +506,26 @@ export async function executeWhatShouldIKnow(
   const root = liveIntel?.getProjectRoot?.() ?? null;
   const fromRequirements = root
     ? requirementsPairs(root, evidence.requirementFiles, (f) => {
-        const full = path.resolve(root, f);
-        if (full !== root && !full.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) return null;
+        // Round 12, R5: read only when the REAL path (symlinks and junctions resolved, the file's and each parent's)
+        // is inside the project's real root.
         try {
-          return fs.statSync(full).size <= 262_144 ? fs.readFileSync(full, "utf8") : null;
+          const realRoot = fs.realpathSync.native(root);
+          const real = fs.realpathSync.native(path.resolve(root, f));
+          const inside = real === realRoot || real.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep);
+          if (!inside) return { why: "outside" };
+          return fs.statSync(real).size <= 262_144 ? fs.readFileSync(real, "utf8") : { why: "unreadable" };
         } catch {
-          return null;
+          return { why: "unreadable" };
         }
       })
     : [];
   pushAll(evidence.pairs, fromRequirements);
   // Round 11, #72: a line of the file it cannot read (or a direct reference) makes the file not read whole.
-  if ((fromRequirements as { notWhole?: boolean }).notWhole) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a line of a requirements file it cannot read" });
+  const requirementsRead = fromRequirements as { notWhole?: boolean; outside?: boolean; unreadable?: boolean };
+  if (requirementsRead.notWhole) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a line of a requirements file it cannot read" });
+  // Round 12, R5: a file outside the project, or one that could not be read, is said and holds review_needed.
+  if (requirementsRead.outside) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a requirements file outside the project is not read" });
+  if (requirementsRead.unreadable) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "the requirements file it names could not be read" });
   const depsText = fromRequirements.length > 0 ? `${task}\n${fromRequirements.map((p) => p.name).join(" ")}` : task;
   // ── 0. The vulnerability scan — awaited, bounded, never assumed ───────
   // Round 7c, F1: a word the grammar consumed (`npm`, `install`, `-D`, an option's value) is no package of the task for
@@ -961,8 +969,8 @@ export async function executeWhatShouldIKnow(
         ),
     )
     .concat(withheldDismissed.filter((w) => w.standing).map((w) => `you said ${w.shown} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`))
-    // Round 8, D3: on the raw text, whatever the grammar made of it (a quoted launcher, full-width letters): a word
-    // the caller dismissed that shares a line, a continued line or a fenced block with a package manager's name.
+    // D3 (round 12, R1): on the raw text, whatever the grammar made of it: a word the caller dismissed that stands
+    // after a package manager's name anywhere earlier in the task (no lines, units or fences).
     .concat(
       notPackages.words
         // Not again where a standing reason above names the word already (a command operand, a manifest entry, a near miss).
@@ -1158,11 +1166,11 @@ export async function executeWhatShouldIKnow(
         assessed.reason = `${confirmationReason(waiting.length)}${before}`;
       }
     }
-    // Round 10, G4: past the call's cap of distinct words or its deadline the near-miss check stopped: the task was
-    // not read in full.
+    // Round 10, G4 / round 12: a bound was reached (the distinct-word cap of the near-miss check, the snippet cap, or
+    // the time budget), and the answer says which. Its absence promises nothing more than best-effort reading.
     const cut = wordScanCut();
     if (cut) {
-      const said = cut === "cap" ? `This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part.` : cut === "snippets" ? `This task holds more manifest snippets than one call reads (${MAX_SNIPPETS}): split the task and ask for each part.` : "This briefing did not finish reading the task within its time budget: split the task and ask for each part.";
+      const said = cut === "cap" ? `This task holds more distinct words than one call checks for near-miss names (${WORD_SCAN_CAP}): split the task and ask for each part.` : cut === "snippets" ? `This task holds more manifest snippets than one call reads (${MAX_SNIPPETS}): split the task and ask for each part.` : "This briefing did not finish reading the task within its time budget: split the task and ask for each part.";
       if (assessed.level === "safe_to_delegate") {
         assessed.level = "review_needed";
         assessed.reason = said;
@@ -1199,10 +1207,11 @@ export async function executeWhatShouldIKnow(
       assessed.reason = `${stateVersion(versionless)}${before}`;
     } else if (versionless.length > 0) assessed.reason = `${assessed.reason} ${stateVersion(versionless)}`;
     // K1: a safe level rests on the caller's declaration, and says so.
-    // Round 11, P1: where the task holds a fenced block, a manifest file name or a command, the versions read in them
-    // are best effort; said before the reason's last sentence (nothing new is detected for it).
-    const holdsSnippetOrCommand = evidence.anyCommand || /^\s*(?:```|~~~)/m.test(params.task) || /\b(?:requirements[\w.-]*\.(?:txt|in)|pyproject\.toml|Cargo\.toml|package\.json|go\.mod)\b/i.test(params.task);
-    if (assessed.level === "safe_to_delegate") assessed.reason = `${assessed.reason}${holdsSnippetOrCommand ? ` ${BEST_EFFORT_READING}` : ""} ${RESTS_ON_DECLARATION}`;
+    // Round 12, R3: no detection. EVERY safe reason of a call that declared at least one package carries the best-effort
+    // sentence, then the rests-on-your-declaration sentence; a call with `packages: []` (or none) never carries the
+    // best-effort sentence. Both rules hold by construction.
+    const declaredSome = Array.isArray(params.packages) && params.packages.length > 0;
+    if (assessed.level === "safe_to_delegate") assessed.reason = `${assessed.reason}${declaredSome ? ` ${BEST_EFFORT_READING}` : ""} ${RESTS_ON_DECLARATION}`;
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
     const delegation = withReadGaps(

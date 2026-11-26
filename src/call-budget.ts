@@ -142,7 +142,8 @@ export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>):
  * Round 10, G4: the per-word scans of one call (the near-miss check) are bounded. A call runs at most
  * WORD_SCAN_CAP of them on distinct words not seen before, and none once its synchronous budget is spent
  * (WORD_SCAN_RESERVE_MS before the deadline). Past either, the scan is not run and the call is marked: the briefing
- * then says the task was not read in full ("split the task") and holds review_needed. Outside a call: no bound.
+ * then says which bound it reached ("split the task") and holds review_needed. Without that sentence nothing more is
+ * promised: the reading of the task stays best effort. Outside a call: no bound.
  */
 export const WORD_SCAN_CAP = 4_000;
 const WORD_SCAN_RESERVE_MS = 4_000;

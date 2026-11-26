@@ -125,6 +125,8 @@ export function readSnippets(task: string): SnippetRead {
   const privateNames: Array<{ ecosystem: CheckEcosystem; name: string }> = [];
   const entryWords = new Set<string>();
   const keys = new Set<string>();
+  /** Words no reader may offer: marker names, group keys (round 12: a dependency-group name is no entry). */
+  const consumed = new Set<string>();
   let snippets = 0;
   let stopped = false;
   /** One more snippet: false (and the call marked) past the cap or the deadline. */
@@ -319,6 +321,7 @@ export function readSnippets(task: string): SnippetRead {
         continue;
       }
       if (table.kind === "optional" || table.kind === "groups") {
+        consumed.add(key.toLowerCase());
         if (!value.startsWith("[")) {
           notWhole("PyPI", "an entry it cannot read", l);
           continue;
@@ -440,7 +443,6 @@ export function readSnippets(task: string): SnippetRead {
     }
   }
 
-  const consumed = new Set<string>();
   for (const m of text.matchAll(MARKER_NAMES)) {
     const lineStart = text.lastIndexOf("\n", m.index) + 1;
     if (text.slice(lineStart, m.index).includes(";")) consumed.add(m[0].toLowerCase());

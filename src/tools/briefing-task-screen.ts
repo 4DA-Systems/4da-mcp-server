@@ -335,7 +335,7 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     const kind = specSource(m[4], "js");
     if (kind && free(m.index!, m.index! + m[0].length)) holdPackage(m[2], kind, m.index!, m.index! + m[0].length);
   }
-  const TOML_SOURCE = /(^|[\s`(])([A-Za-z0-9][\w.-]{0,213})\s{0,8}=\s{0,8}\{([^{}\n]{0,400})\}/gm;
+  const TOML_SOURCE = /(^|[\s`(])([A-Za-z0-9][\w.-]{0,213})[ \t]{0,8}=[ \t]{0,8}\{([^{}\n]{0,400})\}/gm;
   for (const m of task.matchAll(TOML_SOURCE)) {
     const fields = m[3];
     const kind = /\bgit\s{0,4}=/.test(fields) ? "git" : /\bpath\s{0,4}=/.test(fields) ? "a path" : /\burl\s{0,4}=/.test(fields) ? "a URL" : /\bworkspace\s{0,4}=\s{0,4}true/.test(fields) ? "a workspace" : /\bregistry\s{0,4}=\s{0,4}["'](?!crates-io["'])/.test(fields) || /\bsource\s{0,4}=/.test(fields) ? "a registry or source named in the entry" : null;
@@ -343,7 +343,7 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     if (kind && free(start, m.index! + m[0].length)) holdPackage(m[2], kind, start, m.index! + m[0].length);
   }
   // PEP 508 direct reference: `name @ https://...`, `name[extra] @ git+...`, `name @ file:///...`.
-  const PEP508_URL = /(^|[\s"'`(,[])([A-Za-z0-9][\w.-]{0,99})(?:\[[^\]\n]{0,200}\])?\s{0,8}@\s{0,8}((?:git\+|https?:|file:|ssh:|ftp:)[^\s"'`,\]]{0,2000})/gim;
+  const PEP508_URL = /(^|[\s"'`(,[])([A-Za-z0-9][\w.-]{0,99})(?:\[[^\]\n]{0,200}\])?[ \t]{0,8}@[ \t]{0,8}((?:git\+|https?:|file:|ssh:|ftp:)[^\s"'`,\]]{0,2000})/gim;
   for (const m of task.matchAll(PEP508_URL)) {
     const start = m.index! + m[1].length;
     const end = m.index! + m[0].length;
@@ -382,15 +382,15 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
   }
 
   // 3. Registries the task sets: .npmrc / pip.conf lines, environment variables, config commands.
-  for (const m of task.matchAll(/(^|[\s"'`])(@[\w.-]{1,214}):registry\s{0,4}[=\s]\s{0,4}(\S{1,2000})/gim)) {
+  for (const m of task.matchAll(/(^|[\s"'`])(@[\w.-]{1,214}):registry[ \t]{0,4}[= \t][ \t]{0,4}(\S{1,2000})/gim)) {
     if (publicNpm(m[3])) continue;
     scopes.add(m[2].toLowerCase());
     blank(m.index! + m[1].length, m.index! + m[0].length);
   }
-  for (const m of task.matchAll(/(^|[\s"'`])((?:npm_config_|NPM_CONFIG_|BUN_CONFIG_|YARN_NPM_)?(?:registry|REGISTRY)|YARN_REGISTRY|YARN_NPM_REGISTRY_SERVER|npmRegistryServer)\s{0,4}[=\s]\s{0,4}["'`]?((?:https?:)?\/\/\S{1,2000})/gm)) {
+  for (const m of task.matchAll(/(^|[\s"'`])((?:npm_config_|NPM_CONFIG_|BUN_CONFIG_|YARN_NPM_)?(?:registry|REGISTRY)|YARN_REGISTRY|YARN_NPM_REGISTRY_SERVER|npmRegistryServer)[ \t]{0,4}[= \t][ \t]{0,4}["'`]?((?:https?:)?\/\/\S{1,2000})/gm)) {
     if (!publicNpm(m[3])) closeEcosystem("npm", "a registry the task sets for npm", m.index! + m[1].length, m.index! + m[0].length);
   }
-  for (const m of task.matchAll(/(^|[\s"'`])((?:PIP_|UV_)?(?:EXTRA_)?(?:INDEX_URL|DEFAULT_INDEX|INDEX)|(?:global\.)?(?:extra-)?index-url|index_url)\s{0,4}[=\s]\s{0,4}["'`]?(\S{1,2000})/gim)) {
+  for (const m of task.matchAll(/(^|[\s"'`])((?:PIP_|UV_)?(?:EXTRA_)?(?:INDEX_URL|DEFAULT_INDEX|INDEX)|(?:global\.)?(?:extra-)?index-url|index_url)[ \t]{0,4}[= \t][ \t]{0,4}["'`]?(\S{1,2000})/gim)) {
     if (/^(?:https?:|\/\/|file:|\.|\/|[a-z]:)/i.test(m[3]) && !publicPypi(m[3])) closeEcosystem("PyPI", "a package index the task sets for PyPI", m.index! + m[1].length, m.index! + m[0].length);
   }
   for (const m of task.matchAll(/(^|[\s"'`])(GOPROXY|GOPRIVATE|GONOPROXY|GONOSUMDB|GOFLAGS)\s{0,4}=\s{0,4}["'`]?(\S{1,2000})/g)) {

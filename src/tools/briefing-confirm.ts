@@ -15,6 +15,7 @@
  */
 
 import type { CheckEcosystem } from "../live/release-metadata.js";
+import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
 import { lengthProblem, MAX_NAME_ARG_LENGTH, MAX_VERSION_ARG_LENGTH } from "../tool-args.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 import { ecosystemKey, type TaskWordSeen } from "./briefing-new-packages.js";
@@ -54,7 +55,7 @@ export interface ToConfirm {
   ecosystems: string[];
   /** The version the task writes beside it, as written. */
   version?: string;
-  seen: "operand of an install command" | "operand of a runner command" | "entry of a manifest snippet" | "a name with a version written in the task" | "word after an adding verb";
+  seen: "operand of an install command" | "operand of a runner command" | "entry of a manifest snippet" | "a name with a version written in the task" | "word after an adding verb" | "a line of the requirements file the task names";
   /** A help for the agent: a near-miss of a popular name. Never a gate. */
   hint?: string;
   /** A help for the agent: the task calls it a key, a secret, a password or a token. Never a gate. */
@@ -233,6 +234,9 @@ function declarationProblem(item: unknown): string | null {
   if (typeof o.ecosystem !== "string" || !ECOSYSTEMS.some((e) => e.toLowerCase() === o.ecosystem!.toString().trim().toLowerCase())) return `\`ecosystem\` must be one of ${ECOSYSTEMS.map((e) => `"${e}"`).join(", ")}`;
   if (typeof o.name !== "string" || !o.name.trim()) return "`name` must be a non-empty string";
   if (lengthProblem("name", "package", o.name) || o.name.length > MAX_NAME_ARG_LENGTH) return "`name` is longer than any package name";
+  // Round 12, R4: a name of a credential's shape (the task screen's own test) is refused whatever `public` says, and
+  // never repeated; a `public: false` one still forbids its name.
+  if (credentialShape(o.name.trim()) || looksLikeSecret(o.name.trim())) return "`name` has the shape of a credential, not a package name";
   const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
   // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts), and then
   // dependency_check's own entry rule on the name as written (round 7c, F6): a Go path in the proxy's `!`-escaped
@@ -336,6 +340,8 @@ const SEEN: Record<TaskWordSeen, ToConfirm["seen"]> = {
   // Round 9 (docs lane 1): a D1(a) form in prose or a code span ("we pin zqxd2==1.2.3 there").
   form: "a name with a version written in the task",
   prose: "word after an adding verb",
+  // Round 12 (#39): a line of a `-r` / `-c` file the task installs from.
+  file: "a line of the requirements file the task names",
 };
 
 /** Words a task uses for a secret: a name beside one of them may be one. */

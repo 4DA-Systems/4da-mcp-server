@@ -3,7 +3,7 @@
  * what_should_i_know and the version a task names (black-box re-run of 96c16d2, 2026-11-14):
  * "add lodash 4.17.20 to package.json" came back safe_to_delegate, with lodash judged at `latest`
  * (4.18.1) instead of the 4.17.20 the task writes, which four advisories affect; "pin axios to
- * 0.21.1" did not see axios at all. The versions a task names are read here in the forms below and judged by
+ * 0.21.1" did not see axios at all. This reader looks, best effort, for versions a task writes in the forms below, judged by
  * dependency_check itself (the same engine), at that exact version or constraint, ONLY for names the briefing knows
  * on its own: a dependency of the project, or a name on its bundled lists (round 10, #94/#95). For any other name a
  * version in prose is not read: the caller's declared `version` is what is checked (what_should_i_know.ts, K1):
