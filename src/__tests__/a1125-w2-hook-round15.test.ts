@@ -126,7 +126,7 @@ describe("H7: every option on the allow lists is taken by the reader (generated 
   it("cargo install --vers / --version name the operand's version: judged at that version", () => {
     for (const c of ["cargo install ripgrep --vers 13.0.0", "cargo install ripgrep --version 13.0.0", "cargo install ripgrep --vers=13.0.0"]) {
       const r = run(c);
-      expect(r.items, c).toEqual([{ ecosystem: "crates.io", package: "ripgrep", to: "13.0.0" }]);
+      expect(r.items, c).toEqual([{ ecosystem: "crates.io", package: "ripgrep", to: "=13.0.0" }]); // round 20, Q1: exact for cargo install
     }
   });
 });

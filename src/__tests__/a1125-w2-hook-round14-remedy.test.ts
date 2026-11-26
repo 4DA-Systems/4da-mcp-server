@@ -51,6 +51,8 @@ function answer(r: HookRun): void {
   record(
     s,
     (r.items ?? []).map((i) => {
+      // (round 20, Q1: a crates.io bare version is the caret range, recorded with requested: the version itself)
+      if (i.ecosystem === "crates.io" && /^v?\d+\.\d+\.\d+$/.test(i.to)) return { ecosystem: i.ecosystem, package: i.package, version: i.to, verdict: "proceed", requested: i.to };
       const exact = /^(?:==)?v?\d+(?:\.\d+)*$/.test(i.to) || i.to === "latest";
       return { ecosystem: i.ecosystem, package: i.package, version: exact && i.to !== "latest" ? i.to.replace(/^==/, "") : "9.9.9", verdict: "proceed", ...(exact && i.to !== "latest" ? {} : { requested: i.to }) };
     }),

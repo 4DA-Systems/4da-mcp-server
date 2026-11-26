@@ -169,7 +169,7 @@ describe("an exact version, by what the ledger holds", () => {
   });
 
   it("a package a private-registry rule covers goes ahead (it is never looked up), as in 6.5.0; one a project takes from elsewhere is held", () => {
-    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private" }]);
+    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private", private_rule: "listed" }]);
     allowed(hook(lodashEdit("4.17.20")));
     // A git, path, workspace or alias source does not apply to the registry release (a651-hook-withheld.test.ts).
     ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "local_source" }]);
@@ -507,7 +507,7 @@ describe("the ledger the server writes is the one the hook reads", () => {
         { ecosystem: "npm", package: "lodash", to: "4.18.1", verdict: "proceed" },
         { ecosystem: "PyPI", package: "Django", to: "5.1", verdict: "proceed" },
         { ecosystem: "Go", package: "github.com/spf13/cobra", to: "v1.10.2", verdict: "proceed" },
-        { ecosystem: "crates.io", package: "serde_json", to: "1.0.140", verdict: "review" },
+        { ecosystem: "crates.io", package: "serde_json", to: "1.0.140", to_requested: "1.0.140", verdict: "review" }, // round 20, Q1: the server answers a bare crates.io version as the caret reading
       ],
       { dir: home },
     );

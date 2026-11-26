@@ -90,20 +90,20 @@ describe("a local-source answer holds a registry install of that name, in any pr
 
 describe("a private-registry answer behaves as in 6.5.0", () => {
   it("lets any version through, in any folder, with no project needed", () => {
-    ledger([{ ecosystem: "npm", package: "@acme/widgets", version: "1.0.0", not_checked: "private", reason: "NOT CHECKED (private): @acme is mapped to a private registry" }]);
+    ledger([{ ecosystem: "npm", package: "@acme/widgets", version: "1.0.0", not_checked: "private", private_rule: "listed", reason: "NOT CHECKED (private): @acme is mapped to a private registry" }]);
     expect(decide("npm i @acme/widgets@2.0.0").decision).toBe("allow");
   });
 
   it("a decisive verdict for that exact version decides first, even an older avoid", () => {
     ledger([
       { ecosystem: "npm", package: "@acme/widgets", version: "2.0.0", verdict: "avoid", reason: "GHSA-x", ago: 30 },
-      { ecosystem: "npm", package: "@acme/widgets", version: "2.0.0", not_checked: "private", ago: 1 },
+      { ecosystem: "npm", package: "@acme/widgets", version: "2.0.0", not_checked: "private", private_rule: "listed", ago: 1 },
     ]);
     expect(decide("npm i @acme/widgets@2.0.0").decision).toBe("deny");
   });
 
   it("a 6.5.0 entry withheld for an unreadable file (private with unreadable_file) holds", () => {
-    ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.20", not_checked: "private", unreadable_file: "/p/package-lock.json" }]);
+    ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.20", not_checked: "private", private_rule: "listed", unreadable_file: "/p/package-lock.json" }]);
     expect(decide("npm i lodash@4.17.20").text).toMatch(/Repair or regenerate/);
   });
 });

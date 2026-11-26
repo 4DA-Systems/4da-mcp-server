@@ -34,7 +34,7 @@ const COMMAND: Record<string, [string, { ecosystem: string; package: string; to:
   uvadd: ["uv add {} requests==2.32.3", { ecosystem: "PyPI", package: "requests", to: "2.32.3" }],
   uvtool: ["uv tool install {} ruff==0.6.9", { ecosystem: "PyPI", package: "ruff", to: "0.6.9" }],
   cargoadd: ["cargo add {} serde@1.0.200", { ecosystem: "crates.io", package: "serde", to: "1.0.200" }],
-  cargoinstall: ["cargo install {} ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "14.1.1" }],
+  cargoinstall: ["cargo install {} ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "=14.1.1" }], // round 20, Q1: exact for cargo install
   goget: ["go get {} rsc.io/quote@v1.5.2", { ecosystem: "Go", package: "rsc.io/quote", to: "v1.5.2" }],
   goinstall: ["go install {} golang.org/x/tools/gopls@v0.16.2", { ecosystem: "Go", package: "golang.org/x/tools/gopls", to: "v0.16.2" }],
   gomodedit: ["go mod edit {} -require=rsc.io/quote@v1.5.2", { ecosystem: "Go", package: "rsc.io/quote", to: "v1.5.2" }],

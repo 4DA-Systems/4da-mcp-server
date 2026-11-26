@@ -133,7 +133,7 @@ describe("M2: one URL rule for every reader", () => {
     expect(s.write(`${s.project}/package.json`, JSON.stringify({ dependencies: { lodash: "http://localhost:4873/lodash.tgz" } })).decision).toBe("allow");
   });
   it("a URL source is released by a private record", () => {
-    s.ledger([{ ecosystem: "PyPI", package: "acme-utils", version: "latest", verdict: "unknown", reason: "NOT CHECKED (private): acme-utils is a private package (FOURDA_PRIVATE_PACKAGES)", not_checked: "private" }]);
+    s.ledger([{ ecosystem: "PyPI", package: "acme-utils", version: "latest", verdict: "unknown", reason: "NOT CHECKED (private): acme-utils is a private package (FOURDA_PRIVATE_PACKAGES)", not_checked: "private", private_rule: "listed" }]);
     const r = s.write(`${s.project}/pyproject.toml`, pj("acme-utils @ https://pypi.acme.com/files/acme_utils-1.0.0.tar.gz"));
     expect(r.decision, r.text).toBe("allow");
   });
@@ -204,7 +204,7 @@ describe("M5: one source rule: no state without a way through, avoid always deni
     s.ledger([
       { ecosystem: "PyPI", package: "requests", version: "2.34.2", verdict: "proceed", reason: "ok" },
       { ecosystem: "PyPI", package: "requests", version: "2.19.0", verdict: "avoid", reason: "test avoid" },
-      { ecosystem: "PyPI", package: "acme-utils", version: "1.0.0", verdict: "unknown", reason: "NOT CHECKED (private): acme-utils is a private package (FOURDA_PRIVATE_PACKAGES)", not_checked: "private" },
+      { ecosystem: "PyPI", package: "acme-utils", version: "1.0.0", verdict: "unknown", reason: "NOT CHECKED (private): acme-utils is a private package (FOURDA_PRIVATE_PACKAGES)", not_checked: "private", private_rule: "listed" },
     ]);
     const r = run(command);
     expect(r.decision, r.text).toBe(want);

@@ -158,7 +158,8 @@ describe("p1c: the remedy, followed mechanically, releases the same install", ()
         record(
           s,
           (last.items ?? []).map((i) => {
-            const exact = /^(?:==)?v?\d+\.\d+\.\d+$/.test(i.to);
+            // (round 20, Q1: a crates.io bare version is the caret range, recorded with requested)
+            const exact = /^(?:==)?v?\d+\.\d+\.\d+$/.test(i.to) && i.ecosystem !== "crates.io";
             const known = BASE.find((e) => e.ecosystem === i.ecosystem && e.package === i.package)?.version ?? "1.0.0";
             return { ecosystem: i.ecosystem, package: i.package, version: exact ? i.to.replace(/^==/, "") : known, verdict: "proceed", ...(exact ? {} : { requested: i.to }) };
           }),

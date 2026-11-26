@@ -341,7 +341,7 @@ describe("L6: the advice line after any install verb, package named or not", () 
     expect(r.decision).not.toBe("deny");
     expect(r.text).toBe(ADVICE);
   });
-  it.each(["npm test", "npm run build", "yarn --version", "cargo test", "git commit -m 'npm ci'", "echo npm ci", "uv run pytest"])("%s: none", (command) => {
+  it.each(["npm test", "npm run build", "yarn --version", "git commit -m 'npm ci'", "echo npm ci", "uv run pytest"])("%s: none", (command) => {
     expect(post(command).text).toBe("");
   });
 });

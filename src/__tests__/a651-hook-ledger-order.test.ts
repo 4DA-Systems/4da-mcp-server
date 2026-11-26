@@ -42,7 +42,7 @@ describe("an avoid or wait holds over a later private answer, whatever lies betw
     ["avoid, unknown (plain), private", { verdict: "avoid" }, { verdict: "unknown" }],
     ["wait, unknown, private", { verdict: "wait" }, { verdict: "unknown" }],
   ])("%s: held", (_label, first, between) => {
-    writeFileSync(join(home, LEDGER_FILE), lines([e(30, first), e(20, between), e(10, { verdict: "unknown", not_checked: "private", project })]));
+    writeFileSync(join(home, LEDGER_FILE), lines([e(30, first), e(20, between), e(10, { verdict: "unknown", not_checked: "private", private_rule: "listed", project })]));
     expect(decide()).toBe("deny");
   });
 
