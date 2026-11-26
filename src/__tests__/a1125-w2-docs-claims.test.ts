@@ -156,7 +156,9 @@ describe("the guard hook's wording the docs quote", () => {
   };
 
   it("an option the hook does not know: \"Run the same command without `<that part>`\"", () => {
-    expect(deny("Bash", { command: "npm i ms@2.1.3 --before 2020-01-01" })).toContain("Run the same command without `--before 2020-01-01`");
+    // Round 14 (R1): an option is named alone, its value the user's to remove (the README sentence
+    // that quotes this is listed for the docs lane as made partly false).
+    expect(deny("Bash", { command: "npm i ms@2.1.3 --before 2020-01-01" })).toContain("Run the same command without the option `--before`; if that option takes a value, remove its value too");
     expect(readme).toContain('"Run the same command without `<that part>`"');
   });
 
