@@ -57,7 +57,7 @@ function project(template: "npm" | "py", files: Record<string, string> = {}) {
 
 const namesIn = (s: { url: string; body: string }) => [
   ...[...s.url.matchAll(/registry\.npmjs\.org\/((?:@[^/]+\/)?[^/?#]+)|pypi\.org\/pypi\/([^/]+)|crates\.io\/api\/v1\/crates\/([^/?#]+)/g)].map((m) => m[1] ?? m[2] ?? m[3]),
-  ...[...s.body.matchAll(/"name":"([^"]+)"/g)].filter((m) => !s.url.endsWith("/v1/querybatch")).map((m) => m[1]),
+  ...[...s.body.matchAll(/"name":"([^"]+)"/g)].filter(() => !s.url.endsWith("/v1/querybatch")).map((m) => m[1]),
 ];
 
 describe("review-confirm1 cases hold the invariants", () => {
