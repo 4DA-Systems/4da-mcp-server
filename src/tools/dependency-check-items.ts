@@ -53,6 +53,8 @@ export interface ItemResult {
   canonical_module_path?: string;
   /** Unknown because this server's own request limit held a registry read back: seconds until asking again can read it. */
   retry_after_seconds?: number;
+  /** The OSV.dev answer behind this verdict came from the local cache: its age in whole minutes (absent when read live; dependency-check-age.ts). */
+  advisory_data_age_minutes?: number;
 }
 
 /** A validated request item. */
