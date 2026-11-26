@@ -4592,8 +4592,10 @@ function denialFor(introduced, ledger, dir, what) {
  * LEDGER_READ_COMMANDS, with nothing else on the line.
  *
  * The raw text is normalised once before that search (normaliseLedgerText): case folded, every run
- * of `/` and `\` one `/`, `/./` dropped, `name/../` resolved as text, `\\?\` stripped, and the
- * `//localhost/c$/`, `/c/`, `/mnt/c/` and `/cygdrive/c/` forms read as `c:/`.
+ * of `/` and `\` one `/`, `/./` dropped, trailing dots and blanks of a path part dropped (as
+ * PowerShell and Win32 drop them: `homes./x`, `homes /x`), `name/../` resolved as text, `\\?\`
+ * stripped, and the `//localhost/c$/` (this host's other names and addresses too), `/c/`,
+ * `/mnt/c/`, `/cygdrive/c/` and `/proc/cygdrive/c/` forms read as `c:/`.
  *
  * What this does not see (the hook is a guard-rail against an agent's mistakes and shortcuts, not
  * a sandbox): a path reached by `cd` in an earlier call, a junction or symlink made earlier, a name
@@ -4624,6 +4626,8 @@ function normaliseLedgerText(text, dots = true) {
   t = t.replace(/\/{2,}/g, "/");
   t = t.replace(/(^|[^a-z0-9._~$-])\/(?:mnt\/|cygdrive\/|proc\/cygdrive\/)?([a-z])(?=\/)/g, "$1$2:");
   t = t.replace(/\/(?:\.\/)+/g, "/");
+  // Round 11: trailing dots and blanks of a path part, which PowerShell and Win32 drop (`homes./x`, `homes /x`).
+  t = t.replace(/([^/\s.])[. ]+(?=\/)/g, "$1");
   // `name/../` resolved as text, one pass with a stack per path (linear in the text's size).
   if (dots && t.includes("/..")) t = t.replace(/[^\s'"`;|&<>(){}]+/g, (path) => resolveDots(path));
   return t;

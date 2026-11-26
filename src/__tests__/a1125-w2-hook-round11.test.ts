@@ -4,6 +4,8 @@
  * with the reviewer's cases.
  */
 
+import { realpathSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
@@ -140,5 +142,25 @@ describe("5: a manifest's file name is matched case-insensitively, without a str
   it("another file goes ahead", () => {
     expect(write("package.jsonx", PKG).decision).toBe("allow");
     expect(write("notes.json", PKG).decision).toBe("allow");
+  });
+});
+
+describe("6: trailing dots and blanks in a path part, which PowerShell and Win32 drop", () => {
+  it.each([
+    ["Remove-Item -Recurse -Force '<P>./<N>'", "PowerShell"],
+    ["Rename-Item '<P> /<N>' gone", "PowerShell"],
+    ["rm -rf '<P>../<N>'", "Bash"],
+    ["Remove-Item -Recurse -Force '<P>. ./<N>'", "PowerShell"],
+  ])("%s: held", (command, tool) => {
+    const home = realpathSync(s.home).replace(/\\/g, "/");
+    const cut = home.lastIndexOf("/");
+    const line = command.replaceAll("<P>", home.slice(0, cut)).replaceAll("<N>", home.slice(cut + 1));
+    const r = run(line, tool);
+    expect(r.decision, line).toBe("deny");
+    expect(r.text).toContain("names the 4da check ledger");
+  });
+
+  it("a relative `./` and `../` still read as before", () => {
+    expect(run("cat ./README.md ../notes.txt").decision).toBe("allow");
   });
 });
