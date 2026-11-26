@@ -13,6 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pinnedNpx, RUNNING_VERSION } from "./usage.js";
 
 /** The smallest @hono/node-server release free of known advisories. */
 export const NODE_SERVER_FLOOR = "2.1.6";
@@ -66,7 +67,7 @@ export function nodeServerProblem(version: string | null = loadedNodeServerVersi
     `Refusing to start the MCP HTTP transport: this installation would serve through @hono/node-server ${version},\n` +
     `  which has known vulnerabilities (fixed in ${NODE_SERVER_FLOOR}). The folder this server was installed into already\n` +
     `  held that older copy, and npm kept it.\n` +
-    `  Run the server with npx (npx -y @4da/mcp-server --http), or install @hono/node-server@^${NODE_SERVER_FLOOR} in that\n` +
+    `  Run the server with npx (${pinnedNpx(RUNNING_VERSION)} --http), or install @hono/node-server@^${NODE_SERVER_FLOOR} in that\n` +
     `  folder and start it again. The stdio server does not load it and is not affected.`
   );
 }
