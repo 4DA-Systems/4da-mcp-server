@@ -1,0 +1,15 @@
+# Made at run time; never committed. tasks.json and the run records hold made-up credential-shaped strings
+# (assembled by gen-tasks.mjs), and .ca holds the proxy's throwaway private keys.
+.ca/
+certs/
+templates/
+tasks.json
+runs/
+ideal/
+ideal.json
+peek/
+results/*.json
+*.log
+*.jsonl
+smoke-home-*/
+!results/.gitkeep
