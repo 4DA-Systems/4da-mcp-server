@@ -104,6 +104,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod", "pnpm-workspace.yaml"]);
 /** The largest hook payload read (characters). */
@@ -2985,7 +2986,9 @@ const DETECT_STRING_RUNNERS = new Set([...SHELLS, "eval", "pwsh", "powershell", 
 /** A detector token: a separator, or a word (quoted parts kept inside it). */
 // A double-quoted part holds no `$` or backquote here: bash runs `cmd` and $(cmd) inside double
 // quotes (PowerShell its $(...) subexpression), so there the quote is not one word.
-const DETECT_TOKEN = /<#|#>|[;&|(){}`\n\r]|(?:'[^'\n\r]*'|"[^"\n\r`$]*"|[^\s;&|(){}`\n\r'"<#]|<(?!#)|#(?!>))+/g;
+// A plain run is one `[...]+` (one repetition per run, not per character: per character, an 8 MB
+// word overflowed the regular expression's stack).
+const DETECT_TOKEN = /<#|#>|[;&|(){}`\n\r]|(?:[^\s;&|(){}`\n\r'"<#]+|'[^'\n\r]*'|"[^"\n\r`$]*"|<(?!#)|#(?!>))+/g;
 const unquoteWord = (w) => w.replace(/['"]/g, "");
 
 /** The package manager a token names (`npm.cmd`, `pip3.12`, `yarnpkg`, `pnpm.cjs`, `npm-cli.js`), or null. */
@@ -3022,6 +3025,7 @@ export function detectsInstall(text, depth = 0) {
   let pythonM = false;
   let skipTarget = false;
   for (const m of text.matchAll(DETECT_TOKEN)) {
+    tick();
     const w = m[0];
     if (w.length === 1 ? ";&|(){}`\n\r".includes(w) : w === "<#" || w === "#>") {
       first = true;
@@ -3322,6 +3326,9 @@ let accountTop = null;
 
 /** R8-2 for one simple command that holds a detector hit: null when read whole, else the part not read. */
 function accountCommand(words, dialect, depth) {
+  tick();
+  // Past the reader's own depth the command is not read (a runner chain of any length is held, never followed).
+  if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   if (depth === 0 || accountTop === null) {
     let memo = null;
     accountTop = () => (memo ??= quietly(() => commandInstalls(words, depth, dialect)));
@@ -3380,6 +3387,7 @@ function judgedByReader(names, reader, ecosystem) {
 /** npx, bunx, pnpx, `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x`: the command they run, read again. */
 function accountRunner(args, dialect, depth) {
   for (let i = 0; i < args.length; i++) {
+    tick();
     const a = args[i];
     if (a === "--") return args.length > i + 1 ? accountCommand(args.slice(i + 1), dialect, depth + 1) : null;
     if (a.startsWith("-") && a.length > 1) {
@@ -3403,6 +3411,7 @@ function accountRunner(args, dialect, depth) {
 /** `python -m pip ...` (also `-mpip`, `-Im pip`): pip read as pip; any other module or script is not a package manager. */
 function accountPython(program, args, reader) {
   for (let i = 0; i < args.length; i++) {
+    tick();
     const a = args[i];
     const glued = /^-[uBOsSEIbdqvRP]*m(pip\d*(?:\.\d+)?)?$/.exec(a);
     if (glued) {
@@ -4518,8 +4527,48 @@ async function main() {
   // show a manifest write or edit, or a command that names an install (round 4 of the hook review:
   // judged from the first 64 KB of escaped text, it missed `\n` before npm, a long description
   // before the command, content before file_path); let through otherwise.
-  const out = raw.length > MAX_INPUT_CHARS ? oversizedParsed(input) : respond(input);
+  // A payload past WORKER_ABOVE_CHARS is judged in a worker thread under a hard wall clock: the
+  // budget's ticks are the first bound, and this one holds whatever they missed (seventh independent
+  // check, D1: a runner chain over 512 KB printed nothing in 10 s, and the call went ahead).
+  const out = raw.length > WORKER_ABOVE_CHARS ? await judgeInWorker(input, raw.length > MAX_INPUT_CHARS) : respond(input);
   if (out) process.stdout.write(out);
+}
+
+/** Payloads over this are judged in a worker under WALL_LIMIT_MS; smaller ones inline (a worker costs about 40 ms to start). */
+const WORKER_ABOVE_CHARS = 8 * 1024;
+/** From the hook's start: past it, a call a worker has not judged is held (Claude Code's own limit is 10 s). */
+const WALL_LIMIT_MS = 5000;
+
+/** The answer for a call judged in a worker; past WALL_LIMIT_MS (or on a worker's failure) the hold timeHold gives. */
+function judgeInWorker(input, oversize) {
+  return new Promise((done) => {
+    let settled = false;
+    const settle = (out) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.terminate().catch(() => {});
+      done(out);
+    };
+    const worker = new Worker(new URL(import.meta.url), { workerData: { fourdaJudge: input, oversize } });
+    const left = WALL_LIMIT_MS - (performance.now() - (mainStartedAt ?? performance.now()));
+    const timer = setTimeout(() => settle(timeHold(input)), Math.max(250, left));
+    worker.once("message", (m) => settle(typeof m === "string" ? m : timeHold(input)));
+    worker.once("error", () => settle(timeHold(input)));
+    worker.once("exit", () => settle(timeHold(input)));
+  });
+}
+
+/** The hold for a call not judged in time: a command or a manifest write, where a ledger exists and the guard blocks; nothing else. */
+function timeHold(input) {
+  if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || guardMode(process.env.FOURDA_GUARD) !== "block") return "";
+  const tool = input.tool_name;
+  const command = tool === "Bash" || tool === "PowerShell";
+  const file = input.tool_input?.file_path;
+  if (!command && !(typeof file === "string" && manifestKind(file) !== null)) return "";
+  if (!readLedgerExists(dataDir(process.env))) return "";
+  unreadRemedy = null;
+  return denyJson(notReadDenial(command ? "command" : "edit", `reading it took over ${WALL_LIMIT_MS / 1000} s`));
 }
 
 /** The largest payload the hook parses to judge it (past MAX_INPUT_CHARS it is judged, never read). */
@@ -4577,7 +4626,18 @@ function oversized(head) {
   return denyJson(notReadDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
 }
 
-if (basename(process.argv[1] ?? "") === "manifest-edit.mjs") {
+// A worker started by judgeInWorker: judge the one call it was given, and answer.
+if (!isMainThread && workerData && typeof workerData === "object" && workerData.fourdaJudge) {
+  let out = "";
+  try {
+    out = workerData.oversize ? oversizedParsed(workerData.fourdaJudge) : respond(workerData.fourdaJudge);
+  } catch {
+    out = timeHold(workerData.fourdaJudge);
+  }
+  parentPort.postMessage(out);
+}
+
+if (isMainThread && basename(process.argv[1] ?? "") === "manifest-edit.mjs") {
   main().catch(() => {
     // The hook never fails the call it looks at: an error of its own is silence.
   });
