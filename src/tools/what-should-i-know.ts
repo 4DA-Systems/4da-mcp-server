@@ -1129,7 +1129,8 @@ async function conflictsFor(db: FourDADatabase, packages: TaskPackage[]) {
   const out: Array<{ technology: string; decision_id: number; reason: string }> = [];
   for (const pkg of packages) {
     try {
-      const result = await executeCheckDecisionAlignment(db, { technology: pkg.name });
+      // Ranked on this machine: a task's package names are task text, never sent for embedding (C1).
+      const result = await executeCheckDecisionAlignment(db, { technology: pkg.name }, { lexicalOnly: true });
       for (const c of result.conflicts) out.push({ technology: pkg.name, decision_id: c.decision_id, reason: c.reason });
     } catch {
       // No decisions table: nothing to conflict with.

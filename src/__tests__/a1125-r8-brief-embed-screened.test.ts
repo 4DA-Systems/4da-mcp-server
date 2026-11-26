@@ -122,6 +122,14 @@ describe("the embedding provider gets the screened task", () => {
     expect(JSON.stringify(notReadWords(brief) ?? [])).not.toContain(secret);
   });
 
+  it("the decision-conflict check of a dependency the task names sends nothing for embedding either (C1)", async () => {
+    await recordDecision("Utility library", "Use lodash for collection helpers");
+    const before = promptsSent().length;
+    const brief = await call("what_should_i_know", { task: "upgrade lodash to 4.17.21", packages: [] });
+    expect(promptsSent().slice(before)).toEqual([]);
+    expect((brief.task_dependencies as Array<{ package: string }>).map((t) => t.package)).toContain("lodash");
+  });
+
   it("a clean declared call is not embedded either (wave 2, C1: no task text, ever)", async () => {
     await recordDecision("Component library", "Use the shared component library for every screen");
     const brief = await call("what_should_i_know", { task: "then npm install pg", packages: [] });
