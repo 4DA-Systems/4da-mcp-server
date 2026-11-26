@@ -72,7 +72,7 @@ export interface CheckedIndex {
 export interface PrivateIndex {
   name: string;
   ecosystem: string;
-  basis: "marked private by you" | "this project's registry configuration" | "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one";
+  basis: "marked private by you" | "this project's registry configuration" | "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" | "the manifest snippet in the task takes it from git, a path, a registry or the workspace, not the public registry";
 }
 
 export interface TaskPackages {
@@ -228,10 +228,16 @@ function declarationProblem(item: unknown): string | null {
   if (typeof o.name !== "string" || !o.name.trim()) return "`name` must be a non-empty string";
   if (lengthProblem("name", "package", o.name) || o.name.length > MAX_NAME_ARG_LENGTH) return "`name` is longer than any package name";
   const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
-  // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts); a Go path in
-  // the proxy's `!`-escaped form is read unescaped first (round 6, item 4b).
-  const bad = nameProblem(ecosystem, ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim());
+  // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts), and then
+  // dependency_check's own entry rule on the name as written (round 7c, F6): a Go path in the proxy's `!`-escaped
+  // form is refused here as dependency_check refuses it, so neither tool looks it up or records it.
+  const bad = nameProblem(ecosystem, o.name.trim());
   if (bad) return `\`name\` is no ${ecosystem} package name (${bad})`;
+  try {
+    validateItem({ ecosystem, package: o.name.trim(), to: "latest" }, 0);
+  } catch {
+    return `\`name\` is refused as dependency_check refuses it: it is no ${ecosystem} package name as written (a Go path is written unescaped, \`github.com/Org/mod\`, never in the proxy's \`!\` form)`;
+  }
   if (o.version !== undefined && o.version !== null) {
     if (typeof o.version !== "string") return "`version` must be a string";
     const v = o.version.trim();
@@ -243,7 +249,7 @@ function declarationProblem(item: unknown): string | null {
     if (v && versionLooksSecret(v)) return "`version` looks like a credential (it is not recorded either)";
     if (v) {
       try {
-        validateItem({ ecosystem, package: ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim(), to: v }, 0);
+        validateItem({ ecosystem, package: o.name.trim(), to: v }, 0);
       } catch (error) {
         // The refused value is never repeated (round 6b, item 1): dependency_check's message ends "(got <value>)".
         return `\`version\` is refused as dependency_check refuses it: ${(error instanceof Error ? error.message : String(error)).replace(/^items\[0\]\.to /, "").replace(/\s*\(got [\s\S]*\)\s*$/, "")}`;

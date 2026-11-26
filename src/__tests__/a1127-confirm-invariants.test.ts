@@ -106,7 +106,8 @@ describe("C4 (was I2): which versions a declared entry is checked at", () => {
     ["pin zqxpin to 1.0.0", "zqxpin", undefined, ["zqxpin@latest"]],
   ])("%s, declared at %s %s", async (task, name, declaredVersion, expected) => {
     const r = await brief(task, { packages: [{ ecosystem: "npm", name, ...(declaredVersion ? { version: declaredVersion } : {}), public: true }] });
-    const rows = (r.new_packages ?? []).map((x: { name: string; version?: string }) => `${x.name}@${x.version ?? "latest"}`);
+    // Round 7c, R3: one row per (pair, version), in new_packages or requested_versions.
+    const rows = [...(r.new_packages ?? []).map((x: { name: string; version?: string }) => `${x.name}@${x.version ?? "latest"}`), ...(r.requested_versions ?? []).map((x: { name: string; to: string }) => `${x.name}@${x.to}`)];
     for (const e of expected) expect(rows, JSON.stringify(rows)).toContain(e);
     if (name === "node-forge" && !declaredVersion) expect(r.delegation_assessment.level).toBe("human_only");
   });
