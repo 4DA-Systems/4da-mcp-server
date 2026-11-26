@@ -32,13 +32,21 @@
  * subcommand is resolved as npm resolves it (aliases, typos, unique prefixes: npmCommand).
  * A global install that names its version (`npm i -g x@1`, `pnpm add -g`, `bun add -g`) is read
  * and checked like any other.
+ * A package named without a version, with `@latest`, or as an `npm:` alias without one
+ * (`npm install x`, `yarn add x`, `pip install x`, `uv add x`, `poetry add x`, `cargo add x`,
+ * `go get x`, and `pnpm up -L x`, Berry's `yarn up x`, `yarn upgrade x --latest`, which move it to
+ * the newest release) writes the registry's newest release into the manifest and the lockfile: it
+ * is the request "latest", judged like a constraint on the verdict recorded for that request (the
+ * server records `requested: "latest"`). A dist-tag other than latest (`x@next`) or a Go branch is
+ * held with "name the version": no dependency_check call clears a tag.
  * A command this hook does not take apart exactly (a variable, a substitution, a heredoc, a
  * registry or index other than the public one, a git or path source), a bare `npm install` or
- * `npm ci`, a global tool install that is not a package manager's add (`cargo install`,
- * `yarn global add`, `go install`), an `npm:` alias without a version, and a package named
- * without a version all go ahead without comment. An `npm:` alias with a version (on the command
- * line or in package.json) is read as the package it installs; the public index or registry named
- * explicitly (`-i https://pypi.org/simple`, `--registry crates-io`) is the public one.
+ * `npm ci`, `pnpm up x` / `yarn upgrade x` (inside the manifest's range), a global tool install that
+ * is not a package manager's add (`cargo install`, `yarn global add`, `go install`) and a tool run
+ * (npx, `pnpm dlx`, bunx, uvx, pipx) all go ahead without comment. An `npm:` alias with a version
+ * (on the command line or in package.json) is read as the package it installs; the public index
+ * or registry named explicitly (`-i https://pypi.org/simple`, `--registry crates-io`) is the
+ * public one.
  * In a manifest only dependency declarations count (never a comment or another string field),
  * each section's are compared on their own, a renamed Cargo dependency is the crate `package =`
  * names, and a dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`,
@@ -1908,6 +1916,34 @@ function jsVersion(raw) {
 }
 
 const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9._~][a-z0-9._~-]*)@(.+)$/i;
+
+/**
+ * A package named on an install command without a version is written at the registry's newest
+ * release (the manifest and the lockfile get it), so it is read as the request "latest", which
+ * needs a dependency_check verdict for that same request (the server records `requested:
+ * "latest"`). A dist-tag other than latest (`next`, `beta`) is read as itself (`tag`):
+ * dependency_check reads exact versions, ranges and latest, so no call clears it, and the denial
+ * says to name the version. Each test below keeps out what installs no public package by name:
+ * a path, a tarball, a URL or git source, a GitHub `user/repo`, a version-like word.
+ */
+const LATEST = "latest";
+/** An npm package name standing alone (`lodash`, `@types/node`): no path, tarball, URL or `user/repo`. */
+const npmBareName = (w) =>
+  w.length <= 214 && /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i.test(w) && /[a-z]/i.test(w) && !/\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip)$/i.test(w);
+/** A dist-tag (`next`, `beta`, `canary`): a word that is no version, range or wildcard. */
+const isDistTag = (raw) => raw.length <= 100 && /^[A-Za-z][A-Za-z0-9._-]*$/.test(raw) && !/^[vV]\d/.test(raw) && !/^[xX](?:$|\.)/.test(raw);
+/** A PyPI requirement that is a name alone (`requests`, `requests[socks]`): no specifier, path, archive or URL. */
+function pyBareName(w) {
+  const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?$/.exec(w);
+  return m && /[A-Za-z]/.test(m[1]) && !/\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar|egg)$/i.test(m[1]) ? m[1] : null;
+}
+/** A PyPI install operand: its requirement, or the name alone as the request "latest". */
+function pyOperand(w) {
+  const r = pep508(w);
+  if (r) return [{ ecosystem: "PyPI", name: r.name, spec: r.spec }];
+  const bare = pyBareName(w);
+  return bare ? [{ ecosystem: "PyPI", name: bare, spec: LATEST }] : [];
+}
 const CARGO_SPEC = /^([A-Za-z0-9_][A-Za-z0-9_-]*)@(.+)$/;
 const GO_SPEC = /^([A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*)@(.+)$/;
 const PEP508_NAME = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]]{0,200}\])?\s*/;
@@ -1933,13 +1969,15 @@ function poetrySpec(word) {
   const at = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?@(.+)$/.exec(word);
   if (at) {
     const v = at[2].trim();
-    if (v.toLowerCase() === "latest" || /[/:]/.test(v)) return null;
+    if (v.toLowerCase() === LATEST) return { name: at[1], spec: LATEST };
+    if (/[/:]/.test(v)) return null;
     if (specTooLong(v)) return refuse(specTooLong(v));
     if (exactFor("PyPI", v) || /^[~^]\s*\d/.test(v)) return { name: at[1], spec: v };
     const set = PEP440_SPECIFIERS.exec(v);
     return set && set[1].length === v.length ? { name: at[1], spec: v } : null;
   }
-  return pep508(word);
+  const bare = pep508(word) ? null : pyBareName(word);
+  return bare ? { name: bare, spec: LATEST } : pep508(word);
 }
 
 const JS_VALUES = {
@@ -2126,13 +2164,36 @@ function jsInstalls(manager, args) {
   else if (all && manager === "yarn" && all[0] === "workspaces" && all[1] === "foreach") all = all.slice(2);
   if (all && manager === "npm" && npmCommand(all[0]) === "pkg" && all[1] === "set") return npmPkgSet(all.slice(2), args.includes("--json"));
   if (!all || all.length === 0 || !isInstallCommand(manager, all[0])) return [];
+  // Which subcommands write the newest release for a name given alone: an install or add, `pnpm up
+  // -L` / `--latest`, Berry's `yarn up`, classic `yarn upgrade --latest`. `pnpm up x` and `yarn
+  // upgrade x` without it stay inside the manifest's range: a name alone is not read there.
+  const sub = all[0];
+  const latestFlag = args.includes("-L") || args.includes("--latest");
+  const writesNewest =
+    manager === "npm" ||
+    (manager === "pnpm" && (["add", "install", "i"].includes(sub) || latestFlag)) ||
+    (manager === "yarn" && (sub === "add" || sub === "up" || (sub === "upgrade" && latestFlag))) ||
+    (manager === "bun" && ["add", "a", "install", "i"].includes(sub));
   const out = [];
   for (const word of all.slice(1)) {
     const m = NPM_SPEC.exec(word);
-    // `alias@npm:target@1.2.3` installs target 1.2.3.
-    const target = m && m[2].startsWith("npm:") ? NPM_SPEC.exec(m[2].slice(4)) : m;
-    const version = target ? jsVersion(target[2]) : null;
-    if (version) out.push({ ecosystem: "npm", name: target[1], spec: version });
+    if (!m) {
+      if (writesNewest && npmBareName(word)) out.push({ ecosystem: "npm", name: word, spec: LATEST });
+      continue;
+    }
+    // `alias@npm:target@1.2.3` installs target 1.2.3; `alias@npm:target` its newest release.
+    let name = m[1];
+    let raw = m[2];
+    if (raw.startsWith("npm:")) {
+      const inner = NPM_SPEC.exec(raw.slice(4));
+      if (inner) [name, raw] = [inner[1], inner[2]];
+      else if (npmBareName(raw.slice(4))) [name, raw] = [raw.slice(4), LATEST];
+      else continue;
+    }
+    const version = jsVersion(raw);
+    if (version) out.push({ ecosystem: "npm", name, spec: version });
+    else if (raw.trim().toLowerCase() === LATEST) out.push({ ecosystem: "npm", name, spec: LATEST });
+    else if (isDistTag(raw.trim())) out.push({ ecosystem: "npm", name, spec: raw.trim(), tag: true });
   }
   return out;
 }
@@ -2141,10 +2202,7 @@ function jsInstalls(manager, args) {
 function pipInstalls(args) {
   const all = operands(args, { values: PIP_VALUES, refuse: PY_INDEX });
   if (!all || all[0] !== "install") return [];
-  return all.slice(1).flatMap((w) => {
-    const r = pep508(w);
-    return r ? [{ ecosystem: "PyPI", name: r.name, spec: r.spec }] : [];
-  });
+  return all.slice(1).flatMap(pyOperand);
 }
 
 /**
@@ -2439,6 +2497,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     if (all && all[0] === "update") return cargoUpdate(rest);
     if (!all || all[0] !== "add") return [];
     return all.slice(1).flatMap((w) => {
+      // A crate named alone: its newest release.
+      if (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(w)) return [{ ecosystem: "crates.io", name: w, spec: LATEST }];
       const m = CARGO_SPEC.exec(w);
       const v = m ? m[2].trim() : null;
       if (v && specTooLong(v)) return refuse(specTooLong(v)) ?? [];
@@ -2468,13 +2528,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     // `uv lock` / `uv sync` / `uv add` move a package to the version `--upgrade-package x==v` names.
     const upgrades = upgradePackages(args);
     if (all[0] !== "add") return upgrades;
-    return [
-      ...upgrades,
-      ...all.slice(1).flatMap((w) => {
-        const r = pep508(w);
-        return r ? [{ ecosystem: "PyPI", name: r.name, spec: r.spec }] : [];
-      }),
-    ];
+    return [...upgrades, ...all.slice(1).flatMap(pyOperand)];
   }
   if (program === "pip-compile") return upgradePackages(args);
   // `uvx pip-compile ...`: uv runs the pip-tools command named first.
@@ -2493,11 +2547,18 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     if (all && (all[0] === "mod" || all[0] === "work") && all[1] === "edit") return goModEdit(args);
     if (!all || all[0] !== "get") return [];
     return all.slice(1).flatMap((w) => {
+      // A module named alone, or `@latest` / `@upgrade`: its newest release.
+      const bare = /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*$/.test(w) ? w : null;
+      if (bare && !bare.includes("...")) return [{ ecosystem: "Go", name: bare, spec: LATEST }];
       const m = GO_SPEC.exec(w);
       if (!m || m[1].includes("...")) return [];
       const v = m[2];
       if (specTooLong(v)) return refuse(specTooLong(v)) ?? [];
-      return GO_EXACT.test(v) || /^v\d+(?:\.\d+)?$/.test(v) ? [{ ecosystem: "Go", name: m[1], spec: v }] : [];
+      if (v === "latest" || v === "upgrade") return [{ ecosystem: "Go", name: m[1], spec: LATEST }];
+      if (v === "none") return [];
+      if (GO_EXACT.test(v) || /^v\d+(?:\.\d+)?$/.test(v)) return [{ ecosystem: "Go", name: m[1], spec: v }];
+      // A branch, a tag or `@patch`: no version this hook or dependency_check can read.
+      return isDistTag(v) ? [{ ecosystem: "Go", name: m[1], spec: v, tag: true }] : [];
     });
   }
   return [];
@@ -2777,6 +2838,7 @@ function denialFor(introduced, ledger, dir, what) {
   const unreadable = [];
   const local = [];
   const unchecked = [];
+  const tagged = [];
   const index = byPackage(ledger);
   for (const c of introduced) {
     // Past the budget the call is held as not read (judgeCall), whatever is left to judge.
@@ -2786,9 +2848,10 @@ function denialFor(introduced, ledger, dir, what) {
     if (verdict.deny) held.push({ c, entry: verdict.deny });
     else if (verdict.unreadable) unreadable.push({ c, entry: verdict.unreadable });
     else if (verdict.localSource) local.push({ c, entry: verdict.localSource });
+    else if (c.tag) tagged.push({ c });
     else unchecked.push({ c, last: verdict.check });
   }
-  if (held.length === 0 && unreadable.length === 0 && local.length === 0 && unchecked.length === 0) return null;
+  if (held.length === 0 && unreadable.length === 0 && local.length === 0 && unchecked.length === 0 && tagged.length === 0) return null;
   const lines = [`4DA guard: this ${what} was stopped before it ran.`];
   for (const { c, entry } of held.slice(0, 10)) {
     lines.push(`- ${quotedChange(c)}: dependency_check answered ${entry.verdict} at ${when(entry)}, recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}. Write a version it answers proceed for.`);
@@ -2802,7 +2865,12 @@ function denialFor(introduced, ledger, dir, what) {
   }
   for (const { c, entry } of local.slice(0, 10)) {
     lines.push(
-      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove that non-registry spec from the manifest that declares it (that edit goes ahead; one that puts a registry version in its place is held like this command), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. FOURDA_GUARD is the user's setting, not yours to change.`,
+      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove that non-registry spec from the manifest that declares it (that edit goes ahead; one that puts a registry version in its place is held like this command), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. If the name is a package of this workspace: with pnpm or Yarn install it as ${quoted(`${c.name}@workspace:*`)} (that command goes ahead); with any manager, have it marked private with FOURDA_PRIVATE_PACKAGES=${quoted(c.name)} in the 4da server's environment (the name then never leaves this machine: the next dependency_check call for it sends nothing, records it private, and this ${what} passes), or add it to the manifest by hand as a file: path (that edit goes ahead). FOURDA_GUARD is the user's setting, not yours to change.`,
+    );
+  }
+  for (const { c } of tagged.slice(0, 10)) {
+    lines.push(
+      `- ${quotedChange(c)}: a dist-tag or branch, not a version. dependency_check reads exact versions, ranges and latest, so no call clears a tag: name the version the tag points to, check that version with dependency_check, and run the ${what} with that version.`,
     );
   }
   for (const { c, last } of unchecked.slice(0, 10)) {
@@ -2837,8 +2905,10 @@ function denialFor(introduced, ledger, dir, what) {
       );
     }
     lines.push(
-      "dependency_check sends each name to its public registry and to OSV.dev unless this project's private rules cover it (an .npmrc scope mapped to a private registry, GOPRIVATE, a private Cargo or Python index, FOURDA_PRIVATE_PACKAGES); a name they cover is never sent, and any version of it then goes ahead. " +
-        "A private package no such rule covers: add the rule first rather than make the call. A name not published on its public registry comes back unknown and stays blocked: correct the name or remove it rather than retrying.",
+      "dependency_check sends each name to its public registry and to OSV.dev unless this project's private rules cover it (an .npmrc scope mapped to a private registry, GOPRIVATE, a private Cargo or Python index, FOURDA_PRIVATE_PACKAGES); a name they cover is never sent, it is recorded private, and any version of it then goes ahead. " +
+        "A package from a private registry that no such rule covers must NOT be checked: the call would send its name to the public registry. Add the rule first (the registry line in .npmrc, pip.conf or GOPRIVATE, or FOURDA_PRIVATE_PACKAGES=<name> in the 4da server's environment, which the user sets), then make the call: it sends nothing, records the name private, and this " +
+        what +
+        " passes. Saying a name is private anywhere else (what_should_i_know's `public: false`) records nothing and releases nothing. A name not published on its public registry comes back unknown and stays blocked: correct the name or remove it rather than retrying.",
     );
     // A call that was made and left nothing behind would be stopped here for ever: say what that
     // means, once, where a version has no entry at all (an `unknown` answer is named above).
@@ -3021,7 +3091,7 @@ function introducedBy(input) {
   if (!toolInput || typeof toolInput !== "object") return null;
   if (toolName === "Bash" || toolName === "PowerShell") {
     const found = installsIn(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash");
-    return { what: "command", changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null })) };
+    return { what: "command", changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null, ...(r.tag ? { tag: true } : {}) })) };
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
   if (typeof toolInput.file_path !== "string") return null;
@@ -3072,7 +3142,7 @@ function judgeCall(input, env, now) {
     const spec = String(c.spec).trim();
     // A version or constraint past its bound is held as not read, never dropped (it was in round 2).
     if (specTooLong(spec)) refuse(specTooLong(spec));
-    else if (NAME_TEXT.test(c.name) && specText(c.spec) === spec) changes.push(c);
+    else if (NAME_TEXT.test(c.name) && (specText(c.spec) === spec || (c.tag && isDistTag(spec)))) changes.push(c);
     else if (String(c.name).length > 214) refuse("a package name over 214 characters");
   }
   overBudget();

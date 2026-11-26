@@ -91,6 +91,6 @@ describe("(c) what a private rule means for the name", () => {
     ledger([{ package: "other", verdict: "proceed" }]);
     const text = denial();
     expect(text).not.toMatch(/its version then goes ahead/);
-    expect(text).toMatch(/a name they cover is never sent, and any version of it then goes ahead/);
+    expect(text).toMatch(/a name they cover is never sent, it is recorded private, and any version of it then goes ahead/);
   });
 });

@@ -169,7 +169,8 @@ describe("a call that could not be read in time is held, never let through", () 
   });
 
   it("within the budget nothing changes", () => {
-    expect(respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now())).toBe("");
+    // Within the budget it is read (since wave 2 a name alone is the request "latest", held for its verdict), never held as not read.
+    expect(respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now())).not.toContain("could not be read");
   });
 });
 
