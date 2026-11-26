@@ -3237,6 +3237,7 @@ function detectIn(text, seen) {
  * position, and an unknown wrapper (`start npm i x`, `mise exec -- npm i x`) then went unread.
  */
 export function detectsInstall(text) {
+  fault("detector");
   if (typeof text !== "string") return false;
   // J3: a line continued with `\` (bash) or a backtick (PowerShell) is one line.
   if (/[\\`]\r?\n/.test(text)) text = text.replace(/[\\`]\r?\n/g, " ");
@@ -4147,6 +4148,7 @@ const SED_AWK_REMEDY =
 let accountRemedy = null;
 
 function accountCall(command, dialect) {
+  fault("account");
   accountRemedy = null;
   if (!detectsInstall(command)) return null;
   if (command.length > MAX_ACCOUNT_CHARS) return `a command over ${MAX_ACCOUNT_CHARS / 1024 / 1024} MB that names an install`;
@@ -4158,6 +4160,7 @@ function accountCall(command, dialect) {
  * hook does not read. `depth`: the wrappers (a shell's `-c`, a runner) it was found inside.
  */
 export function installsIn(command, dialect, depth = 0) {
+  fault("reader");
   if (depth > MAX_WRAPS) return [];
   const line = dialect === "powershell" && typeof command === "string" ? psEnvAssignments(command).line : command;
   const commands = simpleCommands(line, dialect, null, null, MAX_ACCOUNT_CHARS);
@@ -4209,6 +4212,7 @@ function ledgerStarted(dir) {
  * a call stopped here could never pass).
  */
 function readLedger(dir, now) {
+  fault("ledger-read");
   if (!existsSync(dir) || !ledgerStarted(dir)) return null;
   const entries = [];
   // D10: a line that does not parse but names a package (an avoid cut short), or one stamped past
@@ -4672,6 +4676,7 @@ function plainLedgerRead(command, dialect) {
 
 /** For a PreToolUse call, "command" or "edit" when it names the ledger and is not plainly a read, else null. */
 function ledgerCall(input, env) {
+  fault("ledger-guard");
   const toolInput = input.tool_input;
   if (!toolInput || typeof toolInput !== "object") return null;
   const marks = ledgerFolderMarks(env);
@@ -4750,6 +4755,8 @@ function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
     return judgeCall(input, env, now);
   } catch {
     // An error of the hook's own while reading: an install or manifest call it could not read is held.
+    // The budget is spent or broken: this check runs without it (a throw here reaches rawHold).
+    deadline = Infinity;
     if (!mayInstall(input)) return "";
     refuse("the hook could not read it");
     const dir = dataDir(env);
@@ -4798,7 +4805,7 @@ function judgeCall(input, env, now) {
 }
 
 /** The deny JSON for `reason`. */
-const denyJson = (reason) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+const denyJson = (reason) => (fault("denial"), JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
 
 /** Whether `dir` holds a ledger (the hook denies only where one exists). */
 const readLedgerExists = (dir) => existsSync(dir) && ledgerStarted(dir);
@@ -5024,6 +5031,7 @@ function postToolUse(input) {
  * reading the manifest and the ledger.
  */
 export function respond(input, env = process.env, now = Date.now(), readBudgetMs = READ_BUDGET_MS) {
+  fault("respond");
   if (!input || typeof input !== "object") return "";
   const mode = guardMode(env.FOURDA_GUARD);
   if (mode === "off") return "";
@@ -5034,41 +5042,53 @@ export function respond(input, env = process.env, now = Date.now(), readBudgetMs
   return "";
 }
 
+/** The payload as it arrives on stdin (rawHold decides on it when anything goes wrong). */
+let stdinText = "";
+let answered = false;
+/** Writes the hook's one answer, once. */
+function answer(out) {
+  if (answered) return;
+  answered = true;
+  if (out) process.stdout.write(out);
+}
+
 async function main() {
   mainStartedAt = performance.now();
-  // A payload still arriving after SELF_LIMIT_MS (stdin left open) ends the hook silently, and the
-  // call goes ahead. The timer cannot fire while the hook reads a payload: that work is bounded and
-  // timed instead (preToolUse), so the hook answers far inside Claude Code's 10 s hook timeout.
-  setTimeout(() => process.exit(0), SELF_LIMIT_MS).unref();
+  // stdin never closed: after SELF_LIMIT_MS the hook answers from what has arrived (rawHold: held
+  // when that text already shows a tool it judges and a manager word, manifest or ledger name).
+  setTimeout(() => {
+    answer(rawHold(stdinText));
+    process.exit(0);
+  }, SELF_LIMIT_MS).unref();
   process.stdin.setEncoding("utf8");
-  let raw = "";
   for await (const chunk of process.stdin) {
-    raw += chunk;
+    stdinText += chunk;
     // Past what the hook will even parse: judged from the first part's text alone.
-    if (raw.length > MAX_PARSE_CHARS) {
-      const out = oversized(raw.slice(0, 64 * 1024));
-      if (out) process.stdout.write(out);
+    if (stdinText.length > MAX_PARSE_CHARS) {
+      answer(oversized(stdinText.slice(0, 64 * 1024)));
       process.exit(0);
     }
   }
-  let input;
-  try {
-    input = JSON.parse(raw);
-  } catch {
-    // Not JSON: an oversized payload is judged from its first part's text; any other goes ahead.
-    const out = raw.length > MAX_INPUT_CHARS ? oversized(raw.slice(0, 64 * 1024)) : "";
-    if (out) process.stdout.write(out);
-    return;
-  }
-  // A hook payload is kilobytes. One over MAX_INPUT_CHARS is not read: held when its parsed fields
-  // show a manifest write or edit, or a command that names an install (round 4 of the hook review:
-  // judged from the first 64 KB of escaped text, it missed `\n` before npm, a long description
-  // before the command, content before file_path); let through otherwise.
+  fault("stdin");
+  const raw = stdinText.charCodeAt(0) === 0xfeff ? stdinText.slice(1) : stdinText;
   // A payload past WORKER_ABOVE_CHARS is judged in a worker thread under a hard wall clock: the
   // budget's ticks are the first bound, and this one holds whatever they missed (seventh independent
-  // check, D1: a runner chain over 512 KB printed nothing in 10 s, and the call went ahead).
-  const out = raw.length > WORKER_ABOVE_CHARS ? await judgeInWorker(input, raw.length > MAX_INPUT_CHARS) : respond(input);
-  if (out) process.stdout.write(out);
+  // check, D1). The worker is given the raw text and parses it itself (a value nested thousands deep
+  // could not be cloned to it: tenth independent check, S45).
+  if (raw.length > WORKER_ABOVE_CHARS) {
+    answer(await judgeInWorker(raw, raw.length > MAX_INPUT_CHARS));
+    return;
+  }
+  let input;
+  try {
+    fault("parse");
+    input = JSON.parse(raw);
+  } catch {
+    // Not JSON (or the parse failed): rawHold decides on the text.
+    answer(rawHold(raw));
+    return;
+  }
+  answer(respond(input));
 }
 
 /** Payloads over this are judged in a worker under WALL_LIMIT_MS; smaller ones inline (a worker costs about 40 ms to start). */
@@ -5076,36 +5096,62 @@ const WORKER_ABOVE_CHARS = 8 * 1024;
 /** From the hook's start: past it, a call a worker has not judged is held (Claude Code's own limit is 10 s). */
 const WALL_LIMIT_MS = 5000;
 
-/** The answer for a call judged in a worker; past WALL_LIMIT_MS (or on a worker's failure) the hold timeHold gives. */
-function judgeInWorker(input, oversize) {
+/** The answer for a payload judged in a worker; past WALL_LIMIT_MS, or on a worker's error or exit without an answer, rawHold's. */
+function judgeInWorker(raw, oversize) {
   return new Promise((done) => {
     let settled = false;
+    let worker = null;
     const settle = (out) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      worker.terminate().catch(() => {});
+      worker?.terminate().catch(() => {});
       done(out);
     };
-    const worker = new Worker(new URL(import.meta.url), { workerData: { fourdaJudge: input, oversize } });
     const left = WALL_LIMIT_MS - (performance.now() - (mainStartedAt ?? performance.now()));
-    const timer = setTimeout(() => settle(timeHold(input)), Math.max(250, left));
-    worker.once("message", (m) => settle(typeof m === "string" ? m : timeHold(input)));
-    worker.once("error", () => settle(timeHold(input)));
-    worker.once("exit", () => settle(timeHold(input)));
+    const timer = setTimeout(() => settle(rawHold(raw)), Math.max(250, left));
+    try {
+      fault("worker-start");
+      worker = new Worker(new URL(import.meta.url), { workerData: { fourdaRaw: raw, oversize } });
+    } catch {
+      settle(rawHold(raw));
+      return;
+    }
+    worker.once("message", (m) => settle(typeof m === "string" ? m : rawHold(raw)));
+    worker.once("error", () => settle(rawHold(raw)));
+    worker.once("exit", () => settle(rawHold(raw)));
   });
 }
 
-/** The hold for a call not judged in time: a command or a manifest write, where a ledger exists and the guard blocks; nothing else. */
-function timeHold(input) {
-  if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || guardMode(process.env.FOURDA_GUARD) !== "block") return "";
-  const tool = input.tool_name;
-  const command = tool === "Bash" || tool === "PowerShell";
-  const file = input.tool_input?.file_path;
-  if (!command && !(typeof file === "string" && manifestKind(file) !== null)) return "";
-  if (!readLedgerExists(dataDir(process.env))) return "";
-  unreadRemedy = null;
-  return denyJson(notReadDenial(command ? "command" : "edit", OVER_BUDGET));
+/**
+ * Round 12 (tenth independent check, S45): the hook's one answer when anything goes wrong (a throw,
+ * a rejected promise, a worker's error or exit without an answer, the wall clock, stdin never
+ * closed). It never ticks and never parses: it decides on the raw text alone, by indexOf. A
+ * PreToolUse call that names a tool the hook judges and holds any manager word, manifest file name
+ * or the ledger's name is held, where a ledger exists and the guard blocks; any other gets nothing.
+ */
+const RAW_TOOLS = ['"bash"', '"powershell"', '"edit"', '"multiedit"', '"write"'];
+const RAW_WORDS = ["npm", "pnpm", "yarn", "bun", "pip", "uv ", "uvx", "poetry", "cargo", "go ", "go.exe", "npx", "corepack", "package.json", "cargo.toml", "pyproject.toml", "requirements", "go.mod", "pnpm-workspace", "check-ledger"];
+const RAW_HOLD =
+  "4DA guard: this call was stopped before it ran: the hook could not finish reading this call, so the dependency versions it may install or write were not checked. Run it again as a plain command or a smaller edit; if it is held again, tell the user. FOURDA_GUARD is the user's setting, not yours to change.";
+function rawHold(raw) {
+  try {
+    if (typeof raw !== "string" || raw.length === 0 || guardMode(process.env.FOURDA_GUARD) !== "block") return "";
+    const text = raw.toLowerCase();
+    if (text.indexOf('"pretooluse"') < 0) return "";
+    if (!RAW_TOOLS.some((w) => text.indexOf(w) >= 0)) return "";
+    if (!RAW_WORDS.some((w) => text.indexOf(w) >= 0)) return "";
+    if (!readLedgerExists(dataDir(process.env))) return "";
+    return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: RAW_HOLD } });
+  } catch {
+    return "";
+  }
+}
+
+/** Test only: FOURDA_HOOK_FAULT=<point> throws at that point, so each path to rawHold can be exercised. */
+const FAULT = process.env.FOURDA_HOOK_FAULT ?? "";
+function fault(point) {
+  if (FAULT === point) throw new Error(`injected fault: ${point}`);
 }
 
 /** The largest payload the hook parses to judge it (past MAX_INPUT_CHARS it is judged, never read). */
@@ -5164,18 +5210,32 @@ function oversized(head) {
 }
 
 // A worker started by judgeInWorker: judge the one call it was given, and answer.
-if (!isMainThread && workerData && typeof workerData === "object" && workerData.fourdaJudge) {
+if (!isMainThread && workerData && typeof workerData === "object" && typeof workerData.fourdaRaw === "string") {
   let out = "";
   try {
-    out = workerData.oversize ? oversizedParsed(workerData.fourdaJudge) : respond(workerData.fourdaJudge);
+    fault("worker");
+    let input = null;
+    try {
+      input = JSON.parse(workerData.fourdaRaw);
+    } catch {
+      input = null;
+    }
+    // Not JSON: past MAX_INPUT_CHARS judged from its first part's text (oversized); any other goes ahead.
+    if (input === null) out = workerData.fourdaRaw.length > MAX_INPUT_CHARS ? oversized(workerData.fourdaRaw.slice(0, 64 * 1024)) : rawHold(workerData.fourdaRaw);
+    else out = workerData.oversize ? oversizedParsed(input) : respond(input);
   } catch {
-    out = timeHold(workerData.fourdaJudge);
+    out = rawHold(workerData.fourdaRaw);
   }
   parentPort.postMessage(out);
 }
 
 if (isMainThread && basename(process.argv[1] ?? "") === "manifest-edit.mjs") {
-  main().catch(() => {
-    // The hook never fails the call it looks at: an error of its own is silence.
-  });
+  // Everything that can go wrong ends in rawHold: a throw, a rejected promise, an uncaught error.
+  const fallBack = () => {
+    answer(rawHold(stdinText));
+    process.exit(0);
+  };
+  process.on("uncaughtException", fallBack);
+  process.on("unhandledRejection", fallBack);
+  main().catch(fallBack);
 }

@@ -4,6 +4,10 @@
  * with the reviewer's cases.
  */
 
+import { spawn, spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
@@ -29,6 +33,17 @@ function releases(command: string, tool = "Bash"): void {
 }
 
 const I = "npm i lodash@4.17.20";
+const HERE = dirname(fileURLToPath(import.meta.url));
+const HOOK = join(HERE, "..", "..", "hooks", "manifest-edit.mjs");
+const STALL = pathToFileURL(join(HERE, "helpers", "a1125-stall-preload.mjs")).href;
+
+/** The hook run on raw stdin text with extra env (and node options); its stdout. */
+function spawnHook(raw: string, extra: Record<string, string>, nodeArgs: string[] = []): string {
+  const env: Record<string, string | undefined> = { ...process.env, FOURDA_MCP_HOME: s.home, STALL_AFTER: nodeArgs.length > 0 ? "3" : "", ...extra };
+  delete env.FOURDA_GUARD;
+  const r = spawnSync(process.execPath, [...nodeArgs, HOOK], { input: raw, encoding: "utf8", env, timeout: 15_000, maxBuffer: 1 << 26 });
+  return r.stdout;
+}
 
 describe("1: sed and awk are never text; git under an editor / pager / GIT_* setting, make with a makefile option, neither", () => {
   it.each([
@@ -94,4 +109,48 @@ describe("3: no option that installs a name not on the line", () => {
   it.each(["bun add lodash@4.17.20", "yarn add lodash@4.17.20", "pnpm update lodash@4.17.20"])("%s: the plain command is read", (command) => {
     releases(command);
   });
+});
+
+describe("4: one outermost handler: nothing goes silent", () => {
+  const install = (pad = 0) => ({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `${I}${pad ? ` # ${"x".repeat(pad)}` : ""}` } });
+  const plain = (pad = 0) => ({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `ls -la${pad ? ` # ${"x".repeat(pad)}` : ""}` } });
+
+  it("a payload over 8 KB with a value nested 4,500 deep: read, and held", () => {
+    const deep = "[".repeat(4500) + "]".repeat(4500);
+    const raw = `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"${I}","description":${deep}}}`;
+    const r = spawnHook(raw, {});
+    expect(r).toContain('"deny"');
+  });
+
+  it("under 8 KB, the clock jumps 3 s past the budget mid-read (the reviewer's stall): held", () => {
+    const r = spawnHook(JSON.stringify(install(6000)), {}, ["--import", STALL]);
+    expect(r).toContain('"deny"');
+  });
+
+  const POINTS = ["stdin", "parse", "respond", "ledger-guard", "reader", "detector", "account", "ledger-read", "denial", "worker-start", "worker"];
+  it.each(POINTS)("a fault injected at %s: an install is held, a plain command is not", (point) => {
+    for (const pad of [0, 9000]) {
+      const held = spawnHook(JSON.stringify(install(pad)), { FOURDA_HOOK_FAULT: point });
+      expect(held, `${point} pad ${pad}`).toContain('"deny"');
+      expect(spawnHook(JSON.stringify(plain(pad)), { FOURDA_HOOK_FAULT: point }), `${point} pad ${pad}`).toBe("");
+    }
+  });
+
+  it("a payload that starts with a BOM is read", () => {
+    expect(spawnHook(`﻿${JSON.stringify(install())}`, {})).toContain("lodash");
+  });
+
+  it("stdin that is never closed: after 8 s the text that has arrived decides (held here)", async () => {
+    const out = await new Promise<string>((done) => {
+      const env: Record<string, string | undefined> = { ...process.env, FOURDA_MCP_HOME: s.home };
+      delete env.FOURDA_GUARD;
+      const p = spawn(process.execPath, [HOOK], { env });
+      let o = "";
+      p.stdout.on("data", (d: Buffer) => (o += d.toString()));
+      p.on("exit", () => done(o));
+      p.stdin.write(JSON.stringify(install()).slice(0, -2));
+      setTimeout(() => p.kill(), 15_000);
+    });
+    expect(out).toContain('"deny"');
+  }, 20_000);
 });
