@@ -355,3 +355,35 @@ describe("D4: what a runner subcommand runs is read", () => {
     expect(run("python -m pipx run uv add requests==2.5.0").text).toContain("could not be read");
   });
 });
+
+/** D6: a manager's own setting made earlier in the same call holds the install; any other setting does not. */
+describe("D6: a setting made earlier in the call", () => {
+  it.each([
+    ["export npm_config_before=2020-01-01; npm i lodash", "Bash"],
+    ["export npm_config_tag=beta && npm i lodash", "Bash"],
+    ["declare -x npm_config_tag=beta; npm i lodash", "Bash"],
+    ["npm_config_tag=beta; export npm_config_tag; npm i lodash", "Bash"],
+    ["set -a; npm_config_tag=beta; npm i lodash", "Bash"],
+    ["export PIP_PRE=1; pip install requests", "Bash"],
+    ["export UV_PRERELEASE=allow; uv add requests", "Bash"],
+    ["$env:npm_config_tag = 'beta'; npm i lodash", "PowerShell"],
+    ["$env:PIP_PRE=1; pip install requests", "PowerShell"],
+    ["Set-Item env:npm_config_tag beta; npm i lodash", "PowerShell"],
+    ["Set-Item -Path env:UV_PRERELEASE -Value allow; uv add requests", "PowerShell"],
+  ])("%s: held as not read; the plain install releases", (command, tool) => {
+    const r = run(command, tool);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text).toContain("made earlier in this call");
+    s.ledger([]);
+    releases(command.includes("pip") ? "pip install requests" : command.includes("uv add") ? "uv add requests" : "npm i lodash");
+  });
+
+  it.each([
+    ['$env:CI = "true"; pnpm install --frozen-lockfile', "PowerShell"],
+    ["$env:NODE_ENV='production'; npm ci", "PowerShell"],
+    ["export CI=true; npm ci", "Bash"],
+    ["export NODE_OPTIONS=--max-old-space-size=4096 && npm install", "Bash"],
+  ])("%s: another namespace's setting goes ahead", (command, tool) => {
+    expect(run(command, tool).decision).toBe("allow");
+  });
+});

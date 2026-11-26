@@ -3222,6 +3222,13 @@ function pyOperandKind(word) {
  */
 function accountLine(line, dialect, depth = 0) {
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
+  // D6: PowerShell `$env:NAME = value` statements: a manager's own setting holds the line; any other is taken out before it is read.
+  if (dialect === "powershell") {
+    const env = psEnvAssignments(line);
+    const managed = env.names.find((n) => MANAGER_SETTING.test(n));
+    if (managed) return `the setting ${managed} made earlier in this call`;
+    line = env.line;
+  }
   const dropped = [];
   const commands = quietly(() => simpleCommands(line, dialect, null, dropped, MAX_ACCOUNT_CHARS));
   if (!commands) return dialect === "bash" && line.includes("<<") ? dataHeredoc(line) : "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
@@ -3234,9 +3241,48 @@ function accountLine(line, dialect, depth = 0) {
     }
   }
   for (const words of commands) {
+    const set = managerSettingIn(words);
+    if (set) return `the setting ${set} made earlier in this call`;
+  }
+  for (const words of commands) {
     tick();
     const why = accountCommand(words, dialect, depth);
     if (why) return why;
+  }
+  return null;
+}
+
+/** A PowerShell `$env:NAME = value` statement: its name, and the line without it. */
+const PS_ENV_ASSIGNMENT = /(^|[;\n\r])[ \t]*\$env:([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:'[^'\n\r]*'|"[^"`$\n\r]*"|[^\s;|&'"`$()]+)[ \t]*(?=$|[;\n\r])/gi;
+function psEnvAssignments(line) {
+  const names = [];
+  const out = line.replace(PS_ENV_ASSIGNMENT, (_m, lead, name) => {
+    names.push(name);
+    return lead;
+  });
+  return { line: out, names };
+}
+
+/**
+ * D6: the manager setting (MANAGER_SETTING) a simple command makes for the commands after it, or
+ * null: `export npm_config_tag=next`, `declare -x PIP_PRE=1`, a bare `UV_PRERELEASE=allow`, and
+ * PowerShell's `Set-Item env:npm_config_before 2020-01-01` / `-Path env:X`.
+ */
+function managerSettingIn(words) {
+  const program = (words[0] ?? "").toLowerCase();
+  if (words.every((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w))) return words.map((w) => w.slice(0, w.indexOf("="))).find((n) => MANAGER_SETTING.test(n)) ?? null;
+  if (["export", "declare", "typeset", "local", "readonly"].includes(program)) {
+    for (const w of words.slice(1)) {
+      const name = w.startsWith("-") ? "" : w.split("=")[0];
+      if (name && MANAGER_SETTING.test(name)) return name;
+    }
+    return null;
+  }
+  if (["set-item", "si", "new-item", "ni", "set-content", "sc", "add-content", "ac"].includes(programName(program))) {
+    for (const w of words.slice(1)) {
+      const m = /^env:([A-Za-z_][A-Za-z0-9_]*)/i.exec(w);
+      if (m && MANAGER_SETTING.test(m[1])) return m[1];
+    }
   }
   return null;
 }
@@ -3658,7 +3704,8 @@ function accountCall(command, dialect) {
  */
 export function installsIn(command, dialect, depth = 0) {
   if (depth > MAX_WRAPS) return [];
-  const commands = simpleCommands(command, dialect, null, null, MAX_ACCOUNT_CHARS);
+  const line = dialect === "powershell" && typeof command === "string" ? psEnvAssignments(command).line : command;
+  const commands = simpleCommands(line, dialect, null, null, MAX_ACCOUNT_CHARS);
   if (!commands) return [];
   const seen = new Set();
   const out = [];
