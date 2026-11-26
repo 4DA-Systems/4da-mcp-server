@@ -455,6 +455,8 @@ export function namesNoPackage(operand: string): boolean {
   return /\.(?:txt|toml|json|lock|whl|tgz|tar\.gz|zip|cfg|ini|ya?ml)$/.test(o);
 }
 
+const MAX_PAIRS = 200;
+
 /** A strict (name, ecosystem) pair the task's text gives by position (K2), with the spec written on it. */
 export interface StrictPair {
   ecosystem: CheckEcosystem;
@@ -474,6 +476,9 @@ export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable:
   const hiddenValues: string[] = [];
   const seen = new Set<string>();
   for (const c of scanCommands(task)) {
+    // Bounded like the reader (MAX_READ_PACKAGES): the briefing's matching of each pair is linear in the pairs, and
+    // 16,000 one-line commands took 8 s of CPU (CPU sweep, round 6). Past the cap the reader says NOT CHECKED.
+    if (pairs.length >= MAX_PAIRS) break;
     if (c.unreadable) unreadable.push(c);
     for (const f of c.requirementFiles ?? []) if (!requirementFiles.includes(f)) requirementFiles.push(f);
     for (const f of c.hiddenValues ?? []) if (!hiddenValues.includes(f)) hiddenValues.push(f);
