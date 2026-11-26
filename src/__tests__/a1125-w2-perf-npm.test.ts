@@ -121,6 +121,24 @@ describe("large package-lock.json files never hold the event loop (audit 2026-11
     expect(npmLockPrivateSources(dir, new Set()).length).toBe(10);
   });
 
+  it("a lockfile with more private locations than are kept is read again, with the same answer", () => {
+    write(lockOf(20_050, () => "https://npm.zq-internal.example"));
+    const fresh = npmLockPrivateSources(dir, new Set());
+    expect(fresh.length).toBe(20_050);
+    _resetNpmLockLocations();
+    resolveVersionSource(dir, "npm");
+    expect(npmLockPrivateSources(dir, new Set())).toEqual(fresh);
+  });
+
+  it("the kept locations serve one pass: a second pass (a rule change) reads the file", () => {
+    write(lockOf(50));
+    resolveVersionSource(dir, "npm");
+    const first = npmLockPrivateSources(dir, new Set());
+    const parse = vi.spyOn(JSON, "parse");
+    expect(npmLockPrivateSources(dir, new Set())).toEqual(first);
+    expect(parse.mock.calls.some(([s]) => typeof s === "string" && s.includes("zqpkg-49"))).toBe(true);
+  });
+
   it("a v1 lockfile's locations are kept as well", () => {
     const v1 = { name: "app", version: "1.0.0", lockfileVersion: 1, dependencies: { "@zq/old": { version: "1.0.0", resolved: "https://npm.zq-internal.example/@zq/old/-/old-1.0.0.tgz", dependencies: { inner: { version: "https://npm.zq-internal.example/inner-2.0.0.tgz" } } }, pub: { version: "1.0.0", resolved: "https://registry.npmjs.org/pub/-/pub-1.0.0.tgz" } } };
     write(JSON.stringify(v1));

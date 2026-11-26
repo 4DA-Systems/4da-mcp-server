@@ -1512,28 +1512,43 @@ function npmLocationMaybePrivate(location: string): boolean {
  */
 const npmLockLocationMemo = new Map<string, { signature: FileSignature; locations: Array<[string, string | null, string]> }>();
 const NPM_LOCATION_MEMO_FILES = 512;
+/**
+ * The most locations kept for one file. A lockfile that installs more from hosts that may be
+ * private (a company registry for everything) is not kept, and the pass reads it again, pausing as
+ * it goes: kept for 20 such files of 185,000 entries, the locations would outweigh the parse they save.
+ */
+const MAX_KEPT_LOCATIONS = 20_000;
 
 /** Steps for the npm lockfile reader: keep what the private-source pass needs from `doc`, read from `file` at `signature`. */
 export function* rememberNpmLockLocationsSteps(file: string, signature: FileSignature, doc: unknown): Steps<void> {
+  const key = path.resolve(file);
+  npmLockLocationMemo.delete(key);
   const locations: Array<[string, string | null, string]> = [];
+  let tooMany = false;
   try {
     yield* npmLockLocationsSteps(doc, (name, version, location) => {
-      if (npmLocationMaybePrivate(location)) locations.push([name, version, location]);
+      if (tooMany || !npmLocationMaybePrivate(location)) return;
+      if (locations.length >= MAX_KEPT_LOCATIONS) {
+        tooMany = true;
+        locations.length = 0;
+      } else locations.push([name, version, location]);
     });
   } catch {
     // A shape the pass reads as not JSON: nothing is kept, so it reads the file itself and says so.
-    npmLockLocationMemo.delete(path.resolve(file));
     return;
   }
-  const key = path.resolve(file);
-  npmLockLocationMemo.delete(key);
+  if (tooMany) return;
   npmLockLocationMemo.set(key, { signature, locations });
   if (npmLockLocationMemo.size > NPM_LOCATION_MEMO_FILES) npmLockLocationMemo.delete(npmLockLocationMemo.keys().next().value as string);
 }
 
+/** The locations kept for `file` as it is now, taken: the next pass over it (a rule change) reads the file. */
 function recallNpmLockLocations(file: string): Array<[string, string | null, string]> | null {
-  const kept = npmLockLocationMemo.get(path.resolve(file));
-  return kept && kept.signature === fileSignature(file) ? kept.locations : null;
+  const key = path.resolve(file);
+  const kept = npmLockLocationMemo.get(key);
+  if (!kept) return null;
+  npmLockLocationMemo.delete(key);
+  return kept.signature === fileSignature(file) ? kept.locations : null;
 }
 
 /** Tests only: forget the kept locations. */
