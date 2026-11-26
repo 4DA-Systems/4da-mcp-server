@@ -3087,30 +3087,56 @@ function denialFor(introduced, ledger, dir, what) {
  * `~/...` form, as written and as resolved. A read goes ahead only as one plain command from
  * LEDGER_READ_COMMANDS, with nothing else on the line.
  *
+ * The raw text is normalised once before that search (normaliseLedgerText): case folded, every run
+ * of `/` and `\` one `/`, `/./` dropped, `name/../` resolved as text, `\\?\` stripped, and the
+ * `//localhost/c$/`, `/c/`, `/mnt/c/` and `/cygdrive/c/` forms read as `c:/`.
+ *
  * What this does not see (the hook is a guard-rail against an agent's mistakes and shortcuts, not
- * a sandbox): a command that removes or renames the data folder's parent or matches the folder by
- * a wildcard, a path built from a variable, and a program that writes the file without naming it.
- * And since the hook denies only where a ledger exists, a removed ledger means no denials until the
- * server starts again.
+ * a sandbox): a path reached by `cd` in an earlier call, a junction or symlink made earlier, a name
+ * the shell assembles from pieces, a wildcard, a parent folder. And since the hook denies only where
+ * a ledger exists, a removed ledger means no denials until the server starts again.
  */
 const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?\b)/;
 /** Programs that only show a file or a folder: one of them, alone on the line, may name the ledger. */
 const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "more", "wc", "get-content", "gc", "ls", "dir", "get-childitem", "gci", "du"]);
 
-/** The case-folded spellings of the data folder a call's text may hold. */
+/**
+ * A call's raw text in one spelling of paths: case folded, `\` read as `/`, `\\?\` stripped, a
+ * `//localhost/c$/` share and the `/c/`, `/mnt/c/`, `/cygdrive/c/` forms read as `c:/`, every run of
+ * `/` one `/`, `/./` dropped and `name/../` resolved as text.
+ */
+function normaliseLedgerText(text) {
+  let t = text.toLowerCase().replace(/\\/g, "/");
+  t = t.replace(/\/{2,}[?.]\/+(?:unc\/+)?/g, "//");
+  t = t.replace(/\/{2,}(?:localhost|127\.0\.0\.1)\/+([a-z])\$\/+/g, "$1:/");
+  t = t.replace(/\/{2,}/g, "/");
+  t = t.replace(/(^|[^a-z0-9._~$-])\/(?:mnt\/|cygdrive\/)?([a-z])(?=\/)/g, "$1$2:");
+  t = t.replace(/\/(?:\.\/)+/g, "/");
+  // `name/../` resolved as text, one pass with a stack per path (linear in the text's size).
+  if (t.includes("/..")) t = t.replace(/[^\s'"`;|&<>(){}]+/g, (path) => resolveDots(path));
+  return t;
+}
+
+/** A path with every `name/..` step removed (a leading `..` is kept). */
+function resolveDots(path) {
+  if (!path.includes("/..")) return path;
+  const kept = [];
+  for (const part of path.split("/")) {
+    if (part === ".." && kept.length > 0 && kept[kept.length - 1] !== ".." && !/^[a-z]:$|^~$/.test(kept[kept.length - 1])) kept.pop();
+    else if (part !== "." || kept.length === 0) kept.push(part);
+  }
+  return kept.join("/");
+}
+
+/** The normalised spellings of the data folder a call's text may hold. */
 function ledgerFolderMarks(env) {
   const marks = new Set();
-  const home = homedir().replace(/[\\/]+$/, "").toLowerCase().replace(/\\/g, "/");
+  const home = normaliseLedgerText(homedir()).replace(/\/+$/, "");
   const add = (p) => {
-    const f = p.replace(/[\\/]+$/, "").toLowerCase().replace(/\\/g, "/");
+    const f = normaliseLedgerText(p).replace(/\/+$/, "");
     if (f.length < 4) return;
     marks.add(f);
-    marks.add(f.replace(/\//g, "\\"));
-    if (/^[a-z]:\//.test(f)) marks.add(`/${f[0]}${f.slice(2)}`);
-    if (home.length >= 3 && f.startsWith(`${home}/`)) {
-      marks.add(`~${f.slice(home.length)}`);
-      marks.add(`~${f.slice(home.length)}`.replace(/\//g, "\\"));
-    }
+    if (home.length >= 3 && f.startsWith(`${home}/`)) marks.add(`~${f.slice(home.length)}`);
   };
   const dir = resolve(dataDir(env));
   add(dir);
@@ -3124,7 +3150,7 @@ function ledgerFolderMarks(env) {
 
 /** Whether a call's raw text names the ledger (LEDGER_MENTION, or a spelling of its folder). */
 function namesLedgerText(text, marks) {
-  const t = text.toLowerCase();
+  const t = normaliseLedgerText(text);
   return LEDGER_MENTION.test(t) || marks.some((m) => t.includes(m));
 }
 
