@@ -112,6 +112,15 @@ were still there, `prediction.planned_but_remained`) and `max_new_vulnerable_cop
 copies the run brought in). Both hold the candidate's recorded 22 and 24 until a run of the fixed
 build over the whole corpus sets them.
 
+Since 2026-11-26 the corpus has 23 projects. The 15 that 6.5.0 and 6.5.1 were gated on are held as
+`groups.original` at exactly their old numbers (0.77, 24, 26, one lowering: uptime-kuma's cypress
+case); the corpus-wide ratio is 0.70 because the eight added projects measure 0.662 where published
+6.5.1 measures 0.670 on them (hand edits and copies waiting on upstream). fastapi-backend's 8 more
+remaining advisories than 6.5.0 left are the deliberate Python-floor hold (a uv pin that would install
+an affected release on the project's lowest supported Python is held as words). A planned copy that
+lands below its row's target while still carrying one of its advisories counts as planned but
+remained, not as a new copy.
+
 A project can carry floors of its own under `projects.<id>` (`min_net_cleared_ratio`,
 `max_failed_steps`, `max_lowering_steps`, `max_refused_steps`, `max_planned_but_remained`), so a
 regression in one project is not hidden by the corpus total. A floor is never set below what the

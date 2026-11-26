@@ -3,11 +3,11 @@
   "max_failed_steps": 0,
   "max_lowering_steps": 1,
   "max_refused_steps": 0,
-  "max_planned_but_remained": null,
-  "max_new_vulnerable_copies": null,
+  "max_planned_but_remained": 93,
+  "max_new_vulnerable_copies": 34,
   "min_net_cleared_ratio": 0.7,
   "require_order_source": "run_order",
-  "corpus_note": "Corpus-wide over all 23 projects. min_net_cleared_ratio is 0.70 because the corpus grew from 15 to 23 projects: the eight added on 2026-11-26 measure 0.662 where published 6.5.1 measures 0.670 on them (hand edits and copies waiting on upstream), while the original 15 are still gated at 0.77 as a group (groups.original). Of the original group's advisories left, 8 more than 6.5.0 left are fastapi-backend's, the deliberate Python-floor hold (a uv pin that would install an affected release on the project's lowest supported Python is held as words). max_planned_but_remained and max_new_vulnerable_copies are the measured values plus about 5%.",
+  "corpus_note": "Corpus-wide over all 23 projects. min_net_cleared_ratio is 0.70 because the corpus grew from 15 to 23 projects: the eight added on 2026-11-26 measure 0.662 where published 6.5.1 measures 0.670 on them (hand edits and copies waiting on upstream), while the original 15 are still gated at 0.77 as a group (groups.original). Of the original group's advisories left, 8 more than 6.5.0 left are fastapi-backend's, the deliberate Python-floor hold (a uv pin that would install an affected release on the project's lowest supported Python is held as words). max_planned_but_remained 93 and max_new_vulnerable_copies 34 are the measured 89 and 32 plus about 5% (2026-11-26: branch fix/a1125-w2-plan-js at bc740de, starship, crewAI, formik and zustand re-measured at 7a23134). A planned copy that lands below its row's target and still carries one of its advisories counts as planned but remained, not as a new copy (7a23134).",
   "groups": {
     "original": {
       "ids": [
