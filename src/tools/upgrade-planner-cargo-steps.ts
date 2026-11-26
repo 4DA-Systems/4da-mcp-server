@@ -22,6 +22,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pushAll } from "../array-utils.js";
 import { cargoPrecisePrerequisites, type FixPathSources } from "../live/fix-paths.js";
 import { parseCargoLockPackages } from "../live/lockfile-parsers.js";
 import { cargoReqAdmits } from "../live/range-satisfies.js";
@@ -288,6 +289,60 @@ export async function withCargoStepPreconditions(rows: CargoStepRow[], root: str
     return graphs.get(file) ?? null;
   };
   const prereqsCache = new Map<string, Promise<string[] | null>>();
+  /** The fix of one command: kept (maybe with a pre-update), or taken off as words. */
+  const judge = async (c: Field): Promise<{ command: string } | { words: string } | null> => {
+    if (c.command.includes("&&")) return null;
+    const precise = PRECISE.exec(c.command);
+    if (precise) {
+      const [, name, installed, target] = precise;
+      const lock = lockOf(c.dir);
+      if (!lock || !sources) return { words: preciseWords(name, installed, target) };
+      const key = `${c.dir}\0${c.command}`;
+      if (!prereqsCache.has(key)) {
+        const left = deadline - Date.now();
+        prereqsCache.set(
+          key,
+          left <= 0
+            ? Promise.resolve(null)
+            : Promise.race([
+                cargoPrecisePrerequisites(sources, lock.content, name, installed, target).catch(() => null),
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), left).unref?.()),
+              ]),
+        );
+      }
+      const prereqs = await prereqsCache.get(key)!;
+      if (prereqs === null || prereqs.some((p) => !/^[A-Za-z0-9_-]+(?:@[0-9A-Za-z.+_-]+)?$/.test(p))) return { words: preciseWords(name, installed, target) };
+      return prereqs.length > 0 ? { command: `cargo update ${prereqs.map((p) => `-p ${p}`).join(" ")} && ${c.command}` } : null;
+    }
+    const add = ADD.exec(c.command);
+    if (add) {
+      const [, crate, target] = add;
+      const lock = lockOf(c.dir);
+      const versions = lock?.graph.locked.get(crate) ?? [];
+      // The copy the command replaces: on another line than the target (an in-line move keeps one copy).
+      for (const installed of versions) {
+        if (cargoLine(installed) === cargoLine(target)) continue;
+        const verdict = sources && lock ? await linksConflict(sources, lock.graph, crate, installed, target, deadline) : { kind: "unknown" as const, why: "live lookups are off" };
+        if (verdict.kind === "conflict") return { words: linksWords(crate, installed, target, verdict.conflict) };
+        if (verdict.kind === "unknown") return { words: linksUnknownWords(crate, installed, target, verdict.why) };
+      }
+    }
+    return null;
+  };
+  // Every command's checks start at once and share the deadline: one after another, the last ones
+  // of a large project ran out of time under a slow index and were left as words.
+  const judged = new Map<string, Promise<{ command: string } | { words: string } | null>>();
+  const judgeOnce = (c: Field) => {
+    const key = `${c.dir}\0${c.command}`;
+    if (!judged.has(key)) judged.set(key, judge(c));
+    return judged.get(key)!;
+  };
+  const all: Field[] = [];
+  for (const row of rows) {
+    if (row.ecosystem !== "crates.io") continue;
+    pushAll(all, [...(row.upgradeCommands ?? []), ...(row.refreshCommands ?? []), ...(row.parentUpgrades ?? []).flatMap((u) => [...u.levers.flatMap((l) => l.commands ?? []), ...(u.refreshCommands ?? [])])]);
+  }
+  await Promise.all(all.map((c) => judgeOnce(c)));
   for (const row of rows) {
     if (row.ecosystem !== "crates.io") continue;
     const said = new Set(row.reasons);
@@ -295,52 +350,12 @@ export async function withCargoStepPreconditions(rows: CargoStepRow[], root: str
       if (!said.has(text)) row.reasons.push(text);
       said.add(text);
     };
-    /** The fix of one command: kept (maybe with a pre-update), or taken off as words. */
-    const judge = async (c: Field): Promise<{ command: string } | { words: string } | null> => {
-      if (c.command.includes("&&")) return null;
-      const precise = PRECISE.exec(c.command);
-      if (precise) {
-        const [, name, installed, target] = precise;
-        const lock = lockOf(c.dir);
-        if (!lock || !sources) return { words: preciseWords(name, installed, target) };
-        const key = `${c.dir}\0${c.command}`;
-        if (!prereqsCache.has(key)) {
-          const left = deadline - Date.now();
-          prereqsCache.set(
-            key,
-            left <= 0
-              ? Promise.resolve(null)
-              : Promise.race([
-                  cargoPrecisePrerequisites(sources, lock.content, name, installed, target).catch(() => null),
-                  new Promise<null>((resolve) => setTimeout(() => resolve(null), left).unref?.()),
-                ]),
-          );
-        }
-        const prereqs = await prereqsCache.get(key)!;
-        if (prereqs === null || prereqs.some((p) => !/^[A-Za-z0-9_-]+(?:@[0-9A-Za-z.+_-]+)?$/.test(p))) return { words: preciseWords(name, installed, target) };
-        return prereqs.length > 0 ? { command: `cargo update ${prereqs.map((p) => `-p ${p}`).join(" ")} && ${c.command}` } : null;
-      }
-      const add = ADD.exec(c.command);
-      if (add) {
-        const [, crate, target] = add;
-        const lock = lockOf(c.dir);
-        const versions = lock?.graph.locked.get(crate) ?? [];
-        // The copy the command replaces: on another line than the target (an in-line move keeps one copy).
-        for (const installed of versions) {
-          if (cargoLine(installed) === cargoLine(target)) continue;
-          const verdict = sources && lock ? await linksConflict(sources, lock.graph, crate, installed, target, deadline) : { kind: "unknown" as const, why: "live lookups are off" };
-          if (verdict.kind === "conflict") return { words: linksWords(crate, installed, target, verdict.conflict) };
-          if (verdict.kind === "unknown") return { words: linksUnknownWords(crate, installed, target, verdict.why) };
-        }
-      }
-      return null;
-    };
     /** Applies the judgement to one list of commands; the words go to `instructions`. */
     const rework = async <T extends Field>(list: T[] | undefined, instructions: Instruction[]): Promise<T[] | undefined> => {
       if (!list) return list;
       const kept: T[] = [];
       for (const c of list) {
-        const j = await judge(c);
+        const j = await judgeOnce(c);
         if (j === null) kept.push(c);
         else if ("command" in j) kept.push({ ...c, command: j.command });
         else {

@@ -278,7 +278,7 @@ const PYTHON_FLOOR_BUDGET_MS = 4_000;
 /** Time the check that a target clears any of its row's advisories may take. */
 const NOT_A_FIX_BUDGET_MS = 4_000;
 /** Time the Cargo steps may spend reading what their targets require (upgrade-planner-cargo-steps.ts). */
-const CARGO_STEP_BUDGET_MS = 6_000;
+const CARGO_STEP_BUDGET_MS = 10_000;
 /** Time the Cargo rows may spend reading the rust-version of releases not already in the cache. */
 const RUST_VERSION_BUDGET_MS = 4_000;
 
