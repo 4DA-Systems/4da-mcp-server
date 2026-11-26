@@ -5158,6 +5158,21 @@ function postToolUse(input) {
   if (!file) return "";
   let changes = [];
   const disk = onDisk(String(toolInput.file_path));
+  // Round 12 (tenth independent check, S42 / S44): the same reading of the file block mode uses. The
+  // file on disk is the edit's result; the edits applied backwards (new -> old, last first) give the
+  // file before it, and the two whole files are compared, so an edit of the version alone ("4.17.21"
+  // -> "4.17.20", no key) is advised as block mode would deny it. Where that does not apply (the new
+  // text is not found once), the edits are read as snippets, as before.
+  const edits = input.tool_name === "Edit" || input.tool_name === "MultiEdit" ? editsOf(input.tool_name, toolInput) : null;
+  const after = edits ? readManifest(String(toolInput.file_path)) : null;
+  if (edits && after !== null) {
+    let before = after;
+    for (const e of [...edits].reverse()) before = before === null ? null : applyEdit(before, e.new_string, e.old_string, e.replace_all);
+    if (before !== null) {
+      const whole = repeatable(wholeFileChanges(file, before, after));
+      if (whole.length > 0) return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: adviceFor(file, whole) } });
+    }
+  }
   if (input.tool_name === "Edit") {
     changes = versionChanges(file, toolInput.old_string ?? "", toolInput.new_string ?? "", disk);
   } else if (input.tool_name === "MultiEdit" && Array.isArray(toolInput.edits)) {

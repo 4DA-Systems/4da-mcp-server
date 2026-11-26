@@ -220,3 +220,30 @@ describe("6: the remedy each denial prints releases", () => {
     }
   });
 });
+
+describe("7: advise mode and no ledger read the file as block mode does", () => {
+  it("an Edit of the version alone (no key): advised after it, as block mode denies it before", () => {
+    const pkg = s.file("pkg/package.json", '{"dependencies":{"lodash":"4.17.21"}}\n');
+    // block mode, before the edit: denied
+    expect(s.edit(pkg, '"4.17.21"', '"4.17.20"').decision).toBe("deny");
+    // the edit made; advise mode after it: advice naming lodash 4.17.20
+    s.file("pkg/package.json", '{"dependencies":{"lodash":"4.17.20"}}\n');
+    const advised = s.post(pkg, '"4.17.21"', '"4.17.20"');
+    expect(advised.decision).toBe("advise");
+    expect(advised.text).toContain("lodash");
+    expect(advised.text).toContain("4.17.20");
+  });
+
+  it("with no ledger at all (an older server): the same advice", () => {
+    const pkg = s.file("pkg/package.json", '{"dependencies":{"lodash":"4.17.20"}}\n');
+    const advised = s.post(pkg, '"4.17.21"', '"4.17.20"', { FOURDA_MCP_HOME: `${s.project}/no-ledger-here` });
+    expect(advised.decision).toBe("advise");
+    expect(advised.text).toContain("4.17.20");
+  });
+
+  it("an edit whose new text is not found once falls back to the snippet reading", () => {
+    const pkg = s.file("pkg/package.json", '{"dependencies":{"a":"1.0.0","b":"1.0.0"}}\n');
+    const advised = s.post(pkg, '"a":"0.9.0"', '"a":"1.0.0"');
+    expect(advised.text).toContain("1.0.0");
+  });
+});
