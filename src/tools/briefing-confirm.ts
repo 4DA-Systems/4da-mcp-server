@@ -92,7 +92,10 @@ export interface TaskPackages {
  * agent writes itself; nothing in to_confirm is shaped as the `packages` argument, so it cannot be pasted back.
  */
 export const NEXT_STEP =
-  "Call what_should_i_know again with the same task and `packages`: one entry for each name in to_confirm that is a package this task adds or changes: `public: true` if it is on the public registry (it is checked in that call), `public: false` if it comes from a private registry, git, a path or the workspace (it is never sent). Put a name that is not a package in `not_packages`. Every name in to_confirm needs one of these three answers: a name left out stays in to_confirm. Nothing about a name is sent until you mark it public. You may add packages the task changes that are not listed.";
+  "Call what_should_i_know again with the same task and `packages`: one entry for each name in to_confirm that is a package this task adds or changes: `public: true` if it is on the public registry (it is checked in that call), `public: false` if it comes from a private registry, git, a path or the workspace (it is never sent). Put a name that is not a package in `not_packages`. Every name in to_confirm needs one of these three answers: a name left out stays in to_confirm. Nothing about a name is sent until you mark it public. to_confirm can miss names and ecosystems: declare every package the task adds or changes, in each ecosystem it is added to, whether it is listed here or not.";
+
+/** The last sentence of every safe_to_delegate reason (contract K1). */
+export const RESTS_ON_DECLARATION = "This rests on your declaration: a package you did not declare was not checked.";
 
 /** Added to next_step when more names wait than to_confirm shows (fixed wording). */
 export const MORE_WAITING =
@@ -137,7 +140,7 @@ export function readDeclarations(raw: unknown): { entries: DeclaredPackage[]; re
   raw.forEach((item, at) => {
     const where = `packages[${at}]`;
     if (at >= MAX_DECLARED) {
-      refused.push({ shown: where, reason: `refused: at most ${MAX_DECLARED} entries are read per call; nothing in it was sent` });
+      refused.push({ shown: where, reason: `refused: at most ${MAX_DECLARED} entries are read per call; nothing in it was sent. A task that adds more than ${MAX_DECLARED} packages is too large for one briefing: split it into smaller tasks` });
       return;
     }
     const problem = declarationProblem(item);
@@ -279,12 +282,21 @@ export function cautionFor(task: string, word: string): string | undefined {
 export function toConfirmEntry(task: string, w: UnverifiedWord & { seen?: TaskWordSeen }): ToConfirm {
   const near = /^one edit from (\S+): /.exec(w.note ?? "")?.[1];
   const caution = cautionFor(task, w.word);
+  const ecosystems = w.read_as.split(" or ");
+  // V4: never offer what the declaration check would refuse: an npm dist-tag is offered as the name, with a note.
+  const tag = w.version && ecosystems.includes("npm") && /^[a-z][\w.-]*$/i.test(w.version) && !/^latest$/i.test(w.version) ? w.version : null;
+  const hints = [
+    ...(near ? [`one edit from ${near}: if you mean ${near}, confirm ${near} instead`] : []),
+    ...(tag ? [`the task writes the tag ${tag}: name the version`] : []),
+    // K2: a prose candidate is the caller's word: in which of the project's ecosystems it goes is too.
+    ...((w.seen ?? "prose") === "prose" && ecosystems.length > 1 ? [`this project uses ${ecosystems.slice(0, -1).join(", ")} and ${ecosystems[ecosystems.length - 1]}: declare it in each one you add it to`] : []),
+  ];
   return {
     name: w.word,
-    ecosystems: w.read_as.split(" or "),
-    ...(w.version ? { version: w.version } : {}),
+    ecosystems,
+    ...(w.version && !tag ? { version: w.version } : {}),
     seen: SEEN[w.seen ?? "prose"],
-    ...(near ? { hint: `one edit from ${near}: if you mean ${near}, confirm ${near} instead` } : {}),
+    ...(hints.length > 0 ? { hint: hints.join("; ") } : {}),
     ...(caution ? { caution } : {}),
   };
 }

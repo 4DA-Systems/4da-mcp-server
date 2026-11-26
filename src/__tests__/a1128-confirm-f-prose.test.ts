@@ -52,7 +52,8 @@ describe("F1/F2: an agent's own wording is not a command it could not read", () 
     expect(scanCommands("npm install hono (latest) in the project").map((c) => c.operands)).toEqual([["hono"]]);
     expect(scanCommands("pip install litestar (PyPI) and set GITHUB_TOKEN").map((c) => c.operands)).toEqual([["litestar"]]);
     expect(scanCommands("Add chi router (github.com/go-chi/chi/v5) to a Go project")).toEqual([]);
-    expect(scanCommands("Add an AWS key to the uploader config and install papaparse (npm)")).toEqual([]);
+    // K2: an ecosystem label ties the name before it to that pair (strict), with no command around it.
+    expect(scanCommands("Add an AWS key to the uploader config and install papaparse (npm)").map((c) => [c.ecosystem, c.operands])).toEqual([["npm", ["papaparse"]]]);
     // The explicit prose shape still fires.
     expect(scanCommands("Install zqxevil with npm.").map((c) => c.operands)).toEqual([["zqxevil"]]);
     expect(scanCommands("add zqxevil using pnpm").map((c) => c.operands)).toEqual([["zqxevil"]]);

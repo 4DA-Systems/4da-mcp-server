@@ -24,6 +24,7 @@
  * cached, and any failure degrades to the old answer, never to a guess.
  */
 
+import { NotFoundMemory } from "./npm-packument.js";
 import { withinCallBudget } from "../call-budget.js";
 import { isShellSafeCargoTarget, isShellSafeDir, isShellSafeName, isShellSafeVersion, unsafeDirLabel } from "./shell-safe.js";
 import type { LiveCache } from "./cache.js";
@@ -178,6 +179,8 @@ const FREEZE_MEMO = Boolean(process.env.VITEST);
 
 export class FixPathSources {
   private npmDocs = new Map<string, { at: number; doc: Promise<NpmAbbreviatedDoc | null>; settled: boolean }>();
+  /** npm's "no such package", kept in this process for a short time (V5). */
+  private readonly npmAbsent = new NotFoundMemory();
   private memo = new Map<string, { at: number; value: unknown }>();
   /** Advisory-list lookups in flight, so concurrent checks of one package make one request. */
   private advisoriesInFlight = new Map<string, Promise<AdvisoryRanges[] | null>>();
@@ -363,6 +366,8 @@ export class FixPathSources {
     for (const [n, e] of this.npmDocs) if (now - e.at > NPM_DOC_MEMORY_MS) this.npmDocs.delete(n);
     const hit = this.npmDocs.get(name);
     if (hit) return hit.doc;
+    // V5: "not on the registry" is kept like any answer, for a short time (npm-packument.ts NOT_FOUND_TTL_SECONDS).
+    if (this.npmAbsent.has(name)) return Promise.resolve(null);
     if (!this.rateLimiter.consume("fixpath-registry")) return Promise.resolve(null);
     const doc = (async (): Promise<NpmAbbreviatedDoc | null> => {
       try {
@@ -371,6 +376,7 @@ export class FixPathSources {
           { headers: { Accept: "application/vnd.npm.install-v1+json" } },
           TIMEOUT_MS,
         );
+        if (res.status === 404) this.npmAbsent.add(name);
         if (!res.ok) return null;
         return (await res.json()) as NpmAbbreviatedDoc;
       } catch {

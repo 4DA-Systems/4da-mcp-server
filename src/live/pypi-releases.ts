@@ -26,6 +26,7 @@
  * release's own document, so that request carries the judged version too.
  */
 
+import { NotFoundMemory } from "./npm-packument.js";
 import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -149,6 +150,7 @@ export function projectPypiProject(name: string, doc: PyPIProject): PackageRelea
 }
 
 export class PypiReleasesReader implements ReleaseMetadataSource {
+  private readonly absent = new NotFoundMemory();
   constructor(
     private cache: LiveCache,
     private rateLimiter: RateLimiter,
@@ -160,6 +162,9 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     const key = `pypi-releases:v2:${normalized}`;
     const hit = this.cache.get<PackageReleaseIndex>(key);
     if (hit) return { status: "ok", data: hit };
+    // V5: a not-found answer is cached like any other, for a short time (npm-packument.ts NOT_FOUND_TTL_SECONDS).
+    const absentKey = normalized;
+    if (this.absent.has(absentKey)) return { status: "not_found", detail: `"${name}" is not on PyPI` };
     if (!this.rateLimiter.consume("pypi")) return ownLimit(this.rateLimiter, "pypi");
     let response: Response;
     try {
@@ -171,7 +176,10 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     } catch (err) {
       return { status: "unreachable", detail: `PyPI: ${errorText(err)}` };
     }
-    if (response.status === 404) return { status: "not_found", detail: `"${name}" is not on PyPI` };
+    if (response.status === 404) {
+      this.absent.add(absentKey);
+      return { status: "not_found", detail: `"${name}" is not on PyPI` };
+    }
     if (!response.ok) return { status: "unreachable", detail: `PyPI answered HTTP ${response.status}` };
     let doc: PyPIProject;
     try {
