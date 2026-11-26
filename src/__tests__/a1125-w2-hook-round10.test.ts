@@ -64,15 +64,18 @@ describe("S2: a constraints or overrides file beside a named package", () => {
   });
 });
 
-describe("S3: the public source named by another name", () => {
-  it("poetry add --source pypi requests==2.5.0 is judged", () => {
-    heldThenReleased("poetry add --source pypi requests==2.5.0", { ecosystem: "PyPI", package: "requests", to: "2.5.0" });
-  });
-  it.each(["cargo install serde@1.0.0 --index https://github.com/rust-lang/crates.io-index", "cargo install serde@1.0.0 --index sparse+https://index.crates.io/"])("%s is judged", (command) => {
-    heldThenReleased(command, { ecosystem: "crates.io", package: "serde", to: "1.0.0" });
-  });
-  it("another Poetry source is the project's own", () => {
-    expect(run("poetry add --source corp requests==2.5.0").decision).toBe("allow");
+// Round 14 (R2): an index or registry option beside a named package goes ahead unjudged only when it
+// is the one source option on the line and its host is positively not public. A public index named
+// another way, and a Poetry source (a name, no host), are held as not read now (they were judged, or
+// let through, in round 10).
+describe("S3 (round 14): a source named by another name, or by a config name, is held", () => {
+  it.each([
+    "poetry add --source pypi requests==2.5.0",
+    "poetry add --source corp requests==2.5.0",
+    "cargo install serde@1.0.0 --index https://github.com/rust-lang/crates.io-index",
+    "cargo install serde@1.0.0 --index sparse+https://index.crates.io/",
+  ])("%s", (command) => {
+    expect(run(command).text).toContain("could not be read");
   });
 });
 
@@ -96,12 +99,18 @@ describe("S5: a ledger line naming a package that is not fully valid", () => {
 });
 
 describe("S6: an extra index keeps the public index in play", () => {
-  it.each(["pip install --extra-index-url https://pypi.corp.example/simple requests==2.5.0", "pip install --find-links https://pypi.org/simple requests==2.5.0"])("%s: judged on its verdict, released by the call", (command) => {
-    heldThenReleased(command, { ecosystem: "PyPI", package: "requests", to: "2.5.0" });
+  // Round 14 (R2): a public index named as such is no "project's own source": held as not read.
+  it("pip install --extra-index-url https://pypi.corp.example/simple requests==2.5.0: held (PyPI stays in play beside an extra index)", () => {
+    expect(run("pip install --extra-index-url https://pypi.corp.example/simple requests==2.5.0").text).toContain("could not be read");
+  });
+  it("pip install --find-links https://pypi.org/simple requests==2.5.0: held as not read", () => {
+    expect(run("pip install --find-links https://pypi.org/simple requests==2.5.0").text).toContain("could not be read");
   });
   it("a private primary index is the project's own source", () => {
     expect(run("pip install -i https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
-    expect(run("uv add --index https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
+    expect(run("uv add --default-index https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
+    // uv's --index adds to PyPI (round 14, R2): held.
+    expect(run("uv add --index https://pypi.corp.example/simple requests==2.5.0").text).toContain("could not be read");
   });
 });
 

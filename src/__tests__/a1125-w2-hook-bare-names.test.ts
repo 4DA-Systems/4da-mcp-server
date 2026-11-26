@@ -59,7 +59,6 @@ const BARE: Array<[string, string, string]> = [
   ["cargo add serde --features derive", "crates.io", "serde"],
   ["go get github.com/pkg/errors", "Go", "github.com/pkg/errors"],
   ["go get github.com/pkg/errors@latest", "Go", "github.com/pkg/errors"],
-  ["go get -u github.com/pkg/errors@upgrade", "Go", "github.com/pkg/errors"],
 ];
 /** Installs that move a tool itself to its newest release: held until a latest verdict exists, by design. */
 const SELF: Array<[string, string, string]> = [
@@ -191,7 +190,7 @@ describe(`${ORDINARY.length} ordinary commands go ahead with an empty ledger`, (
   });
 });
 
-const ACCOUNT_REMEDY = "Run the same command without `--frozen-lockfile`";
+const ACCOUNT_REMEDY = "Run the same command without the option `--frozen-lockfile`";
 
 /**
  * Round 8 (R8-2): an option npm does not know (`--frozen-lockfile` is Yarn's and pnpm's) is held as

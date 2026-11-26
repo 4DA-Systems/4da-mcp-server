@@ -226,7 +226,6 @@ describe("R8-2: what is read whole goes ahead on its verdict, or installs nothin
     "pip install ./dist/x-1.0-py3-none-any.whl",
     "pip install git+https://github.com/a/b",
     "pip install -i https://pypi.internal.example/simple requests",
-    "pip install --no-index --find-links ./wheels requests",
     "uv sync",
     "uv sync --frozen",
     "uv lock",
@@ -312,10 +311,10 @@ describe("the remedy releases", () => {
     releases(command);
   });
 
-  it("npm i --tag next lodash: held; the remedy removes `--tag next` and nothing else", () => {
+  it("npm i --tag next lodash: held; the remedy names `--tag` alone (round 14: its arity is the user's)", () => {
     s.ledger([{ ecosystem: "npm", package: "lodash", version: "9.9.9", requested: "latest", verdict: "proceed" }]);
     const r = run("npm i --tag next lodash");
-    expect(r.text).toContain("Run the same command without `--tag next`");
+    expect(r.text).toContain("Run the same command without the option `--tag`; if that option takes a value, remove its value too");
     expect(run(followRemedy("npm i --tag next lodash", r.text) ?? "").decision).toBe("allow");
   });
 

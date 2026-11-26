@@ -83,15 +83,34 @@ function bareName(token: string): string {
   return t.replace(/\s*(?:[=<>!~;]|@).*$/s, "").trim();
 }
 
+/** The held options the tests write with a value (the user's knowledge of each tool, not the hook's). */
+export const TAKES_VALUE = new Set(
+  (
+    "--tag --before -c --config --prerelease --resolution --exclude-newer --mode --only-binary --python-version --platform --upgrade-strategy --no-binary " +
+    "--implementation --abi --python-platform --cache-min -i --index-url --extra-index-url --index --default-index -f --find-links --registry --source " +
+    "--userconfig --globalconfig --config-file --python -p --cert --client-cert --exists-action --use-feature --cache-dir --os --cpu --linker --ca " +
+    "--color --allow-insecure-host --resolution-mode --index-strategy --keyring-provider --cache-folder --network-timeout --directory --project -C"
+  ).split(" "),
+);
+
 /**
  * Round 13: the not-read remedy followed mechanically. "Run the same command without `X`" removes X
  * (and, for find, the `;` / `+` that ends -exec); "with `X` written as <form>" writes X in that form
  * (`value` stands for a variable's or substitution's value). Null when the denial names no part.
  */
 export function followRemedy(command: string, text: string, value = "lodash"): string | null {
-  const tidy = (c: string) => c.replace(/[ \t]{2,}/g, " ").trim();
+  const tidy = (c: string) => c.replace(/[ \t]{2,}/g, " ").replace(/^\s*(?:;|&&)\s*/, "").trim();
   // The named part as a whole word (`--pre` is not the start of `--prefix`).
   const word = (token: string) => new RegExp(`(^|[\\s'"(])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s'";|&)]|$)`);
+  // Round 14: an option named alone ("if that option takes a value, remove its value too"): the user
+  // knows its arity; here, the options these tests give a value (TAKES_VALUE).
+  const named = /Run the same command without the option `([^`]+)`; if that option takes a value, remove its value too/.exec(text);
+  if (named) {
+    const o = named[1];
+    const tail = !o.includes("=") && TAKES_VALUE.has(o) ? String.raw`(?:\s+(?:'[^']*'|"[^"]*"|[^\s'";|&)]+))?` : "";
+    const re = new RegExp(`(^|[\\s'"(])${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}(?=[\\s'";|&)]|$)`);
+    return tidy(command.replace(re, "$1"));
+  }
   const without = /Run the same command without `([^`]+)`( and the ; or \+ that ends -exec)?/.exec(text);
   if (without) {
     let c = command.replace(word(without[1]), "$1");
