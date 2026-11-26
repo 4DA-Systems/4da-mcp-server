@@ -449,3 +449,10 @@ describe("D7: a public-registry URL operand", () => {
     expect(run("npm i https://npm.corp.example/lodash-4.17.20.tgz").decision).toBe("allow");
   });
 });
+
+/** D8: a path with extras is a path. */
+describe("D8: pip install .[dev]", () => {
+  it.each(["pip install .[dev]", 'pip install ".[dev,test]"', "pip install -e .[dev]", "pip install ./pkg[test]", "uv pip install -e '.[dev]'", "python -m pip install '.[all]'"])("%s goes ahead", (command) => {
+    expect(run(command).decision).toBe("allow");
+  });
+});

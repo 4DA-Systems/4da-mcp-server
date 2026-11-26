@@ -3270,7 +3270,9 @@ function pyOperandKind(word) {
   if (file && file.ecosystem === "PyPI") return { name: file.name };
   if (publicUrl(word) || /\s@\s*https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org)\//i.test(word)) return null;
   if (/:\/\//.test(word) || /^(?:git\+|hg\+|svn\+|bzr\+)/i.test(word) || /\s@\s/.test(word)) return "local";
-  if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(word) || /\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar)$/i.test(word)) return "local";
+  // D8: a path with extras (`.[dev]`, `./pkg[test,docs]`) is a path.
+  const path = word.replace(/\[[^\]]{0,200}\]$/, "");
+  if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(path) || /\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar)$/i.test(path)) return "local";
   const r = quietly(() => pyOperand(word));
   return r.length === 1 ? { name: r[0].name } : null;
 }
