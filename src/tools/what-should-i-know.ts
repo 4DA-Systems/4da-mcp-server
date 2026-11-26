@@ -758,13 +758,13 @@ export async function executeWhatShouldIKnow(
     // Recorded under the declared spelling: what dependency_check, asked for this entry, writes (V7).
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
     for (const version of versions) {
-      if (!installed(d.name, d.ecosystem) && !knownNew.some((k) => k.version === version) && !declaredNew.some((x) => sameAs(d)(x) && x.version === version)) {
+      if (!installed(d.name, d.ecosystem) && !knownNew.some((k) => k.version === version && k.name === d.name) && !declaredNew.some((x) => sameAs(d)(x) && x.version === version)) {
         declaredNew.push({ name: spelled, ecosystem: d.ecosystem, ...(version ? { version } : {}) });
       }
       // A pin or constraint is judged as a requested version; on an installed dependency even "latest" is (m4).
       const asked = version ?? (installed(d.name, d.ecosystem) ? "latest" : undefined);
       const judged = asked && (/^latest$/i.test(asked) ? installed(d.name, d.ecosystem) : checkableSpec(d.ecosystem, asked) !== null);
-      if (asked && judged && !knownWanted.some((k) => k.to === asked) && !declaredWanted.some((x) => sameAs(d)(x) && x.to === asked)) {
+      if (asked && judged && !knownWanted.some((k) => k.to === asked && k.name === d.name) && !declaredWanted.some((x) => sameAs(d)(x) && x.to === asked)) {
         const copies = ecosystemDeps().filter((x) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem) && x.version);
         declaredWanted.push({ name: spelled, ecosystem: d.ecosystem, to: asked, ...(copies.length === 1 && copies[0].version ? { from: copies[0].version } : {}) });
       }
@@ -778,11 +778,16 @@ export async function executeWhatShouldIKnow(
   // Only what the caller declared goes to the check ledger, once per verdict: the briefing's own lookups stay unrecorded.
   const privateRule = (liveIntel as { privateRegistryRuleCovers?: (e: string, n: string) => boolean } | null)?.privateRegistryRuleCovers;
   const recorded = new Set<string>();
-  const recordDeclared = (results: readonly CheckedItem[]) => {
-    // One line per pair and version, under the name the caller declared: the briefing may check "Django" and the
-    // task's "django"; dependency_check, asked for the declared entry, records one line (check 2, ledger minor).
-    const mine = results.flatMap((r) => {
+  const recordDeclared = (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string }>) => {
+    // Round 6, item 5: only the answers to the declared items themselves, as the engine wrote them: the briefing's
+    // own lookup of the task's "django" is not the declared "Django", and is not recorded.
+    // An item is the declared one when it names the declared package in its declared spelling (the briefing's own
+    // lookup of a pin it read counts when the spelling is the same: one lookup, the line dependency_check writes).
+    const declaredItems = new Set(declaredPublic.map((d) => `${d.ecosystem}\0${d.name}`));
+    const mine = results.flatMap((r, k) => {
       if (typeof r.package !== "string") return [];
+      const item = sent[k];
+      if (!item || !declaredItems.has(`${item.ecosystem}\0${item.name}`)) return [];
       const key = `${r.ecosystem}\0${ecosystemKey(r.package, r.ecosystem as CheckEcosystem)}`;
       if (!declaredName.has(key)) return [];
       const line = `${key}\0${r.to}\0${r.to_requested ?? ""}\0${r.verdict}`;

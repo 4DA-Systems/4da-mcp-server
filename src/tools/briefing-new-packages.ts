@@ -1134,7 +1134,7 @@ function badness(f: NewPackageFinding): number {
  * `ctx` is malware (PYSEC-2022-199; black-box audit of 60c9edc, 2026-11-14). The other
  * ecosystems' answers are listed in `also_checked`.
  */
-export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date, onAnswer?: (results: readonly CheckedItem[]) => void): Promise<NewPackageFinding[]> {
+export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string }>) => void): Promise<NewPackageFinding[]> {
   if (packages.length === 0) return [];
   if (!liveIntel || !liveIntel.isEnabled()) return packages.map((p) => unchecked(p, "live lookups are disabled"));
   if (!liveIntel.getReleaseSources || !liveIntel.getFixPathSources || !liveIntel.queryAdvisories) {
@@ -1168,7 +1168,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
         now ? { now } : {},
       ).then((answer) => {
         // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
-        onAnswer?.(answer.results as readonly CheckedItem[]);
+        onAnswer?.(answer.results as readonly CheckedItem[], list.map((p) => ({ ecosystem: p.ecosystem, name: p.name, to: p.version ?? "latest" })));
         return answer;
       }),
     );
