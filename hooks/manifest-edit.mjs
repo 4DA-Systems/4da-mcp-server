@@ -3822,6 +3822,11 @@ function ledgerStarted(dir) {
 function readLedger(dir, now) {
   if (!existsSync(dir) || !ledgerStarted(dir)) return null;
   const entries = [];
+  // D10: a line that does not parse but names a package (an avoid cut short), or one stamped past
+  // the clock's slack, makes that package's verdict unknown from that line on: every earlier line
+  // for it is set aside, so an older proceed never stands in for it. A later answer releases it.
+  const unknown = [];
+  let seq = 0;
   for (const file of LEDGER_FILES) {
     let text;
     try {
@@ -3840,17 +3845,40 @@ function readLedger(dir, now) {
     for (const line of text.split("\n")) {
       if (++n % 512 === 0 && overBudget()) return entries;
       if (!line) continue;
+      seq++;
       let e;
       try {
         e = JSON.parse(line);
       } catch {
+        const pkg = /"package"\s*:\s*"((?:[^"\\]|\\.){1,214})"/.exec(line);
+        if (pkg) unknown.push({ ecosystem: /"ecosystem"\s*:\s*"([^"]{1,20})"/.exec(line)?.[1] ?? null, package: pkg[1], seq });
         continue;
       }
       if (!e || typeof e !== "object" || typeof e.package !== "string" || typeof e.version !== "string" || typeof e.verdict !== "string" || typeof e.ecosystem !== "string") continue;
       const t = Date.parse(e.t);
-      if (!Number.isFinite(t) || t < now - LEDGER_WINDOW_MS || t > now + 5 * 60 * 1000) continue;
-      entries.push({ ...e, at: t });
+      if (Number.isFinite(t) && t > now + 5 * 60 * 1000) {
+        unknown.push({ ecosystem: e.ecosystem, package: e.package, seq });
+        continue;
+      }
+      if (!Number.isFinite(t) || t < now - LEDGER_WINDOW_MS) continue;
+      entries.push({ ...e, at: t, seq });
     }
+  }
+  if (unknown.length > 0) {
+    // The last unknown line per package (per ecosystem, or for every ecosystem when the cut line lost it).
+    const fold = (eco, name) => nameKey(["npm", "crates.io", "PyPI", "Go"].find((x) => x.toLowerCase() === String(eco).toLowerCase()) ?? "npm", name).toLowerCase();
+    const last = new Map();
+    for (const u of unknown) {
+      for (const eco of u.ecosystem === null ? ["npm", "crates.io", "PyPI", "Go"] : [u.ecosystem]) {
+        const key = `${eco.toLowerCase()}\0${fold(eco, u.package)}`;
+        last.set(key, Math.max(last.get(key) ?? 0, u.seq));
+      }
+    }
+    let w = 0;
+    for (const e of entries) {
+      if (!(e.seq < (last.get(`${e.ecosystem.toLowerCase()}\0${fold(e.ecosystem, e.package)}`) ?? 0))) entries[w++] = e;
+    }
+    entries.length = w;
   }
   // Oldest first by the time each answer was given: several servers append to one ledger, and the
   // previous file can hold newer lines than the current one's first. Equal times keep file order.
