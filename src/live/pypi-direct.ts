@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
 import { normalizePythonName } from "./lockfile-parsers-pygo.js";
 import { pythonSpecAdmits } from "./pygo-parents.js";
-import { isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
+import { escapedNameLabel, isPlainName, isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
 import { readTextFile } from "./text-file.js";
 
 export type PyprojectFix = { command: string; refresh: true } | { instruction: string };
@@ -28,8 +28,10 @@ export type PyprojectFix = { command: string; refresh: true } | { instruction: s
 /** One requirement the project puts on a package, as uv.lock records it. */
 interface UvRequirement {
   specifier: string;
-  /** "[project] dependencies", or the dependency group it is listed under. */
+  /** "[project] dependencies", or the dependency group it is listed under (a group whose name is not plain, escaped). */
   where: string;
+  /** False when it is listed under a dependency group whose name is not in the group grammar. */
+  plain: boolean;
 }
 
 /** The `[[package]]` block of the project itself (`source = { editable = "." }` or `{ virtual = "." }`). */
@@ -51,14 +53,14 @@ function subTable(block: string, header: string): string | null {
 }
 
 /** `{ name = "x", specifier = "..." }` entries of `name` in a TOML text; null when one names it without a specifier. */
-function entriesOf(text: string, name: string, where: string): UvRequirement[] | null {
+function entriesOf(text: string, name: string, where: string, plain = true): UvRequirement[] | null {
   const want = normalizePythonName(name);
   const out: UvRequirement[] = [];
   for (const m of text.matchAll(/\{\s*name\s*=\s*"([^"]+)"([^}]*)\}/g)) {
     if (normalizePythonName(m[1]) !== want) continue;
     const specifier = /\bspecifier\s*=\s*"([^"]*)"/.exec(m[2])?.[1];
     if (specifier === undefined) return null;
-    out.push({ specifier, where });
+    out.push({ specifier, where, plain });
   }
   return out;
 }
@@ -87,7 +89,9 @@ function uvRequirements(projectDir: string, name: string): UvRequirement[] | nul
   const dev = subTable(root, "package.metadata.requires-dev");
   if (dev !== null) {
     for (const group of arrays(dev)) {
-      const found = entriesOf(group.body, name, `the "${group.key}" dependency group`);
+      // A group name is the project's file: quoted only in the group grammar, otherwise escaped (no command then).
+      const plain = isPlainName(group.key);
+      const found = entriesOf(group.body, name, plain ? `the "${group.key}" dependency group` : `the dependency group ${escapedNameLabel(group.key, "dependency group")}`, plain);
       if (found === null) return null;
       pushAll(out, found);
     }
@@ -98,7 +102,8 @@ function uvRequirements(projectDir: string, name: string): UvRequirement[] | nul
 /** Each `key = [ ... ]` of a TOML table text, on one line or over several (inner brackets matched). */
 function arrays(text: string): Array<{ key: string; body: string }> {
   const out: Array<{ key: string; body: string }> = [];
-  const open = /^([A-Za-z0-9_.-]+)\s*=\s*\[/gm;
+  // A bare key, or a quoted one (a group named with any text is read, never skipped).
+  const open = /^([A-Za-z0-9_.-]+|"(?:[^"\\\n]|\\.){0,200}")\s*=\s*\[/gm;
   for (let m = open.exec(text); m !== null; m = open.exec(text)) {
     let depth = 1;
     let i = m.index + m[0].length;
@@ -107,7 +112,7 @@ function arrays(text: string): Array<{ key: string; body: string }> {
       else if (text[i] === "]") depth--;
       else if (text[i] === '"') i = Math.max(i, text.indexOf('"', i + 1));
     }
-    out.push({ key: m[1], body: text.slice(m.index + m[0].length, i) });
+    out.push({ key: m[1].startsWith('"') ? m[1].slice(1, -1) : m[1], body: text.slice(m.index + m[0].length, i) });
     open.lastIndex = i;
   }
   return out;
@@ -135,6 +140,15 @@ export function pyprojectDirectFix(projectDir: string, name: string, installed: 
   if (!isShellSafeName(name, "PyPI") || !isShellSafeVersion(target)) return null;
   const reqs = uvRequirements(projectDir, name);
   if (!reqs || reqs.length === 0) return null;
+  // Listed under a dependency group whose name is not plain: words, never a command, the name escaped.
+  const odd = reqs.filter((r) => !r.plain);
+  if (odd.length > 0) {
+    return {
+      instruction: `pyproject.toml lists ${name} in ${[...new Set(odd.map((r) => r.where))].join(" and ")}, and this plan names no command for a package listed under a group it cannot quote: check that group's requirement on ${name} admits ${target} by hand, then re-lock with \`uv lock --upgrade-package ${name}==${target}\``,
+    };
+  }
+  // A specifier is quoted only in the specifier grammar.
+  if (reqs.some((r) => !/^[A-Za-z0-9.*!=<>~,+ _-]{0,128}$/.test(r.specifier))) return null;
   // The locked copy satisfies what the project declares, or the lockfile is not the one read here.
   if (reqs.some((r) => pythonSpecAdmits(r.specifier, installed) !== true)) return null;
   const command = `uv lock --upgrade-package ${name}==${target}`;
