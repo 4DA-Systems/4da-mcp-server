@@ -18,6 +18,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  dataFolderWriteProblem,
   desktopAppDbPaths,
   explicitDbPathProblem,
   FourDADatabase,
@@ -98,10 +99,15 @@ export function dataFolderChecks(): Check[] {
   const appInUse = Boolean(app?.valid && !app.standalone);
   const rest = [ownStoreCheck(standaloneMode, appInUse), cacheCheck(), appDatabaseCheck(selected, standaloneMode)];
   const made = existed ? "" : fs.existsSync(dir) ? " (created by this check)" : " (created on first use)";
+  const unwritable = notFolder ? null : dataFolderWriteProblem();
   const folder: Check = {
     name: "Data folder",
-    status: notFolder ? "fail" : "pass",
-    detail: notFolder ? `${dir} exists but is not a folder: the server cannot keep its files there` : `${dir}${made}`,
+    status: notFolder || unwritable ? "fail" : "pass",
+    detail: notFolder
+      ? `${dir} exists but is not a folder: the server cannot keep its files there`
+      : unwritable
+        ? `${unwritable}: the server cannot keep its files there`
+        : `${dir}${made}`,
   };
   return [folder, ...rest];
 }

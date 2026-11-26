@@ -12,6 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { closeServerCacheDb, getServerCacheDb, serverCacheState } from "../live/cache.js";
 import { createDatabase, DatabaseUnavailableError } from "../db.js";
+import { dataFolderChecks } from "../doctor.js";
 
 let base: string;
 let prior: string | undefined;
@@ -102,6 +103,23 @@ describe("a data folder the server cannot use (audit 2026-11-25, F-m3)", () => {
     undo();
     undo = null;
     expect(fs.readdirSync(home)).toEqual(["keep.txt"]);
+  });
+
+  it("--doctor's Data folder line fails on a folder this user cannot write to, and passes on one it can", ({ skip }) => {
+    const ro = path.join(base, "doctor-ro");
+    fs.mkdirSync(ro);
+    undo = denyWrites(ro);
+    if (!undo) return skip("this user cannot be denied writes here (root)");
+    process.env.FOURDA_MCP_HOME = ro;
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const line = dataFolderChecks().find((c) => c.name === "Data folder");
+    expect(line?.status).toBe("fail");
+    expect(line?.detail).toMatch(/the data folder .*doctor-ro is not writable .*: the server cannot keep its files there/);
+    undo();
+    undo = null;
+    closeServerCacheDb();
+    process.env.FOURDA_MCP_HOME = path.join(base, "doctor-rw");
+    expect(dataFolderChecks().find((c) => c.name === "Data folder")?.status).toBe("pass");
   });
 
   it("a writable folder is used as before", () => {
