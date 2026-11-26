@@ -790,8 +790,10 @@ export async function executeWhatShouldIKnow(
     const specs = [...new Set([...onPair.flatMap((p) => (p.version ? [p.version] : [])), ...formSpecs])];
     // Without a declared version: the specs read on the pair, else latest (the ledger keeps dependency_check's line
     // for exactly those items); either way the call stays confirmation_needed until `version` is stated (E1).
-    const versions = d.version ? [...specs, d.version] : specs.length > 0 ? specs : ["latest"];
-    if (!d.version) checkedSoFar.set(d.name, specs.length > 0 ? specs.join(", ") : "latest");
+    // (latest too where the pair is also named without a spec: `npm install x@1.0.0 x`).
+    const versionlessAt = specs.length > 0 && !onPair.some((p) => !p.version) ? specs : [...specs, "latest"];
+    const versions = d.version ? [...specs, d.version] : versionlessAt;
+    if (!d.version) checkedSoFar.set(d.name, versionlessAt.join(", "));
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
     for (const version of [...new Set(versions)]) {
       const latest = /^latest$/i.test(version);
