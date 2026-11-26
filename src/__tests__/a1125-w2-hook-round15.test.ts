@@ -219,3 +219,26 @@ describe("H1: a name alone beside a declaration of it is held (npm, pnpm, uv, Po
     expect(run("npm install lodash").text).toContain("could not be read");
   });
 });
+
+describe("H8a: a quoted heredoc as a command's argument is read as its text", () => {
+  const msg = (delim: string, body: string) => `"$(cat <<${delim}\n${body}\n${delim.replace(/['"\\]/g, "")}\n)"`;
+  it.each([
+    `git commit -m ${msg("'EOF'", "docs: run npm install lodash@4.17.20 first\n\nCo-Authored-By: x")}`,
+    `git commit -m ${msg('"EOF"', "ci: pip install -r requirements.txt")}`,
+    `git commit -m ${msg("\\EOF", "ci: cargo add serde")}`,
+    `gh pr create --title "Bump" --body ${msg("'EOF'", "## Summary\n- npm install lodash@4.17.20\n- it's done")}`,
+    `gh pr comment 12 --body ${msg("'EOF'", "try uv add httpx")}`,
+    `git tag -a v1 -m ${msg("'EOF'", "release: npm install now pins lodash")}`,
+  ])("%s: text, goes ahead", (command) => {
+    expect(run(command).decision, command).toBe("allow");
+  });
+  it.each([
+    [`git commit -m ${msg("'EOF'", "docs")} && npm i lodash@4.17.20`, "an install after it is still judged"],
+    [`git commit -m ${msg("'EOF'", "docs")}; npm i lodash@4.17.20`, "after ;"],
+    [`git commit -m "$(cat <<'EOF'\ndocs\nEOF\nnpm i lodash@4.17.20\nEOF\n)"`, "a body line that is the delimiter ends the heredoc: the rest runs"],
+    [`git commit -m ${msg("EOF", "docs $(npm i lodash@4.17.20)")}`, "an unquoted delimiter expands the body"],
+    [`npm i ${msg("'EOF'", "lodash@4.17.20")}`, "the text as an install's operand is judged"],
+  ])("%s: denied (%s)", (command) => {
+    expect(run(command).decision, command).toBe("deny");
+  });
+});

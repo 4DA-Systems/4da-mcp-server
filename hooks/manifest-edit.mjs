@@ -3593,6 +3593,61 @@ function pyOperandKind(word) {
  * read whole, else the part not read. A line that does not take apart is not read, unless its
  * only hits are in heredoc bodies fed to data programs.
  */
+/**
+ * Round 15 (H8a): `"$(cat <<'EOF'` newline, body lines, `EOF` newline, `)"`, the form Claude Code
+ * writes for commit messages and PR bodies. With the delimiter quoted (single or double quotes, or a
+ * backslash) the shell expands nothing in the body, and the argument is exactly the body (the
+ * substitution drops the trailing newlines): rewritten as that text in single quotes, it is read as
+ * any other argument. The heredoc ends at the first line that is exactly the delimiter, as the
+ * shell ends it; only when `)"` follows that line at once is the form rewritten, so a body line
+ * cannot end it early and leave a command after it unread. Any other shape is left as written.
+ */
+function heredocArgumentsAsText(line) {
+  if (!line.includes("$(cat <<")) return line;
+  let out = "";
+  let at = 0;
+  for (;;) {
+    tick();
+    const start = line.indexOf('"$(cat <<', at);
+    if (start < 0) break;
+    const m = /^"\$\(cat <<-?[ \t]*(?:'([A-Za-z0-9_.-]+)'|"([A-Za-z0-9_.-]+)"|\\([A-Za-z0-9_.-]+))[ \t]*\n/.exec(line.slice(start));
+    if (!m) {
+      out += line.slice(at, start + 1);
+      at = start + 1;
+      continue;
+    }
+    const delim = m[1] ?? m[2] ?? m[3];
+    const strip = m[0].startsWith('"$(cat <<-');
+    const bodyStart = start + m[0].length;
+    let pos = bodyStart;
+    let end = -1;
+    const lines = [];
+    while (pos <= line.length) {
+      const nl = line.indexOf("\n", pos);
+      const raw = line.slice(pos, nl < 0 ? line.length : nl);
+      const l = strip ? raw.replace(/^\t+/, "") : raw;
+      if (l === delim) {
+        end = nl < 0 ? line.length : nl + 1;
+        break;
+      }
+      lines.push(l);
+      if (nl < 0) break;
+      pos = nl + 1;
+    }
+    if (end < 0 || !line.startsWith(')"', end)) {
+      out += line.slice(at, start + 1);
+      at = start + 1;
+      continue;
+    }
+    const text = lines.join("\n").replace(/\n+$/, "");
+    // An apostrophe in the text is written as U+02BC so the text stays one single-quoted word for the
+    // reader (no package spec holds one, so an operand with it is not read either way).
+    out += line.slice(at, start) + `'${text.replace(/'/g, "ʼ")}'`;
+    at = end + 2;
+  }
+  return out + line.slice(at);
+}
+
 /** H1: the folder after a simple command (`cd dir`, pushd, Set-Location): null once it cannot be named. */
 function movedTo(words, dir) {
   const start = Math.max(0, commandStart(words));
@@ -3605,6 +3660,7 @@ function movedTo(words, dir) {
 
 function accountLine(line, dialect, depth = 0) {
   let lineDir = depth === 0 ? accountCwd : accountDir;
+  if (dialect === "bash") line = heredocArgumentsAsText(line);
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // D6: PowerShell `$env:NAME = value` statements: a manager's own setting holds the line; any other is taken out before it is read.
   let dataSetting = false;
@@ -4951,7 +5007,8 @@ function accountCall(command, dialect) {
 export function installsIn(command, dialect, depth = 0) {
   fault("reader");
   if (depth > MAX_WRAPS) return [];
-  const line = dialect === "powershell" && typeof command === "string" ? psEnvAssignments(command).line : command;
+  // H8a: the reader reads a quoted heredoc argument as its text too, as the account does.
+  const line = dialect === "powershell" && typeof command === "string" ? psEnvAssignments(command).line : typeof command === "string" ? heredocArgumentsAsText(command) : command;
   const commands = simpleCommands(line, dialect, null, null, MAX_ACCOUNT_CHARS);
   if (!commands) return [];
   const seen = new Set();
