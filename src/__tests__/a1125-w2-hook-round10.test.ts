@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Round 10, from the eighth independent check: small fixes S1-S6.
+ * S1 `name@<URL>` / `name @ <URL>` is the URL. S2 a constraints or overrides file beside a named
+ * package: held, "name the version". S3 Poetry's `--source pypi` and crates.io's git index are the
+ * public ones. S4 `poetry self add x==v` is an add. S5 a ledger line that names a package but is
+ * not fully valid makes its verdict unknown; the budget hold says what happened. S6 an extra index
+ * or find-links keeps the public index in play: the names are judged on their verdicts.
+ */
+
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
+import { answerDenial } from "./helpers/a1125-hook-run.js";
+
+let s: Sandbox;
+beforeEach(() => {
+  s = sandbox();
+  s.ledger([]);
+});
+afterEach(() => s.dispose());
+
+const run = (command: string, tool = "Bash") => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command } });
+
+/** Held on its verdict with the dependency_check call; answered proceed, it goes ahead. */
+function heldThenReleased(command: string, item: Record<string, string>): void {
+  const r = run(command);
+  expect(r.decision, r.text).toBe("deny");
+  expect(r.text).not.toContain("could not be read");
+  expect(r.items).toEqual([item]);
+  answerDenial(s, r, "proceed");
+  expect(run(command).decision).toBe("allow");
+}
+
+describe("S1: name@<URL> is the URL", () => {
+  const TGZ = "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz";
+  it.each([`npm i lodash@${TGZ}`, `pnpm add lodash@${TGZ}`, `yarn add lodash@${TGZ}`, `bun add lodash@${TGZ}`])("%s", (command) => {
+    heldThenReleased(command, { ecosystem: "npm", package: "lodash", to: "4.17.20" });
+  });
+
+  it.each(["pip install requests@https://files.pythonhosted.org/packages/source/r/requests/requests-2.5.0.tar.gz", "pip install 'requests @ https://files.pythonhosted.org/packages/source/r/requests/requests-2.5.0.tar.gz'"])("%s", (command) => {
+    heldThenReleased(command, { ecosystem: "PyPI", package: "requests", to: "2.5.0" });
+  });
+
+  it("another form on a public host is held as not read; another host is its own source", () => {
+    expect(run("npm i lodash@https://registry.npmjs.org/lodash").text).toContain("could not be read");
+    expect(run("npm i lodash@https://npm.corp.example/lodash-4.17.20.tgz").decision).toBe("allow");
+  });
+});
+
+describe("S2: a constraints or overrides file beside a named package", () => {
+  it.each(["pip install requests -c c.txt", "uv pip install requests --overrides o.txt", "uv add requests --constraints c.txt", "pip install requests==2.32.3 --constraint c.txt"])("%s: held, name the version", (command) => {
+    const r = run(command);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("name the version on the command line");
+    heldThenReleased("pip install requests==2.32.3", { ecosystem: "PyPI", package: "requests", to: "2.32.3" });
+  });
+
+  it.each(["pip install -r requirements.txt -c constraints.txt", "uv pip install -r requirements.txt --overrides o.txt", "pip install -c constraints.txt -e ."])("%s: a file-driven install goes ahead", (command) => {
+    expect(run(command).decision).toBe("allow");
+  });
+});
+
+describe("S3: the public source named by another name", () => {
+  it("poetry add --source pypi requests==2.5.0 is judged", () => {
+    heldThenReleased("poetry add --source pypi requests==2.5.0", { ecosystem: "PyPI", package: "requests", to: "2.5.0" });
+  });
+  it.each(["cargo install serde@1.0.0 --index https://github.com/rust-lang/crates.io-index", "cargo install serde@1.0.0 --index sparse+https://index.crates.io/"])("%s is judged", (command) => {
+    heldThenReleased(command, { ecosystem: "crates.io", package: "serde", to: "1.0.0" });
+  });
+  it("another Poetry source is the project's own", () => {
+    expect(run("poetry add --source corp requests==2.5.0").decision).toBe("allow");
+  });
+});
+
+describe("S4: poetry self add", () => {
+  it("poetry self add urllib3==2.5.0 is judged", () => {
+    heldThenReleased("poetry self add urllib3==2.5.0", { ecosystem: "PyPI", package: "urllib3", to: "2.5.0" });
+  });
+});
+
+describe("S5: a ledger line naming a package that is not fully valid", () => {
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const proceed = JSON.stringify({ t: at, ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed" });
+  it.each([
+    ["a t that is not a date", JSON.stringify({ t: "soon", ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "avoid" })],
+    ["a verdict that is not one of the five", JSON.stringify({ t: at, ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "Avoid" })],
+    ["no version", JSON.stringify({ t: at, ecosystem: "npm", package: "lodash", verdict: "avoid" })],
+  ])("%s after a proceed: held", (_label, bad) => {
+    writeFileSync(join(s.home, "check-ledger.jsonl"), `${proceed}\n${bad}\n`);
+    expect(run("npm i lodash@4.17.21").decision).toBe("deny");
+  });
+});
+
+describe("S6: an extra index keeps the public index in play", () => {
+  it.each(["pip install --extra-index-url https://pypi.corp.example/simple requests==2.5.0", "pip install --find-links https://pypi.org/simple requests==2.5.0"])("%s: judged on its verdict, released by the call", (command) => {
+    heldThenReleased(command, { ecosystem: "PyPI", package: "requests", to: "2.5.0" });
+  });
+  it("a private primary index is the project's own source", () => {
+    expect(run("pip install -i https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
+    expect(run("uv add --index https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
+  });
+});

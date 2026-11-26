@@ -1535,6 +1535,8 @@ let unreadInstalls = false;
 
 /** Thrown out of a reader's loop once the call is past its time budget (preToolUse holds it). */
 const TOO_SLOW = new Error("over the time budget");
+/** The part named when reading does not finish in time (the budget's ticks, or the worker's wall clock). */
+const OVER_BUDGET = "reading it did not finish inside the hook's time budget";
 let ticks = 0;
 
 /**
@@ -1545,7 +1547,7 @@ let ticks = 0;
  */
 function tick() {
   if ((++ticks & 1023) === 0 && performance.now() > deadline) {
-    refuse(`reading it took over ${READ_BUDGET_MS / 1000} s`);
+    refuse(OVER_BUDGET);
     throw TOO_SLOW;
   }
 }
@@ -1553,7 +1555,7 @@ function tick() {
 /** Whether this call's reading is past its time budget; marks it so when it is. */
 function overBudget() {
   if (performance.now() <= deadline) return false;
-  refuse(`reading it took over ${READ_BUDGET_MS / 1000} s`);
+  refuse(OVER_BUDGET);
   return true;
 }
 /** PEP 440 pre-, post- and dev-release tags, longest first (read greedily: `rc` before `r`). */
@@ -2196,10 +2198,17 @@ function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = 
  */
 function publicSource(flag, value) {
   if (typeof value !== "string") return false;
-  if (["-i", "--index-url", "--index", "--default-index", "--extra-index-url"].includes(flag)) return /^https:\/\/pypi\.org\/simple\/?$/i.test(value);
+  // S6: an extra index or find-links location keeps the public index in play: the names are judged as public names.
+  if (flag === "--extra-index-url" || flag === "-f" || flag === "--find-links") return true;
+  if (["-i", "--index-url", "--index", "--default-index"].includes(flag)) return /^https:\/\/pypi\.org\/simple\/?$/i.test(value) || (flag === "--index" && CRATES_INDEX.test(value));
   if (flag === "--registry") return value === "crates-io";
+  // S3: Poetry's source named pypi is the public index.
+  if (flag === "--source") return /^pypi$/i.test(value);
   return false;
 }
+
+/** crates.io's own index, by its git and sparse URLs. */
+const CRATES_INDEX = /^(?:sparse\+|registry\+)?https:\/\/(?:github\.com\/rust-lang\/crates\.io-index(?:\.git)?|index\.crates\.io)\/?$/i;
 
 /** A version or range after `@` in a JS package manager's spec, or null for a tag, alias, git or URL source. */
 function jsVersion(raw) {
@@ -2257,9 +2266,12 @@ function registryFile(word) {
 const publicUrl = (word) => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) && sourceKind(word.replace(/^git\+/i, "")) === "public";
 
 /** A PyPI install operand: its requirement, or the name alone as the request "latest". */
+/** `name@<URL>` / `name @ <URL>`: the URL. */
+const PY_DIRECT = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]{0,200}\])?\s*@\s*([a-z][a-z0-9+.-]*:\/\/\S+)$/i;
+
 function pyOperand(w) {
-  const file = registryFile(w);
-  if (file) return [file];
+  const file = registryFile(w) ?? registryFile(PY_DIRECT.exec(w)?.[1]);
+  if (file && file.ecosystem === "PyPI") return [file];
   const r = pep508(w);
   if (r) return [{ ecosystem: "PyPI", name: r.name, spec: r.spec }];
   const bare = pyBareName(w);
@@ -2511,6 +2523,11 @@ function jsInstalls(manager, args) {
     // `alias@npm:target@1.2.3` installs target 1.2.3; `alias@npm:target` its newest release.
     let name = m[1];
     let raw = m[2];
+    const atFile = registryFile(raw);
+    if (atFile && atFile.ecosystem === "npm") {
+      out.push(atFile);
+      continue;
+    }
     if (raw.startsWith("npm:")) {
       const inner = NPM_SPEC.exec(raw.slice(4));
       if (inner) [name, raw] = [inner[1], inner[2]];
@@ -2527,6 +2544,8 @@ function jsInstalls(manager, args) {
 
 /** `pip install` (and `uv pip install`, `python -m pip install`) specs. */
 function pipInstalls(args) {
+  // --no-index: no public index at all (only --find-links locations).
+  if (args.includes("--no-index")) return [];
   const all = operands(args, { values: PIP_VALUES, refuse: PY_INDEX });
   if (!all || all[0] !== "install") return [];
   return all.slice(1).flatMap(pyOperand);
@@ -2977,7 +2996,9 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     if (inner !== null) return inner.length > 0 ? commandInstalls(inner, depth + 1, dialect) : [];
   }
   if (program === "poetry") {
-    const all = operands(args, { values: POETRY_VALUES, refuse: new Set(["--source"]) });
+    const found = operands(args, { values: POETRY_VALUES, refuse: new Set(["--source"]) });
+    // S4: `poetry self add x==v` adds a package to Poetry's own environment: an add all the same.
+    const all = found && found[0] === "self" ? found.slice(1) : found;
     if (!all || all[0] !== "add") return [];
     return all.slice(1).flatMap((w) => {
       const r = poetrySpec(w);
@@ -3153,6 +3174,7 @@ function detectsInWords(words) {
 /** An index or registry value: "public", "private" (positively not a public host) or "unknown". */
 function sourceKind(value) {
   if (typeof value !== "string" || !value) return "unknown";
+  if (CRATES_INDEX.test(value)) return "public";
   try {
     const host = new URL(value.replace(/^(?:sparse|git|registry)\+/i, "")).hostname.toLowerCase().replace(/\.+$/, "");
     if (!host) return "unknown";
@@ -3280,6 +3302,12 @@ function jsOperand(word) {
   const m = NPM_SPEC.exec(word);
   if (!m) return null;
   let [name, raw] = [m[1], m[2]];
+  // S1: `name@<URL>` is the URL: the public registry's own file form read, another form on a public host held.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    const at = registryFile(raw);
+    if (at && at.ecosystem === "npm") return { name: at.name };
+    return publicUrl(raw) ? null : "local";
+  }
   if (/^(?:workspace:|file:|link:|portal:|git|github:|https?:)/i.test(raw)) return "local";
   if (raw.startsWith("npm:")) {
     const inner = NPM_SPEC.exec(raw.slice(4));
@@ -3294,7 +3322,14 @@ function jsOperand(word) {
 function pyOperandKind(word) {
   const file = registryFile(word);
   if (file && file.ecosystem === "PyPI") return { name: file.name };
-  if (publicUrl(word) || /\s@\s*https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org)\//i.test(word)) return null;
+  if (publicUrl(word)) return null;
+  // S1: `name@<URL>` and PEP 508's `name @ <URL>` are the URL.
+  const direct = PY_DIRECT.exec(word);
+  if (direct) {
+    const at = registryFile(direct[1]);
+    if (at && at.ecosystem === "PyPI") return { name: at.name };
+    return publicUrl(direct[1]) ? null : "local";
+  }
   if (/:\/\//.test(word) || /^(?:git\+|hg\+|svn\+|bzr\+)/i.test(word) || /\s@\s/.test(word)) return "local";
   // D8: a path with extras (`.[dev]`, `./pkg[test,docs]`) is a path.
   const path = word.replace(/\[[^\]]{0,200}\]$/, "");
@@ -3808,15 +3843,31 @@ function accountPip(args, table, reader) {
     for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return `${k} ${v}, a file read from the command's input`;
   }
   const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => values.get(k) ?? []);
-  for (const v of [...index, ...(values.get("--extra-index-url") ?? [])]) if (sourceKind(v) === "unknown") return `the index ${v}`;
-  if (values.has("--no-index") || (index.length > 0 && index.every((v) => sourceKind(v) === "private") && !(values.get("--extra-index-url") ?? []).some((v) => sourceKind(v) === "public"))) return null;
+  for (const v of index) if (sourceKind(v) === "unknown") return `the index ${v}`;
+  if (values.has("--no-index") || (index.length > 0 && index.every((v) => sourceKind(v) === "private"))) return null;
   const names = [];
   for (const o of read.positional) {
     const kind = pyOperandKind(o);
     if (kind === null) return `${o}, which this hook does not read as a version to check`;
     if (kind !== "local") names.push(kind.name);
   }
+  const pinned = constraintsBeside(values, names);
+  if (pinned) return pinned;
   return judgedByReader(names, reader, "PyPI");
+}
+
+/** Options naming a file that decides the release of the packages named beside it. */
+const CONSTRAINT_OPTIONS = ["-c", "--constraint", "--constraints", "--overrides", "--override", "--build-constraints", "-b"];
+const CONSTRAINT_REMEDY =
+  "A constraints or overrides file decides the release of a package named beside it, and this hook does not read that file: name the version on the command line instead (pip install <name>==<version>, uv add <name>==<version>), without the file, and call dependency_check on it: it passes once dependency_check answers proceed or review. Installing from -r <file> alone (no package named) goes ahead.";
+
+/** S2: a constraints or overrides file beside a named package: held, with "name the version". */
+function constraintsBeside(values, names) {
+  if (names.length === 0) return null;
+  const option = CONSTRAINT_OPTIONS.find((k) => (values.get(k) ?? []).length > 0);
+  if (!option) return null;
+  accountRemedy = CONSTRAINT_REMEDY;
+  return `${option} ${values.get(option)[0]}, a file that decides the release of ${names[0]}`;
 }
 
 /** `-P` / `--upgrade-package` values: each a requirement the reader reads. */
@@ -3864,18 +3915,25 @@ function accountUv(args, dialect, depth, reader) {
   const upgrade = upgradeValues(values);
   if (upgrade) return upgrade;
   if (sub !== "add") return null;
-  for (const v of ["--index", "--default-index", "-i", "--index-url", "--extra-index-url"].flatMap((k) => values.get(k) ?? [])) if (sourceKind(v.replace(/^[\w-]+=/, "")) === "unknown") return `the index ${v}`;
+  const uvIndex = ["--index", "--default-index", "-i", "--index-url"].flatMap((k) => values.get(k) ?? []).map((v) => v.replace(/^[\w-]+=/, ""));
+  for (const v of uvIndex) if (sourceKind(v) === "unknown") return `the index ${v}`;
+  if (uvIndex.some((v) => sourceKind(v) === "private")) return null;
   const names = [];
   for (const o of read.positional) {
     const kind = pyOperandKind(o);
     if (kind === null) return `${o}, which this hook does not read as a version to check`;
     if (kind !== "local") names.push(kind.name);
   }
+  const pinned = constraintsBeside(values, names);
+  if (pinned) return pinned;
   return judgedByReader(names, reader, "PyPI");
 }
 
 function accountPoetry(args, dialect, depth, reader) {
-  const head = subcommand(args, ACCOUNT_TABLES.poetry);
+  const first = subcommand(args, ACCOUNT_TABLES.poetry);
+  if (first.bad) return `the option ${first.bad}`;
+  // S4: `poetry self add x==v` is an add.
+  const head = first.sub === "self" ? subcommand(first.rest, ACCOUNT_TABLES.poetry) : first;
   if (head.bad) return `the option ${head.bad}`;
   const { sub, rest } = head;
   if (sub === "run") return rest.length > 0 ? accountCommand(rest, dialect, depth + 1) : null;
@@ -3883,7 +3941,7 @@ function accountPoetry(args, dialect, depth, reader) {
   const read = readOptions(rest, ACCOUNT_TABLES.poetry);
   if (read.bad) return `the option ${read.bad}`;
   if (sub !== "add") return null;
-  if (read.values.has("--source")) return null;
+  if ((read.values.get("--source") ?? []).some((v) => !/^pypi$/i.test(v))) return null;
   const names = [];
   for (const o of read.positional) {
     if (pyOperandKind(o) === "local") continue;
@@ -3967,7 +4025,11 @@ function accountGo(args, reader) {
  * R8-1 + R8-2 for a command call: the part not read, or null. Asked of every Bash and PowerShell
  * command, whatever its size: a line with no detector hit is null at once.
  */
+/** A remedy other than ACCOUNT_REMEDY for the part accountCall returns (set by the part's reader). */
+let accountRemedy = null;
+
 function accountCall(command, dialect) {
+  accountRemedy = null;
   if (!detectsInstall(command)) return null;
   if (command.length > MAX_ACCOUNT_CHARS) return `a command over ${MAX_ACCOUNT_CHARS / 1024 / 1024} MB that names an install`;
   return accountLine(command, dialect);
@@ -4063,8 +4125,13 @@ function readLedger(dir, now) {
         if (pkg) unknown.push({ ecosystem: /"ecosystem"\s*:\s*"([^"]{1,20})"/.exec(line)?.[1] ?? null, package: pkg[1], seq });
         continue;
       }
-      if (!e || typeof e !== "object" || typeof e.package !== "string" || typeof e.version !== "string" || typeof e.verdict !== "string" || typeof e.ecosystem !== "string") continue;
+      if (!e || typeof e !== "object" || typeof e.package !== "string") continue;
       const t = Date.parse(e.t);
+      // S5: a line that names a package but is not fully valid makes that package's verdict unknown.
+      if (typeof e.version !== "string" || typeof e.ecosystem !== "string" || !LEDGER_VERDICTS.has(e.verdict) || !Number.isFinite(t)) {
+        unknown.push({ ecosystem: typeof e.ecosystem === "string" ? e.ecosystem : null, package: e.package, seq });
+        continue;
+      }
       if (Number.isFinite(t) && t > now + 5 * 60 * 1000) {
         unknown.push({ ecosystem: e.ecosystem, package: e.package, seq });
         continue;
@@ -4128,6 +4195,8 @@ function versionKey(ecosystem, version) {
 }
 
 const HOLDS = new Set(["avoid", "wait"]);
+/** The five verdicts a ledger line may carry. */
+const LEDGER_VERDICTS = new Set(["proceed", "review", "avoid", "wait", "unknown"]);
 const PASSES = new Set(["proceed", "review"]);
 
 /** The ledger's entries by ecosystem and package name (as the registry compares names), oldest first. */
@@ -4583,7 +4652,7 @@ function judgeCall(input, env, now) {
     const part = accountCall(input.tool_input.command, input.tool_name === "PowerShell" ? "powershell" : "bash");
     if (part !== null) {
       // The reader's own part, when it already found one (a bound it passed), is the one named.
-      refuse(part, ACCOUNT_REMEDY);
+      refuse(part, accountRemedy ?? ACCOUNT_REMEDY);
       unreadInstalls = true;
     }
   }
@@ -4914,7 +4983,7 @@ function timeHold(input) {
   if (!command && !(typeof file === "string" && manifestKind(file) !== null)) return "";
   if (!readLedgerExists(dataDir(process.env))) return "";
   unreadRemedy = null;
-  return denyJson(notReadDenial(command ? "command" : "edit", `reading it took over ${WALL_LIMIT_MS / 1000} s`));
+  return denyJson(notReadDenial(command ? "command" : "edit", OVER_BUDGET));
 }
 
 /** The largest payload the hook parses to judge it (past MAX_INPUT_CHARS it is judged, never read). */
