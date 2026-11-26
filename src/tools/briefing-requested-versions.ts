@@ -667,7 +667,7 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
  * dependency_check's verdict for each named version, within the briefing's budget. Offline or past
  * the budget a version is `unknown`: never read as safe.
  */
-export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date, onAnswer?: (results: readonly CheckedItem[]) => void): Promise<RequestedVersionFinding[]> {
+export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string }>) => void): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
   const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
@@ -694,7 +694,7 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
           now ? { now } : {},
         ).then((answer) => {
           // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
-          onAnswer?.(answer.results as readonly CheckedItem[]);
+          onAnswer?.(answer.results as readonly CheckedItem[], list.map((x) => ({ ecosystem: x.ecosystem, name: x.name, to: x.to })));
           return answer;
         }),
         new Promise<null>((resolve) => {

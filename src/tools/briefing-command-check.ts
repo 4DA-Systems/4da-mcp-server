@@ -19,6 +19,7 @@
  * has not gone through the task screen is ever repeated.
  */
 import type { CheckEcosystem } from "../live/release-metadata.js";
+import { pushAll } from "../array-utils.js";
 
 const MANAGERS: ReadonlyMap<string, CheckEcosystem> = new Map([
   ...["npm", "pnpm", "yarn", "bun", "bunx", "npx", "pnpx"].map((m) => [m, "npm"] as const),
@@ -28,6 +29,32 @@ const MANAGERS: ReadonlyMap<string, CheckEcosystem> = new Map([
   // Deno installs npm packages by their `npm:` specifier; its other operands are files and URLs.
   ["deno", "npm"] as const,
 ]);
+type Family = "js" | "py" | "cargo" | "go";
+const FAMILY: Record<CheckEcosystem, Family> = { npm: "js", PyPI: "py", "crates.io": "cargo", Go: "go" };
+/**
+ * Round 6, item 3: options known to take NO value, per family (a short positive list). The word after any other
+ * option is that option's value: never an operand, never offered, never repeated.
+ */
+const SWITCHES: Record<Family, ReadonlySet<string>> = {
+  js: new Set([
+    "-D", "--save-dev", "-S", "--save", "-P", "--save-prod", "-O", "--save-optional", "--save-peer", "-E", "--save-exact", "-g", "--global", "--no-save",
+    "--legacy-peer-deps", "--strict-peer-deps", "--force", "-f", "--ignore-scripts", "--no-audit", "--no-fund", "--dry-run", "--prefer-offline", "--offline",
+    "--production", "--prod", "--no-package-lock", "-B", "--save-bundle", "-y", "--yes", "-W", "--ignore-workspace-root-check", "--dev", "-d", "--peer",
+    "--optional", "--exact", "-T", "--tilde", "--frozen-lockfile", "--no-frozen-lockfile", "--recursive", "-r", "--latest", "-L", "--silent", "-s", "--quiet",
+    "-q", "--verbose", "--trust", "--interactive", "-i", "--no-optional", "--frozen", "--immutable", "--json", "--ci",
+  ]),
+  py: new Set([
+    "-U", "--upgrade", "--user", "--no-deps", "--pre", "-q", "--quiet", "-v", "--verbose", "--force-reinstall", "--no-cache-dir", "--break-system-packages",
+    "-I", "--ignore-installed", "--no-build-isolation", "--require-hashes", "--no-input", "--isolated", "--dev", "--frozen", "--locked", "--no-sync",
+    "--system", "--compile", "--dry-run", "--prefer-binary", "--all-extras", "--refresh", "--reinstall", "--optional", "--editable-false", "-y", "--yes",
+  ]),
+  cargo: new Set(["--dev", "--build", "--optional", "--no-optional", "--no-default-features", "--locked", "--frozen", "--offline", "--force", "-f", "--dry-run", "-q", "--quiet", "-v", "--verbose", "--all-features", "--debug", "--no-track"]),
+  go: new Set(["-u", "-d", "-t", "-v", "-x", "-insecure"]),
+};
+/** pnpm's and yarn's -w is --workspace-root (no value); npm's -w is --workspace <name>. */
+const WORKSPACE_ROOT = new Set(["pnpm", "yarn", "bun"]);
+const isSwitch = (family: Family, flag: string, manager = "") => SWITCHES[family].has(flag) || (WORKSPACE_ROOT.has(manager) && (flag === "-w" || flag === "--workspace-root"));
+
 /** Options whose value IS a package (the runner's package, uv's `--with`): never a script. */
 const PACKAGE_OPTIONS = new Set(["--with", "--with-editable", "--spec", "--from", "--package", "-p"]);
 /** pip's index options: a value that is not the public index makes the command's operands private. */
@@ -59,6 +86,9 @@ const VALUE_OPTIONS = new Set([
   "--features", "--timeout", "--loglevel", "--log-level", "--network-timeout", "--prefix", "--cwd", "--dir", "--filter", "--target", "--registry",
   "--index-url", "--extra-index-url", "--index", "--default-index", "-i", "--rev", "--branch", "--tag", "--python", "--root", "--manifest-path", "--profile",
   "--cache-dir", "--config", "--userconfig", "--requirement", "-r", "--constraint", "-e", "--editable",
+  // Round 6, item 3: options known to take a value that is no package (a path, a workspace, a date, a feature).
+  "--path", "--git", "--version", "--vers", "-F", "--workspace", "-w", "--omit", "--include", "--before", "-C", "--modfile", "-tags", "--find-links",
+  "-f", "-t", "--only-binary", "--no-binary", "--platform", "--implementation", "--abi", "--progress-bar", "--group", "-G", "--optional-group", "--extra",
 ]);
 const MAX_SEGMENT_WORDS = 400;
 const MAX_TEXT = 120;
@@ -94,8 +124,8 @@ export interface InstallCommand {
   ecosystem: CheckEcosystem;
   /** Its operands, as written. */
   operands: string[];
-  /** The operands right after an option this module does not know, with that option's flag (they may be its value). */
-  maybeValues?: Array<[string, string]>;
+  /** The options this module does not know whose next word it took as their value (never shown; round 6, item 3). */
+  hiddenValues?: string[];
   /** The manager word and the verb, from this module's fixed lists: what an answer may say of the command. */
   manager: string;
   verb: string;
@@ -159,8 +189,6 @@ interface Operand {
   ofOption: boolean;
   /** The ecosystem of a label right after it: "papaparse (npm)". */
   label?: CheckEcosystem;
-  /** Right after an option this module does not know (its flag): it may be that option's value (a token, a path). */
-  afterOption?: string;
 }
 
 /** A public package index URL (pip's own default, its JSON mirror name). */
@@ -170,12 +198,13 @@ const publicIndex = (url: string) => /^https?:\/\/(?:pypi\.org|pypi\.python\.org
  * The operand run from `from` (F2): the contiguous words after the verb, ending at the first token that cannot be
  * an operand or option. `end` is the index of the first token after it.
  */
-function operandRun(t: Token[], from: number): { operands: Operand[]; end: number; privateIndex: boolean; requirementFiles: string[]; unreadable?: InstallCommand["unreadable"] } {
+function operandRun(t: Token[], from: number, family: Family = "js", manager = ""): { operands: Operand[]; end: number; privateIndex: boolean; requirementFiles: string[]; hiddenValues: string[]; unreadable?: InstallCommand["unreadable"] } {
   const operands: Operand[] = [];
   const requirementFiles: string[] = [];
+  /** The options this module does not know whose following word it took as their value (item 3). */
+  const hiddenValues: string[] = [];
   let end = from;
   let packageNext = false;
-  let maybeValue: string | null = null;
   let privateIndex = false;
   let unreadable: InstallCommand["unreadable"];
   for (; end < t.length; end++) {
@@ -197,7 +226,7 @@ function operandRun(t: Token[], from: number): { operands: Operand[]; end: numbe
     if (!w) continue;
     if (w.startsWith("-")) {
       const flag = w.replace(/=.*$/, "");
-      if (VALUE_OPTIONS.has(flag)) {
+      if (VALUE_OPTIONS.has(flag) && !isSwitch(family, flag, manager)) {
         const value = w.includes("=") ? w.slice(w.indexOf("=") + 1) : end + 1 < t.length ? t[end + 1].word : "";
         if (INDEX_OPTIONS.has(flag) && value && !publicIndex(value)) privateIndex = true;
         if ((flag === "-r" || flag === "--requirement") && value) requirementFiles.push(w.includes("=") ? bare(t[end].raw).slice(bare(t[end].raw).indexOf("=") + 1) : bare(t[end + 1].raw));
@@ -206,9 +235,15 @@ function operandRun(t: Token[], from: number): { operands: Operand[]; end: numbe
         // `--package=x`, `--with=x` name a package; another option's value (`--omit=dev`) never does.
         if (PACKAGE_OPTIONS.has(flag)) operands.push({ text: bare(raw).replace(/^[^=]*=/, ""), ofOption: true });
       }
-      else {
-        packageNext = PACKAGE_OPTIONS.has(flag);
-        maybeValue = packageNext ? null : flag;
+      else if (PACKAGE_OPTIONS.has(flag)) packageNext = true;
+      else if (!isSwitch(family, flag, manager)) {
+        // Item 3: an option not known to take no value takes the next word as its value, unless that word ends the
+        // run or is another option: never an operand, never offered; it is counted as "the word after <option>".
+        const next = t[end + 1];
+        if (next && !t[end].closes && !next.opens && !next.word.startsWith("-") && !CONNECTIVES.has(next.word) && !STOPS.has(next.word) && !managerOf(next.word)) {
+          hiddenValues.push(flag);
+          end++;
+        }
       }
       if (t[end].closes) {
         end++;
@@ -221,15 +256,14 @@ function operandRun(t: Token[], from: number): { operands: Operand[]; end: numbe
     if (raw.includes("$(") || raw.includes("${") || (raw.startsWith("`") && !/^`[^`\s]+`[.,;:)]*$/.test(raw))) unreadable = "a command substitution among its words";
     const quote = raw[0] === '"' || raw[0] === "'" ? raw[0] : null;
     if (quote && raw.indexOf(quote, 1) < 0 && !t.slice(end + 1).some((x) => x.raw.includes(quote))) unreadable ??= "an unclosed quote";
-    operands.push({ text: bare(raw), ofOption: packageNext, ...(maybeValue ? { afterOption: maybeValue } : {}) });
+    operands.push({ text: bare(raw), ofOption: packageNext });
     packageNext = false;
-    maybeValue = null;
     if (t[end].closes) {
       end++;
       break;
     }
   }
-  return { operands: operands.filter((o) => o.text !== ""), end, privateIndex, requirementFiles, ...(unreadable ? { unreadable } : {}) };
+  return { operands: operands.filter((o) => o.text !== ""), end, privateIndex, requirementFiles, hiddenValues, ...(unreadable ? { unreadable } : {}) };
 }
 
 /**
@@ -239,14 +273,27 @@ function operandRun(t: Token[], from: number): { operands: Operand[]; end: numbe
 function verbAfter(t: Token[], managerAt: number): number {
   const manager = managerName(t[managerAt].word);
   if (RUNNERS.has(manager)) return managerAt;
-  for (let k = managerAt + 1; k < t.length; k++) {
+  const family = FAMILY[MANAGERS.get(manager) ?? "npm"];
+  for (let k = managerAt + 1; k < t.length && k - managerAt <= 8; k++) {
     const w = t[k].word;
-    if (w.startsWith("-") && !t[k].opens) {
-      if (VALUE_OPTIONS.has(w) && k + 1 < t.length) k++;
+    if (t[k].opens) return -1;
+    // `cargo +nightly install x`: the toolchain.
+    if (manager === "cargo" && w.startsWith("+")) continue;
+    if (w.startsWith("-")) {
+      // An option between the manager and its verb, with its value when it is not known to take none and the word
+      // after it is no verb (`npm -w web install x`, `npm --workspace web install x`; round 6, item 1).
+      const next = t[k + 1]?.word ?? "";
+      if (!w.includes("=") && !isSwitch(family, w, manager) && next && !next.startsWith("-") && !VERBS.has(next) && VERBS.has(t[k + 2]?.word ?? "")) k++;
       if (t[k].closes) return -1;
       continue;
     }
     if (VERBS.has(w)) return k;
+    // `yarn global add x`, `yarn workspace web add x`, `pnpm --filter web add x` (the option is skipped above).
+    if (manager === "yarn" && w === "global") continue;
+    if ((manager === "yarn" || manager === "pnpm") && w === "workspace" && VERBS.has(t[k + 2]?.word ?? "")) {
+      k++;
+      continue;
+    }
     if (w === "tool" && (t[k + 1]?.word === "run" || t[k + 1]?.word === "install")) return k + 1;
     if (w === "run" && (manager === "deno" || t.slice(k + 1, k + 40).some((x) => /^--(?:with|spec)(?:-editable|-requirements)?(?:=|$)/.test(x.word)))) return k;
     return -1;
@@ -274,7 +321,7 @@ export function scanCommands(task: string): InstallCommand[] {
       if (ecosystem && !t[managerAt].closes) {
         const v = verbAfter(t, managerAt);
         if (v >= 0) {
-          const read = t[v].closes && v !== managerAt ? { operands: [] as Operand[], end: v + 1, privateIndex: false, requirementFiles: [] as string[] } : operandRun(t, v + 1);
+          const read = t[v].closes && v !== managerAt ? { operands: [] as Operand[], end: v + 1, privateIndex: false, requirementFiles: [] as string[], hiddenValues: [] as string[] } : operandRun(t, v + 1, FAMILY[ecosystem], managerName(t[managerAt].word));
           const manager = managerName(t[managerAt].word);
           const deno = manager === "deno";
           const verb = v === managerAt ? manager : t[v].word;
@@ -295,7 +342,7 @@ export function scanCommands(task: string): InstallCommand[] {
               return true;
             });
           const operands = kept.map((o) => o.text);
-          const maybeValues = kept.filter((o) => o.afterOption).map((o) => [o.text, o.afterOption!] as [string, string]);
+
           commands.push({
             text: t.slice(m, Math.max(read.end, v + 1)).map((x) => x.raw).join(" ").slice(0, MAX_TEXT),
             ecosystem,
@@ -304,7 +351,7 @@ export function scanCommands(task: string): InstallCommand[] {
             verb,
             ...("unreadable" in read && read.unreadable ? { unreadable: read.unreadable } : {}),
             ...(read.privateIndex ? { privateIndex: true } : {}),
-            ...(maybeValues.length > 0 ? { maybeValues } : {}),
+            ...(read.hiddenValues.length > 0 ? { hiddenValues: read.hiddenValues } : {}),
             ...(read.requirementFiles.length > 0 && ecosystem === "PyPI" ? { requirementFiles: read.requirementFiles } : {}),
           });
           m = Math.max(m, read.end - 1);
@@ -408,6 +455,8 @@ export function namesNoPackage(operand: string): boolean {
   return /\.(?:txt|toml|json|lock|whl|tgz|tar\.gz|zip|cfg|ini|ya?ml)$/.test(o);
 }
 
+const MAX_PAIRS = 200;
+
 /** A strict (name, ecosystem) pair the task's text gives by position (K2), with the spec written on it. */
 export interface StrictPair {
   ecosystem: CheckEcosystem;
@@ -415,24 +464,29 @@ export interface StrictPair {
   version?: string;
   /** From a command that installs from the task's own private index (`-i <url>`): never sent. */
   privateIndex?: boolean;
-  /** Right after an option this module does not know (its flag): the word may be that option's value. */
-  afterOption?: string;
+  /** How the task gives it: an operand of a command, or an entry of a manifest snippet (round 6, item 1). */
+  seen?: "command" | "manifest";
 }
 
 /** The strict pairs of the task, and the commands whose shape could not be read (K2, K3). */
-export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[] } {
+export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[]; hiddenValues: string[] } {
   const pairs: StrictPair[] = [];
   const unreadable: InstallCommand[] = [];
   const requirementFiles: string[] = [];
+  const hiddenValues: string[] = [];
   const seen = new Set<string>();
   for (const c of scanCommands(task)) {
+    // Bounded like the reader (MAX_READ_PACKAGES): the briefing's matching of each pair is linear in the pairs, and
+    // 16,000 one-line commands took 8 s of CPU (CPU sweep, round 6). Past the cap the reader says NOT CHECKED.
+    if (pairs.length >= MAX_PAIRS) break;
     if (c.unreadable) unreadable.push(c);
     for (const f of c.requirementFiles ?? []) if (!requirementFiles.includes(f)) requirementFiles.push(f);
+    for (const f of c.hiddenValues ?? []) if (!hiddenValues.includes(f)) hiddenValues.push(f);
     // A command whose shape cannot be read gives no pairs (K3). A word that may be an unknown option's value is
     // marked: it is offered by name only where the task screen left it readable (what-should-i-know.ts).
     if (c.unreadable) continue;
     for (const o of c.operands) {
-      const maybeValue = c.maybeValues?.find(([text]) => text === o)?.[1];
+
       if (namesNoPackage(o)) continue;
       const names = operandNames(o);
       for (const name of names) {
@@ -445,11 +499,12 @@ export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable:
         const key = `${c.ecosystem}\0${name.toLowerCase()}\0${version ?? ""}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        pairs.push({ ecosystem: c.ecosystem, name, ...(version ? { version } : {}), ...(c.privateIndex ? { privateIndex: true } : {}), ...(maybeValue ? { afterOption: maybeValue } : {}) });
+        pairs.push({ ecosystem: c.ecosystem, name, ...(version ? { version } : {}), ...(c.privateIndex ? { privateIndex: true } : {}) });
       }
     }
   }
-  return { pairs, unreadable, requirementFiles };
+  pushAll(pairs, manifestPairs(task));
+  return { pairs, unreadable, requirementFiles, hiddenValues };
 }
 
 /**
@@ -472,12 +527,74 @@ export function requirementsPairs(root: string, files: readonly string[], read: 
 }
 
 /**
+ * Round 6, item 1: every entry of a manifest snippet is a STRICT pair in that manifest's ecosystem, with the spec it
+ * writes: a package.json dependencies object, requirements lines (after a requirements file is named or in a
+ * fence), pyproject `dependencies = [...]`, a Poetry table, a Cargo.toml dependencies table, go.mod requires.
+ * Bounded: at most 200 entries, each block read to at most 20,000 characters. Linear.
+ */
+export function manifestPairs(task: string): StrictPair[] {
+  const text = task.length > 200_000 ? task.slice(0, 200_000) : task;
+  const out: StrictPair[] = [];
+  const push = (ecosystem: CheckEcosystem, name: string, version?: string) => {
+    if (out.length >= 200 || !name || namesNoPackage(name)) return;
+    if (ecosystem === "PyPI" && name.toLowerCase() === "python") return;
+    // `==1.0.0` is the release 1.0.0, as the reader writes it.
+    const spec = version && /^===?[^=<>!~,]+$/.test(version) ? version.replace(/^===?/, "") : version;
+    out.push({ ecosystem, name, ...(spec ? { version: spec } : {}), seen: "manifest" });
+  };
+  // package.json: "dependencies": { "x": "1.0.0", ... } (and dev/peer/optional).
+  for (const m of text.matchAll(/"(?:dev|peer|optional)?[dD]ependencies"\s*:\s*\{([^{}]{0,4000})\}/g)) {
+    for (const e of m[1].matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,100})"/gi)) push("npm", e[1], e[2]);
+  }
+  // A TOML table: [dependencies] / [dev-dependencies] (Cargo) or [tool.poetry.dependencies] / group (Poetry).
+  for (const m of text.matchAll(/\[((?:tool\.poetry\.(?:group\.[\w-]+\.)?)?(?:dev-|build-)?dependencies)\]([^[]{0,20000})/g)) {
+    const ecosystem: CheckEcosystem = m[1].startsWith("tool.poetry") ? "PyPI" : "crates.io";
+    for (const line of m[2].split(/\r?\n/).slice(0, 400)) {
+      const e = /^\s*([A-Za-z0-9][\w.-]*)\s*=\s*(.{0,400})$/.exec(line);
+      if (!e) continue;
+      const value = e[2].trim();
+      const spec = value.startsWith('"') ? /^"([^"]{0,100})"/.exec(value)?.[1] : value.startsWith("{") ? /\bversion\s*=\s*"([^"]{0,100})"/.exec(value)?.[1] : undefined;
+      if (value.startsWith('"') || value.startsWith("{")) push(ecosystem, e[1], spec);
+    }
+  }
+  // pyproject (PEP 621): dependencies = ["x>=1", ...] and optional groups.
+  for (const m of text.matchAll(/(?:^|\s)dependencies\s*=\s*\[([^\]]{0,4000})\]/g)) {
+    for (const e of m[1].matchAll(/["']([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*([<>=!~][^"';]{0,100})?["']/g)) push("PyPI", e[1], e[2]?.trim());
+  }
+  // requirements lines: after a requirements file is named, or inside a ```txt / ```requirements / ```pip fence.
+  const reqStart = [...text.matchAll(/requirements[\w.-]*\.(?:txt|in)\b|```(?:txt|text|requirements|pip)\b/gi)].map((m) => m.index! + m[0].length);
+  if (reqStart.length > 0) {
+    const from = Math.min(...reqStart);
+    for (const line of text.slice(from, from + 20000).split(/\r?\n/)) {
+      const m = /^\s*([A-Za-z][\w.-]*)(?:\[[^\]]*\])?\s*((?:===?|~=|>=|<=|!=)\s*[\w.*+!-]+(?:\s*,\s*(?:===?|~=|>=|<=|!=|<|>)\s*[\w.*+!-]+)*)\s*(?:#.*)?$/.exec(line);
+      if (m) push("PyPI", m[1], m[2].replace(/\s+/g, ""));
+    }
+    // One line written after the file's name: "Add to requirements.txt: zqxdual==1.0.0".
+    for (const m of text.matchAll(/requirements[\w.-]*\.(?:txt|in)\b[^\n:]{0,40}:\s*([A-Za-z][\w.-]*)\s*((?:===?|~=|>=|<=|!=)\s*[\w.*+!-]+)/gi)) push("PyPI", m[1], m[2].replace(/\s+/g, ""));
+  }
+  // go.mod: require x v1.2.3 / require ( x v1 ... ).
+  for (const m of text.matchAll(/\brequire\s*\(([^)]{0,4000})\)|\brequire\s+([a-z0-9.-]+\.[a-z]{2,}\/[^\s]+)\s+(v[\w.+-]+)/gi)) {
+    if (m[2]) push("Go", m[2], m[3]);
+    else for (const e of m[1].matchAll(/([a-z0-9.-]+\.[a-z]{2,}\/[^\s]+)\s+(v[\w.+-]+)/gi)) push("Go", e[1], e[2]);
+  }
+  const seen = new Set<string>();
+  return out.filter((p) => {
+    const key = `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.version ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
  * The first command with an operand the briefing did not account for, or null (the C3 property test's view of the
  * strict evidence: such an operand waits in to_confirm). `accounted(ecosystem, name)` says whether the briefing
  * checked that pair, the caller declared it, or the project already depends on it.
  */
 export function unreadCommand(task: string, accounted: (ecosystem: CheckEcosystem, name: string) => boolean): InstallCommand | null {
   for (const c of scanCommands(task)) {
+    // A word an unknown option took as its value is never accounted for (round 6, item 3).
+    if ((c.hiddenValues?.length ?? 0) > 0) return c;
     for (const o of c.operands) {
       if (namesNoPackage(o)) continue;
       for (const name of operandNames(o)) if (!namesNoPackage(name) && !accounted(c.ecosystem, name)) return c;

@@ -14,6 +14,7 @@
  * matching a declaration to a name the task gives, and the wording the agent acts on.
  */
 
+import { credentialShape } from "./briefing-task-screen.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { lengthProblem, MAX_NAME_ARG_LENGTH, MAX_VERSION_ARG_LENGTH } from "../tool-args.js";
 import { quoteThirdParty } from "../untrusted-text.js";
@@ -92,7 +93,11 @@ export interface TaskPackages {
  * agent writes itself; nothing in to_confirm is shaped as the `packages` argument, so it cannot be pasted back.
  */
 export const NEXT_STEP =
-  "Call what_should_i_know again with the same task and `packages`: one entry for each name in to_confirm that is a package this task adds or changes: `public: true` if it is on the public registry (it is checked in that call), `public: false` if it comes from a private registry, git, a path or the workspace (it is never sent). Put a name that is not a package in `not_packages`. Every name in to_confirm needs one of these three answers: a name left out stays in to_confirm. Nothing about a name is sent until you mark it public. to_confirm can miss names and ecosystems: declare every package the task adds or changes, in each ecosystem it is added to, whether it is listed here or not.";
+  "Call what_should_i_know again with the same task and `packages`: one entry for each name in to_confirm that is a package this task adds or changes: `public: true` if it is on the public registry (it is checked in that call), `public: false` if it comes from a private registry, git, a path or the workspace (it is never looked up for the task). Put a name that is not a package in `not_packages`. Every name in to_confirm needs one of these three answers: a name left out stays in to_confirm. This briefing sends nothing about a name until you mark it public; this project's own scan still reads its installed dependencies. to_confirm can miss names and ecosystems: declare every package the task adds or changes, in each ecosystem it is added to, whether it is listed here or not.";
+
+/** What a declaration does not change (round 6, item 4a): said wherever an installed dependency is marked private. */
+export const SCAN_STILL_READS =
+  "A declaration keeps this briefing from looking a name up for the task; it does not change this project's own vulnerability scan, which reads the installed dependencies and sends their names unless the project's configuration marks them private (FOURDA_PRIVATE_PACKAGES, an .npmrc scope or registry, a pip index, GOPRIVATE).";
 
 /** The last sentence of every safe_to_delegate reason (contract K1). */
 export const RESTS_ON_DECLARATION = "This rests on your declaration: a package you did not declare was not checked.";
@@ -132,11 +137,13 @@ export function confirmationSummary(waiting: number): string {
  * reads is refused in its place and never sent; the others stand. Past MAX_DECLARED entries are refused.
  * A refusal never repeats what the entry held (it may be a secret): it names the entry by its place.
  */
-export function readDeclarations(raw: unknown): { entries: DeclaredPackage[]; refused: NotRead[] } {
+export function readDeclarations(raw: unknown): { entries: DeclaredPackage[]; refused: NotRead[]; forbidOnly: string[] } {
   const entries: DeclaredPackage[] = [];
   const refused: NotRead[] = [];
-  if (raw === undefined || raw === null) return { entries, refused };
-  if (!Array.isArray(raw)) return { entries, refused: [{ shown: "packages", reason: "refused: it must be a list of { ecosystem, name, version?, public } entries; nothing in it was read or sent" }] };
+  /** Round 6, item 4b: a `public: false` entry that is refused still forbids its name (folded by the caller). */
+  const forbidOnly: string[] = [];
+  if (raw === undefined || raw === null) return { entries, refused, forbidOnly };
+  if (!Array.isArray(raw)) return { entries, refused: [{ shown: "packages", reason: "refused: it must be a list of { ecosystem, name, version?, public } entries; nothing in it was read or sent" }], forbidOnly };
   raw.forEach((item, at) => {
     const where = `packages[${at}]`;
     if (at >= MAX_DECLARED) {
@@ -146,14 +153,39 @@ export function readDeclarations(raw: unknown): { entries: DeclaredPackage[]; re
     const problem = declarationProblem(item);
     if (problem) {
       refused.push({ shown: where, reason: `refused: ${problem}; nothing in it was sent` });
+      const o = (item ?? {}) as Record<string, unknown>;
+      if (typeof item === "object" && o.public === false && typeof o.name === "string" && o.name.trim() && o.name.length <= MAX_NAME_ARG_LENGTH) forbidOnly.push(goUnescaped(o.name.trim()));
       return;
     }
     const o = item as Record<string, unknown>;
     const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
-    const version = typeof o.version === "string" && o.version.trim() ? o.version.trim() : undefined;
-    entries.push({ ecosystem, name: String(o.name).trim(), ...(version ? { version } : {}), public: o.public as boolean, at });
+    const given = typeof o.version === "string" && o.version.trim() ? o.version.trim() : undefined;
+    // Item 7: a Poetry caret or tilde the reader offers for PyPI goes to the engine as the PEP 440 range it means.
+    const version = given && ecosystem === "PyPI" ? (poetrySpec(given) ?? given) : given;
+    const name = ecosystem === "Go" ? goUnescaped(String(o.name).trim()) : String(o.name).trim();
+    entries.push({ ecosystem, name, ...(version ? { version } : {}), public: o.public as boolean, at });
   });
-  return { entries, refused };
+  return { entries, refused, forbidOnly };
+}
+
+/** A Go module path in the Go proxy's escaped form (`!z` for `Z`) as the go command writes it. */
+export const goUnescaped = (name: string) => name.replace(/!([a-z])/g, (_m, c: string) => c.toUpperCase());
+
+/**
+ * A Poetry constraint as the PEP 440 range it means (item 7): `^1.2.3` is `>=1.2.3,<2.0.0` (`^0.2` is `>=0.2,<0.3`),
+ * `~1.2` is `>=1.2,<1.3`. Null for anything else.
+ */
+export function poetrySpec(spec: string): string | null {
+  const m = /^([\^~])\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(spec.trim());
+  if (!m) return null;
+  const [major, minor, patch] = [Number(m[2]), m[3] === undefined ? undefined : Number(m[3]), m[4] === undefined ? undefined : Number(m[4])];
+  const floor = [m[2], m[3], m[4]].filter((x) => x !== undefined).join(".");
+  let ceil: string;
+  if (m[1] === "~") ceil = minor === undefined ? `${major + 1}` : `${major}.${minor + 1}`;
+  else if (major > 0 || minor === undefined) ceil = `${major + 1}.0`;
+  else if (minor > 0 || patch === undefined) ceil = `0.${minor + 1}`;
+  else ceil = `0.0.${patch + 1}`;
+  return `>=${floor},<${ceil}`;
 }
 
 /** Why one `packages` entry is refused, or null. */
@@ -169,8 +201,9 @@ function declarationProblem(item: unknown): string | null {
   if (typeof o.name !== "string" || !o.name.trim()) return "`name` must be a non-empty string";
   if (lengthProblem("name", "package", o.name) || o.name.length > MAX_NAME_ARG_LENGTH) return "`name` is longer than any package name";
   const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
-  // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts).
-  const bad = nameProblem(ecosystem, o.name.trim());
+  // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts); a Go path in
+  // the proxy's `!`-escaped form is read unescaped first (round 6, item 4b).
+  const bad = nameProblem(ecosystem, ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim());
   if (bad) return `\`name\` is no ${ecosystem} package name (${bad})`;
   if (o.version !== undefined && o.version !== null) {
     if (typeof o.version !== "string") return "`version` must be a string";
@@ -178,9 +211,14 @@ function declarationProblem(item: unknown): string | null {
     if (v.length > MAX_VERSION_ARG_LENGTH) return "`version` is longer than any version or constraint";
     // Exactly dependency_check's own validation of the item (a dist-tag other than latest is refused there, so here
     // too): what the check ledger records for a declared entry is what dependency_check would record for it.
+    // Item 4c: the credential screen covers the whole entry: a version whose label has a credential shape is refused.
+    // A label part that is a token prefix, or a long run mixing capitals, lower case and digits, is a secret's shape.
+    const label = v ? v.replace(/^[^-+]*[-+]?/, "") : "";
+    const secretish = (part: string) => credentialShape(part) || /^(?:gh[pousr]|github|glpat|sk|akia|xox[bpa]|npm|pat|token)$/i.test(part) || (part.length >= 16 && /[A-Z]/.test(part) && /[a-z]/.test(part) && /\d/.test(part));
+    if (v && [v, label, ...v.split(/[-+._]/)].some((part) => part && secretish(part))) return "`version` looks like a credential (it is not recorded either)";
     if (v) {
       try {
-        validateItem({ ecosystem, package: o.name.trim(), to: v }, 0);
+        validateItem({ ecosystem, package: ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim(), to: ecosystem === "PyPI" ? (poetrySpec(v) ?? v) : v }, 0);
       } catch (error) {
         return `\`version\` is refused as dependency_check refuses it: ${(error instanceof Error ? error.message : String(error)).replace(/^items\[0\]\.to /, "")}`;
       }
@@ -211,7 +249,8 @@ export function readNotPackages(raw: unknown): { words: string[]; refused: NotRe
  */
 export function forbiddenKey(name: string): string {
   // A Go module's major-version suffix names the same private path: example.com/zqx/lib/v2 is example.com/zqx/lib.
-  return name.trim().toLowerCase().replace(/!/g, "").replace(/^(.+\/.+)\/v\d+$/, "$1").replace(/[-_.]+/g, "-");
+  // An npm alias or an ecosystem prefix (`npm:x`) names the same package (fourth check, f-alias2).
+  return name.trim().toLowerCase().replace(/^(?:npm|jsr|pypi):/, "").replace(/!/g, "").replace(/^(.+\/.+)\/v\d+$/, "$1").replace(/[-_.]+/g, "-");
 }
 
 /** Whether two names are one edit apart: one character changed, added or dropped, or two neighbours swapped (lodahs, lodash). */

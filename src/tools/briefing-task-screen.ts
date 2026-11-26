@@ -246,6 +246,12 @@ function withoutUserInfo(text: string): string {
 
 /** Words that end a command in prose ("then", "&&", ";"), and verbs that start the next clause after "and". */
 const COMMAND_ENDS = new Set(["then", "&&", "||", ";", "|", "and", "or", "but", "after", "before", "so"]);
+/**
+ * Plain connectives that end a command's words after its verb (round 6, item 8): "npm install hono to replace the
+ * router in src/server.ts" held src/server.ts as a git source standing in the command. Not right after the
+ * manager, where `npm in x` is npm's own verb.
+ */
+const LATE_COMMAND_ENDS = new Set(["to", "for", "with", "in", "into", "on", "from", "because", "when", "while", "using", "via", "once", "until"]);
 
 /**
  * The name of a setting, not a package: one that is, or ends in `_` (or `-`, for the words no package
@@ -406,7 +412,7 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     let last = i;
     for (; j < words.length && j - i <= 40; j++) {
       const w = words[j].text;
-      if (COMMAND_ENDS.has(w.toLowerCase())) break;
+      if (COMMAND_ENDS.has(w.toLowerCase()) || (j > i + 1 && LATE_COMMAND_ENDS.has(w.toLowerCase()))) break;
       // A shell or sentence separator ends the command too (fourth blind check, item 2): `&`, `|`, a
       // redirection, a comment, a new line, a parenthesis, a lone dash (an em dash folded), `$(`, a backtick.
       if (/^(?:[&|<>#(]|\d?>|\/\/|-$|\$\()/.test(w) || /\n/.test(task.slice(words[j - 1].end, words[j].start))) break;
