@@ -474,7 +474,8 @@ function validateItems(raw: unknown): Array<Requested | Refused> {
   return out;
 }
 
-function validateItem(r: unknown, i: number): Requested {
+/** One item as dependency_check validates it, or an Error saying why it is refused (also the briefing's screen of a declared entry). */
+export function validateItem(r: unknown, i: number): Requested {
   const o = (r ?? {}) as Record<string, unknown>;
   const where = `items[${i}]`;
   // A field this tool does not define is never ignored: `registry` or `index_url` says where the

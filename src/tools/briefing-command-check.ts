@@ -21,7 +21,13 @@ const MANAGERS: ReadonlyMap<string, CheckEcosystem> = new Map([
   ...["pip", "pip3", "pipx", "uv", "uvx", "poetry"].map((m) => [m, "PyPI"] as const),
   ["cargo", "crates.io"] as const,
   ["go", "Go"] as const,
+  // Deno installs npm packages by their `npm:` specifier; its other operands are files and URLs.
+  ["deno", "npm"] as const,
 ]);
+/** Options whose value IS a package (the runner's package, uv's `--with`): never a script. */
+const PACKAGE_OPTIONS = new Set(["--with", "--with-editable", "--spec", "--from", "--package", "-p"]);
+/** A script or program file a runner runs (`uv run --with X s.py`): not a package when no option carries it. */
+const SCRIPT = /\.(?:py|pyw|sh|ps1|ts|tsx|js|mjs|cjs)$/i;
 /** Runner words: the word is its own verb, the next non-option word the package. */
 const RUNNERS = new Set(["npx", "pnpx", "bunx", "uvx"]);
 const VERBS = new Set([
@@ -75,22 +81,33 @@ function segments(task: string): string[] {
   return task.split(/\r?\n|;|&&|\|\||\||(?<=[.!?])\s+/);
 }
 
+interface Operand {
+  text: string;
+  /** The value of an option that names a package (`--with X`, `-p X`). */
+  ofOption: boolean;
+}
+
 /** Operands from `from` to the end of the command; `end` is where it stopped. */
-function operandsFrom(raw: string[], words: string[], from: number, upto: number): { operands: string[]; end: number } {
-  const operands: string[] = [];
+function operandsFrom(raw: string[], words: string[], from: number, upto: number): { operands: Operand[]; end: number } {
+  const operands: Operand[] = [];
   let end = from;
+  let packageNext = false;
   for (; end < upto; end++) {
     const w = words[end];
     if (!w || LIST.has(w)) continue;
     if (w.startsWith("-")) {
-      if (VALUE_OPTIONS.has(w) && end + 1 < upto) end++;
-      else if (w.includes("=") && !VALUE_OPTIONS.has(w.replace(/=.*$/, ""))) operands.push(bare(raw[end]).replace(/^[^=]*=/, ""));
+      const flag = w.replace(/=.*$/, "");
+      if (VALUE_OPTIONS.has(flag)) {
+        if (!w.includes("=") && end + 1 < upto) end++;
+      } else if (w.includes("=")) operands.push({ text: bare(raw[end]).replace(/^[^=]*=/, ""), ofOption: true });
+      else packageNext = PACKAGE_OPTIONS.has(flag);
       continue;
     }
     if (STOPS.has(w) || MANAGERS.has(w)) break;
-    operands.push(bare(raw[end]));
+    operands.push({ text: bare(raw[end]), ofOption: packageNext });
+    packageNext = false;
   }
-  return { operands: operands.filter(Boolean), end };
+  return { operands: operands.filter((o) => o.text !== ""), end };
 }
 
 /** Every command (and prose install) in the task that can add or run a package. Linear in the task's length. */
@@ -118,14 +135,22 @@ export function scanCommands(task: string): InstallCommand[] {
             v = k + 1;
             break;
           }
-          if (words[k] === "run" && words.slice(k + 1).some((w) => /^--(?:with|spec)(?:-editable|-requirements)?(?:=|$)/.test(w))) {
+          if (words[k] === "run" && (words[managerAt] === "deno" || words.slice(k + 1).some((w) => /^--(?:with|spec)(?:-editable|-requirements)?(?:=|$)/.test(w)))) {
             v = k;
             break;
           }
         }
       }
       if (v < 0) continue;
-      const { operands, end } = operandsFrom(raw, words, v + 1, words.length);
+      const read = operandsFrom(raw, words, v + 1, words.length);
+      const end = read.end;
+      const deno = words[managerAt] === "deno";
+      const runs = deno || words[v] === "run" || RUNNERS.has(words[v]) || words[v] === "x" || words[v] === "exec" || words[v] === "dlx";
+      // A runner's script file is no package; deno reads only its `npm:` and `jsr:` operands as packages.
+      const operands = read.operands
+        .filter((o) => !(runs && !o.ofOption && SCRIPT.test(o.text) && !RUNNERS.has(words[v])))
+        .filter((o) => !deno || /^(?:npm|jsr):/i.test(o.text))
+        .map((o) => o.text);
       commands.push({ text: raw.slice(m, Math.max(end, v + 1)).join(" ").slice(0, MAX_TEXT), ecosystem, operands });
       sawCommand = true;
       m = Math.max(m, end - 1);
@@ -143,12 +168,27 @@ export function scanCommands(task: string): InstallCommand[] {
   return commands;
 }
 
-/** The name an operand names, its version or extras aside (`x@1.2`, `@s/x@^1`, `x==1.0`, `x[extra]>=2`, `x:1.0`). */
+/** The name an operand names, its version or extras aside (`x@1.2`, `@s/x@^1`, `x==1.0`, `x[extra]>=2`). */
 export function operandName(operand: string): string {
   const scoped = operand.startsWith("@");
   const at = operand.indexOf("@", scoped ? 1 : 0);
   const head = at > 0 ? operand.slice(0, at) : operand;
-  return head.replace(/\[.*$/, "").replace(/(?:===?|~=|>=|<=|!=|>|<|\^|~|:).*$/, "");
+  return head.replace(/\[.*$/, "").replace(/(?:===?|~=|>=|<=|!=|>|<|\^|~).*$/, "");
+}
+
+/**
+ * Every registry name an operand installs: its own, and an alias's target (`lodash@npm:zqxevil` installs
+ * zqxevil; deno's `npm:zqxevil@1`). A `jsr:` specifier names a registry this server does not check: it is
+ * returned as written, so it is never accounted for.
+ */
+export function operandNames(operand: string): string[] {
+  const alias = operand.search(/(?:^|@)npm:/i);
+  if (alias >= 0) {
+    const target = operand.slice(operand.toLowerCase().indexOf("npm:", alias) + 4);
+    return [...(alias > 0 ? [operandName(operand.slice(0, alias))] : []), operandName(target)].filter(Boolean);
+  }
+  if (/^jsr:/i.test(operand)) return [operand];
+  return [operandName(operand)].filter(Boolean);
 }
 
 /** An operand that names no registry package: a path, a URL, a git or file source, a version, a file. */
@@ -169,9 +209,7 @@ export function unreadCommand(task: string, accounted: (ecosystem: CheckEcosyste
   for (const c of scanCommands(task)) {
     for (const o of c.operands) {
       if (namesNoPackage(o)) continue;
-      const name = operandName(o);
-      if (!name || namesNoPackage(name)) continue;
-      if (!accounted(c.ecosystem, name)) return c;
+      for (const name of operandNames(o)) if (!namesNoPackage(name) && !accounted(c.ecosystem, name)) return c;
     }
   }
   return null;

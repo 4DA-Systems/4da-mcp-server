@@ -17,8 +17,8 @@
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { lengthProblem, MAX_NAME_ARG_LENGTH, MAX_VERSION_ARG_LENGTH } from "../tool-args.js";
 import { quoteThirdParty } from "../untrusted-text.js";
-import { checkableSpec } from "./briefing-names.js";
-import { ecosystemKey, NPM_TAG, type TaskWordSeen } from "./briefing-new-packages.js";
+import { ecosystemKey, type TaskWordSeen } from "./briefing-new-packages.js";
+import { validateItem } from "./dependency-check.js";
 import type { UnverifiedWord } from "./briefing-requested-versions.js";
 import { nameProblem } from "./dependency-check-screen.js";
 
@@ -173,16 +173,17 @@ function declarationProblem(item: unknown): string | null {
     if (typeof o.version !== "string") return "`version` must be a string";
     const v = o.version.trim();
     if (v.length > MAX_VERSION_ARG_LENGTH) return "`version` is longer than any version or constraint";
-    if (v && !versionReadable(ecosystem, v)) return `\`version\` is no ${ecosystem} version, constraint or tag dependency_check reads`;
+    // Exactly dependency_check's own validation of the item (a dist-tag other than latest is refused there, so here
+    // too): what the check ledger records for a declared entry is what dependency_check would record for it.
+    if (v) {
+      try {
+        validateItem({ ecosystem, package: o.name.trim(), to: v }, 0);
+      } catch (error) {
+        return `\`version\` is refused as dependency_check refuses it: ${(error instanceof Error ? error.message : String(error)).replace(/^items\[0\]\.to /, "")}`;
+      }
+    }
   }
   return null;
-}
-
-/** A version, constraint or tag as dependency_check reads one for `to`. */
-export function versionReadable(ecosystem: CheckEcosystem, version: string): boolean {
-  if (/^latest$/i.test(version)) return true;
-  if (checkableSpec(ecosystem, version) !== null) return true;
-  return ecosystem === "npm" && NPM_TAG.test(version);
 }
 
 /** The `not_packages` argument: strings, at most MAX_DECLARED, each no longer than a word can be. */

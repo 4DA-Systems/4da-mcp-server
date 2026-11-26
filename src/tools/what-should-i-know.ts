@@ -575,7 +575,9 @@ export async function executeWhatShouldIKnow(
   for (const t of packages) if (isForbidden(t.name)) keepOrWithhold({ name: t.name, ecosystem: t.ecosystem as CheckEcosystem });
   // I2 and I8: every declared public entry is checked, at the version the task writes AND the declared one.
   const declaredKeys = new Set(declaredPublic.map((d) => `${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`));
+  const declaredName = new Map<string, string>(declaredPublic.map((d) => [`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name] as const));
   const readVersions = taskVersions;
+  const labelCut = new Set<string>();
   const declaredNew: NewPackage[] = [];
   const declaredWanted: RequestedVersion[] = [];
   const sameAs = (d: DeclaredPackage) => (x: { name: string; ecosystem: CheckEcosystem }) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem);
@@ -586,17 +588,29 @@ export async function executeWhatShouldIKnow(
     // C2: EVERY version the task writes for the pair (each operand, each manifest entry), plus a declared one.
     const written = readVersions.requested.filter((r) => [r.ecosystem, ...(r.alternatives ?? [])].includes(d.ecosystem) && sameName(r.name, d.name, d.ecosystem)).map((r) => r.to);
     const writtenVersions = [...words.map((w) => w.version), ...written, ...knownNew.map((k) => k.version), ...knownWanted.map((k) => k.to)].filter((v): v is string => typeof v === "string" && v !== "");
-    const versions = [...new Set([...(writtenVersions.length > 0 ? writtenVersions : [undefined]), ...(d.version ? [d.version] : [])])];
+    // A build or local label (`1.0.0+zqxlocalbuild`) can name a private build: it is not sent. The plain version
+    // is checked, and the answer says so (the same screen the task text gets).
+    const plainOf = (v: string) => {
+      const plus = v.indexOf("+");
+      if (plus <= 0) return v;
+      labelCut.add(`${d.name} ${v.slice(0, plus)}`);
+      return v.slice(0, plus);
+    };
+    const versions = [...new Set([...(writtenVersions.length > 0 ? writtenVersions.map(plainOf) : [undefined]), ...(d.version ? [plainOf(d.version)] : [])])];
+    // Checked under the spelling the task reads ("ZqxVuln" declared for the task's zqxvuln@1.0.0 was looked up as
+    // ZqxVuln and came back unknown), and recorded under it.
+    const spelled = knownNew[0]?.name ?? knownWanted[0]?.name ?? words[0]?.word ?? d.name;
+    declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, spelled);
     for (const version of versions) {
       if (!installed(d.name, d.ecosystem) && !knownNew.some((k) => k.version === version) && !declaredNew.some((x) => sameAs(d)(x) && x.version === version)) {
-        declaredNew.push({ name: d.name, ecosystem: d.ecosystem, ...(version ? { version } : {}) });
+        declaredNew.push({ name: spelled, ecosystem: d.ecosystem, ...(version ? { version } : {}) });
       }
       // A pin or constraint is judged as a requested version; on an installed dependency even "latest" is (m4).
       const asked = version ?? (installed(d.name, d.ecosystem) ? "latest" : undefined);
       const judged = asked && (/^latest$/i.test(asked) ? installed(d.name, d.ecosystem) : checkableSpec(d.ecosystem, asked) !== null);
       if (asked && judged && !knownWanted.some((k) => k.to === asked) && !declaredWanted.some((x) => sameAs(d)(x) && x.to === asked)) {
         const copies = ecosystemDeps().filter((x) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem) && x.version);
-        declaredWanted.push({ name: d.name, ecosystem: d.ecosystem, to: asked, ...(copies.length === 1 && copies[0].version ? { from: copies[0].version } : {}) });
+        declaredWanted.push({ name: spelled, ecosystem: d.ecosystem, to: asked, ...(copies.length === 1 && copies[0].version ? { from: copies[0].version } : {}) });
       }
     }
   }
@@ -608,12 +622,17 @@ export async function executeWhatShouldIKnow(
   const privateRule = (liveIntel as { privateRegistryRuleCovers?: (e: string, n: string) => boolean } | null)?.privateRegistryRuleCovers;
   const recorded = new Set<string>();
   const recordDeclared = (results: readonly CheckedItem[]) => {
-    const mine = results.filter((r) => {
-      if (typeof r.package !== "string" || !declaredKeys.has(`${r.ecosystem}\0${ecosystemKey(r.package, r.ecosystem as CheckEcosystem)}`)) return false;
-      const line = `${r.ecosystem}\0${r.package}\0${r.to}\0${r.to_requested ?? ""}\0${r.verdict}`;
-      if (recorded.has(line)) return false;
+    // One line per pair and version, under the name the caller declared: the briefing may check "Django" and the
+    // task's "django"; dependency_check, asked for the declared entry, records one line (check 2, ledger minor).
+    const mine = results.flatMap((r) => {
+      if (typeof r.package !== "string") return [];
+      const key = `${r.ecosystem}\0${ecosystemKey(r.package, r.ecosystem as CheckEcosystem)}`;
+      const spelled = declaredName.get(key);
+      if (spelled === undefined) return [];
+      const line = `${key}\0${r.to}\0${r.to_requested ?? ""}\0${r.verdict}`;
+      if (recorded.has(line)) return [];
       recorded.add(line);
-      return true;
+      return [{ ...r, package: spelled }];
     });
     if (mine.length > 0) void recordVerdicts(mine, { privateRule: privateRule ? (e, n) => privateRule.call(liveIntel, e, n) : null });
   };
@@ -847,6 +866,7 @@ export async function executeWhatShouldIKnow(
         assessed.reason = `${confirmationReason(waiting.length)}${before}`;
       }
     }
+    if (labelCut.size > 0) assessed.reason = `${assessed.reason} A version's build or local label was not sent; the plain version was checked (${[...labelCut].join(", ")}).`;
     // C3: the reader is not trusted for safe. A command (or prose install) in the raw task whose every operand the
     // briefing did not account for (checked, declared, already a dependency, or a path/URL/file/version) keeps the
     // level at review_needed, whatever the reader made of it. A not_packages word is no account of an operand.
