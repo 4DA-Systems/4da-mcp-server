@@ -23,13 +23,17 @@
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersion, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import {
-  blankWords,
+  EMBEDDING_CUT_NOTE,
   confirmationReason,
   confirmationSummary,
   declarationFor,
   dismissedBy,
   MAX_TO_CONFIRM,
   NEXT_STEP,
+  oneEditApart,
+  MORE_WAITING,
+  BUDGET_MISS,
+  forbiddenKey,
   DECLARE_REASON,
   DECLARE_STEP,
   declaredClause,
@@ -42,7 +46,7 @@ import {
   type PrivateIndex,
   type TaskPackages,
 } from "./briefing-confirm.js";
-import { credentialShape } from "./briefing-task-screen.js";
+import { credentialShape, knownCompromised } from "./briefing-task-screen.js";
 import { checkableSpec } from "./briefing-names.js";
 import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
@@ -345,9 +349,9 @@ export const whatShouldIKnowTool = {
       },
       packages: {
         type: "array",
-        maxItems: 25,
+        maxItems: 100,
         description:
-          "Packages this task adds or changes, at most 25. public: true = on the public registry: checked in this call at `version` (default: the version the task writes, else latest), verdict recorded as dependency_check records it. public: false = private registry, git, path or workspace: never sent. Names the task does not mention are accepted.",
+          "Packages this task adds or changes, at most 100. public: true = on the public registry: checked in this call at `version` (default: the version the task writes, else latest), verdict recorded as dependency_check records it. public: false = private registry, git, path or workspace: never sent. Names the task does not mention are accepted.",
         items: {
           type: "object",
           properties: {
@@ -361,9 +365,9 @@ export const whatShouldIKnowTool = {
       },
       not_packages: {
         type: "array",
-        maxItems: 25,
+        maxItems: 100,
         items: { type: "string" },
-        description: "Words of the task that are not packages (a password, a file, a setting), at most 25: dropped, never looked up.",
+        description: "Words of the task that are not packages (a password, a file, a setting), at most 100: dropped, never looked up.",
       },
       project_path: {
         type: "string",
@@ -498,88 +502,142 @@ export async function executeWhatShouldIKnow(
   // The caller's statement (briefing-confirm.ts): what it marks private or not a package is never looked
   // up, by the gate's own rule included; what it marks public is checked now, past the project's private
   // rules and the credential shapes, and recorded in the check ledger as dependency_check records it.
+  // ── The caller's statement (briefing-confirm.ts). Invariants, each proved by a property test over generated
+  // cases (a1127-confirm-invariants.test.ts):
+  //  I1. A declaration only ADDS checks: what a bare call looks up and concludes (project dependencies,
+  //      bundled-list names, the versions the task writes) is looked up and weighed the same with any arguments.
+  //      Privacy is the one exception: a name the caller marks `public: false` or lists in not_packages is not
+  //      SENT even where the bare call would send it, and then it counts as an unchecked name standing where it
+  //      stands (review_needed at least, never safe); a bundled known-malicious name is known without a lookup
+  //      and stays human_only whatever the caller says.
+  //  I2. The version the task writes is always checked; a declared version is checked in addition; the worst
+  //      verdict stands and both rows show.
+  //  I3. A waiting name is settled only by a declaration in an ecosystem the reader read it in; a declaration in
+  //      another ecosystem is an extra check, and the name still waits.
+  //  I4. A dismissed name that stands where a package stands keeps review_needed: an install or runner
+  //      command's operand, a manifest entry, a near-miss of a popular name, a name the briefing would have
+  //      checked itself, or one within one edit of a package declared in the same call.
+  //  I5. Never sent: ONE set of forbidden names, built before any lookup from every `public: false` entry and
+  //      every not_packages word, folded for every ecosystem's rules at once; a `public: true` entry in it is
+  //      refused (private wins, whatever the order) and the level cannot be safe.
+  //  I8. Every declared public entry that passed the screens is checked in the call, past the caps of the
+  //      briefing's own lookups; one the call's budget did not reach keeps the briefing confirmation_needed.
   const declared = readDeclarations(params.packages);
   const notPackages = readNotPackages(params.not_packages);
+  const refusedEntries = declared.refused.length + notPackages.refused.length;
   const argsNotRead: TaskWordWithheld[] = [...declared.refused, ...notPackages.refused];
+  const forbidden = new Set([...declared.entries.filter((d) => !d.public).map((d) => forbiddenKey(d.name)), ...notPackages.words.map(forbiddenKey)]);
+  const isForbidden = (name: string) => forbidden.size > 0 && forbidden.has(forbiddenKey(name));
   const declaredPrivate: PrivateIndex[] = [];
   const declaredPublic: DeclaredPackage[] = [];
   for (const d of declared.entries) {
     if (!d.public) {
-      declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "marked private by you" });
+      if (!declaredPrivate.some((x) => forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "marked private by you" });
+      continue;
+    }
+    if (isForbidden(d.name)) {
+      argsNotRead.push({ shown: `packages[${d.at}]`, reason: "refused: declared public, and private or not a package, in the same call: private wins, nothing was sent" });
       continue;
     }
     const why = registryReason(d.ecosystem, d.name) ?? privateAnywhere(liveIntel, d.name) ?? (privateShort.has(d.name.toLowerCase()) ? "a private package of this project" : null);
     if (why) {
-      declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "this project's registry configuration" });
-      if (!privateTask.some((p) => p.package.toLowerCase() === d.name.toLowerCase())) privateTask.push({ package: d.name, ecosystem: d.ecosystem, installed: [], why });
+      if (!declaredPrivate.some((x) => forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "this project's registry configuration" });
+      if (!privateTask.some((x) => forbiddenKey(x.package) === forbiddenKey(d.name))) privateTask.push({ package: d.name, ecosystem: d.ecosystem, installed: [], why });
       continue;
     }
     if (credentialShape(d.name)) {
-      argsNotRead.push({ shown: `packages[${d.at}]`, reason: "not read: it looks like a credential; if it is a package, call dependency_check on it" });
+      argsNotRead.push({ shown: `packages[${d.at}]`, reason: "not read: it looks like a credential; if it is a package after all, call dependency_check on it" });
       continue;
     }
     declaredPublic.push(d);
   }
-  // Marked private by the caller: weighed as the project's own private packages are.
+  // Marked private by the caller: weighed as the project's own private packages are (once per name).
   for (const d of declaredPrivate) {
-    if (d.basis === "marked private by you" && !privateTask.some((p) => p.package.toLowerCase() === d.name.toLowerCase())) {
+    if (d.basis === "marked private by you" && !privateTask.some((x) => forbiddenKey(x.package) === forbiddenKey(d.name))) {
       privateTask.push({ package: d.name, ecosystem: d.ecosystem as CheckEcosystem, installed: [], why: "marked private by the caller: never looked up" });
     }
   }
-  /** A name the caller marked private (in any ecosystem) or not a package: never looked up by the briefing. */
-  const off = (p: { name: string; ecosystem: CheckEcosystem; alternatives?: CheckEcosystem[] }) =>
-    declaredPrivate.some((d) => [p.ecosystem, ...(p.alternatives ?? [])].some((e) => sameName(d.name, p.name, e))) ||
-    dismissedBy(p.name, [p.ecosystem, ...(p.alternatives ?? [])], notPackages.words) !== undefined;
-  const lookedUp = gated.packages.filter((p) => !off(p));
-  const wanted = gated.requested.filter((r) => !off(r));
   const installed = installedNames(ecosystemDeps());
+  // I1 (privacy exception): what the briefing would have looked up itself and the caller forbids is not sent; it
+  // stands as unchecked, and a known-malicious bundled name is human_only without a lookup.
+  const withheldByCaller: Array<{ name: string; ecosystem: CheckEcosystem; malicious: boolean; dependency: boolean }> = [];
+  const keepOrWithhold = <T extends { name: string; ecosystem: CheckEcosystem; alternatives?: CheckEcosystem[] }>(x: T): boolean => {
+    if (!isForbidden(x.name)) return true;
+    if (!withheldByCaller.some((w) => forbiddenKey(w.name) === forbiddenKey(x.name))) {
+      const ecos = [x.ecosystem, ...(x.alternatives ?? [])];
+      withheldByCaller.push({ name: x.name, ecosystem: x.ecosystem, malicious: ecos.some((e) => knownCompromised(x.name, e)), dependency: ecos.some((e) => installed(x.name, e)) });
+    }
+    return false;
+  };
+  const lookedUp = gated.packages.filter(keepOrWithhold);
+  const wanted = gated.requested.filter(keepOrWithhold);
+  // A task dependency the caller forbids is not looked up for "latest" either (its scan rows still weigh: I1).
+  for (const t of packages) if (isForbidden(t.name)) keepOrWithhold({ name: t.name, ecosystem: t.ecosystem as CheckEcosystem });
+  // I2 and I8: every declared public entry is checked, at the version the task writes AND the declared one.
   const declaredKeys = new Set(declaredPublic.map((d) => `${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`));
   const declaredNew: NewPackage[] = [];
   const declaredWanted: RequestedVersion[] = [];
+  const sameAs = (d: DeclaredPackage) => (x: { name: string; ecosystem: CheckEcosystem }) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem);
   for (const d of declaredPublic) {
     const word = gated.unverified.find((w) => sameName(w.word, d.name, d.ecosystem));
-    const same = (x: { name: string; ecosystem: CheckEcosystem }) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem);
-    const known = lookedUp.find(same);
-    const version = d.version ?? word?.version ?? known?.version;
-    // The ecosystem is the caller's: no guess, no alternative, no prose reading of the word.
-    if (known) {
-      lookedUp.splice(lookedUp.indexOf(known), 1);
-    }
-    if (!installed(d.name, d.ecosystem)) declaredNew.push({ name: d.name, ecosystem: d.ecosystem, ...(version ? { version } : {}) });
-    if (version && !/^latest$/i.test(version) && checkableSpec(d.ecosystem, version) !== null) {
-      const had = wanted.find(same);
-      if (had) wanted.splice(wanted.indexOf(had), 1);
-      const copies = ecosystemDeps().filter((x) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem) && x.version);
-      declaredWanted.push({ name: d.name, ecosystem: d.ecosystem, to: version, ...(copies.length === 1 && copies[0].version ? { from: copies[0].version } : {}) });
+    const knownNew = lookedUp.filter(sameAs(d));
+    const knownWanted = wanted.filter(sameAs(d));
+    const taskVersions = [word?.version, ...knownNew.map((k) => k.version), ...knownWanted.map((k) => k.to)].filter((v): v is string => typeof v === "string" && v !== "");
+    const versions = [...new Set([...(taskVersions.length > 0 ? taskVersions : [undefined]), ...(d.version ? [d.version] : [])])];
+    for (const version of versions) {
+      if (!installed(d.name, d.ecosystem) && !knownNew.some((k) => k.version === version) && !declaredNew.some((x) => sameAs(d)(x) && x.version === version)) {
+        declaredNew.push({ name: d.name, ecosystem: d.ecosystem, ...(version ? { version } : {}) });
+      }
+      // A pin or constraint is judged as a requested version; on an installed dependency even "latest" is (m4).
+      const asked = version ?? (installed(d.name, d.ecosystem) ? "latest" : undefined);
+      const judged = asked && (/^latest$/i.test(asked) ? installed(d.name, d.ecosystem) : checkableSpec(d.ecosystem, asked) !== null);
+      if (asked && judged && !knownWanted.some((k) => k.to === asked) && !declaredWanted.some((x) => sameAs(d)(x) && x.to === asked)) {
+        const copies = ecosystemDeps().filter((x) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem) && x.version);
+        declaredWanted.push({ name: d.name, ecosystem: d.ecosystem, to: asked, ...(copies.length === 1 && copies[0].version ? { from: copies[0].version } : {}) });
+      }
     }
   }
-  // The caller's answers settle the words the task gives: what is left waits for confirmation.
-  const settledWords = declared.entries;
-  const waiting = gated.unverified.filter((w) => !declarationFor(w.word, settledWords) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) === undefined);
-  const dismissedWords = gated.unverified.filter((w) => !declarationFor(w.word, settledWords) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) !== undefined);
-  // Only what the caller declared goes to the check ledger: the briefing's own lookups stay unrecorded.
+  // I3: a waiting name is settled only by a declaration in an ecosystem the reader read it in.
+  const settles = (w: UnverifiedWord) => declarationFor(w.word, declared.entries.filter((d) => w.read_as.split(" or ").includes(d.ecosystem)));
+  const waiting = gated.unverified.filter((w) => !settles(w) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) === undefined);
+  const dismissedWords = gated.unverified.filter((w) => !settles(w) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) !== undefined);
+  // Only what the caller declared goes to the check ledger, once per verdict: the briefing's own lookups stay unrecorded.
   const privateRule = (liveIntel as { privateRegistryRuleCovers?: (e: string, n: string) => boolean } | null)?.privateRegistryRuleCovers;
+  const recorded = new Set<string>();
   const recordDeclared = (results: readonly CheckedItem[]) => {
-    const mine = results.filter((r) => typeof r.package === "string" && declaredKeys.has(`${r.ecosystem}\0${ecosystemKey(r.package, r.ecosystem as CheckEcosystem)}`));
+    const mine = results.filter((r) => {
+      if (typeof r.package !== "string" || !declaredKeys.has(`${r.ecosystem}\0${ecosystemKey(r.package, r.ecosystem as CheckEcosystem)}`)) return false;
+      const line = `${r.ecosystem}\0${r.package}\0${r.to}\0${r.to_requested ?? ""}\0${r.verdict}`;
+      if (recorded.has(line)) return false;
+      recorded.add(line);
+      return true;
+    });
     if (mine.length > 0) void recordVerdicts(mine, { privateRule: privateRule ? (e, n) => privateRule.call(liveIntel, e, n) : null });
   };
-  const named = [...declaredNew, ...lookedUp].map((p) => {
+  const closedFor = (p: NewPackage) => {
     const closed = NAME_ECOSYSTEMS.filter((e) => e !== p.ecosystem && registryReason(e, p.name) !== null);
     return closed.length > 0 ? { ...p, closed: [...new Set([...(p.closed ?? []), ...closed])] } : p;
-  });
-  const newPackages = [
-    ...(await checkNewPackages(liveIntel, named.slice(0, MAX_NEW_PACKAGES), undefined, recordDeclared)),
-  ];
+  };
+  const ownNamed = lookedUp.map(closedFor);
+  const named = [...declaredNew.map(closedFor), ...ownNamed.slice(0, MAX_NEW_PACKAGES)];
+  const newPackages = [...(await checkNewPackages(liveIntel, named, undefined, recordDeclared))];
   // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14). Past their
   // own cap they are named NOT CHECKED too: the sixth version a task named was dropped without a word (r8).
-  const wantedVersions = [...declaredWanted, ...wanted];
-  const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions.slice(0, MAX_REQUESTED), undefined, recordDeclared);
+  const wantedVersions = [...declaredWanted, ...wanted.slice(0, MAX_REQUESTED)];
+  const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions, undefined, recordDeclared);
+  // I8: a declared package the call's budget did not reach keeps the briefing confirmation_needed: call again.
+  const unreached = [
+    ...new Set([
+      ...newPackages.filter((f) => declaredKeys.has(`${f.ecosystem}\0${ecosystemKey(f.name, f.ecosystem)}`) && BUDGET_MISS.test(f.reason)).map((f) => f.name),
+      ...requestedVersions.filter((f) => declaredKeys.has(`${f.ecosystem}\0${ecosystemKey(f.name, f.ecosystem)}`) && BUDGET_MISS.test(f.reason)).map((f) => f.name),
+    ]),
+  ];
   const uncheckedPackages = [
     ...new Set([
-      ...named.slice(MAX_NEW_PACKAGES).map((p) => p.name),
-      ...wantedVersions.slice(MAX_REQUESTED).map((r) => `${r.name} ${r.to}`),
+      ...ownNamed.slice(MAX_NEW_PACKAGES).map((p) => p.name),
+      ...wanted.slice(MAX_REQUESTED).map((r) => `${r.name} ${r.to}`),
       ...overflowTask,
       // `gem install rails`, `composer require x`, `conda install numpy`: a registry this server does not
       // read, named NOT CHECKED, never looked up in npm (pre-publish round 10, W14).
@@ -597,30 +655,36 @@ export async function executeWhatShouldIKnow(
   const WRAP = "\"'`([{)]},;.";
   for (const w of screened.withheld) {
     if (w.end - w.start > 302 || notPackages.words.length === 0) continue;
-    let a = w.start;
-    let b = w.end;
-    while (a < b && WRAP.includes(task[a])) a++;
-    while (b > a && WRAP.includes(task[b - 1])) b--;
-    valueOf.set(w.label, [...(valueOf.get(w.label) ?? []), task.slice(a, b)]);
+    let x = w.start;
+    let y = w.end;
+    while (x < y && WRAP.includes(task[x])) x++;
+    while (y > x && WRAP.includes(task[y - 1])) y--;
+    valueOf.set(w.label, [...(valueOf.get(w.label) ?? []), task.slice(x, y)]);
   }
   const withheldDismissed = allWithheld.filter((w) => (valueOf.get(w.shown) ?? []).some((v) => notPackages.words.some((n) => n === v || n.toLowerCase() === v.toLowerCase())));
   const withheldWords = allWithheld.filter((w) => !withheldDismissed.includes(w));
-  const dismissed = [...new Set([...dismissedWords.map((w) => dismissedBy(w.word, w.read_as.split(" or "), notPackages.words)!), ...withheldDismissed.map((w) => w.shown)])];
-  // A dismissal never makes the briefing reassuring about a name that stands where a package stands: an
-  // install command's operand, a manifest entry, or a near-miss of a popular name. The word is dismissed as
-  // asked, and the level is at least review_needed, naming it (wave 2: `npm install lodahs` answered with
-  // not_packages ["lodahs"] would otherwise end safe_to_delegate, and the literal command still installs it).
+  const dismissed = [...new Set([...dismissedWords.map((w) => dismissedBy(w.word, w.read_as.split(" or "), notPackages.words)!), ...withheldByCaller.filter((w) => notPackages.words.some((n) => forbiddenKey(n) === forbiddenKey(w.name))).map((w) => w.name), ...withheldDismissed.map((w) => w.shown)])];
+  // I4: a dismissal never makes the briefing reassuring about a name that stands where a package stands. The word
+  // is dismissed as asked, and the level is at least review_needed, naming it.
+  const replacedBy = (word: string) => declaredPublic.find((d) => oneEditApart(d.name, word))?.name;
   const standing = dismissedWords.flatMap((w) => {
     const near = /^one edit from (\S+): /.exec(w.note ?? "")?.[1];
+    const instead = replacedBy(w.word);
+    if (instead) return [`you said ${w.word} is not a package and declared ${instead} instead: the task names ${w.word}; say so to the user, and make sure nothing installs ${w.word}`];
     if (w.seen === "command") return [`you said ${w.word} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`];
+    if (w.seen === "runner") return [`you said ${w.word} is not a package; it stands where a package name stands in the task's runner command, which downloads and runs it: make sure nothing runs it`];
     if (w.seen === "manifest") return [`you said ${w.word} is not a package; it stands where a package name stands in a manifest entry of the task: make sure nothing installs it`];
     if (near) return [`you said ${w.word} is not a package; it is one edit from ${near}: make sure nothing installs it`];
     return [];
-  }).concat(withheldDismissed.filter((w) => w.standing).map((w) => `you said ${w.shown} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`));
+  })
+    .concat(withheldByCaller.filter((w) => !w.malicious).map((w) => `${w.name} was not sent because you marked it private or not a package, but this briefing would have checked it (${w.dependency ? "a dependency of this project" : "a well-known name"}): it is unchecked; make sure nothing installs it unchecked`))
+    .concat(withheldDismissed.filter((w) => w.standing).map((w) => `you said ${w.shown} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`));
+  // A bundled known-malicious name is known without a lookup: human_only whatever the caller says (I1).
+  const maliciousWithheld = withheldByCaller.filter((w) => w.malicious);
   // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
   const unreadVersions = taskVersions.unread;
   const vulns = scan?.vulnerabilities ?? [];
-  const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages.filter((p) => !off(p as { name: string; ecosystem: CheckEcosystem })), allDeps()) : null;
+  const latest = wantsLatest(task) ? await latestVersions(liveIntel, packages.filter((t) => !isForbidden(t.name)), allDeps()) : null;
   const taskDependencies = packages.map((pkg) => describePackage(db, pkg, vulns, latest));
   // With no database open, the stored parts below are not read (STORED_DATA_ABSENT_NOTE).
 
@@ -745,6 +809,11 @@ export async function executeWhatShouldIKnow(
     // (confirmation_needed), unless what is known already makes the task human_only. It outranks
     // review_needed and unknown: the agent can act on it now. With nothing waiting, the level follows
     // from every checked row, so a confirmed typosquat or critical pin is human_only again (wave 2, P4/P5).
+    if (maliciousWithheld.length > 0) {
+      assessed.level = "human_only";
+      assessed.reason = `${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not sent because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides. ${assessed.reason}`;
+    }
+    if (refusedEntries > 0) assessed.reason = `${assessed.reason} ${refusedEntries} of your entries ${refusedEntries === 1 ? "was" : "were"} refused (task_packages.not_read): fix and resend ${refusedEntries === 1 ? "it" : "them"}.`;
     if (standing.length > 0) {
       const said = `${standing.join("; ")}.`.replace(/^y/, "Y");
       if (assessed.level === "safe_to_delegate") {
@@ -755,14 +824,17 @@ export async function executeWhatShouldIKnow(
     // A call that declared no packages never ends complete: the agent's statement is what the level rests on,
     // the reader only a net under it (wave 2, lead's change A). `packages: []` is a declaration.
     const declaredCall = params.packages !== undefined;
-    if (waiting.length === 0 && !declaredCall) {
+    if (unreached.length > 0 && assessed.level !== "human_only") {
+      assessed.level = "confirmation_needed";
+      assessed.reason = `${unreached.length} of the packages you declared ${unreached.length === 1 ? "was" : "were"} not checked within this call's time (${unreached.join(", ")}): call what_should_i_know again with the same arguments; ${unreached.length === 1 ? "it is" : "they are"} checked first and cached by now.`;
+    } else if (waiting.length === 0 && !declaredCall) {
       if (assessed.level === "human_only") assessed.reason = `${assessed.reason} This call declared no packages: do task_packages.next_step.`;
       else {
         const before = assessed.level === "safe_to_delegate" ? "" : ` Also: ${assessed.reason.replace(/^Delegate, then review: /, "")}`;
         assessed.level = "confirmation_needed";
         assessed.reason = `${DECLARE_REASON}${before}`;
       }
-    } else if (waiting.length === 0) assessed.reason = `${assessed.reason} ${declaredClause(declared.entries.length)}`;
+    } else if (waiting.length === 0 && unreached.length === 0) assessed.reason = `${assessed.reason} ${declaredClause(declared.entries.length)}`;
     if (waiting.length > 0) {
       if (assessed.level === "human_only") assessed.reason = `${assessed.reason} ${waiting.length} name${waiting.length === 1 ? " also waits" : "s also wait"} for confirmation in task_packages.to_confirm.`;
       else {
@@ -788,7 +860,7 @@ export async function executeWhatShouldIKnow(
       ...(newPackages.length > 0 ? { new_packages: newPackages } : {}),
       ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
       ...(requestedVersions.length > 0 ? { requested_versions: requestedVersions } : {}),
-      task_packages: taskPackagesSection({ task, waiting, dismissed, notRead: withheldWords.map(({ standing: _standing, ...w }) => w), declaredPrivate, privateTask, declaredKeys, taskDependencies, newPackages, requestedVersions, installed, undeclared: params.packages === undefined }),
+      task_packages: taskPackagesSection({ task, waiting, unreached, dismissed, notRead: withheldWords.map(({ standing: _standing, ...w }) => w), declaredPrivate, privateTask, declaredKeys, taskDependencies, newPackages, requestedVersions, installed, undeclared: params.packages === undefined }),
       advisories,
       decision_windows: decisionWindows,
       relevant_wisdom: relevantWisdom,
@@ -813,9 +885,13 @@ export async function executeWhatShouldIKnow(
   if (!embedConfig) {
     return finalize(getRelevantWisdom(db, task, files), "ranked_lexical");
   }
-  // The embedding copy: the screened task with the names the caller marked private and its not_packages words blanked too (P2).
-  const embedText = blankWords(screenFor(task, ecosystemDeps()).forEmbedding, [...declaredPrivate.map((d) => d.name), ...notPackages.words, ...declared.entries.filter((d) => d.public && credentialShape(d.name)).map((d) => d.name)]);
-  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig, embedText);
+  // I6: embeddings are cut, never repaired. A call that carries a `public: false` entry or a not_packages word,
+  // that leaves a name waiting, that declared nothing, or whose screen withheld a word sends the task to no
+  // embedding provider: the wisdom is ranked lexically, on the machine, and the answer says so.
+  if (forbidden.size > 0 || waiting.length > 0 || params.packages === undefined || withheldWords.length > 0 || withheldDismissed.length > 0 || argsNotRead.length > 0) {
+    return finalize(getRelevantWisdom(db, task, files), "ranked_lexical", EMBEDDING_CUT_NOTE);
+  }
+  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig, screenFor(task, ecosystemDeps()).forEmbedding);
   return finalize(wisdom, recall_mode, recall_note);
 }
 
@@ -1044,6 +1120,8 @@ function notCheckedPackages(names: string[]): string {
 function taskPackagesSection(input: {
   task: string;
   waiting: UnverifiedWord[];
+  /** Declared packages the call budget did not reach (I8). */
+  unreached: string[];
   dismissed: string[];
   notRead: TaskWordWithheld[];
   declaredPrivate: PrivateIndex[];
@@ -1074,14 +1152,20 @@ function taskPackagesSection(input: {
   }
   const waiting = input.waiting.slice(0, MAX_TO_CONFIRM).map((w) => toConfirmEntry(input.task, w));
   return {
-    status: input.waiting.length > 0 || input.undeclared ? "confirmation_needed" : "complete",
+    status: input.waiting.length > 0 || input.unreached.length > 0 || input.undeclared ? "confirmation_needed" : "complete",
     to_confirm: waiting,
     ...(input.waiting.length > MAX_TO_CONFIRM ? { to_confirm_total: input.waiting.length } : {}),
     checked,
     private: privateRows,
     not_read: input.notRead,
     dismissed: input.dismissed,
-    ...(input.waiting.length > 0 ? { next_step: NEXT_STEP } : input.undeclared ? { next_step: DECLARE_STEP } : {}),
+    ...(input.waiting.length > 0
+      ? { next_step: input.waiting.length > MAX_TO_CONFIRM ? `${NEXT_STEP} ${MORE_WAITING}` : NEXT_STEP }
+      : input.unreached.length > 0
+        ? { next_step: `Call what_should_i_know again with the same arguments: ${input.unreached.length} of the packages you declared (${input.unreached.join(", ")}) were not checked within this call's time, and are checked first and cached by now.` }
+        : input.undeclared
+          ? { next_step: DECLARE_STEP }
+          : {}),
   };
 }
 

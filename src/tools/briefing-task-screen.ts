@@ -616,6 +616,12 @@ const KNOWN_COMPROMISED: Record<CheckEcosystem, ReadonlySet<string>> = {
 };
 
 /** Whether `name` is exactly a name of a bundled list of `eco`: the popular names, or a name with a known malicious or hijacked release. */
+/** Whether a name is on the bundled list of names with a known malicious or hijacked release: known without a lookup. */
+export function knownCompromised(name: string, eco: CheckEcosystem): boolean {
+  const lower = name.toLowerCase();
+  return KNOWN_COMPROMISED[eco]?.has(eco === "PyPI" ? normalizePypiName(lower) : lower) ?? false;
+}
+
 export function knownPublicName(name: string, eco: CheckEcosystem): boolean {
   const lower = name.toLowerCase();
   if (KNOWN_COMPROMISED[eco].has(eco === "PyPI" ? normalizePypiName(lower) : lower)) return true;

@@ -111,6 +111,7 @@ describe("what_should_i_know hybrid wisdom", () => {
     // "document database" shares NO words with the Postgres/mongo decision, but
     // is the same topic — hybrid wisdom should surface it; lexical would not.
     const res = (await executeWhatShouldIKnow(db, {
+      packages: [],
       task: "plan a document database migration",
     })) as {
       wisdom_recall_mode: string;
@@ -127,7 +128,7 @@ describe("what_should_i_know hybrid wisdom", () => {
   it("the embedding provider receives the task text, never the file paths (audit 2026-11-11 W1 M2-3)", async () => {
     const fetchMock = installEmbeddingStub();
     const files = ["C:/Users/alice/acme-secret-project/src/billing/ledger.ts", "/home/alice/private-repo/db.ts"];
-    await executeWhatShouldIKnow(db, { task: "plan a document database migration", files });
+    await executeWhatShouldIKnow(db, { task: "plan a document database migration", files, packages: [] });
     const bodies = fetchMock.mock.calls.map(([, init]) => String((init as { body?: string } | undefined)?.body ?? ""));
     const queries = bodies.filter((b) => b.includes("document database migration"));
     expect(queries.length).toBeGreaterThan(0);
@@ -144,6 +145,7 @@ describe("what_should_i_know hybrid wisdom", () => {
     // The briefing is always async now (it awaits the vulnerability scan);
     // what must hold is that wisdom retrieval stays lexical without a provider.
     const res = await executeWhatShouldIKnow(db, {
+      packages: [],
       task: "plan a document database migration",
     });
 

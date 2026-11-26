@@ -28,17 +28,26 @@ async function brief(task: string, more: Record<string, unknown> = {}): Promise<
 
 describe("a dismissed name that stands where a package stands keeps the task at review_needed at least", () => {
   it.each([
-    ["npm install lodahs", "lodahs", "in the task's command"],
+    ["npm install zqxlodahs", "zqxlodahs", "in the task's command"],
     ['add "zqxthing": "1.0.0" to package.json', "zqxthing", "in a manifest entry of the task"],
     ["add lodahs to the helpers", "lodahs", "one edit from lodash"],
   ])("%s", async (task, word, where) => {
-    const r = await brief(task, { packages: [{ ecosystem: "npm", name: "lodash", public: true }], not_packages: [word] });
+    const r = await brief(task, { packages: [{ ecosystem: "npm", name: "zod", public: true }], not_packages: [word] });
     expect(r.task_packages.dismissed).toEqual([word]);
     expect(r.task_packages.to_confirm).toEqual([]);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(r.delegation_assessment.reason).toContain(`ou said ${word} is not a package`);
     expect(r.delegation_assessment.reason).toContain(where);
     expect(r.delegation_assessment.reason).toContain("make sure nothing installs it");
+  });
+
+  it("a dismissed name one edit from a package declared in the same call: the replacement is said (the fastifyy case)", async () => {
+    for (const [task, word, instead] of [["npm install lodahs", "lodahs", "lodash"], ["Add fastifyy for the new HTTP layer", "fastifyy", "fastify"]]) {
+      const r = await brief(task, { packages: [{ ecosystem: "npm", name: instead, public: true }], not_packages: [word] });
+      expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+      expect(r.delegation_assessment.reason).toContain(`ou said ${word} is not a package and declared ${instead} instead`);
+      expect(r.delegation_assessment.reason).toContain("say so to the user");
+    }
   });
 
   it("a word read only after an adding verb in prose can be dismissed without that", async () => {

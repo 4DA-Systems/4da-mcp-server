@@ -115,15 +115,16 @@ describe("the embedding provider gets the screened task", () => {
     ["add ghp_ZQXTOK0123456789abcdefABCDEF012345 as the token", "ghp_ZQXTOK"],
   ])("%s", async (task, secret) => {
     await recordDecision("Component library", "Use the shared component library for every screen");
-    const brief = await call("what_should_i_know", { task });
-    expect(toEmbedder().length).toBeGreaterThan(0);
-    expect(promptsSent().filter((p) => p.includes(secret))).toEqual([]);
+    const brief = await call("what_should_i_know", { task, packages: [] });
+    // Wave 2, invariant I6: a call whose screen withheld a word sends the task to no embedding provider at all.
+    // (Recording the decision above embeds the decision's own text; nothing of the task is sent.)
+    expect(promptsSent().filter((p) => p.includes(secret) || /install|token/i.test(p))).toEqual([]);
     expect(JSON.stringify(notReadWords(brief) ?? [])).not.toContain(secret);
   });
 
-  it("the rest of the task is still embedded", async () => {
+  it("a clean declared call is embedded", async () => {
     await recordDecision("Component library", "Use the shared component library for every screen");
-    await call("what_should_i_know", { task: "DB_PASSWORD=zqs77secret then npm install pg" });
+    await call("what_should_i_know", { task: "then npm install pg", packages: [] });
     expect(promptsSent().some((p) => p.includes("npm install pg"))).toBe(true);
   });
 });

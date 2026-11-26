@@ -399,8 +399,21 @@ const CLAUSE_START_VERBS = new Set([
 /** Words after which the one before is a verb starting a clause ("point it", "store the", "branch name"), not a list item. */
 const CLAUSE_OBJECTS = new Set(["it", "them", "this", "that", "these", "those", "the", "a", "an", "its", "their", "our", "my", "your", "only", "name", "everything", "all"]);
 
+/** A runner command at word `i` (lower-cased words): its ecosystem and how many words it takes, or null (I7). */
+function runnerAt(words: readonly string[], i: number): { ecosystem: CheckEcosystem; skip: number } | null {
+  const w = words[i];
+  const next = words[i + 1];
+  if (w === "npx" || w === "pnpx" || w === "bunx") return { ecosystem: "npm", skip: 1 };
+  if (w === "npm" && next === "exec") return { ecosystem: "npm", skip: 2 };
+  if ((w === "pnpm" || w === "yarn") && next === "dlx") return { ecosystem: "npm", skip: 2 };
+  if (w === "uvx") return { ecosystem: "PyPI", skip: 1 };
+  if (w === "pipx" && next === "run") return { ecosystem: "PyPI", skip: 2 };
+  if (w === "uv" && next === "tool" && words[i + 2] === "run") return { ecosystem: "PyPI", skip: 3 };
+  return null;
+}
+
 /** How a name was read from the task: an install command's operand, a manifest snippet's entry, or a word after an adding verb. */
-export type TaskWordSeen = "command" | "manifest" | "prose";
+export type TaskWordSeen = "command" | "runner" | "manifest" | "prose";
 
 /** A word the briefing did not look up, as the answer names it. */
 export interface HeldWord {
@@ -533,7 +546,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const fixed: TaskItems["fixed"] = [];
   const foreign: TaskItems["foreign"] = [];
   const seen = new Map<string, TaskWordSeen>();
-  const SEEN_RANK: Record<TaskWordSeen, number> = { command: 3, manifest: 2, prose: 1 };
+  const SEEN_RANK: Record<TaskWordSeen, number> = { command: 4, runner: 3, manifest: 2, prose: 1 };
   const saw = (name: string, how: TaskWordSeen) => {
     const key = name.toLowerCase();
     const had = seen.get(key);
@@ -639,6 +652,46 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       break;
     }
     const word = words[i];
+    // I7: a runner command downloads a package and runs it (`npx x`, `npm exec x`, `pnpm dlx x`, `pnpx x`,
+    // `bunx x`, `yarn dlx x`, `uvx x`, `pipx run x`, `uv tool run x`): its package operand is a candidate like an
+    // install's, read as "operand of a runner command". Its options are skipped, `-p`/`--package` and uvx's
+    // `--from` name the package; the first other operand is the package, the rest are the program's arguments.
+    const runner = runnerAt(words, i);
+    if (runner) {
+      let r = i + runner.skip;
+      let named = false;
+      for (; r < words.length && r - i < 40; r++) {
+        if (endsList(r) && r > i + runner.skip) break;
+        const w = words[r];
+        const before = task.slice(span(r - 1).end, starts[r]);
+        if (r > i + runner.skip && (!before.startsWith("|") && OPERANDS_END.test(before))) break;
+        if (w.startsWith("-")) {
+          const takesPackage = /^(?:-p|--package|--from|--with)$/.test(w);
+          if (takesPackage && r + 1 < words.length) {
+            const name = asName(raw[r + 1], runner.ecosystem);
+            if (name) {
+              fixed.push({ ...span(r + 1), ecosystem: runner.ecosystem });
+              add(name, runner.ecosystem, false, false, inlineVersion(r + 1, runner.ecosystem));
+              saw(name, "runner");
+              named = true;
+            }
+            r++;
+          } else if (/^--(?:yes|no|quiet|silent|no-install|ignore-existing|prefer-offline|shell-auto-fallback)$|^-[yqc]$/.test(w) || w.includes("=")) {
+            if (w === "-c") break;
+          } else r++;
+          continue;
+        }
+        if (named) break;
+        const name = asName(raw[r], runner.ecosystem);
+        if (!name) break;
+        fixed.push({ ...span(r), ecosystem: runner.ecosystem });
+        add(name, runner.ecosystem, false, false, inlineVersion(r, runner.ecosystem));
+        saw(name, "runner");
+        break;
+      }
+      i = Math.max(i, r - 1);
+      continue;
+    }
     // `npm install a b`, `pnpm add -D a`, `go get host/path`: every argument that is a name.
     const manager = Object.hasOwn(MANAGERS, word) ? MANAGERS[word] : undefined;
     let j = i + 1;

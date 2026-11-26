@@ -23,7 +23,7 @@ import type { UnverifiedWord } from "./briefing-requested-versions.js";
 import { nameProblem } from "./dependency-check-screen.js";
 
 /** At most this many `packages` entries and `not_packages` words are read; the rest are refused, said. */
-export const MAX_DECLARED = 25;
+export const MAX_DECLARED = 100;
 
 /** How many names `to_confirm` lists one by one; `to_confirm_total` counts all. */
 export const MAX_TO_CONFIRM = 25;
@@ -54,7 +54,7 @@ export interface ToConfirm {
   ecosystems: string[];
   /** The version the task writes beside it, as written. */
   version?: string;
-  seen: "operand of an install command" | "entry of a manifest snippet" | "word after an adding verb";
+  seen: "operand of an install command" | "operand of a runner command" | "entry of a manifest snippet" | "word after an adding verb";
   /** A help for the agent: a near-miss of a popular name. Never a gate. */
   hint?: string;
   /** A help for the agent: the task calls it a key, a secret, a password or a token. Never a gate. */
@@ -93,6 +93,10 @@ export interface TaskPackages {
  */
 export const NEXT_STEP =
   "Call what_should_i_know again with the same task and `packages`: one entry for each name in to_confirm that is a package this task adds or changes: `public: true` if it is on the public registry (it is checked in that call), `public: false` if it comes from a private registry, git, a path or the workspace (it is never sent). Put a name that is not a package in `not_packages`. Every name in to_confirm needs one of these three answers: a name left out stays in to_confirm. Nothing about a name is sent until you mark it public. You may add packages the task changes that are not listed.";
+
+/** Added to next_step when more names wait than to_confirm shows (fixed wording). */
+export const MORE_WAITING =
+  "to_confirm shows the first 25 of to_confirm_total names: answer these (keeping your earlier answers in the call), then call again for the next ones; an answer for a waiting name that is not shown is honoured too.";
 
 /**
  * What the agent does when its call declared no packages and nothing waits (fixed wording). A bare call never
@@ -195,6 +199,33 @@ export function readNotPackages(raw: unknown): { words: string[]; refused: NotRe
   return { words, refused };
 }
 
+/**
+ * The key a forbidden name is held by (invariant I5), folded for every ecosystem's rules at once: case (npm,
+ * PyPI, crates.io, an npm scope), PEP 503's runs of `-`, `_` and `.`, crates' `-`/`_`, and a Go path's `!`
+ * escape of a capital. Folding more than one ecosystem would is the point: a private name is never sent under
+ * another spelling.
+ */
+export function forbiddenKey(name: string): string {
+  return name.trim().toLowerCase().replace(/!/g, "").replace(/[-_.]+/g, "-");
+}
+
+/** Whether two names are one edit apart: one character changed, added or dropped, or two neighbours swapped (lodahs, lodash). */
+export function oneEditApart(a: string, b: string): boolean {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  if (x === y || Math.abs(x.length - y.length) > 1) return false;
+  let i = 0;
+  while (i < x.length && i < y.length && x[i] === y[i]) i++;
+  if (x.length === y.length) {
+    if (x.slice(i + 1) === y.slice(i + 1)) return true;
+    return x[i] === y[i + 1] && x[i + 1] === y[i] && x.slice(i + 2) === y.slice(i + 2);
+  }
+  return x.length > y.length ? x.slice(i + 1) === y.slice(i) : x.slice(i) === y.slice(i + 1);
+}
+
+/** A dependency_check answer that the call's time budget cut short (the item was not checked). */
+export const BUDGET_MISS = /did not finish in time|time budget|time_budget/i;
+
 /** A name compared as its ecosystem compares names (PEP 503, crates' `-`/`_`, npm's case; a Go path as written). */
 export function sameName(a: string, b: string, ecosystem: CheckEcosystem): boolean {
   return ecosystemKey(a, ecosystem) === ecosystemKey(b, ecosystem);
@@ -217,6 +248,7 @@ export function declarationFor(word: string, declared: readonly DeclaredPackage[
 
 const SEEN: Record<TaskWordSeen, ToConfirm["seen"]> = {
   command: "operand of an install command",
+  runner: "operand of a runner command",
   manifest: "entry of a manifest snippet",
   prose: "word after an adding verb",
 };
@@ -255,16 +287,6 @@ export function toConfirmEntry(task: string, w: UnverifiedWord & { seen?: TaskWo
   };
 }
 
-/**
- * The embedding provider's copy of the task with the names the caller marked private and its
- * not_packages words blanked as well (P2: neither is sent by any path, the embedding provider included).
- */
-export function blankWords(text: string, words: readonly string[]): string {
-  let out = text;
-  for (const w of words) {
-    if (!w) continue;
-    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`(?<![\\w@/.-])${escaped}(?![\\w/-])`, "gi"), (m) => " ".repeat(m.length));
-  }
-  return out;
-}
+/** Said in wisdom_recall_note when a call's task was kept from the embedding provider (invariant I6). */
+export const EMBEDDING_CUT_NOTE =
+  "The task was not sent to the embedding provider in this call: it declares names private or not packages, leaves a name waiting, declares nothing, or holds words the screen withheld. Wisdom was ranked lexically, on this machine.";
