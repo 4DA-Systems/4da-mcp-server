@@ -85,6 +85,7 @@ export function _resetCargoPlatformCache(): void {
   cache.clear();
   inFlight.clear();
   gaveUpAt = Number.NEGATIVE_INFINITY;
+  lastCargoChild = null;
 }
 
 /**
@@ -114,6 +115,14 @@ let cargoCommand: { file: string; prefix: string[] } = { file: "cargo", prefix: 
 /** Tests only: run `file prefix... <cargo tree args>` instead of cargo; null restores cargo. */
 export function _setCargoCommandForTests(command: { file: string; prefix: string[] } | null): void {
   cargoCommand = command ?? { file: "cargo", prefix: [] };
+}
+
+/** The last cargo child started, kept so tests can wait on its exit instead of on a fixed delay. */
+let lastCargoChild: ChildProcess | null = null;
+
+/** Tests only: the last cargo child this module started (null when none since the last reset). */
+export function _lastCargoChildForTests(): ChildProcess | null {
+  return lastCargoChild;
 }
 
 function signatureOf(key: string): string {
@@ -226,6 +235,7 @@ function runCargoTree(dir: string, waitMs: number): Promise<{ out: string | null
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
       });
+      lastCargoChild = child;
     } catch {
       resolve({ out: null, timedOut: false });
       return;

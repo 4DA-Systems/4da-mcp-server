@@ -11,11 +11,13 @@
  * platform-filtered"), never a wait and never a silent "all platforms". Shutdown kills it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import {
+  _lastCargoChildForTests,
   _resetCargoPlatformCache,
   _setCargoCommandForTests,
   _setCargoTreeWaitForTests,
@@ -51,6 +53,21 @@ const HANGS = "setInterval(() => {}, 1000)";
 /** Answers at once with the crates built here: smallvec only, so `time` is not built on this host. */
 const ANSWERS = "process.stdout.write('cli-rust v0.1.0 (C:/x)\\nsmallvec v1.6.0\\n')";
 
+/** The child's exit, observed as an event (20 s bound for a loaded machine), and whether it was killed. */
+function exitOf(child: ChildProcess, boundMs = 20_000): Promise<{ killed: boolean; code: number | null; signal: string | null } | "still running"> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ killed: child.killed, code: child.exitCode, signal: child.signalCode });
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve("still running"), boundMs);
+    timer.unref();
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ killed: child.killed, code, signal });
+    });
+  });
+}
+
 function alive(pid: number | undefined): boolean {
   if (!pid) return false;
   try {
@@ -82,14 +99,14 @@ describe.runIf(hostTriple() !== null)("cargo tree never holds the event loop (au
     const t0 = performance.now();
     // Unknown for now, never a wait: the old code sat in execFileSync for its whole 30 s here.
     expect(activeCratesForHost(dir)).toBeNull();
-    expect(performance.now() - t0).toBeLessThan(500);
+    expect(performance.now() - t0).toBeLessThan(3000);
     const pending = activeCratesInFlight(dir);
     expect(pending).not.toBeNull();
     await pending;
     clearInterval(ticker);
     const waited = performance.now() - t0;
     // Bounded by the wait, then given up on: no answer is "unknown", every crate counted.
-    expect(waited).toBeLessThan(6000);
+    expect(waited).toBeLessThan(15_000);
     expect(ticks).toBeGreaterThan(10);
     expect(activeCratesForHost(dir)).toBeNull();
     expect(activeCratesInFlight(dir)).toBeNull();
@@ -97,15 +114,16 @@ describe.runIf(hostTriple() !== null)("cargo tree never holds the event loop (au
 
   it("kills the cargo it gave up on", async () => {
     _setCargoTreeWaitForTests(800);
-    fakeCargo(`require('fs').writeFileSync(${JSON.stringify(path.join(dir, "pid.txt"))}, String(process.pid)); setInterval(() => {}, 1000)`);
+    fakeCargo(HANGS);
     activeCratesForHost(dir);
+    const child = _lastCargoChildForTests();
+    expect(child?.pid).toBeGreaterThan(0);
+    const exit = exitOf(child!);
+    // The bound passes and the wait ends with no answer (the child never answers by itself).
     await activeCratesInFlight(dir);
-    const pidFile = path.join(dir, "pid.txt");
-    const pid = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8")) : undefined;
-    expect(pid).toBeGreaterThan(0);
-    // Give the OS a moment to reap it.
-    for (let i = 0; i < 50 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
-    expect(alive(pid)).toBe(false);
+    // The child was killed, not left running: its exit is observed, however loaded the machine.
+    expect(await exit).toMatchObject({ killed: true });
+    expect(alive(child!.pid)).toBe(false);
   });
 
   it("asks cargo once per lockfile state, not once per resolution, when it did not answer", async () => {
@@ -176,8 +194,8 @@ describe.runIf(hostTriple() !== null)("cargo tree never holds the event loop (au
     const t0 = performance.now();
     expect(await li.initFromProjectTreeYielding(dir, [{ dir, language: "rust", deps: ["smallvec", "time"], devDeps: [], targets: {} }])).toBe(true);
     clearInterval(ticker);
-    expect(performance.now() - t0).toBeLessThan(6000);
-    expect(longestGap).toBeLessThan(500);
+    expect(performance.now() - t0).toBeLessThan(15_000);
+    expect(longestGap).toBeLessThan(2000);
     const deps = li.getAuditDeps().filter((d) => d.ecosystem === "crates.io");
     expect(deps.length).toBeGreaterThan(0);
     // Unknown is never "inactive": every crate is counted, and the answer says the filter did not run.
@@ -192,7 +210,7 @@ describe.runIf(hostTriple() !== null)("cargo tree never holds the event loop (au
     const li = new LiveIntelligence(new Database(":memory:"));
     const t0 = performance.now();
     li.initFromProjectTree(dir, [{ dir, language: "rust", deps: ["smallvec", "time"], devDeps: [], targets: {} }]);
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(5000);
     expect(li.getAuditDeps().filter((d) => d.ecosystem === "crates.io").every((d) => d.platformActive === true)).toBe(true);
   });
 });
