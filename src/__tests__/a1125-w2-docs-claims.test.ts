@@ -182,7 +182,7 @@ describe("the other numbers the docs state", () => {
     expect(section).toContain("2 s of reading from its start, and a 5 s wall clock for a payload over 8 KB");
     expect(hookConst("MAX_INPUT_CHARS")).toBe(8 * MB);
     expect(hookConst("MAX_PARSE_CHARS")).toBe(64 * MB);
-    expect(section).toContain("A payload over 8 MB that does not parse, or one over 64 MB, is judged from its first 64 KB.");
+    expect(section).toContain("A payload over 8 MB that does not parse, or one over 64 MB, is not read whole and is held like a failure of the hook:");
     expect(hookConst("SELF_LIMIT_MS")).toBe(8000);
     expect(section).toContain("still open after 8 s");
     expect(JSON.parse(text("hooks/hooks.json")).hooks.PreToolUse[0].hooks[0].timeout).toBe(10);

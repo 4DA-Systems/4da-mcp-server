@@ -13,3 +13,4 @@ results/*.json
 *.jsonl
 smoke-home-*/
 !results/.gitkeep
+logs/
