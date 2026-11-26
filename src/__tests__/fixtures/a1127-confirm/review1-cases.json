@@ -1,0 +1,2408 @@
+{
+ "note": "The first independent check of the confirmation loop (review-confirm1, 2026-11-27): its npm and PyPI cases, steps only. A token-shaped name is stored as {{GH}}<rest> and assembled at run time. Run by a1127-confirm-review1.test.ts against invariants I1-I5.",
+ "cases": [
+  {
+   "set": "c1",
+   "id": "b01",
+   "template": "npm",
+   "note": "declare a different (clean) version than the task writes",
+   "steps": [
+    {
+     "task": "npm install lodash@4.17.20"
+    },
+    {
+     "task": "npm install lodash@4.17.20",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "lodash",
+       "public": true,
+       "version": "4.17.21"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b02",
+   "template": "npm",
+   "note": "declare a different version, critical pin",
+   "steps": [
+    {
+     "task": "npm install node-forge@0.10.0"
+    },
+    {
+     "task": "npm install node-forge@0.10.0",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "node-forge",
+       "public": true,
+       "version": "1.3.1"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b03",
+   "template": "npm",
+   "note": "bad name declared in another ecosystem",
+   "steps": [
+    {
+     "task": "npm install colorsx"
+    },
+    {
+     "task": "npm install colorsx",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "colorsx",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b04",
+   "template": "npm",
+   "note": "bad name declared in crates",
+   "steps": [
+    {
+     "task": "npm install colorsx@1.0.1"
+    },
+    {
+     "task": "npm install colorsx@1.0.1",
+     "packages": [
+      {
+       "ecosystem": "crates.io",
+       "name": "colorsx",
+       "public": true,
+       "version": "1.0.1"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b05",
+   "template": "npm",
+   "note": "bad name dismissed (command operand)",
+   "steps": [
+    {
+     "task": "npm install colorsx"
+    },
+    {
+     "task": "npm install colorsx",
+     "packages": [],
+     "not_packages": [
+      "colorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b06",
+   "template": "npm",
+   "note": "bad name declared private",
+   "steps": [
+    {
+     "task": "npm install colorsx"
+    },
+    {
+     "task": "npm install colorsx",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "colorsx",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b07",
+   "template": "npm",
+   "note": "packages [] with a waiting name",
+   "steps": [
+    {
+     "task": "npm install colorsx"
+    },
+    {
+     "task": "npm install colorsx",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b08",
+   "template": "npm",
+   "note": "bad name in prose dismissed",
+   "steps": [
+    {
+     "task": "Use colorsx for the terminal colours."
+    },
+    {
+     "task": "Use colorsx for the terminal colours.",
+     "packages": [],
+     "not_packages": [
+      "colorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b09",
+   "template": "npm",
+   "note": "declare neighbour",
+   "steps": [
+    {
+     "task": "npm install colorsx"
+    },
+    {
+     "task": "npm install colorsx",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "colors",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b10",
+   "template": "npm",
+   "note": "malware in second command, declare only first",
+   "steps": [
+    {
+     "task": "npm install zod@3.23.8 && npm i colorsx"
+    },
+    {
+     "task": "npm install zod@3.23.8 && npm i colorsx",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zod",
+       "public": true,
+       "version": "3.23.8"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b11",
+   "template": "npm",
+   "note": "manifest snippet",
+   "steps": [
+    {
+     "task": "Add this to package.json dependencies:\n```json\n\"colorsx\": \"1.0.1\"\n```"
+    },
+    {
+     "task": "Add this to package.json dependencies:\n```json\n\"colorsx\": \"1.0.1\"\n```",
+     "packages": [],
+     "not_packages": [
+      "colorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b12",
+   "template": "npm",
+   "note": "declared public in npm with a version the task does not write; task writes bad malware pin",
+   "steps": [
+    {
+     "task": "npm install fastifyy@1.0.0"
+    },
+    {
+     "task": "npm install fastifyy@1.0.0",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "fastifyy",
+       "public": true,
+       "version": "9.9.9"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b13",
+   "template": "npm",
+   "note": "declare high pin under scoped alias",
+   "steps": [
+    {
+     "task": "npm install undici@5.8.0"
+    },
+    {
+     "task": "npm install undici@5.8.0",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "undici",
+       "public": true,
+       "version": "6.21.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b14",
+   "template": "py",
+   "note": "py different version",
+   "steps": [
+    {
+     "task": "pip install ormar==0.12.2"
+    },
+    {
+     "task": "pip install ormar==0.12.2",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "ormar",
+       "public": true,
+       "version": "0.20.2"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b15",
+   "template": "npm",
+   "note": "declared other eco then dismissed",
+   "steps": [
+    {
+     "task": "npm install colorsx"
+    },
+    {
+     "task": "npm install colorsx",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "colorsx",
+       "public": true
+      }
+     ],
+     "not_packages": [
+      "colorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b16",
+   "template": "npm",
+   "note": "yarn add form",
+   "steps": [
+    {
+     "task": "yarn add colorsx"
+    },
+    {
+     "task": "yarn add colorsx",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "colorsx",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b17",
+   "template": "npm",
+   "note": "Windows shell",
+   "steps": [
+    {
+     "task": "cmd /c \"npm install colorsx\""
+    },
+    {
+     "task": "cmd /c \"npm install colorsx\"",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b18",
+   "template": "npm",
+   "note": "upgrade installed dep to a version via declaration only",
+   "steps": [
+    {
+     "task": "bump zod"
+    },
+    {
+     "task": "bump zod",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zod",
+       "public": true,
+       "version": "3.23.8"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b19",
+   "template": "npm",
+   "note": "lodash high pin, declare lodash with a range that resolves clean",
+   "steps": [
+    {
+     "task": "npm install lodash@4.17.20"
+    },
+    {
+     "task": "npm install lodash@4.17.20",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "lodash",
+       "public": true,
+       "version": "^4.17.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b20",
+   "template": "npm",
+   "note": "lodash pin, declared with no version",
+   "steps": [
+    {
+     "task": "npm install lodash@4.17.20"
+    },
+    {
+     "task": "npm install lodash@4.17.20",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "lodash",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b21",
+   "template": "npm",
+   "note": "two pins same name",
+   "steps": [
+    {
+     "task": "npm install lodash@4.17.21 lodash@4.17.20"
+    },
+    {
+     "task": "npm install lodash@4.17.21 lodash@4.17.20",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "lodash",
+       "public": true,
+       "version": "4.17.21"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "b22",
+   "template": "npm",
+   "note": "name in task mixed case",
+   "steps": [
+    {
+     "task": "npm install Colorsx"
+    },
+    {
+     "task": "npm install Colorsx",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "colorsx",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a01",
+   "template": "npm",
+   "note": "same name public and private",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a02",
+   "template": "npm",
+   "note": "public first then private",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a03",
+   "template": "npm",
+   "note": "public in PyPI private in npm",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": false
+      },
+      {
+       "ecosystem": "PyPI",
+       "name": "zqxsecretlib",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a04",
+   "template": "npm",
+   "note": "in packages public and not_packages",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": true
+      }
+     ],
+     "not_packages": [
+      "zqxsecretlib"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a05",
+   "template": "py",
+   "note": "pypi folding private vs public",
+   "steps": [
+    {
+     "task": "pip install zqx_secret"
+    },
+    {
+     "task": "pip install zqx_secret",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "zqx-secret",
+       "public": false
+      },
+      {
+       "ecosystem": "PyPI",
+       "name": "zqx.secret",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a07",
+   "template": "npm",
+   "note": "npmrc scope declared public",
+   "files": {
+    ".npmrc": "@zqxcorp:registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "task": "npm install @zqxcorp/ui"
+    },
+    {
+     "task": "npm install @zqxcorp/ui",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "@zqxcorp/ui",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a08",
+   "template": "npm",
+   "note": "npmrc scope, declared with Upper case scope",
+   "files": {
+    ".npmrc": "@zqxcorp:registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "task": "npm install @ZqxCorp/ui"
+    },
+    {
+     "task": "npm install @ZqxCorp/ui",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "@ZqxCorp/ui",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a11",
+   "template": "py",
+   "note": "private pip index declared public",
+   "files": {
+    "pip.conf": "[global]\nindex-url = https://pypi.zqx.internal/simple\n"
+   },
+   "steps": [
+    {
+     "task": "pip install zqxtools"
+    },
+    {
+     "task": "pip install zqxtools",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "zqxtools",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a12",
+   "template": "npm",
+   "note": "FOURDA_PRIVATE_PACKAGES npm exact",
+   "steps": [
+    {
+     "task": "npm install zqx-priv"
+    },
+    {
+     "task": "npm install zqx-priv",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqx-priv",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a13",
+   "template": "py",
+   "note": "FOURDA_PRIVATE_PACKAGES pypi folded",
+   "steps": [
+    {
+     "task": "pip install Zqx_Priv"
+    },
+    {
+     "task": "pip install Zqx_Priv",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "Zqx_Priv",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a15",
+   "template": "npm",
+   "note": "version with registry flag",
+   "steps": [
+    {
+     "task": "npm install left-pad"
+    },
+    {
+     "task": "npm install left-pad",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "left-pad",
+       "public": true,
+       "version": "1.0.0 --registry=http://zqxsecret.internal/"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a16",
+   "template": "npm",
+   "note": "version a URL",
+   "steps": [
+    {
+     "task": "npm install left-pad"
+    },
+    {
+     "task": "npm install left-pad",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "left-pad",
+       "public": true,
+       "version": "https://zqxsecret.internal/left-pad.tgz"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a17",
+   "template": "npm",
+   "note": "alias name",
+   "steps": [
+    {
+     "task": "npm install x"
+    },
+    {
+     "task": "npm install x",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "npm:zqxsecret@1",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a18",
+   "template": "npm",
+   "note": "git spec as name",
+   "steps": [
+    {
+     "task": "npm install x"
+    },
+    {
+     "task": "npm install x",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "git+https://zqxsecret.internal/x.git",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a19",
+   "template": "npm",
+   "note": "token-shaped public",
+   "steps": [
+    {
+     "task": "set the token"
+    },
+    {
+     "task": "set the token",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "{{GH}}0123456789abcdefghijABCDEFGHIJ012345",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a20",
+   "template": "npm",
+   "note": "ecosystem outside the four",
+   "steps": [
+    {
+     "task": "gem install zqxsecretlib"
+    },
+    {
+     "task": "gem install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "RubyGems",
+       "name": "zqxsecretlib",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a21",
+   "template": "npm",
+   "note": "ecosystem case / space variant",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": " NPM ",
+       "name": "zqxsecretlib",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a22",
+   "template": "npm",
+   "note": "private npm, task says pnpm",
+   "steps": [
+    {
+     "task": "pnpm add zqxsecretlib@1.2.0 and yarn add zqxsecretlib"
+    },
+    {
+     "task": "pnpm add zqxsecretlib@1.2.0 and yarn add zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a23",
+   "template": "npm",
+   "note": "dismiss near-miss",
+   "steps": [
+    {
+     "task": "npm install lodahs"
+    },
+    {
+     "task": "npm install lodahs",
+     "packages": [],
+     "not_packages": [
+      "lodahs"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a24",
+   "template": "npm",
+   "note": "dismiss near-miss in prose",
+   "steps": [
+    {
+     "task": "add expresss to the server"
+    },
+    {
+     "task": "add expresss to the server",
+     "packages": [],
+     "not_packages": [
+      "expresss"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a25",
+   "template": "npm",
+   "note": "bundled name declared private",
+   "steps": [
+    {
+     "task": "npm install lodash@4.17.21"
+    },
+    {
+     "task": "npm install lodash@4.17.21",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "lodash",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a26",
+   "template": "npm",
+   "note": "bundled name dismissed",
+   "steps": [
+    {
+     "task": "npm install axios"
+    },
+    {
+     "task": "npm install axios",
+     "packages": [],
+     "not_packages": [
+      "axios"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a27",
+   "template": "npm",
+   "note": "bundled name private in PyPI only",
+   "steps": [
+    {
+     "task": "npm install axios"
+    },
+    {
+     "task": "npm install axios",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "axios",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a28",
+   "template": "npm",
+   "note": "installed dep declared private",
+   "steps": [
+    {
+     "task": "upgrade zod to 3.23.8"
+    },
+    {
+     "task": "upgrade zod to 3.23.8",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zod",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a29",
+   "template": "npm",
+   "note": "dismissed with different case",
+   "steps": [
+    {
+     "task": "npm install react"
+    },
+    {
+     "task": "npm install react",
+     "packages": [],
+     "not_packages": [
+      "REACT"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a30",
+   "template": "py",
+   "note": "pypi bundled dismissed with folding",
+   "steps": [
+    {
+     "task": "pip install PyYAML"
+    },
+    {
+     "task": "pip install PyYAML",
+     "packages": [],
+     "not_packages": [
+      "py_yaml"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a31",
+   "template": "py",
+   "note": "private by pypi fold",
+   "steps": [
+    {
+     "task": "pip install requests==2.0.0"
+    },
+    {
+     "task": "pip install requests==2.0.0",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "Requests",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a32",
+   "template": "npm",
+   "note": "26 entries, private at 26th",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-0",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-1",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-2",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-3",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-4",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-5",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-6",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-7",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-8",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-9",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-10",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-11",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-12",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-13",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-14",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-15",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-16",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-17",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-18",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-19",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-20",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-21",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-22",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-23",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zz-filler-24",
+       "public": false
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a33",
+   "template": "npm",
+   "note": "not_packages 26th",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [],
+     "not_packages": [
+      "filler0",
+      "filler1",
+      "filler2",
+      "filler3",
+      "filler4",
+      "filler5",
+      "filler6",
+      "filler7",
+      "filler8",
+      "filler9",
+      "filler10",
+      "filler11",
+      "filler12",
+      "filler13",
+      "filler14",
+      "filler15",
+      "filler16",
+      "filler17",
+      "filler18",
+      "filler19",
+      "filler20",
+      "filler21",
+      "filler22",
+      "filler23",
+      "filler24",
+      "zqxsecretlib"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a34",
+   "template": "npm",
+   "note": "cache: public then private next call",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": true
+      }
+     ]
+    },
+    {
+     "task": "npm install zqxsecretlib",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "zqxsecretlib",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a35",
+   "template": "npm",
+   "note": "no args",
+   "steps": [
+    {
+     "task": "npm install zqxsecretlib"
+    }
+   ]
+  },
+  {
+   "set": "c1",
+   "id": "a36",
+   "template": "npm",
+   "note": "scoped private npm, task unscoped",
+   "steps": [
+    {
+     "task": "npm install @zqx/secret"
+    },
+    {
+     "task": "npm install @zqx/secret",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "@zqx/secret",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d01",
+   "template": "npm",
+   "note": "bundled malware dismissed",
+   "steps": [
+    {
+     "task": "npm install crossenv"
+    },
+    {
+     "task": "npm install crossenv",
+     "packages": [],
+     "not_packages": [
+      "crossenv"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d02",
+   "template": "npm",
+   "note": "bundled malware pin dismissed",
+   "steps": [
+    {
+     "task": "npm install event-stream@3.3.6"
+    },
+    {
+     "task": "npm install event-stream@3.3.6",
+     "packages": [],
+     "not_packages": [
+      "event-stream"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d03",
+   "template": "npm",
+   "note": "bundled high pin dismissed",
+   "steps": [
+    {
+     "task": "npm install lodash@4.17.20"
+    },
+    {
+     "task": "npm install lodash@4.17.20",
+     "packages": [],
+     "not_packages": [
+      "lodash"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d04",
+   "template": "py",
+   "note": "bundled PyPI malware dismissed",
+   "steps": [
+    {
+     "task": "pip install ctx"
+    },
+    {
+     "task": "pip install ctx",
+     "packages": [],
+     "not_packages": [
+      "ctx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d05",
+   "template": "npm",
+   "note": "bundled malware dismissed in manifest",
+   "steps": [
+    {
+     "task": "Add \"crossenv\": \"6.1.1\" to package.json dependencies"
+    },
+    {
+     "task": "Add \"crossenv\": \"6.1.1\" to package.json dependencies",
+     "packages": [],
+     "not_packages": [
+      "crossenv"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d06",
+   "template": "npm",
+   "note": "bundled malware dismissed, packages omitted",
+   "steps": [
+    {
+     "task": "npm install crossenv"
+    },
+    {
+     "task": "npm install crossenv",
+     "not_packages": [
+      "crossenv"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d07",
+   "template": "npm",
+   "note": "bundled malware declared in PyPI (clean 404) -> npm lookup kept?",
+   "steps": [
+    {
+     "task": "npm install crossenv"
+    },
+    {
+     "task": "npm install crossenv",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "crossenv",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d08",
+   "template": "npm",
+   "note": "bundled malware declared other eco and dismissed",
+   "steps": [
+    {
+     "task": "npm install crossenv"
+    },
+    {
+     "task": "npm install crossenv",
+     "packages": [
+      {
+       "ecosystem": "crates.io",
+       "name": "crossenv",
+       "public": true
+      }
+     ],
+     "not_packages": [
+      "crossenv"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d09",
+   "template": "npm",
+   "note": "bundled high pin, dismissed as different case",
+   "steps": [
+    {
+     "task": "npm install lodash@4.17.20"
+    },
+    {
+     "task": "npm install lodash@4.17.20",
+     "packages": [],
+     "not_packages": [
+      "Lodash"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d10",
+   "template": "npm",
+   "note": "malware pin in prose dismissed",
+   "steps": [
+    {
+     "task": "Use event-stream 3.3.6 for the pipeline"
+    },
+    {
+     "task": "Use event-stream 3.3.6 for the pipeline",
+     "packages": [],
+     "not_packages": [
+      "event-stream"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d11",
+   "template": "npm",
+   "note": "declared private bundled malware",
+   "steps": [
+    {
+     "task": "npm install crossenv"
+    },
+    {
+     "task": "npm install crossenv",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "crossenv",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c2",
+   "id": "d12",
+   "template": "npm",
+   "note": "installed dep upgraded to bad pin, dismissed",
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"undici\":\"5.28.4\"}}",
+    "package-lock.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"undici\":\"5.28.4\"}},\"node_modules/undici\":{\"version\":\"5.28.4\",\"resolved\":\"https://registry.npmjs.org/undici/-/undici-5.28.4.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "steps": [
+    {
+     "task": "npm install undici@5.8.0"
+    },
+    {
+     "task": "npm install undici@5.8.0",
+     "packages": [],
+     "not_packages": [
+      "undici"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k01",
+   "template": "npm",
+   "note": "25 declared, malware 25th",
+   "steps": [
+    {
+     "task": "npm install ky p-throttle hono helmet fastify valibot msw papaparse bullmq drizzle-orm express axios dayjs moment typescript pg sharp jsonwebtoken dotenv stripe react ioredis redis vitest fastifyy"
+    },
+    {
+     "task": "npm install ky p-throttle hono helmet fastify valibot msw papaparse bullmq drizzle-orm express axios dayjs moment typescript pg sharp jsonwebtoken dotenv stripe react ioredis redis vitest fastifyy",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "ky",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "p-throttle",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "hono",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "helmet",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "fastify",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "valibot",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "msw",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "papaparse",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "bullmq",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "drizzle-orm",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "express",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "axios",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "dayjs",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "moment",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "typescript",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "pg",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "sharp",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "jsonwebtoken",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "dotenv",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "stripe",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "react",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "ioredis",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "redis",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "vitest",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "fastifyy",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k02",
+   "template": "npm",
+   "note": "25 declared, malware 9th",
+   "steps": [
+    {
+     "task": "npm install ky p-throttle hono helmet fastify valibot msw papaparse fastifyy bullmq drizzle-orm express axios dayjs moment typescript pg sharp jsonwebtoken dotenv stripe react ioredis redis vitest"
+    },
+    {
+     "task": "npm install ky p-throttle hono helmet fastify valibot msw papaparse fastifyy bullmq drizzle-orm express axios dayjs moment typescript pg sharp jsonwebtoken dotenv stripe react ioredis redis vitest",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "ky",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "p-throttle",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "hono",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "helmet",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "fastify",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "valibot",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "msw",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "papaparse",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "fastifyy",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "bullmq",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "drizzle-orm",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "express",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "axios",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "dayjs",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "moment",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "typescript",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "pg",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "sharp",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "jsonwebtoken",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "dotenv",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "stripe",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "react",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "ioredis",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "redis",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "vitest",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k03",
+   "template": "npm",
+   "note": "critical pins beyond the version cap",
+   "steps": [
+    {
+     "task": "npm install ky p-throttle hono helmet fastify valibot msw node-forge@0.10.0"
+    },
+    {
+     "task": "npm install ky p-throttle hono helmet fastify valibot msw node-forge@0.10.0",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "ky",
+       "public": true,
+       "version": "latest"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "p-throttle",
+       "public": true,
+       "version": "latest"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "hono",
+       "public": true,
+       "version": "latest"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "helmet",
+       "public": true,
+       "version": "latest"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "fastify",
+       "public": true,
+       "version": "latest"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "valibot",
+       "public": true,
+       "version": "latest"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "msw",
+       "public": true,
+       "version": "latest"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "node-forge",
+       "public": true,
+       "version": "0.10.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k04",
+   "template": "npm",
+   "note": "6 versioned declared + critical pin 7th",
+   "steps": [
+    {
+     "task": "x",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "ky",
+       "public": true,
+       "version": "1.7.4"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "hono",
+       "public": true,
+       "version": "4.6.14"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "helmet",
+       "public": true,
+       "version": "8.0.0"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "zod",
+       "public": true,
+       "version": "3.23.8"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "msw",
+       "public": true,
+       "version": "2.7.0"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "pino",
+       "public": true,
+       "version": "9.6.0"
+      },
+      {
+       "ecosystem": "npm",
+       "name": "node-forge",
+       "public": true,
+       "version": "0.10.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k07",
+   "template": "npm",
+   "note": "30 names, 25 public + 5 not_packages",
+   "steps": [
+    {
+     "task": "npm install qzpkg1 qzpkg2 qzpkg3 qzpkg4 qzpkg5 qzpkg6 qzpkg7 qzpkg8 qzpkg9 qzpkg10 qzpkg11 qzpkg12 qzpkg13 qzpkg14 qzpkg15 qzpkg16 qzpkg17 qzpkg18 qzpkg19 qzpkg20 qzpkg21 qzpkg22 qzpkg23 qzpkg24 qzpkg25 qzpkg26 qzpkg27 qzpkg28 qzpkg29 qzpkg30",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg1",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg2",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg3",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg4",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg5",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg6",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg7",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg8",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg9",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg10",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg11",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg12",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg13",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg14",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg15",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg16",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg17",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg18",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg19",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg20",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg21",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg22",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg23",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg24",
+       "public": true
+      },
+      {
+       "ecosystem": "npm",
+       "name": "qzpkg25",
+       "public": true
+      }
+     ],
+     "not_packages": [
+      "qzpkg26",
+      "qzpkg27",
+      "qzpkg28",
+      "qzpkg29",
+      "qzpkg30"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k08",
+   "template": "npm",
+   "note": "bad name dismissed in second command after &&",
+   "steps": [
+    {
+     "task": "npm test && npm install colorsx",
+     "packages": [],
+     "not_packages": [
+      "colorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k09",
+   "template": "npm",
+   "note": "bad name dismissed: npx run",
+   "steps": [
+    {
+     "task": "npx colorsx init",
+     "packages": [],
+     "not_packages": [
+      "colorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k10",
+   "template": "npm",
+   "note": "bad name dismissed: package.json snippet in code block",
+   "steps": [
+    {
+     "task": "Edit package.json:\n```\n{ \"dependencies\": { \"colorsx\": \"^1.0.0\" } }\n```",
+     "packages": [],
+     "not_packages": [
+      "colorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k11",
+   "template": "npm",
+   "note": "bad name in prose, dismissed (no near-miss)",
+   "steps": [
+    {
+     "task": "Pull in qzcolorsx for the terminal colours",
+     "packages": [],
+     "not_packages": [
+      "qzcolorsx"
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k12",
+   "template": "npm",
+   "note": "declared private + installs",
+   "steps": [
+    {
+     "task": "npm install fastifyy",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "fastifyy",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k13",
+   "template": "npm",
+   "note": "declare public at version, task writes other version via manifest",
+   "steps": [
+    {
+     "task": "Add \"node-forge\": \"0.10.0\" to package.json",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "node-forge",
+       "public": true,
+       "version": "1.3.1"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k14",
+   "template": "npm",
+   "note": "declare public at latest, task writes critical pin",
+   "steps": [
+    {
+     "task": "yarn add elliptic@6.5.4",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "elliptic",
+       "public": true,
+       "version": "latest"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k15",
+   "template": "py",
+   "note": "PyPI version differs",
+   "steps": [
+    {
+     "task": "Add ormar==0.12.2 to requirements.txt",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "ormar",
+       "public": true,
+       "version": ">=0.20"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k16",
+   "template": "npm",
+   "note": "installed dep, upgrade to vulnerable, declared other version",
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"undici\":\"5.28.4\"}}",
+    "package-lock.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"undici\":\"5.28.4\"}},\"node_modules/undici\":{\"version\":\"5.28.4\",\"resolved\":\"https://registry.npmjs.org/undici/-/undici-5.28.4.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "steps": [
+    {
+     "task": "downgrade undici to 5.8.0"
+    },
+    {
+     "task": "downgrade undici to 5.8.0",
+     "packages": [
+      {
+       "ecosystem": "npm",
+       "name": "undici",
+       "public": true,
+       "version": "6.21.0"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k17",
+   "template": "npm",
+   "note": "ecosystem mismatch with version only in task",
+   "steps": [
+    {
+     "task": "npm install colorsx@1.0.0",
+     "packages": [
+      {
+       "ecosystem": "PyPI",
+       "name": "colorsx",
+       "public": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "c3",
+   "id": "k18",
+   "template": "npm",
+   "note": "bad npm name, declared Go path variant",
+   "steps": [
+    {
+     "task": "npm install colorsx",
+     "packages": [
+      {
+       "ecosystem": "crates.io",
+       "name": "colorsx",
+       "public": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x1",
+   "template": "npm",
+   "steps": [
+    {
+     "task": "npx colorsx init"
+    },
+    {
+     "task": "npx colorsx init",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x2",
+   "template": "npm",
+   "steps": [
+    {
+     "task": "npx fastifyy"
+    },
+    {
+     "task": "npx fastifyy",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x3",
+   "template": "npm",
+   "steps": [
+    {
+     "task": "pnpm dlx colorsx"
+    },
+    {
+     "task": "pnpm dlx colorsx",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x4",
+   "template": "npm",
+   "steps": [
+    {
+     "task": "bunx colorsx"
+    },
+    {
+     "task": "bunx colorsx",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x5",
+   "template": "npm",
+   "steps": [
+    {
+     "task": "yarn dlx fastifyy"
+    },
+    {
+     "task": "yarn dlx fastifyy",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x6",
+   "template": "npm",
+   "steps": [
+    {
+     "task": "npm exec colorsx"
+    },
+    {
+     "task": "npm exec colorsx",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x7",
+   "template": "npm",
+   "steps": [
+    {
+     "task": "npx --yes crossenv"
+    },
+    {
+     "task": "npx --yes crossenv",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x8",
+   "template": "py",
+   "steps": [
+    {
+     "task": "uvx litestarr"
+    },
+    {
+     "task": "uvx litestarr",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x9",
+   "template": "py",
+   "steps": [
+    {
+     "task": "pipx run litestarr"
+    },
+    {
+     "task": "pipx run litestarr",
+     "packages": []
+    }
+   ]
+  },
+  {
+   "set": "cX",
+   "id": "x10",
+   "template": "py",
+   "steps": [
+    {
+     "task": "pipx install litestarr"
+    },
+    {
+     "task": "pipx install litestarr",
+     "packages": []
+    }
+   ]
+  }
+ ]
+}
