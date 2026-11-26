@@ -6,5 +6,47 @@
   "max_planned_but_remained": 24,
   "max_new_vulnerable_copies": 26,
   "min_net_cleared_ratio": 0.77,
-  "require_order_source": "run_order"
+  "require_order_source": "run_order",
+  "projects": {
+    "json-server": {
+      "min_net_cleared_ratio": 0.85,
+      "max_failed_steps": 0,
+      "why": "published 6.5.1 measured 105 -> 14 (0.8666) twice with this harness (2026-11-25 audit, 2026-11-26); bc740de the same"
+    },
+    "monokle": {
+      "min_net_cleared_ratio": 0.76,
+      "max_failed_steps": 0,
+      "why": "6.5.1 measured 444 -> 98 (0.7792) twice; bc740de the same"
+    },
+    "formik": {
+      "min_net_cleared_ratio": 0.61,
+      "max_failed_steps": 0,
+      "why": "6.5.1 measured 401 -> 150 (0.6259, its three yarn workspace steps refused by the old harness); bc740de 401 -> 149 (0.6284), every step run"
+    },
+    "vue-core": {
+      "min_net_cleared_ratio": 0.75,
+      "max_failed_steps": 0,
+      "why": "6.5.1 measured 177 -> 41 (0.7683), minimist 1.2.5 left on json5's edge; bc740de 177 -> 40 (0.774), minimist cleared"
+    },
+    "redux-toolkit": {
+      "min_net_cleared_ratio": 0.45,
+      "max_failed_steps": 0,
+      "why": "6.5.1 measured 401 -> 217 (0.4588, workspace steps refused) and 401 -> 212 (0.4713, workspace steps run, graphql failed); bc740de 401 -> 214 (0.4663), 0 failed. The plan varies between runs (a time-bounded @docusaurus/core 3 step is in one plan and not the next), so the floor sits under the lowest 6.5.1 run"
+    },
+    "starship": {
+      "min_net_cleared_ratio": 0.53,
+      "max_failed_steps": 0,
+      "why": "6.5.1 measured 245 -> 109 (0.555) with 6 failed steps; lane plan-rs 245 -> 103 (0.5795), 0 failed, in one process; bc740de 245 -> 110 (0.551) with 2 failed (the links check ran out of time and still named cargo add git2, plan-rs fixing)"
+    },
+    "crewai": {
+      "min_net_cleared_ratio": 0.69,
+      "max_failed_steps": 0,
+      "why": "BELOW 6.5.1 BY DESIGN: 6.5.1 measured 372 -> 93 (0.75) with 1 failed step and 1 lowering; lane plan-rs holds as words a uv pin that installs an affected release on the project's lowest supported Python, and bc740de measures 372 -> 110 (0.7043), 0 failed, 0 lowered"
+    },
+    "gh-cli": {
+      "min_net_cleared_ratio": 0.92,
+      "max_failed_steps": 0,
+      "why": "6.5.1 measured 36 -> 2 (0.9444); bc740de the same"
+    }
+  }
 }
