@@ -723,6 +723,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const commandWord = word === "uv" && words[i + 1] === "pip" ? "pip" : word;
       /** The package the command named last: Cargo's `--vers` / `--version` names its version. */
       let lastAdded: NewPackage | null = null;
+      let closedSpan = false;
+      /** The command named a package (one the project has included: `npm i zod, zqxdual`). */
+      let readName = false;
       for (j++; j < words.length; j++) {
         // At most MAX_READ_PACKAGES names, here too: `npm install p1 ... p30000` returned 30,012 (re-check, item 3).
         if (found.length >= MAX_READ_PACKAGES) {
@@ -750,7 +753,14 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           // option is known to take no value (`-D`, `-U`); after any other option it may be that option's
           // value, so it is not read, and is named as not read unless the option is known to take one
           // (re-check of the 2026-11-25 fixes, item 2). A long blank is a value the screen withheld.
-          const flag = task.slice(ws, we).replace(/[.,;:)]+$/, "");
+          const flag = task.slice(ws, we).replace(/[.,;:)`'"]+$/, "");
+          // `npm install prisma --save-dev` and ...: a closing backtick ends the command at its option (round 6, o31).
+          if (/[`;]["')]*$/.test(task.slice(ws, we))) {
+            while (j + 1 < raw.length && starts[j + 1] < we) j++;
+            j++;
+            closedSpan = true;
+            break;
+          }
           // Past every token of the option's own word.
           while (j + 1 < raw.length && starts[j + 1] < we) j++;
           const gap = j + 1 < raw.length ? task.slice(we, starts[j + 1]) : "";
@@ -814,11 +824,21 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         saw(name, "command");
         if (pkg && after && !inline && !tag && !/^(?:latest|\*)$/i.test(after)) pkg.versionUnread = true;
         lastAdded = pkg;
+        readName = true;
         if (separatorAfter(j) === "clause") break;
       }
       // F3: "npm install ky and fastifyy": the command's operands end at the connective, and what the list goes
       // on to name is read as prose after an install verb, so it waits in to_confirm (never silently dropped).
-      if (lastAdded && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
+      // Not after a closed code span, and not when another command follows ("and `npm install x`").
+      const nextIsCommand = Object.hasOwn(MANAGERS, words[j + 1] ?? "");
+      if (readName && !closedSpan && !nextIsCommand && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
+      // Round 6, item 6: after a comma, as after a connective ("pip install requests, zqxdualpy"), the next word is
+      // read as an item of the same list: the operand before it stands in for the verb.
+      else if (readName && !closedSpan && j < words.length && j - 1 > i && /^[ \t]*,[ \t]*$/.test(task.slice(span(j - 1).end, starts[j])) && !Object.hasOwn(MANAGERS, words[j])) {
+        listAfterCommand = j - 1;
+        i = j - 2;
+        continue;
+      }
       i = j - 1;
       continue;
     }
@@ -1114,7 +1134,7 @@ function badness(f: NewPackageFinding): number {
  * `ctx` is malware (PYSEC-2022-199; black-box audit of 60c9edc, 2026-11-14). The other
  * ecosystems' answers are listed in `also_checked`.
  */
-export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date, onAnswer?: (results: readonly CheckedItem[]) => void): Promise<NewPackageFinding[]> {
+export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string }>) => void): Promise<NewPackageFinding[]> {
   if (packages.length === 0) return [];
   if (!liveIntel || !liveIntel.isEnabled()) return packages.map((p) => unchecked(p, "live lookups are disabled"));
   if (!liveIntel.getReleaseSources || !liveIntel.getFixPathSources || !liveIntel.queryAdvisories) {
@@ -1148,7 +1168,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
         now ? { now } : {},
       ).then((answer) => {
         // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
-        onAnswer?.(answer.results as readonly CheckedItem[]);
+        onAnswer?.(answer.results as readonly CheckedItem[], list.map((p) => ({ ecosystem: p.ecosystem, name: p.name, to: p.version ?? "latest" })));
         return answer;
       }),
     );

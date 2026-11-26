@@ -26,6 +26,7 @@ import { executeDecisionMemory } from "../tools/decision-memory.js";
 import { forbiddenKey } from "../tools/briefing-confirm.js";
 import type { OsvVulnerability } from "../live/types.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { userConfigFile } from "./helpers/a1129-user-config.js";
 
 const DIR = path.join(__dirname, "fixtures", "a1128-confirm");
 const HOLES: Record<string, string> = {
@@ -150,7 +151,8 @@ describe("review-confirm2 cases hold the invariants", () => {
     for (const [rel, body] of Object.entries(TEMPLATES[c.template] ?? {})) h.write(rel, body);
     for (const [rel, body] of Object.entries(c.files ?? {})) h.write(rel, body);
     for (const [rel, body] of Object.entries(c.homeFiles ?? {})) {
-      const f = path.join(process.env.HOME!, rel);
+      // Written where the running platform's tool reads it (round 6, CI: nP/p27's go env file was Windows-only).
+      const f = userConfigFile(rel, process.env);
       fs.mkdirSync(path.dirname(f), { recursive: true });
       fs.writeFileSync(f, body);
     }
