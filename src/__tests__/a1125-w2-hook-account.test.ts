@@ -410,3 +410,17 @@ describe("D2: quoted manager paths and node <manager script>", () => {
     expect(run('"C:/Program Files/nodejs/npm.cmd" install --@types:registry=https://registry.npmjs.org lodash@4.17.20').text).toContain("could not be read");
   });
 });
+
+/** D3: a manager named with its version after a runner is that manager, for the detector as for the reader. */
+describe("D3: a runner's manager@version", () => {
+  it.each(["npx -y npm@10.9.2 install lodash@4.17.20", "pnpm dlx yarn@1 add lodash@4.17.20", "bunx pnpm@9 add lodash@4.17.20", "corepack pnpm@9.15.0 add lodash@4.17.20"])("%s", (command) => {
+    expect(detectsInstall(command)).toBe(true);
+    s.ledger([]);
+    expect(run(command).decision).toBe("deny");
+    releases(command);
+  });
+
+  it("with an option the account does not take: held as not read", () => {
+    expect(run("npx -y npm@10.9.2 install --@types:registry=https://registry.npmjs.org lodash@4.17.20").text).toContain("could not be read");
+  });
+});
