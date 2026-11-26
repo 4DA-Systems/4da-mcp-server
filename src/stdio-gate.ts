@@ -70,6 +70,8 @@ export class StdioGate extends Transform {
   private buffer = "";
   /** True while the rest of an over-long line is read and thrown away, up to its newline. */
   private discarding = false;
+  /** True once the stream's first character has been read (a leading byte-order mark is dropped). */
+  private startSeen = false;
   private readonly decoder = new StringDecoder("utf8");
   private opened = false;
   /** The id of the `initialize` request, until its answer names the negotiated version. */
@@ -145,6 +147,13 @@ export class StdioGate extends Transform {
 
   private consume(text: string): void {
     let rest = text;
+    // One UTF-8 byte-order mark before the first message (a client that writes its stream as
+    // "UTF-8 with BOM", as .NET and PowerShell can) is not part of it: left in, `initialize` did not
+    // parse and was answered -32700 (audit 2026-11-25). Only the first character of the stream.
+    if (!this.startSeen && rest.length > 0) {
+      this.startSeen = true;
+      if (rest.charCodeAt(0) === 0xfeff) rest = rest.slice(1);
+    }
     while (rest.length > 0) {
       const at = rest.indexOf("\n");
       if (this.discarding) {

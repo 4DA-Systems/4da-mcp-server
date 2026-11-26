@@ -203,8 +203,9 @@ Module._resolveFilename = function (request, ...rest) {
     ]);
     expect(results[0].isError, text(results[0])).toBeFalsy();
     expect(results[1].isError).toBe(true);
-    expect(text(results[1])).toContain("upgrade Node.js to 22.13.0 or later");
-    expect(text(results[1])).toContain("npm install-scripts approve better-sqlite3");
+    // Audit 2026-11-25 (H-5): the minimum for this Node line, and a reinstall in words; no npm 12 steps.
+    expect(text(results[1])).toMatch(/Node\.js 2[23]\.\d+ and later/);
+    expect(text(results[1])).toContain("reinstall @4da/mcp-server with the Node.js that runs it");
   }, 60_000);
 
   it.runIf(HAS_NODE_SQLITE)("--doctor names the driver in use", () => {
