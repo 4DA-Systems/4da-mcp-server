@@ -564,7 +564,7 @@ export function manifestPairs(task: string): StrictPair[] {
   // requirements lines: after a requirements file is named, or inside a ```txt / ```requirements / ```pip fence.
   const reqStart = [...text.matchAll(/requirements[\w.-]*\.(?:txt|in)\b|```(?:txt|text|requirements|pip)\b/gi)].map((m) => m.index! + m[0].length);
   if (reqStart.length > 0) {
-    const from = Math.min(...reqStart);
+    const from = reqStart[0]; // matchAll yields in text order: the first is the smallest
     for (const line of text.slice(from, from + 20000).split(/\r?\n/)) {
       const m = /^\s*([A-Za-z][\w.-]*)(?:\[[^\]]*\])?\s*((?:===?|~=|>=|<=|!=)\s*[\w.*+!-]+(?:\s*,\s*(?:===?|~=|>=|<=|!=|<|>)\s*[\w.*+!-]+)*)\s*(?:#.*)?$/.exec(line);
       if (m) push("PyPI", m[1], m[2].replace(/\s+/g, ""));
