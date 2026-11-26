@@ -118,7 +118,7 @@ import {
   type WisdomRecallMode,
 } from "./briefing-wisdom.js";
 import { maxOf, pushAll } from "../array-utils.js";
-import { isRunStop, plainSpec, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
+import { isRunStop, operandNames, plainSpec, readingText, requirementsPairs, scanCommands, strictEvidence, unreadableReason } from "./briefing-command-check.js";
 import * as fs from "node:fs";
 
 // ============================================================================
@@ -461,6 +461,27 @@ export async function executeWhatShouldIKnow(
   // screen leaves it: a credential, a setting's value or a shell expansion is blanked before the detector reads (K3).
   const evidenceScreen = screenFor(task, [...allDeps(), ...(liveIntel?.getPrivateAuditDeps?.() ?? [])]);
   const evidence = strictEvidence(evidenceScreen.text);
+  /** Words of a command whose shape could not be read: never offered by the reader either (round 6, item 2). */
+  const unreadableWords = new Set<string>();
+  // Round 6, item 2: whether a command's shape can be read is decided on the RAW text (the screen blanks `$(`): a
+  // command with a substitution or an unclosed quote is said by its manager and verb only, and offers no pair of
+  // its own (the screened copy of that command is dropped).
+  {
+    const raw = scanCommands(task);
+    const screened = scanCommands(evidenceScreen.text);
+    const unread = raw.filter((c) => c.unreadable);
+    if (unread.length > 0) {
+      evidence.unreadable = [...unread];
+      const aligned = raw.length === screened.length && raw.every((c, i) => c.manager === screened[i].manager && c.verb === screened[i].verb);
+      const dropped = new Set<string>();
+      screened.forEach((c, i) => {
+        if (!aligned || raw[i].unreadable) for (const o of c.operands) for (const n of operandNames(o)) dropped.add(n.toLowerCase());
+      });
+      for (const c of unread) for (const o of c.operands) for (const n of operandNames(o)) dropped.add(n.toLowerCase());
+      evidence.pairs = evidence.pairs.filter((p) => p.seen === "manifest" || !dropped.has(p.name.toLowerCase()));
+      for (const n of dropped) unreadableWords.add(n.replace(/^["'`]+|["'`]+$/g, ""));
+    }
+  }
   // V2: `pip install -r <file>` names that file's packages: they are task packages (a finding on one is about this
   // task), and strict pairs. Only a file inside the project is read.
   const root = liveIntel?.getProjectRoot?.() ?? null;
@@ -552,9 +573,9 @@ export async function executeWhatShouldIKnow(
   // ── K2: strict positional evidence against the reader's candidates ──
   {
     const has = installedNames(ecosystemDeps());
-    const screenedWords = new Set(screenFor(task, ecosystemDeps()).text.toLowerCase().split(/[\s"'`(),;]+/).map((w) => w.replace(/@.*$/, "")));
     const same = (e: string, n: string) => (x: { name?: string; word?: string; ecosystem?: string; read_as?: string }) =>
       (x.ecosystem === e || (x.read_as ?? "").split(" or ").includes(e)) && sameName(x.name ?? x.word ?? "", n, e as CheckEcosystem);
+    if (unreadableWords.size > 0) gated.unverified = gated.unverified.filter((w) => !unreadableWords.has(w.word.toLowerCase()));
     // V4: a fragment ("github.com/") is never an entry.
     gated.unverified = gated.unverified.filter((w) => !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\/$/i.test(w.word));
     // A spec written on an operand counts only where dependency_check reads it (a tag or a hash does not).
@@ -567,10 +588,6 @@ export async function executeWhatShouldIKnow(
       if (p.privateIndex || !notPrivate(p) || credentialShape(p.name)) continue;
       // What the task itself takes from another registry (`YARN_REGISTRY=<private> yarn add X`) is the screen's.
       if (evidenceScreen.names.has(p.name.toLowerCase()) || evidenceScreen.ecosystems.has(p.ecosystem) || [...evidenceScreen.scopes].some((s) => p.name.toLowerCase().startsWith(`${s}/`))) continue;
-      // An unknown option's possible value is never offered by name when the option may carry a secret, or the task
-      // screen withheld it (K3): it weighs as a word the reader did not read, which stands where a package stands.
-      // An option that names a source or a place (`--registry-mirror X`, `--cache-dir X`) takes a value, never a package.
-      if (p.afterOption && (/tok|auth|pass|secret|key|cred|otp|cert|sig|pat$|login|user|regist|mirror|index|url|host|proxy|scope|prefix|dir|path|cache|config|log|out|file/i.test(p.afterOption) || !screenedWords.has(p.name.toLowerCase()))) continue;
       if (privateTask.some((x) => x.package.toLowerCase() === p.name.toLowerCase())) continue;
       const why = registryReason(p.ecosystem, p.name);
       if (why) {
@@ -593,7 +610,7 @@ export async function executeWhatShouldIKnow(
       }
       // The pair waits: an operand of the task's command that nothing accounts for (K2; it replaced "could not read whole").
       const prose = gated.unverified.findIndex((w) => sameName(w.word, p.name, p.ecosystem) && w.seen === "prose");
-      const entry: UnverifiedWord = { word: p.name, read_as: p.ecosystem, ...(readable(p.ecosystem, p.version) ? { version: p.version } : {}), seen: "command" };
+      const entry: UnverifiedWord = { word: p.name, read_as: p.ecosystem, ...(readable(p.ecosystem, p.version) ? { version: p.version } : {}), seen: p.seen ?? "command" };
       // A strict tie replaces the prose reading of the same name ("add the ctx package to package.json": npm only).
       if (prose >= 0) gated.unverified[prose] = { ...gated.unverified[prose], ...entry };
       else gated.unverified.push(entry);
@@ -801,6 +818,12 @@ export async function executeWhatShouldIKnow(
   ];
   // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
   const allWithheld = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason)), ...argsNotRead.map((w) => ({ ...w, standing: true as const }))];
+  // Round 6, item 3: the word after an option not known to take no value is that option's value, in the detector as
+  // in the reader: counted as "the word after <option>" and standing in the command, never named.
+  for (const flag of evidence.hiddenValues) {
+    const shown = `the word after ${flag.slice(0, 40)}`;
+    if (!allWithheld.some((w) => w.shown === shown)) allWithheld.push({ shown, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)", standing: true as const });
+  }
   // A withheld value the caller lists in not_packages moves to dismissed (by how it is shown: the value itself is
   // never repeated), under the same position rule as a dismissed name (wave 2, change B).
   const screened = screenFor(task, ecosystemDeps());

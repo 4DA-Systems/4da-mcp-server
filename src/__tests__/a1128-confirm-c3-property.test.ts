@@ -40,7 +40,8 @@ function name(r: () => number, ecosystem: CheckEcosystem): string {
 function option(r: () => number): { text: string; hasValue: boolean } {
   const id = Math.floor(r() * 1e4).toString(36);
   const pick = r();
-  if (pick < 0.4) return { text: `-${"mcLwqz"[Math.floor(r() * 6)]}`, hasValue: false };
+  // Short options no manager knows (round 6: a known switch such as -q takes no value; these do not hide a word).
+  if (pick < 0.4) return { text: `-${"mZKjXk"[Math.floor(r() * 6)]}`, hasValue: false };
   if (pick < 0.8) return { text: `--zq-flag-${id}`, hasValue: false };
   return { text: `--zq-key-${id}=zqv${id}`, hasValue: true };
 }
@@ -69,8 +70,11 @@ describe("C3: a command with unknown options and operands is never read whole un
       const accounted = (ecosystem: CheckEcosystem, x: string) => ok.has(`${ecosystem}|${x}`);
       const unread = unreadCommand(task, accounted);
       const label = `#${n}: ${task}`;
-      if (operands.some((o) => !o.accounted)) expect(unread, label).not.toBeNull();
-      // Every operand accounted: the command is read whole (an `--opt=value` value is no operand: round 4, fp39).
+      // Round 6, item 3: the word after an option not known to take no value is that option's value: never an
+      // operand, and the command is not read whole (it stands as "the word after <option>").
+      const hides = versioned.some((_v, i) => opts[i] !== undefined && !opts[i].hasValue);
+      if (operands.some((o) => !o.accounted) || hides) expect(unread, label).not.toBeNull();
+      // Every operand accounted and no word taken as a value: the command is read whole.
       else expect(unread, label).toBeNull();
     }
   });

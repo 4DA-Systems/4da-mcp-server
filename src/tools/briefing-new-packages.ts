@@ -724,6 +724,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       /** The package the command named last: Cargo's `--vers` / `--version` names its version. */
       let lastAdded: NewPackage | null = null;
       let closedSpan = false;
+      /** The command named a package (one the project has included: `npm i zod, zqxdual`). */
+      let readName = false;
       for (j++; j < words.length; j++) {
         // At most MAX_READ_PACKAGES names, here too: `npm install p1 ... p30000` returned 30,012 (re-check, item 3).
         if (found.length >= MAX_READ_PACKAGES) {
@@ -822,13 +824,21 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         saw(name, "command");
         if (pkg && after && !inline && !tag && !/^(?:latest|\*)$/i.test(after)) pkg.versionUnread = true;
         lastAdded = pkg;
+        readName = true;
         if (separatorAfter(j) === "clause") break;
       }
       // F3: "npm install ky and fastifyy": the command's operands end at the connective, and what the list goes
       // on to name is read as prose after an install verb, so it waits in to_confirm (never silently dropped).
       // Not after a closed code span, and not when another command follows ("and `npm install x`").
       const nextIsCommand = Object.hasOwn(MANAGERS, words[j + 1] ?? "");
-      if (lastAdded && !closedSpan && !nextIsCommand && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
+      if (readName && !closedSpan && !nextIsCommand && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
+      // Round 6, item 6: after a comma, as after a connective ("pip install requests, zqxdualpy"), the next word is
+      // read as an item of the same list: the operand before it stands in for the verb.
+      else if (readName && !closedSpan && j < words.length && j - 1 > i && /^[ \t]*,[ \t]*$/.test(task.slice(span(j - 1).end, starts[j])) && !Object.hasOwn(MANAGERS, words[j])) {
+        listAfterCommand = j - 1;
+        i = j - 2;
+        continue;
+      }
       i = j - 1;
       continue;
     }

@@ -107,3 +107,84 @@ describe("item 7: the declaration accepts what to_confirm offers", () => {
 });
 
 export { brief, npmProject, waiting, h };
+
+describe("item 1: manifest snippets and options between manager and verb give strict pairs", () => {
+  it.each([
+    ['Add to package.json: "dependencies": {"zqxdual":"1.0.0"}', "zqxdual/npm"],
+    ['```json\n{"dependencies": {"zqxdual": "^1.0.0"}}\n```', "zqxdual/npm"],
+    ["Add to requirements.txt: zqxdual==1.0.0", "zqxdual/PyPI"],
+    ['pyproject.toml: dependencies = ["zqxdual>=1.0"]', "zqxdual/PyPI"],
+    ['[tool.poetry.dependencies]\npython = "^3.11"\nzqxdual = "^1.0"', "zqxdual/PyPI"],
+    ['Cargo.toml:\n[dependencies]\nzqxdual = { version = "1.0", features = ["x"] }', "zqxdual/crates.io"],
+    ["npm -w web install zqxdual", "zqxdual/npm"],
+    ["npm --workspace web install zqxdual", "zqxdual/npm"],
+    ["yarn global add zqxdual", "zqxdual/npm"],
+    ["yarn workspace web add zqxdual", "zqxdual/npm"],
+    ["cargo +nightly install zqxdual", "zqxdual/crates.io"],
+  ])("%s", async (task, pair) => {
+    npmProject();
+    const r = await brief({ task, packages: [] });
+    expect(waiting(r)).toContain(pair);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+  });
+
+  it("another ecosystem's declaration does not settle a manifest entry: the npm malware is checked once declared", async () => {
+    npmProject();
+    const task = 'Add to package.json: "dependencies": {"zqxdual":"1.0.0"}';
+    const wrong = await brief({ task, packages: [{ ecosystem: "PyPI", name: "zqxdual", public: true }] });
+    expect(waiting(wrong)).toContain("zqxdual/npm");
+    const right = await brief({ task, packages: [{ ecosystem: "npm", name: "zqxdual", public: true }] });
+    expect(right.delegation_assessment.level).toBe("human_only");
+  });
+});
+
+describe("item 2: substitution and unclosed quotes are read on the raw text", () => {
+  it("npm install $(cat pkgs.txt): could not read whole, never safe", async () => {
+    npmProject();
+    const r = await brief({ task: "npm install $(cat pkgs.txt)", packages: [] });
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).toContain("This task holds a command (npm install) this briefing could not read whole");
+    expect(r.delegation_assessment.reason).not.toContain("pkgs.txt");
+  });
+
+  it('npm i zqxok "unterminated: could not read whole, nothing offered from inside the quote', async () => {
+    npmProject();
+    const r = await brief({ task: 'npm i zqxok "unterminated', packages: [{ ecosystem: "npm", name: "zqxok", public: true }] });
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(JSON.stringify(r.task_packages.to_confirm)).not.toContain("unterminated");
+  });
+});
+
+describe("item 3: an unknown option's value is never offered, never repeated", () => {
+  it.each([
+    ["pip install --pw hunter2zz zqx-okpy", "hunter2zz", "--pw"],
+    ["pip install --zqxflag zqvalue7 zqx-okpy", "zqvalue7", "--zqxflag"],
+    ["npm install --ca-pin zqpin55 zod", "zqpin55", "--ca-pin"],
+  ])("%s", async (task, value, flag) => {
+    h.write("requirements.txt", "flask==3.0.3\n");
+    const r = await brief({ task, packages: [] });
+    expect(JSON.stringify({ t: r.task_packages, d: r.delegation_assessment, s: r.summary })).not.toContain(value);
+    expect(JSON.stringify(r.task_packages.not_read)).toContain(`the word after ${flag}`);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(h.requests.filter((u) => u.includes(value))).toEqual([]);
+  });
+
+  it("a known value option's value (--workspace web, --omit dev) is never offered either", async () => {
+    npmProject();
+    const r = await brief({ task: "npm install --workspace web --omit dev zod" });
+    expect(JSON.stringify(r.task_packages.to_confirm)).not.toMatch(/"web"|"dev"/);
+  });
+});
+
+describe("item 6: after a comma the next name waits", () => {
+  it.each([
+    ["pip install requests, zqxdualpy", "zqxdualpy"],
+    ["npm i zod, zqxdual", "zqxdual"],
+  ])("%s", async (task, name) => {
+    npmProject();
+    h.write("requirements.txt", "requests==2.32.3\n");
+    const r = await brief({ task, packages: [] });
+    expect(waiting(r).map((w) => w.split("/")[0])).toContain(name);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+  });
+});
