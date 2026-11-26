@@ -128,3 +128,36 @@ describe("2: options that can change which release of a named package is install
     expect(run("pnpm add --resolution-mode highest lodash@4.17.20").text).toContain("could not be read");
   });
 });
+
+describe("3: make leaves the data list; a data program under a setting that is not inert is none", () => {
+  it.each([
+    ["GH_BROWSER='npm i lodash@4.17.20 --tag' gh pr view 1 --web", "Bash"],
+    ["BROWSER='npm i lodash@4.17.20 --tag' gh pr view 1 --web", "Bash"],
+    ["$env:GH_BROWSER='npm i lodash@4.17.20 --tag'; gh pr view 1 --web", "PowerShell"],
+    ["export GH_BROWSER='npm i lodash@4.17.20 --tag'; gh issue view 1 --web", "Bash"],
+    ["make 'X:=$(shell npm i lodash@4.17.20)'", "Bash"],
+    ["make 'X!=npm i lodash@4.17.20'", "Bash"],
+    ["MAKEFLAGS='--eval=$(shell npm i lodash@4.17.20)' make", "Bash"],
+    ["make SHELL='npm i lodash@4.17.20 #'", "Bash"],
+    ["make PIP=pip3 install", "Bash"],
+    ["PAGER='npm i lodash@4.17.20' git log", "Bash"],
+    ["export X=1; echo 'npm install lodash'", "Bash"],
+  ])("%s: held", (command, tool) => {
+    expect(run(command, tool).decision, command).toBe("deny");
+  });
+
+  it("make's remedy says to keep the tool's command off make's line", () => {
+    expect(run("make PIP=pip3 install").text).toContain("run the make target without putting the package manager's command on the line");
+  });
+
+  it.each([
+    'GIT_AUTHOR_DATE="2026-11-26T10:00:00" git commit -m "ci: run npm install"',
+    "GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.invalid git commit -m 'docs: pip install -r requirements.txt'",
+    "TZ=UTC LANG=C git log --grep 'npm install'",
+    "NO_COLOR=1 grep -rn 'npm install' docs",
+    "CI=true echo 'run npm install'",
+    "make -C docs install",
+  ])("%s: an inert setting, or no manager word: goes ahead", (command) => {
+    expect(run(command).decision, command).toBe("allow");
+  });
+});

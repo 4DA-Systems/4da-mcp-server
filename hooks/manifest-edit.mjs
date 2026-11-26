@@ -3458,12 +3458,12 @@ function pyOperandKind(word) {
 function accountLine(line, dialect, depth = 0) {
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // D6: PowerShell `$env:NAME = value` statements: a manager's own setting holds the line; any other is taken out before it is read.
-  let gitSetting = false;
+  let dataSetting = false;
   if (dialect === "powershell") {
     const env = psEnvAssignments(line);
     const managed = env.names.find((n) => MANAGER_SETTING.test(n));
     if (managed) return `the setting ${managed} made earlier in this call`;
-    gitSetting = env.names.some((n) => GIT_RUN_NAME.test(n));
+    dataSetting = env.names.some((n) => !INERT_SETTING.test(n));
     // A setting whose value is itself an install (`$env:GIT_EDITOR='npm i x'`) runs when a program reads it: not read.
     if (env.values.some((v) => detectsInstall(v))) return "a setting whose value names an install";
     line = env.line;
@@ -3488,7 +3488,7 @@ function accountLine(line, dialect, depth = 0) {
   for (const words of commands) {
     const set = managerSettingIn(words);
     if (set) return `the setting ${set} made earlier in this call`;
-    if (settingNamesIn(words).some((n) => GIT_RUN_NAME.test(n))) gitSetting = true;
+    if (settingNamesIn(words).some((n) => !INERT_SETTING.test(n))) dataSetting = true;
   }
   // J1 (b): a data program's text is text only when it goes nowhere that runs it: no write to a
   // manifest or lockfile on the line, and every later stage of its pipeline a listed sink or data program.
@@ -3501,7 +3501,7 @@ function accountLine(line, dialect, depth = 0) {
   }
   for (let k = 0; k < commands.length; k++) {
     tick();
-    const exempt = !writesManifest && !(gitSetting && programName(commands[k][Math.max(0, commandStart(commands[k]))] ?? "") === "git") && safeAfter[k];
+    const exempt = !writesManifest && !dataSetting && safeAfter[k];
     const why = accountCommand(commands[k], dialect, depth, exempt);
     if (why) {
       accountFailed ??= commands[k];
@@ -3620,8 +3620,6 @@ const DATA_SPECS = {
     long: ["--hidden", "--no-ignore", "--line-number", "--no-line-number", "--ignore-case", "--smart-case", "--case-sensitive", "--files", "--files-with-matches", "--files-without-match", "--count", "--count-matches", "--invert-match", "--word-regexp", "--line-regexp", "--fixed-strings", "--multiline", "--json", "--vimgrep", "--no-heading", "--heading", "--with-filename", "--no-filename", "--only-matching", "--follow", "--stats", "--trim", "--pcre2", "--text", "--no-messages", "--quiet", "--color"],
     longValue: ["--glob", "--iglob", "--type", "--type-not", "--regexp", "--max-count", "--max-depth", "--context", "--after-context", "--before-context", "--color", "--max-filesize", "--sort", "--sortr"],
   },
-  // make: its recipes are the project's (a stated limit); no -f / --file / --makefile / --eval (another makefile, or one given on the line).
-  make: { short: "knsBeiqrRSt", shortValue: "CjoWI", digits: true, long: ["--keep-going", "--dry-run", "--just-print", "--silent", "--quiet", "--always-make", "--ignore-errors", "--question", "--no-builtin-rules", "--print-directory", "--no-print-directory"], longValue: ["--directory", "--jobs"] },
   "write-output": { ps: { "-noenumerate": 0, "-inputobject": 1 } },
   "write-host": { ps: { "-nonewline": 0, "-foregroundcolor": 1, "-backgroundcolor": 1, "-separator": 1, "-object": 1 } },
   "select-string": { ps: { "-pattern": 1, "-path": 1, "-literalpath": 1, "-simplematch": 0, "-casesensitive": 0, "-context": 1, "-notmatch": 0, "-allmatches": 0, "-quiet": 0, "-list": 0, "-raw": 0, "-encoding": 1, "-include": 1, "-exclude": 1, "-inputobject": 1 } },
@@ -3629,7 +3627,6 @@ const DATA_SPECS = {
   true: {},
   ":": {},
 };
-DATA_SPECS.gmake = DATA_SPECS.make;
 DATA_SPECS.sls = DATA_SPECS["select-string"];
 
 /** Pure sinks: a later pipeline stage that only shows, counts, sorts or saves the text. */
@@ -3719,8 +3716,13 @@ const GIT_SPECS = {
   tag: { short: "almndfsv", shortValue: "mFu", long: ["--list", "--annotate", "--delete", "--force", "--sign"], longValue: ["--message", "--file", "--sort", "--contains"] },
 };
 /** Settings that make git run a command of their own: an editor, a pager, any GIT_* variable. */
-const GIT_RUNS = /^(?:EDITOR|VISUAL|PAGER|GIT_[A-Z0-9_]*)=/i;
-const GIT_RUN_NAME = /^(?:EDITOR|VISUAL|PAGER|GIT_[A-Z0-9_]*)$/i;
+/**
+ * Round 13 (eleventh independent check, S12): settings known to be inert for a data program. Any
+ * other setting for it in the call (a prefix, an export, `$env:` / Set-Item env:) can make it run a
+ * command of its own (GH_BROWSER, BROWSER, GIT_EDITOR, PAGER, MAKEFLAGS ...): then it is no data program.
+ */
+const INERT_SETTING = /^(?:GIT_AUTHOR_(?:NAME|EMAIL|DATE)|GIT_COMMITTER_(?:NAME|EMAIL|DATE)|TZ|LANG|LC_ALL|NO_COLOR|FORCE_COLOR|CI)$/i;
+const settingName = (w) => w.slice(0, w.indexOf("="));
 
 /** gh's text commands (`gh pr create --body '...'`), with their options. */
 const GH_SPEC = {
@@ -3739,11 +3741,12 @@ function dataCommand(words) {
   const start = commandStart(words);
   if (start < 0) return false;
   if (start >= words.length) return true;
+  // A setting before it that is not on the inert list: no data program.
+  if (words.slice(0, start).some((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !INERT_SETTING.test(settingName(w)))) return false;
   const program = programName(words[start]);
   const args = words.slice(start + 1);
   if (program === "git") {
     // An editor, pager or GIT_* setting before it runs a command of its own (`GIT_EDITOR='npm i x' git commit -a`).
-    if (words.slice(0, start).some((w) => GIT_RUNS.test(w))) return false;
     let i = 0;
     while (i < args.length && args[i].startsWith("-")) {
       if (args[i] === "-C") i += 2;
@@ -3811,6 +3814,10 @@ function accountCommand(words, dialect, depth, exempt = true) {
   if (/^pip\d+(?:\.\d+)*$/.test(program)) program = "pip";
   if (exempt && dataCommand(words)) return null;
   if (program === "git" || program === "gh") return `a ${program} command this hook does not read`;
+  if (program === "make" || program === "gmake") {
+    accountRemedy = MAKE_REMEDY;
+    return `${program} with a package manager's command on its line, which make can run (a variable, --eval, SHELL)`;
+  }
   if (/^(?:g?sed|g?awk|mawk|nawk)$/.test(program)) {
     accountRemedy = SED_AWK_REMEDY;
     return `${program}, whose script this hook does not read`;
@@ -4313,6 +4320,10 @@ function remedyText(words) {
   if (!command) return ACCOUNT_REMEDY;
   return `Run it as a plain command of its own: \`${command}\` (no other options): the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
 }
+
+/** Round 13: make runs what its variables, --eval and SHELL say; this hook reads none of them. */
+const MAKE_REMEDY =
+  "make can run a command given on its line (a variable such as X:=$(shell ...), --eval, SHELL, MAKEFLAGS), and this hook does not read make: run the make target without putting the package manager's command on the line (the target's recipe is the project's own).";
 
 /** A remedy other than ACCOUNT_REMEDY for the part accountCall returns (set by the part's reader). */
 let accountRemedy = null;

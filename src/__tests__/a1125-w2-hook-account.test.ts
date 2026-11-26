@@ -162,7 +162,6 @@ describe("pipenv, pdm, rye, pixi, hatch and conda installs are not read (a state
 
 describe("D5: a manager word in the arguments of a program known to take text as data goes ahead", () => {
   it.each([
-    "make PIP=pip3 install",
     "node -e \"console.log('npm install')\"",
     "python -c \"print('pip install requests')\"",
     "git commit -m 'docs: `npm install x`'",
