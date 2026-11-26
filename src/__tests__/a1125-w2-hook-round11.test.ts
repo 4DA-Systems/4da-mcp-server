@@ -53,7 +53,9 @@ describe("1: PowerShell's typographic quotes are quotes", () => {
   });
 });
 
-describe("2: sed and awk are text only under a positive grammar", () => {
+// Round 12: the grammar was beaten (a bracket expression, an option value read as the program): sed and awk
+// are no data programs at all now. A manager word and verb in their words is held, with the grep / Write remedy.
+describe("2: sed and awk (round 12: never text)", () => {
   it.each([
     "echo a | sed '1e npm i lodash@4.17.20'",
     "echo a | sed --expression='e npm i lodash@4.17.20'",
@@ -76,10 +78,14 @@ describe("2: sed and awk are text only under a positive grammar", () => {
     "sed -E 's|pip install (.*)|uv add \\1|g' notes.md",
     "sed '1d;s/npm install/pnpm install/' a.md",
     "awk '/pip install/ {print}' docs/setup.md",
-    "awk '{print $1}' 'npm install.log'",
-    "awk -F: 'NR==1' 'npm install.txt'",
-  ])("%s: goes ahead", (command) => {
-    expect(run(command).decision, command).toBe("allow");
+  ])("%s: held, with the grep / Write remedy", (command) => {
+    const r = run(command);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("use grep, rg or Select-String");
+  });
+
+  it.each(["awk '{print $1}' 'npm install.log'", "awk -F: 'NR==1' 'npm install.txt'"])("%s: no manager word and verb as tokens, nothing to hold", (command) => {
+    expect(run(command).decision).toBe("allow");
   });
 });
 

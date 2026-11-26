@@ -19,7 +19,8 @@
  * A tool installed from the registry (`cargo install x`, `go install x@v`, `yarn global add x`,
  * `uv tool install x`, `poetry self add x`) is read as an add. Read whole means: its program and
  * prefixes, every option known with its arity (ACCOUNT_TABLES, from each tool's own help; for
- * Yarn, Bun and Poetry an allow list from their documentation), and every operand one of
+ * Yarn, Bun and Poetry an allow list from their documentation; no option in any of them lets the
+ * manager install a name that is not an operand on the line), and every operand one of
  * - a public name with an exact version or a range, which goes ahead on its verdict: an exact
  *   version on `proceed` or `review`; a range on a `proceed` or `review` answered for that same
  *   constraint, or else for exactly the release its inclusive ceiling names (`<=V`, `A - V`, only
@@ -38,11 +39,12 @@
  * uv and Poetry it installs the lockfile or the manifest's own ranges; what the manager then
  * chooses is a stated limit (THE LIMITS), not a check.
  * A data program's words are text only when both hold: its options are all on its own short list
- * (echo, printf, cat, the grep family, rg, Select-String, findstr, sed without -i and without an
- * `e` or `w` command, awk without system(), a pipe or getline, make without a makefile from stdin,
- * git commit / log / show / diff / status / grep / tag with their options and no `-c` before them,
- * gh pr / issue / release / gist text, `node -e` / `-p`, `python -c`, and docker / podman run / exec
- * / build, whose commands run in a container), and its output goes nowhere that runs it: it is
+ * (echo, printf, cat, the grep family, rg, Select-String, findstr, make with no -f / --file /
+ * --makefile / --eval, git commit / log / show / diff / status / grep / tag with their options, no
+ * `-c` before them and no EDITOR / VISUAL / PAGER / GIT_* setting for them in the call, gh pr /
+ * issue / release / gist text, `node -e` / `-p`, `python -c`, and docker / podman run / exec /
+ * build, whose commands run in a container; not sed or awk, which can run a command from their
+ * script), and its output goes nowhere that runs it: it is
  * the last stage, or every later stage of its pipeline is such a program or a pure sink (wc, head,
  * tail, sort, uniq, cut, tr, less, more, tee to a file that is no manifest or lockfile, Out-Null,
  * Select-Object, Measure-Object, clip), and no redirection on the line writes a manifest or a
@@ -58,10 +60,11 @@
  * subshell, group or script block. Under xargs a manager's operands come from its input: held.
  * The files read on an Edit, MultiEdit or Write are package.json, Cargo.toml, pyproject.toml,
  * go.mod, pnpm-workspace.yaml, and a requirements file (a name `requirements*.txt`, or any `.txt`
- * in a folder named `requirements`). Each name is matched case-insensitively on every platform,
- * after an NTFS stream suffix (`::$DATA`, `:s`) and trailing dots and blanks are taken off its
- * last path part, as Windows opens it (on a case-sensitive file system `Package.json` is held as
- * well: the safe side). Other files a later command reads (constraints.txt, requirements.in, a
+ * in a folder named `requirements`). The path is first resolved as text, as Windows opens it
+ * (`\` read as `/`, empty and `.` parts dropped, `name/..` resolved, each part's trailing dots and
+ * blanks dropped, an NTFS stream suffix `::$DATA` / `:s` taken off the last part), and the name is
+ * matched case-insensitively on every platform (on a case-sensitive file system `Package.json` is
+ * held as well: the safe side). Other files a later command reads (constraints.txt, requirements.in, a
  * lockfile) are not read.
  * In a manifest written with the Edit, MultiEdit or Write tool only dependency declarations count
  * (never a comment or another string field), each section's are compared on their own, and a
@@ -77,15 +80,19 @@
  * - A version with an `avoid` or `wait` verdict: denied with that verdict's reason.
  * - A version with no verdict, or only `unknown`: denied with the `dependency_check` call to make;
  *   the call goes through once it answers proceed or review. A package whose newest ledger line is
- *   cut short, dated ahead of the clock or not fully valid has an unknown verdict.
+ *   cut short, dated ahead of the clock or not fully valid has an unknown verdict. The two ledger
+ *   files are read as one snapshot (stat'ed, read, stat'ed again, at most three times, as the
+ *   server may be moving check-ledger.jsonl over check-ledger.1.jsonl): a ledger still changing
+ *   holds the call.
  * - A dist-tag other than latest (`x@next`) or a Go branch: "name the version".
  * - A name the project takes from elsewhere (`local_source`) or one whose lockfile could not be
  *   read (`unreadable_lockfile`).
  * - A named package beside a constraints or overrides file (`-c`, `--constraint(s)`,
  *   `--override(s)`, `--build-constraints`), which decides its release: "name the version".
- * - As NOT READ, with one remedy (run it as a plain command `<manager> <verb> <name>@<exact
- *   version>`, or the name alone, with no other options): a command the detector names that is not
- *   read whole. That is an option not in the manager's table (among them every option that changes
+ * - As NOT READ, with one remedy: a plain command the denial names, built from a form this hook
+ *   reads (`bun update x@1` -> `bun add x@1`, the name alone where no exact version is read; where
+ *   none can be built, `<manager> <verb> <name>@<exact version>` in words): a command the detector
+ *   names that is not read whole. That is an option not in the manager's table (among them every option that changes
  *   which release a name resolves to: `--tag`, `--before`, `--pre`, `--prerelease`, `--resolution`,
  *   Bun's `--latest` and `-c`, uv's `--upgrade`), a manager's own environment setting
  *   (`npm_config_*`, `PIP_*`, `UV_*` ...) as a prefix or made earlier in the same call (`export`,
@@ -94,8 +101,11 @@
  *   `gsudo`, `concurrently`, `git submodule foreach` ...), a data program whose options are not on
  *   its list or whose output is piped into anything else (`| sh`, `| pwsh -`, `| python`), a runner
  *   chain past MAX_WRAPS, and a line it cannot take apart (a variable, a substitution, an escape, a
- *   PowerShell here-string; for text that only mentions an install, the Write tool). The remedy is
- *   tested to release each of these classes (a1125-w2-hook-account.test.ts).
+ *   PowerShell here-string; for text that only mentions an install, the Write tool). sed and awk
+ *   with a manager word and verb in their words are held too, with the remedy "grep / rg /
+ *   Select-String to search for that text, the Write tool to write it". The remedy is tested to
+ *   release each of these classes (a1125-w2-hook-account.test.ts), and for every manager and verb
+ *   the detector names (a1125-w2-hook-round12.test.ts).
  * - A manifest part it cannot read (a TOML escape or a multi-line string in a dependency context,
  *   a brace in pnpm-workspace.yaml) and anything past a bound or the time budget (the loops' ticks;
  *   a payload over 8 KB is also judged under a 5 s wall clock).
@@ -143,7 +153,8 @@
  * starts again.
  *
  * FOURDA_GUARD=advise: never denies (the ledger guard included); after a manifest edit
- * (PostToolUse) the agent is told which versions moved and which calls check them.
+ * (PostToolUse) the agent is told which versions moved and which calls check them, the edited file
+ * compared as a whole as block mode reads it (the edits applied backwards give the file before).
  * FOURDA_GUARD=off: the hook does nothing.
  *
  * It denies only where a ledger exists. A server from 6.5.0 on starts one when it starts; a
@@ -151,9 +162,15 @@
  * ledger file in the data folder the hook works as it did before 6.5.0: nothing is denied, and
  * the advice follows a manifest edit.
  *
- * An error of its own on a call that may install, or reading past its time budget, holds the call
- * as not read; on any other call, a payload it does not understand, or a data folder that does not
- * exist, it ends with exit 0 and no output. No network, no dependencies, plain Node.
+ * Reading past its time budget holds the call as not read. Anything else that goes wrong (an error
+ * of its own, a rejected promise, a worker's error or exit without an answer, the wall clock, a
+ * payload that does not parse) ends in one handler that decides on the raw stdin text alone: a
+ * PreToolUse call that names a tool the hook judges and holds a manager word, a manifest file name
+ * or the ledger's name is held ("the hook could not finish reading this call"), where a ledger
+ * exists and the guard blocks; any other gets nothing. stdin that is never closed: after 8 s the
+ * same handler answers from the text that has arrived (Claude Code closes stdin). A payload that
+ * starts with a byte-order mark is read. It always ends with exit 0. No network, no dependencies,
+ * plain Node.
  *
  * Names and versions it repeats come from the edit or command, which may quote a third party's
  * manifest, so each is held to its shape first (NAME_TEXT, specText).
@@ -1810,17 +1827,39 @@ function callItem(ecosystem, name, to, from) {
  * the server names one (src/project-tree.ts isRequirementsFileName, mirrored here because the hook
  * imports nothing: `requirements-dev.txt`, `dev_requirements.txt`), or is a .txt in `requirements/`.
  */
+/**
+ * Round 12: a path's parts as Windows opens it, resolved as text: `\` read as `/`, empty and `.`
+ * parts dropped, `name/..` resolved, and each part's trailing dots and blanks dropped (Win32 drops
+ * them), so `package.json/.`, `package.json\.`, `Cargo.toml/x/..` and `requirements/x/../dev.txt`
+ * name the file they open.
+ */
+function pathParts(filePath) {
+  const parts = [];
+  for (const raw of String(filePath).replace(/\\/g, "/").split("/")) {
+    if (raw === "" || raw === ".") continue;
+    if (raw === "..") {
+      if (parts.length > 0 && parts[parts.length - 1] !== "..") parts.pop();
+      else parts.push("..");
+      continue;
+    }
+    const part = raw.replace(/[. ]+$/, "");
+    if (part !== "") parts.push(part);
+  }
+  return parts;
+}
+
 function manifestKind(filePath) {
-  // Round 11: the last path part as Windows opens it: an NTFS stream suffix (`::$DATA`, `:s`) and
-  // trailing dots and blanks dropped, and the name compared case-insensitively on every platform
-  // (on a case-sensitive file system `Package.json` is then held too: the safe side).
-  const name = basename(String(filePath).replace(/[\\/]+$/, "")).replace(/:.*$/, "").replace(/[. ]+$/, "");
+  // The last path part as Windows opens it (pathParts), its NTFS stream suffix (`::$DATA`, `:s`)
+  // dropped, and the name compared case-insensitively on every platform (Round 11: on a
+  // case-sensitive file system `Package.json` is then held too: the safe side).
+  const parts = pathParts(filePath);
+  const name = (parts[parts.length - 1] ?? "").replace(/:.*$/, "").replace(/[. ]+$/, "");
   const known = MANIFEST_NAMES.get(name.toLowerCase());
   if (known) return known;
   // The server reads no `syntax_test_*` file (an editor grammar's fixture: isSyntaxTestName).
   if (/^syntax_test_/i.test(name)) return null;
   if (/requirements[\w.-]*\.txt$/i.test(name)) return "requirements.txt";
-  if (/\.txt$/i.test(name) && basename(dirname(filePath)).toLowerCase() === "requirements") return "requirements.txt";
+  if (/\.txt$/i.test(name) && (parts[parts.length - 2] ?? "").toLowerCase() === "requirements") return "requirements.txt";
   return null;
 }
 
@@ -2375,7 +2414,7 @@ function poetrySpec(word) {
 
 const JS_VALUES = {
   npm: new Set(["--prefix", "-w", "--workspace", "--tag", "--loglevel", "--cache", "--userconfig", "--globalconfig", "--omit", "--include", "--install-strategy", "--before", "--otp", "--save-prefix", "--scope", "--script-shell", "-C", "--location", "--audit-level", "--fetch-retries", "--fetch-timeout", "--auth-type", "--workspace-concurrency"]),
-  pnpm: new Set(["--prefix", "--global-dir", "--cache-dir", "--state-dir", "--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
+  pnpm: new Set(["--trust-policy", "--trust-policy-exclude", "--trust-policy-ignore-after", "--prefix", "--global-dir", "--cache-dir", "--state-dir", "--filter", "-F", "-C", "--dir", "--reporter", "--store-dir", "--virtual-store-dir", "--modules-dir", "--lockfile-dir", "--config", "--save-catalog-name", "--loglevel", "--workspace-concurrency", "--network-concurrency", "--child-concurrency", "--resolution-mode", "--node-linker", "--depth"]),
   // The last five are `yarn workspaces foreach`'s (berry).
   yarn: new Set(["--cwd", "--network-timeout", "--mutex", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder", "--use-yarnrc", "-j", "--jobs", "--include", "--exclude", "--from"]),
   bun: new Set(["--cwd", "--config", "-c", "--backend", "--cache-dir", "--network-concurrency", "--concurrent-scripts"]),
@@ -3112,10 +3151,15 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
  */
 function optionTable(spec) {
   const m = new Map();
-  for (const w of spec.split(" ")) if (w) m.set(w.replace(/=$/, ""), w.endsWith("=") ? 1 : 0);
+  // `name=`: takes a value; `name?`: an optional value (the next word, when it is not an option); `name`: a switch.
+  for (const w of spec.split(" ")) if (w) m.set(w.replace(/[=?]$/, ""), w.endsWith("=") ? 1 : w.endsWith("?") ? 2 : 0);
   return m;
 }
 /**
+ * Round 12: no option that lets the manager install a name that is not an operand on the line is in
+ * a table: bun's --analyze (the imports of a file) and --interactive, Yarn's --pattern, --scope,
+ * --flat, --focus, --use-yarnrc and --interactive, pnpm's --interactive.
+ *
  * The options each manager's install verbs take (a trailing `=`: it takes a value). Not in them,
  * so held: what changes which release a name resolves to (`--pre`, `--prerelease`, `--resolution`,
  * `--exclude-newer`, uv's `--upgrade`, Bun's `--latest` and `-c`, npm's `--tag` and `--before`).
@@ -3123,16 +3167,16 @@ function optionTable(spec) {
  * dependencies, and `go get -u ./...`, is a stated limit (the manager chooses those versions).
  */
 const ACCOUNT_TABLES = {
-  pnpm: optionTable("--aggregate-output --allow-build= --changed-files-ignore-pattern= --child-concurrency= --color --config --depth= --dev --dir= --fail-if-no-match --filter= --filter-prod= --fix-lockfile --force --frozen-lockfile --global --global-dir= --help --hoist-pattern= --ignore-pnpmfile --ignore-scripts --ignore-workspace --interactive --latest --lockfile-dir= --lockfile-only --loglevel= --merge-git-branch-lockfiles --modules-dir= --network-concurrency= --no-color --no-frozen-lockfile --no-hoist --no-lockfile --no-optional --no-save-exact --no-save-workspace-protocol --no-verify-store-integrity --node-linker= --offline --optimistic-repeat-install --package-import-method= --prefer-frozen-lockfile --prefer-offline --prefix= --prod --public-hoist-pattern= --recursive --reporter= --resolution-mode= --resolution-only --save-catalog --save-catalog-name= --save-dev --save-exact --save-optional --save-peer --save-prod --save-workspace-protocol --shamefully-hoist --side-effects-cache --side-effects-cache-readonly --silent --store-dir= --stream --strict-peer-dependencies --test-pattern= --trust-policy --trust-policy-exclude= --trust-policy-ignore-after= --update-checksums --use-running-store-server --use-stderr --use-store-server --verify-store-integrity --virtual-store-dir= --workspace --workspace-concurrency= --workspace-root -C= -D -E -F= -L -O -P -g -h -i -r -s -w"),
+  pnpm: optionTable("--aggregate-output --allow-build= --changed-files-ignore-pattern= --child-concurrency= --color --config --depth= --dev --dir= --fail-if-no-match --filter= --filter-prod= --fix-lockfile --force --frozen-lockfile --global --global-dir= --help --hoist-pattern= --ignore-pnpmfile --ignore-scripts --ignore-workspace --latest --lockfile-dir= --lockfile-only --loglevel= --merge-git-branch-lockfiles --modules-dir= --network-concurrency= --no-color --no-frozen-lockfile --no-hoist --no-lockfile --no-optional --no-save-exact --no-save-workspace-protocol --no-verify-store-integrity --node-linker= --offline --optimistic-repeat-install --package-import-method= --prefer-frozen-lockfile --prefer-offline --prefix= --prod --public-hoist-pattern= --recursive --reporter= --resolution-mode= --resolution-only --save-catalog --save-catalog-name= --save-dev --save-exact --save-optional --save-peer --save-prod --save-workspace-protocol --shamefully-hoist --side-effects-cache --side-effects-cache-readonly --silent --store-dir= --stream --strict-peer-dependencies --test-pattern= --trust-policy= --trust-policy-exclude= --trust-policy-ignore-after= --update-checksums --use-running-store-server --use-stderr --use-store-server --verify-store-integrity --virtual-store-dir= --workspace --workspace-concurrency= --workspace-root -C= -D -E -F= -L -O -P -g -h -r -s -w"),
   pip: optionTable("--abi= --break-system-packages --cache-dir= --cert= --check-build-dependencies --client-cert= --compile --config-settings= --constraint= --debug --disable-pip-version-check --dry-run --editable= --exists-action= --extra-index-url= --find-links= --force-reinstall --global-option= --help --ignore-installed --ignore-requires-python --implementation= --index-url= --isolated --keyring-provider= --log= --no-binary= --no-build-isolation --no-cache-dir --no-clean --no-color --no-compile --no-deps --no-index --no-input --no-python-version-warning --no-warn-conflicts --no-warn-script-location --only-binary= --platform= --prefer-binary --prefix= --progress-bar= --proxy= --python= --python-version= --quiet --report= --require-hashes --require-virtualenv --requirement= --retries= --root= --root-user-action= --src= --target= --timeout= --trusted-host= --upgrade --upgrade-strategy= --use-deprecated= --use-feature= --use-pep517 --user --verbose --version -C= -I -U -V -c= -e= -f= -h -i= -q -r= -t= -v"),
   uvpip: optionTable("--all-extras --allow-insecure-host= --break-system-packages --build-constraints= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --dry-run --editable= --exact --exclude= --excludes= --extra= --extra-index-url= --find-links= --group= --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary= --no-break-system-packages --no-build --no-build-isolation --no-build-isolation-package= --no-cache --no-config --no-deps --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --no-verify-hashes --offline --only-binary= --overrides= --prefix= --project= --python= --python-platform= --python-version= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --require-hashes --requirements= --strict --system --target= --torch-backend= --upgrade --upgrade-package= --user --verbose --version -C= -P= -U -V -b= -c= -e= -f= -h -i= -n -p= -q -r= -v"),
   uvtool: optionTable("--allow-insecure-host= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --editable --extra-index-url= --find-links= --force --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --offline --overrides= --project= --python= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --upgrade-package= --verbose --version --with= --with-editable= --with-requirements= -C= -P= -V -c= -e -f= -h -i= -n -p= -q -v"),
   uvadd: optionTable("--active --all-extras --all-groups --all-packages --allow-insecure-host= --branch= --cache-dir= --check --check-exists --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --dev --directory= --dry-run --editable --extra= --extra-index-url= --find-links= --frozen --group= --help --index= --index-strategy= --index-url= --inexact --keyring-provider= --link-mode= --locked --managed-python --marker= --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-default-groups --no-dev --no-editable --no-extra= --no-group= --no-index --no-install-package= --no-install-project --no-install-workspace --no-managed-python --no-progress --no-python-downloads --no-sources --no-sync --offline --only-dev --only-group= --optional= --package= --project= --python= --quiet --raw-sources --refresh --refresh-package= --reinstall --reinstall-package= --requirements= --rev= --script= --tag= --upgrade-package= --verbose --version -C= -P= -V -c= -f= -h -i= -m= -n -p= -q -r= -v"),
-  cargo: optionTable("--all-features --base= --bin --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
+  cargo: optionTable("--all-features --base= --bin? --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example? --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
   go: optionTable("-C= -u -d -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
-  yarn: optionTable("--all --audit --cache-folder= --cached --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --flat --focus --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interactive --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --pattern --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scope= --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --use-yarnrc= --verbose --version --worktree -A -C -D -E -L -O -P -R -S= -T -W -g -h -i -j= -p -s -t -v"),
-  bun: optionTable("--analyze --backend= --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --interactive --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -E -a -d -g -h -i -p -r -y"),
+  yarn: optionTable("--all --audit --cache-folder= --cached --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --verbose --version --worktree -A -C -D -E -L -O -P -R -T -W -g -h -j= -p -s -t -v"),
+  bun: optionTable("--backend= --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -E -d -g -h -p -r -y"),
   poetry: optionTable("--all-extras --ansi --compile --dev --directory= --dry-run --editable --extras= --group= --help --lock --markers= --no-ansi --no-cache --no-directory --no-interaction --no-plugins --no-root --no-update --only= --only-root --optional --platform= --project= --python= --quiet --regenerate --source= --sync --verbose --with= --without= -C= -D -E= -G= -P= -e -h -n -q -v -vv -vvv"),
 };
 /** npm's one-letter options: the switches, and (NPM_SHORT_VALUE) the five that take a value. */
@@ -3211,6 +3255,7 @@ function detectIn(text, seen) {
  * position, and an unknown wrapper (`start npm i x`, `mise exec -- npm i x`) then went unread.
  */
 export function detectsInstall(text) {
+  fault("detector");
   if (typeof text !== "string") return false;
   // J3: a line continued with `\` (bash) or a backtick (PowerShell) is one line.
   if (/[\\`]\r?\n/.test(text)) text = text.replace(/[\\`]\r?\n/g, " ");
@@ -3319,7 +3364,8 @@ function readOptions(args, table, mode = "", stop = false) {
       else if (table.get(name) === 1) {
         if (i + 1 >= args.length) return done(a);
         add(name, args[++i]);
-      } else add(name, "");
+      } else if (table.get(name) === 2 && i + 1 < args.length && !args[i + 1].startsWith("-")) add(name, args[++i]);
+      else add(name, "");
       continue;
     }
     if (mode !== "go" && eq < 0 && /^-[A-Za-z0-9]./.test(a)) {
@@ -3410,17 +3456,25 @@ function pyOperandKind(word) {
 function accountLine(line, dialect, depth = 0) {
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // D6: PowerShell `$env:NAME = value` statements: a manager's own setting holds the line; any other is taken out before it is read.
+  let gitSetting = false;
   if (dialect === "powershell") {
     const env = psEnvAssignments(line);
     const managed = env.names.find((n) => MANAGER_SETTING.test(n));
     if (managed) return `the setting ${managed} made earlier in this call`;
+    gitSetting = env.names.some((n) => GIT_RUN_NAME.test(n));
+    // A setting whose value is itself an install (`$env:GIT_EDITOR='npm i x'`) runs when a program reads it: not read.
+    if (env.values.some((v) => detectsInstall(v))) return "a setting whose value names an install";
     line = env.line;
   }
   const dropped = [];
   const redirects = [];
   const links = [];
   const commands = quietly(() => simpleCommands(line, dialect, redirects, dropped, MAX_ACCOUNT_CHARS, links));
-  if (!commands) return dialect === "bash" && line.includes("<<") ? dataHeredoc(line) : "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
+  if (!commands) {
+    if (dialect === "bash" && line.includes("<<")) return dataHeredoc(line);
+    accountRemedy = unparsedRemedy(line);
+    return "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
+  }
   // A PowerShell command with a comma or --%: each of its two readings is accounted for.
   for (const { text, readings } of dropped) {
     if (!detectsInstall(text)) continue;
@@ -3432,16 +3486,20 @@ function accountLine(line, dialect, depth = 0) {
   for (const words of commands) {
     const set = managerSettingIn(words);
     if (set) return `the setting ${set} made earlier in this call`;
+    if (settingNamesIn(words).some((n) => GIT_RUN_NAME.test(n))) gitSetting = true;
   }
   // J1 (b): a data program's text is text only when it goes nowhere that runs it: no write to a
   // manifest or lockfile on the line, and every later stage of its pipeline a listed sink or data program.
   const writesManifest = redirects.some((r) => r.write && manifestFile(r.target));
   for (let k = 0; k < commands.length; k++) {
     tick();
-    let exempt = !writesManifest;
+    let exempt = !writesManifest && !(gitSetting && programName(commands[k][Math.max(0, commandStart(commands[k]))] ?? "") === "git");
     for (let j = k; exempt && links[j] === "|" && j + 1 < commands.length; j++) exempt = sinkCommand(commands[j + 1]);
     const why = accountCommand(commands[k], dialect, depth, exempt);
-    if (why) return why;
+    if (why) {
+      accountFailed ??= commands[k];
+      return why;
+    }
   }
   return null;
 }
@@ -3450,11 +3508,22 @@ function accountLine(line, dialect, depth = 0) {
 const PS_ENV_ASSIGNMENT = /(^|[;\n\r])[ \t]*\$env:([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:'[^'\n\r]*'|"[^"`$\n\r]*"|[^\s;|&'"`$()]+)[ \t]*(?=$|[;\n\r])/gi;
 function psEnvAssignments(line) {
   const names = [];
-  const out = line.replace(PS_ENV_ASSIGNMENT, (_m, lead, name) => {
+  const values = [];
+  const out = line.replace(PS_ENV_ASSIGNMENT, (m, lead, name) => {
     names.push(name);
+    values.push(m);
     return lead;
   });
-  return { line: out, names };
+  return { line: out, names, values };
+}
+
+/** The names a simple command sets for the commands after it (`export X=`, `declare -x`, a bare assignment, `Set-Item env:X`). */
+function settingNamesIn(words) {
+  const program = (words[0] ?? "").toLowerCase();
+  if (words.every((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w))) return words.map((w) => w.slice(0, w.indexOf("=")));
+  if (["export", "declare", "typeset", "local", "readonly"].includes(program)) return words.slice(1).filter((w) => !w.startsWith("-")).map((w) => w.split("=")[0]);
+  if (["set-item", "si", "new-item", "ni", "set-content", "sc", "add-content", "ac"].includes(programName(program))) return words.slice(1).flatMap((w) => /^env:([A-Za-z_][A-Za-z0-9_]*)/i.exec(w)?.slice(1) ?? []);
+  return [];
 }
 
 /**
@@ -3544,13 +3613,8 @@ const DATA_SPECS = {
     long: ["--hidden", "--no-ignore", "--line-number", "--no-line-number", "--ignore-case", "--smart-case", "--case-sensitive", "--files", "--files-with-matches", "--files-without-match", "--count", "--count-matches", "--invert-match", "--word-regexp", "--line-regexp", "--fixed-strings", "--multiline", "--json", "--vimgrep", "--no-heading", "--heading", "--with-filename", "--no-filename", "--only-matching", "--follow", "--stats", "--trim", "--pcre2", "--text", "--no-messages", "--quiet", "--color"],
     longValue: ["--glob", "--iglob", "--type", "--type-not", "--regexp", "--max-count", "--max-depth", "--context", "--after-context", "--before-context", "--color", "--max-filesize", "--sort", "--sortr"],
   },
-  // sed: only -n, -E, -r and -e / --expression, and every script in sedScriptRead's grammar (no
-  // `e` or `w`, which run a command or write a file, in any spelling: it is a positive grammar).
-  sed: { short: "nEr", shortValue: "e", long: ["--quiet", "--silent", "--regexp-extended"], longValue: ["--expression"], check: (args) => scriptsOf(args, ["-e", "--expression"]).every(sedScriptRead) },
-  // awk: only -F, -v, and one program in awkProgramRead's grammar (a pattern and a print).
-  awk: { shortValue: "Fv", longValue: ["--field-separator", "--assign"], check: (args) => scriptsOf(args, []).every(awkProgramRead) },
-  // make: its recipes are the project's (a stated limit); no makefile from stdin.
-  make: { short: "knsBeiqrRSt", shortValue: "CjfoWI", digits: true, long: ["--keep-going", "--dry-run", "--just-print", "--silent", "--quiet", "--always-make", "--ignore-errors", "--question", "--no-builtin-rules", "--print-directory", "--no-print-directory"], longValue: ["--directory", "--jobs", "--file", "--makefile"], fileValue: true },
+  // make: its recipes are the project's (a stated limit); no -f / --file / --makefile / --eval (another makefile, or one given on the line).
+  make: { short: "knsBeiqrRSt", shortValue: "CjoWI", digits: true, long: ["--keep-going", "--dry-run", "--just-print", "--silent", "--quiet", "--always-make", "--ignore-errors", "--question", "--no-builtin-rules", "--print-directory", "--no-print-directory"], longValue: ["--directory", "--jobs"] },
   "write-output": { ps: { "-noenumerate": 0, "-inputobject": 1 } },
   "write-host": { ps: { "-nonewline": 0, "-foregroundcolor": 1, "-backgroundcolor": 1, "-separator": 1, "-object": 1 } },
   "select-string": { ps: { "-pattern": 1, "-path": 1, "-literalpath": 1, "-simplematch": 0, "-casesensitive": 0, "-context": 1, "-notmatch": 0, "-allmatches": 0, "-quiet": 0, "-list": 0, "-raw": 0, "-encoding": 1, "-include": 1, "-exclude": 1, "-inputobject": 1 } },
@@ -3558,92 +3622,8 @@ const DATA_SPECS = {
   true: {},
   ":": {},
 };
-DATA_SPECS.gawk = DATA_SPECS.mawk = DATA_SPECS.nawk = DATA_SPECS.awk;
 DATA_SPECS.gmake = DATA_SPECS.make;
-DATA_SPECS.gsed = DATA_SPECS.sed;
 DATA_SPECS.sls = DATA_SPECS["select-string"];
-
-/**
- * The script words of a sed or awk command: the values of `options` (`-e x`, `-ex`, `--expression=x`),
- * else the first operand. Values of -F / -v are not scripts.
- */
-function scriptsOf(args, options) {
-  const scripts = [];
-  let first = null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    const long = options.find((o) => o.startsWith("--") && (a === o || a.startsWith(`${o}=`)));
-    if (long) scripts.push(a === long ? (args[++i] ?? "") : a.slice(long.length + 1));
-    else if (options.includes("-e") && /^-[nEr]*e/.test(a)) {
-      const rest = a.slice(a.indexOf("e") + 1);
-      scripts.push(rest || (args[++i] ?? ""));
-    } else if (/^-[Fv]$/.test(a)) i++;
-    else if (!a.startsWith("-") && first === null) first = a;
-  }
-  return scripts.length > 0 ? scripts : [first ?? ""];
-}
-
-/**
- * Round 11: the sed scripts this hook reads as text. A positive grammar: commands separated by `;`
- * or line ends, each an optional address (a line number, `$`, `/regex/` with I or M, or two of
- * them with `,`) and `!`, then `d`, `p`, `q`, `n`, or `s<d>regex<d>replacement<d>` with flags
- * from [gipI0-9]. Anything else (`e`, `w`, `r`, `R`, `W`, a block, a label) is not read.
- */
-function sedScriptRead(script) {
-  if (typeof script !== "string" || script.length > 4096) return false;
-  let i = 0;
-  const s = script;
-  const regex = () => {
-    if (s[i] !== "/") return false;
-    for (i++; i < s.length && s[i] !== "/"; i++) if (s[i] === "\\") i++;
-    if (s[i] !== "/") return false;
-    i++;
-    while (s[i] === "I" || s[i] === "M") i++;
-    return true;
-  };
-  const address = () => {
-    if (/\d/.test(s[i] ?? "")) while (/\d/.test(s[i] ?? "")) i++;
-    else if (s[i] === "$") i++;
-    else if (s[i] === "/") return regex();
-    return true;
-  };
-  for (;;) {
-    while (s[i] === " " || s[i] === "\t" || s[i] === ";" || s[i] === "\n") i++;
-    if (i >= s.length) return true;
-    const at = i;
-    if (!address()) return false;
-    if (i > at && s[i] === ",") {
-      i++;
-      const second = i;
-      if (!address() || i === second) return false;
-    }
-    while (s[i] === " ") i++;
-    if (s[i] === "!") i++;
-    while (s[i] === " ") i++;
-    const c = s[i++];
-    if ("dpqn".includes(c ?? "x")) continue;
-    if (c !== "s") return false;
-    const d = s[i++];
-    if (!d || d === "\\" || d === "\n" || /\s/.test(d)) return false;
-    for (let part = 0; part < 2; part++) {
-      for (; i < s.length && s[i] !== d; i++) if (s[i] === "\\") i++;
-      if (s[i] !== d) return false;
-      i++;
-    }
-    while (/[gipI0-9]/.test(s[i] ?? "")) i++;
-    if (i < s.length && !/[\s;]/.test(s[i])) return false;
-  }
-}
-
-/**
- * Round 11: the awk programs this hook reads as text. A positive grammar: one rule, a pattern
- * (`/regex/`, `NR` or `NF` compared with a number, `$N` compared with a string) and / or an action
- * `{ print }` of fields, NR, NF and strings. Anything else (system(), getline, a pipe, a function,
- * an assignment, several rules) is not read.
- */
-const AWK_VALUE = String.raw`(?:\$\d+|NR|NF|"[^"\\]*")`;
-const AWK_PROGRAM = new RegExp(String.raw`^\s*(?:(?:\/(?:\\.|[^\/\\])*\/|(?:NR|NF)\s*(?:==|!=|<=|>=|<|>)\s*\d+|\$\d+\s*(?:==|!=|~|!~)\s*"[^"\\]*")\s*)?(?:\{\s*(?:print(?:\s+${AWK_VALUE}(?:\s*,?\s*${AWK_VALUE})*)?)?\s*;?\s*\})?\s*$`);
-const awkProgramRead = (program) => typeof program === "string" && program.trim() !== "" && program.length <= 4096 && AWK_PROGRAM.test(program);
 
 /** Pure sinks: a later pipeline stage that only shows, counts, sorts or saves the text. */
 const SINK_SPECS = {
@@ -3731,6 +3711,10 @@ const GIT_SPECS = {
   grep: { short: "nilwvcEFPhHIqz", shortValue: "efABC", digits: true, long: ["--cached", "--untracked", "--no-index", "--line-number", "--ignore-case", "--word-regexp", "--invert-match", "--count", "--extended-regexp", "--fixed-strings", "--perl-regexp", "--files-with-matches", "--name-only", "--full-name", "--heading", "--break", "--all-match", "--recurse-submodules"], longValue: ["--max-depth", "--context", "--after-context", "--before-context"] },
   tag: { short: "almndfsv", shortValue: "mFu", long: ["--list", "--annotate", "--delete", "--force", "--sign"], longValue: ["--message", "--file", "--sort", "--contains"] },
 };
+/** Settings that make git run a command of their own: an editor, a pager, any GIT_* variable. */
+const GIT_RUNS = /^(?:EDITOR|VISUAL|PAGER|GIT_[A-Z0-9_]*)=/i;
+const GIT_RUN_NAME = /^(?:EDITOR|VISUAL|PAGER|GIT_[A-Z0-9_]*)$/i;
+
 /** gh's text commands (`gh pr create --body '...'`), with their options. */
 const GH_SPEC = {
   short: "dwf",
@@ -3751,6 +3735,8 @@ function dataCommand(words) {
   const program = programName(words[start]);
   const args = words.slice(start + 1);
   if (program === "git") {
+    // An editor, pager or GIT_* setting before it runs a command of its own (`GIT_EDITOR='npm i x' git commit -a`).
+    if (words.slice(0, start).some((w) => GIT_RUNS.test(w))) return false;
     let i = 0;
     while (i < args.length && args[i].startsWith("-")) {
       if (args[i] === "-C") i += 2;
@@ -3818,6 +3804,10 @@ function accountCommand(words, dialect, depth, exempt = true) {
   if (/^pip\d+(?:\.\d+)*$/.test(program)) program = "pip";
   if (exempt && dataCommand(words)) return null;
   if (program === "git" || program === "gh") return `a ${program} command this hook does not read`;
+  if (/^(?:g?sed|g?awk|mawk|nawk)$/.test(program)) {
+    accountRemedy = SED_AWK_REMEDY;
+    return `${program}, whose script this hook does not read`;
+  }
   if (program === "eval") return args.length > 0 ? accountLine(args.join(" "), "bash", depth + 1) : null;
   if (dialect === "powershell" && (program === "invoke-expression" || program === "iex")) {
     const rest = /^-(?:c|co|com|comm|comma|comman|command)$/i.test(args[0] ?? "") ? args.slice(1) : args;
@@ -4176,11 +4166,133 @@ function accountGo(args, reader) {
  * R8-1 + R8-2 for a command call: the part not read, or null. Asked of every Bash and PowerShell
  * command, whatever its size: a line with no detector hit is null at once.
  */
+/** Round 12: sed and awk run what their scripts say (`e`, system()); this hook reads neither language. */
+const SED_AWK_REMEDY =
+  "sed and awk can run a command from their script, and this hook does not read their scripts: to search for that text use grep, rg or Select-String; to write it into a file use the Write tool.";
+
+/**
+ * Round 12 (tenth independent check, S28): the plain command the not-read remedy names, built from
+ * a form this hook reads and releases, or null. The manager is found anywhere in the held command
+ * (after prefixes, wrappers, `python -m pip`); a verb with a named version becomes that manager's
+ * add or install (`bun update x@1` -> `bun add x@1`); each operand keeps its exact version when it
+ * has one this hook reads, and is the name alone otherwise; options are left out.
+ */
+const REMEDY_ADD = { npm: "install", pnpm: "add", yarn: "add", bun: "add", pip: "install", uv: "add", poetry: "add", cargo: "add", go: "get" };
+function remedyCommand(words) {
+  let at = -1;
+  let manager = null;
+  for (let i = 0; i < words.length && manager === null; i++) {
+    const w = words[i].replace(/['"]/g, "");
+    if ((w === "-m" || /^-[A-Za-z]+m$/.test(w)) && /^pip\d*$/.test(words[i + 1] ?? "")) {
+      manager = "pip";
+      at = i + 1;
+      break;
+    }
+    const m = managerWord(programName(w).toLowerCase().replace(/@[^@/\\]*$/, ""));
+    if (m) {
+      manager = m;
+      at = i;
+    }
+  }
+  if (manager === null) return null;
+  const rest = words.slice(at + 1);
+  const uvPip = manager === "uv" && rest.includes("pip");
+  const verbAt = rest.findIndex((w) => !w.startsWith("-") && (isManagerVerb(manager, w.toLowerCase()) || (manager === "go" && w === "mod")));
+  if (verbAt < 0) return null;
+  let verb = rest[verbAt].toLowerCase();
+  if (manager === "go" && verb === "mod") verb = "edit";
+  const after = rest.slice(verbAt + 1);
+  // Operands: the words that are not options, an option that takes a value taking its value with it.
+  const values = manager === "go" ? GO_VALUES : manager === "cargo" ? CARGO_VALUES : manager === "pip" || manager === "uv" ? PIP_VALUES : manager === "poetry" ? POETRY_VALUES : JS_VALUES[manager] ?? new Set();
+  const operands = [];
+  const required = [];
+  for (let i = 0; i < after.length; i++) {
+    const a = after[i];
+    if (a.startsWith("-")) {
+      const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+      if (manager === "go" && (name === "-require" || name === "--require")) required.push(a.includes("=") ? a.slice(a.indexOf("=") + 1) : (after[++i] ?? ""));
+      else if (!a.includes("=") && (values.has(name) || (manager === "npm" && NPM_VALUE_OPTIONS.has(name.replace(/^--/, ""))))) i++;
+      continue;
+    }
+    operands.push(a);
+  }
+  if (manager === "go" && verb === "edit") {
+    operands.push(...required);
+    verb = "get";
+  }
+  const names = operands.map((o) => remedyOperand(manager, o)).filter(Boolean);
+  if (names.length === 0) {
+    // No package named: the command as typed, without options (the lockfile, or the manifest's ranges).
+    // pip needs a requirement (a bare `pip install` is refused by pip itself): the general remedy then.
+    if ((manager === "go" && verb !== "get") || manager === "pip" || uvPip) return null;
+    return `${manager} ${verb}`;
+  }
+  const install = manager === "cargo" && verb === "install" ? "install" : manager === "go" && verb === "install" ? "install" : REMEDY_ADD[manager];
+  return `${manager === "uv" && uvPip ? "uv pip install" : `${manager} ${install}`} ${names.join(" ")}`;
+}
+
+/** One operand as the remedy names it: its exact version when this hook reads one, else the name alone; null for none. */
+function remedyOperand(manager, word) {
+  const w = word.replace(/['"]/g, "");
+  if (PACKAGE_MANAGERS.has(manager)) {
+    const file = registryFile(w);
+    if (file && file.ecosystem === "npm") return `${file.name}@${file.spec}`;
+    if (npmBareName(w)) return w;
+    const m = NPM_SPEC.exec(w);
+    if (!m) return null;
+    const exact = FULL_SEMVER.exec(m[2].trim());
+    return exact ? `${m[1]}@${exact[1]}` : m[1];
+  }
+  if (manager === "pip" || manager === "uv" || manager === "poetry") {
+    const file = registryFile(w);
+    if (file && file.ecosystem === "PyPI") return `${file.name}${file.spec}`;
+    const r = quietly(() => pep508(w));
+    if (r && /^==\d[\w.!+]*$/.test(r.spec)) return `${r.name}${r.spec}`;
+    const name = r?.name ?? pyBareName(w) ?? /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})/.exec(w)?.[1] ?? null;
+    return name && !/\.(?:txt|in|cfg|toml|lock|json|ya?ml|ini|md|whl|gz|zip)$/i.test(name) ? name : null;
+  }
+  if (manager === "cargo") {
+    const m = CARGO_SPEC.exec(w);
+    if (m && FULL_SEMVER.test(m[2].trim())) return `${m[1]}@${m[2].trim().replace(/^=/, "")}`;
+    const name = m ? m[1] : /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(w) ? w : null;
+    return name;
+  }
+  if (manager === "go") {
+    const m = GO_SPEC.exec(w);
+    if (m && GO_EXACT.test(m[2])) return `${m[1]}@${m[2]}`;
+    const name = m ? m[1] : /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*$/.test(w) ? w : null;
+    return name && !name.includes("...") ? name : null;
+  }
+  return null;
+}
+
+/**
+ * The remedy for a line this hook cannot take apart: write the values out, or run the install as
+ * the plain command built from the line's own words (`docker run -v $PWD:/app ... pnpm install`:
+ * the path instead of $PWD, or `pnpm install`).
+ */
+function unparsedRemedy(line) {
+  const command = remedyCommand(String(line).slice(0, 4096).split(/[\s;&|(){}]+/).filter(Boolean));
+  const plain = command ? `Run it as a plain command of its own: \`${command}\` (no other options)` : "Run it as a plain command of its own: `<manager> <verb> <name>@<exact version>` (no other options)";
+  return `${plain}, or write the values out in full (a path instead of $PWD, a version instead of a variable, single quotes instead of a substitution): it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
+}
+
+/** The not-read remedy for the command that was not read: a concrete command when one can be built. */
+function remedyText(words) {
+  const command = words ? remedyCommand(words) : null;
+  if (!command) return ACCOUNT_REMEDY;
+  return `Run it as a plain command of its own: \`${command}\` (no other options): the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
+}
+
 /** A remedy other than ACCOUNT_REMEDY for the part accountCall returns (set by the part's reader). */
 let accountRemedy = null;
+/** The simple command that was not read (its remedy is built from it). */
+let accountFailed = null;
 
 function accountCall(command, dialect) {
+  fault("account");
   accountRemedy = null;
+  accountFailed = null;
   if (!detectsInstall(command)) return null;
   if (command.length > MAX_ACCOUNT_CHARS) return `a command over ${MAX_ACCOUNT_CHARS / 1024 / 1024} MB that names an install`;
   return accountLine(command, dialect);
@@ -4191,6 +4303,7 @@ function accountCall(command, dialect) {
  * hook does not read. `depth`: the wrappers (a shell's `-c`, a runner) it was found inside.
  */
 export function installsIn(command, dialect, depth = 0) {
+  fault("reader");
   if (depth > MAX_WRAPS) return [];
   const line = dialect === "powershell" && typeof command === "string" ? psEnvAssignments(command).line : command;
   const commands = simpleCommands(line, dialect, null, null, MAX_ACCOUNT_CHARS);
@@ -4241,7 +4354,48 @@ function ledgerStarted(dir) {
  * holds no ledger file (the servers that ran there are older than 6.5.0 and record no verdict, so
  * a call stopped here could never pass).
  */
+/** A ledger file's identity: its size, change time and file id ("absent" when there is none). */
+function fileIdentity(path) {
+  // Test only: the files change between every two stats, as during a rotation that never settles.
+  if (FAULT === "ledger-rotating") return String(Math.random());
+  try {
+    const st = statSync(path);
+    return `${st.size}:${st.mtimeMs}:${st.ino}:${st.birthtimeMs}`;
+  } catch {
+    return "absent";
+  }
+}
+const OVER_BOUND = Symbol("over the bound");
+
+/**
+ * Round 12 (tenth independent check, a missing sentence): the two ledger files as one consistent
+ * snapshot. The server moves check-ledger.jsonl over check-ledger.1.jsonl while a hook may be
+ * reading the one after the other, and an avoid in the current file was missed (21 of 2,400 calls
+ * with a rotation in flight). Both files are stat'ed, read, and stat'ed again; if either one's
+ * identity changed, they are read again, at most three times; still changing: null (the call is
+ * held, its verdicts unknown). Each text is null for a file that is not there, OVER_BOUND past the bound.
+ */
+function ledgerSnapshot(dir) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const paths = LEDGER_FILES.map((file) => join(dir, file));
+    const before = paths.map(fileIdentity);
+    const texts = paths.map((path, i) => {
+      if (before[i] === "absent") return null;
+      if (Number(before[i].split(":")[0]) > MAX_LEDGER_BYTES) return OVER_BOUND;
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return null;
+      }
+    });
+    const after = paths.map(fileIdentity);
+    if (after.every((id, i) => id === before[i])) return texts;
+  }
+  return null;
+}
+
 function readLedger(dir, now) {
+  fault("ledger-read");
   if (!existsSync(dir) || !ledgerStarted(dir)) return null;
   const entries = [];
   // D10: a line that does not parse but names a package (an avoid cut short), or one stamped past
@@ -4249,18 +4403,18 @@ function readLedger(dir, now) {
   // for it is set aside, so an older proceed never stands in for it. A later answer releases it.
   const unknown = [];
   let seq = 0;
-  for (const file of LEDGER_FILES) {
-    let text;
-    try {
-      const path = join(dir, file);
+  const snapshot = ledgerSnapshot(dir);
+  if (snapshot === null) {
+    refuse("the check ledger changed while it was read (the server was rotating it)");
+    return entries;
+  }
+  for (const [i, file] of LEDGER_FILES.entries()) {
+    const text = snapshot[i];
+    if (text === null) continue;
+    if (text === OVER_BOUND) {
       // A ledger past the bound is not read, and the call is held: its verdicts are not known
       // (round 2 skipped such a file, so a newer avoid in it was never seen).
-      if (statSync(path).size > MAX_LEDGER_BYTES) {
-        refuse(`the check ledger ${file} is over ${MAX_LEDGER_BYTES / 1024 / 1024} MB`);
-        continue;
-      }
-      text = readFileSync(path, "utf8");
-    } catch {
+      refuse(`the check ledger ${file} is over ${MAX_LEDGER_BYTES / 1024 / 1024} MB`);
       continue;
     }
     let n = 0;
@@ -4705,6 +4859,7 @@ function plainLedgerRead(command, dialect) {
 
 /** For a PreToolUse call, "command" or "edit" when it names the ledger and is not plainly a read, else null. */
 function ledgerCall(input, env) {
+  fault("ledger-guard");
   const toolInput = input.tool_input;
   if (!toolInput || typeof toolInput !== "object") return null;
   const marks = ledgerFolderMarks(env);
@@ -4783,6 +4938,8 @@ function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
     return judgeCall(input, env, now);
   } catch {
     // An error of the hook's own while reading: an install or manifest call it could not read is held.
+    // The budget is spent or broken: this check runs without it (a throw here reaches rawHold).
+    deadline = Infinity;
     if (!mayInstall(input)) return "";
     refuse("the hook could not read it");
     const dir = dataDir(env);
@@ -4807,7 +4964,7 @@ function judgeCall(input, env, now) {
     const part = accountCall(input.tool_input.command, input.tool_name === "PowerShell" ? "powershell" : "bash");
     if (part !== null) {
       // The reader's own part, when it already found one (a bound it passed), is the one named.
-      refuse(part, accountRemedy ?? ACCOUNT_REMEDY);
+      refuse(part, accountRemedy ?? remedyText(accountFailed));
       unreadInstalls = true;
     }
   }
@@ -4831,7 +4988,7 @@ function judgeCall(input, env, now) {
 }
 
 /** The deny JSON for `reason`. */
-const denyJson = (reason) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+const denyJson = (reason) => (fault("denial"), JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
 
 /** Whether `dir` holds a ledger (the hook denies only where one exists). */
 const readLedgerExists = (dir) => existsSync(dir) && ledgerStarted(dir);
@@ -5032,6 +5189,21 @@ function postToolUse(input) {
   if (!file) return "";
   let changes = [];
   const disk = onDisk(String(toolInput.file_path));
+  // Round 12 (tenth independent check, S42 / S44): the same reading of the file block mode uses. The
+  // file on disk is the edit's result; the edits applied backwards (new -> old, last first) give the
+  // file before it, and the two whole files are compared, so an edit of the version alone ("4.17.21"
+  // -> "4.17.20", no key) is advised as block mode would deny it. Where that does not apply (the new
+  // text is not found once), the edits are read as snippets, as before.
+  const edits = input.tool_name === "Edit" || input.tool_name === "MultiEdit" ? editsOf(input.tool_name, toolInput) : null;
+  const after = edits ? readManifest(String(toolInput.file_path)) : null;
+  if (edits && after !== null) {
+    let before = after;
+    for (const e of [...edits].reverse()) before = before === null ? null : applyEdit(before, e.new_string, e.old_string, e.replace_all);
+    if (before !== null) {
+      const whole = repeatable(wholeFileChanges(file, before, after));
+      if (whole.length > 0) return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: adviceFor(file, whole) } });
+    }
+  }
   if (input.tool_name === "Edit") {
     changes = versionChanges(file, toolInput.old_string ?? "", toolInput.new_string ?? "", disk);
   } else if (input.tool_name === "MultiEdit" && Array.isArray(toolInput.edits)) {
@@ -5057,6 +5229,7 @@ function postToolUse(input) {
  * reading the manifest and the ledger.
  */
 export function respond(input, env = process.env, now = Date.now(), readBudgetMs = READ_BUDGET_MS) {
+  fault("respond");
   if (!input || typeof input !== "object") return "";
   const mode = guardMode(env.FOURDA_GUARD);
   if (mode === "off") return "";
@@ -5067,41 +5240,53 @@ export function respond(input, env = process.env, now = Date.now(), readBudgetMs
   return "";
 }
 
+/** The payload as it arrives on stdin (rawHold decides on it when anything goes wrong). */
+let stdinText = "";
+let answered = false;
+/** Writes the hook's one answer, once. */
+function answer(out) {
+  if (answered) return;
+  answered = true;
+  if (out) process.stdout.write(out);
+}
+
 async function main() {
   mainStartedAt = performance.now();
-  // A payload still arriving after SELF_LIMIT_MS (stdin left open) ends the hook silently, and the
-  // call goes ahead. The timer cannot fire while the hook reads a payload: that work is bounded and
-  // timed instead (preToolUse), so the hook answers far inside Claude Code's 10 s hook timeout.
-  setTimeout(() => process.exit(0), SELF_LIMIT_MS).unref();
+  // stdin never closed: after SELF_LIMIT_MS the hook answers from what has arrived (rawHold: held
+  // when that text already shows a tool it judges and a manager word, manifest or ledger name).
+  setTimeout(() => {
+    answer(rawHold(stdinText));
+    process.exit(0);
+  }, SELF_LIMIT_MS).unref();
   process.stdin.setEncoding("utf8");
-  let raw = "";
   for await (const chunk of process.stdin) {
-    raw += chunk;
+    stdinText += chunk;
     // Past what the hook will even parse: judged from the first part's text alone.
-    if (raw.length > MAX_PARSE_CHARS) {
-      const out = oversized(raw.slice(0, 64 * 1024));
-      if (out) process.stdout.write(out);
+    if (stdinText.length > MAX_PARSE_CHARS) {
+      answer(oversized(stdinText.slice(0, 64 * 1024)));
       process.exit(0);
     }
   }
-  let input;
-  try {
-    input = JSON.parse(raw);
-  } catch {
-    // Not JSON: an oversized payload is judged from its first part's text; any other goes ahead.
-    const out = raw.length > MAX_INPUT_CHARS ? oversized(raw.slice(0, 64 * 1024)) : "";
-    if (out) process.stdout.write(out);
-    return;
-  }
-  // A hook payload is kilobytes. One over MAX_INPUT_CHARS is not read: held when its parsed fields
-  // show a manifest write or edit, or a command that names an install (round 4 of the hook review:
-  // judged from the first 64 KB of escaped text, it missed `\n` before npm, a long description
-  // before the command, content before file_path); let through otherwise.
+  fault("stdin");
+  const raw = stdinText.charCodeAt(0) === 0xfeff ? stdinText.slice(1) : stdinText;
   // A payload past WORKER_ABOVE_CHARS is judged in a worker thread under a hard wall clock: the
   // budget's ticks are the first bound, and this one holds whatever they missed (seventh independent
-  // check, D1: a runner chain over 512 KB printed nothing in 10 s, and the call went ahead).
-  const out = raw.length > WORKER_ABOVE_CHARS ? await judgeInWorker(input, raw.length > MAX_INPUT_CHARS) : respond(input);
-  if (out) process.stdout.write(out);
+  // check, D1). The worker is given the raw text and parses it itself (a value nested thousands deep
+  // could not be cloned to it: tenth independent check, S45).
+  if (raw.length > WORKER_ABOVE_CHARS) {
+    answer(await judgeInWorker(raw, raw.length > MAX_INPUT_CHARS));
+    return;
+  }
+  let input;
+  try {
+    fault("parse");
+    input = JSON.parse(raw);
+  } catch {
+    // Not JSON (or the parse failed): rawHold decides on the text.
+    answer(rawHold(raw));
+    return;
+  }
+  answer(respond(input));
 }
 
 /** Payloads over this are judged in a worker under WALL_LIMIT_MS; smaller ones inline (a worker costs about 40 ms to start). */
@@ -5109,36 +5294,62 @@ const WORKER_ABOVE_CHARS = 8 * 1024;
 /** From the hook's start: past it, a call a worker has not judged is held (Claude Code's own limit is 10 s). */
 const WALL_LIMIT_MS = 5000;
 
-/** The answer for a call judged in a worker; past WALL_LIMIT_MS (or on a worker's failure) the hold timeHold gives. */
-function judgeInWorker(input, oversize) {
+/** The answer for a payload judged in a worker; past WALL_LIMIT_MS, or on a worker's error or exit without an answer, rawHold's. */
+function judgeInWorker(raw, oversize) {
   return new Promise((done) => {
     let settled = false;
+    let worker = null;
     const settle = (out) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      worker.terminate().catch(() => {});
+      worker?.terminate().catch(() => {});
       done(out);
     };
-    const worker = new Worker(new URL(import.meta.url), { workerData: { fourdaJudge: input, oversize } });
     const left = WALL_LIMIT_MS - (performance.now() - (mainStartedAt ?? performance.now()));
-    const timer = setTimeout(() => settle(timeHold(input)), Math.max(250, left));
-    worker.once("message", (m) => settle(typeof m === "string" ? m : timeHold(input)));
-    worker.once("error", () => settle(timeHold(input)));
-    worker.once("exit", () => settle(timeHold(input)));
+    const timer = setTimeout(() => settle(rawHold(raw)), Math.max(250, left));
+    try {
+      fault("worker-start");
+      worker = new Worker(new URL(import.meta.url), { workerData: { fourdaRaw: raw, oversize } });
+    } catch {
+      settle(rawHold(raw));
+      return;
+    }
+    worker.once("message", (m) => settle(typeof m === "string" ? m : rawHold(raw)));
+    worker.once("error", () => settle(rawHold(raw)));
+    worker.once("exit", () => settle(rawHold(raw)));
   });
 }
 
-/** The hold for a call not judged in time: a command or a manifest write, where a ledger exists and the guard blocks; nothing else. */
-function timeHold(input) {
-  if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || guardMode(process.env.FOURDA_GUARD) !== "block") return "";
-  const tool = input.tool_name;
-  const command = tool === "Bash" || tool === "PowerShell";
-  const file = input.tool_input?.file_path;
-  if (!command && !(typeof file === "string" && manifestKind(file) !== null)) return "";
-  if (!readLedgerExists(dataDir(process.env))) return "";
-  unreadRemedy = null;
-  return denyJson(notReadDenial(command ? "command" : "edit", OVER_BUDGET));
+/**
+ * Round 12 (tenth independent check, S45): the hook's one answer when anything goes wrong (a throw,
+ * a rejected promise, a worker's error or exit without an answer, the wall clock, stdin never
+ * closed). It never ticks and never parses: it decides on the raw text alone, by indexOf. A
+ * PreToolUse call that names a tool the hook judges and holds any manager word, manifest file name
+ * or the ledger's name is held, where a ledger exists and the guard blocks; any other gets nothing.
+ */
+const RAW_TOOLS = ['"bash"', '"powershell"', '"edit"', '"multiedit"', '"write"'];
+const RAW_WORDS = ["npm", "pnpm", "yarn", "bun", "pip", "uv ", "uvx", "poetry", "cargo", "go ", "go.exe", "npx", "corepack", "package.json", "cargo.toml", "pyproject.toml", "requirements", "go.mod", "pnpm-workspace", "check-ledger"];
+const RAW_HOLD =
+  "4DA guard: this call was stopped before it ran: the hook could not finish reading this call, so the dependency versions it may install or write were not checked. Run it again as a plain command or a smaller edit; if it is held again, tell the user. FOURDA_GUARD is the user's setting, not yours to change.";
+function rawHold(raw) {
+  try {
+    if (typeof raw !== "string" || raw.length === 0 || guardMode(process.env.FOURDA_GUARD) !== "block") return "";
+    const text = raw.toLowerCase();
+    if (text.indexOf('"pretooluse"') < 0) return "";
+    if (!RAW_TOOLS.some((w) => text.indexOf(w) >= 0)) return "";
+    if (!RAW_WORDS.some((w) => text.indexOf(w) >= 0)) return "";
+    if (!readLedgerExists(dataDir(process.env))) return "";
+    return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: RAW_HOLD } });
+  } catch {
+    return "";
+  }
+}
+
+/** Test only: FOURDA_HOOK_FAULT=<point> throws at that point, so each path to rawHold can be exercised. */
+const FAULT = process.env.FOURDA_HOOK_FAULT ?? "";
+function fault(point) {
+  if (FAULT === point) throw new Error(`injected fault: ${point}`);
 }
 
 /** The largest payload the hook parses to judge it (past MAX_INPUT_CHARS it is judged, never read). */
@@ -5197,18 +5408,32 @@ function oversized(head) {
 }
 
 // A worker started by judgeInWorker: judge the one call it was given, and answer.
-if (!isMainThread && workerData && typeof workerData === "object" && workerData.fourdaJudge) {
+if (!isMainThread && workerData && typeof workerData === "object" && typeof workerData.fourdaRaw === "string") {
   let out = "";
   try {
-    out = workerData.oversize ? oversizedParsed(workerData.fourdaJudge) : respond(workerData.fourdaJudge);
+    fault("worker");
+    let input = null;
+    try {
+      input = JSON.parse(workerData.fourdaRaw);
+    } catch {
+      input = null;
+    }
+    // Not JSON: past MAX_INPUT_CHARS judged from its first part's text (oversized); any other goes ahead.
+    if (input === null) out = workerData.fourdaRaw.length > MAX_INPUT_CHARS ? oversized(workerData.fourdaRaw.slice(0, 64 * 1024)) : rawHold(workerData.fourdaRaw);
+    else out = workerData.oversize ? oversizedParsed(input) : respond(input);
   } catch {
-    out = timeHold(workerData.fourdaJudge);
+    out = rawHold(workerData.fourdaRaw);
   }
   parentPort.postMessage(out);
 }
 
 if (isMainThread && basename(process.argv[1] ?? "") === "manifest-edit.mjs") {
-  main().catch(() => {
-    // The hook never fails the call it looks at: an error of its own is silence.
-  });
+  // Everything that can go wrong ends in rawHold: a throw, a rejected promise, an uncaught error.
+  const fallBack = () => {
+    answer(rawHold(stdinText));
+    process.exit(0);
+  };
+  process.on("uncaughtException", fallBack);
+  process.on("unhandledRejection", fallBack);
+  main().catch(fallBack);
 }
