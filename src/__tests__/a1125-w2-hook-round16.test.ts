@@ -75,3 +75,39 @@ describe("J5: `@latest` moves to the newest with npm, pnpm, Yarn and Bun: judged
     expect(run(command).decision, run(command).text).toBe("allow");
   });
 });
+
+describe("J2: a range that bounds nothing, by meaning, is the request latest (generated from the grammar)", () => {
+  const wild = ["*", "x", "X", "x.x", "*.*", "x.x.x", "X.*", "*.x.X"];
+  const ops = ["", "=", "^", "~", ">=", "v", "~>"];
+  const specs = new Set<string>([""]);
+  for (const w of wild) for (const o of ops) specs.add(`${o}${w}`);
+  for (const a of ["*", "x"]) for (const b of [">=x", "^*", "1.2.3", "~x"]) specs.add(`${a} || ${b}`);
+  specs.add(">= *");
+  specs.add("x.x x.x");
+  it.each([...specs])("package.json %j: held for a verdict on latest", (spec) => {
+    const r = s.write(`${s.project}/package.json`, JSON.stringify({ devDependencies: { vite: spec } }));
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items).toEqual([{ ecosystem: "npm", package: "vite", to: "latest" }]);
+  });
+  it.each(["overrides", "resolutions"])("the same in %s", (section) => {
+    const r = s.write(`${s.project}/package.json`, JSON.stringify({ [section]: { vite: "^*" } }));
+    expect(r.items).toEqual([{ ecosystem: "npm", package: "vite", to: "latest" }]);
+  });
+  it.each([
+    ["pnpm-workspace.yaml", "catalog:\n  vite: '>=*'\n"],
+    ["pnpm-workspace.yaml", "packageExtensions:\n  ms:\n    dependencies:\n      vite: 'x.x'\n"],
+    ["package.json", '{"dependencies":{"v":"npm:vite"}}'],
+    ["package.json", '{"dependencies":{"v":"npm:vite@*"}}'],
+    ["Cargo.toml", '[package]\nname = "x"\nversion = "0.1.0"\n[dependencies]\nvite = ">=*"\n'],
+  ])("%s %j: latest", (file, content) => {
+    const r = s.write(`${s.project}/${file}`, content);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items?.[0]?.to).toBe("latest");
+  });
+  it("a wildcard beside a numbered bound is that range: >=* <2 is judged as a constraint", () => {
+    expect(s.write(`${s.project}/package.json`, JSON.stringify({ dependencies: { vite: ">=* <2" } })).items?.[0]?.to).toBe(">=* <2");
+  });
+  it.each(["<*", ">*", "~>!"])("%j matches nothing or is no form: held as not read", (spec) => {
+    expect(s.write(`${s.project}/package.json`, JSON.stringify({ dependencies: { vite: spec } })).text).toContain("could not be read");
+  });
+});

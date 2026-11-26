@@ -610,7 +610,7 @@ function cargoDependencies(entries, more = null) {
     if (CARGO_OTHER_SOURCE.some((k) => k in fields && !(k === "registry" && fields.registry?.s === "crates-io"))) continue;
     let version = fields.version?.s;
     // Round 15 (H2): `"*"`, or a table with no version (and no other source), installs the newest release.
-    if ((typeof version === "string" && UNBOUNDED_SPEC.test(version.trim())) || (version === undefined && !("workspace" in fields))) version = "latest";
+    if ((typeof version === "string" && cargoUnbounded(version)) || (version === undefined && !("workspace" in fields))) version = "latest";
     if (typeof version !== "string" || !(VERSION_SHAPED.test(version) || version === "latest")) continue;
     if (fields.package && typeof fields.package.s !== "string") continue;
     out.push({ name: fields.package ? fields.package.s : d.name, section: d.section, spec: version });
@@ -1237,21 +1237,45 @@ function npmWholeDependencies(text) {
  * release: the request latest.
  */
 const UNBOUNDED_SPEC = /^(?:\*|x|X|)$/;
+/**
+ * Round 16 (J2): an npm range that bounds nothing, by meaning: some `||` alternative is empty or
+ * has only wildcard comparators (`*`, `x`, `X`, `x.x`, `*.*`, `=*`, `^*`, `~*`, `>=*`, `v*`...): no
+ * number bounds it, so it is the request latest. (`<*` and `>*` match nothing: not this.)
+ */
+function npmUnbounded(v) {
+  const wild = /^(?:>=|=|\^|~>?|v)?[xX*](?:\.[xX*]){0,2}$/;
+  return String(v)
+    .split("||")
+    .some((alt) => {
+      const a = alt.trim().replace(/(>=|=|\^|~>?)\s+/g, "$1");
+      return a === "" || a.split(/\s+/).every((c) => wild.test(c));
+    });
+}
+/** J2: a Cargo requirement that bounds nothing: every comma part a wildcard (`*`, `=*`, `^*`, `>=*`). */
+const cargoUnbounded = (v) => String(v).split(",").every((c) => /^\s*(?:>=|=|\^|~)?\s*\*\s*$/.test(c) || c.trim() === "");
 /** H2: npm forms that name no registry release (the project's own source, not judged). */
 const NPM_OTHER_FORM = /^(?:file:|link:|workspace:|portal:|patch:|catalog:|git[+:]|github:|gitlab:|bitbucket:|gist:|https?:|\.{0,2}[\\/]|~[\\/]|[A-Za-z]:[\\/])|\.(?:tgz|tar\.gz|tar)$|^[\w.-]+\/[\w.-]+(?:#.*)?$/i;
 function npmDeclared(name, value) {
   const v = value.trim();
-  if (VERSION_SHAPED.test(v)) return { name, spec: value };
-  if (v === "latest" || UNBOUNDED_SPEC.test(v)) return { name, spec: "latest" };
+  if (v === "latest" || (!v.startsWith("npm:") && !v.startsWith("$") && !NPM_OTHER_FORM.test(v) && npmUnbounded(v))) return { name, spec: "latest" };
+  // J2: a range with at least one numbered bound, in npm's grammar (`>=* <2` is `<2`).
+  if (VERSION_SHAPED.test(v) || (/\d/.test(v) && /^[<>=~^\dvxX*.\s|-]+$/.test(v) && versionReadable("npm", v))) return { name, spec: value };
   // A dist-tag other than latest: held, "name the version" (the edit path marks it a tag).
   if (isDistTag(v)) return { name, spec: v };
+  // Anything else that is no other form (`<*`, `>*`: they match nothing) is held as not read.
   // (`$name` in an override is the version the project declares for that name, judged where it is declared)
-  if (!v.startsWith("npm:") && !v.startsWith("$") && !NPM_OTHER_FORM.test(v) && !/^[<>=~^\d\s.|xX*-]+$/.test(v)) {
+  if (v !== "-" && !v.startsWith("npm:") && !v.startsWith("$") && !NPM_OTHER_FORM.test(v)) {
     refuse(`${JSON.stringify(name).slice(0, 120)}: ${JSON.stringify(v).slice(0, 80)}, a specifier this hook does not read`);
     return null;
   }
+  // J2: an `npm:` alias with no version is the newest release of its target.
+  if (v.startsWith("npm:") && npmBareName(v.slice(4))) return { name: v.slice(4), spec: "latest" };
   const alias = v.startsWith("npm:") ? NPM_SPEC.exec(v.slice(4)) : null;
-  const version = alias ? (alias[2] === "latest" ? "latest" : jsVersion(alias[2])) : null;
+  const version = alias ? (alias[2] === "latest" || npmUnbounded(alias[2]) ? "latest" : jsVersion(alias[2])) : null;
+  if (alias && version === null) {
+    refuse(`${JSON.stringify(name).slice(0, 120)}: ${JSON.stringify(v).slice(0, 80)}, a specifier this hook does not read`);
+    return null;
+  }
   return version ? { name: alias[1], spec: version } : null;
 }
 
