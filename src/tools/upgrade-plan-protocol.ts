@@ -14,8 +14,9 @@
  *   `poetry update`, `uv pip compile`, `pip-compile`) has none.
  * - `after_run` (the plan's): what to do when the steps have run, and what the plan cannot promise.
  *
- * JavaScript steps (npm, pnpm, Yarn, Bun) are filled by lane plan-js through `jsStepProtocol`; until
- * then they carry no `changes`.
+ * JavaScript steps (npm, pnpm, Yarn, Bun) are filled by `jsStepProtocol`: their `changes` (the manifest and the
+ * lockfile a command writes) and, for a command that sets a version or an override (`npm install x@v`, `pnpm add`,
+ * `yarn up`, `npm pkg set`), the `if_it_fails` that puts the manifest entry back.
  */
 
 import * as fs from "node:fs";
