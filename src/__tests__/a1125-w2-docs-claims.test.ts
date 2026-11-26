@@ -15,7 +15,7 @@ import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands } from "../tools/briefing-canonical.js";
-import { CLEAN_COMMAND, RAW_SOURCE, unreadableReason } from "../tools/briefing-command-check.js";
+import { CLEAN_COMMAND, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
 import { MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
@@ -112,6 +112,7 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe(`This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check. ${CLEAN_COMMAND}`);
     // Round 8, m8: reworded as advice about the `task` passed, the user's words kept (README/CHANGELOG follow).
     expect(CLEAN_COMMAND).toBe("For a clean answer you may also pass the command on its own line or in a code span, with only package names after the verb (`npm install x y`), and call again: keep the user's words as the request and add the line, do not rewrite the request.");
+    expect(next).toContain(`the reason adds "${CLEAN_COMMAND}"`);
     expect(next).toContain("(\"This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.\")");
     expect(canonicalCommands("npm create vite")[0]!.why).toBe("it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check");
     expect(next).toContain('"it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check"');
@@ -249,5 +250,41 @@ describe("the guard hook's wording the docs quote", () => {
     expect(deny("Bash", { command: `echo x >> ${join(home, LEDGER_FILE)}` }, { FOURDA_GUARD: "advise" })).toBe("");
     expect(deny("Bash", { command: "npm install ky" }, { FOURDA_GUARD: "advise" })).toBe("");
     expect(readme).toContain("`FOURDA_GUARD=advise` never denies (the ledger guard included)");
+  });
+});
+
+describe("what_should_i_know after confirmation round 8: the wordings and the list the docs quote", () => {
+  const wsik = text("src/tools/what-should-i-know.ts");
+
+  it("a version no form ties to a package: the reason and next_step the CHANGELOG quotes", () => {
+    const untied = 'The task writes a version this briefing cannot tie to a package. Declare `version` for each package you declare public (the version you will write, or "latest"), and call again.';
+    expect(wsik).toContain(`const VERSION_UNTIED = '${untied}';`);
+    expect(next).toContain(`"${untied}"`);
+    expect(next).not.toContain("attaches to no pair");
+    expect(readme).not.toContain("a version in prose is not used");
+  });
+
+  it("more than 100 names: the sentence the CHANGELOG quotes", () => {
+    expect(wsik).toContain("const TOO_MANY = `The task holds more than ${MAX_DECLARED} names that may be packages, more than one call can declare: split the task into smaller ones.`;");
+    expect(next).toContain(`"The task holds more than ${MAX_DECLARED} names that may be packages, more than one call can declare: split the task into smaller ones."`);
+  });
+
+  it("the source check is a list, and the CHANGELOG names every spelling of it", () => {
+    for (const spelling of SOURCE_SPELLINGS) {
+      if (/^pip -[if] /.test(spelling)) continue;
+      const shown = spelling === "replace <module> => (go.mod)" ? "go.mod `replace ... =>`" : `\`${spelling.replace(/ \(.*\)$/, "")}\``;
+      expect(next, spelling).toContain(shown);
+    }
+    expect(next).toContain("pip's `-i` and `-f` inside a pip command");
+    expect(next).toContain("A courtesy check on a list of spellings, not a promise about sources.");
+    expect(readme).toContain('a source named any other way ("from our Artifactory") is not noticed');
+  });
+
+  it("the tool says first that a public name is sent and what to declare private", () => {
+    expect(whatShouldIKnowTool.description).toContain("Declare public: false for anything the task or the project takes from a private registry, an index of its own, git or a path");
+    expect(whatShouldIKnowTool.description).toContain("a name declared public: true is sent to the public registry and checked in this call");
+    const items = (whatShouldIKnowTool.inputSchema.properties.packages as unknown as { items: { properties: { public: { description: string } } } }).items;
+    expect(items.properties.public.description).toBe("false for anything from a private registry, an own index, git or a path; true sends the name to the public registry.");
+    expect(next).toContain("sends every name you declare `public: true` to its public registry");
   });
 });
