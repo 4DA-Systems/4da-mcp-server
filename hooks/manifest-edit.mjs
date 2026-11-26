@@ -3410,10 +3410,14 @@ function pyOperandKind(word) {
 function accountLine(line, dialect, depth = 0) {
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // D6: PowerShell `$env:NAME = value` statements: a manager's own setting holds the line; any other is taken out before it is read.
+  let gitSetting = false;
   if (dialect === "powershell") {
     const env = psEnvAssignments(line);
     const managed = env.names.find((n) => MANAGER_SETTING.test(n));
     if (managed) return `the setting ${managed} made earlier in this call`;
+    gitSetting = env.names.some((n) => GIT_RUN_NAME.test(n));
+    // A setting whose value is itself an install (`$env:GIT_EDITOR='npm i x'`) runs when a program reads it: not read.
+    if (env.values.some((v) => detectsInstall(v))) return "a setting whose value names an install";
     line = env.line;
   }
   const dropped = [];
@@ -3432,13 +3436,14 @@ function accountLine(line, dialect, depth = 0) {
   for (const words of commands) {
     const set = managerSettingIn(words);
     if (set) return `the setting ${set} made earlier in this call`;
+    if (settingNamesIn(words).some((n) => GIT_RUN_NAME.test(n))) gitSetting = true;
   }
   // J1 (b): a data program's text is text only when it goes nowhere that runs it: no write to a
   // manifest or lockfile on the line, and every later stage of its pipeline a listed sink or data program.
   const writesManifest = redirects.some((r) => r.write && manifestFile(r.target));
   for (let k = 0; k < commands.length; k++) {
     tick();
-    let exempt = !writesManifest;
+    let exempt = !writesManifest && !(gitSetting && programName(commands[k][Math.max(0, commandStart(commands[k]))] ?? "") === "git");
     for (let j = k; exempt && links[j] === "|" && j + 1 < commands.length; j++) exempt = sinkCommand(commands[j + 1]);
     const why = accountCommand(commands[k], dialect, depth, exempt);
     if (why) return why;
@@ -3450,11 +3455,22 @@ function accountLine(line, dialect, depth = 0) {
 const PS_ENV_ASSIGNMENT = /(^|[;\n\r])[ \t]*\$env:([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:'[^'\n\r]*'|"[^"`$\n\r]*"|[^\s;|&'"`$()]+)[ \t]*(?=$|[;\n\r])/gi;
 function psEnvAssignments(line) {
   const names = [];
-  const out = line.replace(PS_ENV_ASSIGNMENT, (_m, lead, name) => {
+  const values = [];
+  const out = line.replace(PS_ENV_ASSIGNMENT, (m, lead, name) => {
     names.push(name);
+    values.push(m);
     return lead;
   });
-  return { line: out, names };
+  return { line: out, names, values };
+}
+
+/** The names a simple command sets for the commands after it (`export X=`, `declare -x`, a bare assignment, `Set-Item env:X`). */
+function settingNamesIn(words) {
+  const program = (words[0] ?? "").toLowerCase();
+  if (words.every((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w))) return words.map((w) => w.slice(0, w.indexOf("=")));
+  if (["export", "declare", "typeset", "local", "readonly"].includes(program)) return words.slice(1).filter((w) => !w.startsWith("-")).map((w) => w.split("=")[0]);
+  if (["set-item", "si", "new-item", "ni", "set-content", "sc", "add-content", "ac"].includes(programName(program))) return words.slice(1).flatMap((w) => /^env:([A-Za-z_][A-Za-z0-9_]*)/i.exec(w)?.slice(1) ?? []);
+  return [];
 }
 
 /**
@@ -3544,13 +3560,8 @@ const DATA_SPECS = {
     long: ["--hidden", "--no-ignore", "--line-number", "--no-line-number", "--ignore-case", "--smart-case", "--case-sensitive", "--files", "--files-with-matches", "--files-without-match", "--count", "--count-matches", "--invert-match", "--word-regexp", "--line-regexp", "--fixed-strings", "--multiline", "--json", "--vimgrep", "--no-heading", "--heading", "--with-filename", "--no-filename", "--only-matching", "--follow", "--stats", "--trim", "--pcre2", "--text", "--no-messages", "--quiet", "--color"],
     longValue: ["--glob", "--iglob", "--type", "--type-not", "--regexp", "--max-count", "--max-depth", "--context", "--after-context", "--before-context", "--color", "--max-filesize", "--sort", "--sortr"],
   },
-  // sed: only -n, -E, -r and -e / --expression, and every script in sedScriptRead's grammar (no
-  // `e` or `w`, which run a command or write a file, in any spelling: it is a positive grammar).
-  sed: { short: "nEr", shortValue: "e", long: ["--quiet", "--silent", "--regexp-extended"], longValue: ["--expression"], check: (args) => scriptsOf(args, ["-e", "--expression"]).every(sedScriptRead) },
-  // awk: only -F, -v, and one program in awkProgramRead's grammar (a pattern and a print).
-  awk: { shortValue: "Fv", longValue: ["--field-separator", "--assign"], check: (args) => scriptsOf(args, []).every(awkProgramRead) },
-  // make: its recipes are the project's (a stated limit); no makefile from stdin.
-  make: { short: "knsBeiqrRSt", shortValue: "CjfoWI", digits: true, long: ["--keep-going", "--dry-run", "--just-print", "--silent", "--quiet", "--always-make", "--ignore-errors", "--question", "--no-builtin-rules", "--print-directory", "--no-print-directory"], longValue: ["--directory", "--jobs", "--file", "--makefile"], fileValue: true },
+  // make: its recipes are the project's (a stated limit); no -f / --file / --makefile / --eval (another makefile, or one given on the line).
+  make: { short: "knsBeiqrRSt", shortValue: "CjoWI", digits: true, long: ["--keep-going", "--dry-run", "--just-print", "--silent", "--quiet", "--always-make", "--ignore-errors", "--question", "--no-builtin-rules", "--print-directory", "--no-print-directory"], longValue: ["--directory", "--jobs"] },
   "write-output": { ps: { "-noenumerate": 0, "-inputobject": 1 } },
   "write-host": { ps: { "-nonewline": 0, "-foregroundcolor": 1, "-backgroundcolor": 1, "-separator": 1, "-object": 1 } },
   "select-string": { ps: { "-pattern": 1, "-path": 1, "-literalpath": 1, "-simplematch": 0, "-casesensitive": 0, "-context": 1, "-notmatch": 0, "-allmatches": 0, "-quiet": 0, "-list": 0, "-raw": 0, "-encoding": 1, "-include": 1, "-exclude": 1, "-inputobject": 1 } },
@@ -3558,92 +3569,8 @@ const DATA_SPECS = {
   true: {},
   ":": {},
 };
-DATA_SPECS.gawk = DATA_SPECS.mawk = DATA_SPECS.nawk = DATA_SPECS.awk;
 DATA_SPECS.gmake = DATA_SPECS.make;
-DATA_SPECS.gsed = DATA_SPECS.sed;
 DATA_SPECS.sls = DATA_SPECS["select-string"];
-
-/**
- * The script words of a sed or awk command: the values of `options` (`-e x`, `-ex`, `--expression=x`),
- * else the first operand. Values of -F / -v are not scripts.
- */
-function scriptsOf(args, options) {
-  const scripts = [];
-  let first = null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    const long = options.find((o) => o.startsWith("--") && (a === o || a.startsWith(`${o}=`)));
-    if (long) scripts.push(a === long ? (args[++i] ?? "") : a.slice(long.length + 1));
-    else if (options.includes("-e") && /^-[nEr]*e/.test(a)) {
-      const rest = a.slice(a.indexOf("e") + 1);
-      scripts.push(rest || (args[++i] ?? ""));
-    } else if (/^-[Fv]$/.test(a)) i++;
-    else if (!a.startsWith("-") && first === null) first = a;
-  }
-  return scripts.length > 0 ? scripts : [first ?? ""];
-}
-
-/**
- * Round 11: the sed scripts this hook reads as text. A positive grammar: commands separated by `;`
- * or line ends, each an optional address (a line number, `$`, `/regex/` with I or M, or two of
- * them with `,`) and `!`, then `d`, `p`, `q`, `n`, or `s<d>regex<d>replacement<d>` with flags
- * from [gipI0-9]. Anything else (`e`, `w`, `r`, `R`, `W`, a block, a label) is not read.
- */
-function sedScriptRead(script) {
-  if (typeof script !== "string" || script.length > 4096) return false;
-  let i = 0;
-  const s = script;
-  const regex = () => {
-    if (s[i] !== "/") return false;
-    for (i++; i < s.length && s[i] !== "/"; i++) if (s[i] === "\\") i++;
-    if (s[i] !== "/") return false;
-    i++;
-    while (s[i] === "I" || s[i] === "M") i++;
-    return true;
-  };
-  const address = () => {
-    if (/\d/.test(s[i] ?? "")) while (/\d/.test(s[i] ?? "")) i++;
-    else if (s[i] === "$") i++;
-    else if (s[i] === "/") return regex();
-    return true;
-  };
-  for (;;) {
-    while (s[i] === " " || s[i] === "\t" || s[i] === ";" || s[i] === "\n") i++;
-    if (i >= s.length) return true;
-    const at = i;
-    if (!address()) return false;
-    if (i > at && s[i] === ",") {
-      i++;
-      const second = i;
-      if (!address() || i === second) return false;
-    }
-    while (s[i] === " ") i++;
-    if (s[i] === "!") i++;
-    while (s[i] === " ") i++;
-    const c = s[i++];
-    if ("dpqn".includes(c ?? "x")) continue;
-    if (c !== "s") return false;
-    const d = s[i++];
-    if (!d || d === "\\" || d === "\n" || /\s/.test(d)) return false;
-    for (let part = 0; part < 2; part++) {
-      for (; i < s.length && s[i] !== d; i++) if (s[i] === "\\") i++;
-      if (s[i] !== d) return false;
-      i++;
-    }
-    while (/[gipI0-9]/.test(s[i] ?? "")) i++;
-    if (i < s.length && !/[\s;]/.test(s[i])) return false;
-  }
-}
-
-/**
- * Round 11: the awk programs this hook reads as text. A positive grammar: one rule, a pattern
- * (`/regex/`, `NR` or `NF` compared with a number, `$N` compared with a string) and / or an action
- * `{ print }` of fields, NR, NF and strings. Anything else (system(), getline, a pipe, a function,
- * an assignment, several rules) is not read.
- */
-const AWK_VALUE = String.raw`(?:\$\d+|NR|NF|"[^"\\]*")`;
-const AWK_PROGRAM = new RegExp(String.raw`^\s*(?:(?:\/(?:\\.|[^\/\\])*\/|(?:NR|NF)\s*(?:==|!=|<=|>=|<|>)\s*\d+|\$\d+\s*(?:==|!=|~|!~)\s*"[^"\\]*")\s*)?(?:\{\s*(?:print(?:\s+${AWK_VALUE}(?:\s*,?\s*${AWK_VALUE})*)?)?\s*;?\s*\})?\s*$`);
-const awkProgramRead = (program) => typeof program === "string" && program.trim() !== "" && program.length <= 4096 && AWK_PROGRAM.test(program);
 
 /** Pure sinks: a later pipeline stage that only shows, counts, sorts or saves the text. */
 const SINK_SPECS = {
@@ -3731,6 +3658,10 @@ const GIT_SPECS = {
   grep: { short: "nilwvcEFPhHIqz", shortValue: "efABC", digits: true, long: ["--cached", "--untracked", "--no-index", "--line-number", "--ignore-case", "--word-regexp", "--invert-match", "--count", "--extended-regexp", "--fixed-strings", "--perl-regexp", "--files-with-matches", "--name-only", "--full-name", "--heading", "--break", "--all-match", "--recurse-submodules"], longValue: ["--max-depth", "--context", "--after-context", "--before-context"] },
   tag: { short: "almndfsv", shortValue: "mFu", long: ["--list", "--annotate", "--delete", "--force", "--sign"], longValue: ["--message", "--file", "--sort", "--contains"] },
 };
+/** Settings that make git run a command of their own: an editor, a pager, any GIT_* variable. */
+const GIT_RUNS = /^(?:EDITOR|VISUAL|PAGER|GIT_[A-Z0-9_]*)=/i;
+const GIT_RUN_NAME = /^(?:EDITOR|VISUAL|PAGER|GIT_[A-Z0-9_]*)$/i;
+
 /** gh's text commands (`gh pr create --body '...'`), with their options. */
 const GH_SPEC = {
   short: "dwf",
@@ -3751,6 +3682,8 @@ function dataCommand(words) {
   const program = programName(words[start]);
   const args = words.slice(start + 1);
   if (program === "git") {
+    // An editor, pager or GIT_* setting before it runs a command of its own (`GIT_EDITOR='npm i x' git commit -a`).
+    if (words.slice(0, start).some((w) => GIT_RUNS.test(w))) return false;
     let i = 0;
     while (i < args.length && args[i].startsWith("-")) {
       if (args[i] === "-C") i += 2;
@@ -3818,6 +3751,10 @@ function accountCommand(words, dialect, depth, exempt = true) {
   if (/^pip\d+(?:\.\d+)*$/.test(program)) program = "pip";
   if (exempt && dataCommand(words)) return null;
   if (program === "git" || program === "gh") return `a ${program} command this hook does not read`;
+  if (/^(?:g?sed|g?awk|mawk|nawk)$/.test(program)) {
+    accountRemedy = SED_AWK_REMEDY;
+    return `${program}, whose script this hook does not read`;
+  }
   if (program === "eval") return args.length > 0 ? accountLine(args.join(" "), "bash", depth + 1) : null;
   if (dialect === "powershell" && (program === "invoke-expression" || program === "iex")) {
     const rest = /^-(?:c|co|com|comm|comma|comman|command)$/i.test(args[0] ?? "") ? args.slice(1) : args;
@@ -4176,6 +4113,10 @@ function accountGo(args, reader) {
  * R8-1 + R8-2 for a command call: the part not read, or null. Asked of every Bash and PowerShell
  * command, whatever its size: a line with no detector hit is null at once.
  */
+/** Round 12: sed and awk run what their scripts say (`e`, system()); this hook reads neither language. */
+const SED_AWK_REMEDY =
+  "sed and awk can run a command from their script, and this hook does not read their scripts: to search for that text use grep, rg or Select-String; to write it into a file use the Write tool.";
+
 /** A remedy other than ACCOUNT_REMEDY for the part accountCall returns (set by the part's reader). */
 let accountRemedy = null;
 
