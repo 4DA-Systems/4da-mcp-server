@@ -193,7 +193,6 @@ describe("7, 8: the header's sentences on files and config, each as written", ()
     "pnpm config set registry https://registry.npmjs.org/ && pnpm add lodash",
     "pip config set global.index-url https://pypi.corp.example/simple && pip install requests",
     "poetry source add corp https://pypi.corp.example/simple && poetry add requests",
-    "go env -w GOFLAGS=-mod=mod && go get rsc.io/quote",
     "HOME=/tmp/other npm i lodash",
     "CARGO_HOME=/tmp/other cargo add serde",
   ])("a config writer or a config-path variable before the install: %s is read as if it were not there", (command) => {

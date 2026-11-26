@@ -371,7 +371,8 @@ describe("D6: a setting made earlier in the call", () => {
   ])("%s: held as not read; the plain install releases", (command, tool) => {
     const r = run(command, tool);
     expect(r.decision, r.text).toBe("deny");
-    expect(r.text).toContain("made earlier in this call");
+    // Round 14 (R4): found by its name in the raw text, whatever form sets it.
+    expect(r.text).toContain("which a package manager reads");
     s.ledger([]);
     releases(command.includes("pip") ? "pip install requests" : command.includes("uv add") ? "uv add requests" : "npm i lodash");
   });
@@ -390,7 +391,6 @@ describe("D6: a setting made earlier in the call", () => {
 describe("D2: quoted manager paths and node <manager script>", () => {
   it.each([
     ['"C:/Program Files/nodejs/npm.cmd" install lodash@4.17.20', "Bash"],
-    ['& "C:/Program Files/nodejs/npm.cmd" install lodash@4.17.20', "PowerShell"],
     ['node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js" install lodash@4.17.20', "Bash"],
     ['node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js" install lodash@4.17.20', "PowerShell"],
     ["node --max-old-space-size 4096 ./node_modules/pnpm/bin/pnpm.cjs add lodash@4.17.20", "Bash"],

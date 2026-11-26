@@ -3089,12 +3089,12 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       const a = args[j];
       // `python -m piptools compile ... --upgrade-package "x==v"` is pip-compile.
       // `-m`, glued to its module (`-mpip`) or after other one-letter options (`-Im pip`, `-Impip`).
-      const glued = /^-[uBOsSEIbdqvRP]*m(pip\d*(?:\.\d+)?)?$/.exec(a);
+      const glued = /^-[uBOsSEIbdqvRP]*m(pip(?:\d+(?:\.\d+)*)?(?:\.[\w.]+)?)?$/.exec(a);
       if (glued?.[1]) return pipInstalls(args.slice(j + 1));
       if (glued && args[j + 1] === "piptools") return args[j + 2] === "compile" ? upgradePackages(args.slice(j + 3)) : [];
       if (glued) {
         const module = args[j + 1] ?? "";
-        if (/^pip(?:\d+(?:\.\d+)*)?$/.test(module)) return pipInstalls(args.slice(j + 2));
+        if (PIP_MODULE.test(module)) return pipInstalls(args.slice(j + 2));
         // `python -m uv add x`, `python -m poetry add x`: the manager the module is.
         return PYTHON_MANAGER_MODULES.has(module) ? commandInstalls([module, ...args.slice(j + 2)], depth + 1, dialect) : [];
       }
@@ -3248,7 +3248,7 @@ function managerWord(token) {
   let t = token.replace(/\.(?:exe|cmd|bat|ps1|js|cjs|mjs)$/, "");
   if (t === "yarnpkg") t = "yarn";
   if (/^(?:npm|pnpm|yarn)-cli$/.test(t)) t = t.slice(0, -4);
-  if (/^pip\d*(?:\.\d+)?$/.test(t) || /^-[a-z]*mpip\d*(?:\.\d+)?$/.test(t)) return "pip";
+  if (/^pip\d*(?:\.\d+)?(?:\.[a-z0-9_.]*)?$/.test(t) || /^-[a-z]*mpip\d*(?:\.\d+)?(?:\.[a-z0-9_.]*)?$/.test(t)) return "pip";
   return t === "npm" || DETECT_VERBS.has(t) ? t : null;
 }
 
@@ -3260,6 +3260,8 @@ function isManagerVerb(manager, token) {
 
 /** A detector token: a run of name characters (`npm@10.9.2` is `npm` and `10.9.2`), or a line end. */
 const DETECT_TOKEN = /[a-z0-9._+-]+|[\n\r]/g;
+/** R6: a module spelled as pip and more (`pip.__main__`, `pip._internal.cli.main`). */
+const PIP_MODULE = /^pip(?:\d+(?:\.\d+)*)?(?:\.[\w.]+)?$/;
 
 /**
  * The detector's pass over one text: `seen` carries the managers met so far on the current line
@@ -3545,7 +3547,7 @@ function accountLine(line, dialect, depth = 0) {
   }
   for (let k = 0; k < commands.length; k++) {
     tick();
-    const exempt = !writesManifest && !dataSetting && safeAfter[k];
+    const exempt = !writesManifest && !dataSetting && safeAfter[k] && !(k > 0 && links[k - 1] === "|" && runsInput(commands[k]));
     const why = accountCommand(commands[k], dialect, depth, exempt);
     if (why) {
       if (!exempt && dataCommand(commands[k])) {
@@ -3829,7 +3831,7 @@ function dataCommand(words) {
   if (words.slice(0, start).some((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !INERT_SETTING.test(settingName(w)))) return false;
   // Round 13: a first word with a blank in it and no path is a quoted string: PowerShell's value
   // (`'npm install x' | Out-File notes.txt`), and in bash no program at all.
-  if (/\s/.test(words[start]) && !/[\\/]/.test(words[start])) return words.length === start + 1;
+  if (/\s/.test(words[start]) && !/[\\/]/.test(words[start]) && ["'", '"', "\u2018", "\u2019", "\u201c", "\u201d"].some((q) => accountRaw.includes(q + words[start]))) return words.length === start + 1;
   const program = programName(words[start]);
   const args = words.slice(start + 1);
   if (program === "git") {
@@ -3849,12 +3851,19 @@ function dataCommand(words) {
   }
   // `node -e '...'` / `-p`, `python -c '...'`: code given as text, nothing else on the line before it
   // (a program that runs an install is a stated limit).
-  if (program === "node") return /^(?:-e|-p|--eval|--print|-pe)$/.test(args[0] ?? "");
-  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return args[0] === "-c";
+  // Round 14 (R8): only the code alone; the words after it are the code's own arguments, which it may run.
+  if (program === "node") return /^(?:-e|-p|--eval|--print|-pe)$/.test(args[0] ?? "") && args.length <= 2;
+  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return args[0] === "-c" && args.length <= 2;
   // docker and podman: the command runs in a container (a stated limit); their own options set it up.
   if (program === "docker" || program === "podman") return ["run", "exec", "build", "compose", "buildx", "create"].includes(args.find((a) => !a.startsWith("-")) ?? "");
   const spec = DATA_SPECS[program];
   return Boolean(spec) && optionsAllowed(args, spec) && (!spec.check || spec.check(args));
+}
+
+/** `node -e` / `-p` and `python -c`: code that may run what it reads from its input. */
+function runsInput(words, start = Math.max(0, commandStart(words))) {
+  const p = programName(words[start] ?? "");
+  return p === "node" || /^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(p);
 }
 
 /** A later pipeline stage that runs nothing it is given: a listed sink, or a data program. */
@@ -3862,6 +3871,8 @@ function sinkCommand(words) {
   const start = commandStart(words);
   if (start < 0) return false;
   if (start >= words.length) return true;
+  // R8: code given on the line runs what it is given (`| python -c "os.system(sys.stdin.read())"`).
+  if (runsInput(words, start)) return false;
   const spec = SINK_SPECS[programName(words[start])];
   return (Boolean(spec) && optionsAllowed(words.slice(start + 1), spec)) || dataCommand(words);
 }
@@ -4003,11 +4014,11 @@ function accountPython(program, args, reader) {
   for (let i = 0; i < args.length; i++) {
     tick();
     const a = args[i];
-    const glued = /^-[uBOsSEIbdqvRP]*m(pip\d*(?:\.\d+)?)?$/.exec(a);
+    const glued = /^-[uBOsSEIbdqvRP]*m(pip(?:\d+(?:\.\d+)*)?(?:\.[\w.]+)?)?$/.exec(a);
     if (glued) {
       const module = glued[1] ?? args[i + 1] ?? "";
       const rest = args.slice(i + (glued[1] ? 1 : 2));
-      if (/^pip\d*(?:\.\d+)?$/.test(module)) return accountPip(rest, ACCOUNT_TABLES.pip, reader);
+      if (PIP_MODULE.test(module)) return accountPip(rest, ACCOUNT_TABLES.pip, reader);
       if (PYTHON_MANAGER_MODULES.has(module)) return accountCommand([module, ...rest], "bash", 1);
       return `${program} -m ${module.slice(0, 60)}, a module this hook does not read`;
     }
@@ -4041,6 +4052,7 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (isRunnerCommand(manager, sub)) return accountRunner(rest, dialect, depth);
   if ((manager === "pnpm" || manager === "yarn") && managerWord(programName(sub))) return accountCommand([sub, ...rest], dialect, depth + 1);
   if (manager === "npm" && verb === "pkg") return accountNpmPkg(rest);
+  if (manager === "npm" && /[A-Z]/.test(sub) && ["install", "install-test", "link", "update"].includes(npmCommand(sub.toLowerCase()) ?? "")) return `npm ${sub}, a command word in capitals this hook does not read`;
   const adds = { npm: ["install", "install-test"], pnpm: ["add", "install", "i"], yarn: ["add"], bun: ["add", "a", "install", "i"] }[manager];
   const moves = { npm: ["update"], pnpm: ["up", "update", "upgrade"], yarn: ["up", "upgrade"], bun: ["update"] }[manager];
   const links = { npm: ["link"], pnpm: ["link", "ln"], yarn: ["link"], bun: ["link"] }[manager];
@@ -4567,6 +4579,8 @@ let accountRemedy = null;
  * as <form>"; it never prints a command the user did not write.
  */
 let accountToken = null;
+/** The call's raw text (R3: a quoted first word is text only when it begins with a quote there). */
+let accountRaw = "";
 /** The words of the simple command being accounted for (optionToken finds an option's spelling in them). */
 let accountWords = [];
 const OPERAND_FORM = "an exact version (name@1.2.3, pip: name==1.2.3) or the name alone";
@@ -4603,11 +4617,83 @@ function optionToken(option) {
   return option;
 }
 
+/** R3: blanks and controls other than space, tab, CR, LF. */
+// eslint-disable-next-line no-control-regex -- the control characters are what this rule finds
+const UNUSUAL_BLANKS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00A0\u061C\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF]/g;
+const UNUSUAL_BLANK = new RegExp(UNUSUAL_BLANKS.source);
+/** R5: what builds a command from other words. */
+const BUILDS_COMMAND = /\bxargs\b|\bset-alias\b|\bnew-alias\b|(?:^|[\s;&|(])alias\s|\bfunction\s|(?:^|[\s;&|(])fn\s|\binvoke-expression\b|\biex\b|&\s*['"\u2018-\u201d]|\bdoskey\b|[\w-]\s*\(\)\s*\{/i;
+/** Whether a package manager's name stands anywhere in the text, as the detector reads words. */
+function namesManager(text) {
+  for (const m of text.toLowerCase().replace(/[\\`'"\u2018-\u201e]/g, "").matchAll(DETECT_TOKEN)) {
+    tick();
+    if (managerWord(programName(m[0]))) return true;
+  }
+  return false;
+}
+/** R4: a manager's own setting names, by raw text. */
+const SETTING_NAME = /(?<![A-Za-z0-9_])(?:npm_config_[A-Za-z0-9_]+|yarn_[A-Za-z0-9_]+|bun_config[A-Za-z0-9_]*|pip_[A-Za-z0-9_]+|uv_[A-Za-z0-9_]+|poetry_[A-Za-z0-9_]+|cargo_(?:registr|source|net|http)[A-Za-z0-9_]*|goproxy|goflags|goprivate|gonoproxy|gonosumdb|goinsecure|gotoolchain)(?![A-Za-z0-9_])/gi;
+/**
+ * R4: the first manager setting named in the call at or before the end of the last line the
+ * detector names: held, its remedy built from the text as written (the setting word, or the whole
+ * statement that sets it), with the option it stands for where it only places the install.
+ */
+function settingBeforeInstall(command) {
+  const text = command.replace(/[\\`]\r?\n/g, "  ");
+  let end = -1;
+  let at = 0;
+  for (const line of text.split("\n")) {
+    if (detectsInstall(line)) end = at + line.length;
+    at += line.length + 1;
+  }
+  if (end < 0) return null;
+  SETTING_NAME.lastIndex = 0;
+  const m = SETTING_NAME.exec(text);
+  if (!m || m.index > end) return null;
+  const name = m[0];
+  // The statement it stands in: from the last separator before it to the next one.
+  const before = text.slice(0, m.index);
+  const startAt = Math.max(
+    0,
+    ...[";", "&&", "||", "|", "\n"].map((s) => {
+      const i = before.lastIndexOf(s);
+      return i < 0 ? 0 : i + s.length;
+    }),
+  );
+  const rest = text.slice(startAt);
+  const stop = /;|&&|\|\||\||\n/.exec(rest);
+  const statement = (stop ? rest.slice(0, stop.index) : rest).trim();
+  // A prefix assignment (`NAME=v npm i x`, `env NAME=v npm i x`): the word alone; else the statement.
+  const inStatement = detectsInstall(statement);
+  const word = /^[^\s;&|]+/.exec(text.slice(m.index))?.[0] ?? name;
+  const token = inStatement ? word : statement;
+  const value = word.includes("=") ? word.slice(word.indexOf("=") + 1) : (/[\s=]+['"]?([^'"\s;]+)/.exec(text.slice(m.index + name.length))?.[1] ?? "");
+  return notReadAt(`the setting ${name}, which a package manager reads`, token, settingForm(name, value));
+}
+
 function accountCall(command, dialect) {
   fault("account");
   accountRemedy = null;
   accountToken = null;
+  accountRaw = typeof command === "string" ? command : "";
+  if (typeof command !== "string") return null;
+  // R3: a blank the shell may split at that this hook's words do not (NBSP, U+2000-200A, U+3000,
+  // VT, FF, U+0085, zero-width and bidi marks, other controls): with an install the detector names
+  // once they are read as blanks, held.
+  const odd = UNUSUAL_BLANK.exec(command);
+  if (odd && detectsInstall(command.replace(UNUSUAL_BLANKS, " "))) {
+    const cp = `U+${odd[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
+    accountRemedy = `The command holds an invisible or unusual blank character (${cp}); retype it with plain spaces. FOURDA_GUARD is the user's setting, not yours to change.`;
+    return `an invisible or unusual blank character (${cp}) the shell may split at`;
+  }
+  // R5: a command the call builds (xargs, an alias, a function, iex, & with a string, doskey) beside
+  // a package manager's name: the manager's words may come from elsewhere; held.
+  const builder = BUILDS_COMMAND.exec(command);
+  if (builder && namesManager(command)) return `${builder[0].trim()} beside a package manager's name: the command it runs is built from words this hook does not see`;
   if (!detectsInstall(command)) return null;
+  // R4: a manager's own setting named anywhere before or on an install line the detector names.
+  const setting = settingBeforeInstall(command);
+  if (setting) return setting;
   if (command.length > MAX_ACCOUNT_CHARS) return `a command over ${MAX_ACCOUNT_CHARS / 1024 / 1024} MB that names an install`;
   return accountLine(command, dialect);
 }
