@@ -171,7 +171,7 @@ describe("a workspace member: the local_source hold names three ways that releas
 
 /** Commands that install no public package by name, or install the lockfile: none may be held. */
 const ORDINARY = [
-  "npm install", "npm i", "npm ci", "npm install --frozen-lockfile", "pnpm install", "pnpm i --frozen-lockfile", "pnpm up", "pnpm up react", "pnpm update react",
+  "npm install", "npm i", "npm ci", "pnpm install", "pnpm i --frozen-lockfile", "pnpm up", "pnpm up react", "pnpm update react",
   "yarn", "yarn install", "yarn install --immutable", "yarn upgrade react", "bun install", "bun i", "npm update lodash", "npm uninstall lodash", "npm rm lodash",
   "pnpm remove lodash", "yarn remove lodash", "npm run build", "npm test", "npm ls lodash", "npm view lodash version", "npm outdated", "npm audit", "npm dedupe",
   "npm i ./local-pkg", "npm i ../shared", "npm i file:../shared", "npm i user/repo", "npm i github:user/repo", "npm i git+https://example.com/r.git",
@@ -181,14 +181,33 @@ const ORDINARY = [
   "pip install -i https://pypi.internal.example/simple x", "pip download requests", "pip list", "pip show requests", "pip uninstall -y requests", "uv sync", "uv lock",
   "uv pip sync requirements.txt", "uv run pytest", "poetry install", "poetry lock", "cargo build", "cargo add --path ../x", "cargo add x --git https://example.com/x",
   "cargo update", "go get ./...", "go mod tidy", "go mod download", "go build ./...", "go get -u ./...", "go get github.com/pkg/errors@none",
-  "npx cowsay hi", "pnpm dlx create-vite", "bunx tsc", "uvx ruff", "pipx install black", "cargo install ripgrep", "go install golang.org/x/tools/gopls@latest",
-  "yarn global add typescript", "echo npm install lodash", "git commit -m 'npm install lodash'",
+  "npx cowsay hi", "pnpm dlx create-vite", "bunx tsc", "uvx ruff", "pipx install black", "echo npm install lodash", "git commit -m 'npm install lodash'",
 ];
 
 describe(`${ORDINARY.length} ordinary commands go ahead with an empty ledger`, () => {
   it.each(ORDINARY.map((c) => [c]))("%s", (command) => {
     s.ledger([]);
     expect(run(command).decision).toBe("allow");
+  });
+});
+
+const ACCOUNT_REMEDY = "Run it as a plain command of its own";
+
+/**
+ * Round 8 (R8-2): an option npm does not know (`--frozen-lockfile` is Yarn's and pnpm's) is held as
+ * not read, with one remedy; the remedy (`npm install`) goes ahead.
+ */
+describe("round 8: an option npm does not know is held as not read, with one remedy", () => {
+  it.each(["npm install --frozen-lockfile"])("%s", (command) => {
+    s.ledger([]);
+    const r = run(command);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain(ACCOUNT_REMEDY);
+  });
+
+  it("the remedy releases: npm install alone goes ahead", () => {
+    s.ledger([]);
+    expect(run("npm install").decision).toBe("allow");
   });
 });
 

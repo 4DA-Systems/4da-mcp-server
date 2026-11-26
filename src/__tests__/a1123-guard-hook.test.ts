@@ -446,7 +446,6 @@ describe("install commands", () => {
     "cargo add mycrate@1.0.0 --git https://example.com/repo",
     "poetry add requests@^2.31 --source corp",
     "go get ./...",
-    "go install golang.org/x/tools/gopls@v0.16.2",
     "cat <<EOF > package.json",
     "echo npm install lodash@4.17.20",
     // A subshell `(npm install lodash@4.17.20)` is read since 6.5.1 (a651-hook-command-prefixes-and-aliases).
@@ -455,8 +454,13 @@ describe("install commands", () => {
     expect(installsIn(command, "bash")).toEqual([]);
   });
 
-  it("a command it does not read goes ahead, run as Claude Code runs the hook", () => {
-    for (const command of ["npm ci", "npm install $PKG", "pip install --index-url https://pypi.example.com/simple requests==2.31.0"]) allowed(hook(bash(command)));
+  it("a command that installs nothing new from the public registry goes ahead, run as Claude Code runs the hook", () => {
+    for (const command of ["npm ci", "pip install --index-url https://pypi.example.com/simple requests==2.31.0"]) allowed(hook(bash(command)));
+  });
+
+  // Round 8 (R8-2): an install the hook cannot read (a variable) is held as not read, no longer let through.
+  it("an install it cannot read is held as not read", () => {
+    expect(hook(bash("npm install $PKG")).stdout).toContain("could not be read");
   });
 
   it("the tokenizer reads redirections and separators, and refuses what it cannot read exactly", () => {

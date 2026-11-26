@@ -75,8 +75,8 @@ describe("a pnpm-workspace.yaml with a brace outside a comment line", () => {
 });
 
 describe("forms the hook still does not read", () => {
-  it("go install goes ahead; go get is read (control)", () => {
-    expect(bash("go install golang.org/x/tools/gopls@v0.16.0")).toBe("allow");
+  it("go install of a module is read like go get (round 8, no longer a limit)", () => {
+    expect(bash("go install golang.org/x/tools/gopls@v0.16.0")).toBe("no verdict");
     expect(bash("go get golang.org/x/tools@v0.16.0")).toBe("no verdict");
   });
   it("Cargo root dotted keys, a root inline table and the underscore table names are read (wave 2; no longer a limit)", () => {

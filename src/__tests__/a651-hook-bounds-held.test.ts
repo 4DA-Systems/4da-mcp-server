@@ -53,12 +53,24 @@ describe("held: each case round 2 let through (the checker's a5-bounds)", () => 
     [`poetry add 'requests==${zeros(38)}'`, /a version over 80 characters/],
     [`cargo add serde@${"1.0.100+" + "a".repeat(80)}`, /a version over 80 characters/],
     [`npm i lodash@4.17.20+${"a".repeat(80)}`, /a version over 80 characters/],
-    [`npm i lodash@4.17.20 # ${"x".repeat(70 * 1024)}`, /a command over 64 KB/],
   ])("%s", (command, why) => {
     const r = bash(command.length > 200 ? command : command);
     expect(r.decision).toBe("deny");
     expect(r.text).toMatch(/could not be read/);
     expect(r.text).toMatch(why);
+  });
+
+  // Round 8: a command line is read to MAX_ACCOUNT_CHARS (2 MB), so a long comment no longer stops the read: the pin is judged.
+  it("an install with a 70 KB comment is read and its pin held as unchecked", () => {
+    const r = bash(`npm i lodash@4.17.20 # ${"x".repeat(70 * 1024)}`);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain('"lodash" "4.17.20" (npm)');
+  });
+
+  it("an install in a command over 2 MB is held as not read", () => {
+    const r = bash(`npm i lodash@4.17.20 # ${"x".repeat(2 * 1024 * 1024 + 10)}`);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toMatch(/could not be read/);
   });
 
   it("a long marker is read (not refused) and the pin is held as unchecked", () => {

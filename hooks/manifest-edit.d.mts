@@ -12,6 +12,14 @@ export function respond(input: unknown, env?: Record<string, string | undefined>
 /** `depth`: the wrappers (a shell's `-c`, a runner) the command was found inside; 0 for a command line as typed. */
 export function installsIn(command: string, dialect: "bash" | "powershell", depth?: number): Install[];
 /** `redirects`, when given, collects the redirection targets (`write`: `>` or `>>`). */
-export function simpleCommands(line: string, dialect: "bash" | "powershell", redirects?: Array<{ target: string; write: boolean }> | null): string[][] | null;
+export function simpleCommands(
+  line: string,
+  dialect: "bash" | "powershell",
+  redirects?: Array<{ target: string; write: boolean }> | null,
+  dropped?: Array<{ text: string; readings: string[][] }> | null,
+  cap?: number,
+): string[][] | null;
+/** Whether a text holds, on one line, a package-manager word followed later by one of its verbs (round 8, R8-1). */
+export function detectsInstall(text: string): boolean;
 export function dataDir(env?: Record<string, string | undefined>, platform?: string, home?: string): string;
 export function poetryToPep440(spec: string): string;
