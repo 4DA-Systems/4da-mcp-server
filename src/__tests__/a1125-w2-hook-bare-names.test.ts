@@ -40,7 +40,7 @@ const BARE: Array<[string, string, string]> = [
   ["yarn add lodash", "npm", "lodash"],
   ["yarn workspace web add lodash", "npm", "lodash"],
   ["pnpm add -D typescript", "npm", "typescript"],
-  ["pnpm add lodash@latest --filter web", "npm", "lodash"],
+  ["pnpm add lodash@latest --save-dev", "npm", "lodash"],
   ["pnpm up -L react", "npm", "react"],
   ["pnpm up --latest react", "npm", "react"],
   ["yarn up react", "npm", "react"],
@@ -151,7 +151,7 @@ describe("a workspace member: the local_source hold names three ways that releas
   it("the denial wording, and each of the three", () => {
     s.ledger([]);
     answer([{ ecosystem: "npm", package: "shared", to: "latest", verdict: "unknown", not_checked: "private", reason: "the project takes shared from its workspace" }], () => false);
-    const held = run("pnpm add shared --filter web");
+    const held = run("pnpm add shared");
     expect(held.decision).toBe("deny");
     expect(held.text).toContain('install it as "shared@workspace:*"');
     expect(held.text).toContain('FOURDA_PRIVATE_PACKAGES="shared"');
@@ -164,7 +164,7 @@ describe("a workspace member: the local_source hold names three ways that releas
     expect(s.edit(file, '"dependencies": {}', '"dependencies": { "shared": "file:../shared" }').decision).toBe("allow");
     // 2. Marked private by the server's rule (FOURDA_PRIVATE_PACKAGES=shared), the next call records it private: it passes.
     answer([{ ecosystem: "npm", package: "shared", to: "latest", verdict: "unknown", not_checked: "private" }], (_e, n) => n === "shared");
-    expect(run("pnpm add shared --filter web").decision).toBe("allow");
+    expect(run("pnpm add shared").decision).toBe("allow");
   });
 });
 

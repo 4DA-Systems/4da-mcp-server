@@ -3593,7 +3593,18 @@ function pyOperandKind(word) {
  * read whole, else the part not read. A line that does not take apart is not read, unless its
  * only hits are in heredoc bodies fed to data programs.
  */
+/** H1: the folder after a simple command (`cd dir`, pushd, Set-Location): null once it cannot be named. */
+function movedTo(words, dir) {
+  const start = Math.max(0, commandStart(words));
+  const p = programName(words[start] ?? "");
+  if (!["cd", "pushd", "set-location", "sl", "chdir", "popd"].includes(p)) return dir;
+  const args = words.slice(start + 1).filter((w) => !/^-(?:Path|LiteralPath)$/i.test(w));
+  if (dir === null || p === "popd" || args.length !== 1 || args[0].startsWith("-") || /[$`~%*?]/.test(args[0])) return null;
+  return resolve(dir, args[0]);
+}
+
 function accountLine(line, dialect, depth = 0) {
+  let lineDir = depth === 0 ? accountCwd : accountDir;
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // D6: PowerShell `$env:NAME = value` statements: a manager's own setting holds the line; any other is taken out before it is read.
   let dataSetting = false;
@@ -3650,7 +3661,9 @@ function accountLine(line, dialect, depth = 0) {
   for (let k = 0; k < commands.length; k++) {
     tick();
     const exempt = !writesManifest && !dataSetting && safeAfter[k] && !(k > 0 && links[k - 1] === "|" && runsInput(commands[k]));
+    accountDir = lineDir;
     const why = accountCommand(commands[k], dialect, depth, exempt);
+    lineDir = movedTo(commands[k], lineDir);
     if (why) {
       if (!exempt && dataCommand(commands[k])) {
         // The data program would be text; what made it none is the part not read.
@@ -4179,6 +4192,87 @@ function subcommand(args, table, mode = "") {
   return { sub: head.at < 0 ? undefined : args[head.at], rest: head.at < 0 ? [] : args.slice(head.at + 1), bad: null, values: head.values };
 }
 
+/**
+ * Round 15 (H1, thirteenth independent check): a name alone is judged at the registry's newest
+ * release, but npm, pnpm, uv, Poetry and Cargo keep the release a project already declares
+ * (measured: `npm install ms` and `pnpm add ms` beside "ms": "2.0.0" install 2.0.0, `uv add six`
+ * beside six==1.16.0 locks 1.16.0, `cargo add regex` beside regex = "=1.5.4" keeps 1.5.4; Yarn 1
+ * and Bun move to the newest). So for a name alone with those managers the manifest of the folder
+ * the command runs in is read: a name it declares is held, "name the version".
+ */
+const KEEPS_DECLARED = {
+  npm: { file: "package.json", dir: ["--prefix"], workspace: ["-w", "--workspace", "-ws", "--workspaces", "--include-workspace-root"], global: ["-g", "--global"] },
+  pnpm: { file: "package.json", dir: ["-C", "--dir", "--prefix"], workspace: ["-F", "--filter", "-r", "--recursive", "-w", "--workspace-root", "-W", "--ignore-workspace-root-check"], global: ["-g", "--global"] },
+  uvadd: { file: "pyproject.toml", dir: ["--directory", "--project"], workspace: ["--package"], global: [] },
+  poetry: { file: "pyproject.toml", dir: ["-C", "--directory", "-P", "--project"], workspace: [], global: [] },
+  cargoadd: { file: "Cargo.toml", dir: ["--manifest-path"], workspace: ["-p", "--package"], global: [] },
+};
+/** The folder the command being accounted for runs in (the payload's cwd, after `cd` earlier in the line), or null when not known. */
+let accountDir = null;
+/** The payload's cwd. */
+let accountCwd = null;
+
+/** A word's value for one of `names` in the current command (`--opt v`, `--opt=v`), or undefined. */
+function optionValueOf(names) {
+  const w = accountWords;
+  for (let i = 0; i < w.length; i++) {
+    for (const n of names) {
+      if (w[i] === n) return w[i + 1] ?? "";
+      if (w[i].startsWith(`${n}=`)) return w[i].slice(n.length + 1);
+    }
+  }
+  return undefined;
+}
+
+/** H1: a reason when the project already declares one of `bare` (names given alone); null otherwise. */
+function declaredHeld(key, bare) {
+  if (bare.length === 0) return null;
+  const rule = KEEPS_DECLARED[key];
+  if (!rule) return null;
+  const has = (names) => accountWords.some((w) => names.includes(w) || names.some((n) => w.startsWith(`${n}=`)));
+  if (has(rule.global)) return null;
+  const first = bare[0];
+  const writtenAs = (name) => accountWords.find((w) => w.replace(/^['"]|['"]$/g, "").toLowerCase().startsWith(name.toLowerCase())) ?? name;
+  const held = (why) => notReadAt(why, writtenAs(first), "an exact version (`name@1.2.3`; uv and Poetry: `name==1.2.3`)");
+  if (has(rule.workspace)) return held(`${first} given alone beside a workspace option: which manifest declares it is not known, and the manager may keep the release one declares`);
+  let file;
+  const dirValue = optionValueOf(rule.dir);
+  if (accountDir === null || (dirValue !== undefined && (dirValue === "" || /[$`~%]/.test(dirValue)))) return held(`${first} given alone in a folder this hook cannot name, so it cannot read whether the project declares it`);
+  if (key === "cargoadd" && dirValue !== undefined) file = resolve(accountDir, dirValue);
+  else file = join(dirValue === undefined ? accountDir : resolve(accountDir, dirValue), rule.file);
+  let text;
+  try {
+    if (statSync(file).size > MAX_MANIFEST_BYTES) return held(`${first} given alone, and ${rule.file} is over ${MAX_MANIFEST_BYTES / 1024 / 1024} MB`);
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+    return held(`${first} given alone, and ${rule.file} could not be read`);
+  }
+  // An empty manifest declares nothing (npm itself refuses to install beside one).
+  if (text.trim() === "") return null;
+  const kind = rule.file;
+  const eco = ECOSYSTEM[kind];
+  let declared = [];
+  if (kind === "package.json") {
+    const deps = npmWholeDependencies(text);
+    if (deps === null) return held(`${first} given alone, and package.json is not JSON this hook reads`);
+    declared = deps.filter((d) => NPM_PLAIN_SECTIONS.includes(d.section));
+  } else {
+    for (const [k, specs] of declaredVersions(kind, text, () => null, 0, true)) declared.push({ name: k.split("\0")[0], spec: specs[0] });
+  }
+  for (const name of bare) {
+    const d = declared.find((x) => nameKey(eco, x.name).toLowerCase() === nameKey(eco, name).toLowerCase());
+    if (!d) continue;
+    const spec = specText(String(d.spec)) || "a form this hook does not repeat";
+    return notReadAt(
+      `this project already declares ${name} at ${spec} (${kind}); the manager may keep that release: name the version (\`${name}@<version>\`)`,
+      writtenAs(name),
+      "an exact version (`name@1.2.3`; uv and Poetry: `name==1.2.3`)",
+    );
+  }
+  return null;
+}
+
 function accountJs(manager, args, dialect, depth, reader) {
   const table = manager === "npm" ? null : ACCOUNT_TABLES[manager];
   const mode = manager === "npm" ? "npm" : "";
@@ -4208,17 +4302,19 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (links.includes(verb) && read.positional.every((o) => jsOperand(o) === "local")) return null;
   const toNewest = adds.includes(verb) || links.includes(verb) || values.has("-L") || values.has("--latest") || (manager === "yarn" && verb === "up");
   const names = [];
+  const bare = [];
   for (const o of read.positional) {
     const kind = jsOperand(o);
     if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     if (kind === "local") continue;
+    if (adds.includes(verb) && (npmBareName(o) || /@latest$/i.test(o))) bare.push(kind.name);
     // A name alone moved inside the manifest's range (`npm update x`, `pnpm up x`) installs nothing new.
     if (!toNewest && npmBareName(o)) continue;
     names.push(kind.name);
   }
   const source = sourceRule(values, ["--registry"], names);
   if (source !== undefined) return source;
-  return namedHeld(manager, names) ?? judgedByReader(names, reader, "npm");
+  return namedHeld(manager, names) ?? declaredHeld(manager, bare) ?? judgedByReader(names, reader, "npm");
 }
 
 /** `npm pkg set k=v`: a dependency key's value must be a version or range the reader reads. */
@@ -4588,8 +4684,12 @@ function accountUv(args, dialect, depth, reader) {
   }
   const source = sourceRule(values, ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], names);
   if (source !== undefined) return source;
-  return judgePyNames(names, reader, values, "uvadd");
+  const bareUv = read.positional.filter((o) => PY_BARE_OPERAND.test(o)).map((o) => o.replace(/\[.*$|@latest$/i, ""));
+  return namedHeld("uvadd", names) ?? declaredHeld("uvadd", bareUv) ?? judgePyNames(names, reader, values, "uvadd");
 }
+
+/** H1: a Python operand that names no version (`requests`, `requests[socks]`, `requests@latest`). */
+const PY_BARE_OPERAND = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?(?:@latest)?$/i;
 
 function accountPoetry(args, dialect, depth, reader) {
   const first = subcommand(args, ACCOUNT_TABLES.poetry);
@@ -4616,7 +4716,8 @@ function accountPoetry(args, dialect, depth, reader) {
   }
   const source = sourceRule(read.values, ["--source"], names);
   if (source !== undefined) return source;
-  return judgePyNames(names, reader, read.values, "poetry");
+  const barePoetry = read.positional.filter((o) => PY_BARE_OPERAND.test(o)).map((o) => o.replace(/\[.*$|@latest$/i, ""));
+  return namedHeld("poetry", names) ?? declaredHeld("poetry", barePoetry) ?? judgePyNames(names, reader, read.values, "poetry");
 }
 
 function accountCargo(args, reader) {
@@ -4642,7 +4743,8 @@ function accountCargo(args, reader) {
   }
   const source = sourceRule(values, ["--registry", "--index"], names, new Set(["--registry", "--index"]));
   if (source !== undefined) return source;
-  return namedHeld(sub === "add" ? "cargoadd" : "cargoinstall", names) ?? judgedByReader(names, reader, "crates.io");
+  const bareCargo = sub === "add" ? read.positional.filter((o) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(o)) : [];
+  return namedHeld(sub === "add" ? "cargoadd" : "cargoinstall", names) ?? (sub === "add" ? declaredHeld("cargoadd", bareCargo) : null) ?? judgedByReader(names, reader, "crates.io");
 }
 
 function accountGo(args, reader) {
@@ -5532,6 +5634,8 @@ function judgeCall(input, env, now) {
   if (!found) return "";
   // R8-1 / R8-2: a command the detector names goes ahead only when every install in it is read whole.
   if (found.what === "command") {
+    // H1: the folder the command starts in (a name alone is checked against that project's manifest).
+    accountCwd = resolve(typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd());
     const part = accountCall(input.tool_input.command, input.tool_name === "PowerShell" ? "powershell" : "bash");
     if (part !== null) {
       // The reader's own part, when it already found one (a bound it passed), is the one named.
