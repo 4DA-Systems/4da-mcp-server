@@ -3476,7 +3476,10 @@ function accountLine(line, dialect, depth = 0) {
     let exempt = !writesManifest && !(gitSetting && programName(commands[k][Math.max(0, commandStart(commands[k]))] ?? "") === "git");
     for (let j = k; exempt && links[j] === "|" && j + 1 < commands.length; j++) exempt = sinkCommand(commands[j + 1]);
     const why = accountCommand(commands[k], dialect, depth, exempt);
-    if (why) return why;
+    if (why) {
+      accountFailed ??= commands[k];
+      return why;
+    }
   }
   return null;
 }
@@ -4147,12 +4150,118 @@ function accountGo(args, reader) {
 const SED_AWK_REMEDY =
   "sed and awk can run a command from their script, and this hook does not read their scripts: to search for that text use grep, rg or Select-String; to write it into a file use the Write tool.";
 
+/**
+ * Round 12 (tenth independent check, S28): the plain command the not-read remedy names, built from
+ * a form this hook reads and releases, or null. The manager is found anywhere in the held command
+ * (after prefixes, wrappers, `python -m pip`); a verb with a named version becomes that manager's
+ * add or install (`bun update x@1` -> `bun add x@1`); each operand keeps its exact version when it
+ * has one this hook reads, and is the name alone otherwise; options are left out.
+ */
+const REMEDY_ADD = { npm: "install", pnpm: "add", yarn: "add", bun: "add", pip: "install", uv: "add", poetry: "add", cargo: "add", go: "get" };
+function remedyCommand(words) {
+  let at = -1;
+  let manager = null;
+  for (let i = 0; i < words.length && manager === null; i++) {
+    const w = words[i].replace(/['"]/g, "");
+    if ((w === "-m" || /^-[A-Za-z]+m$/.test(w)) && /^pip\d*$/.test(words[i + 1] ?? "")) {
+      manager = "pip";
+      at = i + 1;
+      break;
+    }
+    const m = managerWord(programName(w).toLowerCase().replace(/@[^@/\\]*$/, ""));
+    if (m) {
+      manager = m;
+      at = i;
+    }
+  }
+  if (manager === null) return null;
+  const rest = words.slice(at + 1);
+  const uvPip = manager === "uv" && rest.includes("pip");
+  const verbAt = rest.findIndex((w) => !w.startsWith("-") && (isManagerVerb(manager, w.toLowerCase()) || (manager === "go" && w === "mod")));
+  if (verbAt < 0) return null;
+  let verb = rest[verbAt].toLowerCase();
+  if (manager === "go" && verb === "mod") verb = "edit";
+  const after = rest.slice(verbAt + 1);
+  // Operands: the words that are not options, an option that takes a value taking its value with it.
+  const values = manager === "go" ? GO_VALUES : manager === "cargo" ? CARGO_VALUES : manager === "pip" || manager === "uv" ? PIP_VALUES : manager === "poetry" ? POETRY_VALUES : JS_VALUES[manager] ?? new Set();
+  const operands = [];
+  const required = [];
+  for (let i = 0; i < after.length; i++) {
+    const a = after[i];
+    if (a.startsWith("-")) {
+      const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+      if (manager === "go" && (name === "-require" || name === "--require")) required.push(a.includes("=") ? a.slice(a.indexOf("=") + 1) : (after[++i] ?? ""));
+      else if (!a.includes("=") && (values.has(name) || (manager === "npm" && NPM_VALUE_OPTIONS.has(name.replace(/^--/, ""))))) i++;
+      continue;
+    }
+    operands.push(a);
+  }
+  if (manager === "go" && verb === "edit") {
+    operands.push(...required);
+    verb = "get";
+  }
+  const names = operands.map((o) => remedyOperand(manager, o)).filter(Boolean);
+  if (names.length === 0) {
+    // No package named: the command as typed, without options (the lockfile, or the manifest's ranges).
+    // pip needs a requirement (a bare `pip install` is refused by pip itself): the general remedy then.
+    if ((manager === "go" && verb !== "get") || manager === "pip" || uvPip) return null;
+    return `${manager} ${verb}`;
+  }
+  const install = manager === "cargo" && verb === "install" ? "install" : manager === "go" && verb === "install" ? "install" : REMEDY_ADD[manager];
+  return `${manager === "uv" && uvPip ? "uv pip install" : `${manager} ${install}`} ${names.join(" ")}`;
+}
+
+/** One operand as the remedy names it: its exact version when this hook reads one, else the name alone; null for none. */
+function remedyOperand(manager, word) {
+  const w = word.replace(/['"]/g, "");
+  if (PACKAGE_MANAGERS.has(manager)) {
+    const file = registryFile(w);
+    if (file && file.ecosystem === "npm") return `${file.name}@${file.spec}`;
+    if (npmBareName(w)) return w;
+    const m = NPM_SPEC.exec(w);
+    if (!m) return null;
+    const exact = FULL_SEMVER.exec(m[2].trim());
+    return exact ? `${m[1]}@${exact[1]}` : m[1];
+  }
+  if (manager === "pip" || manager === "uv" || manager === "poetry") {
+    const file = registryFile(w);
+    if (file && file.ecosystem === "PyPI") return `${file.name}${file.spec}`;
+    const r = quietly(() => pep508(w));
+    if (r && /^==\d[\w.!+]*$/.test(r.spec)) return `${r.name}${r.spec}`;
+    const name = r?.name ?? pyBareName(w) ?? /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})/.exec(w)?.[1] ?? null;
+    return name && !/\.(?:txt|in|cfg|toml|lock|json|ya?ml|ini|md|whl|gz|zip)$/i.test(name) ? name : null;
+  }
+  if (manager === "cargo") {
+    const m = CARGO_SPEC.exec(w);
+    if (m && FULL_SEMVER.test(m[2].trim())) return `${m[1]}@${m[2].trim().replace(/^=/, "")}`;
+    const name = m ? m[1] : /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(w) ? w : null;
+    return name;
+  }
+  if (manager === "go") {
+    const m = GO_SPEC.exec(w);
+    if (m && GO_EXACT.test(m[2])) return `${m[1]}@${m[2]}`;
+    const name = m ? m[1] : /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*$/.test(w) ? w : null;
+    return name && !name.includes("...") ? name : null;
+  }
+  return null;
+}
+
+/** The not-read remedy for the command that was not read: a concrete command when one can be built. */
+function remedyText(words) {
+  const command = words ? remedyCommand(words) : null;
+  if (!command) return ACCOUNT_REMEDY;
+  return `Run it as a plain command of its own: \`${command}\` (no other options): the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
+}
+
 /** A remedy other than ACCOUNT_REMEDY for the part accountCall returns (set by the part's reader). */
 let accountRemedy = null;
+/** The simple command that was not read (its remedy is built from it). */
+let accountFailed = null;
 
 function accountCall(command, dialect) {
   fault("account");
   accountRemedy = null;
+  accountFailed = null;
   if (!detectsInstall(command)) return null;
   if (command.length > MAX_ACCOUNT_CHARS) return `a command over ${MAX_ACCOUNT_CHARS / 1024 / 1024} MB that names an install`;
   return accountLine(command, dialect);
@@ -4824,7 +4933,7 @@ function judgeCall(input, env, now) {
     const part = accountCall(input.tool_input.command, input.tool_name === "PowerShell" ? "powershell" : "bash");
     if (part !== null) {
       // The reader's own part, when it already found one (a bound it passed), is the one named.
-      refuse(part, accountRemedy ?? ACCOUNT_REMEDY);
+      refuse(part, accountRemedy ?? remedyText(accountFailed));
       unreadInstalls = true;
     }
   }

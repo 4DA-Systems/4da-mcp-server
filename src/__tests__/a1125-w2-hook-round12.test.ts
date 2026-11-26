@@ -154,3 +154,69 @@ describe("4: one outermost handler: nothing goes silent", () => {
     expect(out).toContain('"deny"');
   }, 20_000);
 });
+
+/**
+ * 6: for every manager and every verb in the detector, a command held as not read (an option no
+ * table knows) prints a remedy command; that command, run as printed (and its dependency_check call
+ * answered when it names one), goes ahead.
+ */
+describe("6: the remedy each denial prints releases", () => {
+  const Z = "--zz-not-an-option";
+  const HELD: string[] = [
+    `npm install ${Z} lodash@4.17.21`,
+    `npm install-test ${Z} lodash@4.17.21`,
+    `npm it ${Z} lodash@4.17.21`,
+    `npm link ${Z} lodash`,
+    `npm update ${Z} lodash@4.17.21`,
+    `pnpm add ${Z} lodash@4.17.21`,
+    `pnpm install ${Z} lodash@4.17.21`,
+    `pnpm i ${Z} lodash@4.17.21`,
+    `pnpm up ${Z} lodash@4.17.21`,
+    `pnpm update ${Z} lodash@4.17.21`,
+    `pnpm upgrade ${Z} lodash@4.17.21`,
+    `pnpm link ${Z} lodash`,
+    `pnpm ln ${Z} lodash`,
+    `yarn add ${Z} lodash@4.17.21`,
+    `yarn up ${Z} lodash@4.17.21`,
+    `yarn upgrade ${Z} lodash@4.17.21`,
+    `yarn install ${Z}`,
+    `yarn link ${Z} lodash`,
+    `bun add ${Z} typescript@5.6.3`,
+    `bun a ${Z} typescript@5.6.3`,
+    `bun install ${Z} typescript@5.6.3`,
+    `bun i ${Z} typescript@5.6.3`,
+    `bun update ${Z} typescript@5.6.3`,
+    "bun update typescript@5.6.3",
+    `bun link ${Z} typescript`,
+    `pip install ${Z} requests==2.32.3`,
+    `python -m pip install ${Z} requests==2.32.3`,
+    `uv add ${Z} requests==2.32.3`,
+    `uv sync ${Z}`,
+    `uv lock ${Z}`,
+    `uv pip install ${Z} requests==2.32.3`,
+    `poetry add ${Z} requests==2.32.3`,
+    `poetry install ${Z}`,
+    `poetry update ${Z}`,
+    `poetry lock ${Z}`,
+    `cargo add ${Z} serde@1.0.200`,
+    `cargo install ${Z} ripgrep@14.1.1`,
+    `cargo update ${Z}`,
+    `go get ${Z} rsc.io/quote@v1.5.2`,
+    `go install ${Z} golang.org/x/tools/gopls@v0.16.2`,
+    `go mod edit ${Z} -require=rsc.io/quote@v1.5.2`,
+  ];
+  it.each(HELD)("%s", (command) => {
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text).toContain("could not be read");
+    const remedy = /plain command of its own: `([^`]+)`/.exec(r.text)?.[1];
+    expect(remedy, r.text).toBeDefined();
+    expect(remedy).not.toBe(command);
+    const first = run(remedy as string);
+    if (first.decision === "deny") {
+      expect(first.text, remedy).not.toContain("could not be read");
+      answerDenial(s, first, "proceed");
+      expect(run(remedy as string).decision, remedy).toBe("allow");
+    }
+  });
+});
