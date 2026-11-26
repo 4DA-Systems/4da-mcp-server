@@ -563,7 +563,8 @@ export async function executeWhatShouldIKnow(
       if (evidenceScreen.names.has(p.name.toLowerCase()) || evidenceScreen.ecosystems.has(p.ecosystem) || [...evidenceScreen.scopes].some((s) => p.name.toLowerCase().startsWith(`${s}/`))) continue;
       // An unknown option's possible value is never offered by name when the option may carry a secret, or the task
       // screen withheld it (K3): it weighs as a word the reader did not read, which stands where a package stands.
-      if (p.afterOption && (/tok|auth|pass|secret|key|cred|otp|cert|sig|pat$|login|user/i.test(p.afterOption) || !screenedWords.has(p.name.toLowerCase()))) continue;
+      // An option that names a source or a place (`--registry-mirror X`, `--cache-dir X`) takes a value, never a package.
+      if (p.afterOption && (/tok|auth|pass|secret|key|cred|otp|cert|sig|pat$|login|user|regist|mirror|index|url|host|proxy|scope|prefix|dir|path|cache|config|log|out|file/i.test(p.afterOption) || !screenedWords.has(p.name.toLowerCase()))) continue;
       if (privateTask.some((x) => x.package.toLowerCase() === p.name.toLowerCase())) continue;
       const why = registryReason(p.ecosystem, p.name);
       if (why) {

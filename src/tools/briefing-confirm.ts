@@ -266,6 +266,9 @@ const SECRET_WORDS = /^(?:keys?|secrets?|passwords?|passwd|pwd|passphrase|tokens
  * it). Help for the agent, never a gate: a promise never depends on it. Linear: one scan of the task
  * per listed word, at most MAX_TO_CONFIRM words.
  */
+/** Words a task uses for a package of its own (a help for the agent, never a rule the level rests on). */
+const PRIVATE_WORDS = new Set(["internal", "private", "company", "company's", "in-house", "inhouse", "proprietary", "corporate", "own"]);
+
 export function cautionFor(task: string, word: string): string | undefined {
   const lower = task.toLowerCase();
   const target = word.toLowerCase();
@@ -274,6 +277,9 @@ export function cautionFor(task: string, word: string): string | undefined {
     const before = lower.slice(Math.max(0, at - 60), at).split(/[^a-z0-9_-]+/).filter(Boolean).slice(-3);
     const after = lower.slice(at + target.length, at + target.length + 60).split(/[^a-z0-9_-]+/).filter(Boolean).slice(0, 3);
     if ([...before, ...after].some((w) => SECRET_WORDS.test(w))) return "the task calls this a key, a secret, a password or a token: confirm it only if it really is a package";
+    // "our internal zq7-audit-log (company registry)": the task says where it comes from.
+    const parenthetical = /^\s*\(/.test(lower.slice(at + target.length, at + target.length + 4));
+    if ([...before.slice(-2), ...(parenthetical ? after : [])].some((w) => PRIVATE_WORDS.has(w))) return "the task calls this internal or the company's own: if it comes from a private registry, git or the workspace, declare it public: false (never sent)";
   }
   return undefined;
 }
