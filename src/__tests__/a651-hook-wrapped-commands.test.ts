@@ -80,12 +80,17 @@ describe("commands run through a shell or a runner are read", () => {
     "pnpm dlx create-vite my-app",
     "python -c 'import pip' -m pip install requests==2.31.0",
     "pwsh -File build.ps1",
-    // Global tools, not this project's dependencies: left alone, as before.
-    "cargo install ripgrep@14.1.1",
-    "yarn global add typescript@5.6.3",
-    "go install golang.org/x/tools/gopls@v0.16.2",
   ])("not read, so allowed without comment: %s", (command) => {
     expect(installsIn(command, "bash")).toEqual([]);
+  });
+
+  // Round 8: a tool installed from the registry is the same question as an add, and is read as one.
+  it.each([
+    ["cargo install ripgrep@14.1.1", { ecosystem: "crates.io", name: "ripgrep", spec: "14.1.1" }],
+    ["yarn global add typescript@5.6.3", { ecosystem: "npm", name: "typescript", spec: "5.6.3" }],
+    ["go install golang.org/x/tools/gopls@v0.16.2", { ecosystem: "Go", name: "golang.org/x/tools/gopls", spec: "v0.16.2" }],
+  ])("a global tool from the registry is read: %s", (command, item) => {
+    expect(installsIn(command, "bash")).toEqual([item]);
   });
 
   it("wrappers nest at most three deep", () => {

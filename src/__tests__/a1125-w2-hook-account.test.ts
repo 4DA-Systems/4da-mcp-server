@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { detectsInstall } from "../../hooks/manifest-edit.mjs";
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
-import { timedWithin } from "./helpers/a1125-hook-run.js";
+import { answerDenial, timedWithin } from "./helpers/a1125-hook-run.js";
 
 const REMEDY = "Run it as a plain command of its own";
 const AVOID_LATEST = [
@@ -43,11 +43,18 @@ describe("R8-1: the detector", () => {
     "go mod edit -require=rsc.io/quote@v1.5.2",
     "npm pkg set dependencies.lodash=4.17.21",
     `echo ${"x ".repeat(100_000)} && cargo add serde`,
+    // bash runs a backquote or $( ) inside double quotes: those are command words
+    'git commit -m "docs: `npm install x` step"',
+    'echo "$(pip install requests)"',
+    "2>/dev/null pip install requests",
+    "sudo -E npm i lodash",
+    "bash -c 'npm i lodash'",
+    "pipenv run pip install requests",
   ])("names %s", (command) => {
     expect(detectsInstall(command)).toBe(true);
   });
 
-  it.each(["npm ci", "npm run build", "bunx tsc", "make install", "brew install node", "apt-get install -y python3-pip", "gem install bundler", "composer require x/y", "dotnet add package X", "npm\ninstall"])(
+  it.each(["npm ci", "npm run build", "bunx tsc", "make install", "brew install node", "apt-get install -y python3-pip", "gem install bundler", "composer require x/y", "dotnet add package X", "npm\ninstall", "git commit -m 'docs: `npm install x`'", "make PIP=pip3 install", "pipenv install requests", "pdm install"])(
     "does not name %s",
     (command) => {
       expect(detectsInstall(command)).toBe(false);
@@ -55,60 +62,118 @@ describe("R8-1: the detector", () => {
   );
 });
 
-describe("R8-2: a detected command not read whole is held as not read, with one remedy", () => {
-  it.each([
-    // spellings the reader did not read
-    "python -mpip install requests",
-    "pythonw -m pip install requests",
-    "python -Im pip install requests",
-    "uv run pip install requests",
-    "poetry run pip install requests",
-    "stdbuf -oL npm i lodash",
-    "winpty npm i lodash",
-    "cross-env A=1 npm i lodash",
-    "flock /tmp/l npm i lodash",
-    "find . -maxdepth 0 -exec npm i lodash ';'",
-    "watch -n1 npm i lodash",
-    "yarnpkg add lodash",
-    // options that change what a name resolves to, and settings before the manager
-    "npm i --tag next lodash",
-    "npm i --before 2020-01-01 lodash",
-    "npm_config_tag=next npm i lodash",
-    "PIP_INDEX_URL=https://example.invalid/simple pip install requests",
-    "UV_PRERELEASE=allow uv add requests",
-    "bun add -c x.toml lodash",
-    "bun update --latest lodash",
-    "pip install --pre requests",
-    "uv add --prerelease allow requests",
-    "uv lock --upgrade",
-    // operands not read as a version
-    "npm i lodash@x",
-    "pip install 'requests '",
-    "go get rsc.io/quote/...",
-    // a registry or index this hook cannot classify
-    "npm i --registry registry lodash",
-    // installs of tools this hook does not read, and managers it detects but does not read
-    "cargo install ripgrep",
-    "go install golang.org/x/tools/gopls@latest",
-    "yarn global add typescript",
-    "uv tool install ruff",
-    "pipenv install requests",
-    "pdm add requests",
-    "rye add requests",
-    "pixi add requests",
-    "hatch add requests",
-    // lines this hook cannot take apart
-    "npm install $PKG",
-    "npm i $(cat pkgs.txt)",
-    "bash <<'EOF'\nnpm i lodash\nEOF",
-    "cat <<EOF\n$(npm i lodash)\nEOF",
-  ])("%s", (command) => {
+/**
+ * Each command held as not read, beside the command its remedy tells the user to run
+ * (`<manager> <verb> <name>@<exact version>`, or the name alone, no other options). NO HOLD WITHOUT
+ * A WAY THROUGH: the remedy is run, the dependency_check call its denial names (if any) is answered
+ * proceed, and it goes ahead.
+ */
+const NOT_READ: [string, string][] = [
+  // spellings the reader does not read
+  ["python -mpip install requests", "pip install requests"],
+  ["pythonw -m pip install requests", "pip install requests"],
+  ["python -Im pip install requests", "pip install requests"],
+  ["stdbuf -oL npm i lodash", "npm i lodash"],
+  ["winpty npm i lodash", "npm i lodash"],
+  ["cross-env A=1 npm i lodash", "npm i lodash"],
+  ["flock /tmp/l npm i lodash", "npm i lodash"],
+  ["find . -maxdepth 0 -exec npm i lodash ';'", "npm i lodash"],
+  ["watch -n1 npm i lodash", "npm i lodash"],
+  ["yarnpkg add lodash", "yarn add lodash"],
+  // options that change what a name resolves to, and settings before the manager
+  ["npm i --tag next lodash", "npm i lodash@4.17.21"],
+  ["npm i --before 2020-01-01 lodash", "npm i lodash@4.17.21"],
+  ["npm_config_tag=next npm i lodash", "npm i lodash"],
+  ["PIP_INDEX_URL=https://example.invalid/simple pip install requests", "pip install requests"],
+  ["UV_PRERELEASE=allow uv add requests", "uv add requests"],
+  ["bun add -c x.toml lodash", "bun add lodash"],
+  ["bun update --latest lodash", "bun add lodash@4.17.21"],
+  ["pip install --pre requests", "pip install requests==2.32.3"],
+  ["uv add --prerelease allow requests", "uv add requests==2.32.3"],
+  ["uv lock --upgrade", "uv lock --upgrade-package requests==2.32.3"],
+  ["npm install --frozen-lockfile", "npm install"],
+  // operands not read as a version
+  ["npm i lodash@x", "npm i lodash"],
+  ["pip install 'requests '", "pip install requests"],
+  ["go get rsc.io/quote/...", "go get rsc.io/quote"],
+  // a registry this hook cannot classify
+  ["npm i --registry registry lodash", "npm i lodash"],
+  // lines this hook cannot take apart
+  ["npm install $PKG", "npm install lodash"],
+  ["npm i $(cat pkgs.txt)", "npm i lodash"],
+  ["bash <<'EOF'\nnpm i lodash\nEOF", "npm i lodash"],
+  ["cat <<EOF\n$(npm i lodash)\nEOF", "npm i lodash"],
+];
+
+/** Runs `command`; when held for a verdict, answers the call its denial names (proceed) and runs it again. */
+function releases(command: string): void {
+  const first = run(command);
+  if (first.decision === "deny") {
+    expect(first.text, command).not.toContain("could not be read");
+    answerDenial(s, first, "proceed");
+    const second = run(command);
+    expect(second.decision, second.text).toBe("allow");
+  }
+}
+
+describe("R8-2: a detected command not read whole is held as not read, with one remedy, and the remedy releases it", () => {
+  it.each(NOT_READ)("%s  ->  %s", (command, remedy) => {
     const r = run(command);
     expect(r.decision, r.text).toBe("deny");
     expect(r.text).toContain("could not be read");
     expect(r.text).toContain(REMEDY);
+    s.ledger([]);
+    releases(remedy);
+  });
+});
+
+describe("a tool installed from the registry is the same question as an add: held on its verdict, released by the call the denial names", () => {
+  it.each([
+    "cargo install ripgrep",
+    "cargo install ripgrep@14.1.1",
+    "cargo install ripgrep --version 14.1.1",
+    "go install golang.org/x/tools/gopls@latest",
+    "go install golang.org/x/tools/gopls@v0.16.2",
+    "yarn global add typescript",
+    "yarn global add typescript@5.6.3",
+    "uv tool install ruff",
+    "uv tool install ruff==0.5.0 --with black",
+    "uv run pip install requests",
+    "poetry run pip install requests",
+    "pipenv run pip install requests",
+  ])("%s", (command) => {
+    s.ledger([]);
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items, r.text).not.toBeNull();
+    releases(command);
   });
 
+  it.each(["cargo install --path .", "cargo install --git https://example.invalid/x.git x", "go install ./cmd/tool", "uv tool install --index-url https://pypi.corp.example/simple ruff"])("goes ahead (no public release named): %s", (command) => {
+    expect(run(command).decision).toBe("allow");
+  });
+});
+
+describe("pipenv, pdm, rye, pixi, hatch and conda installs are not read (a stated limit): they go ahead", () => {
+  it.each(["pipenv install requests", "pipenv install", "pdm add requests", "pdm install", "rye add requests", "rye sync", "pixi add requests", "pixi install", "hatch env create", "conda install requests", "pipx inject v requests"])("%s", (command) => {
+    expect(run(command).decision).toBe("allow");
+  });
+});
+
+describe("a manager word inside another program's arguments is not a command word: it goes ahead", () => {
+  it.each([
+    "make PIP=pip3 install",
+    "sed -i 's/npm install/npm ci/' README.md",
+    "awk '/pip install/ {print}' docs/setup.md",
+    "node -e \"console.log('npm install')\"",
+    "python -c \"print('pip install requests')\"",
+    "echo \"$HOME: npm install\"",
+  ])("%s", (command) => {
+    expect(run(command).decision).toBe("allow");
+  });
+});
+
+describe("R8-2: misc", () => {
   it.each(["npm i 'lodash@>=0'", "cargo add 'serde@>=0'", "go get rsc.io/quote@master"])("%s: a range or a tag the reader reads is held on its verdict, not as not read", (command) => {
     const r = run(command);
     expect(r.decision).toBe("deny");

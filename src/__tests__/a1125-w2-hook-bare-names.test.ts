@@ -194,12 +194,11 @@ describe(`${ORDINARY.length} ordinary commands go ahead with an empty ledger`, (
 const ACCOUNT_REMEDY = "Run it as a plain command of its own";
 
 /**
- * Round 8 (R8-2): forms the hook does not read whole are now held as not read, with one remedy:
- * an option npm does not know (`--frozen-lockfile` is Yarn's and pnpm's), and installs of tools
- * from the registry by cargo install, go install and yarn global add, which this hook does not read.
+ * Round 8 (R8-2): an option npm does not know (`--frozen-lockfile` is Yarn's and pnpm's) is held as
+ * not read, with one remedy; the remedy (`npm install`) goes ahead.
  */
-describe("round 8: forms not read whole are held as not read, with one remedy", () => {
-  it.each(["npm install --frozen-lockfile", "cargo install ripgrep", "go install golang.org/x/tools/gopls@latest", "yarn global add typescript"])("%s", (command) => {
+describe("round 8: an option npm does not know is held as not read, with one remedy", () => {
+  it.each(["npm install --frozen-lockfile"])("%s", (command) => {
     s.ledger([]);
     const r = run(command);
     expect(r.decision).toBe("deny");
