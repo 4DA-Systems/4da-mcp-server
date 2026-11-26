@@ -186,3 +186,17 @@ describe("C7, C9b, C9c: arguments", () => {
     expect(h.requests.filter((u) => u.includes("zqxok"))).toEqual([]);
   });
 });
+
+describe("C1: a command opened by a parenthesis ends at its close", () => {
+  it.each([
+    ["Add structured logging with pino (npm install pino) and replace console.log in the server.", "pino"],
+    ["Store uploads in S3 with boto3 (pip install boto3).", "boto3"],
+  ])("%s", async (task, name) => {
+    npmProject();
+    const r = await brief({ task });
+    expect(r.delegation_assessment.reason).not.toMatch(/could not read whole/);
+    // The operand is the only pair (pino and boto3 are bundled-list names: looked up, not waiting); nothing after ")".
+    expect(waiting(r)).toEqual([]);
+    expect(JSON.stringify(r.new_packages ?? [])).toContain(name);
+  });
+});

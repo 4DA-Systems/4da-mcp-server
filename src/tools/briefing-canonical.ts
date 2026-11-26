@@ -12,10 +12,10 @@
  *  (a) a switch on that manager's short, case-SENSITIVE allow list (it takes no value), or an option of fixed
  *      arity whose value is consumed and never offered (`-w <ws>`, `--group <g>`, `-F <features>`), or
  *  (b) an operand that is a plain package name, with an optional spec, in that ecosystem's grammar;
- * and it is DELIMITED: it is a code span of its own (`...`), or it starts its line or sentence (after a shell
- * prompt or "Run"), and it ends at a shell separator (`;`, `&&`, `||`, `|`, a new line), the closing backtick, or the
- * end of its sentence. A command that starts inside prose ("make npm install work behind the proxy") cannot be
- * told where it ends: it is not canonical. Every operand of a canonical command is a strict (name as written,
+ * and it ENDS at a shell separator (`;`, `&&`, `||`, `|`, a new line), the close of its own code span (`...`) or
+ * parenthesis ("(npm install pino)"), or the end of its sentence: every word up to there is an option or an operand,
+ * so a command inside prose ("npm install msw for tests") holds msw, for and tests. Every operand of a canonical
+ * command is a strict (name as written,
  * ecosystem) pair; no word is skipped because it looks like English (`npm i -D test zqxevil` holds test and
  * zqxevil). Anything else is NOT READ WHOLE: an option not on the list (never lower-cased before comparing: `-F`
  * is not `-f`), a registry, index, source, git or path option, a substitution, a quote problem, a comma in the
@@ -173,7 +173,8 @@ export function canonicalCommands(text: string): CanonicalCommand[] {
 /** A command named at token `m`, read canonically or not; null when no command is named there. */
 function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: number } | null {
   const first = tokens[m];
-  const span = first.startsWith("`");
+  // A command in a code span of its own ends at its closing backtick; one opened by a parenthesis at its ")".
+  const span: Closer = first.startsWith("`") ? "`" : first.startsWith("(") ? ")" : null;
   let k = m;
   let manager: Manager | null = null;
   let runnerWord: string | null = null;
@@ -244,7 +245,7 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
   for (let j = v + 1; j < end; j++) {
     const rawTok = tokens[j];
     const last = j === end - 1;
-    let t = span ? rawTok.replace(/`[.,;:!?)]*$/, "") : rawTok;
+    let t = span === "`" ? rawTok.replace(/`[.,;:!?)]*$/, "") : span === ")" && j === end - 1 ? rawTok.replace(/\)[.,;:!?]*$/, "") : rawTok;
     if (last) t = t.replace(/[.!?]$/, "");
     if (rawTok.includes("$(") || rawTok.includes("${") || (rawTok.startsWith("`") && j > m)) return { command: notWhole(manager!, verb, ecosystem, "a command substitution among its words", tokens, m, end), end };
     if (/,$/.test(t) || (t.includes(",") && ecosystem !== "PyPI")) return { command: notWhole(manager!, verb, ecosystem, "a comma in its list of packages", tokens, m, end), end };
@@ -267,11 +268,14 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
   return { command: { manager: manager!, verb, ecosystem, canonical: true, operands, requirementFiles, text: tokens.slice(m, end).join(" ").slice(0, 120) }, end };
 }
 
-/** Where a command started at `m` ends: the closing backtick of its own code span, else the end of its sentence. */
-function endOf(tokens: string[], m: number, span: boolean): number {
+type Closer = "`" | ")" | null;
+
+/** Where a command started at `m` ends: the close of its own code span or parenthesis, else the end of its sentence. */
+function endOf(tokens: string[], m: number, span: Closer): number {
+  const closes = span === "`" ? /`[.,;:!?)]*$/ : /\)[.,;:!?]*$/;
   if (span) {
-    if (/`[.,;:!?)]*$/.test(tokens[m].slice(1))) return m + 1;
-    for (let j = m + 1; j < tokens.length; j++) if (/`[.,;:!?)]*$/.test(tokens[j])) return j + 1;
+    if (closes.test(tokens[m].slice(1))) return m + 1;
+    for (let j = m + 1; j < tokens.length; j++) if (closes.test(tokens[j])) return j + 1;
   }
   return tokens.length;
 }
