@@ -714,9 +714,24 @@ function pyprojectDependencies(entries, local = new Set()) {
       else if (keys.length === 1 && value.s !== undefined && VERSION_SHAPED.test(value.s) && !TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) {
         out.push({ name: keys[0], section: null, spec: value.s });
       }
-    } else {
-      section = pyRequirementArray([...table, ...keys]);
-      if (section !== null && value.a) strings = value.a;
+    } else if (table.length + keys.length <= 5) {
+      // pyRequirementArray names paths of 2 to 5 parts; an inline table's keys go on the path
+      // (`project = { dependencies = [..] }`, `[project]` with `optional-dependencies = { dev = [..] }`,
+      // `dependency-groups = { dev = [..] }`, `[tool]` with `uv = { dev-dependencies = [..] }`:
+      // fifth independent check, G3c), followed only while the path is short enough to become one.
+      const arrays = (path, v) => {
+        tick();
+        const at = pyRequirementArray(path);
+        if (at !== null) {
+          if (v.a) for (const s of v.a) if (typeof s.s === "string") {
+            const r = requirementString(s.s);
+            if (r) out.push({ name: r.name, section: at, spec: r.spec });
+          }
+          return;
+        }
+        if (v.t && path.length < 5) for (const [k, inner] of Object.entries(v.t)) arrays([...path, ...k.split(".")], inner);
+      };
+      arrays([...table, ...keys], value);
     }
     for (const v of strings) {
       const r = typeof v.s === "string" ? requirementString(v.s) : null;
@@ -1253,11 +1268,61 @@ function wholeFileChanges(file, before, after) {
       return [];
     }
   }
+  if (file === "Cargo.toml" || file === "pyproject.toml") {
+    // A TOML escape (`"smallve\u0063"`, `["dependencie\u0073"]`, `"1.6.\u0030"`, a line-ending
+    // backslash in `"""`) is not decoded here: a new or changed line that holds a backslash in a
+    // basic string or quoted key is held as not read; an unchanged one never is (fifth independent
+    // check, G3b). Literal strings in single quotes have no escapes and are read as they are.
+    const was = tomlEscapeLines(before);
+    if ([...tomlEscapeLines(after)].some((line) => !was.has(line))) {
+      refuse(
+        `a ${file} line with a backslash escape in a double-quoted string or key, which this hook does not decode`,
+        "Write each dependency's name and version without escapes, and any other value that needs a backslash as a literal string in single quotes ('C:\\path', '\\d+'), which has no escapes: the hook then reads the file, and the versions it sets are judged as in any other edit.",
+      );
+    }
+  }
   const versionsOf = (text) => {
     const context = fileContext(text);
     return declaredVersions(file, text, () => context, 0, true);
   };
   return diffVersions(versionsOf(before), versionsOf(after), specKey(file));
+}
+
+/**
+ * The lines of a TOML text (trimmed) that hold a backslash inside a basic string or a quoted key
+ * (`"..."` or `"""..."""`), read in one pass: comments and literal strings ('...', '''...''')
+ * hold no escape.
+ */
+function tomlEscapeLines(text) {
+  const out = new Set();
+  if (typeof text !== "string" || !text.includes("\\")) return out;
+  const lines = text.split("\n");
+  let state = ""; // "" | '"' | '"""' | "'" | "'''"
+  for (const raw of lines) {
+    tick();
+    const line = raw.replace(/\r$/, "");
+    let escaped = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (state === "") {
+        if (ch === "#") break;
+        if (line.startsWith('"""', i)) (state = '"""'), (i += 2);
+        else if (line.startsWith("'''", i)) (state = "'''"), (i += 2);
+        else if (ch === '"' || ch === "'") state = ch;
+      } else if (state === '"' || state === '"""') {
+        if (ch === "\\") {
+          escaped = true;
+          i++;
+        } else if (state === '"' && ch === '"') state = "";
+        else if (state === '"""' && line.startsWith('"""', i)) (state = ""), (i += 2);
+      } else if (state === "'" && ch === "'") state = "";
+      else if (state === "'''" && line.startsWith("'''", i)) (state = ""), (i += 2);
+    }
+    // A one-line string never runs past its line.
+    if (state === '"' || state === "'") state = "";
+    if (escaped) out.add(line.trim());
+  }
+  return out;
 }
 
 const ECOSYSTEM = {
