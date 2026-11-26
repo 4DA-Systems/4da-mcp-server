@@ -17,15 +17,24 @@
  *     not read, each of which holds review_needed at least: a command or snippet not read whole (K3), a
  *     package-source spelling of the C3 list, a refused argument, a word the screen withheld where a package stands,
  *     a dismissed name that stands where a package stands or after a package manager's name on its line,
- *     continued line or fenced block (D3), and more candidate names than one call can declare (m7). A public entry
+ *     continued line or fenced block (D3), a command of a tool it does not read (`xargs npm install`, `gem install`),
+ *     and more candidate names than one call can declare (m7). "A package manager's name" is one of these names
+ *     (briefing-canonical.ts MANAGER_NAMES, round 10, G3): npm, pnpm, yarn, bun, pip, pip3 (and pipX.Y), pipx, uv,
+ *     poetry, cargo, go, npx, pnpx, bunx, uvx, deno, pipenv, pdm, rye, hatch, conda, mamba, micromamba, pixi,
+ *     yarnpkg, cargo-binstall, easy_install, gem, bundle, composer, dotnet, nuget, brew, apt, apt-get, ni, nci, nr,
+ *     nlx, corepack, volta, mise, asdf. A public entry
  *     without `version` leaves the declaration incomplete: confirmation_needed, whatever else holds (round 9, E1). The CALLER'S DECLARATION is the statement of what the
  *     task adds or changes: `public: true` says the name is on the public registry, and it is sent there; `public:
  *     false` is for anything from a private registry, an index of its own, git or a path. `to_confirm` is what this
  *     briefing noticed, a prompt, never a complete reading. A safe_to_delegate reason ends "This rests on your
  *     declaration: a package you did not declare was not checked."
  * K2. Strict evidence (briefing-command-check.ts strictEvidence): the operands of a command the canonical grammar
- *     reads whole, the entries of a manifest snippet it reads whole, and (D1(a)) a name@spec, name==spec,
- *     `name = "spec"` or `"name": "spec"` token anywhere in the task whose form decides the ecosystem. Each is a
+ *     reads whole, the entries of a manifest snippet it reads whole (every line or entry of it is a pair, a known
+ *     non-package line, or it makes the snippet not read whole: round 10, G1), and a token of one of these forms
+ *     anywhere in the task whose form decides the ecosystem: name@spec with the spec bare or in single or double
+ *     quotes; `alias@npm:name@spec` (tied to name); name==spec and PEP 440's other operators, bare or spaced;
+ *     `name = "spec"`; `"name": "spec"`; `"alias": "npm:name@spec"`. These are versions the briefing happens to read,
+ *     never a complete reading. Each is a
  *     (name as written, ecosystem) pair that waits in to_confirm until a declaration of exactly that pair settles it;
  *     dismissed, it keeps review_needed. A prose candidate is offered once with every ecosystem the project uses, and
  *     any declaration of the name settles it. No entry carries a version. A word the grammar consumed (program,
@@ -44,11 +53,13 @@
  *     public, and each is said "not looked up"; the level is at most review_needed and nothing is written to the
  *     check ledger. Any other way a task names a source is not noticed: the declaration decides. The project's own
  *     private rules (its configuration on disk, FOURDA_PRIVATE_PACKAGES) override a public declaration as before.
- * C4/C6. A declared public package is checked as dependency_check would be asked for it: at its declared `version`
- *     (round 9, E1: without one, at `latest`, and the declaration is incomplete: confirmation_needed until each public
- *     entry states its version, no task text consulted for it), and in addition at every spec the briefing happens to
- *     read on that exact pair (a command's operand, a snippet entry, a form of K2 tied by position to its own name):
- *     never a complete reading. The worst answer stands, and the ledger gets dependency_check's line for each check. Build metadata and a local label
+ * C4/C6. A declared public package is checked as dependency_check would be asked for it: at its declared `version`,
+ *     and in addition at every spec the briefing happens to read on that exact pair (a command's operand, a snippet
+ *     entry, a form of K2 tied by position to its own name): never a complete reading. Without `version` it is
+ *     checked at those specs, else at latest (also at latest where the pair is named without one), and the
+ *     declaration is incomplete: confirmation_needed until each public entry states its version; that completeness
+ *     depends on the declaration alone (round 9, E1). The worst answer stands, and the ledger gets dependency_check's
+ *     line for each check. Build metadata and a local label
  *     (`+x`) are dropped by dependency_check itself before any lookup (Go's `+incompatible` is kept).
  * Privacy. A declaration keeps the briefing from looking a name up for the task; it does not change this
  *     project's own scan, which reads the installed dependencies and sends their names unless the project's
@@ -145,7 +156,7 @@ import {
   type WisdomRecallMode,
 } from "./briefing-wisdom.js";
 import { maxOf, pushAll } from "../array-utils.js";
-import { STAYS_REVIEW, RAW_SOURCE, wordsAfterManager, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
+import { STAYS_REVIEW, RAW_SOURCE, unreadCommandLines, wordsAfterManager, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
 import * as fs from "node:fs";
 
 // ============================================================================
@@ -681,7 +692,8 @@ export async function executeWhatShouldIKnow(
   //      and stays human_only whatever the caller says.
   //  I2. The declared version is checked; a version the briefing happens to read on that exact pair is checked in
   //      addition (never a complete reading); the worst verdict stands. A public entry without `version` is checked
-  //      at latest and keeps the call confirmation_needed (round 9, E1).
+  //      at the specs read on its pair, else at latest (and at latest too where the pair is named without one), and
+  //      keeps the call confirmation_needed: whether the declaration is complete depends on the declaration alone.
   //  I3. A waiting name is settled only by a declaration in an ecosystem the reader read it in; a declaration in
   //      another ecosystem is an extra check, and the name still waits.
   //  I4. A dismissed name that stands where a package stands keeps review_needed: an install or runner
@@ -706,7 +718,7 @@ export async function executeWhatShouldIKnow(
   const declaredPublic: DeclaredPackage[] = [];
   for (const d of declared.entries) {
     if (!d.public) {
-      if (!declaredPrivate.some((x) => forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "marked private by you" });
+      if (!declaredPrivate.some((x) => x.ecosystem === d.ecosystem && forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "marked private by you" });
       continue;
     }
     if (isForbidden(d.name)) {
@@ -725,7 +737,7 @@ export async function executeWhatShouldIKnow(
     const why = (snippetSource ? SNIPPET_SOURCE : null) ?? taskSource ?? registryReason(d.ecosystem, d.name) ?? privateAnywhere(liveIntel, d.name) ?? (privateShort.has(d.name.toLowerCase()) ? "a private package of this project" : null);
     if (why) {
       // Round 6b, item 3: a private status the task's own command gives is said as such, not as the project's.
-      if (!declaredPrivate.some((x) => forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: snippetSource ? SNIPPET_SOURCE_BASIS : taskSource ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : "this project's registry configuration" });
+      if (!declaredPrivate.some((x) => x.ecosystem === d.ecosystem && forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: snippetSource ? SNIPPET_SOURCE_BASIS : taskSource ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : "this project's registry configuration" });
       if (!privateTask.some((x) => forbiddenKey(x.package) === forbiddenKey(d.name))) privateTask.push({ package: d.name, ecosystem: d.ecosystem, installed: [], why });
       continue;
     }
@@ -775,7 +787,7 @@ export async function executeWhatShouldIKnow(
   const declaredName = new Map<string, string>(declaredPublic.map((d) => [`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name] as const));
   const declaredNew: NewPackage[] = [];
   /** Round 9, E1: what each public entry without `version` was checked at in this call. */
-  const checkedSoFar = new Map<string, string>();
+  const checkedSoFar = new Map<string, { name: string; ecosystem: string; at: string }>();
   const declaredWanted: RequestedVersion[] = [];
   // C4/C6: each declared public package is checked as dependency_check would be asked for it: `package` as declared,
   // `to` its declared version, and each spec read on that exact pair (a canonical operand, a snippet entry, a form
@@ -793,7 +805,7 @@ export async function executeWhatShouldIKnow(
     // (latest too where the pair is also named without a spec: `npm install x@1.0.0 x`).
     const versionlessAt = specs.length > 0 && !onPair.some((p) => !p.version) ? specs : [...specs, "latest"];
     const versions = d.version ? [...specs, d.version] : versionlessAt;
-    if (!d.version) checkedSoFar.set(d.name, versionlessAt.join(", "));
+    if (!d.version) checkedSoFar.set(`${d.ecosystem}\0${d.name}`, { name: d.name, ecosystem: d.ecosystem, at: versionlessAt.join(", ") });
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
     for (const version of [...new Set(versions)]) {
       const latest = /^latest$/i.test(version);
@@ -854,7 +866,8 @@ export async function executeWhatShouldIKnow(
   };
   // Round 7c, R3/R4: what the caller declared at a version is checked once, as declared; the briefing's own lookup of
   // the same (pair, version) is not made again beside it, so each row has one basis and one clause.
-  const rowKey = (ecosystem: string, name: string, version: string | undefined) => `${ecosystem}\0${ecosystemKey(name, ecosystem as CheckEcosystem)}\0${(version ?? "latest").toLowerCase()}`;
+  // PyPI's `==2.32.3` is the release 2.32.3 (round 10, #71: the declared row keeps its basis).
+  const rowKey = (ecosystem: string, name: string, version: string | undefined) => `${ecosystem}\0${ecosystemKey(name, ecosystem as CheckEcosystem)}\0${(ecosystem === "PyPI" && /^==[^,*=]+$/.test(version ?? "") ? version!.slice(2) : version ?? "latest").toLowerCase()}`;
   const declaredRows = new Set([...declaredNew.map((p) => rowKey(p.ecosystem, p.name, p.version)), ...declaredWanted.map((r) => rowKey(r.ecosystem, r.name, r.to))]);
   const ownNamed = lookedUp.filter((p) => !declaredRows.has(rowKey(p.ecosystem, p.name, p.version))).map(closedFor);
   // The briefing's own rows first: they are never degraded by how many entries the caller declared (C4, I1).
@@ -887,7 +900,10 @@ export async function executeWhatShouldIKnow(
   // Round 9, E1: a `public: true` entry states the version the caller will write. Without `version` it is checked at
   // latest in this call, but the declaration is not complete: confirmation_needed until each states one. No task text
   // is consulted for this.
-  const versionless = [...new Set(declaredPublic.filter((d) => d.version === undefined || d.version === "").map((d) => `${d.name} at ${checkedSoFar.get(d.name) ?? "latest"}`))];
+  // Round 10, #72: keyed by (ecosystem, name); the ecosystem is said where a name stands in more than one.
+  const versionlessEntries = declaredPublic.filter((d) => d.version === undefined || d.version === "");
+  const twice = (name: string) => versionlessEntries.filter((d) => d.name === name).length > 1;
+  const versionless = [...new Set(versionlessEntries.map((d) => `${d.name}${twice(d.name) ? ` (${d.ecosystem})` : ""} at ${checkedSoFar.get(`${d.ecosystem}\0${d.name}`)?.at ?? "latest"}`))];
   // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
   // Round 7b: an option's value inside a command the grammar named is the grammar's to say: a listed option is read
   // (its value consumed, or none), any other makes the command not read whole (K3, by manager and verb). The older
@@ -1141,6 +1157,16 @@ export async function executeWhatShouldIKnow(
         assessed.level = "confirmation_needed";
         assessed.reason = `${confirmationReason(waiting.length)}${before}`;
       }
+    }
+    // Round 10 (docs lane B): a command of a tool this briefing does not read, on the raw text (`xargs npm install`,
+    // `gem install x`, `composer require x`): said as such, review_needed at most.
+    const foreignLines = unreadCommandLines(params.task);
+    if (foreignLines.length > 0) {
+      const said = `This task holds a command this briefing does not read (${foreignLines.slice(0, 5).join(", ")}): check what it installs with dependency_check.`;
+      if (assessed.level === "safe_to_delegate") {
+        assessed.level = "review_needed";
+        assessed.reason = said;
+      } else if (assessed.level !== "human_only") assessed.reason = `${assessed.reason} ${said}`;
     }
     // K3: an explicit command whose shape cannot be read is said by its manager and verb only.
     // Round 7, C2: at most review_needed whatever is declared, and said whatever else holds the level.
@@ -1458,7 +1484,7 @@ function taskPackagesSection(input: {
 }): TaskPackages {
   const key = (ecosystem: string, name: string) => `${ecosystem}\0${ecosystemKey(name, ecosystem as CheckEcosystem)}`;
   const basis = (ecosystem: string, name: string, version: string | undefined): CheckedIndex["basis"] =>
-    input.declaredRows.has(`${key(ecosystem, name)}\0${(version ?? "latest").toLowerCase()}`) ? "confirmed public by you" : input.installed(name, ecosystem as CheckEcosystem) ? "project dependency" : "well-known name";
+    input.declaredRows.has(`${key(ecosystem, name)}\0${(ecosystem === "PyPI" && /^==[^,*=]+$/.test(version ?? "") ? version!.slice(2) : version ?? "latest").toLowerCase()}`) ? "confirmed public by you" : input.installed(name, ecosystem as CheckEcosystem) ? "project dependency" : "well-known name";
   const checked: CheckedIndex[] = [];
   // Round 9 (#82): one row per (package, release): PyPI's `==2022.12.7` is the release 2022.12.7.
   const release = (ecosystem: string, version: string) => (ecosystem === "PyPI" && /^==[^,*=]+$/.test(version) ? version.slice(2) : version);
@@ -1472,7 +1498,7 @@ function taskPackagesSection(input: {
   }
   const privateRows: PrivateIndex[] = [...input.declaredPrivate];
   for (const p of input.privateTask) {
-    if (!privateRows.some((d) => d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: /^the task installs it from its own package index/.test(p.why) ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : p.why === SNIPPET_SOURCE ? SNIPPET_SOURCE_BASIS : "this project's registry configuration" });
+    if (!privateRows.some((d) => d.ecosystem === p.ecosystem && d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: /^the task installs it from its own package index/.test(p.why) ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : p.why === SNIPPET_SOURCE ? SNIPPET_SOURCE_BASIS : "this project's registry configuration" });
   }
   const waiting = input.waiting.slice(0, MAX_TO_CONFIRM).map((w) => toConfirmEntry(input.task, w));
   return {

@@ -35,7 +35,7 @@ const DECLARED_FIELDS = new Set(["ecosystem", "name", "version", "public"]);
 export interface DeclaredPackage {
   ecosystem: CheckEcosystem;
   name: string;
-  /** What the task will write: an exact version, a constraint or a dist-tag. Absent: the version the task writes beside the name, else latest. */
+  /** What the caller will write: an exact version, a constraint, or "latest" (another dist-tag is refused). Absent: the declaration is incomplete (round 9, E1). */
   version?: string;
   public: boolean;
   /** Its place in the caller's list. */
