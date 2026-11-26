@@ -101,9 +101,9 @@ function lodashEdit(to: string, from = "4.17.21") {
 describe("registration", () => {
   const hooks = JSON.parse(readFileSync(join(root, "hooks", "hooks.json"), "utf8")) as { hooks: Record<string, Array<{ matcher: string; hooks: Array<Record<string, unknown>> }>> };
 
-  it("runs before Edit, MultiEdit, Write, Bash and PowerShell, and a hook that cannot run never blocks", () => {
+  it("runs before Edit, MultiEdit, Write, NotebookEdit, Bash and PowerShell, and a hook that cannot run never blocks", () => {
     const [entry] = hooks.hooks.PreToolUse;
-    expect(entry.matcher.split("|").sort()).toEqual(["Bash", "Edit", "MultiEdit", "PowerShell", "Write"]);
+    expect(entry.matcher.split("|").sort()).toEqual(["Bash", "Edit", "MultiEdit", "NotebookEdit", "PowerShell", "Write"]);
     expect(entry.hooks[0]).toMatchObject({ type: "command", onFailure: "continue" });
     expect(String(entry.hooks[0].command)).toContain("${CLAUDE_PLUGIN_ROOT}/hooks/manifest-edit.mjs");
   });
