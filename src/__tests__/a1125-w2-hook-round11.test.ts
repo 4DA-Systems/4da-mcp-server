@@ -4,8 +4,6 @@
  * with the reviewer's cases.
  */
 
-import { realpathSync } from "node:fs";
-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
@@ -50,5 +48,35 @@ describe("1: PowerShell's typographic quotes are quotes", () => {
     `npm ${LOWD}i${RD} lodash@4.17.20`,
   ])("%s: read, held, released by the call", (command) => {
     releasedByTheCall(command, "PowerShell");
+  });
+});
+
+describe("2: sed and awk are text only under a positive grammar", () => {
+  it.each([
+    "echo a | sed '1e npm i lodash@4.17.20'",
+    "echo a | sed --expression='e npm i lodash@4.17.20'",
+    "echo a | sed '/a/e pip install requests==2.5.0'",
+    "echo a | sed '$e npm i lodash@4.17.20'",
+    "echo a | sed '1,3e npm i lodash@4.17.20'",
+    "echo a | sed -ee 'npm i lodash@4.17.20'",
+    "sed -e 's/x/y/' -e '1e npm i lodash@4.17.20' f",
+    "sed 's/x/npm i lodash@4.17.20/w out.sh' f",
+    "awk 'BEGIN { system(\"npm i lodash@4.17.20\") }'",
+    "awk '{ print \"npm i lodash@4.17.20\" | \"sh\" }' f",
+    "awk -f prog.awk 'npm i lodash@4.17.20'",
+  ])("%s: held", (command) => {
+    expect(run(command).decision, command).toBe("deny");
+  });
+
+  it.each([
+    "sed 's/npm install/npm ci/' README.md",
+    "sed -n '/pip install/p' docs/setup.md",
+    "sed -E 's|pip install (.*)|uv add \\1|g' notes.md",
+    "sed '1d;s/npm install/pnpm install/' a.md",
+    "awk '/pip install/ {print}' docs/setup.md",
+    "awk '{print $1}' 'npm install.log'",
+    "awk -F: 'NR==1' 'npm install.txt'",
+  ])("%s: goes ahead", (command) => {
+    expect(run(command).decision, command).toBe("allow");
   });
 });

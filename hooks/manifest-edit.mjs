@@ -3522,10 +3522,11 @@ const DATA_SPECS = {
     long: ["--hidden", "--no-ignore", "--line-number", "--no-line-number", "--ignore-case", "--smart-case", "--case-sensitive", "--files", "--files-with-matches", "--files-without-match", "--count", "--count-matches", "--invert-match", "--word-regexp", "--line-regexp", "--fixed-strings", "--multiline", "--json", "--vimgrep", "--no-heading", "--heading", "--with-filename", "--no-filename", "--only-matching", "--follow", "--stats", "--trim", "--pcre2", "--text", "--no-messages", "--quiet", "--color"],
     longValue: ["--glob", "--iglob", "--type", "--type-not", "--regexp", "--max-count", "--max-depth", "--context", "--after-context", "--before-context", "--color", "--max-filesize", "--sort", "--sortr"],
   },
-  // sed: no -i (it writes files), and a script with no `e` (GNU sed runs it as a command) or `w`.
-  sed: { short: "nErsuz", shortValue: "e", long: ["--quiet", "--silent", "--regexp-extended", "--posix", "--separate", "--unbuffered", "--null-data", "--sandbox", "--debug"], longValue: ["--expression", "--line-length"], check: (args) => !args.some((a) => !a.startsWith("-") && /(?:^|[;{}\n]\s*)[ew]\b|s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gpiImM0-9]*[ew]/.test(a)) },
-  // awk: no `system(`, no pipe to or from a command, no -f program file, no in-place edit.
-  awk: { shortValue: "Fv", long: ["--posix", "--traditional"], longValue: ["--field-separator", "--assign"], check: (args) => !args.some((a) => /system\s*\(|\||getline/.test(a)) },
+  // sed: only -n, -E, -r and -e / --expression, and every script in sedScriptRead's grammar (no
+  // `e` or `w`, which run a command or write a file, in any spelling: it is a positive grammar).
+  sed: { short: "nEr", shortValue: "e", long: ["--quiet", "--silent", "--regexp-extended"], longValue: ["--expression"], check: (args) => scriptsOf(args, ["-e", "--expression"]).every(sedScriptRead) },
+  // awk: only -F, -v, and one program in awkProgramRead's grammar (a pattern and a print).
+  awk: { shortValue: "Fv", longValue: ["--field-separator", "--assign"], check: (args) => scriptsOf(args, []).every(awkProgramRead) },
   // make: its recipes are the project's (a stated limit); no makefile from stdin.
   make: { short: "knsBeiqrRSt", shortValue: "CjfoWI", digits: true, long: ["--keep-going", "--dry-run", "--just-print", "--silent", "--quiet", "--always-make", "--ignore-errors", "--question", "--no-builtin-rules", "--print-directory", "--no-print-directory"], longValue: ["--directory", "--jobs", "--file", "--makefile"], fileValue: true },
   "write-output": { ps: { "-noenumerate": 0, "-inputobject": 1 } },
@@ -3539,6 +3540,88 @@ DATA_SPECS.gawk = DATA_SPECS.mawk = DATA_SPECS.nawk = DATA_SPECS.awk;
 DATA_SPECS.gmake = DATA_SPECS.make;
 DATA_SPECS.gsed = DATA_SPECS.sed;
 DATA_SPECS.sls = DATA_SPECS["select-string"];
+
+/**
+ * The script words of a sed or awk command: the values of `options` (`-e x`, `-ex`, `--expression=x`),
+ * else the first operand. Values of -F / -v are not scripts.
+ */
+function scriptsOf(args, options) {
+  const scripts = [];
+  let first = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const long = options.find((o) => o.startsWith("--") && (a === o || a.startsWith(`${o}=`)));
+    if (long) scripts.push(a === long ? (args[++i] ?? "") : a.slice(long.length + 1));
+    else if (options.includes("-e") && /^-[nEr]*e/.test(a)) {
+      const rest = a.slice(a.indexOf("e") + 1);
+      scripts.push(rest || (args[++i] ?? ""));
+    } else if (/^-[Fv]$/.test(a)) i++;
+    else if (!a.startsWith("-") && first === null) first = a;
+  }
+  return scripts.length > 0 ? scripts : [first ?? ""];
+}
+
+/**
+ * Round 11: the sed scripts this hook reads as text. A positive grammar: commands separated by `;`
+ * or line ends, each an optional address (a line number, `$`, `/regex/` with I or M, or two of
+ * them with `,`) and `!`, then `d`, `p`, `q`, `n`, or `s<d>regex<d>replacement<d>` with flags
+ * from [gipI0-9]. Anything else (`e`, `w`, `r`, `R`, `W`, a block, a label) is not read.
+ */
+function sedScriptRead(script) {
+  if (typeof script !== "string" || script.length > 4096) return false;
+  let i = 0;
+  const s = script;
+  const regex = () => {
+    if (s[i] !== "/") return false;
+    for (i++; i < s.length && s[i] !== "/"; i++) if (s[i] === "\\") i++;
+    if (s[i] !== "/") return false;
+    i++;
+    while (s[i] === "I" || s[i] === "M") i++;
+    return true;
+  };
+  const address = () => {
+    if (/\d/.test(s[i] ?? "")) while (/\d/.test(s[i] ?? "")) i++;
+    else if (s[i] === "$") i++;
+    else if (s[i] === "/") return regex();
+    return true;
+  };
+  for (;;) {
+    while (s[i] === " " || s[i] === "\t" || s[i] === ";" || s[i] === "\n") i++;
+    if (i >= s.length) return true;
+    const at = i;
+    if (!address()) return false;
+    if (i > at && s[i] === ",") {
+      i++;
+      const second = i;
+      if (!address() || i === second) return false;
+    }
+    while (s[i] === " ") i++;
+    if (s[i] === "!") i++;
+    while (s[i] === " ") i++;
+    const c = s[i++];
+    if ("dpqn".includes(c ?? "x")) continue;
+    if (c !== "s") return false;
+    const d = s[i++];
+    if (!d || d === "\\" || d === "\n" || /\s/.test(d)) return false;
+    for (let part = 0; part < 2; part++) {
+      for (; i < s.length && s[i] !== d; i++) if (s[i] === "\\") i++;
+      if (s[i] !== d) return false;
+      i++;
+    }
+    while (/[gipI0-9]/.test(s[i] ?? "")) i++;
+    if (i < s.length && !/[\s;]/.test(s[i])) return false;
+  }
+}
+
+/**
+ * Round 11: the awk programs this hook reads as text. A positive grammar: one rule, a pattern
+ * (`/regex/`, `NR` or `NF` compared with a number, `$N` compared with a string) and / or an action
+ * `{ print }` of fields, NR, NF and strings. Anything else (system(), getline, a pipe, a function,
+ * an assignment, several rules) is not read.
+ */
+const AWK_VALUE = String.raw`(?:\$\d+|NR|NF|"[^"\\]*")`;
+const AWK_PROGRAM = new RegExp(String.raw`^\s*(?:(?:\/(?:\\.|[^\/\\])*\/|(?:NR|NF)\s*(?:==|!=|<=|>=|<|>)\s*\d+|\$\d+\s*(?:==|!=|~|!~)\s*"[^"\\]*")\s*)?(?:\{\s*(?:print(?:\s+${AWK_VALUE}(?:\s*,?\s*${AWK_VALUE})*)?)?\s*;?\s*\})?\s*$`);
+const awkProgramRead = (program) => typeof program === "string" && program.trim() !== "" && program.length <= 4096 && AWK_PROGRAM.test(program);
 
 /** Pure sinks: a later pipeline stage that only shows, counts, sorts or saves the text. */
 const SINK_SPECS = {
