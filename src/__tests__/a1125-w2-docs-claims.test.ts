@@ -259,6 +259,16 @@ describe("what_should_i_know after confirmation round 8: the wordings and the li
   it("a public entry without `version`: the fixed next_step", () => {
     expect(wsik).toContain("State \\`version\\` for each package you declared public: the version or range you will write, or \"latest\" for the newest release (checked so far:");
     expect(wsik).not.toContain("VERSION_UNTIED");
+    expect(next).toContain('`next_step` says "State `version` for each package you declared public: the version or range you will write, or "latest" for the newest release (checked so far: <name> at <version>, ...)."');
+    for (const doc of [readme, next]) {
+      expect(doc).not.toContain("cannot tie to a package");
+      expect(doc).not.toContain("For a clean answer");
+      expect(doc).not.toContain("on a line with a package manager's name");
+    }
+    expect(next).toContain(`the reason adds "${STAYS_REVIEW}" No remedy is offered.`);
+    expect(next).toContain("it stands after a package manager's name in the task: make sure nothing installs it");
+    expect(wsik).toContain("it stands after a package manager's name in the task: make sure nothing installs it");
+    expect(readme).toContain('"name": "lodahs", "version": "latest", "public": true');
   });
 
   it("more than 100 names: the sentence the CHANGELOG quotes", () => {
@@ -270,7 +280,10 @@ describe("what_should_i_know after confirmation round 8: the wordings and the li
     for (const spelling of SOURCE_SPELLINGS) {
       if (/^pip -[if] /.test(spelling)) continue;
       // Round 9: the go.mod entry covers the block form too; the docs lane renames it from the ROUND 9 block.
-      if (spelling.startsWith("a go.mod replace directive")) continue;
+      if (spelling.startsWith("a go.mod replace directive")) {
+        expect(next).toContain("a go.mod replace directive with `=>`, single-line or block");
+        continue;
+      }
       const shown = `\`${spelling.replace(/ \(.*\)$/, "")}\``;
       expect(next, spelling).toContain(shown);
     }
