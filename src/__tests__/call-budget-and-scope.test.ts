@@ -23,7 +23,7 @@ import Database from "better-sqlite3";
 import { callBudgetMs, raceCallBudget, remainingCallBudgetMs, runWithCallBudget, scanUnfinishedText, settleWithin, withinCallBudget } from "../call-budget.js";
 import { lateAnswer } from "../late-answer.js";
 import { setLiveIntelligence } from "../live-singleton.js";
-import { _resetCargoPlatformCache, activeCratesForHost } from "../live/cargo-platform.js";
+import { _resetCargoPlatformCache, resolveActiveCratesForHost } from "../live/cargo-platform.js";
 import { dedupeDependencies } from "../live/dependency-set.js";
 import { LiveIntelligence } from "../live/index.js";
 import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
@@ -437,9 +437,10 @@ describe("platform activity is tracked per lockfile", () => {
     }
   })();
 
-  it("with cargo: a lockfile cargo cannot resolve no longer makes the project's unbuilt crates count as the project's", ({ skip }) => {
+  it("with cargo: a lockfile cargo cannot resolve no longer makes the project's unbuilt crates count as the project's", async ({ skip }) => {
     _resetCargoPlatformCache();
-    const resolved = cargo ? activeCratesForHost(FIXTURE_DIR) : null;
+    // cargo runs as a child process now (audit 2026-11-25, F-M2): its answer is waited for here.
+    const resolved = cargo ? await resolveActiveCratesForHost(FIXTURE_DIR) : null;
     if (resolved === null) {
       // No cargo, or the fixture's crates are not in the local registry cache (CI fetches them first).
       if (process.env.FOURDA_REQUIRE_CARGO === "1") throw new Error("FOURDA_REQUIRE_CARGO=1 but `cargo tree` could not resolve test-fixtures/cargo-platform");

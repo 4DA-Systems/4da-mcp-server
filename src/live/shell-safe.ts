@@ -216,8 +216,15 @@ export function liveUnsafeDirs(intel: UnsafeDirSources | null | undefined, rootO
   };
   const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
   const root = norm(rootOverride ?? call(() => intel.getProjectRoot?.()) ?? "");
+  // A directory is judged once: 20 lockfiles of 185,000 entries name a few directories millions of
+  // times, and judging each again held dependency_health for 5-9 s (audit 2026-11-25, F-M1).
+  const seenAbsolute = new Set<string>();
+  const seenRelative = new Set<string>();
   const add = (dir: string | undefined, relativeAlready = false) => {
     if (!dir) return;
+    const seen = relativeAlready ? seenRelative : seenAbsolute;
+    if (seen.has(dir)) return;
+    seen.add(dir);
     let rel = norm(dir);
     if (!relativeAlready && root) {
       if (rel.toLowerCase() === root.toLowerCase()) return;
@@ -232,7 +239,7 @@ export function liveUnsafeDirs(intel: UnsafeDirSources | null | undefined, rootO
     }
   };
   const dirOf = (file: string) => norm(file).replace(/\/[^/]*$/, "");
-  for (const d of [...(call(() => intel.getResolvedDeps?.()) ?? []), ...(call(() => intel.getAuditDeps?.()) ?? [])]) for (const s of d.sourceDirs ?? []) add(s);
+  for (const deps of [call(() => intel.getResolvedDeps?.()) ?? [], call(() => intel.getAuditDeps?.()) ?? []]) for (const d of deps) for (const s of d.sourceDirs ?? []) add(s);
   for (const v of call(() => intel.getVulnerabilities?.())?.vulnerabilities ?? []) for (const s of [...(v.sourceDirs ?? []), ...(v.platformInactiveDirs ?? [])]) add(s);
   for (const r of call(() => intel.getInstallDrift?.()) ?? []) add(r.dir);
   for (const p of call(() => intel.getLockfileProblems?.()) ?? []) add(dirOf(p.file));

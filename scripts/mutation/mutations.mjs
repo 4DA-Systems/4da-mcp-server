@@ -281,7 +281,7 @@ export const mutations = [
     intent: "Cargo.lock: the first [[package]] table is skipped (off by one)",
     tests: ["src/__tests__/coverage-ledger.test.ts", "src/__tests__/scan-targets.test.ts", "src/__tests__/version-resolution.test.ts"] },
   { id: "L03", area: "lockfile", file: "src/live/lockfile-parsers.ts",
-    find: "        if (value.dependencies) walk(value.dependencies, false);",
+    find: "        if (value.dependencies) yield* walk(value.dependencies, false);",
     replace: "        /* mutated: nested v1 copies not walked */",
     intent: "package-lock v1: nested (non-hoisted) copies are never read, so a vulnerable nested version is not scanned",
     tests: ["src/__tests__/conformance.test.ts", "src/__tests__/scan-parity.test.ts"] },
