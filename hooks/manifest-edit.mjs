@@ -1430,6 +1430,66 @@ function diffVersions(old, now, same = (spec) => spec) {
   return changes;
 }
 
+/** YAML's indicators: a plain scalar or key does not start with one. */
+const YAML_INDICATORS = new Set([..."-?:,[]{}#&*!|>'\"%@`"]);
+/** R7: a plain scalar or key (no indicator first, no `: `, no flow brackets), or a simply quoted one. */
+function yamlScalarOk(v) {
+  if (v === "") return false;
+  if (v[0] === "'") {
+    if (v.length < 2 || v[v.length - 1] !== "'") return false;
+    const inner = v.slice(1, -1);
+    return !inner.replace(/''/g, "").includes("'");
+  }
+  if (v[0] === '"') return v.length >= 2 && v[v.length - 1] === '"' && !/["\\]/.test(v.slice(1, -1));
+  if (YAML_INDICATORS.has(v[0])) return false;
+  return !/[[\]{}]/.test(v) && !v.includes(": ") && !v.endsWith(":") && !/\s#/.test(v);
+}
+/** R7: the first line of a pnpm-workspace.yaml text that is not plain YAML (null when every line is). */
+export function pnpmUnplainLine(text) {
+  let content = false;
+  for (const raw of String(text).split(/\r\n|\r|\n/)) {
+    tick();
+    // a comment: from a `#` at the start or after a blank, outside quotes
+    let end = raw.length;
+    let quote = null;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === "'" || ch === '"') quote = ch;
+      else if (ch === "#" && (i === 0 || raw[i - 1] === " " || raw[i - 1] === "\t")) {
+        end = i;
+        break;
+      }
+    }
+    const line = raw.slice(0, end).trimEnd();
+    const s = line.trimStart();
+    if (s === "") continue;
+    if (s === "---" && !content && line === s) continue;
+    content = true;
+    if (s === "-" ) return raw;
+    if (s.startsWith("- ")) {
+      if (!yamlScalarOk(s.slice(2).trim())) return raw;
+      continue;
+    }
+    // `key:` or `key: value`; a quoted key ends at its closing quote
+    let k;
+    if (s[0] === "'" || s[0] === '"') {
+      const close = s.indexOf(s[0], 1);
+      if (close < 0 || s[close + 1] !== ":") return raw;
+      k = close + 1;
+    } else {
+      const m = /:(?=\s|$)/.exec(s);
+      if (!m) return raw;
+      k = m.index;
+    }
+    if (!yamlScalarOk(s.slice(0, k))) return raw;
+    const value = s.slice(k + 1).trim();
+    if (value !== "" && !yamlScalarOk(value)) return raw;
+  }
+  return null;
+}
+
 /** Changed or added dependency versions between two whole texts of one manifest (both show every section). */
 function wholeFileChanges(file, before, after) {
   if (file === "pnpm-workspace.yaml") {
@@ -1437,12 +1497,16 @@ function wholeFileChanges(file, before, after) {
     // content lines is held as not read, and no verdict releases it; a re-save, a comment or a
     // blank line changed holds nothing.
     const now = pnpmContentLines(after);
-    if (pnpmHasBrace(now)) {
+    // Round 14 (R7): a positive grammar. The edit is read only when every line of the file it makes
+    // is a plain one; any other line (a tag, an anchor or alias, a block scalar, an explicit key, a
+    // merge key, a flow mapping or sequence, a second document) holds an edit that changes the file.
+    const odd = pnpmUnplainLine(after);
+    if (odd !== null) {
       const was = pnpmContentLines(before);
       if (was.length !== now.length || was.some((line, i) => line !== now[i])) {
         refuse(
-          "pnpm-workspace.yaml holds { or } outside a comment line, which this hook does not read exactly (a flow mapping, a brace glob, a quoted or commented brace), and this edit changes the file",
-          `No dependency_check verdict releases this edit. To make the file readable: write each flow mapping as block lines, one "name: version" per line; write a brace glob ('*{eslint,prettier}*', 'packages/{a,b}') as separate entries; move a brace in a trailing comment to a comment line of its own; take any other brace (in a quoted value or a block scalar) out of the file. Then the versions it sets are judged as in any other edit (call dependency_check for each one the denial names).`,
+          `pnpm-workspace.yaml holds a line this hook does not read as plain YAML (${JSON.stringify(odd.slice(0, 80))}), and this edit changes the file`,
+          "No dependency_check verdict releases this edit. To make the file readable: write each flow mapping as block lines, one \"name: version\" per line; write a brace glob ('*{eslint,prettier}*', 'packages/{a,b}') as separate entries; move a brace in a trailing comment to a comment line of its own; and rewrite as plain `name: version` lines every other line that is not plain: a `key:` header, `  - 'entry'` list items, and `name: version` lines with a plain or simply quoted value (no tag, anchor, alias, block scalar, explicit or merge key, braces or brackets). Then the versions it sets are judged as in any other edit (call dependency_check for each one the denial names).",
         );
       }
       return [];

@@ -43,7 +43,8 @@ function edit(file: string, before: string, after: string): Decision {
 const WS = 'packages:\n  - "pkgs/*"\n';
 const CARGO = '[package]\nname = "a"\nversion = "0.1.0"\n';
 
-describe("block-style YAML the hook does not read in pnpm-workspace.yaml goes ahead", () => {
+// Round 14 (R7): these forms were a stated limit (they went ahead); the positive grammar holds them now.
+describe("block-style YAML the hook does not read in pnpm-workspace.yaml is held as not read", () => {
   it("the plain override is read (control)", () => {
     expect(edit("pnpm-workspace.yaml", WS, `${WS}overrides:\n  lodash: 4.17.20\n`)).toBe("no verdict");
   });
@@ -54,11 +55,11 @@ describe("block-style YAML the hook does not read in pnpm-workspace.yaml goes ah
     ["a block scalar", "overrides:\n  lodash: >-\n    4.17.20\n"],
     ["an explicit key", "overrides:\n  ? lodash\n  : 4.17.20\n"],
   ])("%s", (_label, section) => {
-    expect(edit("pnpm-workspace.yaml", WS, WS + section)).toBe("allow");
+    expect(edit("pnpm-workspace.yaml", WS, WS + section)).toBe("not read");
   });
   it("a merge key", () => {
     const base = `${WS}x: &b\n  lodash: 4.17.20\n`;
-    expect(edit("pnpm-workspace.yaml", base, `${base}overrides:\n  <<: *b\n`)).toBe("allow");
+    expect(edit("pnpm-workspace.yaml", base, `${base}overrides:\n  <<: *b\n`)).toBe("not read");
   });
 });
 
