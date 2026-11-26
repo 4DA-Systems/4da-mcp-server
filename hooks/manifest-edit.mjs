@@ -101,7 +101,7 @@
  */
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
@@ -4147,7 +4147,9 @@ function denialFor(introduced, ledger, dir, what) {
  *
  * What this does not see (the hook is a guard-rail against an agent's mistakes and shortcuts, not
  * a sandbox): a path reached by `cd` in an earlier call, a junction or symlink made earlier, a name
- * the shell assembles from pieces, a wildcard, a parent folder. And since the hook denies only where
+ * the shell assembles from pieces, a wildcard, a parent folder, a share named by another of this
+ * machine's names or addresses than localhost, 127.x, ::1, an ipv6-literal.net name or its host
+ * name. And since the hook denies only where
  * a ledger exists, a removed ledger means no denials until the server starts again.
  */
 const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?\b)/;
@@ -4159,12 +4161,18 @@ const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "mo
  * `//localhost/c$/` share and the `/c/`, `/mnt/c/`, `/cygdrive/c/` forms read as `c:/`, every run of
  * `/` one `/`, `/./` dropped and `name/../` resolved as text.
  */
+/** This machine's admin shares: `//localhost/c$/`, `//127.x.x.x/c$/`, `//[::1]/c$/`, `//<ipv6>.ipv6-literal.net/c$/`, `//<this host's name>/c$/`. */
+const LOCAL_SHARE = new RegExp(
+  String.raw`\/{2,}(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?|[0-9a-f-]+\.ipv6-literal\.net|${hostname().toLowerCase().replace(/[^a-z0-9-]/g, "")}(?:\.[a-z0-9.-]+)?)\/+([a-z])\$\/+`,
+  "g",
+);
+
 function normaliseLedgerText(text, dots = true) {
   let t = text.toLowerCase().replace(/\\/g, "/");
   t = t.replace(/\/{2,}[?.]\/+(?:unc\/+)?/g, "//");
-  t = t.replace(/\/{2,}(?:localhost|127\.0\.0\.1)\/+([a-z])\$\/+/g, "$1:/");
+  t = t.replace(LOCAL_SHARE, "$1:/");
   t = t.replace(/\/{2,}/g, "/");
-  t = t.replace(/(^|[^a-z0-9._~$-])\/(?:mnt\/|cygdrive\/)?([a-z])(?=\/)/g, "$1$2:");
+  t = t.replace(/(^|[^a-z0-9._~$-])\/(?:mnt\/|cygdrive\/|proc\/cygdrive\/)?([a-z])(?=\/)/g, "$1$2:");
   t = t.replace(/\/(?:\.\/)+/g, "/");
   // `name/../` resolved as text, one pass with a stack per path (linear in the text's size).
   if (dots && t.includes("/..")) t = t.replace(/[^\s'"`;|&<>(){}]+/g, (path) => resolveDots(path));
