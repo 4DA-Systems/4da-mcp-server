@@ -80,3 +80,20 @@ describe("2: sed and awk are text only under a positive grammar", () => {
     expect(run(command).decision, command).toBe("allow");
   });
 });
+
+describe("3: a constraints or overrides file beside a named package, on every reader", () => {
+  it.each([
+    "uv tool install ruff -c c.txt",
+    "uv tool install ruff --overrides o.txt",
+    "uv tool install ruff --with black --constraints c.txt",
+    "uv pip install requests -c c.txt",
+    "uv add requests --constraints c.txt",
+    "pip install requests --constraint c.txt",
+    "python -m pip install requests -c c.txt",
+  ])("%s: held, name the version; the named version, checked, goes ahead", (command) => {
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text).toContain("name the version on the command line");
+    releasedByTheCall(command.startsWith("uv tool") ? "uv tool install ruff==0.8.0" : "pip install requests==2.32.3");
+  });
+});

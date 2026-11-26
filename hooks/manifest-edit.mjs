@@ -3976,15 +3976,21 @@ function accountPip(args, table, reader) {
     if (kind === null) return `${o}, which this hook does not read as a version to check`;
     if (kind !== "local") names.push(kind.name);
   }
-  const pinned = constraintsBeside(values, names);
-  if (pinned) return pinned;
-  return judgedByReader(names, reader, "PyPI");
+  return judgePyNames(names, reader, values);
 }
 
 /** Options naming a file that decides the release of the packages named beside it. */
 const CONSTRAINT_OPTIONS = ["-c", "--constraint", "--constraints", "--overrides", "--override", "--build-constraints", "-b"];
 const CONSTRAINT_REMEDY =
   "A constraints or overrides file decides the release of a package named beside it, and this hook does not read that file: name the version on the command line instead (pip install <name>==<version>, uv add <name>==<version>), without the file, and call dependency_check on it: it passes once dependency_check answers proceed or review. Installing from -r <file> alone (no package named) goes ahead.";
+
+/**
+ * Round 11: the one place a PyPI reader with named operands judges them: S2 first (a constraints or
+ * overrides file beside a named package decides its release), then the reader's own judgement.
+ */
+function judgePyNames(names, reader, values) {
+  return constraintsBeside(values, names) ?? judgedByReader(names, reader, "PyPI");
+}
 
 /** S2: a constraints or overrides file beside a named package: held, with "name the version". */
 function constraintsBeside(values, names) {
@@ -4031,7 +4037,7 @@ function accountUv(args, dialect, depth, reader) {
       if (kind === null) return `${o}, which this hook does not read as a version to check`;
       if (kind !== "local") names.push(kind.name);
     }
-    return judgedByReader(names, reader, "PyPI");
+    return judgePyNames(names, reader, tool.values);
   }
   if (sub !== "add" && sub !== "sync" && sub !== "lock") return null;
   const read = readOptions(rest, ACCOUNT_TABLES.uvadd);
@@ -4049,9 +4055,7 @@ function accountUv(args, dialect, depth, reader) {
     if (kind === null) return `${o}, which this hook does not read as a version to check`;
     if (kind !== "local") names.push(kind.name);
   }
-  const pinned = constraintsBeside(values, names);
-  if (pinned) return pinned;
-  return judgedByReader(names, reader, "PyPI");
+  return judgePyNames(names, reader, values);
 }
 
 function accountPoetry(args, dialect, depth, reader) {
@@ -4074,7 +4078,7 @@ function accountPoetry(args, dialect, depth, reader) {
     if (!r) return `${o}, which this hook does not read as a version to check`;
     names.push(r.name);
   }
-  return judgedByReader(names, reader, "PyPI");
+  return judgePyNames(names, reader, read.values);
 }
 
 function accountCargo(args, reader) {
