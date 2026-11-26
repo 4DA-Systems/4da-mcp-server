@@ -931,6 +931,13 @@ function requirementLine(line) {
   const text = line.replace(/(^|\s)#.*$/, "").trim();
   if (text.length > MAX_LINE_CHARS) return refuse(`a requirements line over ${MAX_LINE_CHARS} characters`);
   if (!text || text.startsWith("-")) return null;
+  // Round 14: `name @ https://files.pythonhosted.org/.../name-1.2.3-py3-none-any.whl`, or the URL alone,
+  // installs that public release: read as it (a command reads it the same way).
+  const url = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@\s*)?(https?:\/\/\S+)$/.exec(text);
+  if (url) {
+    const file = registryFile(url[1]);
+    return file && file.ecosystem === "PyPI" ? { name: nameKey("PyPI", file.name), spec: file.spec } : null;
+  }
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]\n]{0,200}\])?\s*\(?\s*/.exec(text);
   if (!m) return null;
   const rest = text.slice(m[0].length);
@@ -1149,7 +1156,7 @@ function goDirectives(text, block = null) {
     tick();
     // go.mod allows a module path or version in double quotes (`replace x => "github.com/fork/x" v1.0.0`).
     // The comment is dropped first; a line still over the bound is refused, not skipped.
-    const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").trim();
+    const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").replace(/`([^`]*)`/g, "$1").trim();
     if (!line) continue;
     if (line.length > MAX_LINE_CHARS) {
       refuse(`a go.mod line over ${MAX_LINE_CHARS} characters`);
@@ -1857,7 +1864,9 @@ function manifestKind(filePath) {
   // dropped, and the name compared case-insensitively on every platform (Round 11: on a
   // case-sensitive file system `Package.json` is then held too: the safe side).
   const parts = pathParts(filePath);
-  const name = (parts[parts.length - 1] ?? "").replace(/:.*$/, "").replace(/[. ]+$/, "");
+  // Round 14: invisible and format characters and NUL taken out, a dot look-alike read as a dot.
+  // eslint-disable-next-line no-control-regex -- NUL is one of the characters taken out
+  const name = (parts[parts.length - 1] ?? "").replace(/[\u0000\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g, "").replace(/[\u2024\uff0e\u3002\u00b7]/g, ".").replace(/:.*$/, "").replace(/[. ]+$/, "");
   const known = MANIFEST_NAMES.get(name.toLowerCase());
   if (known) return known;
   // The server reads no `syntax_test_*` file (an editor grammar's fixture: isSyntaxTestName).
@@ -3492,7 +3501,7 @@ function accountLine(line, dialect, depth = 0) {
   if (!commands) {
     if (dialect === "bash" && line.includes("<<")) return dataHeredoc(line);
     // (a backquote span is not named: it cannot be quoted inside the remedy's own backquotes)
-    const span = /\$\([^()]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*/.exec(line)?.[0];
+    const span = /\$\([^()]*\)|\$\{[^}]*\}|\$env:[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*/i.exec(line)?.[0];
     // A substitution that holds the install itself: the command inside it, run on its own.
     const inner = span && /^(?:\$\(|`)/.test(span) ? span.replace(/^\$\(|^`|\)$|`$/g, "") : "";
     const form = inner && detectsInstall(inner) ? "the command inside it, run as a command of its own" : "its value written out in single quotes, not a variable or substitution";

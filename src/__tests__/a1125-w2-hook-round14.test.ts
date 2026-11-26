@@ -68,6 +68,26 @@ describe("R7: pnpm-workspace.yaml is read only when every line is plain", () => 
   });
 });
 
+describe("check 12's manifest rows", () => {
+  const write = (name: string, content: string) => s.write(`${s.project}/${name}`, content);
+  it("a go.mod module path in backquotes is read", () => {
+    const r = write("go.mod", "module example.com/x\n\ngo 1.22\n\nrequire `golang.org/x/text` v0.3.0\n");
+    expect(r.decision).toBe("deny");
+    expect(r.items?.[0]?.package).toBe("golang.org/x/text");
+  });
+  it.each([
+    "urllib3 @ https://files.pythonhosted.org/packages/x/urllib3-2.2.3-py3-none-any.whl\n",
+    "https://files.pythonhosted.org/packages/x/urllib3-2.2.3-py3-none-any.whl\n",
+  ])("a requirements line naming a public registry's own file is that release: %s", (content) => {
+    const r = write("requirements.txt", content);
+    expect(r.decision).toBe("deny");
+    expect(r.items).toEqual([{ ecosystem: "PyPI", package: "urllib3", to: "2.2.3" }]);
+  });
+  it.each(["package.json​", "package․json", "package.json\u0000"])("a manifest name with an invisible character or a dot look-alike is held as the manifest: %j", (name) => {
+    expect(write(name, '{"dependencies":{"lodash":"4.17.20"}}').decision).toBe("deny");
+  });
+});
+
 describe("R9: the ledger minors", () => {
   it("a line cut before its package after a proceed: the proceed does not stand", () => {
     s.ledger([{ ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed", reason: "ok" }]);
