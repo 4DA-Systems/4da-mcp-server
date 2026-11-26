@@ -237,6 +237,8 @@ const PHASE = { pre: 0, precise: 1, set: 2, compile: 2, uvlock: 2, goget: 2, oth
 const JS_TOOLS = new Set(["npm", "pnpm", "yarn", "bun"]);
 /** An override or resolution written by `npm pkg set` (upgrade-plan-overrides.ts). */
 const OVERRIDE_SET = /^npm pkg set "(?:overrides|resolutions|pnpm\.overrides)\./;
+/** An npm override scoped to a parent's subtree: `npm pkg set "overrides.<parent>.<name>=<version>"`. */
+const SCOPED_NPM_OVERRIDE = /^npm pkg set "overrides\.[^".=]+\.[^"=]+=/;
 
 /** One step of the script, merged from every row command that does the same thing. */
 interface Node {
@@ -492,7 +494,9 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
     return jsLock.get(c.dir) ?? null;
   };
   const overrideNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
+  const scopedNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
   const setNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
+  const npmRefreshNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
   for (const row of rows) {
     const fix = keyOf(row);
     let previous: { key: string; lock: string | null } | null = null;
@@ -505,8 +509,10 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
       // root's install ran last, and website's resolution after it, past website's upgrades).
       if (previous && !(previous.lock !== null && lock !== null && previous.lock !== lock)) edge(previous.key, n.key);
       previous = { key: n.key, lock };
-      if (lock !== null && OVERRIDE_SET.test(c.run)) overrideNodes.push({ key: n.key, lock, row });
+      if (lock !== null && SCOPED_NPM_OVERRIDE.test(c.run)) scopedNodes.push({ key: n.key, lock, row });
+      else if (lock !== null && OVERRIDE_SET.test(c.run)) overrideNodes.push({ key: n.key, lock, row });
       if (lock !== null && p.kind === "set") setNodes.push({ key: n.key, lock, row });
+      if (lock !== null && p.kind === "refresh" && p.tool === "npm") npmRefreshNodes.push({ key: n.key, lock, row });
     }
   }
   // An override or resolution runs before the version-setting steps of other rows on its lockfile:
@@ -520,6 +526,12 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
     if (follows.has(o.key)) continue;
     for (const s of setNodes) if (s.lock === o.lock && s.key !== o.key) edge(o.key, s.key);
   }
+  // An npm override scoped to a parent (`overrides.request.qs`) stops `npm update` from moving any
+  // package inside that parent's subtree, applied or not (npm 10.9.2, starship v1.0.0 docs/:
+  // `npm update jsprim` under request said "up to date" and left json-schema 0.2.3; run first, it
+  // moved jsprim to 1.4.2 and the override and install after it landed too). So the npm refreshes
+  // on its lockfile run before it.
+  for (const o of scopedNodes) for (const r of npmRefreshNodes) if (r.lock === o.lock && r.row !== o.row && r.key !== o.key) edge(r.key, o.key);
   for (const e of extra) {
     const p = parseCommand(e.run);
     if (p.kind !== "set") continue;
