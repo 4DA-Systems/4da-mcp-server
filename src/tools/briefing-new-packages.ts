@@ -821,7 +821,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       i = j - 1;
       continue;
     }
-    const installing = INSTALL_VERBS.has(word) || i === listAfterCommand;
+    const installing = INSTALL_VERBS.has(word);
+    // F3: the list after a command's connective is read as prose after an adding verb (one name per item).
+    const continued = i === listAfterCommand;
     // "bring in ctx", "pull in left-pad", "depend on event-stream": the verb is the pair.
     const bringingIn =
       (IN_VERBS.has(word) && (words[i + 1] === "in" || words[i + 1] === "into")) || (ON_VERBS.has(word) && (words[i + 1] === "on" || words[i + 1] === "upon"));
@@ -849,7 +851,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       for (let o = c; o < end; o++) if (isVersionSpec(words[o])) ignored.push(span(o));
       swapped = true;
       i = end;
-    } else if (!installing && !bringingIn && !ADD_VERBS.has(word)) continue;
+    } else if (!installing && !bringingIn && !continued && !ADD_VERBS.has(word)) continue;
     // A number after a name is a release after add and install; after "use" or "need" it may be a count.
     const bareNumbers = installing || word.startsWith("add") || ON_VERBS.has(word);
     /** Past the articles and adjectives before an item: where its first word is, or null when the list ended. */
