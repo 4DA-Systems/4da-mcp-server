@@ -41,6 +41,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { extractAuthClaims, getAuthSecret, type TeamClaims } from "./auth.js";
+import { nodeServerProblem } from "./http-transport-floor.js";
 import { runWithAuthContext } from "./auth-context.js";
 import { envFlag } from "./env-flags.js";
 import { batchCancellation, batchRefusedMessage } from "./stdio-gate.js";
@@ -416,6 +417,8 @@ export async function startHttpServer(
   const { port, host } = options;
   const policy = resolveSecurityPolicy(host);
   enforceBindPolicy(host, policy);
+  const transportProblem = nodeServerProblem();
+  if (transportProblem) throw new Error(transportProblem);
 
   const mcpHandler = createMcpHandler(factory);
   const handleMcpRequest = toNodeHandler(mcpHandler, {
