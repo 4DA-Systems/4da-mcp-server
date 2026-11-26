@@ -1,0 +1,6938 @@
+{
+ "source": "review-confirm2 (second independent check, 2026-11-28)",
+ "cases": [
+  {
+   "set": "nP",
+   "id": "p01",
+   "template": "py",
+   "note": "private plain + public extras",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecret[fast]==1.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecret[fast]==1.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecret",
+        "public": false
+       },
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecret[fast]",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxsecret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p02",
+   "template": "py",
+   "note": "public extras alone",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecret[fast]==1.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecret[fast]==1.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecret[fast]",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxsecret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p03",
+   "template": "go",
+   "note": "private v1 path + public v2",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/secret/v2@v2.1.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/secret/v2@v2.1.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxcorp/secret",
+        "public": false
+       },
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxcorp/secret/v2",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxcorp/secret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p04",
+   "template": "go",
+   "note": "private v2 + public v1",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/secret@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/secret@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxcorp/secret/v2",
+        "public": false
+       },
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxcorp/secret",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxcorp/secret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p05",
+   "template": "npm",
+   "note": "private scope lower, public upper",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install @zqxcorp/secret"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/secret",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@zqxcorp/secret",
+        "public": false
+       },
+       {
+        "ecosystem": "npm",
+        "name": "@ZQXCORP/secret",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p06",
+   "template": "npm",
+   "note": "private ascii, public with zero-width",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxsecret"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecret",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxsecret",
+        "public": false
+       },
+       {
+        "ecosystem": "npm",
+        "name": "zqxsecret​",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxsecret",
+    "qxsecret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p07",
+   "template": "npm",
+   "note": "private ascii, public fullwidth z",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxsecret"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecret",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxsecret",
+        "public": false
+       },
+       {
+        "ecosystem": "npm",
+        "name": "ｚqxsecret",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "qxsecret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p08",
+   "template": "rs",
+   "note": "crates private underscore, public case",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqx_secret"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqx_secret",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx_secret",
+        "public": false
+       },
+       {
+        "ecosystem": "crates.io",
+        "name": "Zqx-Secret",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqx_secret",
+    "zqx-secret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p09",
+   "template": "npm",
+   "note": "version a token-like tag",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqx-tool"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqx-tool",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqx-tool",
+        "public": true,
+        "version": "sk-live-zqx{{TOK}}"
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxtoken"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p10",
+   "template": "npm",
+   "note": "version a word tag",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqx-tool"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqx-tool",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqx-tool",
+        "public": true,
+        "version": "zqxtagsecret"
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxtagsecret"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p11",
+   "template": "py",
+   "note": "PEP 440 local label",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx-cleanpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx-cleanpy",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-cleanpy",
+        "public": true,
+        "version": "1.0.0+zqxlocalbuild"
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxlocalbuild"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p12",
+   "template": "npm",
+   "note": "semver build metadata",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqx-tool"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqx-tool",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqx-tool",
+        "public": true,
+        "version": "1.0.0+zqxbuildmeta"
+       }
+      ]
+     }
+    }
+   ],
+   "watch": [
+    "zqxbuildmeta"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p13",
+   "template": "py",
+   "note": "private PyPI index (env); declare npm public -> any PyPI fallback?",
+   "steps": [
+    {
+     "args": {
+      "task": "add zqxsecret"
+     }
+    },
+    {
+     "args": {
+      "task": "add zqxsecret",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxsecret",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "env": {
+    "PIP_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "watch": [
+    "pypi.org/pypi/zqxsecret",
+    "pypi.org/simple/zqxsecret",
+    "\"ecosystem\":\"PyPI\""
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p14",
+   "template": "npm",
+   "note": ".npmrc all private; declare PyPI public -> npm fallback?",
+   "steps": [
+    {
+     "args": {
+      "task": "add zqxsecret"
+     }
+    },
+    {
+     "args": {
+      "task": "add zqxsecret",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecret",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    ".npmrc": "registry=https://npm.zqxcorp.internal/\n"
+   },
+   "watch": [
+    "registry.npmjs.org/zqxsecret",
+    "\"ecosystem\":\"npm\"}"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p15",
+   "template": "npm",
+   "note": ".yarnrc.yml npmScopes declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@zqxcorp/ui",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    ".yarnrc.yml": "npmScopes:\n  zqxcorp:\n    npmRegistryServer: \"https://npm.zqxcorp.internal\"\n"
+   },
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p16",
+   "template": "npm",
+   "note": "bunfig.toml scope declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@zqxcorp/ui",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "bunfig.toml": "[install.scopes]\nzqxcorp = \"https://npm.zqxcorp.internal/\"\n"
+   },
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p17",
+   "template": "py",
+   "note": "pyproject uv index default declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecretpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretpy",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "pyproject.toml": "[project]\nname = \"svc\"\nversion = \"0.1.0\"\ndependencies = [\"flask==3.0.3\"]\n\n[[tool.uv.index]]\nname = \"corp\"\nurl = \"https://pypi.zqxcorp.internal/simple\"\ndefault = true\n"
+   },
+   "watch": [
+    "zqxsecretpy"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p18",
+   "template": "py",
+   "note": "poetry primary source declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecretpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretpy",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "pyproject.toml": "[tool.poetry]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[tool.poetry.dependencies]\npython = \"^3.11\"\nflask = \"3.0.3\"\n\n[[tool.poetry.source]]\nname = \"corp\"\nurl = \"https://pypi.zqxcorp.internal/simple\"\npriority = \"primary\"\n"
+   },
+   "watch": [
+    "zqxsecretpy"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p19",
+   "template": "py",
+   "note": "uv.toml index-url declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecretpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretpy",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "uv.toml": "index-url = \"https://pypi.zqxcorp.internal/simple\"\n"
+   },
+   "watch": [
+    "zqxsecretpy"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p20",
+   "template": "py",
+   "note": "requirements --index-url declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecretpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretpy",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements.txt": "--index-url https://pypi.zqxcorp.internal/simple\nflask==3.0.3\n"
+   },
+   "watch": [
+    "zqxsecretpy"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p21",
+   "template": "py",
+   "note": "requirements --extra-index-url declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecretpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretpy",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements.txt": "--extra-index-url https://pypi.zqxcorp.internal/simple\nflask==3.0.3\n"
+   },
+   "watch": [
+    "zqxsecretpy"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p22",
+   "template": "py",
+   "note": "user pip.ini (APPDATA) declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxsecretpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretpy",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "homeFiles": {
+    "Roaming/pip/pip.ini": "[global]\nindex-url = https://pypi.zqxcorp.internal/simple\n"
+   },
+   "watch": [
+    "zqxsecretpy"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p23",
+   "template": "npm",
+   "note": "user ~/.npmrc registry declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxsecretnpm"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecretnpm",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxsecretnpm",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "homeFiles": {
+    ".npmrc": "registry=https://npm.zqxcorp.internal/\n"
+   },
+   "watch": [
+    "zqxsecretnpm"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p24",
+   "template": "rs",
+   "note": ".cargo/config replace-with declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqxsecretrs"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqxsecretrs",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqxsecretrs",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    ".cargo/config.toml": "[source.crates-io]\nreplace-with = \"corp\"\n\n[source.corp]\nregistry = \"sparse+https://crates.zqxcorp.internal/index/\"\n"
+   },
+   "watch": [
+    "zqxsecretrs"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p25",
+   "template": "go",
+   "note": "GONOPROXY env declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxcorp/lib",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "env": {
+    "GONOPROXY": "github.com/zqxcorp"
+   },
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p26",
+   "template": "go",
+   "note": "GOPROXY private env declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxcorp/lib",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "env": {
+    "GOPROXY": "https://goproxy.zqxcorp.internal"
+   },
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p27",
+   "template": "go",
+   "note": "go.env file GOPRIVATE (user config dir)",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxcorp/lib",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "homeFiles": {
+    "Roaming/go/env": "GOPRIVATE=github.com/zqxcorp\n"
+   },
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p28",
+   "template": "npm",
+   "note": "project file: dep, declared public in PyPI",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxlocal"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxlocal",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxlocal",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"zqxlocal\":\"file:../zqxlocal\"}}"
+   },
+   "watch": [
+    "zqxlocal"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p29",
+   "template": "npm",
+   "note": ".npmrc scope with spaces/quotes declared public",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@zqxcorp/ui",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    ".npmrc": "@ZQXCORP:registry = \"https://npm.zqxcorp.internal/\"\n"
+   },
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "p30",
+   "template": "npm",
+   "note": "workspace .npmrc in a parent folder",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@zqxcorp/ui",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "web/package.json": "{\"name\":\"web\",\"version\":\"1.0.0\"}",
+    ".npmrc": "@zqxcorp:registry=https://npm.zqxcorp.internal/\n"
+   },
+   "watch": [
+    "zqxcorp"
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e20",
+   "template": "npm",
+   "note": "positive control: should embed",
+   "watch": [],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "refactor the http layer to use ky",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e21",
+   "template": "npm",
+   "note": ".npmrc scope private, nothing waits",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".npmrc": "@zqxcorp:registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/newsecret and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e22",
+   "template": "npm",
+   "note": ".npmrc scope, declared public",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".npmrc": "@zqxcorp:registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/newsecret and refactor",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@zqxcorp/newsecret",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e23",
+   "template": "go",
+   "note": "GOPRIVATE env",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "GOPRIVATE": "github.com/zqxcorp/*"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/secretmod and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e24",
+   "template": "npm",
+   "note": "FOURDA_PRIVATE_PACKAGES",
+   "watch": [
+    "zqxsecretlib"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "FOURDA_PRIVATE_PACKAGES": "zqxsecretlib"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecretlib and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e25",
+   "template": "py",
+   "note": "PIP_INDEX_URL private",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "PIP_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e26",
+   "template": "npm",
+   "note": "file: dependency",
+   "watch": [
+    "zqxlocal"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"zqxlocal\":\"file:../zqxlocal\"}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "update zqxlocal and refactor its callers",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e27",
+   "template": "npm",
+   "note": "private scope only in prose",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".npmrc": "@zqxcorp:registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "refactor the @zqxcorp/billing client",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e28",
+   "template": "npm",
+   "note": "prose credential, nothing declared private",
+   "watch": [
+    "{{PW9}}"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "set the database password to {{PW}} in the config and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e29",
+   "template": "npm",
+   "note": "token-shaped word",
+   "watch": [
+    "{{HEX12}}"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "refactor with token zqx_{{HEX}}",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e30",
+   "template": "npm",
+   "note": "installed private dep via file:, task names it",
+   "watch": [
+    "zqxsecretlib"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"zqxsecretlib\":\"git+https://git.zqxcorp.internal/zqxsecretlib.git\"}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecretlib and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e31",
+   "template": "npm",
+   "note": "private declared",
+   "watch": [
+    "zqxsecretlib"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecretlib and refactor",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxsecretlib",
+        "public": false
+       }
+      ],
+      "not_packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e32",
+   "template": "npm",
+   "note": "private declared in other eco, task prose",
+   "watch": [
+    "zqxsecretlib"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install ky and wire zqxsecretlib",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "ky",
+        "public": true
+       },
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretlib",
+        "public": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e33",
+   "template": "npm",
+   "note": "prose name not read as package: is it waiting or sent?",
+   "watch": [
+    "zqxsecretlib"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "use zqxsecretlib in the http layer",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nP",
+   "id": "e34",
+   "template": "npm",
+   "note": "files param holds private path",
+   "watch": [
+    "zqxsecretlib",
+    "zqxperson"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install ky",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "ky",
+        "public": true
+       }
+      ],
+      "files": [
+       "libs/zqxsecretlib/index.js",
+       "C:/Users/zqxperson/zqxsecretlib.ts"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f01",
+   "template": "py",
+   "note": "PIP_INDEX_URL (repeat of e25)",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "PIP_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f02",
+   "template": "py",
+   "note": "PIP_INDEX_URL, declared public",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "PIP_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxsecretpy",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f03",
+   "template": "py",
+   "note": "PIP_INDEX_URL, prose only",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "PIP_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "refactor the zqxsecretpy client",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f04",
+   "template": "py",
+   "note": "requirements --index-url",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "requirements.txt": "--index-url https://pypi.zqxcorp.internal/simple\nflask==3.0.3\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f05",
+   "template": "py",
+   "note": "uv.toml index-url",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "uv.toml": "index-url = \"https://pypi.zqxcorp.internal/simple\"\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f06",
+   "template": "py",
+   "note": "user pip.ini",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "homeFiles": {
+    "Roaming/pip/pip.ini": "[global]\nindex-url = https://pypi.zqxcorp.internal/simple\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f07",
+   "template": "npm",
+   "note": "project .npmrc registry=",
+   "watch": [
+    "zqxsecretnpm"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".npmrc": "registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecretnpm and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f08",
+   "template": "npm",
+   "note": "user ~/.npmrc registry=",
+   "watch": [
+    "zqxsecretnpm"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "homeFiles": {
+    ".npmrc": "registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecretnpm and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f09",
+   "template": "go",
+   "note": "GOPROXY private",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "GOPROXY": "https://goproxy.zqxcorp.internal"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f10",
+   "template": "rs",
+   "note": "cargo replace-with",
+   "watch": [
+    "zqxsecretrs"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".cargo/config.toml": "[source.crates-io]\nreplace-with = \"corp\"\n\n[source.corp]\nregistry = \"sparse+https://crates.zqxcorp.internal/index/\"\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqxsecretrs and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f11",
+   "template": "py",
+   "note": "pyproject uv default index",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "pyproject.toml": "[project]\nname = \"svc\"\nversion = \"0.1.0\"\ndependencies = [\"flask==3.0.3\"]\n\n[[tool.uv.index]]\nname = \"corp\"\nurl = \"https://pypi.zqxcorp.internal/simple\"\ndefault = true\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f12",
+   "template": "py",
+   "note": "PIP_EXTRA_INDEX_URL",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "PIP_EXTRA_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f13",
+   "template": "npm",
+   "note": ".yarnrc.yml npmScopes",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".yarnrc.yml": "npmScopes:\n  zqxcorp:\n    npmRegistryServer: \"https://npm.zqxcorp.internal\"\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f14",
+   "template": "npm",
+   "note": "bunfig scope",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "bunfig.toml": "[install.scopes]\nzqxcorp = \"https://npm.zqxcorp.internal/\"\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install @zqxcorp/ui and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "f15",
+   "template": "py",
+   "note": "poetry primary source",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "pyproject.toml": "[tool.poetry]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[tool.poetry.dependencies]\npython = \"^3.11\"\nflask = \"3.0.3\"\n\n[[tool.poetry.source]]\nname = \"corp\"\nurl = \"https://pypi.zqxcorp.internal/simple\"\npriority = \"primary\"\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g01",
+   "template": "py",
+   "note": "spec malware, run a public name",
+   "steps": [
+    {
+     "args": {
+      "task": "pipx run --spec zqxevilpy flask"
+     }
+    },
+    {
+     "args": {
+      "task": "pipx run --spec zqxevilpy flask",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g02",
+   "template": "npm",
+   "note": "package malware, run a public bin name",
+   "steps": [
+    {
+     "args": {
+      "task": "npx -p zqxevil ky"
+     }
+    },
+    {
+     "args": {
+      "task": "npx -p zqxevil ky",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g03",
+   "template": "npm",
+   "note": "pnpm workspace-root before add",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm -w add zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm -w add zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g04",
+   "template": "npm",
+   "note": "pnpm dev + workspace-root",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add -D -w zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add -D -w zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g05",
+   "template": "npm",
+   "note": "flag after",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add zqxevil -w"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add zqxevil -w",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g06",
+   "template": "npm",
+   "note": "long flag",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add --workspace-root zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add --workspace-root zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g07",
+   "template": "npm",
+   "note": "yarn v1 workspace-root",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn add -W zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn add -W zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g08",
+   "template": "npm",
+   "note": "npm workspace value then operand",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i -w packages/web zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i -w packages/web zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g09",
+   "template": "npm",
+   "note": "create- package explicit",
+   "steps": [
+    {
+     "args": {
+      "task": "npx create-zqxevil my-app"
+     }
+    },
+    {
+     "args": {
+      "task": "npx create-zqxevil my-app",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g10",
+   "template": "npm",
+   "note": "pnpm create",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm create zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm create zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g11",
+   "template": "npm",
+   "note": "bun create",
+   "steps": [
+    {
+     "args": {
+      "task": "bun create zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "bun create zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g12",
+   "template": "npm",
+   "note": "npm exec bare",
+   "steps": [
+    {
+     "args": {
+      "task": "npm exec zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm exec zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g13",
+   "template": "npm",
+   "note": "yarn dlx bare",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn dlx zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn dlx zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g14",
+   "template": "py",
+   "note": "uv tool run bare",
+   "steps": [
+    {
+     "args": {
+      "task": "uv tool run zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "uv tool run zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g15",
+   "template": "py",
+   "note": "uv run --with pinned",
+   "steps": [
+    {
+     "args": {
+      "task": "uv run --with zqxevilpy==1.0.1 pytest"
+     }
+    },
+    {
+     "args": {
+      "task": "uv run --with zqxevilpy==1.0.1 pytest",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g16",
+   "template": "py",
+   "note": "pip -e with a name",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install -e zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install -e zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g17",
+   "template": "npm",
+   "note": "unknown short flag -m",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i -m zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i -m zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g18",
+   "template": "npm",
+   "note": "short -c",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i -c zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i -c zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g19",
+   "template": "npm",
+   "note": "short -L",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add -L zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add -L zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g20",
+   "template": "npm",
+   "note": "-j value then operand",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install -j 4 zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install -j 4 zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g21",
+   "template": "npm",
+   "note": "workspace= then operand",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i --save-dev --workspace=web zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i --save-dev --workspace=web zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g22",
+   "template": "npm",
+   "note": "omit value then operand",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i --omit dev zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i --omit dev zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g23",
+   "template": "npm",
+   "note": "unknown long switch",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i --legacy-peer-deps zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i --legacy-peer-deps zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g24",
+   "template": "npm",
+   "note": "--force",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i --force zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i --force zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g25",
+   "template": "npm",
+   "note": "--ignore-scripts",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i --ignore-scripts zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i --ignore-scripts zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g26",
+   "template": "py",
+   "note": "--no-deps",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install --no-deps zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install --no-deps zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g27",
+   "template": "py",
+   "note": "--break-system-packages",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install --break-system-packages zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install --break-system-packages zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g28",
+   "template": "py",
+   "note": "--pre",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install --pre zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install --pre zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g29",
+   "template": "py",
+   "note": "uv add --dev",
+   "steps": [
+    {
+     "args": {
+      "task": "uv add --dev zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "uv add --dev zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g30",
+   "template": "py",
+   "note": "uv add -U",
+   "steps": [
+    {
+     "args": {
+      "task": "uv add -U zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "uv add -U zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g31",
+   "template": "rs",
+   "note": "cargo -q",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add -q zqxevilrs"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add -q zqxevilrs",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g32",
+   "template": "rs",
+   "note": "cargo --build",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add --build zqxevilrs"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add --build zqxevilrs",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g33",
+   "template": "npm",
+   "note": "yarn up",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn up zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn up zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g34",
+   "template": "npm",
+   "note": "--save-optional",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install --save-optional zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install --save-optional zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g35",
+   "template": "npm",
+   "note": "--no-save",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i --no-save zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i --no-save zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g36",
+   "template": "npm",
+   "note": "--save-peer",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add --save-peer zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add --save-peer zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g37",
+   "template": "npm",
+   "note": "prefix value",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i -g --prefix ~/.local zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i -g --prefix ~/.local zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g38",
+   "template": "py",
+   "note": "python3 -m pip flags",
+   "steps": [
+    {
+     "args": {
+      "task": "python3 -m pip install --user -U zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "python3 -m pip install --user -U zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g39",
+   "template": "py",
+   "note": "uv pip --system",
+   "steps": [
+    {
+     "args": {
+      "task": "uv pip install --system zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "uv pip install --system zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "g40",
+   "template": "npm",
+   "note": "--global",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install --global zqxevil@1.0.1"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install --global zqxevil@1.0.1",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h01",
+   "template": "npm",
+   "note": "two pins of a bundled name, packages []",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install lodash@4.17.21 && npm install lodash@4.17.20"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install lodash@4.17.21 && npm install lodash@4.17.20",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h02",
+   "template": "npm",
+   "note": "two pins one command",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install node-forge@1.3.1 node-forge@0.10.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install node-forge@1.3.1 node-forge@0.10.0",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h03",
+   "template": "npm",
+   "note": "declared lodash only",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install lodash@4.17.21 && npm install lodash@4.17.20"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install lodash@4.17.21 && npm install lodash@4.17.20",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "lodash",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h04",
+   "template": "npm",
+   "note": "repeat v03",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h05",
+   "template": "py",
+   "note": "repeat v01",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h06",
+   "template": "npm",
+   "note": "bad first",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0 zqxvuln@2.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0 zqxvuln@2.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h07",
+   "template": "rs",
+   "note": "crates two pins",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqx-vuln-rs@2.0.0 && cargo add zqx-vuln-rs@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqx-vuln-rs@2.0.0 && cargo add zqx-vuln-rs@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h08",
+   "template": "go",
+   "note": "go two pins",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod@v1.2.0 && go get github.com/zqxevil/mod@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod@v1.2.0 && go get github.com/zqxevil/mod@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "h09",
+   "template": "npm",
+   "note": "two manifest entries",
+   "steps": [
+    {
+     "args": {
+      "task": "Add \"zqxvuln\": \"2.0.0\" to package.json and \"zqxvuln\": \"1.0.0\" to web/package.json"
+     }
+    },
+    {
+     "args": {
+      "task": "Add \"zqxvuln\": \"2.0.0\" to package.json and \"zqxvuln\": \"1.0.0\" to web/package.json",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "j01",
+   "template": "npm",
+   "note": "two-eco command, literal agent",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install colorsx && npm install colorsx"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 2
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "j02",
+   "template": "npm",
+   "note": "two-eco, crates first",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqxdual; npm i zqxdual"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 2
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "j03",
+   "template": "npm",
+   "note": "declared private PyPI",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxdual",
+        "public": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "j04",
+   "template": "npm",
+   "note": "declared both",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxdual",
+        "public": true
+       },
+       {
+        "ecosystem": "npm",
+        "name": "zqxdual",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "k01",
+   "template": "npm",
+   "note": "prose install dismissed",
+   "steps": [
+    {
+     "args": {
+      "task": "Install zqxevil with npm."
+     }
+    },
+    {
+     "args": {
+      "task": "Install zqxevil with npm.",
+      "packages": [],
+      "not_packages": [
+       "zqxevil"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "k02",
+   "template": "npm",
+   "note": "prose install dismissed 2",
+   "steps": [
+    {
+     "args": {
+      "task": "Use npm to install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "Use npm to install zqxevil",
+      "packages": [],
+      "not_packages": [
+       "zqxevil"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "k03",
+   "template": "npm",
+   "note": "reader-missed operand, dismissed",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add -w zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add -w zqxevil",
+      "packages": [],
+      "not_packages": [
+       "zqxevil"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "k04",
+   "template": "npm",
+   "note": "dismissed with trailing dot",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxevil",
+      "packages": [],
+      "not_packages": [
+       "zqxevil."
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "k05",
+   "template": "npm",
+   "note": "dismissed as quoted",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxevil",
+      "packages": [],
+      "not_packages": [
+       "\"zqxevil\""
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "n5",
+   "id": "k06",
+   "template": "npm",
+   "note": "dismissed with zero-width",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxevil",
+      "packages": [],
+      "not_packages": [
+       "zqx​evil"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r01",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npx -p zqxevil zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "npx -p zqxevil zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r02",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npx --package=zqxevil zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "npx --package=zqxevil zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r03",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npx --package zqxevil -- zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "npx --package zqxevil -- zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r04",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npx zqxevil@1.0.1"
+     }
+    },
+    {
+     "args": {
+      "task": "npx zqxevil@1.0.1",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r05",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm exec --package=zqxevil -- zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "npm exec --package=zqxevil -- zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r06",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm exec -p zqxevil zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "npm exec -p zqxevil zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r07",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm x zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm x zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r08",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm dlx --package=zqxevil zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm dlx --package=zqxevil zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r09",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn dlx -p zqxevil zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn dlx -p zqxevil zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r10",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "bunx --package zqxevil zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "bunx --package zqxevil zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r11",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpx zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpx zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r12",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm init zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm init zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r13",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm create zqxevil@latest"
+     }
+    },
+    {
+     "args": {
+      "task": "npm create zqxevil@latest",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r14",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn create zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn create zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r15",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "bun x zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "bun x zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r16",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "deno run npm:zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "deno run npm:zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r17",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "uvx --from zqxevilpy zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "uvx --from zqxevilpy zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r18",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "uv tool run --from zqxevilpy zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "uv tool run --from zqxevilpy zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r19",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "uv tool install zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "uv tool install zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r20",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "pipx run --spec zqxevilpy zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "pipx run --spec zqxevilpy zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r21",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "pipx run zqxevilpy==1.0.1"
+     }
+    },
+    {
+     "args": {
+      "task": "pipx run zqxevilpy==1.0.1",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r22",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "uvx zqxevilpy@1.0.1"
+     }
+    },
+    {
+     "args": {
+      "task": "uvx zqxevilpy@1.0.1",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r23",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "uv run --with zqxevilpy script.py"
+     }
+    },
+    {
+     "args": {
+      "task": "uv run --with zqxevilpy script.py",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r24",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install --user zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install --user zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r25",
+   "template": "rs",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo install zqxevilrs"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo install zqxevilrs",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r26",
+   "template": "rs",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo binstall zqxevilrs"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo binstall zqxevilrs",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r27",
+   "template": "go",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "go run github.com/zqxevil/mod@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go run github.com/zqxevil/mod@v1.0.0",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r28",
+   "template": "go",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "go install github.com/zqxevil/mod/v2@v2.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go install github.com/zqxevil/mod/v2@v2.0.0",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r29",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npx -y zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npx -y zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r30",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npx --yes --package zqxevil@1.0.1 zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "npx --yes --package zqxevil@1.0.1 zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r31",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npx --package=zqx-tool --package=zqxevil zqx-run"
+     }
+    },
+    {
+     "args": {
+      "task": "npx --package=zqx-tool --package=zqxevil zqx-run",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r32",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "uvx --with zqxevilpy ruff check"
+     }
+    },
+    {
+     "args": {
+      "task": "uvx --with zqxevilpy ruff check",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "r33",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "pipx inject black zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pipx inject black zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w01",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm.cmd install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm.cmd install zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w02",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "cmd /c npm i zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "cmd /c npm i zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w03",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "powershell -Command \"npm i zqxevil\""
+     }
+    },
+    {
+     "args": {
+      "task": "powershell -Command \"npm i zqxevil\"",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w04",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "Run this:\n```\nnpm i zqxevil\n```"
+     }
+    },
+    {
+     "args": {
+      "task": "Run this:\n```\nnpm i zqxevil\n```",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w05",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i -D zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i -D zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w07",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil@latest"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxevil@latest",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w08",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add -w zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add -w zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w09",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn workspace web add zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn workspace web add zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w10",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm --filter web add zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm --filter web add zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w11",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm --prefix web install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm --prefix web install zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w12",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm -w web install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm -w web install zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w13",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn global add zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn global add zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w14",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "sudo npm install -g zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "sudo npm install -g zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w15",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "python -m pip install zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "python -m pip install zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w16",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "py -m pip install zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "py -m pip install zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w17",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "uv pip install zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "uv pip install zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w18",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "poetry add zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "poetry add zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w19",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pdm add zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pdm add zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w20",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pipenv install zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pipenv install zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w21",
+   "template": "rs",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add --dev zqxevilrs"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add --dev zqxevilrs",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w22",
+   "template": "rs",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqxevilrs --features full"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqxevilrs --features full",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w23",
+   "template": "go",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "go get -u github.com/zqxevil/mod@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get -u github.com/zqxevil/mod@v1.0.0",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w24",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "env FOO=1 npm install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "env FOO=1 npm install zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w25",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil&&npm test"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxevil&&npm test",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w26",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i zqxevil|tee log"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i zqxevil|tee log",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w27",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "NODE_ENV=production npm ci && npm install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "NODE_ENV=production npm ci && npm install zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w28",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "1. `npm install zqxevil`"
+     }
+    },
+    {
+     "args": {
+      "task": "1. `npm install zqxevil`",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w29",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install zqxevil."
+     }
+    },
+    {
+     "args": {
+      "task": "Run npm install zqxevil.",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w30",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install 'zqxevil'"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install 'zqxevil'",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w31",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install \"zqxevil@1.0.1\""
+     }
+    },
+    {
+     "args": {
+      "task": "npm install \"zqxevil@1.0.1\"",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w32",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i @zqxpub/evil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i @zqxpub/evil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w33",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i @ZQXPUB/evil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i @ZQXPUB/evil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w34",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "bun add zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "bun add zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w35",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm i zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm i zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w36",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn add zqxevil --dev"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn add zqxevil --dev",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w37",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pip3 install -U zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip3 install -U zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w38",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install -r requirements.txt zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install -r requirements.txt zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w39",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install --save zqx-tool zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install --save zqx-tool zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w40",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm\tinstall\tzqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm\tinstall\tzqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w41",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w42",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "ｎｐｍ install zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "ｎｐｍ install zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w43",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqx​evil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqx​evil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w44",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install ZQXEVIL"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install ZQXEVIL",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w45",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install ZqxEvilPy"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install ZqxEvilPy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w46",
+   "template": "py",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx_evil_py"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx_evil_py",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w47",
+   "template": "go",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/ZqxEvil/mod@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/ZqxEvil/mod@v1.0.0",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w48",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil # needed for the cli"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxevil # needed for the cli",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w49",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install --registry=https://registry.npmjs.org zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install --registry=https://registry.npmjs.org zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nR",
+   "id": "w50",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i zqx-tool@2.0.0 zqxevil@1.0.1"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i zqx-tool@2.0.0 zqxevil@1.0.1",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nK",
+   "id": "K1",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install crossenv qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23 qz24 qz25"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nK",
+   "id": "K2",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23 qz24 qz25"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nK",
+   "id": "K3",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23 qz24 qz25 qz26 qz27 qz28 qz29 qz30 zqxevil"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nK",
+   "id": "K4",
+   "template": "py",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install ctx qzp1 qzp2 qzp3 qzp4 qzp5 qzp6 qzp7 qzp8 qzp9 qzp10 qzp11 qzp12 qzp13 qzp14 qzp15 qzp16 qzp17 qzp18 qzp19 qzp20 qzp21 qzp22 qzp23 qzp24 qzp25"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nK",
+   "id": "K5",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install lodash@4.17.20 node-forge@0.10.0 qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23 qz24 qz25"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nK",
+   "id": "K6",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install crossenv qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nK",
+   "id": "K7",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "t01",
+   "template": "npm",
+   "note": "declare PyPI only; npm copy is malware",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxdual",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "t02",
+   "template": "py",
+   "note": "same, py project",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxdual",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "t03",
+   "template": "npm",
+   "note": "declare crates only",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqxdual && npm i zqxdual"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqxdual && npm i zqxdual",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqxdual",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "t04",
+   "template": "npm",
+   "note": "prose two ecosystems",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxdual to both the web app and the python worker"
+     }
+    },
+    {
+     "args": {
+      "task": "Add zqxdual to both the web app and the python worker",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxdual",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "worker/requirements.txt": "flask==3.0.3\n"
+   }
+  },
+  {
+   "set": "nT",
+   "id": "t05",
+   "template": "npm",
+   "note": "declare PyPI only, npm first",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxdual && pip install zqxdual"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxdual && pip install zqxdual",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxdual",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "t06",
+   "template": "npm",
+   "note": "world colorsx: npm malware, PyPI clean",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install colorsx && npm install colorsx"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install colorsx && npm install colorsx",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "colorsx",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v01",
+   "template": "py",
+   "note": "two pins, declare none",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v02",
+   "template": "py",
+   "note": "two pins, declare clean",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v03",
+   "template": "npm",
+   "note": "two pins one command",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v04",
+   "template": "npm",
+   "note": "prose pin",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0, then pin zqxvuln to 1.0.0 in package.json"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0, then pin zqxvuln to 1.0.0 in package.json",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v05",
+   "template": "npm",
+   "note": "prose version",
+   "steps": [
+    {
+     "args": {
+      "task": "add zqxvuln version 1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "add zqxvuln version 1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v06",
+   "template": "npm",
+   "note": "manifest + command",
+   "steps": [
+    {
+     "args": {
+      "task": "Add \"zqxvuln\": \"1.0.0\" to package.json, then run npm install zqxvuln@2.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "Add \"zqxvuln\": \"1.0.0\" to package.json, then run npm install zqxvuln@2.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v07",
+   "template": "py",
+   "note": "constraint",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install 'zqx-vuln-py>=1.0,<2'"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install 'zqx-vuln-py>=1.0,<2'",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v08",
+   "template": "npm",
+   "note": "caret, declare 2.0.0",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@^1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@^1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v09",
+   "template": "npm",
+   "note": "major only, declare 2.0.0",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i zqxvuln@1"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i zqxvuln@1",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v10",
+   "template": "rs",
+   "note": "declared underscore spelling",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqx-vuln-rs@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqx-vuln-rs@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx_vuln_rs",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v11",
+   "template": "go",
+   "note": "go declared fixed",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "public": true,
+        "version": "v1.2.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v12",
+   "template": "py",
+   "note": "declared dash spelling",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx_vuln_py==1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx_vuln_py==1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v13",
+   "template": "npm",
+   "note": "alias spec",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn add zqxvuln@npm:zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn add zqxvuln@npm:zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v14",
+   "template": "npm",
+   "note": "declare latest",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0 --save-exact"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0 --save-exact",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true,
+        "version": "latest"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v15",
+   "template": "npm",
+   "note": "declared twice",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true,
+        "version": "2.0.0"
+       },
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v16",
+   "template": "npm",
+   "note": "declared under other case",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "ZqxVuln",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v17",
+   "template": "go",
+   "note": "go v2 declared as v1 path",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod/v2@v2.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod/v2@v2.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "public": true,
+        "version": "v1.2.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v18",
+   "template": "py",
+   "note": "extras + pin, declare clean",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install \"zqx-vuln-py[fast]==1.0.0\""
+     }
+    },
+    {
+     "args": {
+      "task": "pip install \"zqx-vuln-py[fast]==1.0.0\"",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true,
+        "version": "2.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "v19",
+   "template": "npm",
+   "note": "declared with a range including the bad",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true,
+        "version": ">=1.0.0"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nT",
+   "id": "s01",
+   "template": "npm",
+   "note": "installed vulnerable; private decl",
+   "steps": [
+    {
+     "args": {
+      "task": "bump lodash to 4.17.21"
+     }
+    },
+    {
+     "args": {
+      "task": "bump lodash to 4.17.21",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "lodash",
+        "public": false
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}}",
+    "package-lock.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}},\"node_modules/zod\":{\"version\":\"3.23.8\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/lodash\":{\"version\":\"4.17.20\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   }
+  },
+  {
+   "set": "nT",
+   "id": "s02",
+   "template": "npm",
+   "note": "installed vulnerable; private decl; no bump",
+   "steps": [
+    {
+     "args": {
+      "task": "refactor the template rendering that uses lodash"
+     }
+    },
+    {
+     "args": {
+      "task": "refactor the template rendering that uses lodash",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "lodash",
+        "public": false
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}}",
+    "package-lock.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}},\"node_modules/zod\":{\"version\":\"3.23.8\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/lodash\":{\"version\":\"4.17.20\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   }
+  },
+  {
+   "set": "nT",
+   "id": "s03",
+   "template": "npm",
+   "note": "installed vulnerable; not_packages",
+   "steps": [
+    {
+     "args": {
+      "task": "refactor the template rendering that uses lodash"
+     }
+    },
+    {
+     "args": {
+      "task": "refactor the template rendering that uses lodash",
+      "packages": [],
+      "not_packages": [
+       "lodash"
+      ]
+     }
+    }
+   ],
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}}",
+    "package-lock.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}},\"node_modules/zod\":{\"version\":\"3.23.8\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/lodash\":{\"version\":\"4.17.20\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   }
+  },
+  {
+   "set": "nT",
+   "id": "s04",
+   "template": "npm",
+   "note": "installed vulnerable; packages []",
+   "steps": [
+    {
+     "args": {
+      "task": "refactor the template rendering that uses lodash"
+     }
+    },
+    {
+     "args": {
+      "task": "refactor the template rendering that uses lodash",
+      "packages": []
+     }
+    }
+   ],
+   "files": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}}",
+    "package-lock.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"^3.23.8\",\"lodash\":\"4.17.20\"}},\"node_modules/zod\":{\"version\":\"3.23.8\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/lodash\":{\"version\":\"4.17.20\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   }
+  },
+  {
+   "set": "nT",
+   "id": "s05",
+   "template": "py",
+   "note": "installed critical; private",
+   "steps": [
+    {
+     "args": {
+      "task": "upgrade ormar"
+     }
+    },
+    {
+     "args": {
+      "task": "upgrade ormar",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "ormar",
+        "public": false
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements.txt": "flask==3.0.3\normar==0.10.0\n"
+   }
+  },
+  {
+   "set": "nT",
+   "id": "s06",
+   "template": "py",
+   "note": "installed critical; packages []",
+   "steps": [
+    {
+     "args": {
+      "task": "upgrade ormar"
+     }
+    },
+    {
+     "args": {
+      "task": "upgrade ormar",
+      "packages": []
+     }
+    }
+   ],
+   "files": {
+    "requirements.txt": "flask==3.0.3\normar==0.10.0\n"
+   }
+  },
+  {
+   "set": "nT",
+   "id": "s07",
+   "template": "py",
+   "note": "installed critical; not_packages",
+   "steps": [
+    {
+     "args": {
+      "task": "use ormar for the new model"
+     }
+    },
+    {
+     "args": {
+      "task": "use ormar for the new model",
+      "packages": [],
+      "not_packages": [
+       "ormar"
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements.txt": "flask==3.0.3\normar==0.10.0\n"
+   }
+  },
+  {
+   "set": "nX",
+   "id": "Xf01",
+   "template": "py",
+   "note": "PIP_INDEX_URL (repeat of e25)",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "PIP_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xf04",
+   "template": "py",
+   "note": "requirements --index-url",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    "requirements.txt": "--index-url https://pypi.zqxcorp.internal/simple\nflask==3.0.3\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xf07",
+   "template": "npm",
+   "note": "project .npmrc registry=",
+   "watch": [
+    "zqxsecretnpm"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".npmrc": "registry=https://npm.zqxcorp.internal/\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxsecretnpm and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xf09",
+   "template": "go",
+   "note": "GOPROXY private",
+   "watch": [
+    "zqxcorp"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "GOPROXY": "https://goproxy.zqxcorp.internal"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxcorp/lib and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xf10",
+   "template": "rs",
+   "note": "cargo replace-with",
+   "watch": [
+    "zqxsecretrs"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}"
+   },
+   "files": {
+    ".cargo/config.toml": "[source.crates-io]\nreplace-with = \"corp\"\n\n[source.corp]\nregistry = \"sparse+https://crates.zqxcorp.internal/index/\"\n"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqxsecretrs and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xe25",
+   "template": "py",
+   "note": "PIP_INDEX_URL private",
+   "watch": [
+    "zqxsecretpy"
+   ],
+   "env": {
+    "FOURDA_EMBED_PROVIDER": "openai",
+    "OPENAI_API_KEY": "{{SK}}",
+    "PIP_INDEX_URL": "https://pypi.zqxcorp.internal/simple"
+   },
+   "steps": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "Use ky for HTTP",
+      "decision": "ky",
+      "rationale": "smaller"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxsecretpy and refactor",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xg01",
+   "template": "py",
+   "note": "spec malware, run a public name",
+   "steps": [
+    {
+     "args": {
+      "task": "pipx run --spec zqxevilpy flask"
+     }
+    },
+    {
+     "args": {
+      "task": "pipx run --spec zqxevilpy flask",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xw08",
+   "template": "npm",
+   "note": "install form",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add -w zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add -w zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xg04",
+   "template": "npm",
+   "note": "pnpm dev + workspace-root",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add -D -w zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add -D -w zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xg17",
+   "template": "npm",
+   "note": "unknown short flag -m",
+   "steps": [
+    {
+     "args": {
+      "task": "npm i -m zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm i -m zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xg19",
+   "template": "npm",
+   "note": "short -L",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm add -L zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "pnpm add -L zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xr07",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm x zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm x zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xr12",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "npm init zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "npm init zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xr14",
+   "template": "npm",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn create zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn create zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xr23",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "uv run --with zqxevilpy script.py"
+     }
+    },
+    {
+     "args": {
+      "task": "uv run --with zqxevilpy script.py",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xr26",
+   "template": "rs",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo binstall zqxevilrs"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo binstall zqxevilrs",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xr33",
+   "template": "py",
+   "note": "runner form",
+   "steps": [
+    {
+     "args": {
+      "task": "pipx inject black zqxevilpy"
+     }
+    },
+    {
+     "args": {
+      "task": "pipx inject black zqxevilpy",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xg33",
+   "template": "npm",
+   "note": "yarn up",
+   "steps": [
+    {
+     "args": {
+      "task": "yarn up zqxevil"
+     }
+    },
+    {
+     "args": {
+      "task": "yarn up zqxevil",
+      "packages": []
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 1
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xh04",
+   "template": "npm",
+   "note": "repeat v03",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xh05",
+   "template": "py",
+   "note": "repeat v01",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xh07",
+   "template": "rs",
+   "note": "crates two pins",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqx-vuln-rs@2.0.0 && cargo add zqx-vuln-rs@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "cargo add zqx-vuln-rs@2.0.0 && cargo add zqx-vuln-rs@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xh08",
+   "template": "go",
+   "note": "go two pins",
+   "steps": [
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod@v1.2.0 && go get github.com/zqxevil/mod@v1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "go get github.com/zqxevil/mod@v1.2.0 && go get github.com/zqxevil/mod@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xh09",
+   "template": "npm",
+   "note": "two manifest entries",
+   "steps": [
+    {
+     "args": {
+      "task": "Add \"zqxvuln\": \"2.0.0\" to package.json and \"zqxvuln\": \"1.0.0\" to web/package.json"
+     }
+    },
+    {
+     "args": {
+      "task": "Add \"zqxvuln\": \"2.0.0\" to package.json and \"zqxvuln\": \"1.0.0\" to web/package.json",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xv01",
+   "template": "py",
+   "note": "two pins, declare none",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqx-vuln-py==2.0.0 && pip install zqx-vuln-py==1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xv03",
+   "template": "npm",
+   "note": "two pins one command",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0"
+     }
+    },
+    {
+     "args": {
+      "task": "npm install zqxvuln@2.0.0 zqxvuln@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxvuln",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xt01",
+   "template": "npm",
+   "note": "declare PyPI only; npm copy is malware",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install zqxdual && npm install zqxdual",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxdual",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xt06",
+   "template": "npm",
+   "note": "world colorsx: npm malware, PyPI clean",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install colorsx && npm install colorsx"
+     }
+    },
+    {
+     "args": {
+      "task": "pip install colorsx && npm install colorsx",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "colorsx",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xj01",
+   "template": "npm",
+   "note": "two-eco command, literal agent",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install colorsx && npm install colorsx"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 2
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "Xj02",
+   "template": "npm",
+   "note": "two-eco, crates first",
+   "steps": [
+    {
+     "args": {
+      "task": "cargo add zqxdual; npm i zqxdual"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 2
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "XK1",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install crossenv qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23 qz24 qz25"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "XK2",
+   "template": "npm",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "npm install zqxevil qz1 qz2 qz3 qz4 qz5 qz6 qz7 qz8 qz9 qz10 qz11 qz12 qz13 qz14 qz15 qz16 qz17 qz18 qz19 qz20 qz21 qz22 qz23 qz24 qz25"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  },
+  {
+   "set": "nX",
+   "id": "XK4",
+   "template": "py",
+   "note": "literal agent over the 25 cap",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install ctx qzp1 qzp2 qzp3 qzp4 qzp5 qzp6 qzp7 qzp8 qzp9 qzp10 qzp11 qzp12 qzp13 qzp14 qzp15 qzp16 qzp17 qzp18 qzp19 qzp20 qzp21 qzp22 qzp23 qzp24 qzp25"
+     }
+    },
+    {
+     "agent": true,
+     "agentLeft": 4
+    }
+   ]
+  }
+ ]
+}
