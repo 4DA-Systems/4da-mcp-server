@@ -252,7 +252,7 @@ A user-invoked workflow (shown as a slash command by hosts that surface MCP prom
 
 The Claude Code plugin adds a hook that runs before every edit and command an agent makes (PreToolUse on Edit, MultiEdit, Write, NotebookEdit, Bash and PowerShell). It is a guard-rail against an agent's mistakes and shortcuts: it stops an agent from writing or installing a dependency version that has not been checked. It is not a sandbox. An agent that sets out to get around it can (a script file that runs the install, a path built from pieces), and it says nothing about what a package does once it is installed. It is plain Node, reads no network and contacts nothing.
 
-**How a version is cleared.** Every `dependency_check` answer is recorded in a ledger in the server's data folder (`check-ledger.jsonl`, never sent anywhere), and so is the answer for every package a `what_should_i_know` call declared `public: true`. The hook reads the answers of the last 24 hours, for the exact version the edit or command writes:
+**How a version is cleared.** Every `dependency_check` answer for an item it accepted is recorded in a ledger in the server's data folder (`check-ledger.jsonl`, never sent anywhere), and so is the answer for every package a `what_should_i_know` call declared `public: true`. The hook reads the answers of the last 24 hours, for the exact version the edit or command writes:
 
 - `proceed` or `review`: the call goes ahead.
 - `avoid` or `wait`: it is held, with that answer's reason.
