@@ -14,14 +14,13 @@
  * matching a declaration to a name the task gives, and the wording the agent acts on.
  */
 
-import { credentialShape } from "./briefing-task-screen.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { lengthProblem, MAX_NAME_ARG_LENGTH, MAX_VERSION_ARG_LENGTH } from "../tool-args.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 import { ecosystemKey, type TaskWordSeen } from "./briefing-new-packages.js";
 import { validateItem } from "./dependency-check.js";
 import type { UnverifiedWord } from "./briefing-requested-versions.js";
-import { nameProblem } from "./dependency-check-screen.js";
+import { nameProblem, versionLooksSecret } from "./dependency-check-screen.js";
 
 /** At most this many `packages` entries and `not_packages` words are read; the rest are refused, said. */
 export const MAX_DECLARED = 100;
@@ -73,7 +72,7 @@ export interface CheckedIndex {
 export interface PrivateIndex {
   name: string;
   ecosystem: string;
-  basis: "marked private by you" | "this project's registry configuration";
+  basis: "marked private by you" | "this project's registry configuration" | "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one";
 }
 
 export interface TaskPackages {
@@ -117,8 +116,32 @@ export const DECLARE_STEP =
 export const DECLARE_REASON = "This call declared no packages: do task_packages.next_step; the level follows from your answer.";
 
 /** What a level reached after a declaration rests on, in one clause. */
-export function declaredClause(count: number): string {
+export function declaredClause(count: number, refused = 0): string {
+  // Round 6b, item 1: entries that were refused are no statement that the task changes nothing.
+  if (refused > 0 && count === 0) return `None of your ${refused} \`packages\` entr${refused === 1 ? "y" : "ies"} could be read, so nothing you declared was checked.`;
   return count === 0 ? "You declared that the task adds or changes no package." : `You declared ${count} package${count === 1 ? "" : "s"}.`;
+}
+
+/** The refused entries by reason class, never their values (round 6b, item 1): "2 with a name its registry cannot have". */
+export function refusedClasses(refused: readonly NotRead[]): string {
+  const classes: Array<[RegExp, string]> = [
+    [/at most \d+ entries/, "past the 100-entry limit"],
+    [/unknown field/, "with a field this tool does not define"],
+    [/`public` must be/, "without public: true or false"],
+    [/`ecosystem` must be/, "with an unknown ecosystem"],
+    [/`version` looks like a credential/, "with a version shaped like a credential"],
+    [/`version`/, "with a version dependency_check cannot read"],
+    [/`name`/, "with a name its registry cannot have"],
+    [/declared public, and private/, "declared both public and private"],
+    [/looks like a credential/, "with a name shaped like a credential"],
+    [/must be a list|an entry must be an object/, "that are no { ecosystem, name, version?, public } entry"],
+  ];
+  const counts = new Map<string, number>();
+  for (const r of refused) {
+    const label = classes.find(([re]) => re.test(r.reason))?.[1] ?? "refused for another reason";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts].map(([label, n]) => `${n} ${label}`).join(", ");
 }
 
 /** The delegation reason while names wait and nothing known already makes the task human_only. */
@@ -212,15 +235,14 @@ function declarationProblem(item: unknown): string | null {
     // Exactly dependency_check's own validation of the item (a dist-tag other than latest is refused there, so here
     // too): what the check ledger records for a declared entry is what dependency_check would record for it.
     // Item 4c: the credential screen covers the whole entry: a version whose label has a credential shape is refused.
-    // A label part that is a token prefix, or a long run mixing capitals, lower case and digits, is a secret's shape.
-    const label = v ? v.replace(/^[^-+]*[-+]?/, "") : "";
-    const secretish = (part: string) => credentialShape(part) || /^(?:gh[pousr]|github|glpat|sk|akia|xox[bpa]|npm|pat|token)$/i.test(part) || (part.length >= 16 && /[A-Z]/.test(part) && /[a-z]/.test(part) && /\d/.test(part));
-    if (v && [v, label, ...v.split(/[-+._]/)].some((part) => part && secretish(part))) return "`version` looks like a credential (it is not recorded either)";
+    // The same screen dependency_check applies to `to` (dependency-check-screen.ts versionLooksSecret).
+    if (v && versionLooksSecret(v)) return "`version` looks like a credential (it is not recorded either)";
     if (v) {
       try {
         validateItem({ ecosystem, package: ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim(), to: ecosystem === "PyPI" ? (poetrySpec(v) ?? v) : v }, 0);
       } catch (error) {
-        return `\`version\` is refused as dependency_check refuses it: ${(error instanceof Error ? error.message : String(error)).replace(/^items\[0\]\.to /, "")}`;
+        // The refused value is never repeated (round 6b, item 1): dependency_check's message ends "(got <value>)".
+        return `\`version\` is refused as dependency_check refuses it: ${(error instanceof Error ? error.message : String(error)).replace(/^items\[0\]\.to /, "").replace(/\s*\(got [\s\S]*\)\s*$/, "")}`;
       }
     }
   }

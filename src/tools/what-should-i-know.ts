@@ -49,6 +49,7 @@ import {
   confirmationReason,
   confirmationSummary,
   declarationFor,
+  refusedClasses,
   dismissedBy,
   MAX_TO_CONFIRM,
   NEXT_STEP,
@@ -664,7 +665,6 @@ export async function executeWhatShouldIKnow(
   //      briefing's own lookups; one the call's budget did not reach keeps the briefing confirmation_needed.
   const declared = readDeclarations(params.packages);
   const notPackages = readNotPackages(params.not_packages);
-  const refusedEntries = declared.refused.length + notPackages.refused.length;
   const argsNotRead: TaskWordWithheld[] = [...declared.refused, ...notPackages.refused];
   // A refused `public: false` entry still forbids its name (round 6, item 4b: a refused `!`-escaped Go path let its
   // public sibling be sent).
@@ -689,7 +689,8 @@ export async function executeWhatShouldIKnow(
         : null;
     const why = taskSource ?? registryReason(d.ecosystem, d.name) ?? privateAnywhere(liveIntel, d.name) ?? (privateShort.has(d.name.toLowerCase()) ? "a private package of this project" : null);
     if (why) {
-      if (!declaredPrivate.some((x) => forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: "this project's registry configuration" });
+      // Round 6b, item 3: a private status the task's own command gives is said as such, not as the project's.
+      if (!declaredPrivate.some((x) => forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: taskSource ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : "this project's registry configuration" });
       if (!privateTask.some((x) => forbiddenKey(x.package) === forbiddenKey(d.name))) privateTask.push({ package: d.name, ecosystem: d.ecosystem, installed: [], why });
       continue;
     }
@@ -830,7 +831,7 @@ export async function executeWhatShouldIKnow(
     ]),
   ];
   // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
-  const allWithheld = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason)), ...argsNotRead.map((w) => ({ ...w, standing: true as const }))];
+  const allWithheld = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason)), ...argsNotRead.map((w) => ({ ...w, argument: true as const }))];
   // Round 6, item 3: the word after an option not known to take no value is that option's value, in the detector as
   // in the reader: counted as "the word after <option>" and standing in the command, never named.
   for (const flag of evidence.hiddenValues) {
@@ -854,6 +855,8 @@ export async function executeWhatShouldIKnow(
   }
   const withheldDismissed = allWithheld.filter((w) => (valueOf.get(w.shown) ?? []).some((v) => notPackages.words.some((n) => n === v || n.toLowerCase() === v.toLowerCase())));
   const withheldWords = allWithheld.filter((w) => !withheldDismissed.includes(w));
+  /** The words of the TASK the screen withheld (the caller's refused arguments are said apart: round 6b, item 1). */
+  const taskWithheld = withheldWords.filter((w) => !("argument" in w));
   const dismissed = [...new Set([...dismissedWords.map((w) => dismissedBy(w.word, w.read_as.split(" or "), notPackages.words)!), ...withheldByCaller.filter((w) => notPackages.words.some((n) => forbiddenKey(n) === forbiddenKey(w.name))).map((w) => w.name), ...withheldDismissed.map((w) => w.shown)])];
   // I4: a dismissal never makes the briefing reassuring about a name that stands where a package stands. The word
   // is dismissed as asked, and the level is at least review_needed, naming it.
@@ -874,7 +877,7 @@ export async function executeWhatShouldIKnow(
         .filter((w) => !w.malicious)
         .map((w) =>
           w.dependency
-            ? `you marked ${w.name} private or not a package, so this briefing did not look it up for the task, though it would have (a dependency of this project): it is unchecked for the task; make sure nothing installs it unchecked. ${SCAN_STILL_READS}`
+            ? `you marked ${w.name} private or not a package, so this briefing did not look it up for the task, though it would have (a dependency of this project): it is unchecked for the task; make sure nothing installs it unchecked. ${SCAN_STILL_READS.replace(/\.$/, "")}`
             : `${w.name} was not sent because you marked it private or not a package, but this briefing would have checked it (a well-known name): it is unchecked; make sure nothing installs it unchecked`,
         ),
     )
@@ -1014,7 +1017,15 @@ export async function executeWhatShouldIKnow(
       assessed.level = "human_only";
       assessed.reason = `${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not looked up for the task because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides. ${assessed.reason}`;
     }
-    if (refusedEntries > 0) assessed.reason = `${assessed.reason} ${refusedEntries} of your entries ${refusedEntries === 1 ? "was" : "were"} refused (task_packages.not_read): fix and resend ${refusedEntries === 1 ? "it" : "them"}.`;
+    // Round 6b, item 1: refused entries are the caller's arguments, not words of the task; the level is no more
+    // reassuring than review_needed while one is refused.
+    // Every refused argument, those refused in the declaration loop (public and private at once) included.
+    const refusedEntries = argsNotRead.length;
+    if (refusedEntries > 0 && assessed.level === "safe_to_delegate") {
+      assessed.level = "review_needed";
+      assessed.reason = "Review before delegating: some of your arguments were refused, so what they meant to declare was not checked.";
+    }
+    if (refusedEntries > 0) assessed.reason = `${assessed.reason} ${refusedEntries} of your entries ${refusedEntries === 1 ? "was" : "were"} refused (${refusedClasses(argsNotRead)}; task_packages.not_read names each by its place): fix and resend ${refusedEntries === 1 ? "it" : "them"}.`;
     if (standing.length > 0) {
       const said = `${standing.join("; ")}.`.replace(/^y/, "Y");
       if (assessed.level === "safe_to_delegate") {
@@ -1035,7 +1046,7 @@ export async function executeWhatShouldIKnow(
         assessed.level = "confirmation_needed";
         assessed.reason = `${DECLARE_REASON}${before}`;
       }
-    } else if (waiting.length === 0 && unreached.length === 0) assessed.reason = `${assessed.reason} ${declaredClause(declared.entries.length)}`;
+    } else if (waiting.length === 0 && unreached.length === 0) assessed.reason = `${assessed.reason} ${declaredClause(declared.entries.length, declared.refused.length)}`;
     if (waiting.length > 0) {
       if (assessed.level === "human_only") assessed.reason = `${assessed.reason} ${waiting.length} name${waiting.length === 1 ? " also waits" : "s also wait"} for confirmation in task_packages.to_confirm.`;
       else {
@@ -1069,7 +1080,7 @@ export async function executeWhatShouldIKnow(
       ...(newPackages.length > 0 ? { new_packages: newPackages } : {}),
       ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
       ...(requestedVersions.length > 0 ? { requested_versions: requestedVersions } : {}),
-      task_packages: taskPackagesSection({ task, waiting, unreached, dismissed, notRead: withheldWords.map(({ standing: _standing, ...w }) => w), declaredPrivate, privateTask, declaredKeys, taskDependencies, newPackages, requestedVersions, installed, undeclared: params.packages === undefined }),
+      task_packages: taskPackagesSection({ task, waiting, unreached, dismissed, notRead: withheldWords.map(({ standing: _standing, argument: _argument, ...w }: TaskWordWithheld & { argument?: true }) => w), declaredPrivate, privateTask, declaredKeys, taskDependencies, newPackages, requestedVersions, installed, undeclared: params.packages === undefined }),
       advisories,
       decision_windows: decisionWindows,
       relevant_wisdom: relevantWisdom,
@@ -1079,7 +1090,7 @@ export async function executeWhatShouldIKnow(
       scan_status: scanStatus,
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
-      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${withheldWords.length > 0 ? `${withheldWordsText(withheldWords)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${taskWithheld.length > 0 ? `${withheldWordsText(taskWithheld)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, unreadVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -1348,7 +1359,7 @@ function taskPackagesSection(input: {
   }
   const privateRows: PrivateIndex[] = [...input.declaredPrivate];
   for (const p of input.privateTask) {
-    if (!privateRows.some((d) => d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: "this project's registry configuration" });
+    if (!privateRows.some((d) => d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: /^the task installs it from its own package index/.test(p.why) ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : "this project's registry configuration" });
   }
   const waiting = input.waiting.slice(0, MAX_TO_CONFIRM).map((w) => toConfirmEntry(input.task, w));
   return {
