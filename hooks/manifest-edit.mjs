@@ -1288,6 +1288,15 @@ function wholeFileChanges(file, before, after) {
         "Write each dependency's name and version without escapes, and any other value that needs a backslash as a literal string in single quotes ('C:\\path', '\\d+'), which has no escapes: the hook then reads the file, and the versions it sets are judged as in any other edit.",
       );
     }
+    // A multi-line string (`"""` or `'''`) opened on a new or changed line in a dependency
+    // context (`package = """\nserde"""`) is not read either (sixth independent check, R8-5).
+    const opened = tomlMultilineOpens(before);
+    if ([...tomlMultilineOpens(after)].some((line) => !opened.has(line))) {
+      refuse(
+        `a ${file} line in a dependency table or a dependency key that opens a multi-line string (""" or '''), which this hook does not read`,
+        `Write each dependency's name and version as a one-line string ("1.2.3" or '1.2.3'), with no multi-line string in a dependency table or key: the hook then reads the file, and the versions it sets are judged as in any other edit.`,
+      );
+    }
   }
   const versionsOf = (text) => {
     const context = fileContext(text);
@@ -1329,6 +1338,44 @@ function tomlEscapeLines(text) {
     // A one-line string never runs past its line.
     if (state === '"' || state === "'") state = "";
     if (escaped) out.add(line.trim());
+  }
+  return out;
+}
+
+/** A TOML section or key that holds dependencies (Cargo's tables, PEP 621 / 735, Poetry, uv, build-system). */
+const TOML_DEPENDENCY_CONTEXT = /dependenc|requires|requirements|constraint|override|\bpatch\b|\breplace\b|\.sources\b/i;
+
+/**
+ * The lines of a TOML text (trimmed) that open a multi-line string (`"""` or `'''`) in a dependency
+ * context: a section whose header, or a key on that line, matches TOML_DEPENDENCY_CONTEXT. One
+ * pass; comments and one-line strings are skipped as in tomlEscapeLines.
+ */
+function tomlMultilineOpens(text) {
+  const out = new Set();
+  if (typeof text !== "string" || (!text.includes('"""') && !text.includes("'''"))) return out;
+  let state = "";
+  let section = "";
+  for (const raw of text.split("\n")) {
+    tick();
+    const line = raw.replace(/\r$/, "");
+    if (state === "" && /^\s*\[/.test(line)) section = line.trim().slice(0, 256);
+    let opens = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (state === "") {
+        if (ch === "#") break;
+        if (line.startsWith('"""', i)) (state = '"""'), (i += 2), (opens = true);
+        else if (line.startsWith("'''", i)) (state = "'''"), (i += 2), (opens = true);
+        else if (ch === '"' || ch === "'") state = ch;
+      } else if (state === '"' || state === '"""') {
+        if (ch === "\\") i++;
+        else if (state === '"' && ch === '"') state = "";
+        else if (state === '"""' && line.startsWith('"""', i)) (state = ""), (i += 2);
+      } else if (state === "'" && ch === "'") state = "";
+      else if (state === "'''" && line.startsWith("'''", i)) (state = ""), (i += 2);
+    }
+    if (state === '"' || state === "'") state = "";
+    if (opens && (TOML_DEPENDENCY_CONTEXT.test(section) || TOML_DEPENDENCY_CONTEXT.test(line.slice(0, Math.max(0, line.indexOf("="))).slice(0, 256)))) out.add(line.trim());
   }
   return out;
 }
