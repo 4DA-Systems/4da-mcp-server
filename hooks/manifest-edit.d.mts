@@ -23,3 +23,7 @@ export function simpleCommands(
 export function detectsInstall(text: string): boolean;
 export function dataDir(env?: Record<string, string | undefined>, platform?: string, home?: string): string;
 export function poetryToPep440(spec: string): string;
+/** Round 14 (R1): the options each manager may carry beside a named package, each with its reason. */
+export const NAMED_OPTIONS: Record<string, Array<[string, string]>>;
+/** Round 14 (R7): the first pnpm-workspace.yaml line that is not plain YAML, or null. */
+export function pnpmUnplainLine(text: string): string | null;
