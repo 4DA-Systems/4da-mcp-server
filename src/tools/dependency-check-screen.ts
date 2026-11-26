@@ -10,6 +10,7 @@ import { checkGoModulePath, goModulePathGrammarProblem, goPathNotCheckedText, go
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { PYPI_NAME } from "../live/upgrade-pypi.js";
+import { credentialShape } from "./briefing-task-screen.js";
 import { isNpmPackageName, quoteThirdParty } from "../untrusted-text.js";
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK, unreadFileKind } from "../live/private-packages.js";
 import { cachedAdvisoryNotes } from "./dependency-check-offline.js";
@@ -138,6 +139,25 @@ const NOT_A_NAME = "pass the registry name alone (a local path, a URL, a git sou
  * a spelling the go command reads as a misspelt module is left to checkGoModulePath. Each test is
  * one anchored regex with no nested quantifier: linear in the name's length (validateItem bounds it).
  */
+/**
+ * Round 6b, item 6: a version (or constraint) whose label carries the shape of a credential: a token prefix as a
+ * label part (`1.0.0-ghp-...`), a part a credential screen matches (`1.0.0-AKIA...`, `+glpat-...`, a UUID), or a
+ * run of 16 or more characters mixing capitals, lower case and digits. Real version shapes are kept: numbers,
+ * pre-release words, and the 7-12 lower-case hex digits of an abbreviated commit (a Go pseudo-version's
+ * `-20191109021931-daa7c04131f5`, a `+g1a2b3c4` build label). A full 40-digit commit in a label is refused.
+ */
+export function versionLooksSecret(version: string): boolean {
+  const v = version.trim();
+  if (credentialShape(v.replace(/^[^-+]*[-+]?/, ""))) return !/^[0-9a-f]{7,12}$/.test(v.replace(/^[^-+]*[-+]?/, ""));
+  const parts = v.replace(/^[v=^~<>!]*\d+(?:\.\d+)*/, "").split(/[-+._,\s]/).filter(Boolean);
+  return parts.some(
+    (p) =>
+      (credentialShape(p) && !/^[0-9a-f]{7,12}$/.test(p) && !/^\d+$/.test(p)) ||
+      /^(?:gh[pousr]|github|glpat|sk|akia|xox[bpa]|npm|pat|token)$/i.test(p) ||
+      (p.length >= 16 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /\d/.test(p)),
+  );
+}
+
 export function nameProblem(ecosystem: CheckEcosystem, name: string): string | null {
   switch (ecosystem) {
     case "npm": {

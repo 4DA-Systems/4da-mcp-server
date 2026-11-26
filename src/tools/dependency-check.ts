@@ -68,7 +68,7 @@ import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-c
 import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, type NpmWhy } from "./dependency-check-resolution.js";
 import { ECOSYSTEMS, head, provisional, type ItemResult, type Requested } from "./dependency-check-items.js";
 import { unreadFileKind } from "../live/private-packages.js";
-import { offlineResults, screenItems } from "./dependency-check-screen.js";
+import { offlineResults, screenItems, versionLooksSecret } from "./dependency-check-screen.js";
 import { itemResults, nameCrateSpellings, readFirstPublished } from "./dependency-check-verdict.js";
 import { gatherFindings } from "./dependency-check-findings.js";
 import { noteNewerRust } from "./dependency-check-rust-version.js";
@@ -171,7 +171,7 @@ export async function runDependencyCheck(db: FourDADatabase | null, params: Depe
   const answer = await executeDependencyCheck(db, params, liveIntel);
   // A withheld name is recorded as "private" only when a private-registry rule covers it, asked of the
   // rules themselves (check-ledger.ts withheldKind); otherwise "local_source", which the hook holds.
-  void recordVerdicts(answer.results, { privateRule: liveIntel?.privateRegistryRuleCovers ? (eco, name) => liveIntel.privateRegistryRuleCovers(eco, name) : null });
+  void recordVerdicts(answer.results.filter((r) => !SECRET_REFUSED.has(r)), { privateRule: liveIntel?.privateRegistryRuleCovers ? (eco, name) => liveIntel.privateRegistryRuleCovers(eco, name) : null });
   return shapeDependencyCheck(answer, params.response_format);
 }
 
@@ -249,13 +249,15 @@ function timeBudgetResult(r: Requested, budgetMs: number): ItemResult {
 
 /** An item refused as written: unknown in its place, with the refusal as its reason; nothing was looked up for it. */
 function refusedResult(v: Refused): ItemResult {
-  return {
+  const result: ItemResult = {
     ...v.shown,
     verdict: "unknown",
     reason: `NOT CHECKED: ${v.refused}. Nothing was looked up for it: correct it and ask again. This is not a clean result.`,
     signals: [],
     not_checked: "input",
   };
+  if (v.secret) SECRET_REFUSED.add(result);
+  return result;
 }
 
 /** An item whose check failed outright (it never reads as clean). */
@@ -450,6 +452,8 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
 /** An item refused as written: why, and its fields as given (capped) for the answer in its place. */
 interface Refused {
   refused: string;
+  /** Refused over a credential-shaped version: never shown, sent or recorded. */
+  secret?: true;
   shown: Pick<ItemResult, "ecosystem" | "package" | "from" | "to">;
 }
 
@@ -462,6 +466,11 @@ function isRefused(v: Requested | Refused): v is Refused {
  * answered in its place and the others are checked. A call that is not a list of 1 to 25 items, or
  * whose every item is refused, is refused whole (the first item's reason).
  */
+/** A refusal whose value is never shown, sent or recorded (round 6b, item 6). */
+class SecretVersionError extends Error {}
+/** Answers for items refused over a credential-shaped version: kept out of the check ledger. */
+const SECRET_REFUSED = new WeakSet<object>();
+
 function validateItems(raw: unknown): Array<Requested | Refused> {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_ITEMS) {
     throw new Error(`items must be an array of 1 to ${MAX_ITEMS} { ecosystem, package, to, from? } objects`);
@@ -472,6 +481,9 @@ function validateItems(raw: unknown): Array<Requested | Refused> {
     } catch (error) {
       const o = (r ?? {}) as Record<string, unknown>;
       const field = (v: unknown) => (typeof v === "string" ? quoteThirdParty(v, 214) : "");
+      if (error instanceof SecretVersionError) {
+        return { refused: error.message, secret: true, shown: { ecosystem: field(o.ecosystem), package: field(o.package), from: null, to: "(withheld: shaped like a credential)" } };
+      }
       return { refused: error instanceof Error ? error.message : String(error), shown: { ecosystem: field(o.ecosystem), package: field(o.package), from: typeof o.from === "string" && o.from ? field(o.from) : null, to: field(o.to) } };
     }
   });
@@ -506,6 +518,11 @@ export function validateItem(r: unknown, i: number): Requested {
   // so it never reaches crates.io or OSV.dev, and the answer says so.
   const cargoBuild = (v: string) => (ecosystem === "crates.io" ? v.replace(CARGO_BUILD_METADATA, "$1") : v);
   const givenTo = typeof o.to === "string" ? o.to.trim() : "";
+  // Round 6b, item 6: a version label shaped like a credential is refused before anything reads it: not sent, not
+  // recorded, never repeated (the briefing's declarations apply the same screen).
+  if (versionLooksSecret(givenTo) || (typeof o.from === "string" && versionLooksSecret(o.from))) {
+    throw new SecretVersionError(`${where}.${versionLooksSecret(givenTo) ? "to" : "from"} looks like a credential (a secret in a version label): it was not sent or recorded; write the version without it`);
+  }
   const rawTo = cargoBuild(givenTo);
   if (rawTo !== givenTo) notes.push(`Build metadata in ${JSON.stringify(quoteThirdParty(givenTo, 80))} was ignored, as Cargo ignores it when resolving: checked ${rawTo}, and the metadata was not sent.`);
   // An npm alias (`"my-lodash": "npm:lodash@4.17.20"` in package.json) installs the package it names:
@@ -660,7 +677,7 @@ function noneCheckedText(results: ItemResult[], summary: string, offline: boolea
   if (results.length === 0 || summary.startsWith("NOT CHECKED") || !results.every((r) => r.verdict === "unknown")) return "";
   const n = results.length;
   const why = !offline ? "each reason says why" : isOfflineMode() ? "live lookups are disabled (FOURDA_OFFLINE)" : "OSV.dev and the registries could not be read; each reason says what failed";
-  return `NOT CHECKED: ${n === 1 ? "the item" : `none of the ${n} items`} could be checked (${why}). Nothing here is a clean result. `;
+  return `NOT CHECKED: ${n === 1 ? "the item could not be checked" : `none of the ${n} items could be checked`} (${why}). Nothing here is a clean result. `;
 }
 
 /** `_meta.offline_note`: what `offline: true` means in this answer. */
