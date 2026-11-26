@@ -214,7 +214,8 @@ describe("P5 (offline): after the confirm call, a malware typosquat and a critic
   it.each([
     ["add lodahs", [{ ecosystem: "npm", name: "lodahs", public: true }]],
     ["add elliptic 6.5.4", [{ ecosystem: "npm", name: "elliptic", version: "6.5.4", public: true }]],
-    ["pin elliptic to 6.5.4", [{ ecosystem: "npm", name: "elliptic", public: true }]],
+    // Round 7, C4: a version in prose attaches to no pair: the agent declares the version it will write.
+    ["pin elliptic to 6.5.4", [{ ecosystem: "npm", name: "elliptic", version: "6.5.4", public: true }]],
   ])("%s", async (task, packages) => {
     const first = await brief(task);
     expect(first.delegation_assessment.level).toBe("confirmation_needed");
@@ -232,7 +233,7 @@ describe("P6: the secret-in-task cases of the earlier reviews", () => {
     const withheld = screenTask(task).withheld.map((w) => task.slice(w.start, w.end)).filter((v) => v.length >= 4);
     for (const t of r.task_packages.to_confirm as Array<{ name: string; version?: string }>) {
       for (const v of withheld) {
-        expect(t.name.includes(v) || v.includes(t.name) && t.name.length >= 8, `${t.name} repeats a withheld value`).toBe(false);
+        expect(t.name.includes(v) || v.includes(t.name) && t.name.length >= 8, `${t.name} repeats a withheld value ${v}`).toBe(false);
         if (t.version) expect(t.version.includes(v), `${t.version} repeats a withheld value`).toBe(false);
       }
     }

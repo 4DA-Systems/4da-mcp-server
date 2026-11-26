@@ -95,17 +95,20 @@ describe("I1: a declaration only adds checks", () => {
   });
 });
 
-describe("I2: the version the task writes is always checked; a declared one in addition", () => {
+// Round 7, C4: a declared entry is checked at its declared version if it gives one; else at every spec written on
+// that exact pair (a canonical operand, a manifest entry), and at latest where the pair is named without one. A
+// version in prose ("pin zqxpin to 1.0.0") attaches to no pair.
+describe("C4 (was I2): which versions a declared entry is checked at", () => {
   it.each([
-    ["npm install node-forge@0.10.0", "node-forge", "1.3.1", "0.10.0"],
-    ["npm install lodash@4.17.20", "lodash", "4.17.21", "4.17.20"],
-    ["pin zqxpin to 1.0.0", "zqxpin", "2.0.0", "1.0.0"],
-  ])("%s, declared at %s", async (task, name, declaredVersion, written) => {
-    const r = await brief(task, { packages: [{ ecosystem: "npm", name, version: declaredVersion, public: true }] });
-    const rows = [...(r.requested_versions ?? []).map((x: { name: string; to: string }) => `${x.name}@${x.to}`), ...(r.new_packages ?? []).map((x: { name: string; version?: string }) => `${x.name}@${x.version}`)];
-    expect(rows).toContain(`${name}@${written}`);
-    expect(rows).toContain(`${name}@${declaredVersion}`);
-    if (name === "node-forge") expect(r.delegation_assessment.level).toBe("human_only");
+    ["npm install node-forge@0.10.0", "node-forge", undefined, ["node-forge@0.10.0"]],
+    ["npm install node-forge@0.10.0", "node-forge", "1.3.1", ["node-forge@1.3.1"]],
+    ["npm install lodash@4.17.20", "lodash", undefined, ["lodash@4.17.20"]],
+    ["pin zqxpin to 1.0.0", "zqxpin", undefined, ["zqxpin@latest"]],
+  ])("%s, declared at %s %s", async (task, name, declaredVersion, expected) => {
+    const r = await brief(task, { packages: [{ ecosystem: "npm", name, ...(declaredVersion ? { version: declaredVersion } : {}), public: true }] });
+    const rows = (r.new_packages ?? []).map((x: { name: string; version?: string }) => `${x.name}@${x.version ?? "latest"}`);
+    for (const e of expected) expect(rows, JSON.stringify(rows)).toContain(e);
+    if (name === "node-forge" && !declaredVersion) expect(r.delegation_assessment.level).toBe("human_only");
   });
 });
 
@@ -152,7 +155,9 @@ describe("I5: one forbidden set, folded for every ecosystem; private wins", () =
   });
 });
 
-describe("I7: a runner command's operand is a candidate", () => {
+// Round 7, C1/C2: a runner or scaffold command fetches and runs a package this briefing does not check: it is not read
+// whole, nothing of it is offered, and the level is at most review_needed.
+describe("C1 (was I7): a runner command is never read whole", () => {
   it.each([
     ["npx zqxrun init", "zqxrun"],
     ["npx --yes zqxrun", "zqxrun"],
@@ -165,8 +170,9 @@ describe("I7: a runner command's operand is a candidate", () => {
     ["uv tool run zqxpyrun", "zqxpyrun"],
   ])("%s", async (task, name) => {
     const r = await brief(task, { packages: [] });
-    expect(r.task_packages.to_confirm).toContainEqual(expect.objectContaining({ name, seen: "operand of a runner command" }));
+    expect(JSON.stringify(r.task_packages.to_confirm)).not.toContain(name);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(r.delegation_assessment.reason).toMatch(/could not read whole \(it fetches and runs a package/);
   });
 
   it("npx crossenv: a known-malicious name, looked up and human_only on a bare call", async () => {

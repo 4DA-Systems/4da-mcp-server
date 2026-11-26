@@ -135,8 +135,18 @@ export function privateAdvisoryText(found: PrivateTaskPackage[]): string {
   const unread = found.filter((p) => p.unreadable_file);
   const notRegistry = (p: PrivateTaskPackage) => p.why.includes(NOT_REGISTRY_MARK) || p.why.includes(UNREAD_CATALOG_MARK) || p.why.includes(AMBIGUOUS_SPEC_MARK);
   const local = found.filter((p) => !p.unreadable_file && notRegistry(p));
-  const priv = found.filter((p) => !p.unreadable_file && !notRegistry(p));
+  // Round 7, C9a: a dependency the project has that the caller marked private was still read by the project's own
+  // scan: never "nothing about it was looked up" for it.
+  const scanned = (p: PrivateTaskPackage) => /^marked private by the caller: not looked up for the task/.test(p.why);
+  const yours = found.filter((p) => !p.unreadable_file && scanned(p));
+  const priv = found.filter((p) => !p.unreadable_file && !notRegistry(p) && !scanned(p));
   const parts: string[] = [];
+  if (yours.length > 0) {
+    const one = yours.length === 1;
+    parts.push(
+      `the task touches ${yours.map(label).join(", ")}, which you marked private: this briefing did not look ${one ? "it" : "them"} up for the task, and this project's own scan still read ${one ? "it" : "them"} with the installed dependencies (task_packages.checked)`,
+    );
+  }
   if (unread.length > 0) {
     const one = unread.length === 1;
     const files = [...new Set(unread.map((p) => p.unreadable_file!))].join(", ");

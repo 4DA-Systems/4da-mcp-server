@@ -389,7 +389,7 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief("add left-pad 1.3.0, chalk 5.6.2 and express 5.1.0");
     expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
-    expect(waitingWords(r)).toEqual([{ word: "left-pad", read_as: "npm", version: "1.3.0" }]);
+    expect(waitingWords(r)).toEqual([{ word: "left-pad", read_as: "npm" }]);
     expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 

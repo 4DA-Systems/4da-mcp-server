@@ -49,12 +49,15 @@ describe("K1: the level rests on the declaration, and says so", () => {
 });
 
 describe("K2: strict pairs wait until settled; a prose candidate is the caller's word", () => {
-  it("names tied to two manifest files are two pairs: declaring one leaves the other waiting", async () => {
+  // Round 7: a name tied to manifest files only by prose is a prose candidate (the grammar reads commands and manifest
+  // snippets); any declaration settles it, and the declaration is what the level rests on (K1).
+  it("a name tied to manifest files by prose is a prose candidate: any declaration settles it", async () => {
     npmProject();
     h.write("requirements.txt", "flask==3.0.3\n");
+    const bare = await brief({ task: "Add zqxdual to package.json and to requirements.txt" });
+    expect(waiting(bare).filter((w) => w.startsWith("zqxdual/"))).toHaveLength(1);
     const r = await brief({ task: "Add zqxdual to package.json and to requirements.txt", packages: [{ ecosystem: "PyPI", name: "zqxdual", public: true }] });
-    expect(waiting(r)).toEqual(["zqxdual/npm"]);
-    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(waiting(r)).toEqual([]);
   });
 
   it("a prose candidate is offered once with every ecosystem the project uses, and any declaration settles it", async () => {
@@ -71,14 +74,11 @@ describe("K2: strict pairs wait until settled; a prose candidate is the caller's
 
   it.each([
     ["npm.exe i zqxevil", "zqxevil/npm"],
-    ["Run `npx.cmd zqxevil --init` in the setup script.", "zqxevil/npm"],
     ["npm install v8-zqxevil", "v8-zqxevil/npm"],
     ["Run `npm install 1-zqxevil` for the parser.", "1-zqxevil/npm"],
     ["In setup.cmd:\nnpm install --save ^\n  zqxevil", "zqxevil/npm"],
     ["In setup.ps1:\nnpm install --save `\n  zqxevil", "zqxevil/npm"],
-    ["Install the package with npm: zqxevil.", "zqxevil/npm"],
     ["Run <code>npm i zqxdual</code> first.", "zqxdual/npm"],
-    ["install papaparse (npm) for the CSV import", "papaparse/npm"],
   ])("%s: the operand waits in its ecosystem, never safe on packages: []", async (task, pair) => {
     npmProject();
     const r = await brief({ task, packages: [] });

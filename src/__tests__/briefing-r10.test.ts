@@ -27,9 +27,6 @@ import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type S
 import { waitingWords, nearMissHint } from "./helpers/a1127-task-packages.js";
 
 /** The dependency_check call an agent makes for the unverified words (fourth blind check: the answer itself holds no arguments). */
-const follow = (r: unknown) => ({
-  items: (waitingWords(r) ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: w.version ?? "latest" })),
-});
 
 const NPM = [dep("lodash", "4.17.20")];
 const RUST = [dep("tokio", "1.40.0", "crates.io")];
@@ -164,10 +161,17 @@ describe("2. a Cargo table entry is one package in one ecosystem", () => {
     const r = await brief(`add ${ENTRY}`, NPM_AND_RUST);
     expect(r.new_packages).toBeUndefined();
     expect(waitingWords(r)).toMatchObject([{ word: "smallvec", read_as: "crates.io" }]);
-    const check = (await executeDependencyCheck(null, follow(r), stubIntel(NPM_AND_RUST, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    // Round 7, C7: the entry carries no version; the agent asks dependency_check at the constraint the entry writes.
+    expect(JSON.stringify(r.task_packages.to_confirm)).not.toContain(">=1.6.0");
+    const check = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "smallvec", to: ">=1.6.0, <1.6.1" }] }, stubIntel(NPM_AND_RUST, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
     expect(check.results).toMatchObject([{ verdict: "avoid" }]);
     expect(stub.asked.some((u) => u === "https://registry.npmjs.org/smallvec")).toBe(false);
   });
+});
+
+/** dependency_check items for every waiting entry, at latest (round 7, C7: entries carry no version). */
+const follow = (r: unknown) => ({
+  items: (waitingWords(r) ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: "latest" })),
 });
 
 describe("3. name-version pairs with no verb are read, and each version stays with its own name", () => {
@@ -195,7 +199,8 @@ describe("3. name-version pairs with no verb are read, and each version stays wi
     expect(requested("ship acme-billing 2.3.1, acme-auth 1.4.0")).toEqual([]);
     const r = await brief("ship acme-billing 2.3.1, acme-auth 1.4.0");
     expect(stub.asked.some((u) => u.includes("acme-"))).toBe(false);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    // Round 7, C10: a version in prose tied to no package holds nothing; the level follows from the rest.
+    expect(r.delegation_assessment.reason).not.toMatch(/could not tie/);
   });
 
   it("an English word before `to` is still no package", () => {

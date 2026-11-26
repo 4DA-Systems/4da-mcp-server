@@ -41,31 +41,28 @@ function project(template: string) {
   if (template === "go") h.write("go.mod", "module example.com/app\n\ngo 1.21\n");
 }
 
-describe("F1/F2: an agent's own wording is not a command it could not read", () => {
+// Round 7, C1: the canonical grammar replaced F1-F3. A command in an agent's sentence with a parenthetical, "and" or a
+// trailing clause is named but not read whole (review_needed, said by manager and verb), and nothing of it is
+// offered; a task that holds no command (a10, d07: "add ... to a Go project") is prose, settled by any declaration.
+describe("round 7: agents' own wording (run3 a10, d04, d05, d07)", () => {
   it.each(run3)("$id", async (c) => {
     project(c.template);
     const r = (await executeWhatShouldIKnow(null, { task: c.task, packages: c.packages, project_path: h.dir } as never, await h.live())) as Record<string, any>;
-    expect(r.delegation_assessment.reason).not.toMatch(/could not read whole/);
-  });
-
-  it("a parenthetical label or version after an operand belongs to it; a connective ends the run", () => {
-    expect(scanCommands("npm install hono (latest) in the project").map((c) => c.operands)).toEqual([["hono"]]);
-    expect(scanCommands("pip install litestar (PyPI) and set GITHUB_TOKEN").map((c) => c.operands)).toEqual([["litestar"]]);
-    expect(scanCommands("Add chi router (github.com/go-chi/chi/v5) to a Go project")).toEqual([]);
-    // K2: an ecosystem label ties the name before it to that pair (strict), with no command around it.
-    expect(scanCommands("Add an AWS key to the uploader config and install papaparse (npm)").map((c) => [c.ecosystem, c.operands])).toEqual([["npm", ["papaparse"]]]);
-    // The explicit prose shape still fires.
-    expect(scanCommands("Install zqxevil with npm.").map((c) => c.operands)).toEqual([["zqxevil"]]);
-    expect(scanCommands("add zqxevil using pnpm").map((c) => c.operands)).toEqual([["zqxevil"]]);
+    const named = scanCommands(c.task);
+    if (named.some((x) => x.unreadable)) {
+      expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+      expect(r.delegation_assessment.reason).toMatch(/This task holds a command \(\w+ \w+\) this briefing could not read whole/);
+    } else expect(r.delegation_assessment.reason).not.toMatch(/could not read whole/);
   });
 });
 
-describe("F3: after the connective the word is a prose candidate, never silently dropped", () => {
-  it("`npm install ky and fastifyy`: fastifyy waits in to_confirm, and declaring ky alone stays confirmation_needed", async () => {
+describe("a connective in a command: every word of a canonical command is an operand", () => {
+  it("`npm install ky and fastifyy`: ky, and, fastifyy all wait; declaring ky alone stays confirmation_needed", async () => {
     project("npm");
-    expect(scanCommands("npm install ky and fastifyy").map((c) => c.operands)).toEqual([["ky"]]);
+    expect(scanCommands("npm install ky and fastifyy").map((c) => c.operands)).toEqual([["ky", "and", "fastifyy"]]);
     const r = (await executeWhatShouldIKnow(null, { task: "npm install ky and fastifyy", packages: [{ ecosystem: "npm", name: "ky", public: true }], project_path: h.dir } as never, await h.live())) as Record<string, any>;
-    expect((r.task_packages.to_confirm as Array<{ name: string }>).map((e) => e.name)).toContain("fastifyy");
+    const names = (r.task_packages.to_confirm as Array<{ name: string }>).map((e) => e.name);
+    expect(names).toEqual(expect.arrayContaining(["and", "fastifyy"]));
     expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 });

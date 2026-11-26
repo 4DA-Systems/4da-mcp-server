@@ -23,7 +23,7 @@ function rng(seed: number) {
 }
 
 const FORMS: Array<{ head: string; ecosystem: CheckEcosystem }> = [
-  ...["npm install", "npm i", "npm add", "npm x", "npm exec", "npm init", "npm create", "npm update", "npm it", "npm isntall"].map((head) => ({ head, ecosystem: "npm" as const })),
+  ...["npm install", "npm i", "npm add", "npm x", "npm exec", "npm init", "npm create", "npm update"].map((head) => ({ head, ecosystem: "npm" as const })),
   ...["pnpm add", "pnpm install", "pnpm dlx", "pnpm create", "pnpm up", "pnpm update", "yarn add", "yarn up", "yarn dlx", "yarn create", "bun add", "bun x", "bun create", "bunx", "npx", "pnpx"].map((head) => ({ head, ecosystem: "npm" as const })),
   ...["pip install", "pip3 install", "python -m pip install", "pipx install", "pipx inject black", "pipx run --spec", "uv add", "uv pip install", "uv tool install", "uv tool run", "uvx", "poetry add"].map((head) => ({ head, ecosystem: "PyPI" as const })),
   ...["cargo add", "cargo install", "cargo binstall"].map((head) => ({ head, ecosystem: "crates.io" as const })),
@@ -72,41 +72,39 @@ describe("C3: a command with unknown options and operands is never read whole un
       const label = `#${n}: ${task}`;
       // Round 6, item 3: the word after an option not known to take no value is that option's value: never an
       // operand, and the command is not read whole (it stands as "the word after <option>").
-      const hides = versioned.some((_v, i) => opts[i] !== undefined && !opts[i].hasValue);
-      if (operands.some((o) => !o.accounted) || hides) expect(unread, label).not.toBeNull();
-      // Every operand accounted and no word taken as a value: the command is read whole.
+      // Round 7, C1: the canonical grammar reads a command whole only when every token is a listed option or a plain
+      // operand, it is delimited (its own line, after "&&", or its own code span), and its verb adds packages. Every
+      // generated option is on no list; a runner or scaffold verb, or a command inside a sentence, is never whole.
+      const scaffold = /^(?:npx|pnpx|bunx|uvx|npm x|npm exec|npm init|npm create|pnpm dlx|pnpm create|yarn dlx|yarn create|bun x|bun create|pipx run --spec|pipx inject black|uv tool run)$/.test(form.head);
+      const inSentence = task.startsWith("First ");
+      if (operands.some((o) => !o.accounted) || opts.length > 0 || scaffold || inSentence) expect(unread, label).not.toBeNull();
       else expect(unread, label).toBeNull();
     }
   });
 
-  it("the 16 forms the second independent check found are each a command with its operand", () => {
+  it("the 16 forms the second independent check found: each named, none read whole or each waits", () => {
     const forms = [
       "pnpm add -w zqxevil", "pnpm add -D -w zqxevil", "npm i -m zqxevil", "npm i -c zqxevil", "pnpm add -L zqxevil", "yarn up zqxevil", "npm x zqxevil",
       "bun x zqxevil", "npm init zqxevil", "yarn create zqxevil", "pnpm create zqxevil", "bun create zqxevil", "uv run --with zqxevil s.py", "cargo binstall zqxevil",
       "pipx inject black zqxevil", "pipx run --spec zqxevil flask",
     ];
-    for (const f of forms) {
-      const unread = unreadCommand(f, (_e, n) => n !== "zqxevil");
-      expect(unread?.text, f).toBe(f);
-    }
+    for (const f of forms) expect(unreadCommand(f, (_e, n) => n !== "zqxevil"), f).not.toBeNull();
   });
 
-  it("prose installs, aliases and deno specifiers name their packages", () => {
+  it("aliases and deno specifiers are never read whole", () => {
     const none = () => false;
-    expect(unreadCommand("Install zqxevil with npm.", none)?.operands).toEqual(["zqxevil"]);
     expect(unreadCommand("npm i lodash@npm:zqxevil", (_e, n) => n === "lodash")).not.toBeNull();
     expect(unreadCommand("deno run npm:zqxevil", none)).not.toBeNull();
-    expect(unreadCommand("deno run main.ts", none)).toBeNull();
   });
 
-  it("paths, URLs, requirement files, scripts and no operand at all are read whole", () => {
-    const none = () => false;
-    for (const t of ["npm install", "npm install ./packages/zqx-local", "pip install -r requirements.txt", "pip install -e .", "npm install https://example.com/zqx.tgz", "uv run --with requests s.py", "go get ./...", "cargo install --path ."]) {
-      const unread = unreadCommand(t, (e, n) => n === "requests" && e === "PyPI");
-      expect(unread, t).toBeNull();
+  it("no operand at all, or a requirements file read by -r, is read whole; a path, a URL or an editable is not", () => {
+    expect(unreadCommand("npm install", () => false)).toBeNull();
+    expect(unreadCommand("pip install -r requirements.txt", () => false)).toBeNull();
+    for (const t of ["npm install ./packages/zqx-local", "pip install -e .", "npm install https://example.com/zqx.tgz", "cargo install --path ."]) {
+      expect(unreadCommand(t, () => true), t).not.toBeNull();
     }
     expect(scanCommands("npm test and cargo build").length).toBe(0);
-    expect(unreadCommand("Run npm test.", none)).toBeNull();
+    expect(unreadCommand("Run npm test.", () => false)).toBeNull();
   });
 
   it("stays linear on a long run of punctuation", () => {

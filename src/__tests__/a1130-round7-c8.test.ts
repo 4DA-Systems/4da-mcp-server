@@ -45,7 +45,7 @@ describe("C8: task words that name Object.prototype members", () => {
 
   it("check_decision_alignment with such a word answers", async () => {
     await executeDecisionMemory(db, { action: "record", subject: "Parser", decision: "Keep the parser class small", rationale: "test" } as never);
-    const r = (await executeCheckDecisionAlignment(db, { technology: "constructor", pattern: "__proto__ toString" }, { lexicalOnly: true })) as Record<string, unknown>;
+    const r = (await executeCheckDecisionAlignment(db, { technology: "constructor", pattern: "__proto__ toString" }, { lexicalOnly: true })) as unknown as Record<string, unknown>;
     expect(r).toHaveProperty("aligned");
   });
 });

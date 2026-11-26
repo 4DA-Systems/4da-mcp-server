@@ -37,7 +37,9 @@ describe("item 8: the only two of the reviewer's 80 ordinary tasks that failed",
     npmProject();
     const r = await brief({ task: "Run npm install hono to replace the express-style router in src/server.ts with a Hono app.", packages: [{ ecosystem: "npm", name: "hono", public: true }] });
     expect(JSON.stringify(r.task_packages.not_read)).not.toContain("src/server.ts");
-    expect(r.delegation_assessment.reason).not.toMatch(/was not looked up|not read/);
+    // Round 7, C1: "src/server.ts" is no plain name, so the command is not read whole (review_needed, said by its
+    // manager and verb), but the path itself is never a withheld word.
+    expect(r.delegation_assessment.reason).not.toMatch(/was not looked up/);
   });
 
   it("o31: a backtick closing the command after an option ends the command there", async () => {
@@ -84,7 +86,16 @@ describe("item 4: what a declaration does and does not change", () => {
   });
 });
 
-describe("item 7: the declaration accepts what to_confirm offers", () => {
+// Round 7, C6: a Poetry `^` / `~` declared for PyPI is refused, as dependency_check refuses it (the smaller change of
+// "both accept or neither"); to_confirm offers no version at all (C7).
+describe("item 7 (round 7): the declaration accepts what dependency_check accepts, and refuses what it refuses", () => {
+  it.each(["^2.32", "~2.32"])("PyPI requests %s is refused, as dependency_check refuses it", async (version) => {
+    npmProject();
+    const r = await brief({ task: "add requests", packages: [{ ecosystem: "PyPI", name: "requests", version, public: true }] });
+    expect(JSON.stringify(r.task_packages.not_read)).toContain("refused");
+    expect(JSON.stringify(r)).not.toContain(version);
+  });
+
   it.each([
     ["npm", "zod", "^1.2.0"],
     ["npm", "zod", "~1.2"],
@@ -94,8 +105,6 @@ describe("item 7: the declaration accepts what to_confirm offers", () => {
     ["PyPI", "requests", "==2.32.3"],
     ["PyPI", "requests", ">=2.0,<3"],
     ["PyPI", "requests", "~=2.32"],
-    ["PyPI", "requests", "^2.32"],
-    ["PyPI", "requests", "~2.32"],
     ["crates.io", "zqxdual", "^1.0"],
     ["crates.io", "zqxdual", "=1.0.0"],
     ["Go", "github.com/pkg/errors", "v0.9.1"],
@@ -114,7 +123,9 @@ describe("item 1: manifest snippets and options between manager and verb give st
     ['```json\n{"dependencies": {"zqxdual": "^1.0.0"}}\n```', "zqxdual/npm"],
     ["Add to requirements.txt: zqxdual==1.0.0", "zqxdual/PyPI"],
     ['pyproject.toml: dependencies = ["zqxdual>=1.0"]', "zqxdual/PyPI"],
-    ['[tool.poetry.dependencies]\npython = "^3.11"\nzqxdual = "^1.0"', "zqxdual/PyPI"],
+    // Round 7, C5/C6: a Poetry `^` is no spec dependency_check reads for PyPI, so a table holding one is not read whole
+    // (item 6 below); an entry with a plain version is a strict pair.
+    ['[tool.poetry.dependencies]\npython = "^3.11"\nzqxdual = "1.0"', "zqxdual/PyPI"],
     ['Cargo.toml:\n[dependencies]\nzqxdual = { version = "1.0", features = ["x"] }', "zqxdual/crates.io"],
     ["npm -w web install zqxdual", "zqxdual/npm"],
     ["npm --workspace web install zqxdual", "zqxdual/npm"],
@@ -176,15 +187,19 @@ describe("item 3: an unknown option's value is never offered, never repeated", (
   });
 });
 
-describe("item 6: after a comma the next name waits", () => {
+// Round 7, C1/C5: a comma in a command's list, or a manifest entry it cannot read, makes it not read whole: nothing of
+// it is offered, review_needed at most.
+describe("item 6 (round 7): a comma in a command's list: not read whole", () => {
   it.each([
     ["pip install requests, zqxdualpy", "zqxdualpy"],
     ["npm i zod, zqxdual", "zqxdual"],
+    ['[tool.poetry.dependencies]\nzqxdual = "^1.0"', "zqxdual"],
   ])("%s", async (task, name) => {
     npmProject();
     h.write("requirements.txt", "requests==2.32.3\n");
     const r = await brief({ task, packages: [] });
-    expect(waiting(r).map((w) => w.split("/")[0])).toContain(name);
-    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(waiting(r).map((w) => w.split("/")[0])).not.toContain(name);
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).toMatch(/could not read whole/);
   });
 });
