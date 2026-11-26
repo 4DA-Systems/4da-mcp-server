@@ -3635,7 +3635,7 @@ function managerSettingIn(words) {
   return null;
 }
 
-/** A bash line whose heredoc bodies are taken out: read when every command left is a data program (`cat > f <<EOF`), else the part not read. */
+/** A bash line whose heredoc bodies are taken out: read when every command left is a data program or a sink (`cat > f <<EOF`, `tee notes.md <<EOF`), else the part not read. */
 function dataHeredoc(line) {
   let stripped = "";
   let rest = line;
@@ -3665,6 +3665,8 @@ function dataHeredoc(line) {
   stripped += rest;
   const commands = quietly(() => simpleCommands(stripped, "bash", null, null, MAX_ACCOUNT_CHARS));
   if (!commands) return "a command line this hook cannot take apart";
+  // Every command left must be a data program or a sink: an install beside a heredoc is not judged
+  // by the reader (which does not read a heredoc line), so it is held, not read here.
   for (const words of commands) if (!sinkCommand(words)) return "a heredoc fed to a command that is not a plain data command";
   return null;
 }
@@ -3802,7 +3804,7 @@ function optionsAllowed(args, spec) {
 
 /** git's commands whose words are text, with their options. */
 const GIT_SPECS = {
-  commit: { short: "aqsvpn", shortValue: "mFCc", long: ["--amend", "--no-edit", "--allow-empty", "--allow-empty-message", "--no-verify", "--signoff", "--quiet", "--all", "--verbose", "--dry-run", "--short", "--porcelain"], longValue: ["--message", "--file", "--author", "--date", "--fixup", "--squash", "--trailer", "--cleanup"] },
+  commit: { short: "aqsvpn", shortValue: "mFCc", long: ["--amend", "--no-edit", "--allow-empty", "--allow-empty-message", "--no-verify", "--signoff", "--quiet", "--all", "--verbose", "--dry-run", "--short", "--porcelain"], longValue: ["--message", "--file", "--author", "--date", "--fixup", "--squash", "--trailer", "--cleanup", "--template"] },
   log: { short: "pi", shortValue: "nSGL", digits: true, long: ["--oneline", "--stat", "--name-only", "--name-status", "--graph", "--all", "--decorate", "--reverse", "--no-merges", "--merges", "--patch", "--follow", "--first-parent", "--regexp-ignore-case", "--all-match", "--no-patch", "--abbrev-commit"], longValue: ["--grep", "--author", "--since", "--until", "--after", "--before", "--format", "--pretty", "--max-count", "--date"] },
   show: { short: "sp", long: ["--stat", "--name-only", "--name-status", "--oneline", "--no-patch", "--patch"], longValue: ["--pretty", "--format"] },
   diff: { shortValue: "U", long: ["--stat", "--cached", "--staged", "--name-only", "--name-status", "--shortstat", "--numstat", "--no-color", "--color", "--word-diff", "--ignore-all-space", "--ignore-space-change", "--patch"], longValue: ["--unified", "--diff-filter"] },

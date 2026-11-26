@@ -224,3 +224,17 @@ describe("6: a ledger that exists but cannot be read is unreadable, not absent: 
     expect(r.text).toContain("exists but could not be read");
   });
 });
+
+describe("proofs: check 11's data rows", () => {
+  it("git commit --template is a file of text: goes ahead", () => {
+    expect(run("git commit --template=t.txt -m 'npm i lodash@4.17.20'").decision).toBe("allow");
+  });
+
+  it.each([
+    "cat <<EOF > notes.md\nnpm i lodash@4.17.20\nEOF\nnpm i lodash@4.17.20",
+    "tee notes.md <<'EOF'\nx\nEOF\nnpm i lodash@4.17.20",
+    "cat <<EOF > package.json\n{}\nEOF\nnpm i lodash@4.17.20",
+  ])("an install beside a heredoc is held (the reader does not read a heredoc line): %s", (command) => {
+    expect(run(command).decision, command).toBe("deny");
+  });
+});
