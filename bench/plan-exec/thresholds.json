@@ -30,10 +30,12 @@
       "max_failed_steps": 0,
       "max_lowering_steps": 1,
       "max_refused_steps": 0,
-      "max_planned_but_remained": 24,
-      "max_new_vulnerable_copies": 26,
+      "max_planned_but_remained": 28,
+      "max_new_vulnerable_copies": 22,
       "min_net_cleared_ratio": 0.77,
-      "why": "the 15 projects 6.5.0 and 6.5.1 were gated on, at exactly their numbers; the one lowering allowed is uptime-kuma's (cypress 15 pins cli-table3 0.6.1 where 0.6.3 was installed)"
+      "max_planned_and_new_copies": 50,
+      "why": "the 15 projects 6.5.0 and 6.5.1 were gated on, at exactly their numbers; the one lowering allowed is uptime-kuma's (cypress 15 pins cli-table3 0.6.1 where 0.6.3 was installed)",
+      "recount": "28 / 22 (was 24 / 26) is a recount, not a loosening: since 7a23134 a planned copy that lands below its row's target while still carrying one of its advisories is counted as planned but remained instead of as a new copy. On the 2026-11-26 run that moved four copies: http-server @babel/traverse 7.10.5 -> 7.16.3 and 7.15.4 -> 7.16.3 (inside tap 15), uptime-kuma minimatch 9.0.3 -> 9.0.9, h3 minimatch 9.0.4 -> 9.0.9 (23 / 23 under the old count, 27 / 20 under the new). The sum is capped at the old 24 + 26 = 50 (max_planned_and_new_copies), so the two cannot both drift up."
     }
   },
   "projects": {

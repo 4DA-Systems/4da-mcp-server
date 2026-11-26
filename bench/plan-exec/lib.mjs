@@ -767,6 +767,8 @@ export function gateFindings(t, thresholds, projects = []) {
     gmax("max_refused_steps", gt.steps_refused, "step(s) named a command this harness does not run");
     gmax("max_planned_but_remained", gt.planned_but_remained, "vulnerable copies a step ran for were still there after the run");
     gmax("max_new_vulnerable_copies", gt.new_vulnerable_copies, "vulnerable copies the run brought in that were not there before");
+    // Both counts at once: a copy moved from one to the other by a recount never lets the two drift up together.
+    gmax("max_planned_and_new_copies", gt.planned_but_remained + gt.new_vulnerable_copies, "vulnerable copies a step ran for that stayed, or the run brought in, together");
     if (typeof g.min_net_cleared_ratio === "number" && (gt.net_cleared_ratio ?? 0) < g.min_net_cleared_ratio) {
       f.push(`${name}: advisories ${gt.advisories_before} -> ${gt.advisories_after}: ${gt.net_cleared_ratio} cleared, below the group's ${g.min_net_cleared_ratio}`);
     }
