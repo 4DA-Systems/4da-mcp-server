@@ -54,6 +54,13 @@
  * what it installs must be what the outer command's reader judges; so is one after a prefix (sudo,
  * env, timeout, nice, nohup, time, command, exec, busybox, wsl), a shell keyword, or inside a
  * subshell, group or script block. Under xargs a manager's operands come from its input: held.
+ * The files read on an Edit, MultiEdit or Write are package.json, Cargo.toml, pyproject.toml,
+ * go.mod, pnpm-workspace.yaml, and a requirements file (a name `requirements*.txt`, or any `.txt`
+ * in a folder named `requirements`). Each name is matched case-insensitively on every platform,
+ * after an NTFS stream suffix (`::$DATA`, `:s`) and trailing dots and blanks are taken off its
+ * last path part, as Windows opens it (on a case-sensitive file system `Package.json` is held as
+ * well: the safe side). Other files a later command reads (constraints.txt, requirements.in, a
+ * lockfile) are not read.
  * In a manifest written with the Edit, MultiEdit or Write tool only dependency declarations count
  * (never a comment or another string field), each section's are compared on their own, and a
  * dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`, `registry`;
@@ -152,6 +159,8 @@ import { performance } from "node:perf_hooks";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod", "pnpm-workspace.yaml"]);
+/** The manifests by their lower-case names (manifestKind compares names case-insensitively). */
+const MANIFEST_NAMES = new Map([...MANIFESTS].map((m) => [m.toLowerCase(), m]));
 /** The largest hook payload read (characters). */
 const MAX_INPUT_CHARS = 8 * 1024 * 1024;
 /** The largest manifest read from disk (bytes): a manifest is kilobytes. */
@@ -1795,8 +1804,12 @@ function callItem(ecosystem, name, to, from) {
  * imports nothing: `requirements-dev.txt`, `dev_requirements.txt`), or is a .txt in `requirements/`.
  */
 function manifestKind(filePath) {
-  const name = basename(filePath);
-  if (MANIFESTS.has(name)) return name;
+  // Round 11: the last path part as Windows opens it: an NTFS stream suffix (`::$DATA`, `:s`) and
+  // trailing dots and blanks dropped, and the name compared case-insensitively on every platform
+  // (on a case-sensitive file system `Package.json` is then held too: the safe side).
+  const name = basename(String(filePath).replace(/[\\/]+$/, "")).replace(/:.*$/, "").replace(/[. ]+$/, "");
+  const known = MANIFEST_NAMES.get(name.toLowerCase());
+  if (known) return known;
   // The server reads no `syntax_test_*` file (an editor grammar's fixture: isSyntaxTestName).
   if (/^syntax_test_/i.test(name)) return null;
   if (/requirements[\w.-]*\.txt$/i.test(name)) return "requirements.txt";

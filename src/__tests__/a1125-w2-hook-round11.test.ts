@@ -115,3 +115,30 @@ describe("4: --upgrade-package <name> moves the named package to its newest rele
     expect(run("uv lock -P requests").text).toContain("avoid");
   });
 });
+
+describe("5: a manifest's file name is matched case-insensitively, without a stream suffix or trailing dots and blanks", () => {
+  const write = (name: string, content: string) => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: `${s.project.replace(/\\/g, "/")}/${name}`, content } });
+  const PKG = '{"dependencies":{"lodash":"4.17.20"}}';
+  it.each([
+    ["Package.json", PKG],
+    ["PACKAGE.JSON", PKG],
+    ["package.json::$DATA", PKG],
+    ["package.json:x", PKG],
+    ["package.json.", PKG],
+    ["package.json ", PKG],
+    ["cargo.toml", '[package]\nname = "p"\nversion = "0.1.0"\n[dependencies]\nserde = "=1.0.0"\n'],
+    ["PyProject.toml", '[project]\nname = "p"\nversion = "0.1"\ndependencies = ["requests==2.5.0"]\n'],
+    ["GO.MOD", "module example.com/m\n\ngo 1.22\n\nrequire rsc.io/quote v1.5.0\n"],
+    ["pnpm-workspace.YAML", "catalog:\n  lodash: 4.17.20\n"],
+    ["Requirements.TXT", "requests==2.5.0\n"],
+  ])("Write %s: held on its verdict", (name, content) => {
+    const r = write(name, content);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items, r.text).not.toBeNull();
+  });
+
+  it("another file goes ahead", () => {
+    expect(write("package.jsonx", PKG).decision).toBe("allow");
+    expect(write("notes.json", PKG).decision).toBe("allow");
+  });
+});
