@@ -13,8 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
-import { canonicalCommands } from "../tools/briefing-canonical.js";
+import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
 import { MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
@@ -298,5 +299,27 @@ describe("what_should_i_know after confirmation round 8: the wordings and the li
     const items = (whatShouldIKnowTool.inputSchema.properties.packages as unknown as { items: { properties: { public: { description: string } } } }).items;
     expect(items.properties.public.description).toBe("false for anything from a private registry, an own index, git or a path; true sends the name to the public registry.");
     expect(next).toContain("sends every name you declare `public: true` to its public registry");
+  });
+});
+
+describe("what_should_i_know after confirmation round 10: the list, the bounds and the wordings the docs quote", () => {
+  const wsik = text("src/tools/what-should-i-know.ts");
+
+  it("the CHANGELOG gives MANAGER_NAMES as the code holds it", () => {
+    const shown = MANAGER_NAMES.map((n) => (n === "pip3" ? "pip3 (and pipX.Y)" : n)).join(", ");
+    expect(next).toContain(`is one of this list (MANAGER_NAMES): ${shown}.`);
+  });
+
+  it("a command the briefing does not read: the wording", () => {
+    expect(wsik).toContain("`This task holds a command this briefing does not read (${foreignLines.slice(0, 5).join(\", \")}): check what it installs with dependency_check.`");
+    expect(next).toContain('"This task holds a command this briefing does not read (brew): check what it installs with dependency_check."');
+  });
+
+  it("the CPU bound: 4000 distinct words, and the two sentences", () => {
+    expect(WORD_SCAN_CAP).toBe(4000);
+    expect(wsik).toContain("`This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part.`");
+    expect(wsik).toContain('"This briefing did not finish reading the task within its time budget: split the task and ask for each part."');
+    expect(next).toContain(`"This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part."`);
+    expect(next).toContain('"This briefing did not finish reading the task within its time budget: split the task and ask for each part."');
   });
 });
