@@ -38,7 +38,8 @@ const BARE: Array<[string, string, string]> = [
   ["npm install lodash@latest", "npm", "lodash"],
   ["npm i -D @types/node", "npm", "@types/node"],
   ["yarn add lodash", "npm", "lodash"],
-  ["yarn workspace web add lodash", "npm", "lodash"],
+  // Round 17 (L1 b): `yarn workspace web add lodash` is now held as not read (a workspace option); see round17.
+  ["yarn add --dev lodash", "npm", "lodash"],
   ["pnpm add -D zod", "npm", "zod"],
   ["pnpm add lodash@latest --save-dev", "npm", "lodash"],
   ["pnpm up -L react", "npm", "react"],
@@ -223,7 +224,8 @@ describe("size", () => {
   it("a 60 KB install of names alone, inside the CPU bound", () => {
     s.ledger([]);
     const names = Array.from({ length: 6000 }, (_, i) => `pkg-${i}`).join(" ");
-    const held = timedWithin(s.home, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `npm install ${names}` } }, 500);
+    // Round 17 (L1 c): in the sandbox project; without a cwd it ran in this repository, a pnpm workspace.
+    const held = timedWithin(s.home, { hook_event_name: "PreToolUse", tool_name: "Bash", cwd: s.project, tool_input: { command: `npm install ${names}` } }, 500);
     expect(held.decision).toBe("deny");
     expect(held.text).toContain('"to":"latest"');
   });

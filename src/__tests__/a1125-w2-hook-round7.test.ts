@@ -29,7 +29,8 @@ beforeEach(() => {
 afterEach(() => s.dispose());
 
 const write = (file: string, content: string) => ({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: s.file(file, ""), content } });
-const bash = (command: string, tool = "Bash") => ({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command } });
+// Round 17 (L1 c): the commands run in the sandbox project; without a cwd they ran in this repository, a pnpm workspace.
+const bash = (command: string, tool = "Bash") => ({ hook_event_name: "PreToolUse", tool_name: tool, cwd: s.project, tool_input: { command } });
 const dotted = (n: number) => Array.from({ length: n }, () => "a").join(".");
 
 describe("G2: the inputs that ran past Claude Code's 10 s, and 200,000-character variants of each new shape, inside the CPU bound", () => {

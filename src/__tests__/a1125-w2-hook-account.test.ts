@@ -94,8 +94,7 @@ const NOT_READ: [string, string | null][] = [
   ["npm i lodash@x", "npm i lodash"],
   ["pip install 'requests '", "pip install 'requests'"],
   ["go get rsc.io/quote/...", "go get rsc.io/quote"],
-  // a registry this hook cannot classify
-  ["npm i --registry registry lodash", "npm i lodash"],
+  // (Round 17, L2: a registry option is never left out; `npm i --registry registry lodash` is in round17.)
   // lines this hook cannot take apart
   ["npm install $PKG", "npm install lodash"],
   ["npm i $(cat pkgs.txt)", "npm i lodash"],

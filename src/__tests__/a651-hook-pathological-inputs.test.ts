@@ -170,7 +170,10 @@ describe("a call that could not be read in time is held, never let through", () 
 
   it("within the budget nothing changes", () => {
     // Within the budget it is read (since wave 2 a name alone is the request "latest", held for its verdict), never held as not read.
-    expect(respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now())).not.toContain("could not be read");
+    // Round 17 (L1 c): in a folder that is not inside a workspace (this file's project holds a pnpm-workspace.yaml).
+    const plain = mkdtempSync(join(tmpdir(), "a651-plain-"));
+    expect(respond({ ...bash("npm i left-pad"), cwd: plain }, { FOURDA_MCP_HOME: home }, Date.now())).not.toContain("could not be read");
+    rmSync(plain, { recursive: true, force: true });
   });
 });
 
