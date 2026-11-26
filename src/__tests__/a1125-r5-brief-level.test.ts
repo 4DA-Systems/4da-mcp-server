@@ -44,11 +44,11 @@ describe("unchecked names: confirmation_needed (wave 2), never 'delegate'", () =
 });
 
 describe("a pip --hash value is no credential", () => {
-  it("pip install PyJWT==1.7.1 --hash=sha256:... lists or judges PyJWT at 1.7.1", async () => {
+  // Round 8, m10: `--hash` is no option of pip's command line (a requirements-file option): the command is not read
+  // whole, nothing of it is offered or looked up, and the hash is never treated as a credential.
+  it("pip install PyJWT==1.7.1 --hash=sha256:... is not read whole; the hash is no credential", async () => {
     const r = await brief("pip install PyJWT==1.7.1 --hash=sha256:a3b52a3e8b8e4e5f1e8a1f0d4c2b9a6e7d8c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1");
-    const listed = (waitingWords(r) ?? []).find((i: { word: string }) => i.word.toLowerCase() === "pyjwt");
-    const judged = (r.requested_versions ?? []).find((v: { name: string }) => v.name.toLowerCase() === "pyjwt");
-    expect(listed?.version?.replace(/^==/, "") ?? judged?.to).toBe("1.7.1");
+    expect(r.delegation_assessment.reason).toMatch(/could not read whole/);
     expect(JSON.stringify(notReadWords(r) ?? [])).not.toMatch(/pyjwt/i);
   });
 });

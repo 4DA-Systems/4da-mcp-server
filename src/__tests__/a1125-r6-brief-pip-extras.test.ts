@@ -24,7 +24,14 @@ async function brief(task: string): Promise<Record<string, any>> {
 }
 
 describe("a PEP 508 extra is never a name, and the version stays bound", () => {
-  it.each(['pip install "requests[security]==2.25.0"', 'pip install "requests[security,socks]==2.25.0"', "pip install requests[security, socks]==2.25.0"])("%s", async (task) => {
+  // Round 8, m10: written with a blank inside the extras the command is not read whole: nothing is looked up.
+  it("pip install requests[security, socks]==2.25.0: not read whole, nothing looked up", async () => {
+    const r = await brief("pip install requests[security, socks]==2.25.0");
+    expect(h.requests.some((u) => /requests|security|socks/.test(u))).toBe(false);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+  });
+
+  it.each(['pip install "requests[security]==2.25.0"', 'pip install "requests[security,socks]==2.25.0"'])("%s", async (task) => {
     const r = await brief(task);
     expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/security|socks/);
     expect(JSON.stringify(r.new_packages ?? [])).not.toMatch(/security|socks/);

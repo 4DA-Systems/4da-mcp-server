@@ -32,10 +32,11 @@ const ECOSYSTEM: Record<Manager, CheckEcosystem> = { npm: "npm", pnpm: "npm", ya
 
 /** The adding verbs of each manager: a verb listed here with its operands is an install the grammar can read. */
 const ADDING: Record<Manager, ReadonlySet<string>> = {
-  npm: new Set(["install", "i", "in", "add", "update", "up", "upgrade"]),
+  // npm's own aliases of install (its cli: i, in, ins, inst, insta, instal, isnt, isnta, isntal, isntall) and add.
+  npm: new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "update", "up", "upgrade"]),
   pnpm: new Set(["add", "install", "i", "update", "up", "upgrade"]),
   yarn: new Set(["add", "up", "upgrade"]),
-  bun: new Set(["add", "install", "i", "update"]),
+  bun: new Set(["add", "a", "install", "i", "update"]),
   pip: new Set(["install"]),
   uv: new Set(["add", "install"]), // `uv pip install`, `uv tool install` (a bare `uv install` is no uv verb: not named)
   poetry: new Set(["add"]),
@@ -100,10 +101,15 @@ export interface CanonicalCommand {
   /** The command as written, capped: for tests and diagnosis only, never in an answer. */
   text: string;
   /**
-   * The words the grammar consumed as program, verb, switch, option or option value (lower case, marks set aside):
-   * no other reader may offer, look up or weigh them (round 7c, F1: `npm install ms` looked `install` up).
+   * The words the grammar consumed at THIS command's occurrence (round 8, D4: by occurrence, never by word): its
+   * program, verb, switches, options and their values; of a command not read whole, every word (m10). No other reader
+   * may offer, look up or weigh those occurrences (round 7c, F1: `npm install ms` looked `install` up).
    */
   consumed: string[];
+  /** Every word of the command, at any length (round 8, m4: the 120-character `text` cut is no limit on this). */
+  words: string[];
+  /** It started inside a sentence (not at the start of its line or piece, nor in its own code span or parenthesis). */
+  inSentence: boolean;
 }
 
 const MAX_TOKENS = 200;
@@ -151,9 +157,12 @@ export function plainOperand(ecosystem: CheckEcosystem, raw: string): { name: st
   return { name, ...(spec !== undefined ? { spec } : {}) };
 }
 
-/** The task cut into lines and shell commands: a new line, `;`, `&&`, `||`, `|`. Sentences are cut below. */
+/**
+ * The task cut into lines and shell commands: a new line, `;`, `&&`, `||`, `|`, a background `&`, a redirection
+ * (`>`, `>>`, `<`, `2>`, `&>`, `2>&1`) and a shell comment (` # ` to the line's end). Sentences are cut below.
+ */
 function pieces(text: string): string[] {
-  return text.split(/\r?\n|;|&&|\|\||\|/);
+  return text.split(/\r?\n|;|&&|\|\||\||(?<=\s)\d?(?:>>?|<|&>)(?:&\d)?|(?<![&\w])&(?![&\w])|\s#(?=\s)/);
 }
 
 /** Every named command of the text, each canonical or not. Linear in the text's length. */
@@ -161,8 +170,9 @@ export function canonicalCommands(text: string): CanonicalCommand[] {
   const out: CanonicalCommand[] = [];
   for (const piece of pieces(text.length > 200_000 ? text.slice(0, 200_000) : text)) {
     // Sentences: a sentence end is `.`, `!` or `?` followed by a blank (a version's dots are no sentence end).
-    // (a lone "." is a path, and a sentence starts with a capital, a quote, a backtick or a parenthesis).
-    for (const sentence of piece.split(/(?<=[\w)\]"'`][.!?])\s+(?=[A-Z`"'(])/)) {
+    // Round 8, m3: a word ending in `.`, `!` or `?` before a blank ends its sentence, whatever the next word's case
+    // ("Run npm install pino. zqxprivafter is ..."); a lone "." (a path, `pip install -e .`) does not.
+    for (const sentence of piece.split(/(?<=[\w)\]"'`][.!?])\s+/)) {
       const tokens = sentence.split(/\s+/).filter(Boolean).slice(0, MAX_TOKENS);
       for (let m = 0; m < tokens.length; m++) {
         const read = readAt(tokens, m);
@@ -247,6 +257,7 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
   if (bad) return { command: notWhole(manager!, verb, ecosystem, bad, tokens, m, end), end };
   const operands: Array<{ name: string; spec?: string }> = [];
   const requirementFiles: string[] = [];
+  const operandAt = new Set<number>();
   for (let j = v + 1; j < end; j++) {
     const rawTok = tokens[j];
     const last = j === end - 1;
@@ -266,13 +277,23 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
       return { command: notWhole(manager!, verb, ecosystem, "an option this briefing does not read", tokens, m, end), end };
     }
     if ((t.startsWith('"') || t.startsWith("'")) && !(t.length > 1 && t.endsWith(t[0]))) return { command: notWhole(manager!, verb, ecosystem, "an unclosed quote", tokens, m, end), end };
+    // `name@"4.17.20"`: a quoted spec is that spec. Poetry's `name@1.2.3` / `name@>=1.2` is the PEP 440 pin or range.
+    const quoted = /^((?:@[^/@\s]+\/)?[^@\s"']+)@(["'])([^"'\s]+)\2$/.exec(t);
+    if (quoted) t = `${quoted[1]}@${quoted[3]}`;
+    const poetryAt = manager === "poetry" ? /^([A-Za-z0-9][\w.-]*(?:\[[\w,.-]*\])?)@((?:===?|~=|!=|>=|<=|>|<)?)(\d[\w.!+*-]*)$/.exec(t) : null;
+    if (poetryAt) t = `${poetryAt[1]}${poetryAt[2] || "=="}${poetryAt[3]}`;
     const op = plainOperand(ecosystem, t);
+    // Round 8, D5: Poetry's `name@^x` / `name@~x` is no PEP 440 spec; said with what to write instead.
+    if (!op && ecosystem === "PyPI" && /^[A-Za-z0-9][\w.-]*@[\^~](?!=)/.test(t)) return { command: notWhole(manager!, verb, ecosystem, POETRY_SPEC, tokens, m, end), end };
     if (!op) return { command: notWhole(manager!, verb, ecosystem, "a word that is not a plain package name (a path, a URL, a source, a credential's shape)", tokens, m, end), end };
     operands.push(op);
+    operandAt.add(j);
   }
-  const operandWords = new Set(operands.map((o) => o.name.toLowerCase()));
-  const consumed = consumedWords(tokens, m, end).filter((w) => !operandWords.has(w));
-  return { command: { manager: manager!, verb, ecosystem, canonical: true, operands, requirementFiles, text: tokens.slice(m, end).join(" ").slice(0, 120), consumed }, end };
+  const consumed: string[] = [];
+  for (let j = m; j < end; j++) if (!operandAt.has(j)) pushWords(consumed, tokens[j]);
+  const words: string[] = [];
+  for (let j = m; j < end; j++) pushWords(words, tokens[j]);
+  return { command: { manager: manager!, verb, ecosystem, canonical: true, operands, requirementFiles, text: tokens.slice(m, end).join(" ").slice(0, 120), consumed, words, inSentence: !span && m > 0 }, end };
 }
 
 type Closer = "`" | ")" | null;
@@ -296,30 +317,55 @@ const clean = (t: string) => {
   return t.slice(a, b);
 };
 
+/** Round 8, D5: what a Poetry `^` / `~` operand is told. The command as written stays review_needed. */
+export const POETRY_SPEC = "a Poetry ^ or ~ constraint, which is no PEP 440 spec: write the PEP 440 range it means (for example >=1.2,<2.0) or an exact version; the level stays review_needed for this command as written";
+
 function notWhole(manager: string, verb: string, ecosystem: CheckEcosystem, why: string, tokens: string[], m: number, end: number): CanonicalCommand {
-  // Of a command not read whole, the grammar consumed its program, verb and options (their values it cannot tell).
-  const words = consumedWords(tokens, m, end);
-  const lastVerb = verb.split(" ").at(-1)?.toLowerCase() ?? "";
-  const upTo = Math.max(0, lastVerb ? words.indexOf(lastVerb) : 0);
-  const consumed = words.filter((w, i) => i <= upTo || w.startsWith("-"));
-  return { manager, verb, ecosystem, canonical: false, why, operands: [], requirementFiles: [], text: tokens.slice(m, end).join(" ").slice(0, 120), consumed };
+  // Of a command not read whole, every word is consumed: no reader offers, looks up or weighs any of it (round 8, m10).
+  const words: string[] = [];
+  for (let j = m; j < end; j++) pushWords(words, tokens[j]);
+  const span = /^[`(]/.test(tokens[m] ?? "");
+  return { manager, verb, ecosystem, canonical: false, why, operands: [], requirementFiles: [], text: tokens.slice(m, end).join(" ").slice(0, 120), consumed: words, words, inSentence: !span && m > 0 };
 }
 
-/** The words of tokens[m, end) as other readers see them: lower case, quotes, ticks and end marks set aside. */
-function consumedWords(tokens: string[], m: number, end: number): string[] {
-  const out: string[] = [];
-  for (const t of tokens.slice(m, end)) {
-    // Trailing marks trimmed by a walk: an anchored `[.,;:!?]+$` backtracked over a 150 KB run of dots (31 s of CPU).
-    let w = clean(t);
-    let e = w.length;
-    while (e > 0 && ".,;:!?".includes(w[e - 1])) e--;
-    w = w.slice(0, e).toLowerCase();
-    if (!w) continue;
-    out.push(w);
-    // `--group=dev`, `python3 -m pip`: the option's value and the program's own name are consumed too.
-    if (w.includes("=")) out.push(w.slice(w.indexOf("=") + 1));
-    const base = w.replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|bat|ps1)$/, "");
-    if (base !== w) out.push(base);
+/**
+ * The words one token stands for, as other readers see them: lower case, wrapping quotes, ticks and end marks set
+ * aside; an option's value after `=`; a path's basename with its launcher extension; each piece a comma, `=`, `:` or
+ * `@` joins, its spec aside (`a,b`, `x=1`, `x@npm:y`, `qzws@7.4.5`). Walks, never an anchored regex (a 150 KB run of
+ * dots made `[.,;:!?]+$` backtrack for 31 s of CPU).
+ */
+export function wordsOf(token: string): string[] {
+  let w = clean(token);
+  let e = w.length;
+  while (e > 0 && ".,;:!?".includes(w[e - 1])) e--;
+  w = w.slice(0, e).toLowerCase();
+  if (!w) return [];
+  const out = new Set<string>([w]);
+  if (w.includes("=")) out.add(w.slice(w.indexOf("=") + 1));
+  const base = w.replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|bat|ps1)$/, "");
+  if (base) out.add(base);
+  for (const piece of w.split(/[,=:@]+/)) {
+    if (!piece) continue;
+    out.add(piece);
+    const name = specAside(piece.replace(/^npm:/, ""));
+    if (name) out.add(name);
   }
-  return out;
+  const whole = specAside(w.replace(/^npm:/, ""));
+  if (whole) out.add(whole);
+  return [...out];
+}
+
+/** The name of an operand, its spec and extras aside (`x@1.2`, `@s/x@^1`, `x==1.0`, `x[extra]>=2`). */
+function specAside(operand: string): string {
+  const scoped = operand.startsWith("@");
+  const at = operand.indexOf("@", scoped ? 1 : 0);
+  const head = at > 0 ? operand.slice(0, at) : operand;
+  const bracket = head.indexOf("[");
+  const bare = bracket >= 0 ? head.slice(0, bracket) : head;
+  const op = bare.search(/===?|~=|>=|<=|!=|[<>^~]/);
+  return op > 0 ? bare.slice(0, op) : bare;
+}
+
+function pushWords(out: string[], token: string): void {
+  for (const w of wordsOf(token)) out.push(w);
 }

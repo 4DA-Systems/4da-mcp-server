@@ -526,10 +526,13 @@ export function validateItem(r: unknown, i: number): Requested {
   if (versionLooksSecret(givenTo) || (typeof o.from === "string" && versionLooksSecret(o.from))) {
     throw new SecretVersionError(`${where}.${versionLooksSecret(givenTo) ? "to" : "from"} looks like a credential (a secret in a version label): it was not sent or recorded; write the version without it`);
   }
-  const rawTo = cargoBuild(givenTo);
-  if (rawTo !== givenTo) {
+  // A PyPI exact pin with a local label (`==1.0.0+corp.5`) is that one build: read as the version it names, so the
+  // label is set aside the same way whichever way the pin is written (round 8, reviewer 6's ledger-cmp #74).
+  const pinned = ecosystem === "PyPI" && /^==\s*[^,*=\s][^,*\s]*\+[^,*\s]+$/.test(givenTo) ? givenTo.replace(/^==\s*/, "") : givenTo;
+  const rawTo = cargoBuild(pinned);
+  if (rawTo !== pinned) {
     const why = ecosystem === "crates.io" ? "Build metadata in %s was ignored, as Cargo ignores it when resolving" : ecosystem === "npm" ? "Build metadata in %s was ignored, as npm ignores it when it orders versions" : "The local version label in %s was set aside, as no local build is on the public index";
-    notes.push(`${why.replace("%s", JSON.stringify(quoteThirdParty(givenTo.replace(CARGO_BUILD_METADATA, "$1+..."), 80)))}: checked ${rawTo}, and the ${ecosystem === "PyPI" ? "label" : "metadata"} was not sent.`);
+    notes.push(`${why.replace("%s", JSON.stringify(quoteThirdParty(pinned.replace(CARGO_BUILD_METADATA, "$1+..."), 80)))}: checked ${rawTo}, and the ${ecosystem === "PyPI" ? "label" : "metadata"} was not sent.`);
   }
   // An npm alias (`"my-lodash": "npm:lodash@4.17.20"` in package.json) installs the package it names:
   // that package is the one judged, not the alias, which is no package on the registry.
@@ -588,6 +591,8 @@ const EXAMPLES: Record<CheckEcosystem, string> = {
 
 /** "N checked: ..." over the items looked up; private items are counted as not checked, never as checked. */
 function summaryLine(results: ItemResult[], parts: string[]): string {
+  // Round 8, m11: every item refused as written: no count over an empty list ("0 checked: . Write only ...").
+  if (results.length === 0) return "No item was checked.";
   const privateCount = results.filter((r) => r.not_checked === "private").length;
   const checked = results.length - privateCount;
   // An item that names no safe release (OSV.dev not answering, say) is never told to write one (blind audit round 5).

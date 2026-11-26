@@ -118,7 +118,9 @@ export function validateToolArgs(toolName: string, schema: InputSchema, args: Re
     }
     // A list of objects is the tool's to read entry by entry (what_should_i_know's `packages`, dependency_check's
     // `items`): one null, number or array entry is refused in its place, never the whole call (round 7, C7).
-    if (Array.isArray(value) && prop.items?.type && prop.items.type !== "object") {
+    // what_should_i_know's `not_packages` is read word by word too: a number in it refuses that entry (round 8, m6).
+    const perEntry = toolName === "what_should_i_know" && name === "not_packages";
+    if (Array.isArray(value) && prop.items?.type && prop.items.type !== "object" && !perEntry) {
       const bad = value.findIndex((item) => !matchesType(item, prop.items?.type));
       if (bad >= 0) {
         return `${toolName}: every "${name}" entry must be a ${prop.items.type}; entry ${bad} is ${typeOf(value[bad])}.`;
