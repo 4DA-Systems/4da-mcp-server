@@ -95,7 +95,10 @@ describe("not_read weighs only what stands where a package stands (wave 2, chang
   it("an option value in an install command keeps review_needed", async () => {
     const r = await brief("npm install lodash --_authToken zqxa1", { packages: [{ ecosystem: "npm", name: "lodash", public: true }] });
     expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toContain("if one is a package after all, call dependency_check on it");
+    // Round 7b, item 2: said as the command not read whole, the value never repeated.
+    expect(r.delegation_assessment.reason).toMatch(/could not read whole \(an option this briefing does not read\)/);
+    const { task: _task, ...rest } = r;
+    expect(JSON.stringify(rest)).not.toContain("zqxa1");
   });
 
   it("a withheld value the caller lists in not_packages moves to dismissed, shown without its value", async () => {

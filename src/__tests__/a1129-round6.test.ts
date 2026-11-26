@@ -175,7 +175,9 @@ describe("item 3: an unknown option's value is never offered, never repeated", (
     h.write("requirements.txt", "flask==3.0.3\n");
     const r = await brief({ task, packages: [] });
     expect(JSON.stringify({ t: r.task_packages, d: r.delegation_assessment, s: r.summary })).not.toContain(value);
-    expect(JSON.stringify(r.task_packages.not_read)).toContain(`the word after ${flag}`);
+    // Round 7b, item 2: the grammar says the command not read whole (K3, by manager and verb); no "the word after".
+    expect(JSON.stringify(r.task_packages.not_read)).not.toContain(`the word after ${flag}`);
+    expect(r.delegation_assessment.reason).toMatch(/could not read whole \(an option this briefing does not read\)/);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(h.requests.filter((u) => u.includes(value))).toEqual([]);
   });
