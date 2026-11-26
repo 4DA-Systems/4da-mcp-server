@@ -257,7 +257,7 @@ describe("what_should_i_know after confirmation round 8: the wordings and the li
 
   // Round 9, E1: the leftover-version rule is gone; a public entry without `version` is confirmation_needed.
   it("a public entry without `version`: the fixed next_step", () => {
-    expect(wsik).toContain("State \\`version\\` for each package you declared public: the version or range you will write, or \"latest\" for the newest release (checked at latest so far:");
+    expect(wsik).toContain("State \\`version\\` for each package you declared public: the version or range you will write, or \"latest\" for the newest release (checked so far:");
     expect(wsik).not.toContain("VERSION_UNTIED");
   });
 

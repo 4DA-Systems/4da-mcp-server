@@ -278,10 +278,12 @@ describe("round 5: quoted versions, npm aliases and a version after the manifest
     },
   );
 
-  it("npm install lodash@npm:event-stream@3.3.6: the alias installs event-stream 3.3.6, judged at 3.3.6 (it was judged at latest)", async () => {
+  // Round 9: an alias makes the command not read whole, and no reader looks any of it up (m10); event-stream once
+  // shipped a hijacked release but is no malware-only name, so the bundled list does not decide it offline.
+  it("npm install lodash@npm:event-stream@3.3.6: not read whole, never safe, nothing looked up", async () => {
     const result = await brief("npm install lodash@npm:event-stream@3.3.6", { react: "18.2.0" });
-    expect(result.requested_versions?.find((r) => r.name === "event-stream")).toMatchObject({ to: "3.3.6", verdict: "avoid", critical: ["GHSA-test-event-stream"] });
-    expect(result.delegation_assessment.level).toBe("human_only");
+    expect(result.requested_versions ?? []).toEqual([]);
+    expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
   it('"lodash in package.json to 4.17.20" with no verb is tied to lodash when the project does not have it', async () => {

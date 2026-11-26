@@ -57,7 +57,7 @@ describe("D1: a version the task writes is checked, or holds review_needed", () 
     expect(level(r)).toBe("confirmation_needed");
     expect(r.task_packages.status).toBe("confirmation_needed");
     expect(r.delegation_assessment.reason).toContain('State `version` for each package you declared public: the version or range you will write, or "latest" for the newest release');
-    expect(r.task_packages.next_step).toContain(`(checked at latest so far: ${name})`);
+    expect(r.task_packages.next_step).toContain(`(checked so far: ${name} at latest)`);
   });
 
   it("(b) the declared version is checked: Pin zqxcrit4 to 1.0.0 declared 1.0.0 is human_only; declared latest is the caller's statement", async () => {

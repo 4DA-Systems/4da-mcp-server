@@ -53,7 +53,7 @@ describe("E1: a public entry states its version; without one the call is confirm
     expect(level(r)).toMatch(/^(?:confirmation_needed|human_only)$/);
     expect(r.task_packages.status).toBe("confirmation_needed");
     expect(r.task_packages.next_step).toContain(STATE);
-    expect(r.task_packages.next_step).toContain(`checked at latest so far: ${name}`);
+    expect(r.task_packages.next_step).toContain(`checked so far: ${name} at `);
   });
   it.each(CASES)("%s: the bad version declared -> human_only", async (task, ecosystem, name, bad, project) => {
     project();

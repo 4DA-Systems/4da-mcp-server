@@ -94,7 +94,7 @@ import {
   type PrivateIndex,
   type TaskPackages,
 } from "./briefing-confirm.js";
-import { credentialShape, knownCompromised } from "./briefing-task-screen.js";
+import { credentialShape, knownCompromised, knownMalwareOnly } from "./briefing-task-screen.js";
 import { nameProblem } from "./dependency-check-screen.js";
 import { checkableSpec } from "./briefing-names.js";
 import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
@@ -594,8 +594,8 @@ export async function executeWhatShouldIKnow(
   const taskVersions = readTaskVersions(task, ecosystemDeps());
   const gated = gateTaskNames(task, ecosystemDeps(), registryPrivate(detectAllNewPackages(task, ecosystemDeps()).filter(notPrivate)), registryPrivate(taskVersions.requested.filter(notPrivate)));
   // A bundled known-malicious name stays known wherever it stands (I1: human_only whatever the grammar made of it).
-  gated.packages = gated.packages.filter((p) => notConsumed(p.name) || knownCompromised(p.name, p.ecosystem as CheckEcosystem));
-  gated.requested = gated.requested.filter((p) => notConsumed(p.name) || knownCompromised(p.name, p.ecosystem as CheckEcosystem));
+  gated.packages = gated.packages.filter((p) => notConsumed(p.name) || knownMalwareOnly(p.name, p.ecosystem as CheckEcosystem));
+  gated.requested = gated.requested.filter((p) => notConsumed(p.name) || knownMalwareOnly(p.name, p.ecosystem as CheckEcosystem));
   gated.unverified = gated.unverified.filter((w) => notConsumed(w.word));
   // ── K2 (round 7, C1/C2/C5): strict pairs against the reader's candidates ──
   {
@@ -774,6 +774,8 @@ export async function executeWhatShouldIKnow(
   const declaredKeys = new Set(declaredPublic.map((d) => `${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`));
   const declaredName = new Map<string, string>(declaredPublic.map((d) => [`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name] as const));
   const declaredNew: NewPackage[] = [];
+  /** Round 9, E1: what each public entry without `version` was checked at in this call. */
+  const checkedSoFar = new Map<string, string>();
   const declaredWanted: RequestedVersion[] = [];
   // C4/C6: each declared public package is checked as dependency_check would be asked for it: `package` as declared,
   // `to` its declared version, and each spec read on that exact pair (a canonical operand, a snippet entry, a form
@@ -786,7 +788,10 @@ export async function executeWhatShouldIKnow(
     // allows the declared ecosystem and the spec is one that ecosystem's grammar reads.
     const formSpecs = evidence.formPairs.filter((f) => ecosystemKey(f.name, d.ecosystem) === ecosystemKey(d.name, d.ecosystem) && (f.ecosystems === null || f.ecosystems.includes(d.ecosystem)) && (/^latest$/i.test(f.spec) || checkableSpec(d.ecosystem, f.spec) !== null)).map((f) => f.spec);
     const specs = [...new Set([...onPair.flatMap((p) => (p.version ? [p.version] : [])), ...formSpecs])];
-    const versions = [...specs, d.version ? d.version : "latest"];
+    // Without a declared version: the specs read on the pair, else latest (the ledger keeps dependency_check's line
+    // for exactly those items); either way the call stays confirmation_needed until `version` is stated (E1).
+    const versions = d.version ? [...specs, d.version] : specs.length > 0 ? specs : ["latest"];
+    if (!d.version) checkedSoFar.set(d.name, specs.length > 0 ? specs.join(", ") : "latest");
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
     for (const version of [...new Set(versions)]) {
       const latest = /^latest$/i.test(version);
@@ -880,7 +885,7 @@ export async function executeWhatShouldIKnow(
   // Round 9, E1: a `public: true` entry states the version the caller will write. Without `version` it is checked at
   // latest in this call, but the declaration is not complete: confirmation_needed until each states one. No task text
   // is consulted for this.
-  const versionless = [...new Set(declaredPublic.filter((d) => d.version === undefined || d.version === "").map((d) => d.name))];
+  const versionless = [...new Set(declaredPublic.filter((d) => d.version === undefined || d.version === "").map((d) => `${d.name} at ${checkedSoFar.get(d.name) ?? "latest"}`))];
   // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
   // Round 7b: an option's value inside a command the grammar named is the grammar's to say: a listed option is read
   // (its value consumed, or none), any other makes the command not read whole (K3, by manager and verb). The older
@@ -1083,10 +1088,10 @@ export async function executeWhatShouldIKnow(
     // Round 9 (docs lane 5): a name with a known malicious release on the bundled list, written in a command the
     // grammar could not read whole (so no reader looks it up, m10), decides on its own, offline: human_only. A command
     // read whole has its operands looked up and judged at the version written.
-    const maliciousInCommands = [...new Set(evidence.commands.filter((c) => !c.canonical).flatMap((c) => c.words.filter((w) => knownCompromised(w, c.ecosystem))))];
+    const maliciousInCommands = [...new Set(evidence.commands.filter((c) => !c.canonical).flatMap((c) => c.words.filter((w) => knownMalwareOnly(w, c.ecosystem))))];
     if (maliciousInCommands.length > 0 && assessed.level !== "human_only") {
       assessed.level = "human_only";
-      assessed.reason = `${maliciousInCommands.join(", ")} ${maliciousInCommands.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list), written in a command of the task this briefing could not read whole: a human decides. ${assessed.reason}`;
+      assessed.reason = `${maliciousInCommands.join(", ")} ${maliciousInCommands.length === 1 ? "is a name" : "are names"} that is malware in every release (this server's bundled list), written in a command of the task this briefing could not read whole: a human decides. ${assessed.reason}`;
     }
     // Round 6b, item 1: refused entries are the caller's arguments, not words of the task; the level is no more
     // reassuring than review_needed while one is refused.
@@ -1426,7 +1431,7 @@ const TOO_MANY = `The task holds more than ${MAX_DECLARED} names that may be pac
 
 /** Round 9, E1: the fixed reason and next_step while a public entry has no `version`. */
 const stateVersion = (names: string[]) =>
-  `State \`version\` for each package you declared public: the version or range you will write, or "latest" for the newest release (checked at latest so far: ${names.slice(0, 10).join(", ")}${names.length > 10 ? `, and ${names.length - 10} more` : ""}).`;
+  `State \`version\` for each package you declared public: the version or range you will write, or "latest" for the newest release (checked so far: ${names.slice(0, 10).join(", ")}${names.length > 10 ? `, and ${names.length - 10} more` : ""}).`;
 
 function taskPackagesSection(input: {
   task: string;
