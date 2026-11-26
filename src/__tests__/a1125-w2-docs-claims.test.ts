@@ -17,7 +17,7 @@ import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
-import { MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { BEST_EFFORT_READING, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -315,11 +315,32 @@ describe("what_should_i_know after confirmation round 10: the list, the bounds a
     expect(next).toContain('"This task holds a command this briefing does not read (brew): check what it installs with dependency_check."');
   });
 
-  it("the CPU bound: 4000 distinct words, and the two sentences", () => {
+  it("the CPU bound: 4000 distinct words (a safeguard, not quoted as user-visible), the deadline and snippet sentences", () => {
     expect(WORD_SCAN_CAP).toBe(4000);
-    expect(wsik).toContain("`This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part.`");
+    expect(next).toContain(`on at most ${WORD_SCAN_CAP} distinct words a call has not seen`);
+    expect(next).not.toContain("more distinct words than one call reads in full");
     expect(wsik).toContain('"This briefing did not finish reading the task within its time budget: split the task and ask for each part."');
-    expect(next).toContain(`"This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part."`);
     expect(next).toContain('"This briefing did not finish reading the task within its time budget: split the task and ask for each part."');
+    expect(wsik).toContain("`This task holds more manifest snippets than one call reads (${MAX_SNIPPETS}): split the task and ask for each part.`");
+    expect(next).toContain('"This task holds more manifest snippets than one call reads (100): split the task and ask for each part."');
+  });
+});
+
+describe("what_should_i_know after confirmation round 11: one promise, the rest best effort", () => {
+  const promise = "The level rests on your declaration: each package you declare public is checked at the `version` you state. Declare the version the task writes.";
+  it("the promise comes first, and the best-effort sentence is the one the code gives", () => {
+    expect(next).toContain(`makes one promise. ${promise}`);
+    expect(next).toContain(`- The one promise: ${promise}`);
+    expect(readme).toContain(`| \`what_should_i_know\` |`);
+    expect(readme).toContain(`${promise} Pass the request in the user's words`);
+    expect(readme).toContain("The briefing makes one promise: each package you declare public is checked at the `version` you state");
+    expect(BEST_EFFORT_READING).toBe("The versions this briefing read in the task's commands and snippets are best effort: a version written in a spelling it does not read was not checked, so declare the version the task writes.");
+    for (const doc of [readme, next]) expect(doc).toContain(`"${BEST_EFFORT_READING}"`);
+  });
+
+  it("no sentence about the briefing promises a complete reading of the task text", () => {
+    for (const doc of [readme, next]) {
+      for (const phrase of ["no line is dropped in silence", "is read in its ecosystem's grammar or makes the snippet not read whole", "bare or spaced", "The forms that tie a version to a package name, exactly", "a small exact grammar", "exactly these forms"]) expect(doc, phrase).not.toContain(phrase);
+    }
   });
 });
