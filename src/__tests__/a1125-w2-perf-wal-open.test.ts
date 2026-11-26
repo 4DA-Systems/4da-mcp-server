@@ -95,13 +95,18 @@ describe("the own store's WAL switch waits for a lock another server holds", () 
       [
         "--no-warnings",
         "-e",
-        "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1]);d.exec('BEGIN IMMEDIATE');console.log('held');setTimeout(()=>{d.exec('COMMIT');d.close();},400);",
+        // node:sqlite where this Node has it (22.13+), else the packaged driver (Node 22.12 has no node:sqlite without a flag).
+        "let d;try{const {DatabaseSync}=require('node:sqlite');d=new DatabaseSync(process.argv[1]);}catch{d=new (require('better-sqlite3'))(process.argv[1]);}d.exec('BEGIN IMMEDIATE');console.log('held');setTimeout(()=>{d.exec('COMMIT');d.close();},400);",
         file,
       ],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
     const done = new Promise((resolve) => holder.on("close", resolve));
-    await new Promise<void>((resolve) => holder.stdout.on("data", () => resolve()));
+    // The holder says "held", or it ended without taking the lock: then the test fails here, at once, with the reason.
+    await new Promise<void>((resolve, reject) => {
+      holder.stdout.on("data", () => resolve());
+      holder.on("close", (code) => reject(new Error(`the lock holder ended (exit ${code}) before it held the lock`)));
+    });
     try {
       const started = Date.now();
       const db = createDatabase();
