@@ -57,7 +57,7 @@ describe("the @hono/node-server floor of HTTP mode", () => {
     expect(text).toContain("@hono/node-server 1.19.9");
     expect(text).toContain(`fixed in ${NODE_SERVER_FLOOR}`);
     // The remedy is pinned to the running version, as every printed command is.
-    expect(text).toMatch(/npx -y --prefer-offline @4da/mcp-server@d+.d+.d+ --http/);
+    expect(text).toMatch(/npx -y --prefer-offline @4da\/mcp-server@\d+\.\d+\.\d+ --http/);
     expect(text).toContain("stdio server");
     expect(nodeServerProblem("2.1.3")).not.toBeNull();
     expect(nodeServerProblem("2.1.6")).toBeNull();
