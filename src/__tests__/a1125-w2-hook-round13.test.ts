@@ -5,6 +5,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -202,5 +203,24 @@ describe("5: the eleventh check's false holds go ahead; their dangerous neighbou
   it("a write into a manifest names the redirect as written; a substitution holding the install names the command inside it", () => {
     expect(run("echo 'npm install lodash' >> package.json").text).toContain("without `>> package.json`");
     expect(run("echo $(npm i lodash@4.17.20)").text).toContain("with `$(npm i lodash@4.17.20)` written as the command inside it, run as a command of its own");
+  });
+});
+
+describe("6: a ledger that exists but cannot be read is unreadable, not absent: held", () => {
+  it("a ledger file the hook cannot read (a directory in its place): an install is held, an ordinary command goes ahead", () => {
+    s.ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed", reason: "ok" }]);
+    expect(run("npm i lodash@4.17.21").decision).toBe("allow");
+    mkdirSync(join(s.home, "check-ledger.1.jsonl"));
+    const r = run("npm i lodash@4.17.21");
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text).toContain("exists but could not be read");
+    expect(run("ls -la").decision).toBe("allow");
+  });
+
+  it("a read that fails (EACCES / EPERM, injected): held", () => {
+    s.ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed", reason: "ok" }]);
+    const r = run("npm i lodash@4.17.21", "Bash", { FOURDA_HOOK_FAULT: "ledger-unreadable" });
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text).toContain("exists but could not be read");
   });
 });

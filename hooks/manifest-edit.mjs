@@ -28,7 +28,8 @@
  *   (an npm tarball, a PyPI wheel or sdist), is read as that name and version;
  * - a name alone or `@latest`, the request "latest", which goes ahead on the verdict recorded for
  *   that request (the server records `requested: "latest"`), as do `pnpm up -L x`, `yarn up x` and
- *   `yarn upgrade x --latest`, which move it to the newest release;
+ *   `yarn upgrade x --latest`, which move it to the newest release, and a link of a registry name
+ *   (`npm` / `pnpm` / `yarn` / `bun link x`), read as that name at its newest release;
  * - a requirements file named with `-r` (`-Ur`, `-qr`, alone or with a constraints file): it
  *   names public releases, and it is read when it is written with the Edit, MultiEdit or Write
  *   tool (below), not when it is installed;
@@ -38,17 +39,22 @@
  * A command with no package operand goes ahead without a verdict: for npm, pnpm, Yarn, Bun, pip,
  * uv and Poetry it installs the lockfile or the manifest's own ranges; what the manager then
  * chooses is a stated limit (THE LIMITS), not a check.
- * A data program's words are text only when both hold: its options are all on its own short list
- * (echo, printf, cat, the grep family, rg, Select-String, findstr, make with no -f / --file /
- * --makefile / --eval, git commit / log / show / diff / status / grep / tag with their options, no
- * `-c` before them and no EDITOR / VISUAL / PAGER / GIT_* setting for them in the call, gh pr /
- * issue / release / gist text, `node -e` / `-p`, `python -c`, and docker / podman run / exec /
- * build, whose commands run in a container; not sed or awk, which can run a command from their
- * script), and its output goes nowhere that runs it: it is
- * the last stage, or every later stage of its pipeline is such a program or a pure sink (wc, head,
- * tail, sort, uniq, cut, tr, less, more, tee to a file that is no manifest or lockfile, Out-Null,
+ * A data program's words are text only when all three hold: its options are all on its own short
+ * list (echo, whose every argument is text, printf, cat, the grep family, rg, Select-String,
+ * findstr, Set-Content / Add-Content into a file that is no manifest or lockfile, git commit / log /
+ * show / diff / status / grep / tag with their options and no `-c` before them, gh pr / issue /
+ * release / gist text (bodies, notes, titles, a review's verdict), `node -e` / `-p`, `python -c`,
+ * and docker / podman run / exec / build, whose commands run in a container; not sed, awk or make,
+ * which can run a command from their script or their line); no setting for it stands in the call
+ * (a prefix, an export, `$env:`, Set-Item env:) other than the inert GIT_AUTHOR_NAME / _EMAIL /
+ * _DATE, GIT_COMMITTER_NAME / _EMAIL / _DATE, TZ, LANG, LC_ALL, NO_COLOR, FORCE_COLOR and CI (any
+ * other, such as GH_BROWSER, BROWSER, PAGER or GIT_EDITOR, can make it run a command of its own);
+ * and its output goes nowhere that runs it: it is the last stage, or every later stage of its
+ * pipeline is such a program or a pure sink (wc, head, tail, sort, uniq, cut, tr, less, more, tee,
+ * Out-File, Set-Content or Add-Content to a file that is no manifest or lockfile, Out-Null,
  * Select-Object, Measure-Object, clip), and no redirection on the line writes a manifest or a
- * lockfile. A comment is text. `brew install`, `apt-get install`, `gem install`, `composer
+ * lockfile. A quoted string as the first word (PowerShell's `'text' | Out-File notes.txt`) is
+ * text, and so is a heredoc fed to such a program or sink. A comment is text. `brew install`, `apt-get install`, `gem install`, `composer
  * require` and `dotnet add package` name no manager this hook reads.
  * A command run through a shell's `-c`, `eval`, `pwsh -Command`, `Invoke-Expression`, npx, bunx,
  * pnpx, `npm exec`, `pnpm exec` / `dlx`, `yarn exec` / `dlx` / `run`, `bun run` / `x`, pnpm or Yarn
@@ -83,18 +89,30 @@
  *   cut short, dated ahead of the clock or not fully valid has an unknown verdict. The two ledger
  *   files are read as one snapshot (stat'ed, read, stat'ed again, at most three times, as the
  *   server may be moving check-ledger.jsonl over check-ledger.1.jsonl): a ledger still changing
- *   holds the call.
+ *   holds the call, and so does a ledger file that exists but cannot be read (EACCES, EPERM, a
+ *   deny-read ACL): it is unreadable, not absent.
  * - A dist-tag other than latest (`x@next`) or a Go branch: "name the version".
  * - A name the project takes from elsewhere (`local_source`) or one whose lockfile could not be
  *   read (`unreadable_lockfile`).
- * - A named package beside a constraints or overrides file (`-c`, `--constraint(s)`,
- *   `--override(s)`, `--build-constraints`), which decides its release: "name the version".
- * - As NOT READ, with one remedy: a plain command the denial names, built from a form this hook
- *   reads (`bun update x@1` -> `bun add x@1`, the name alone where no exact version is read; where
- *   none can be built, `<manager> <verb> <name>@<exact version>` in words): a command the detector
- *   names that is not read whole. That is an option not in the manager's table (among them every option that changes
- *   which release a name resolves to: `--tag`, `--before`, `--pre`, `--prerelease`, `--resolution`,
- *   Bun's `--latest` and `-c`, uv's `--upgrade`), a manager's own environment setting
+ * - As NOT READ, with one remedy that names the first part of the line the hook did not read, as
+ *   written, and says "run the same command without <that>" or "with <that> written as <the form
+ *   the hook reads>" (an exact version or the name alone; one module path; a variable's value
+ *   written out; an npm placement setting as its option, `npm_config_save_dev` as `--save-dev`);
+ *   it prints no command the user did not write, and where no single part can be named (a heredoc)
+ *   it says to run the install as a plain command of its own: a command the detector names that is
+ *   not read whole. That is a named package beside an option that can change which release of it
+ *   is installed or where it is fetched from, taken where no package is named (npm / pnpm / Yarn
+ *   `--offline` / `--prefer-offline`, npm `--cache-min`, pnpm / Yarn / Bun `--frozen-lockfile`,
+ *   Yarn `--immutable` / `--immutable-cache` / `--mode`, pip `--upgrade-strategy` /
+ *   `--only-binary` / `--no-binary` / `--platform` / `--python-version` / `--implementation` /
+ *   `--abi`, uv `--offline` / `--frozen` / `--locked` / `--no-build` / `--no-binary` /
+ *   `--only-binary` / `--python-version` / `--python-platform`, `cargo add --locked` / `--offline`
+ *   / `--frozen`, go `-mod`) or beside a constraints or overrides file (`-c`, `--constraint(s)`,
+ *   `--override(s)`, `--build-constraints`), which decides its release; an option not in the
+ *   manager's table (among them every option that changes which release a name resolves to:
+ *   `--tag`, `--before`, `--pre`, `--prerelease`, `--resolution`, Yarn's `--cached`, pnpm's
+ *   `--resolution-mode`, Bun's `--latest` and `-c`, uv's `--upgrade` on uv add / lock / sync,
+ *   Poetry's bare `--optional` before a package); a manager's own environment setting
  *   (`npm_config_*`, `PIP_*`, `UV_*` ...) as a prefix or made earlier in the same call (`export`,
  *   `$env:`, `Set-Item env:`), an operand not read as a version, operands from the command's input
  *   (xargs, `-r -`), a program, prefix or wrapper this hook does not read (`start`, `mise exec`,
@@ -103,9 +121,14 @@
  *   chain past MAX_WRAPS, and a line it cannot take apart (a variable, a substitution, an escape, a
  *   PowerShell here-string; for text that only mentions an install, the Write tool). sed and awk
  *   with a manager word and verb in their words are held too, with the remedy "grep / rg /
- *   Select-String to search for that text, the Write tool to write it". The remedy is tested to
- *   release each of these classes (a1125-w2-hook-account.test.ts), and for every manager and verb
- *   the detector names (a1125-w2-hook-round12.test.ts).
+ *   Select-String to search for that text, the Write tool to write it", and so is make with one on
+ *   its line (a variable, --eval, SHELL or MAKEFLAGS can run it), with the remedy "run the make
+ *   target without putting the package manager's command on the line". The remedy is tested,
+ *   followed mechanically, to release each of these classes (a1125-w2-hook-account.test.ts), every
+ *   manager and verb the detector names (a1125-w2-hook-round12.test.ts), and the eleventh check's
+ *   lines with the same operands, versions, extras and placement flags as written
+ *   (a1125-w2-hook-round13-remedy.test.ts). `uv pip install -U <name>` is pip's: the name at its
+ *   newest release.
  * - A manifest part it cannot read (a TOML escape or a multi-line string in a dependency context,
  *   a brace in pnpm-workspace.yaml) and anything past a bound or the time budget (the loops' ticks;
  *   a payload over 8 KB is also judged under a 5 s wall clock).
@@ -136,7 +159,8 @@
  * - a program or script that runs an install: a make target, a package.json script (`npm run x`),
  *   `pwsh -File`, code given to `node -e` or `python -c`;
  * - a manager name the shell assembles or decodes (`$'\x6epm'`, `powershell -EncodedCommand`);
- * - runners that fetch a package and run it (`npx pkg@v`, `pnpm dlx pkg`, `bunx pkg`, `uvx pkg`,
+ * - runners that fetch a package and run it (`npx pkg@v`, `pnpx pkg`, `npm exec` / `npm x pkg`,
+ *   `pnpm dlx pkg`, `yarn dlx pkg`, `bunx pkg`, `bun x pkg`, `uvx pkg`, `uv tool run pkg`,
  *   `uv run --with pkg`, `pipx run`, `npm init` / `npm create` / `yarn create` / `pnpm create` /
  *   `bun create`, `go run mod@v`, `cargo binstall`): what they fetch is not checked (the operator's
  *   decision is pending);
@@ -146,9 +170,12 @@
  *   same call (`npm` / `pnpm` / `yarn` / `pip config set`, `poetry config`, `poetry source add`,
  *   `go env -w`, `git config url.<x>.insteadOf`), and variables outside the managers' own names
  *   that point a manager at other config files (HOME, USERPROFILE, XDG_CONFIG_HOME, APPDATA,
- *   CARGO_HOME): an install under them is read as if they were not there (the operator's decision
- *   is pending). A manager's own setting (NPM_CONFIG_USERCONFIG, PIP_CONFIG_FILE, any
- *   `npm_config_*` / `PIP_*` / `UV_*` ...) before the install is held (WHAT IS HELD).
+ *   CARGO_HOME, GOENV), and Go's checksum settings before `go get` (GOSUMDB, GONOSUMCHECK): an
+ *   install under them is read as if they were not there (the operator's decision is pending). A
+ *   manager's own setting (NPM_CONFIG_USERCONFIG, PIP_CONFIG_FILE, any `npm_config_*` / `PIP_*` /
+ *   `UV_*` / `POETRY_*` / `YARN_*` / `BUN_CONFIG*`, Cargo's registry and source settings,
+ *   GOPROXY, GOFLAGS, GOPRIVATE, GONOPROXY, GONOSUMDB, GOINSECURE, GOTOOLCHAIN) before the install
+ *   is held (WHAT IS HELD).
  * Since it denies only where a ledger exists, a removed ledger means no denials until the server
  * starts again.
  *
@@ -162,13 +189,16 @@
  * ledger file in the data folder the hook works as it did before 6.5.0: nothing is denied, and
  * the advice follows a manifest edit.
  *
- * Reading past its time budget holds the call as not read. Anything else that goes wrong (an error
- * of its own, a rejected promise, a worker's error or exit without an answer, the wall clock, a
- * payload that does not parse) ends in one handler that decides on the raw stdin text alone: a
- * PreToolUse call that names a tool the hook judges and holds a manager word, a manifest file name
- * or the ledger's name is held ("the hook could not finish reading this call"), where a ledger
- * exists and the guard blocks; any other gets nothing. stdin that is never closed: after 8 s the
- * same handler answers from the text that has arrived (Claude Code closes stdin). A payload that
+ * Reading past its time budget (every stage, link and word the tokenizer produces counts against
+ * it) holds the call as not read. That, and anything else that goes wrong (an error of its own, a
+ * rejected promise, a worker's error or exit without an answer, the wall clock, a payload that
+ * does not parse), ends in one rule that looks for no words, where a ledger exists and the guard
+ * blocks: on a PreToolUse call it holds every Bash and PowerShell call ("the hook could not finish
+ * reading this command; run it in smaller parts"), and every Edit, MultiEdit, Write and
+ * NotebookEdit whose path names a manifest or the ledger or cannot be read; a payload that does not
+ * parse at all is held; any other call gets nothing. stdin that is never closed: after 8 s the text
+ * that has arrived is judged as any other payload when it parses whole, else held by that rule
+ * (Claude Code closes stdin). A payload that
  * starts with a byte-order mark is read. It always ends with exit 0. No network, no dependencies,
  * plain Node.
  *
@@ -4416,6 +4446,8 @@ function fileIdentity(path) {
   }
 }
 const OVER_BOUND = Symbol("over the bound");
+/** Round 13: a ledger file that exists and cannot be read (EACCES, EPERM, a deny-read ACL): unreadable, not absent. */
+const UNREADABLE = Symbol("unreadable");
 
 /**
  * Round 12 (tenth independent check, a missing sentence): the two ledger files as one consistent
@@ -4433,9 +4465,11 @@ function ledgerSnapshot(dir) {
       if (before[i] === "absent") return null;
       if (Number(before[i].split(":")[0]) > MAX_LEDGER_BYTES) return OVER_BOUND;
       try {
+        fault("ledger-unreadable");
         return readFileSync(path, "utf8");
-      } catch {
-        return null;
+      } catch (error) {
+        // Gone between the stat and the read (a rotation): the stats differ and the snapshot is taken again.
+        return error?.code === "ENOENT" ? null : UNREADABLE;
       }
     });
     const after = paths.map(fileIdentity);
@@ -4461,6 +4495,10 @@ function readLedger(dir, now) {
   for (const [i, file] of LEDGER_FILES.entries()) {
     const text = snapshot[i];
     if (text === null) continue;
+    if (text === UNREADABLE) {
+      refuse(`the check ledger ${file}, which exists but could not be read`);
+      continue;
+    }
     if (text === OVER_BOUND) {
       // A ledger past the bound is not read, and the call is held: its verdicts are not known
       // (round 2 skipped such a file, so a newer avoid in it was never seen).
