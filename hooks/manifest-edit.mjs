@@ -8,16 +8,15 @@
  *
  * WHAT GOES AHEAD, ONLY ON POSITIVE EVIDENCE
  *
- * A command goes ahead when it names no package manager as a command word followed by one of its
- * verbs that can add or move a dependency (detectsInstall: npm, pnpm, Yarn, Bun, pip / `python -m
- * pip`, uv, Poetry, Cargo, Go; install / add / up / update / upgrade / link / get / sync / lock /
- * `npm pkg set` / `go mod edit`, read on the raw text whatever its size). A command word is the
- * first word of a simple command, any word after a prefix, runner or wrapper (sudo, env, npx,
- * stdbuf, find -exec, `pipenv run` ...), a line in the string a shell-like runner runs (`bash -c`,
- * `cmd /c`, `eval`), `pip` after Python's `-m`, or the script `node` runs when it is a manager.
- * A tool installed from the registry (`cargo install x`, `go install x@v`, `yarn global add x`,
- * `uv tool install x`) is read as an add. A command the detector names goes ahead only when the hook reads every such simple
- * command in it whole (accountLine): its program and prefixes, every option known with its arity
+ * A command goes ahead when no line of it holds, anywhere, a package-manager word followed later
+ * on that line by one of its verbs that can add or move a dependency (detectsInstall: npm, pnpm,
+ * Yarn, Bun, pip / `python -m pip`, uv, Poetry, Cargo, Go; install / add / up / update / upgrade /
+ * link / get / sync / lock / `npm pkg set` / `go mod edit`; read on the raw text whatever its size,
+ * and again with the shell's escape and quote characters taken out). A line the detector names goes
+ * ahead only when every simple command in it holding a hit is positively classified: the arguments
+ * of a program on a short list known to take them as text (below), or read whole (accountLine). A
+ * tool installed from the registry (`cargo install x`, `go install x@v`, `yarn global add x`, `uv
+ * tool install x`) is read as an add. Read whole means: its program and prefixes, every option known with its arity
  * (ACCOUNT_TABLES, from each tool's own help; for Yarn, Bun and Poetry an allow list from their
  * documentation), and every operand one of
  * - a public name with an exact version or a range, which goes ahead on its verdict: an exact
@@ -28,18 +27,23 @@
  *   that request (the server records `requested: "latest"`), as do `pnpm up -L x`, `yarn up x` and
  *   `yarn upgrade x --latest`, which move it to the newest release;
  * - a form positively installing nothing new from the public registry: no operand (the lockfile),
- *   a requirements file (`-r`, `-Ur`, `-qr`), a path, a tarball, a git or URL source, a registry or
- *   index that is positively not a public host, a name moved inside the manifest's range
- *   (`npm update x`, `pnpm up x`).
- * A command of a program that takes the words only as data goes ahead (echo, printf, grep, rg,
- * cat and a heredoc fed to it, `git commit` / `log` / `show`, docker and podman, whose commands run
- * in a container, a comment). So do `make install`, `brew install`, `apt-get install`, `gem
- * install`, `composer require` and `dotnet add package`, which name no manager this hook reads.
+ *   a requirements file (`-r`, `-Ur`, `-qr`), a path (with extras: `.[dev]`), a tarball, a git or
+ *   URL source on a host that is not a public registry (a public registry's own file URL is read as
+ *   name and version), a registry or index that is positively not a public host, a name moved
+ *   inside the manifest's range (`npm update x`, `pnpm up x`).
+ * The programs known to take the words as text: echo, printf, cat and a heredoc fed to it, the
+ * grep family and Select-String, sed, awk, make, `node -e` / `-p`, `python -c`, `git commit` /
+ * `log` / `show`, `gh pr` / `issue` text, docker and podman (whose commands run in a container),
+ * and a comment. `brew install`, `apt-get install`, `gem install`, `composer require` and `dotnet
+ * add package` name no manager this hook reads.
  * A command run through a shell's `-c`, `eval`, `pwsh -Command`, `Invoke-Expression`, npx, bunx,
- * pnpx, `npm exec`, `pnpm dlx`, `yarn dlx`, `uv run`, `poetry run` or corepack is read as the
- * command it runs, at most MAX_WRAPS wrappers deep, and what it installs must be what the outer
- * command's reader judges; so is one after a prefix (sudo, env, timeout, nice, nohup, time,
- * command, exec, xargs, busybox, wsl), a shell keyword, or inside a subshell, group or script block.
+ * pnpx, `npm exec`, `pnpm exec` / `dlx`, `yarn exec` / `dlx` / `run`, `bun run` / `x`, pnpm or Yarn
+ * passing a manager command through, `uv run`, `uv tool run` / uvx, `poetry run`, `pipenv` / `pdm`
+ * / `rye` / `pixi` / `hatch [env] run`, `python -m uv` / `poetry`, `node <path>/npm-cli.js` or
+ * corepack is read as the command it runs, at most MAX_WRAPS wrappers deep (deeper is held), and
+ * what it installs must be what the outer command's reader judges; so is one after a prefix (sudo,
+ * env, timeout, nice, nohup, time, command, exec, xargs, busybox, wsl), a shell keyword, or inside a
+ * subshell, group or script block.
  * In a manifest only dependency declarations count (never a comment or another string field), each
  * section's are compared on their own, and a dependency taken from a path, git, URL or a non-public
  * source (Cargo `path`, `git`, `registry`; npm `file:`, `link:`, `workspace:`; a PEP 508 direct
@@ -60,10 +64,13 @@
  *   version>`, or the name alone, with no other options): a command the detector names that is not
  *   read whole. That is an option not in the manager's table (among them every option that changes
  *   which release a name resolves to: `--tag`, `--before`, `--pre`, `--prerelease`, `--resolution`,
- *   Bun's `--latest` and `-c`, uv's `--upgrade`), an environment setting before the manager
- *   (`npm_config_*=`, `PIP_*=`, `UV_*=` ...), an operand not read as a version, a program or prefix
- *   this hook does not read, and a line it cannot take apart (a variable, a substitution, an
- *   escape, a PowerShell here-string: for text that only mentions an install, the Write tool).
+ *   Bun's `--latest` and `-c`, uv's `--upgrade`), a manager's own environment setting
+ *   (`npm_config_*`, `PIP_*`, `UV_*` ...) as a prefix or made earlier in the same call (`export`,
+ *   `$env:`, `Set-Item env:`), an operand not read as a version, a program, prefix or wrapper this
+ *   hook does not read (`start`, `mise exec`, `gsudo`, `concurrently`, `git submodule foreach`
+ *   ...), a runner chain past MAX_WRAPS, and a line it cannot take apart (a variable, a
+ *   substitution, an escape, a PowerShell here-string: for text that only mentions an install, the
+ *   Write tool).
  *   Every such hold has that way through; a shape with none is not held.
  * - A manifest part it cannot read (a TOML escape or a multi-line string in a dependency context,
  *   a brace in pnpm-workspace.yaml) and anything past a bound or the time budget.
@@ -76,13 +83,22 @@
  * sets out to defeat it can, for example through a script file that runs the install, a variable,
  * or the ledger limits (a path reached by `cd` in an earlier call, a junction or symlink made
  * earlier, a name the shell assembles from pieces, a wildcard, a parent folder). It reads no
- * network: a registry it cannot classify as public or private is held, not looked up. Installs
- * through pipenv, pdm, rye, pixi, hatch and conda are not read (their manifest sections, [tool.rye]
- * and [tool.pixi], are read on edits), nor are `pipx inject`, gem, composer, dotnet, commands run
- * inside a container, and a manager word inside another program's arguments (`make PIP=pip3
- * install`, `sed`, `awk`, `node -e`, `python -c`): a program or script that runs an install is
- * outside it. Since it denies only where a ledger exists, a removed ledger means no
- * denials until the server starts again.
+ * network: a registry it cannot classify as public or private is held, not looked up. Not read:
+ * - installs through pipenv, pdm, rye, pixi, hatch and conda (their manifest sections, [tool.rye]
+ *   and [tool.pixi], are read on edits), `pipx inject`, gem, composer, dotnet, and commands run
+ *   inside a container;
+ * - a program or script that runs an install: a make target, a package.json script (`npm run x`),
+ *   `pwsh -File`, code given to `node -e`, `python -c`, sed or awk;
+ * - a manager name the shell assembles or decodes (`$'\x6epm'`, `powershell -EncodedCommand`);
+ * - runners that fetch a package and run it (`npx pkg@v`, `pnpm dlx pkg`, `bunx pkg`, `uvx pkg`,
+ *   `pipx run`, `npm init` / `npm create` / `yarn create` / `pnpm create` / `bun create`, `go run
+ *   mod@v`, `cargo binstall`): what they fetch is not checked (the operator's decision is pending);
+ * - settings that change what a name resolves to when they live in files (`.npmrc`, `pip.conf`,
+ *   `uv.toml` or pyproject's [tool.uv], a lockfile written by hand and then installed with `npm
+ *   ci`): an install under them is read as if they were not there (the operator's decision is
+ *   pending).
+ * Since it denies only where a ledger exists, a removed ledger means no denials until the server
+ * starts again.
  *
  * FOURDA_GUARD=advise: never denies; after a manifest edit (PostToolUse) the agent is told which
  * versions moved and which calls check them. FOURDA_GUARD=off: the hook does nothing.
