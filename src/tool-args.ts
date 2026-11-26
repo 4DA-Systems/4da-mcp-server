@@ -73,7 +73,8 @@ const STRING_LIMITS: Record<string, number> = {
 export function lengthProblem(where: string, name: string, value: string): string | null {
   const max = (Object.hasOwn(STRING_LIMITS, name) ? STRING_LIMITS[name] : undefined) ?? MAX_TEXT_ARG_LENGTH;
   if (value.length <= max) return null;
-  return `${where} is ${value.length.toLocaleString("en-US")} characters long; the limit is ${max.toLocaleString("en-US")}. It starts ${JSON.stringify(value.slice(0, 40))}.`;
+  // Nothing of the value is repeated (round 7, C9b: the first 40 characters of an over-long task were a token).
+  return `${where} is ${value.length.toLocaleString("en-US")} characters long; the limit is ${max.toLocaleString("en-US")}. Nothing of it was read or sent; shorten it and call again.`;
 }
 
 /**
@@ -101,20 +102,23 @@ export function validateToolArgs(toolName: string, schema: InputSchema, args: Re
     }
     if (value === undefined || value === null) continue;
     if (!matchesType(value, prop.type)) {
-      return `${toolName}: "${name}" must be ${prop.type === "array" ? "an array" : `a ${prop.type}`}, got ${typeOf(value)} ${JSON.stringify(value)}.`;
+      // The value is never repeated: it may be a secret (round 7, C7).
+      return `${toolName}: "${name}" must be ${prop.type === "array" ? "an array" : `a ${prop.type}`}, got ${typeOf(value)}.`;
     }
     if (typeof value === "string") {
       const long = lengthProblem(`${toolName}: "${name}"`, name, value);
       if (long) return long;
     }
     if (prop.enum && !prop.enum.includes(value)) {
-      return `${toolName}: "${name}" must be one of ${prop.enum.map((e) => JSON.stringify(e)).join(", ")}; got ${JSON.stringify(value)}.`;
+      return `${toolName}: "${name}" must be one of ${prop.enum.map((e) => JSON.stringify(e)).join(", ")}; got another value.`;
     }
     if (typeof value === "number") {
       if (prop.minimum !== undefined && value < prop.minimum) return `${toolName}: "${name}" must be >= ${prop.minimum}; got ${value}.`;
       if (prop.maximum !== undefined && value > prop.maximum) return `${toolName}: "${name}" must be <= ${prop.maximum}; got ${value}.`;
     }
-    if (Array.isArray(value) && prop.items?.type) {
+    // A list of objects is the tool's to read entry by entry (what_should_i_know's `packages`, dependency_check's
+    // `items`): one null, number or array entry is refused in its place, never the whole call (round 7, C7).
+    if (Array.isArray(value) && prop.items?.type && prop.items.type !== "object") {
       const bad = value.findIndex((item) => !matchesType(item, prop.items?.type));
       if (bad >= 0) {
         return `${toolName}: every "${name}" entry must be a ${prop.items.type}; entry ${bad} is ${typeOf(value[bad])}.`;
