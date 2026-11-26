@@ -148,6 +148,69 @@ describe("a cargo add whose two lines would link one native library", () => {
   });
 });
 
+describe("a links check that could not finish is not established: words, never the command (lead, wave 2)", () => {
+  const graph = () =>
+    lock([
+      { name: "starship", version: "1.0.0", deps: ["git2", "shadow-rs"], local: true },
+      { name: "shadow-rs", version: "0.7.2", deps: ["git2"] },
+      { name: "git2", version: "0.13.23", deps: ["libgit2-sys"] },
+      { name: "libgit2-sys", version: "0.12.24+1.3.0" },
+    ]);
+  const git2 = { versions: ["0.13.23", "0.21.0"], reqs: { "0.21.0": { "libgit2-sys": [{ req: "^0.18.4", optional: false }] } } };
+  const sys = { versions: ["0.12.24+1.3.0", "0.18.4+1.9.3"], reqs: { "0.18.4+1.9.3": {} }, links: { "0.12.24+1.3.0": "git2", "0.18.4+1.9.3": "git2" } };
+  const addRow = () => row({ package: "git2", currentVersion: "0.13.23", upgradeCommands: [{ dir: ".", command: "cargo add git2@0.21.0" }] });
+  const expectWords = (r: CargoStepRow) => {
+    expect(r.upgradeCommands).toBeUndefined();
+    expect(r.upgradeInstructions?.[0].instruction).toMatch(/^no command: `cargo add git2@0\.21\.0`: the check that git2 0\.21\.0 and the git2 0\.13\.23 another locked crate keeps do not link the same native library .* could not be finished in this call/);
+    expect(hasCargoPrecondition(r)).toBe(true);
+  };
+
+  it("the deadline has passed", async () => {
+    graph();
+    const r = addRow();
+    await withCargoStepPreconditions([r], root, sources({ git2, "libgit2-sys": sys }), Date.now() - 1);
+    expectWords(r);
+    expect(r.upgradeInstructions![0].instruction).toMatch(/did not answer for git2 within this call's time/);
+  });
+
+  it("a slow index: the read does not come back before the deadline", async () => {
+    graph();
+    const slow = { cratesSparse: (name: string) => new Promise((resolve) => setTimeout(() => resolve(name === "git2" ? { yanked: [], links: {}, ...git2 } : { yanked: [], ...sys }), 400)) } as unknown as FixPathSources;
+    const r = addRow();
+    await withCargoStepPreconditions([r], root, slow, Date.now() + 100);
+    expectWords(r);
+  });
+
+  it("an index read fails", async () => {
+    graph();
+    const r = addRow();
+    await withCargoStepPreconditions([r], root, sources({ git2 }), Date.now() + 5_000);
+    expectWords(r);
+    expect(r.upgradeInstructions![0].instruction).toMatch(/could not be read for libgit2-sys/);
+  });
+
+  it("the walk passes its bound", async () => {
+    graph();
+    const many: Sparse = { git2: { versions: ["0.13.23", "0.21.0"], reqs: { "0.21.0": Object.fromEntries(Array.from({ length: 70 }, (_, i) => [`c${i}`, [{ req: "^1", optional: false }]])) } } };
+    for (let i = 0; i < 70; i++) many[`c${i}`] = { versions: ["1.0.0"], reqs: { "1.0.0": {} }, links: {} };
+    const r = addRow();
+    await withCargoStepPreconditions([r], root, sources(many), Date.now() + 5_000);
+    expectWords(r);
+    expect(r.upgradeInstructions![0].instruction).toMatch(/brings in more new crates than this check reads/);
+  });
+
+  it("the pre-update lookup: a record the default features must be re-read for, whose re-read fails, is words", async () => {
+    lock([{ name: "app", version: "0.1.0", deps: ["chrono"], local: true }, { name: "chrono", version: "0.4.19" }]);
+    let calls = 0;
+    const flaky = { cratesSparse: async (_n: string, fresh?: boolean) => (fresh ? null : (calls++, { versions: ["0.4.19", "0.4.30"], yanked: [], reqs: { "0.4.30": {} } })) } as unknown as FixPathSources;
+    const r = row({ package: "chrono", currentVersion: "0.4.19", upgradeCommands: [{ dir: ".", command: "cargo update -p chrono@0.4.19 --precise 0.4.30" }] });
+    await withCargoStepPreconditions([r], root, flaky, Date.now() + 5_000);
+    expect(calls).toBeGreaterThan(0);
+    expect(r.upgradeCommands).toBeUndefined();
+    expect(hasCargoPrecondition(r)).toBe(true);
+  });
+});
+
 describe("a crate is moved before the crates that depend on it", () => {
   it("crossbeam-utils before crossbeam-epoch, whatever the names' order", () => {
     lock([

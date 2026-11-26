@@ -271,12 +271,14 @@ const OFFER_CHECK_BUDGET_MS = 10_000;
 const SEQUENCE_BUDGET_MS = 3_000;
 /** How the reason starts for a row whose target clears none of its advisories. */
 const NOT_A_FIX_START = `${NO_COMMAND_REASON_START}: it is NOT a fix, `;
+/** How the reason starts for a row whose target could not be checked against its advisories in this call. */
+const NOT_ESTABLISHED_START = `${NO_COMMAND_REASON_START}: whether `;
 /** Time the uv pins' requirements may take to be judged on the project's lowest Python. */
 const PYTHON_FLOOR_BUDGET_MS = 4_000;
 /** Time the check that a target clears any of its row's advisories may take. */
 const NOT_A_FIX_BUDGET_MS = 4_000;
 /** Time the Cargo steps may spend reading what their targets require (upgrade-planner-cargo-steps.ts). */
-const CARGO_STEP_BUDGET_MS = 6_000;
+const CARGO_STEP_BUDGET_MS = 10_000;
 /** Time the Cargo rows may spend reading the rust-version of releases not already in the cache. */
 const RUST_VERSION_BUDGET_MS = 4_000;
 
@@ -924,7 +926,9 @@ async function executeStandalonePlanner(
   // A uv target that requires the project itself at another version cannot lock (upgrade-plan-runnable.ts).
   await withoutSelfRequiringTargets(limited, root, liveIntel.getFixPathSources());
   // A uv pin whose requirement resolves, on the project's lowest Python, to an affected release is held (upgrade-plan-runnable.ts).
-  await withPythonFloorHolds(limited, root, liveIntel.getFixPathSources(), (deps) => liveIntel.queryAdvisories(deps), Date.now() + withinCallBudget(PYTHON_FLOOR_BUDGET_MS, 500));
+  await withPythonFloorHolds(limited, root, liveIntel.getFixPathSources(), (deps) => liveIntel.queryAdvisories(deps), Date.now() + withinCallBudget(PYTHON_FLOOR_BUDGET_MS, 500), (name, version) =>
+    (vulnResult?.vulnerabilities ?? []).filter((v) => v.ecosystem === "PyPI" && v.package === name && v.currentVersion === version && !isMaintenanceNotice(v)),
+  );
   // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
   await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
   // A Cargo step's preconditions, read before it is named: the pre-update a `--precise` needs, and
@@ -945,7 +949,7 @@ async function executeStandalonePlanner(
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
-  const notAFix = (r: (typeof limited)[number]) => r.reasons.some((x) => x.startsWith(NOT_A_FIX_START));
+  const notAFix = (r: (typeof limited)[number]) => r.reasons.some((x) => x.startsWith(NOT_A_FIX_START) || x.startsWith(NOT_ESTABLISHED_START));
   const heldRows = limited.filter(heldUnclean);
   // Not counted as fixed: a target that is not a clean fix, or a step in a directory whose name is not safe in a command.
   const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || notAFix(r) || hasUnsafeDir(r) || hasCargoPrecondition(r) || hasSelfRequiringTarget(r);
@@ -968,6 +972,8 @@ async function executeStandalonePlanner(
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
+  // A uv refresh with no version pinned, run inside the one `uv lock` of its lockfile: the resolver decides (upgrade-plan-sequence.ts).
+  unpinnedInMergedUvLock(limited, sequence.run_order);
   const sharedLeft = (r: (typeof limited)[number]) => r.reasons.some((x) => SHARED_COPY_REASON.test(x));
   const directRows = limited.filter((r) => r.scope === "direct" && r.action === "upgrade_direct" && !notCounted(r) && r.targetVersion !== null);
   const upgrades = directRows.filter((r) => !sharedLeft(r));
@@ -1275,7 +1281,7 @@ function noFixReason(n: number): string {
  * is given for them (their commands go) and the reason says why; a row whose target's advisories
  * could not be read keeps its step.
  */
-async function markTargetsThatFixNothing(
+export async function markTargetsThatFixNothing(
   rows: UpgradeRecommendation[],
   vulnsOf: (r: UpgradeRecommendation) => VulnerabilityEntry[],
   query: (deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>,
@@ -1293,11 +1299,23 @@ async function markTargetsThatFixNothing(
   });
   const answer = await Promise.race([query(deps).catch(() => null), late]);
   clearTimeout(timer);
-  if (!answer) return;
-  const unanswered = new Set(answer.uncheckedDependencies ?? []);
+  const unanswered = new Set(answer?.uncheckedDependencies ?? []);
+  // Three outcomes, never two: a target OSV.dev did not answer for in this call has no step (not established).
+  const notEstablished = (r: UpgradeRecommendation, why: string) => {
+    const text = `${NOT_A_FIX_START.replace("it is NOT a fix, ", "")}whether ${r.package} ${r.targetVersion} clears any advisory on ${r.package} ${r.currentVersion ?? ""}`.trimEnd() + ` could not be checked in this call (${why}), so no step is given and it is not counted as fixed; call upgrade_planner again`;
+    if (!r.reasons.includes(text)) r.reasons.push(text);
+    dropSteps(r);
+  };
   for (const r of asked) {
     const key = `${r.ecosystem}\0${r.package}\0${r.targetVersion}`;
-    if (unanswered.has(key)) continue;
+    if (!answer) {
+      notEstablished(r, "OSV.dev did not answer in time");
+      continue;
+    }
+    if (unanswered.has(key)) {
+      notEstablished(r, `OSV.dev gave no answer for ${r.package} ${r.targetVersion}`);
+      continue;
+    }
     const atTarget = answer.vulnerabilities.filter((v) => v.ecosystem === r.ecosystem && v.package === r.package && v.currentVersion === r.targetVersion);
     const named = new Set(atTarget.flatMap((v) => [v.vulnId, ...v.aliases]));
     const own = vulnsOf(r);
@@ -1305,11 +1323,43 @@ async function markTargetsThatFixNothing(
     const ids = [...new Set(own.map((v) => v.vulnId))];
     const text = `${NOT_A_FIX_START}since ${r.package} ${r.targetVersion} is still affected by ${ids.join(", ")}, every advisory on ${r.package} ${r.currentVersion ?? ""}`.trimEnd() + ": no step is given for it and it is not counted as fixed";
     if (!r.reasons.includes(text)) r.reasons.push(text);
-    delete r.upgradeCommands;
-    delete r.refreshCommands;
-    for (const u of r.parentUpgrades ?? []) {
-      delete u.refreshCommands;
-      for (const l of u.levers) delete l.commands;
-    }
+    dropSteps(r);
+  }
+}
+
+/** Takes every command off a row (its words stay). */
+function dropSteps(r: UpgradeRecommendation): void {
+  delete r.upgradeCommands;
+  delete r.refreshCommands;
+  for (const u of r.parentUpgrades ?? []) {
+    delete u.refreshCommands;
+    for (const l of u.levers) delete l.commands;
+  }
+}
+
+/** How the reason unpinnedInMergedUvLock writes starts. */
+const UNPINNED_UV_START = "uv: no version is pinned for ";
+
+/**
+ * A PyPI row whose step is a plain `uv lock --upgrade-package <name>` (no version) that run_order
+ * merges into one `uv lock` with other upgrades: the version it lands on is the joint resolution's,
+ * which can stop below what a refresh on its own reaches (crewAI 0.86.0: cryptography landed on
+ * 45.0.7, the row's own refresh said 50.0.2). The row's words say so instead of naming an outcome
+ * the step cannot promise; the command is not changed.
+ */
+export function unpinnedInMergedUvLock(rows: UpgradeRecommendation[], runOrder: RunOrderStep[]): void {
+  const merged = runOrder.filter((s) => s.run.startsWith("uv lock ") && (s.run.match(/--upgrade-package /g) ?? []).length > 1);
+  if (merged.length === 0) return;
+  for (const r of rows) {
+    if (r.ecosystem !== "PyPI") continue;
+    const plain = `uv lock --upgrade-package ${r.package}`;
+    const step = merged.find((s) => s.fixes.includes(`PyPI:${r.package}`) && r.commands.some((c) => c.dir === s.dir && c.run === plain));
+    if (!step) continue;
+    const others = (step.run.match(/--upgrade-package /g) ?? []).length - 1;
+    const said = `${UNPINNED_UV_START}${r.package} in run_order's step ${step.n}: it runs in one \`uv lock\` with ${others} other upgrade${others === 1 ? "" : "s"}, where the resolver decides the version it lands on and can stop below what a refresh on its own reaches (another package's pin can cap it); vulnerability_scan after the run says where it landed, and upgrade_planner plans again from there`;
+    r.reasons = r.reasons.map((x) =>
+      x.replace(/ \(a refresh resolves it to ([^)]+)\)/g, " (on its own, a refresh resolves it to $1; in run_order the resolver decides, see below)").replace(/ \(a fresh resolve picks ([^)]+)\)/g, " (on its own, a fresh resolve picks $1; in run_order the resolver decides, see below)"),
+    );
+    if (!r.reasons.includes(said)) r.reasons.push(said);
   }
 }

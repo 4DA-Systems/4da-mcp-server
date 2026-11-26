@@ -26,9 +26,10 @@ import { expandWorkspaces, memberNamesOf, pnpmYamlList } from "../live/js-manife
 import { normalizePythonName } from "../live/lockfile-parsers-pygo.js";
 import { tomlHeader, tomlKeyValue, tomlLines, tomlStrings } from "../live/private-hosts.js";
 import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.js";
-import { lowestPython, parsePep508, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { lockedVersions, lowestPython, parsePep508, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { groupAdvisories } from "../live/advisory-groups.js";
 import { isPrereleaseVersion } from "../live/osv-ranges.js";
-import type { ResolvedDependency, VulnerabilityScanResult } from "../live/types.js";
+import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { isShellSafeDir, unsafeDirWords } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { overrideCommandsOf, recordOverrideCommands } from "./upgrade-plan-overrides.js";
@@ -377,7 +378,15 @@ export async function withoutSelfRequiringTargets(rows: RunnableRow[], projectRo
         const own = uvOwnPackages(path.resolve(projectRoot, c.dir));
         if (own.size === 0) continue;
         const requires = await sources.pypiRequiresDist(m[1], m[2]).catch(() => null);
-        if (!requires) continue;
+        if (!requires) {
+          // Not established: what the release requires could not be read, so whether it requires the project itself is not known.
+          words.push({
+            dir: c.dir,
+            command: c.command,
+            instruction: `no command: whether ${m[1]} ${m[2]} requires another version of this project itself (${[...own.keys()].slice(0, 3).join(", ")}) could not be checked in this call (PyPI did not answer for what ${m[1]} ${m[2]} requires), so \`${c.command}\` is not given; call upgrade_planner again`,
+          });
+          continue;
+        }
         for (const req of requires) {
           const parsed = parsePep508(req);
           if (!parsed || parsed.extra || !own.has(parsed.name)) continue;
@@ -441,27 +450,53 @@ export async function withPythonFloorHolds(
   sources: Pick<FixPathSources, "pypiRequiresDist" | "releaseFacts"> | null,
   query: ((deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>) | null,
   deadline: number,
+  /** The scan's advisories on one installed copy (for what the upgrade would clear). */
+  advisoriesOf: (name: string, version: string | null) => VulnerabilityEntry[] = () => [],
 ): Promise<void> {
-  if (!sources || !query) return;
   for (const r of rows) {
     if (r.ecosystem !== "PyPI") continue;
     const commands = [...(r.upgradeCommands ?? []), ...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.levers.flatMap((l) => l.commands ?? []))];
     for (const c of commands) {
-      if (Date.now() > deadline) return;
       const m = UV_PIN.exec(c.command);
       if (!m) continue;
       const python = projectPython(path.resolve(projectRoot, c.dir));
       const lowest = lowestPython(python?.spec ?? null);
+      // No Python floor declared: there is nothing to judge the release's requirements against.
       if (!python || !lowest) continue;
+      // Three outcomes, never two: a check that could not finish holds the step (it never reads as a pass).
+      const notEstablished = (why: string) => {
+        const text = `${m[1]} ${m[2]} is NOT a clean fix: confirm a release with dependency_check before pinning it. Whether what it requires installs a release an advisory affects on this project's lowest supported Python (${lowest}, from ${python.from}) could not be checked in this call (${why}); call upgrade_planner again`;
+        if (!r.reasons.includes(text)) r.reasons.push(text);
+      };
+      if (!sources || !query) {
+        notEstablished("live lookups are off");
+        break;
+      }
+      if (Date.now() > deadline) {
+        notEstablished("the time for this check ran out");
+        break;
+      }
       const requires = await sources.pypiRequiresDist(m[1], m[2]).catch(() => null);
-      if (!requires) continue;
+      if (!requires) {
+        notEstablished(`PyPI did not answer for what ${m[1]} ${m[2]} requires`);
+        break;
+      }
+      let unfinished: string | null = null;
       for (const raw of requires) {
         const parsed = parsePep508(raw);
         if (!parsed || parsed.extra || parsed.spec === "") continue;
         const marker = raw.includes(";") ? raw.slice(raw.indexOf(";") + 1) : "";
-        if (pythonMarkerHolds(marker, lowest) !== true) continue;
+        // A marker this check cannot read may hold on the floor: judged, never skipped.
+        if (pythonMarkerHolds(marker, lowest) === false) continue;
+        if (Date.now() > deadline) {
+          unfinished = "the time for this check ran out";
+          break;
+        }
         const facts = await sources.releaseFacts("PyPI", parsed.name).catch(() => null);
-        if (!facts) continue;
+        if (!facts) {
+          unfinished = `PyPI did not answer for ${parsed.name}'s releases`;
+          break;
+        }
         const admitted = facts.versions
           .filter((v) => !isPrereleaseVersion(v, "PyPI") && pythonSpecAdmits(parsed.spec, v) === true)
           .sort((a, b) => compareVersions(b, a, "PyPI"));
@@ -470,17 +505,74 @@ export async function withPythonFloorHolds(
           return !needs || pythonSpecAdmits(needs, lowest) !== false;
         });
         if (!onFloor || onFloor === admitted[0]) continue;
-        const answer = await query([{ name: parsed.name, version: onFloor, ecosystem: "PyPI", isDev: false, isDirect: false, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }]).catch(() => null);
-        if (!answer || (answer.uncheckedDependencies ?? []).length > 0) continue;
-        const ids = [...new Set(answer.vulnerabilities.filter((v) => !v.maintenance && v.currentVersion === onFloor).map((v) => v.vulnId))];
-        if (ids.length === 0) continue;
-        const shown = ids.slice(0, 4).join(", ") + (ids.length > 4 ? ` and ${ids.length - 4} more` : "");
-        const why = `${m[1]} ${m[2]} is NOT a clean fix: confirm a release with dependency_check before pinning it. On this project's lowest supported Python (${lowest}, from ${python.from}) it requires ${parsed.name} "${parsed.spec}", and the newest ${parsed.name} that Python can install is ${onFloor} (${admitted[0]} needs a newer Python), which ${shown} affect: \`${c.command}\` would bring it in`;
-        if (!r.reasons.includes(why)) r.reasons.push(why);
+        // The release on the floor, and the releases above it the requirement admits (the first clean one is named).
+        const above = admitted.filter((v) => compareVersions(v, onFloor, "PyPI") > 0).reverse().slice(0, 8);
+        const dep = (version: string): ResolvedDependency => ({ name: parsed.name, version, ecosystem: "PyPI", isDev: false, isDirect: false, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] });
+        const answer = await query([onFloor, ...above].map(dep)).catch(() => null);
+        if (!answer) {
+          unfinished = `OSV.dev did not answer for ${parsed.name} ${onFloor}`;
+          break;
+        }
+        const unchecked = new Set(answer.uncheckedDependencies ?? []);
+        if (unchecked.has(`PyPI\0${parsed.name}\0${onFloor}`)) {
+          unfinished = `OSV.dev gave no answer for ${parsed.name} ${onFloor}`;
+          break;
+        }
+        const at = (v: string) => answer.vulnerabilities.filter((x) => !x.maintenance && x.package === parsed.name && x.currentVersion === v);
+        const landing = groupAdvisories(at(onFloor));
+        if (landing.length === 0) continue;
+        const clean = above.find((v) => !unchecked.has(`PyPI\0${parsed.name}\0${v}`) && at(v).length === 0) ?? null;
+        r.reasons.push(pythonFloorWords({
+          pkg: m[1], target: m[2], command: c.command, installed: r.currentVersion, lowest, from: python.from, spec: python.spec,
+          dep: parsed.name, depSpec: parsed.spec, onFloor, landing, clean, cleanNeeds: clean ? (facts.requiresPython?.[clean] ?? null) : null,
+          own: groupAdvisories(advisoriesOf(r.package, r.currentVersion)).length,
+          depLocked: uvLockedVersion(path.resolve(projectRoot, c.dir), parsed.name),
+          advisoriesOf,
+        }));
+        unfinished = null;
         break;
       }
+      if (unfinished) notEstablished(unfinished);
     }
   }
+}
+
+const SEVERITY_ORDER = ["critical", "high", "medium", "low", "unknown"] as const;
+
+/** The version of `name` a uv.lock in `dir` holds, when it holds exactly one. */
+function uvLockedVersion(dir: string, name: string): string | null {
+  const found = lockedVersions(path.join(dir, "uv.lock"), name);
+  return found.length === 1 ? found[0] : null;
+}
+
+/**
+ * The held row's words, for a person to decide in one read: what the upgrade would clear, what it
+ * would install on the lowest supported Python (how many advisories, the worst grade), which Python
+ * the clean release needs, and the two ways out.
+ */
+function pythonFloorWords(x: {
+  pkg: string; target: string; command: string; installed: string | null; lowest: string; from: string; spec: string;
+  dep: string; depSpec: string; onFloor: string; landing: ReturnType<typeof groupAdvisories>; clean: string | null; cleanNeeds: string | null;
+  own: number; depLocked: string | null; advisoriesOf: (name: string, version: string | null) => VulnerabilityEntry[];
+}): string {
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const depOwn = x.depLocked ? groupAdvisories(x.advisoriesOf(x.dep, x.depLocked)).length : 0;
+  const clears = [
+    ...(x.own > 0 ? [`${n(x.own, "advisory", "advisories")} on ${x.pkg} ${x.installed ?? ""}`.replace(/ $/, "")] : []),
+    ...(x.depLocked && depOwn > 0 ? [`${n(depOwn, "advisory", "advisories")} on ${x.dep} ${x.depLocked}, which it moves`] : []),
+  ];
+  const worst = SEVERITY_ORDER.find((s) => x.landing.some((g) => g.members.some((m) => m.severity === s))) ?? "unknown";
+  const ids = x.landing.map((g) => g.best.vulnId);
+  const shown = ids.slice(0, 3).join(", ") + (ids.length > 3 ? ` and ${ids.length - 3} more` : "");
+  const unlock = x.clean
+    ? x.cleanNeeds
+      ? `The first clean ${x.dep} it admits is ${x.clean}, which needs Python "${x.cleanNeeds}". Two ways out: raise requires-python in pyproject.toml to "${x.cleanNeeds}" (it is "${x.spec}" now) and call upgrade_planner again; or take the upgrade knowingly by writing the requirement ${x.pkg}==${x.target} yourself (the command is \`${x.command}\`; it is not in run_order).`
+      : `The first clean ${x.dep} it admits is ${x.clean}. Two ways out: raise requires-python in pyproject.toml so ${x.dep} ${x.clean} can install, then call upgrade_planner again; or take the upgrade knowingly by writing the requirement ${x.pkg}==${x.target} yourself (the command is \`${x.command}\`; it is not in run_order).`
+    : `No ${x.dep} release it admits was found clean, on any Python. Take the upgrade knowingly by writing the requirement ${x.pkg}==${x.target} yourself (the command is \`${x.command}\`; it is not in run_order), or wait for a fixed ${x.dep}.`;
+  return (
+    `${x.pkg} ${x.target} is NOT a clean fix: confirm a release with dependency_check before pinning it. ` +
+    `${clears.length > 0 ? `It would clear ${clears.join(" and ")}, but on` : "On"} this project's lowest supported Python (${x.lowest}, from ${x.from}) it requires ${x.dep} "${x.depSpec}", and the newest ${x.dep} that Python can install is ${x.onFloor}, which ${n(x.landing.length, "advisory affects", "advisories affect")} (worst: ${worst}; ${shown}). ${unlock}`
+  );
 }
 
 /** How the reason withoutSelfRequiringTargets writes starts. */
