@@ -90,3 +90,41 @@ describe("1: a failure or the budget spent holds by tool, not by words; pipes co
     expect(run("npm i lodash@4.17.21").decision).toBe("allow");
   });
 });
+
+describe("2: options that can change which release of a named package is installed", () => {
+  it.each([
+    "yarn add lodash --cached",
+    "yarn workspace b add lodash --cached",
+    "yarn add lodash --cached --mode=update-lockfile",
+    "yarn add lodash@4.17.20 --mode=update-lockfile",
+    "yarn add lodash@4.17.20 --prefer-offline",
+    "npm i --offline lodash@4.17.20",
+    "npm i --prefer-offline lodash",
+    "pnpm add --frozen-lockfile lodash@4.17.20",
+    "pnpm add --offline lodash",
+    "bun add --frozen-lockfile lodash@4.17.20",
+    "pip install --only-binary :all: requests==2.5.0",
+    "pip install --upgrade-strategy eager requests==2.5.0",
+    "pip install --platform manylinux2014_x86_64 --target out requests==2.5.0",
+    "uv pip install --offline requests==2.5.0",
+    "uv add --frozen requests==2.5.0",
+    "cargo add --locked serde@1.0.0",
+    "go get -mod=mod rsc.io/quote@v1.5.0",
+  ])("%s: held as not read", (command) => {
+    expect(run(command).text, command).toContain("could not be read");
+  });
+
+  it.each(["npm ci --offline", "pnpm install --frozen-lockfile", "yarn install --immutable", "bun install --frozen-lockfile", "pip install -r requirements.txt --only-binary :all:", "uv sync --frozen", "uv lock --locked"])("%s: no named package, goes ahead", (command) => {
+    expect(run(command).decision, command).toBe("allow");
+  });
+
+  it("cargo install --locked builds with the crate's own lockfile: the named release is judged as usual", () => {
+    const r = run("cargo install --locked ripgrep@14.1.1");
+    expect(r.decision).toBe("deny");
+    expect(r.text).not.toContain("could not be read");
+  });
+
+  it("pnpm --resolution-mode is no option this hook takes (pnpm 10 rejects it)", () => {
+    expect(run("pnpm add --resolution-mode highest lodash@4.17.20").text).toContain("could not be read");
+  });
+});

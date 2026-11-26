@@ -3169,7 +3169,7 @@ function optionTable(spec) {
  * dependencies, and `go get -u ./...`, is a stated limit (the manager chooses those versions).
  */
 const ACCOUNT_TABLES = {
-  pnpm: optionTable("--aggregate-output --allow-build= --changed-files-ignore-pattern= --child-concurrency= --color --config --depth= --dev --dir= --fail-if-no-match --filter= --filter-prod= --fix-lockfile --force --frozen-lockfile --global --global-dir= --help --hoist-pattern= --ignore-pnpmfile --ignore-scripts --ignore-workspace --latest --lockfile-dir= --lockfile-only --loglevel= --merge-git-branch-lockfiles --modules-dir= --network-concurrency= --no-color --no-frozen-lockfile --no-hoist --no-lockfile --no-optional --no-save-exact --no-save-workspace-protocol --no-verify-store-integrity --node-linker= --offline --optimistic-repeat-install --package-import-method= --prefer-frozen-lockfile --prefer-offline --prefix= --prod --public-hoist-pattern= --recursive --reporter= --resolution-mode= --resolution-only --save-catalog --save-catalog-name= --save-dev --save-exact --save-optional --save-peer --save-prod --save-workspace-protocol --shamefully-hoist --side-effects-cache --side-effects-cache-readonly --silent --store-dir= --stream --strict-peer-dependencies --test-pattern= --trust-policy= --trust-policy-exclude= --trust-policy-ignore-after= --update-checksums --use-running-store-server --use-stderr --use-store-server --verify-store-integrity --virtual-store-dir= --workspace --workspace-concurrency= --workspace-root -C= -D -E -F= -L -O -P -g -h -r -s -w"),
+  pnpm: optionTable("--aggregate-output --allow-build= --changed-files-ignore-pattern= --child-concurrency= --color --config --depth= --dev --dir= --fail-if-no-match --filter= --filter-prod= --fix-lockfile --force --frozen-lockfile --global --global-dir= --help --hoist-pattern= --ignore-pnpmfile --ignore-scripts --ignore-workspace --latest --lockfile-dir= --lockfile-only --loglevel= --merge-git-branch-lockfiles --modules-dir= --network-concurrency= --no-color --no-frozen-lockfile --no-hoist --no-lockfile --no-optional --no-save-exact --no-save-workspace-protocol --no-verify-store-integrity --node-linker= --offline --optimistic-repeat-install --package-import-method= --prefer-frozen-lockfile --prefer-offline --prefix= --prod --public-hoist-pattern= --recursive --reporter= --resolution-only --save-catalog --save-catalog-name= --save-dev --save-exact --save-optional --save-peer --save-prod --save-workspace-protocol --shamefully-hoist --side-effects-cache --side-effects-cache-readonly --silent --store-dir= --stream --strict-peer-dependencies --test-pattern= --trust-policy= --trust-policy-exclude= --trust-policy-ignore-after= --update-checksums --use-running-store-server --use-stderr --use-store-server --verify-store-integrity --virtual-store-dir= --workspace --workspace-concurrency= --workspace-root -C= -D -E -F= -L -O -P -g -h -r -s -w"),
   pip: optionTable("--abi= --break-system-packages --cache-dir= --cert= --check-build-dependencies --client-cert= --compile --config-settings= --constraint= --debug --disable-pip-version-check --dry-run --editable= --exists-action= --extra-index-url= --find-links= --force-reinstall --global-option= --help --ignore-installed --ignore-requires-python --implementation= --index-url= --isolated --keyring-provider= --log= --no-binary= --no-build-isolation --no-cache-dir --no-clean --no-color --no-compile --no-deps --no-index --no-input --no-python-version-warning --no-warn-conflicts --no-warn-script-location --only-binary= --platform= --prefer-binary --prefix= --progress-bar= --proxy= --python= --python-version= --quiet --report= --require-hashes --require-virtualenv --requirement= --retries= --root= --root-user-action= --src= --target= --timeout= --trusted-host= --upgrade --upgrade-strategy= --use-deprecated= --use-feature= --use-pep517 --user --verbose --version -C= -I -U -V -c= -e= -f= -h -i= -q -r= -t= -v"),
   uvpip: optionTable("--all-extras --allow-insecure-host= --break-system-packages --build-constraints= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --dry-run --editable= --exact --exclude= --excludes= --extra= --extra-index-url= --find-links= --group= --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary= --no-break-system-packages --no-build --no-build-isolation --no-build-isolation-package= --no-cache --no-config --no-deps --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --no-verify-hashes --offline --only-binary= --overrides= --prefix= --project= --python= --python-platform= --python-version= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --require-hashes --requirements= --strict --system --target= --torch-backend= --upgrade --upgrade-package= --user --verbose --version -C= -P= -U -V -b= -c= -e= -f= -h -i= -n -p= -q -r= -v"),
   uvtool: optionTable("--allow-insecure-host= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --editable --extra-index-url= --find-links= --force --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --offline --overrides= --project= --python= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --upgrade-package= --verbose --version --with= --with-editable= --with-requirements= -C= -P= -V -c= -e -f= -h -i= -n -p= -q -v"),
@@ -3177,7 +3177,7 @@ const ACCOUNT_TABLES = {
   cargo: optionTable("--all-features --base= --bin? --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example? --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
   go: optionTable("-C= -u -d -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
-  yarn: optionTable("--all --audit --cache-folder= --cached --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --verbose --version --worktree -A -C -D -E -L -O -P -R -T -W -g -h -j= -p -s -t -v"),
+  yarn: optionTable("--all --audit --cache-folder= --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --verbose --version --worktree -A -C -D -E -L -O -P -R -T -W -g -h -j= -p -s -t -v"),
   bun: optionTable("--backend= --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -E -d -g -h -p -r -y"),
   poetry: optionTable("--all-extras --ansi --compile --dev --directory= --dry-run --editable --extras= --group= --help --lock --markers= --no-ansi --no-cache --no-directory --no-interaction --no-plugins --no-root --no-update --only= --only-root --optional --platform= --project= --python= --quiet --regenerate --source= --sync --verbose --with= --without= -C= -D -E= -G= -P= -e -h -n -q -v -vv -vvv"),
 };
@@ -3954,7 +3954,7 @@ function accountJs(manager, args, dialect, depth, reader) {
     if (!toNewest && npmBareName(o)) continue;
     names.push(kind.name);
   }
-  return judgedByReader(names, reader, "npm");
+  return namedHeld(manager, values, names) ?? judgedByReader(names, reader, "npm");
 }
 
 /** `npm pkg set k=v`: a dependency key's value must be a version or range the reader reads. */
@@ -3995,7 +3995,7 @@ function accountPip(args, table, reader) {
     if (kind === null) return `${o}, which this hook does not read as a version to check`;
     if (kind !== "local") names.push(kind.name);
   }
-  return judgePyNames(names, reader, values);
+  return judgePyNames(names, reader, values, table === ACCOUNT_TABLES.uvpip ? "uv" : "pip");
 }
 
 /** Options naming a file that decides the release of the packages named beside it. */
@@ -4007,8 +4007,31 @@ const CONSTRAINT_REMEDY =
  * Round 11: the one place a PyPI reader with named operands judges them: S2 first (a constraints or
  * overrides file beside a named package decides its release), then the reader's own judgement.
  */
-function judgePyNames(names, reader, values) {
-  return constraintsBeside(values, names) ?? judgedByReader(names, reader, "PyPI");
+function judgePyNames(names, reader, values, manager = "pip") {
+  return constraintsBeside(values, names) ?? namedHeld(manager, values, names) ?? judgedByReader(names, reader, "PyPI");
+}
+
+/**
+ * Round 13 (eleventh independent check, S28): options that can change WHICH RELEASE of a named
+ * package is installed, or where it is fetched from (a cache, offline, a frozen lockfile, another
+ * platform, binaries only, a resolution mode): taken for an install that names no package (the
+ * lockfile), held beside a named one.
+ */
+const NAMED_HELD = {
+  npm: ["--offline", "--prefer-offline", "--cache-min"],
+  pnpm: ["--offline", "--prefer-offline", "--frozen-lockfile"],
+  yarn: ["--offline", "--prefer-offline", "--frozen-lockfile", "--immutable", "--immutable-cache", "--mode"],
+  bun: ["--frozen-lockfile"],
+  pip: ["--upgrade-strategy", "--only-binary", "--no-binary", "--platform", "--python-version", "--implementation", "--abi"],
+  uv: ["--offline", "--frozen", "--locked", "--no-build", "--no-binary", "--only-binary", "--python-version", "--python-platform"],
+  cargo: ["--locked", "--offline", "--frozen"],
+  go: ["-mod"],
+};
+/** The first such option beside a named package, as a reason; null when there is none. */
+function namedHeld(manager, values, names) {
+  if (names.length === 0) return null;
+  const option = (NAMED_HELD[manager] ?? []).find((o) => values.has(o));
+  return option ? `the option ${option} beside the named package ${names[0]}, which can change the release installed` : null;
 }
 
 /** S2: a constraints or overrides file beside a named package: held, with "name the version". */
@@ -4056,7 +4079,7 @@ function accountUv(args, dialect, depth, reader) {
       if (kind === null) return `${o}, which this hook does not read as a version to check`;
       if (kind !== "local") names.push(kind.name);
     }
-    return judgePyNames(names, reader, tool.values);
+    return judgePyNames(names, reader, tool.values, "uv");
   }
   if (sub !== "add" && sub !== "sync" && sub !== "lock") return null;
   const read = readOptions(rest, ACCOUNT_TABLES.uvadd);
@@ -4074,7 +4097,7 @@ function accountUv(args, dialect, depth, reader) {
     if (kind === null) return `${o}, which this hook does not read as a version to check`;
     if (kind !== "local") names.push(kind.name);
   }
-  return judgePyNames(names, reader, values);
+  return judgePyNames(names, reader, values, "uv");
 }
 
 function accountPoetry(args, dialect, depth, reader) {
@@ -4097,7 +4120,7 @@ function accountPoetry(args, dialect, depth, reader) {
     if (!r) return `${o}, which this hook does not read as a version to check`;
     names.push(r.name);
   }
-  return judgePyNames(names, reader, read.values);
+  return judgePyNames(names, reader, read.values, "poetry");
 }
 
 function accountCargo(args, reader) {
@@ -4121,7 +4144,7 @@ function accountCargo(args, reader) {
     else if (m) names.push(m[1]);
     else return `${o}, which this hook does not read as a version to check`;
   }
-  return judgedByReader(names, reader, "crates.io");
+  return (sub === "add" ? namedHeld("cargo", values, names) : null) ?? judgedByReader(names, reader, "crates.io");
 }
 
 function accountGo(args, reader) {
@@ -4153,7 +4176,7 @@ function accountGo(args, reader) {
       if (o.includes("...") || !m || !(m[2] === "latest" || GO_EXACT.test(m[2]) || /^v\d+(?:\.\d+)?$/.test(m[2]) || isDistTag(m[2]))) return `${o}, which this hook does not read as a version to check`;
       names.push(m[1]);
     }
-    return judgedByReader(names, reader, "Go");
+    return namedHeld("go", read.values, names) ?? judgedByReader(names, reader, "Go");
   }
   const names = [];
   for (const o of read.positional) {
@@ -4166,7 +4189,7 @@ function accountGo(args, reader) {
     else if (m && (m[2] === "latest" || GO_EXACT.test(m[2]) || /^v\d+(?:\.\d+)?$/.test(m[2]) || isDistTag(m[2]))) names.push(m[1]);
     else return `${o}, which this hook does not read as a version to check`;
   }
-  return judgedByReader(names, reader, "Go");
+  return namedHeld("go", read.values, names) ?? judgedByReader(names, reader, "Go");
 }
 
 /**
