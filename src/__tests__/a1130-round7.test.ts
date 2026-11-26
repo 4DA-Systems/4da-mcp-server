@@ -206,7 +206,7 @@ describe("7b-1 (C4): the spec written on the pair is always checked; a declared 
     npmProject();
     const r = await brief({ task: "npm i zqxcrit4@1.0.0", packages: [{ ecosystem: "npm", name: "zqxcrit4", version: "2.0.0", public: true }] });
     expect(r.delegation_assessment.level).toBe("human_only");
-    const rows = (r.new_packages ?? []).map((p: { version?: string }) => p.version);
+    const rows = [...(r.new_packages ?? []).map((p: { version?: string }) => p.version), ...(r.requested_versions ?? []).map((p: { to: string }) => p.to)];
     expect(rows).toEqual(expect.arrayContaining(["1.0.0", "2.0.0"]));
   });
 

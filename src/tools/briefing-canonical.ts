@@ -99,6 +99,11 @@ export interface CanonicalCommand {
   requirementFiles: string[];
   /** The command as written, capped: for tests and diagnosis only, never in an answer. */
   text: string;
+  /**
+   * The words the grammar consumed as program, verb, switch, option or option value (lower case, marks set aside):
+   * no other reader may offer, look up or weigh them (round 7c, F1: `npm install ms` looked `install` up).
+   */
+  consumed: string[];
 }
 
 const MAX_TOKENS = 200;
@@ -265,7 +270,9 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
     if (!op) return { command: notWhole(manager!, verb, ecosystem, "a word that is not a plain package name (a path, a URL, a source, a credential's shape)", tokens, m, end), end };
     operands.push(op);
   }
-  return { command: { manager: manager!, verb, ecosystem, canonical: true, operands, requirementFiles, text: tokens.slice(m, end).join(" ").slice(0, 120) }, end };
+  const operandWords = new Set(operands.map((o) => o.name.toLowerCase()));
+  const consumed = consumedWords(tokens, m, end).filter((w) => !operandWords.has(w));
+  return { command: { manager: manager!, verb, ecosystem, canonical: true, operands, requirementFiles, text: tokens.slice(m, end).join(" ").slice(0, 120), consumed }, end };
 }
 
 type Closer = "`" | ")" | null;
@@ -280,8 +287,39 @@ function endOf(tokens: string[], m: number, span: Closer): number {
   return tokens.length;
 }
 
-const clean = (t: string) => t.replace(/^[`"'(]+/, "").replace(/[`"')]+$/, "");
+/** The token without its wrapping marks; walks, never an anchored regex (linear on a long run of marks). */
+const clean = (t: string) => {
+  let a = 0;
+  let b = t.length;
+  while (a < b && "`\"'(".includes(t[a])) a++;
+  while (b > a && "`\"')".includes(t[b - 1])) b--;
+  return t.slice(a, b);
+};
 
 function notWhole(manager: string, verb: string, ecosystem: CheckEcosystem, why: string, tokens: string[], m: number, end: number): CanonicalCommand {
-  return { manager, verb, ecosystem, canonical: false, why, operands: [], requirementFiles: [], text: tokens.slice(m, end).join(" ").slice(0, 120) };
+  // Of a command not read whole, the grammar consumed its program, verb and options (their values it cannot tell).
+  const words = consumedWords(tokens, m, end);
+  const lastVerb = verb.split(" ").at(-1)?.toLowerCase() ?? "";
+  const upTo = Math.max(0, lastVerb ? words.indexOf(lastVerb) : 0);
+  const consumed = words.filter((w, i) => i <= upTo || w.startsWith("-"));
+  return { manager, verb, ecosystem, canonical: false, why, operands: [], requirementFiles: [], text: tokens.slice(m, end).join(" ").slice(0, 120), consumed };
+}
+
+/** The words of tokens[m, end) as other readers see them: lower case, quotes, ticks and end marks set aside. */
+function consumedWords(tokens: string[], m: number, end: number): string[] {
+  const out: string[] = [];
+  for (const t of tokens.slice(m, end)) {
+    // Trailing marks trimmed by a walk: an anchored `[.,;:!?]+$` backtracked over a 150 KB run of dots (31 s of CPU).
+    let w = clean(t);
+    let e = w.length;
+    while (e > 0 && ".,;:!?".includes(w[e - 1])) e--;
+    w = w.slice(0, e).toLowerCase();
+    if (!w) continue;
+    out.push(w);
+    // `--group=dev`, `python3 -m pip`: the option's value and the program's own name are consumed too.
+    if (w.includes("=")) out.push(w.slice(w.indexOf("=") + 1));
+    const base = w.replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|bat|ps1)$/, "");
+    if (base !== w) out.push(base);
+  }
+  return out;
 }

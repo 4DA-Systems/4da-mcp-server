@@ -69,10 +69,12 @@ describe("item 4: what a declaration does and does not change", () => {
     expect(h.requests.filter((u) => /lodash/.test(u))).toEqual([]);
   });
 
-  it("4b: a Go path in its !-escaped form is read unescaped, and forbids its sibling", async () => {
+  // Round 7c, F6: the `!` form is refused at the declaration, as dependency_check refuses it; refused, a
+  // `public: false` entry still forbids its name in both forms, so nothing about it is sent.
+  it("4b: a Go path in its !-escaped form is refused, and still forbids its sibling", async () => {
     h.write("go.mod", "module example.com/app\n\ngo 1.21\n");
     const r = await brief({ task: "go get github.com/Zqxcorp/lib@v1.0.0", packages: [{ ecosystem: "Go", name: "github.com/!zqxcorp/lib", public: false }] });
-    expect(r.task_packages.not_read.filter((n: { reason: string }) => /refused/.test(n.reason))).toEqual([]);
+    expect(r.task_packages.not_read.filter((n: { reason: string }) => /refused/.test(n.reason))).toHaveLength(1);
     expect(h.requests.filter((u) => /zqxcorp/i.test(u))).toEqual([]);
   });
 

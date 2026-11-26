@@ -130,14 +130,18 @@ export interface StrictPair {
  * (markup dropped, continuations joined): a credential, a substitution or a quote problem among a command's words
  * makes it not read whole, and nothing of it is offered.
  */
-export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; namedWords: Set<string>; manifestNotWhole: boolean } {
+export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; namedWords: Set<string>; manifestNotWhole: boolean; consumed: Set<string> } {
   const pairs: StrictPair[] = [];
   const unreadable: InstallCommand[] = [];
   const requirementFiles: string[] = [];
   const seen = new Set<string>();
   /** Every word of every command the grammar named, read whole or not (lower case, quotes and marks set aside). */
   const namedWords = new Set<string>();
-  for (const c of canonicalCommands(readingText(task))) {
+  const commands = canonicalCommands(readingText(task));
+  // Round 7c, F1: what the grammar consumed as program, verb, switch, option or value, unless it is also an operand.
+  const operandNames = new Set(commands.flatMap((c) => c.operands.map((o) => o.name.toLowerCase())));
+  const consumed = new Set(commands.flatMap((c) => c.consumed).filter((w) => !operandNames.has(w)));
+  for (const c of commands) {
     for (const w of c.text.split(/\s+/)) {
       const word = w.replace(/^[`"'(]+|[`"'),.;:!?]+$/g, "").toLowerCase();
       namedWords.add(word);
@@ -159,10 +163,19 @@ export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable:
     }
   }
   const manifest = manifestPairs(task);
-  pushAll(pairs, manifest.pairs);
+  const manifestNotWhole = manifest.unreadable.length > 0;
+  // Round 7c, F4: a snippet not read whole offers nothing, as a command not read whole: none of its entries is a
+  // pair, a private name or a word another reader offers or looks up. F3: a key the grammar read (an alias key
+  // `x = { package = "real" }` included) is never a prose candidate, and an alias key is looked up by no reader.
+  if (!manifestNotWhole) pushAll(pairs, manifest.pairs);
   pushAll(unreadable, manifest.unreadable);
   for (const w of manifest.entryWords) namedWords.add(w);
-  return { pairs, unreadable, requirementFiles, privateNames: manifest.privateNames, namedWords, manifestNotWhole: manifest.unreadable.length > 0 };
+  for (const k of manifest.keys) namedWords.add(k);
+  const pairNames = new Set(pairs.map((p) => p.name.toLowerCase()));
+  for (const k of manifest.keys) if (manifestNotWhole || !pairNames.has(k)) consumed.add(k);
+  for (const p of manifest.privateNames) consumed.add(p.name.toLowerCase());
+  if (manifestNotWhole) for (const p of manifest.pairs) consumed.add(p.name.toLowerCase());
+  return { pairs, unreadable, requirementFiles, privateNames: manifestNotWhole ? [] : manifest.privateNames, namedWords, manifestNotWhole, consumed };
 }
 
 const asInstallCommand = (c: CanonicalCommand): InstallCommand => ({
@@ -205,13 +218,15 @@ export function requirementsPairs(root: string, files: readonly string[], read: 
  * fence), pyproject `dependencies = [...]`, a Poetry table, a Cargo.toml dependencies table, go.mod requires.
  * Bounded: at most 200 entries, each block read to at most 20,000 characters. Linear.
  */
-export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; entryWords: Set<string> } {
+export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; entryWords: Set<string>; keys: Set<string> } {
   const text = task.length > 200_000 ? task.slice(0, 200_000) : task;
   const out: StrictPair[] = [];
   const unreadable: InstallCommand[] = [];
   const privateNames: Array<{ ecosystem: CheckEcosystem; name: string }> = [];
   /** The words of an entry not read whole: nothing of them is offered by another reader (C2, C5). */
   const entryWords = new Set<string>();
+  /** Every entry key the snippet grammar read, lower case (round 7c, F3). */
+  const entryKeys = new Set<string>();
   const notWhole = (ecosystem: CheckEcosystem, why: string, entry = "") => {
     for (const w of entry.toLowerCase().split(/[^a-z0-9@/._-]+/)) if (w) entryWords.add(w);
     if (!unreadable.some((u) => u.unreadable === why && u.ecosystem === ecosystem)) unreadable.push({ text: "", ecosystem, operands: [], manager: "a manifest", verb: "", unreadable: why });
@@ -235,6 +250,7 @@ export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: 
     const entries = [...body.matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,200})"/gi)];
     if (body && body.replace(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,200})"\s*,?/gi, "").trim() !== "") notWhole("npm", "an entry it cannot read", body);
     for (const e of entries) {
+      entryKeys.add(e[1].toLowerCase());
       if (/^(?:git|github:|file:|link:|workspace:|https?:|\.|\/|~)/i.test(e[2]) || e[2].includes("://") || e[2].includes("/")) privateNames.push({ ecosystem: "npm", name: e[1] });
       else push("npm", e[1], e[2]);
     }
@@ -254,6 +270,7 @@ export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: 
       const l = line.replace(/\s+#.*$/, "").trim();
       if (!l || l.startsWith("#") || l.startsWith("```")) continue;
       const e = /^([A-Za-z0-9][\w.-]*)\s*=\s*(.{0,400})$/.exec(l);
+      if (e) entryKeys.add(e[1].toLowerCase());
       if (!e) {
         notWhole(ecosystem, "an entry it cannot read", l);
         continue;
@@ -319,7 +336,7 @@ export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: 
     seen.add(key);
     return true;
   });
-  return { pairs, unreadable, privateNames, entryWords };
+  return { pairs, unreadable, privateNames, entryWords, keys: entryKeys };
 }
 
 /**
@@ -329,8 +346,33 @@ export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: 
 /** How an agent gets a clean answer for a command written into a sentence (round 7b, item 3). */
 export const CLEAN_COMMAND = "For a clean answer, write the command on its own line or in a code span (`npm install x y`) with only package names after the verb, and call again.";
 
-export const RAW_SOURCE =
-  /--registry|registry\s*=|:registry|--index-url|(?:^|\s)-i\s+\S|--extra-index-url|--default-index|--index\b|--find-links|(?:^|\s)-f\s+\S|--source\b|--git\b|--path\b|npm_config_registry|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|UV_INDEX|GOPRIVATE|GOPROXY|GONOSUMDB|npmRegistryServer|\[\[tool\.uv\.index\]\]|\[\[tool\.poetry\.source\]\]|\[registries[.\]]|\[registry\]|\[source\.|\[patch\.|\breplace\s+\S+(?:\s+v\S+)?\s+=>/i;
+/**
+ * C3's source words, matched in their own case (round 7c, F5: case-insensitive matching read Cargo's `-F derive` as
+ * pip's `-f <url>`). Long options, settings, environment variables and manifest tables are each written as their tool
+ * writes them; npm's environment form is matched in both cases it is used in.
+ */
+const SOURCE_WORDS =
+  /--registry\b|(?:^|[\s"'`])registry\s*=|[A-Z_]*REGISTRY=|:registry\b|--index-url\b|--extra-index-url\b|--default-index\b|--index\b|--find-links\b|--source\b|--git\b|--path\b|npm_config_registry|NPM_CONFIG_REGISTRY|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|UV_INDEX|UV_DEFAULT_INDEX|UV_EXTRA_INDEX_URL|GOPRIVATE|GOPROXY|GONOSUMDB|GONOPROXY|npmRegistryServer|\[\[tool\.uv\.index\]\]|\[\[tool\.poetry\.source\]\]|\[registries[.\]]|\[registry\]|\[source\.|\[patch\.|\breplace\s+\S+(?:\s+v\S+)?\s+=>/;
+/**
+ * The short source options, only where their own manager reads them: pip's (and `uv pip`'s) `-i <index>` and
+ * `-f <links>`. Cargo's `-F` (features), npm's `-f` (force) and others are no source.
+ */
+const PIP_COMMAND = /\b(?:pip[\d.]*|uv\s+pip)(?:\.exe)?\s+(?:install|download|wheel)\b/g;
+const SHORT_SOURCE = /\s-[if](?:\s+|=)\S/;
+
+/** pip's `-i` / `-f` inside a pip command, each command read up to its separator or the next command: linear. */
+function pipShortSource(text: string): boolean {
+  const starts = [...text.matchAll(PIP_COMMAND)].map((m) => m.index! + m[0].length);
+  for (let k = 0; k < starts.length; k++) {
+    const segment = text.slice(starts[k], k + 1 < starts.length ? starts[k + 1] : text.length);
+    const stop = segment.search(/[\n;&|]/);
+    if (SHORT_SOURCE.test(stop >= 0 ? segment.slice(0, stop) : segment)) return true;
+  }
+  return false;
+}
+
+/** Whether the task's raw text names a package source of its own (C3). */
+export const RAW_SOURCE = { test: (text: string): boolean => SOURCE_WORDS.test(text) || pipShortSource(text) };
 
 /**
  * The first command with an operand the briefing did not account for, or null (the C3 property test's view of the

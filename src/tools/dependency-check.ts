@@ -171,7 +171,9 @@ export async function runDependencyCheck(db: FourDADatabase | null, params: Depe
   const answer = await executeDependencyCheck(db, params, liveIntel);
   // A withheld name is recorded as "private" only when a private-registry rule covers it, asked of the
   // rules themselves (check-ledger.ts withheldKind); otherwise "local_source", which the hook holds.
-  void recordVerdicts(answer.results.filter((r) => !SECRET_REFUSED.has(r)), { privateRule: liveIntel?.privateRegistryRuleCovers ? (eco, name) => liveIntel.privateRegistryRuleCovers(eco, name) : null });
+  // An item refused as written (round 7c, F6: a `!`-escaped Go path) was never checked: nothing is recorded for it,
+  // as for the briefing's refused entries; the hook holds an unanswered item the same way.
+  void recordVerdicts(answer.results.filter((r) => !SECRET_REFUSED.has(r) && r.not_checked !== "input"), { privateRule: liveIntel?.privateRegistryRuleCovers ? (eco, name) => liveIntel.privateRegistryRuleCovers(eco, name) : null });
   return shapeDependencyCheck(answer, params.response_format);
 }
 

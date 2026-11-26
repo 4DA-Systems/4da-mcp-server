@@ -495,9 +495,12 @@ export async function executeWhatShouldIKnow(
   pushAll(evidence.pairs, fromRequirements);
   const depsText = fromRequirements.length > 0 ? `${task}\n${fromRequirements.map((p) => p.name).join(" ")}` : task;
   // ── 0. The vulnerability scan — awaited, bounded, never assumed ───────
+  // Round 7c, F1: a word the grammar consumed (`npm`, `install`, `-D`, an option's value) is no package of the task for
+  // any reader: not a dependency it names, not a bundled-list lookup, not a candidate.
+  const notConsumed = (name: string) => !evidence.consumed.has(name.toLowerCase());
   const taskPackages = () => {
     const deps = allDeps();
-    const exact = detectTaskPackages(depsText, files, deps, MAX_TASK_PACKAGES + 1);
+    const exact = detectTaskPackages(depsText, files, deps, MAX_TASK_PACKAGES + 1).filter((p) => notConsumed(p.name));
     return [...exact.slice(0, MAX_TASK_PACKAGES), ...detectFamilyPackages(task, files, deps, exact.slice(0, MAX_TASK_PACKAGES))];
   };
   const { scan, scanStatus, scanBlock } = await awaitScan(liveIntel, () => taskPackages().some((p) => p.dev));
@@ -566,6 +569,9 @@ export async function executeWhatShouldIKnow(
   // never shaped as tool arguments (fourth blind check); a near-miss of a popular name is judged offline.
   const taskVersions = readTaskVersions(task, ecosystemDeps());
   const gated = gateTaskNames(task, ecosystemDeps(), registryPrivate(detectAllNewPackages(task, ecosystemDeps()).filter(notPrivate)), registryPrivate(taskVersions.requested.filter(notPrivate)));
+  gated.packages = gated.packages.filter((p) => notConsumed(p.name));
+  gated.requested = gated.requested.filter((p) => notConsumed(p.name));
+  gated.unverified = gated.unverified.filter((w) => notConsumed(w.word));
   // ── K2 (round 7, C1/C2/C5): strict pairs against the reader's candidates ──
   {
     const has = installedNames(ecosystemDeps());
@@ -584,7 +590,7 @@ export async function executeWhatShouldIKnow(
     gated.unverified = gated.unverified.filter((w) => w.read_as.split(" or ").some((e) => nameProblem(e as CheckEcosystem, w.word) === null) && !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\/$/i.test(w.word));
     // A manifest entry with a git, path, registry or workspace source is a source of the task's own (C5).
     for (const p of evidence.privateNames) {
-      if (!privateTask.some((x) => x.package.toLowerCase() === p.name.toLowerCase())) privateTask.push({ package: p.name, ecosystem: p.ecosystem, installed: [], why: "the manifest snippet in the task takes it from git, a path, a registry or the workspace: never looked up" });
+      if (!privateTask.some((x) => x.package.toLowerCase() === p.name.toLowerCase())) privateTask.push({ package: p.name, ecosystem: p.ecosystem, installed: [], why: SNIPPET_SOURCE });
     }
     for (const p of evidence.pairs) {
       if (!notPrivate(p) || privateTask.some((x) => x.package.toLowerCase() === p.name.toLowerCase())) continue;
@@ -749,10 +755,10 @@ export async function executeWhatShouldIKnow(
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
     for (const version of [...new Set(versions)]) {
       const latest = /^latest$/i.test(version);
-      declaredNew.push({ name: d.name, ecosystem: d.ecosystem, ...(latest ? {} : { version }), declared: true });
-      // A version is also judged as a requested version (a critical on it is human_only), with the same item: one
-      // ledger line (round 7, C4/C6).
+      // Round 7c, R3: one check, one row, one clause per (pair, version). A version is judged as a requested version
+      // (a critical on it is human_only); latest of a package the project does not have is judged as a new package.
       if (!latest || installed(d.name, d.ecosystem)) declaredWanted.push({ name: d.name, ecosystem: d.ecosystem, to: version, declared: true });
+      else declaredNew.push({ name: d.name, ecosystem: d.ecosystem, declared: true });
     }
   }
   // I3: a waiting name is settled only by a declaration in an ecosystem the reader read it in.
@@ -793,7 +799,11 @@ export async function executeWhatShouldIKnow(
     const closed = NAME_ECOSYSTEMS.filter((e) => e !== p.ecosystem && registryReason(e, p.name) !== null);
     return closed.length > 0 ? { ...p, closed: [...new Set([...(p.closed ?? []), ...closed])] } : p;
   };
-  const ownNamed = lookedUp.map(closedFor);
+  // Round 7c, R3/R4: what the caller declared at a version is checked once, as declared; the briefing's own lookup of
+  // the same (pair, version) is not made again beside it, so each row has one basis and one clause.
+  const rowKey = (ecosystem: string, name: string, version: string | undefined) => `${ecosystem}\0${ecosystemKey(name, ecosystem as CheckEcosystem)}\0${(version ?? "latest").toLowerCase()}`;
+  const declaredRows = new Set([...declaredNew.map((p) => rowKey(p.ecosystem, p.name, p.version)), ...declaredWanted.map((r) => rowKey(r.ecosystem, r.name, r.to))]);
+  const ownNamed = lookedUp.filter((p) => !declaredRows.has(rowKey(p.ecosystem, p.name, p.version))).map(closedFor);
   // The briefing's own rows first: they are never degraded by how many entries the caller declared (C4, I1).
   const named = [...ownNamed.slice(0, MAX_NEW_PACKAGES), ...declaredNew.map(closedFor)];
   const newPackages = [...(await checkNewPackages(liveIntel, named, undefined, recordDeclared))];
@@ -801,7 +811,7 @@ export async function executeWhatShouldIKnow(
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14). Past their
   // own cap they are named NOT CHECKED too: the sixth version a task named was dropped without a word (r8).
-  const wantedVersions = [...wanted.slice(0, MAX_REQUESTED), ...declaredWanted];
+  const wantedVersions = [...wanted.filter((r) => !declaredRows.has(rowKey(r.ecosystem, r.name, r.to))).slice(0, MAX_REQUESTED), ...declaredWanted];
   const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions, undefined, recordDeclared);
   // I8: a declared package the call's budget did not reach keeps the briefing confirmation_needed: call again.
   const unreached = [
@@ -1078,7 +1088,7 @@ export async function executeWhatShouldIKnow(
       ...(newPackages.length > 0 ? { new_packages: newPackages } : {}),
       ...(privateTask.length > 0 ? { private_dependencies: privateTask } : {}),
       ...(requestedVersions.length > 0 ? { requested_versions: requestedVersions } : {}),
-      task_packages: taskPackagesSection({ task, waiting, unreached, dismissed, notRead: withheldWords.map(({ standing: _standing, argument: _argument, ...w }: TaskWordWithheld & { argument?: true }) => w), declaredPrivate, privateTask, declaredKeys, taskDependencies, newPackages, requestedVersions, installed, undeclared: params.packages === undefined }),
+      task_packages: taskPackagesSection({ task, waiting, unreached, dismissed, notRead: withheldWords.map(({ standing: _standing, argument: _argument, ...w }: TaskWordWithheld & { argument?: true }) => w), declaredPrivate, privateTask, declaredKeys, declaredRows, taskDependencies, newPackages, requestedVersions, installed, undeclared: params.packages === undefined }),
       advisories,
       decision_windows: decisionWindows,
       relevant_wisdom: relevantWisdom,
@@ -1326,6 +1336,10 @@ function notCheckedPackages(names: string[]): string {
  * what waits (shaped so it cannot be pasted back as the `packages` argument: no `public`, a list of
  * ecosystems), a compact index of what was checked and on what basis, what is private, what was not read.
  */
+/** Round 7c, F2: a private name a manifest snippet of the task takes from git, a path, a registry or the workspace. */
+const SNIPPET_SOURCE = "the manifest snippet in the task takes it from git, a path, a registry or the workspace: never looked up";
+const SNIPPET_SOURCE_BASIS = "the manifest snippet in the task takes it from git, a path, a registry or the workspace, not the public registry";
+
 function taskPackagesSection(input: {
   task: string;
   waiting: UnverifiedWord[];
@@ -1336,6 +1350,8 @@ function taskPackagesSection(input: {
   declaredPrivate: PrivateIndex[];
   privateTask: PrivateTaskPackage[];
   declaredKeys: Set<string>;
+  /** The (pair, version) checks the caller's declaration made (round 7c, R4: only those rows say "confirmed public by you"). */
+  declaredRows: Set<string>;
   taskDependencies: TaskDependency[];
   newPackages: NewPackageFinding[];
   requestedVersions: RequestedVersionFinding[];
@@ -1344,20 +1360,20 @@ function taskPackagesSection(input: {
   undeclared: boolean;
 }): TaskPackages {
   const key = (ecosystem: string, name: string) => `${ecosystem}\0${ecosystemKey(name, ecosystem as CheckEcosystem)}`;
-  const basis = (ecosystem: string, name: string): CheckedIndex["basis"] =>
-    input.declaredKeys.has(key(ecosystem, name)) ? "confirmed public by you" : input.installed(name, ecosystem as CheckEcosystem) ? "project dependency" : "well-known name";
+  const basis = (ecosystem: string, name: string, version: string | undefined): CheckedIndex["basis"] =>
+    input.declaredRows.has(`${key(ecosystem, name)}\0${(version ?? "latest").toLowerCase()}`) ? "confirmed public by you" : input.installed(name, ecosystem as CheckEcosystem) ? "project dependency" : "well-known name";
   const checked: CheckedIndex[] = [];
   const add = (row: CheckedIndex) => {
     if (!checked.some((c) => key(c.ecosystem, c.name) === key(row.ecosystem, row.name) && c.version === row.version)) checked.push(row);
   };
-  for (const r of input.requestedVersions) add({ name: r.name, ecosystem: r.ecosystem, version: r.to, verdict: r.verdict, basis: basis(r.ecosystem, r.name) });
-  for (const n of input.newPackages) add({ name: n.name, ecosystem: n.ecosystem, version: n.version ?? n.latest ?? "latest", verdict: n.verdict, basis: basis(n.ecosystem, n.name) });
+  for (const r of input.requestedVersions) add({ name: r.name, ecosystem: r.ecosystem, version: r.to, verdict: r.verdict, basis: basis(r.ecosystem, r.name, r.to) });
+  for (const n of input.newPackages) add({ name: n.name, ecosystem: n.ecosystem, version: n.version ?? n.latest ?? "latest", verdict: n.verdict, basis: basis(n.ecosystem, n.name, n.version) });
   for (const d of input.taskDependencies) {
     add({ name: d.package, ecosystem: d.ecosystem, version: d.installed.join("/") || "declared range", verdict: d.vulnerabilities.length > 0 ? `${d.vulnerabilities.length} confirmed vulnerabilit${d.vulnerabilities.length === 1 ? "y" : "ies"}` : "no confirmed vulnerability", basis: "project dependency" });
   }
   const privateRows: PrivateIndex[] = [...input.declaredPrivate];
   for (const p of input.privateTask) {
-    if (!privateRows.some((d) => d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: /^the task installs it from its own package index/.test(p.why) ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : "this project's registry configuration" });
+    if (!privateRows.some((d) => d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: /^the task installs it from its own package index/.test(p.why) ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : p.why === SNIPPET_SOURCE ? SNIPPET_SOURCE_BASIS : "this project's registry configuration" });
   }
   const waiting = input.waiting.slice(0, MAX_TO_CONFIRM).map((w) => toConfirmEntry(input.task, w));
   return {
