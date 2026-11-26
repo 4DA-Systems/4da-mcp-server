@@ -60,3 +60,28 @@ describe("1: sed and awk are never text; git under an editor / pager / GIT_* set
     expect(run(command).decision).toBe("allow");
   });
 });
+
+describe("2: a manifest's path is resolved as text before its name is matched", () => {
+  const P = () => s.project.replace(/\\/g, "/");
+  const write = (path: string, content: string) => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path, content } });
+  const PKG = '{"dependencies":{"lodash":"4.17.20"}}';
+  it.each([
+    ["x/package.json/.", PKG],
+    ["x/package.json\\.", PKG],
+    ["x/package.json/x/..", PKG],
+    ["x/package.json/", PKG],
+    ["x/requirements/./dev.txt", "requests==2.5.0\n"],
+    ["x/requirements/x/../dev.txt", "requests==2.5.0\n"],
+    ["x/requirements./dev.txt", "requests==2.5.0\n"],
+    ["x/Cargo.toml/x/..", '[package]\nname = "p"\nversion = "0.1.0"\n[dependencies]\nserde = "=1.0.0"\n'],
+    ["x/Cargo.toml/.", '[package]\nname = "p"\nversion = "0.1.0"\n[dependencies]\nserde = "=1.0.0"\n'],
+  ])("Write %s: held on its verdict", (rel, content) => {
+    const r = write(`${P()}/${rel}`, content);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items, r.text).not.toBeNull();
+  });
+
+  it("another file still goes ahead", () => {
+    expect(write(`${P()}/x/package.json/../notes.json`, PKG).decision).toBe("allow");
+  });
+});

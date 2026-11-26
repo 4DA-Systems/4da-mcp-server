@@ -1810,17 +1810,39 @@ function callItem(ecosystem, name, to, from) {
  * the server names one (src/project-tree.ts isRequirementsFileName, mirrored here because the hook
  * imports nothing: `requirements-dev.txt`, `dev_requirements.txt`), or is a .txt in `requirements/`.
  */
+/**
+ * Round 12: a path's parts as Windows opens it, resolved as text: `\` read as `/`, empty and `.`
+ * parts dropped, `name/..` resolved, and each part's trailing dots and blanks dropped (Win32 drops
+ * them), so `package.json/.`, `package.json\.`, `Cargo.toml/x/..` and `requirements/x/../dev.txt`
+ * name the file they open.
+ */
+function pathParts(filePath) {
+  const parts = [];
+  for (const raw of String(filePath).replace(/\\/g, "/").split("/")) {
+    if (raw === "" || raw === ".") continue;
+    if (raw === "..") {
+      if (parts.length > 0 && parts[parts.length - 1] !== "..") parts.pop();
+      else parts.push("..");
+      continue;
+    }
+    const part = raw.replace(/[. ]+$/, "");
+    if (part !== "") parts.push(part);
+  }
+  return parts;
+}
+
 function manifestKind(filePath) {
-  // Round 11: the last path part as Windows opens it: an NTFS stream suffix (`::$DATA`, `:s`) and
-  // trailing dots and blanks dropped, and the name compared case-insensitively on every platform
-  // (on a case-sensitive file system `Package.json` is then held too: the safe side).
-  const name = basename(String(filePath).replace(/[\\/]+$/, "")).replace(/:.*$/, "").replace(/[. ]+$/, "");
+  // The last path part as Windows opens it (pathParts), its NTFS stream suffix (`::$DATA`, `:s`)
+  // dropped, and the name compared case-insensitively on every platform (Round 11: on a
+  // case-sensitive file system `Package.json` is then held too: the safe side).
+  const parts = pathParts(filePath);
+  const name = (parts[parts.length - 1] ?? "").replace(/:.*$/, "").replace(/[. ]+$/, "");
   const known = MANIFEST_NAMES.get(name.toLowerCase());
   if (known) return known;
   // The server reads no `syntax_test_*` file (an editor grammar's fixture: isSyntaxTestName).
   if (/^syntax_test_/i.test(name)) return null;
   if (/requirements[\w.-]*\.txt$/i.test(name)) return "requirements.txt";
-  if (/\.txt$/i.test(name) && basename(dirname(filePath)).toLowerCase() === "requirements") return "requirements.txt";
+  if (/\.txt$/i.test(name) && (parts[parts.length - 2] ?? "").toLowerCase() === "requirements") return "requirements.txt";
   return null;
 }
 
