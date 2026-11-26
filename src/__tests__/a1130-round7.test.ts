@@ -200,3 +200,52 @@ describe("C1: a command opened by a parenthesis ends at its close", () => {
     expect(JSON.stringify(r.new_packages ?? [])).toContain(name);
   });
 });
+
+describe("7b-1 (C4): the spec written on the pair is always checked; a declared version in addition", () => {
+  it("npm i zqxcrit4@1.0.0 declared at 2.0.0 is human_only: the written 1.0.0 is critical", async () => {
+    npmProject();
+    const r = await brief({ task: "npm i zqxcrit4@1.0.0", packages: [{ ecosystem: "npm", name: "zqxcrit4", version: "2.0.0", public: true }] });
+    expect(r.delegation_assessment.level).toBe("human_only");
+    const rows = (r.new_packages ?? []).map((p: { version?: string }) => p.version);
+    expect(rows).toEqual(expect.arrayContaining(["1.0.0", "2.0.0"]));
+  });
+
+  it("both checks leave dependency_check's own ledger lines", async () => {
+    npmProject();
+    const file = path.join(serverDataDir(), LEDGER_FILE);
+    const read = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "").split("\n").filter((l) => l.includes('"zqxcrit4"')).map((l) => JSON.stringify({ ...JSON.parse(l), t: undefined })).sort();
+    await brief({ task: "npm i zqxcrit4@1.0.0", packages: [{ ecosystem: "npm", name: "zqxcrit4", version: "2.0.0", public: true }] });
+    await new Promise((res) => setTimeout(res, 300));
+    const briefing = [...new Set(read())];
+    fs.rmSync(file, { force: true });
+    await runDependencyCheck(null, { items: [{ ecosystem: "npm", package: "zqxcrit4", to: "1.0.0" }, { ecosystem: "npm", package: "zqxcrit4", to: "2.0.0" }] }, await h.live());
+    await new Promise((res) => setTimeout(res, 300));
+    expect(briefing).toHaveLength(2);
+    expect(briefing).toEqual([...new Set(read())]);
+  });
+
+  it("the spec never moves to another pair or ecosystem", async () => {
+    npmProject();
+    const r = await brief({ task: "npm i zqxcrit4@1.0.0", packages: [{ ecosystem: "PyPI", name: "zqxcrit4", version: "2.0.0", public: true }] });
+    expect(JSON.stringify(r.new_packages ?? [])).not.toMatch(/"ecosystem":"PyPI"[^}]*"version":"1\.0\.0"/);
+  });
+});
+
+describe("7b-2 (K3): an unlisted option is said by the grammar, not as 'the word after'", () => {
+  it("npm install --workspaces pino", async () => {
+    npmProject();
+    const r = await brief({ task: "npm install --workspaces pino", packages: [{ ecosystem: "npm", name: "pino", public: true }] });
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).toMatch(/This task holds a command \(npm install\) this briefing could not read whole \(an option this briefing does not read\)/);
+    expect(JSON.stringify(r)).not.toContain("the word after");
+  });
+});
+
+describe("7b-3: a dismissed word of a command in a sentence says how to get a clean answer", () => {
+  it("npm i zqxok and add it as middleware", async () => {
+    npmProject();
+    const r = await brief({ task: "npm i zqxok and add it as middleware", packages: [{ ecosystem: "npm", name: "zqxok", public: true }], not_packages: ["and", "add", "it", "as", "middleware"] });
+    expect(r.delegation_assessment.level).toBe("review_needed");
+    expect(r.delegation_assessment.reason).toContain("For a clean answer, write the command on its own line or in a code span (`npm install x y`) with only package names after the verb, and call again.");
+  });
+});
