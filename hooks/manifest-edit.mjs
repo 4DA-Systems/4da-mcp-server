@@ -19,7 +19,8 @@
  * A tool installed from the registry (`cargo install x`, `go install x@v`, `yarn global add x`,
  * `uv tool install x`, `poetry self add x`) is read as an add. Read whole means: its program and
  * prefixes, every option known with its arity (ACCOUNT_TABLES, from each tool's own help; for
- * Yarn, Bun and Poetry an allow list from their documentation), and every operand one of
+ * Yarn, Bun and Poetry an allow list from their documentation; no option in any of them lets the
+ * manager install a name that is not an operand on the line), and every operand one of
  * - a public name with an exact version or a range, which goes ahead on its verdict: an exact
  *   version on `proceed` or `review`; a range on a `proceed` or `review` answered for that same
  *   constraint, or else for exactly the release its inclusive ceiling names (`<=V`, `A - V`, only
@@ -38,11 +39,12 @@
  * uv and Poetry it installs the lockfile or the manifest's own ranges; what the manager then
  * chooses is a stated limit (THE LIMITS), not a check.
  * A data program's words are text only when both hold: its options are all on its own short list
- * (echo, printf, cat, the grep family, rg, Select-String, findstr, sed without -i and without an
- * `e` or `w` command, awk without system(), a pipe or getline, make without a makefile from stdin,
- * git commit / log / show / diff / status / grep / tag with their options and no `-c` before them,
- * gh pr / issue / release / gist text, `node -e` / `-p`, `python -c`, and docker / podman run / exec
- * / build, whose commands run in a container), and its output goes nowhere that runs it: it is
+ * (echo, printf, cat, the grep family, rg, Select-String, findstr, make with no -f / --file /
+ * --makefile / --eval, git commit / log / show / diff / status / grep / tag with their options, no
+ * `-c` before them and no EDITOR / VISUAL / PAGER / GIT_* setting for them in the call, gh pr /
+ * issue / release / gist text, `node -e` / `-p`, `python -c`, and docker / podman run / exec /
+ * build, whose commands run in a container; not sed or awk, which can run a command from their
+ * script), and its output goes nowhere that runs it: it is
  * the last stage, or every later stage of its pipeline is such a program or a pure sink (wc, head,
  * tail, sort, uniq, cut, tr, less, more, tee to a file that is no manifest or lockfile, Out-Null,
  * Select-Object, Measure-Object, clip), and no redirection on the line writes a manifest or a
@@ -58,10 +60,11 @@
  * subshell, group or script block. Under xargs a manager's operands come from its input: held.
  * The files read on an Edit, MultiEdit or Write are package.json, Cargo.toml, pyproject.toml,
  * go.mod, pnpm-workspace.yaml, and a requirements file (a name `requirements*.txt`, or any `.txt`
- * in a folder named `requirements`). Each name is matched case-insensitively on every platform,
- * after an NTFS stream suffix (`::$DATA`, `:s`) and trailing dots and blanks are taken off its
- * last path part, as Windows opens it (on a case-sensitive file system `Package.json` is held as
- * well: the safe side). Other files a later command reads (constraints.txt, requirements.in, a
+ * in a folder named `requirements`). The path is first resolved as text, as Windows opens it
+ * (`\` read as `/`, empty and `.` parts dropped, `name/..` resolved, each part's trailing dots and
+ * blanks dropped, an NTFS stream suffix `::$DATA` / `:s` taken off the last part), and the name is
+ * matched case-insensitively on every platform (on a case-sensitive file system `Package.json` is
+ * held as well: the safe side). Other files a later command reads (constraints.txt, requirements.in, a
  * lockfile) are not read.
  * In a manifest written with the Edit, MultiEdit or Write tool only dependency declarations count
  * (never a comment or another string field), each section's are compared on their own, and a
@@ -86,9 +89,10 @@
  *   read (`unreadable_lockfile`).
  * - A named package beside a constraints or overrides file (`-c`, `--constraint(s)`,
  *   `--override(s)`, `--build-constraints`), which decides its release: "name the version".
- * - As NOT READ, with one remedy (run it as a plain command `<manager> <verb> <name>@<exact
- *   version>`, or the name alone, with no other options): a command the detector names that is not
- *   read whole. That is an option not in the manager's table (among them every option that changes
+ * - As NOT READ, with one remedy: a plain command the denial names, built from a form this hook
+ *   reads (`bun update x@1` -> `bun add x@1`, the name alone where no exact version is read; where
+ *   none can be built, `<manager> <verb> <name>@<exact version>` in words): a command the detector
+ *   names that is not read whole. That is an option not in the manager's table (among them every option that changes
  *   which release a name resolves to: `--tag`, `--before`, `--pre`, `--prerelease`, `--resolution`,
  *   Bun's `--latest` and `-c`, uv's `--upgrade`), a manager's own environment setting
  *   (`npm_config_*`, `PIP_*`, `UV_*` ...) as a prefix or made earlier in the same call (`export`,
@@ -97,8 +101,11 @@
  *   `gsudo`, `concurrently`, `git submodule foreach` ...), a data program whose options are not on
  *   its list or whose output is piped into anything else (`| sh`, `| pwsh -`, `| python`), a runner
  *   chain past MAX_WRAPS, and a line it cannot take apart (a variable, a substitution, an escape, a
- *   PowerShell here-string; for text that only mentions an install, the Write tool). The remedy is
- *   tested to release each of these classes (a1125-w2-hook-account.test.ts).
+ *   PowerShell here-string; for text that only mentions an install, the Write tool). sed and awk
+ *   with a manager word and verb in their words are held too, with the remedy "grep / rg /
+ *   Select-String to search for that text, the Write tool to write it". The remedy is tested to
+ *   release each of these classes (a1125-w2-hook-account.test.ts), and for every manager and verb
+ *   the detector names (a1125-w2-hook-round12.test.ts).
  * - A manifest part it cannot read (a TOML escape or a multi-line string in a dependency context,
  *   a brace in pnpm-workspace.yaml) and anything past a bound or the time budget (the loops' ticks;
  *   a payload over 8 KB is also judged under a 5 s wall clock).
@@ -146,7 +153,8 @@
  * starts again.
  *
  * FOURDA_GUARD=advise: never denies (the ledger guard included); after a manifest edit
- * (PostToolUse) the agent is told which versions moved and which calls check them.
+ * (PostToolUse) the agent is told which versions moved and which calls check them, the edited file
+ * compared as a whole as block mode reads it (the edits applied backwards give the file before).
  * FOURDA_GUARD=off: the hook does nothing.
  *
  * It denies only where a ledger exists. A server from 6.5.0 on starts one when it starts; a
