@@ -104,6 +104,7 @@ export function followRemedy(command: string, text: string, value = "lodash"): s
   if (form.startsWith("an exact version")) return tidy(command.replace(token, bareName(token)));
   if (form.startsWith("one module path")) return tidy(command.replace(token, token.replace(/\/\.\.\.$/, "")));
   if (form.startsWith("its value written out")) return tidy(command.replace(token, value));
+  if (form.startsWith("the command inside it")) return tidy(token.replace(/^\$\(|^`|\)$|`$/g, ""));
   // A setting written as the option it stands for: the setting left out, the option on the command.
   const option = /^`([^`]+)` on the package manager's command$/.exec(form);
   if (option) return tidy(`${command.replace(token, "")} ${option[1]}`);

@@ -161,3 +161,46 @@ describe("3: make leaves the data list; a data program under a setting that is n
     expect(run(command).decision, command).toBe("allow");
   });
 });
+
+describe("5: the eleventh check's false holds go ahead; their dangerous neighbours stay held", () => {
+  it.each([
+    ['GIT_AUTHOR_DATE="2026-11-26T10:00:00" git commit -m "ci: run npm install"', "Bash"],
+    ["gh release create v1.0.0 --notes 'Install: npm install lodash'", "Bash"],
+    ['gh release create v1.0.0 --title v1 --notes "run pip install -r requirements.txt" --target main', "Bash"],
+    ["gh pr review 12 --body 'please npm install first' --comment", "Bash"],
+    ["gh pr review 12 --approve --body 'npm install works'", "Bash"],
+    ["gh issue comment 5 --body 'try pip install requests'", "Bash"],
+    ["echo '- pip install x' >> README.md", "Bash"],
+    ["echo -n '- npm install lodash' > notes.txt", "Bash"],
+    ["tee docs/setup.md <<'EOF'\nRun npm install lodash\nEOF", "Bash"],
+    ["cat <<'EOF' | tee docs/setup.md\nRun npm install lodash\nEOF", "Bash"],
+    ["Set-Content -Path README.md -Value 'npm install lodash'", "PowerShell"],
+    ["Add-Content README.md 'pip install requests'", "PowerShell"],
+    ["Add-Content NOTES.md '- pip install -r requirements.txt'", "PowerShell"],
+    ["'npm install lodash' | Out-File -FilePath notes.txt", "PowerShell"],
+    ["'npm install lodash' | Set-Content -Path README.md", "PowerShell"],
+  ])("%s: goes ahead", (command, tool) => {
+    expect(run(command, tool).decision, command).toBe("allow");
+  });
+
+  it.each([
+    ["Set-Content -Path package.json -Value 'npm install lodash'", "PowerShell"],
+    ["'npm install lodash' | Out-File package.json", "PowerShell"],
+    ["Set-Content x.txt -Value (npm i lodash@4.17.20)", "PowerShell"],
+    ["Set-Content x.txt -Value $(npm i lodash@4.17.20)", "PowerShell"],
+    ["Add-Content -Path notes.txt -Stream s 'npm install lodash'", "PowerShell"],
+    ["'npm install lodash' | iex", "PowerShell"],
+    ['"npm i lodash@4.17.20" | sh', "Bash"],
+    ["echo 'npm i lodash@4.17.20' | sh", "Bash"],
+    ["echo $(npm i lodash@4.17.20)", "Bash"],
+    ["echo 'npm install lodash' >> package.json", "Bash"],
+    ["tee package.json <<'EOF'\nnpm install\nEOF", "Bash"],
+  ])("%s: held", (command, tool) => {
+    expect(run(command, tool).decision, command).toBe("deny");
+  });
+
+  it("a write into a manifest names the redirect as written; a substitution holding the install names the command inside it", () => {
+    expect(run("echo 'npm install lodash' >> package.json").text).toContain("without `>> package.json`");
+    expect(run("echo $(npm i lodash@4.17.20)").text).toContain("with `$(npm i lodash@4.17.20)` written as the command inside it, run as a command of its own");
+  });
+});

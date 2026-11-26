@@ -2082,13 +2082,13 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
         const end = line.indexOf(line[j], j + 1);
         const inner = end < 0 ? "" : line.slice(j + 1, end);
         if (end < 0 || (line[j] === '"' && (dialect === "powershell" ? /[$`]/.test(inner) : /[$`\\]/.test(inner)))) return null;
-        redirects?.push({ target: inner, write: ch === ">" });
+        redirects?.push({ target: inner, write: ch === ">", text: line.slice(i, end + 1) });
         i = end;
         continue;
       }
       const target = /^[^\s;&|<>()$`'"]+/.exec(line.slice(j));
       if (!target) return null;
-      redirects?.push({ target: target[0], write: ch === ">" });
+      redirects?.push({ target: target[0], write: ch === ">", text: line.slice(i, j + target[0].length) });
       i = j + target[0].length - 1;
     } else if (dialect === "bash" && ch === "\\") {
       if (line[i + 1] === "\n") i++;
@@ -3498,7 +3498,10 @@ function accountLine(line, dialect, depth = 0) {
   if (!commands) {
     if (dialect === "bash" && line.includes("<<")) return dataHeredoc(line);
     const span = /\$\([^()]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`/.exec(line)?.[0];
-    return notReadAt("a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)", span ?? null, span ? "its value written out in single quotes, not a variable or substitution" : null);
+    // A substitution that holds the install itself: the command inside it, run on its own.
+    const inner = span && /^(?:\$\(|`)/.test(span) ? span.replace(/^\$\(|^`|\)$|`$/g, "") : "";
+    const form = inner && detectsInstall(inner) ? "the command inside it, run as a command of its own" : "its value written out in single quotes, not a variable or substitution";
+    return notReadAt("a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)", span ?? null, span ? form : null);
   }
   // A PowerShell command with a comma or --%: each of its two readings is accounted for.
   for (const { text, readings } of dropped) {
@@ -3532,7 +3535,7 @@ function accountLine(line, dialect, depth = 0) {
         const setting = dataSetting ? settingPart(commands, k) : null;
         const pipe = !safeAfter[k] ? unsafeStage(commands, links, k) : null;
         const write = writesManifest ? redirects.find((r) => r.write && manifestFile(r.target)) : null;
-        accountToken = setting ? { token: setting, form: null } : pipe ? { token: `| ${pipe}`, form: null } : write ? { token: `> ${write.target}`, form: null } : accountToken;
+        accountToken = setting ? { token: setting, form: null } : pipe ? { token: `| ${pipe}`, form: null } : write ? { token: write.text ?? `> ${write.target}`, form: null } : accountToken;
       }
       return why;
     }
@@ -3632,7 +3635,7 @@ function dataHeredoc(line) {
   stripped += rest;
   const commands = quietly(() => simpleCommands(stripped, "bash", null, null, MAX_ACCOUNT_CHARS));
   if (!commands) return "a command line this hook cannot take apart";
-  for (const words of commands) if (!dataCommand(words)) return "a heredoc fed to a command that is not a plain data command";
+  for (const words of commands) if (!sinkCommand(words)) return "a heredoc fed to a command that is not a plain data command";
   return null;
 }
 
@@ -3651,8 +3654,10 @@ const GREP_SPEC = {
   long: ["--recursive", "--dereference-recursive", "--line-number", "--ignore-case", "--no-ignore-case", "--files-with-matches", "--files-without-match", "--count", "--invert-match", "--word-regexp", "--line-regexp", "--extended-regexp", "--fixed-strings", "--perl-regexp", "--basic-regexp", "--only-matching", "--no-filename", "--with-filename", "--no-messages", "--quiet", "--silent", "--null", "--text", "--null-data", "--byte-offset", "--initial-tab", "--line-buffered", "--color", "--colour"],
   longValue: ["--include", "--exclude", "--exclude-dir", "--exclude-from", "--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context", "--color", "--colour", "--binary-files", "--devices", "--directories", "--label"],
 };
+/** Set-Content / Add-Content parameters (no -Stream: an alternate stream of any file is no text file). */
+const PS_WRITER = { "-path": 1, "-literalpath": 1, "-value": 1, "-encoding": 1, "-nonewline": 0, "-force": 0, "-passthru": 0, "-asbytestream": 0, "-whatif": 0, "-confirm": 0 };
 const DATA_SPECS = {
-  echo: { short: "neE" },
+  echo: { any: true },
   printf: { shortValue: "v" },
   cat: { short: "nbsAETuvet", long: ["--number", "--number-nonblank", "--squeeze-blank", "--show-all", "--show-ends", "--show-tabs", "--show-nonprinting"] },
   grep: GREP_SPEC,
@@ -3666,6 +3671,9 @@ const DATA_SPECS = {
     longValue: ["--glob", "--iglob", "--type", "--type-not", "--regexp", "--max-count", "--max-depth", "--context", "--after-context", "--before-context", "--color", "--max-filesize", "--sort", "--sortr"],
   },
   "write-output": { ps: { "-noenumerate": 0, "-inputobject": 1 } },
+  // Round 13: PowerShell's writers of text into a file (the file no manifest or lockfile: psFile).
+  "set-content": { ps: PS_WRITER, psFile: true },
+  "add-content": { ps: PS_WRITER, psFile: true },
   "write-host": { ps: { "-nonewline": 0, "-foregroundcolor": 1, "-backgroundcolor": 1, "-separator": 1, "-object": 1 } },
   "select-string": { ps: { "-pattern": 1, "-path": 1, "-literalpath": 1, "-simplematch": 0, "-casesensitive": 0, "-context": 1, "-notmatch": 0, "-allmatches": 0, "-quiet": 0, "-list": 0, "-raw": 0, "-encoding": 1, "-include": 1, "-exclude": 1, "-inputobject": 1 } },
   findstr: { slash: true },
@@ -3687,6 +3695,9 @@ const SINK_SPECS = {
   more: {},
   tee: { short: "ai", long: ["--append", "--ignore-interrupts"], fileOperands: true },
   "out-null": { ps: {} },
+  "out-file": { ps: { "-filepath": 1, "-literalpath": 1, "-path": 1, "-encoding": 1, "-append": 0, "-force": 0, "-noclobber": 0, "-nonewline": 0, "-width": 1, "-inputobject": 1, "-whatif": 0, "-confirm": 0 }, psFile: true },
+  "set-content": { ps: PS_WRITER, psFile: true },
+  "add-content": { ps: PS_WRITER, psFile: true },
   "select-object": { ps: { "-first": 1, "-last": 1, "-skip": 1, "-property": 1, "-expandproperty": 1, "-unique": 0, "-index": 1 } },
   "measure-object": { ps: { "-line": 0, "-word": 0, "-character": 0, "-property": 1, "-sum": 0, "-average": 0, "-maximum": 0, "-minimum": 0 } },
   clip: {},
@@ -3702,13 +3713,22 @@ const manifestFile = (target) => manifestKind(String(target)) !== null || LOCKFI
 
 /** Whether `args` hold only options `spec` lists (and, with `fileOperands`, no operand naming a manifest or lockfile). */
 function optionsAllowed(args, spec) {
+  if (spec.any) return true;
+  let positionalSeen = false;
   for (let i = 0; i < args.length; i++) {
     tick();
     const a = args[i];
     if (spec.ps) {
-      if (!a.startsWith("-") || a === "-") continue;
+      // A word with a blank in it is a quoted value (`'- pip install x'`): no parameter name has one.
+      if (!a.startsWith("-") || a === "-" || /\s/.test(a)) {
+        // psFile: the first word that is no parameter's value is the file (Set-Content <path> <value>).
+        if (spec.psFile && !positionalSeen && manifestFile(a)) return false;
+        positionalSeen = true;
+        continue;
+      }
       const name = a.toLowerCase().replace(/:.*$/, "");
       if (!(name in spec.ps)) return false;
+      if (spec.psFile && ["-path", "-literalpath", "-filepath"].includes(name) && manifestFile(a.includes(":") ? a.slice(a.indexOf(":") + 1) : (args[i + 1] ?? ""))) return false;
       if (spec.ps[name] === 1 && !a.includes(":")) i++;
       continue;
     }
@@ -3760,7 +3780,6 @@ const GIT_SPECS = {
   grep: { short: "nilwvcEFPhHIqz", shortValue: "efABC", digits: true, long: ["--cached", "--untracked", "--no-index", "--line-number", "--ignore-case", "--word-regexp", "--invert-match", "--count", "--extended-regexp", "--fixed-strings", "--perl-regexp", "--files-with-matches", "--name-only", "--full-name", "--heading", "--break", "--all-match", "--recurse-submodules"], longValue: ["--max-depth", "--context", "--after-context", "--before-context"] },
   tag: { short: "almndfsv", shortValue: "mFu", long: ["--list", "--annotate", "--delete", "--force", "--sign"], longValue: ["--message", "--file", "--sort", "--contains"] },
 };
-/** Settings that make git run a command of their own: an editor, a pager, any GIT_* variable. */
 /**
  * Round 13 (eleventh independent check, S12): settings known to be inert for a data program. Any
  * other setting for it in the call (a prefix, an export, `$env:` / Set-Item env:) can make it run a
@@ -3773,8 +3792,8 @@ const settingName = (w) => w.slice(0, w.indexOf("="));
 const GH_SPEC = {
   short: "dwf",
   shortValue: "tbFBHlamrRLSq",
-  long: ["--draft", "--web", "--fill", "--fill-first", "--fill-verbose", "--no-maintainer-edit", "--dry-run"],
-  longValue: ["--title", "--body", "--body-file", "--base", "--head", "--label", "--assignee", "--reviewer", "--milestone", "--repo", "--project", "--json", "--jq", "--template", "--state", "--limit", "--search", "--author", "--add-label", "--remove-label", "--comments", "--reason"],
+  long: ["--draft", "--web", "--fill", "--fill-first", "--fill-verbose", "--no-maintainer-edit", "--dry-run", "--prerelease", "--latest", "--generate-notes", "--verify-tag", "--approve", "--comment", "--request-changes", "--edit-last", "--create-if-none"],
+  longValue: ["--title", "--body", "--body-file", "--notes", "--notes-file", "--notes-start-tag", "--target", "--discussion-category", "--tag", "--base", "--head", "--label", "--assignee", "--reviewer", "--milestone", "--repo", "--project", "--json", "--jq", "--template", "--state", "--limit", "--search", "--author", "--add-label", "--remove-label", "--comments", "--reason"],
 };
 
 /**
@@ -3788,10 +3807,13 @@ function dataCommand(words) {
   if (start >= words.length) return true;
   // A setting before it that is not on the inert list: no data program.
   if (words.slice(0, start).some((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !INERT_SETTING.test(settingName(w)))) return false;
+  // Round 13: a first word with a blank in it and no path is a quoted string: PowerShell's value
+  // (`'npm install x' | Out-File notes.txt`), and in bash no program at all.
+  if (/\s/.test(words[start]) && !/[\\/]/.test(words[start])) return words.length === start + 1;
   const program = programName(words[start]);
   const args = words.slice(start + 1);
   if (program === "git") {
-    // An editor, pager or GIT_* setting before it runs a command of its own (`GIT_EDITOR='npm i x' git commit -a`).
+    // git's own options before the command: -C <dir>, --no-pager; any other (`-c core.pager=...`) is no data program.
     let i = 0;
     while (i < args.length && args[i].startsWith("-")) {
       if (args[i] === "-C") i += 2;
