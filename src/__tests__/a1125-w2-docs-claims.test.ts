@@ -369,6 +369,12 @@ describe("what_should_i_know after confirmation round 12: the wordings the docs 
     expect(next).toContain("the answer is never `safe_to_delegate`");
     expect(readme).toContain("the answer is never `safe_to_delegate`");
   });
+  it("round 12b: a refused entry holds review_needed; a requirements file not read whole offers nothing; include-group is no entry", () => {
+    expect(next).toContain("a refused entry holds the level at `review_needed` at least");
+    expect(next).toContain("A requirements file the briefing says it did not read whole offers none of its entries");
+    expect(next).toContain('or a PEP 735 `{include-group = "cli"}` entry');
+    expect(next).toContain("A word you put in `not_packages` keeps `what_should_i_know` at `review_needed` when a package manager's name");
+  });
   it("the near-miss cap wording in the code (a safeguard; not quoted in the docs)", () => {
     expect(wsik).toContain("than one call checks for near-miss names (${WORD_SCAN_CAP})");
   });
