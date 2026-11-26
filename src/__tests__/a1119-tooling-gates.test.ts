@@ -86,8 +86,11 @@ describe("the workflows as they are", () => {
   });
 
   it("ci.yml: only the upstream schema file itself passes the current-main contract step", () => {
-    const checks = jobBlock(ci, "checks") as string;
-    const step = checks.slice(checks.indexOf("App-schema contract (the desktop app's current main)"));
+    // Its own job since the vendored review sets made one contract run about ten minutes long.
+    const job = jobBlock(ci, "contract-upstream") as string;
+    expect(job).toContain("App-schema contract (the desktop app's current main)");
+    expect(jobBlock(ci, "checks") as string).toContain("App-schema contract (vendored contract/app-schema.sql)");
+    const step = job.slice(job.indexOf("App-schema contract (the desktop app's current main)"));
     expect(step).toContain('[ "$code" = "200" ] ||');
     expect(step).not.toMatch(/exit 0/);
     expect(step).not.toMatch(/"404"/);
