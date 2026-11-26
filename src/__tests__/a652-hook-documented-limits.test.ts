@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * The guard hook's limits that 6.5.2's changelog lists under "Known limits", held as they are.
+ * The guard hook's limits that the 6.6.0 changelog's 6.5.2 draft listed under "Known limits", held as they are now (most are read or held since; the rows say which).
  *
  * An independent check of the 6.5.1 hook (2026-11-25) found six spellings that go ahead unread
  * while the plain spelling beside each is held. They are documented, not fixed: a fix for one of
