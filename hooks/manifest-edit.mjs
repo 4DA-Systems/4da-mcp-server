@@ -2055,7 +2055,7 @@ function commandStart(words) {
  * registry or index, a git or path source: the package is not the public one this hook can name).
  * `values`: options that take the next word as their value.
  */
-function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = false }) {
+function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = false, clusters = true }) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -2077,7 +2077,22 @@ function operands(args, { values = new Set(), refuse = new Set(), npmRegistry = 
         continue;
       }
       if (refuse.has(flag) || flag.startsWith("--@")) return null;
-      if (!a.includes("=") && values.has(flag)) i++;
+      if (!a.includes("=") && values.has(flag)) {
+        i++;
+        continue;
+      }
+      // One-letter options run together (`-Ur req.txt`, `-qr req.txt`, `-qi URL`): the first that
+      // takes a value takes the rest of the word, or the next word when it ends the cluster.
+      if (clusters && /^-[A-Za-z0-9]{2,}$/.test(a)) {
+        for (let k = 1; k < a.length; k++) {
+          const opt = `-${a[k]}`;
+          if (!values.has(opt) && !refuse.has(opt)) continue;
+          const glued = k + 1 < a.length;
+          if (refuse.has(opt) && !publicSource(opt, glued ? a.slice(k + 1) : args[i + 1])) return null;
+          if (!glued) i++;
+          break;
+        }
+      }
       continue;
     }
     out.push(a);
@@ -2123,13 +2138,13 @@ const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9._~][a-z0-9._~-]*)@(.+)$
 const LATEST = "latest";
 /** An npm package name standing alone (`lodash`, `@types/node`): no path, tarball, URL or `user/repo`. */
 const npmBareName = (w) =>
-  w.length <= 214 && /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i.test(w) && /[a-z]/i.test(w) && !/\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip)$/i.test(w);
+  w.length <= 214 && /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i.test(w) && /[a-z]/i.test(w) && !/\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|txt|json|lock|ya?ml|toml|md|cfg|ini)$/i.test(w);
 /** A dist-tag (`next`, `beta`, `canary`): a word that is no version, range or wildcard. */
 const isDistTag = (raw) => raw.length <= 100 && /^[A-Za-z][A-Za-z0-9._-]*$/.test(raw) && !/^[vV]\d/.test(raw) && !/^[xX](?:$|\.)/.test(raw);
 /** A PyPI requirement that is a name alone (`requests`, `requests[socks]`): no specifier, path, archive or URL. */
 function pyBareName(w) {
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?$/.exec(w);
-  return m && /[A-Za-z]/.test(m[1]) && !/\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar|egg)$/i.test(m[1]) ? m[1] : null;
+  return m && /[A-Za-z]/.test(m[1]) && !/\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar|egg|txt|in|cfg|toml|lock|json|ya?ml|ini|md)$/i.test(m[1]) ? m[1] : null;
 }
 /** A PyPI install operand: its requirement, or the name alone as the request "latest". */
 function pyOperand(w) {
@@ -2736,7 +2751,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     });
   }
   if (program === "go") {
-    const all = operands(args, { values: GO_VALUES });
+    const all = operands(args, { values: GO_VALUES, clusters: false });
     // `go work edit -replace=a=b@v` replaces a module for the whole workspace, as go.mod's does.
     if (all && (all[0] === "mod" || all[0] === "work") && all[1] === "edit") return goModEdit(args);
     if (!all || all[0] !== "get") return [];
