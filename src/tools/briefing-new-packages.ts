@@ -76,6 +76,8 @@ import { checkNameOnly, type NameOnlyAnswer } from "./briefing-task-name-check.j
 export interface NewPackage {
   name: string;
   ecosystem: CheckEcosystem;
+  /** Sent for a declaration (round 7, C6): the item dependency_check would get, `to` exactly as declared or written. */
+  declared?: true;
   /** The version or range the task writes for it ("axios 0.21.0", `debug@4.4.2`): checked at that, not at `latest`. */
   version?: string;
   /** The task writes a version for it that is no version, range or tag (`zustand@<uuid>`): never read as latest. */
@@ -1089,7 +1091,7 @@ function nearMissName(name: string, ecosystem: CheckEcosystem): string | null {
   return null;
 }
 
-function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, versionUnread: _versionUnread, ...pkg }: NewPackage, why: string): NewPackageFinding {
+function unchecked({ alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, versionUnread: _versionUnread, declared: _declared, ...pkg }: NewPackage, why: string): NewPackageFinding {
   return {
     ...pkg,
     verdict: "unknown",
@@ -1134,7 +1136,7 @@ function badness(f: NewPackageFinding): number {
  * `ctx` is malware (PYSEC-2022-199; black-box audit of 60c9edc, 2026-11-14). The other
  * ecosystems' answers are listed in `also_checked`.
  */
-export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string }>) => void): Promise<NewPackageFinding[]> {
+export async function checkNewPackages(liveIntel: NameCheckLive | null, packages: NewPackage[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string; declared?: boolean }>) => void): Promise<NewPackageFinding[]> {
   if (packages.length === 0) return [];
   if (!liveIntel || !liveIntel.isEnabled()) return packages.map((p) => unchecked(p, "live lookups are disabled"));
   if (!liveIntel.getReleaseSources || !liveIntel.getFixPathSources || !liveIntel.queryAdvisories) {
@@ -1163,12 +1165,14 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
     inBudget(
       executeDependencyCheck(
         null,
-        { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: p.version ? (checkableSpec(p.ecosystem, p.version) ?? p.version) : "latest" })) },
+        // A declared item goes exactly as dependency_check would get it (round 7, C6); the briefing's own in the form
+        // dependency_check reads for that ecosystem (checkableSpec).
+        { items: list.map((p) => ({ ecosystem: p.ecosystem, package: p.name, to: p.declared ? (p.version ?? "latest") : p.version ? (checkableSpec(p.ecosystem, p.version) ?? p.version) : "latest" })) },
         liveIntel as LiveIntelligence,
         now ? { now } : {},
       ).then((answer) => {
         // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
-        onAnswer?.(answer.results as readonly CheckedItem[], list.map((p) => ({ ecosystem: p.ecosystem, name: p.name, to: p.version ?? "latest" })));
+        onAnswer?.(answer.results as readonly CheckedItem[], list.map((p) => ({ ecosystem: p.ecosystem, name: p.name, to: p.version ?? "latest", ...(p.declared ? { declared: true } : {}) })));
         return answer;
       }),
     );
@@ -1183,7 +1187,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
-    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, versionUnread: _versionUnread, ...p } = pkg;
+    const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, versionUnread: _versionUnread, declared: _declared, ...p } = pkg;
     if (!r) return unchecked(p, "the lookups did not finish in time");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
@@ -1215,8 +1219,8 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
   // "add lodash-es 1.2.3 - 1.4.0 and ctx" lost ctx's malware to PyPI's refusal (round 10, W3).
   const items = packages.flatMap((p, i) =>
     [p.ecosystem, ...(p.alternatives ?? [])]
-      .filter((ecosystem) => !p.version || checkableSpec(ecosystem, p.version) !== null)
-      .map((ecosystem) => ({ i, q: { name: p.name, ecosystem, ...(p.version ? { version: p.version } : {}) } as NewPackage })),
+      .filter((ecosystem) => p.declared || !p.version || checkableSpec(ecosystem, p.version) !== null)
+      .map((ecosystem) => ({ i, q: { name: p.name, ecosystem, ...(p.version ? { version: p.version } : {}), ...(p.declared ? { declared: true as const } : {}) } as NewPackage })),
   );
   // A loose word ("use blueprints") is checked by its name alone, one advisory-list read: the full
   // run also judged its newest release, a second OSV.dev lookup of the name whose answer is dropped

@@ -125,11 +125,14 @@ describe("E2: what the task's own command takes from elsewhere is never looked u
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
-  it("the public registry or index named explicitly is still the public package", async () => {
-    await brief("npm install --registry https://registry.npmjs.org lodash");
-    expect(looked("lodash").length).toBeGreaterThan(0);
+  // Round 7, C3: a registry or index option anywhere in the task is the evidence, whichever it names: no name the task
+  // adds is looked up by the briefing (dependency_check checks the public one when asked).
+  it("a registry or index named in the task, the public one included, holds every name the task adds", async () => {
+    const r = await brief("npm install --registry https://registry.npmjs.org lodash");
+    expect(looked("lodash")).toEqual([]);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     await brief("pip install -i https://pypi.org/simple requests");
-    expect(looked("requests").length).toBeGreaterThan(0);
+    expect(looked("requests")).toEqual([]);
   });
 
   it("an option's value is never a package, and the operands after it are still read", async () => {
@@ -141,7 +144,8 @@ describe("E2: what the task's own command takes from elsewhere is never looked u
   it("a private command does not hide the next clause's popular package, and its own package is never listed (final design)", async () => {
     const r = await brief("npm install --registry https://npm.zqxcorp.internal zqx-cli-tool; then add express");
     expect(leaked(/zqx/i)).toEqual([]);
-    expect(looked("express").length).toBeGreaterThan(0);
+    // Round 7, C3: the source word holds the next clause's name too (it is said, not looked up).
+    expect(looked("express")).toEqual([]);
     expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/zqx/);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });

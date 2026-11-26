@@ -91,10 +91,12 @@ describe("any word that starts with - is an option, and its value is never a nam
     expect(sent().some((s) => /zqxa\d/.test(s))).toBe(false);
   });
 
-  it("cargo add hyper --vers 0.14.9 and --vers=0.14.9: still the version of hyper", async () => {
+  // Round 7, C1: Cargo's --vers is not on cargo's list: the command is not read whole, and the version is never a name.
+  it("cargo add hyper --vers 0.14.9 and --vers=0.14.9: not read whole, 0.14.9 never a name", async () => {
     for (const task of ["cargo add hyper --vers 0.14.9", "cargo add hyper --vers=0.14.9"]) {
       const r = await brief(task);
-      expect(waitingWords(r)).toEqual([{ word: "hyper", read_as: "crates.io", version: "0.14.9" }]);
+      expect(JSON.stringify(waitingWords(r) ?? [])).not.toContain("0.14.9");
+      expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     }
   });
 });
@@ -115,7 +117,9 @@ describe("a setting-named key with a version-shaped value is read as a package (
   ])("%s", async (task, key, value) => {
     // Sixth blind check of the 2026-11-25 fixes, item 2: a version as its value makes a key a package.
     const r = await brief(task);
-    expect(waitingWords(r)).toContainEqual(expect.objectContaining({ word: key, version: value }));
+    // Round 7, C7: the entry carries no version (the value is never repeated in to_confirm).
+    expect(waitingWords(r)).toContainEqual(expect.objectContaining({ word: key }));
+    expect(JSON.stringify(waitingWords(r))).not.toContain(value);
     expect(sent().some((s) => s.includes(value))).toBe(false);
   });
 });

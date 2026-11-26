@@ -25,11 +25,6 @@ import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
 import { waitingWords } from "./helpers/a1127-task-packages.js";
 
-/** The dependency_check call an agent makes for the unverified words (fourth blind check: the answer itself holds no arguments). */
-const follow = (r: unknown) => ({
-  items: (waitingWords(r) ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: w.version ?? "latest" })),
-});
-
 const NPM = [dep("lodash", "4.17.20"), dep("react", "18.2.0")];
 const RUST = [dep("tokio", "1.40.0", "crates.io")];
 
@@ -223,9 +218,10 @@ describe("3. Cargo's `=` pin is kept when the briefing asks dependency_check", (
     // Final design of the 2026-11-25 fixes: neither crate is on a bundled list, so the briefing hands both back,
     // each at the pin the task writes (Cargo's `=` kept), and dependency_check judges them there.
     const r = await brief(task, RUST);
-    expect(waitingWords(r)).toContainEqual({ word: "smallvec", read_as: "crates.io", version: "=1.6.0" });
+    // Round 7, C7: no version in the entry; the agent asks dependency_check at the pin the task writes.
+    expect(waitingWords(r)).toContainEqual({ word: "smallvec", read_as: "crates.io" });
     expect(r.delegation_assessment.level).toBe("confirmation_needed");
-    const check = (await executeDependencyCheck(null, follow(r), stubIntel(RUST, {}, readyScan()) as never)) as { results: Array<{ package: string; verdict: string; to: string; reason: string }> };
+    const check = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "smallvec", to: "=1.6.0" }] }, stubIntel(RUST, {}, readyScan()) as never)) as { results: Array<{ package: string; verdict: string; to: string; reason: string }> };
     const smallvec = check.results.find((v) => v.package === "smallvec");
     expect(smallvec).toMatchObject({ verdict: "avoid", to: "1.6.0" });
     expect(smallvec?.reason).not.toMatch(/1\.16\.5|\^1\.6\.0/);

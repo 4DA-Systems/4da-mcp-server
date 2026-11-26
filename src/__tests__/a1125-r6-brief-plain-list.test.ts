@@ -55,9 +55,10 @@ function callable(r: unknown): string[] {
 
 describe("every name not looked up is a plain unverified word", () => {
   it.each([
-    ["cargo add tokio@1.8.0", { word: "tokio", read_as: "crates.io", version: "1.8.0" }],
-    ['Add "next-auth": "4.10.2" to package.json', { word: "next-auth", read_as: "npm", version: "4.10.2" }],
-    ["go get golang.org/x/net@v0.7.0", { word: "golang.org/x/net", read_as: "Go", version: "v0.7.0" }],
+    // Round 7, C7: an entry carries a name and an ecosystem, never a version taken from the task.
+    ["cargo add tokio@1.8.0", { word: "tokio", read_as: "crates.io" }],
+    ['Add "next-auth": "4.10.2" to package.json', { word: "next-auth", read_as: "npm" }],
+    ["go get golang.org/x/net@v0.7.0", { word: "golang.org/x/net", read_as: "Go" }],
     ["npm install qzpkg", { word: "qzpkg", read_as: "npm" }],
     ["pip install qzpkg==1.0", { word: "qzpkg", read_as: "PyPI" }],
     ["add qzpkg as the router", { word: "qzpkg", read_as: "npm" }],
@@ -75,10 +76,9 @@ describe("every name not looked up is a plain unverified word", () => {
     expect(r.summary).not.toMatch(/check_these/);
   });
 
-  it("the version is as the task writes it, and omitted when it cannot be read", async () => {
+  it("no entry carries a version (round 7, C7), and a credential-shaped one is never repeated", async () => {
     const r = await brief("pip install qzpkg~=1.4 and npm install qzweb@75ebbd2c-2be9-4afe-b207-eab4e7dc3c3b");
-    const words = Object.fromEntries((waitingWords(r) ?? []).map((w: { word: string }) => [w.word, w]));
-    expect(words.qzpkg).toMatchObject({ read_as: "PyPI", version: "~=1.4" });
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/~=1\.4|"version"/);
     expect(JSON.stringify({ ...r, task: undefined })).not.toContain("75ebbd2c");
   });
 
@@ -103,7 +103,7 @@ describe("every name not looked up is a plain unverified word", () => {
 
   it("paths, option values and other managers' non-names are never listed", async () => {
     const r = await brief("npm install ../qz-local @qz/ok qz.ok_2 --prefix ./qz-prefix zod; go get qznohost/path");
-    expect(JSON.stringify(waitingWords(r))).not.toMatch(/qz-local|qz-prefix|qznohost/);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/qz-local|qz-prefix|qznohost/);
   });
 });
 

@@ -24,23 +24,20 @@ async function brief(task: string): Promise<Record<string, any>> {
   return (await executeWhatShouldIKnow(null, { task, project_path: h.dir }, await h.live())) as Record<string, any>;
 }
 
+// Round 7 (C1/C2): commands are read by the canonical grammar. A command with an option not on its manager's list
+// (`--network-timeout`, Cargo's `--vers`), or an operand that is no plain name with a readable spec (a dist-tag, a
+// hash, a UUID) is NOT READ WHOLE: nothing of it is offered or repeated, and the level is at most review_needed.
 describe("the command reader", () => {
-  it("an option's value is never a package", async () => {
-    const r = await brief("yarn add qzws@7.4.5 --network-timeout 100000");
-    expect(waitingWords(r)).toEqual([{ word: "qzws", read_as: "npm", version: "7.4.5" }]);
-    expect(JSON.stringify(r)).not.toMatch(/"(?:word|package)":"network-timeout"/);
-  });
-
-  it.each(["cargo add hyper --vers 0.14.9", "cargo add hyper --version 0.14.9", "cargo add hyper --vers=0.14.9"])("%s: the version of hyper", async (task) => {
-    const r = await brief(task);
-    expect(waitingWords(r)).toEqual([{ word: "hyper", read_as: "crates.io", version: "0.14.9" }]);
-  });
-
-  it("an npm dist-tag is kept as written", async () => {
-    const r = await brief("npm install qzstand@next");
-    // Round 4, V4: to_confirm never offers what the declaration check refuses: the tag is named in a hint.
-    expect(waitingWords(r)).toEqual([{ word: "qzstand", read_as: "npm", hint: "the task writes the tag next: name the version" }]);
-  });
+  it.each(["yarn add qzws@7.4.5 --network-timeout 100000", "cargo add hyper --vers 0.14.9", "cargo add hyper --version 0.14.9", "cargo add hyper --vers=0.14.9", "npm install qzstand@next"])(
+    "%s: not read whole, nothing offered, never safe",
+    async (task) => {
+      const r = await brief(task);
+      expect(waitingWords(r)).toBeUndefined();
+      expect(JSON.stringify(r)).not.toMatch(/"(?:word|package|name)":"network-timeout"/);
+      expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+      expect(r.delegation_assessment.reason).toMatch(/could not read whole/);
+    },
+  );
 
   it("npm install qzstand@<uuid>: the word is a credential shape: held, redacted, never listed at latest", async () => {
     const r = await brief("npm install qzstand@98e62aac-d9e2-44a1-946d-1fbf082c44aa");
@@ -48,13 +45,10 @@ describe("the command reader", () => {
     expect(JSON.stringify(notReadWords(r))).toMatch(/qzst... .*credential/);
   });
 
-  it.each(["npm install qzstand@9d962429c6eeafce", "npm install zustand@9d962429c6eeafce"])(
-    "%s: listed with no version, never as latest",
-    async (task) => {
-      const r = await brief(task);
-      const name = task.split(" ")[2].split("@")[0];
-      expect(waitingWords(r)).toEqual([{ word: name, read_as: "npm" }]);
-      expect(JSON.stringify(r)).not.toMatch(/"to":"latest"/);
-    },
-  );
+  it.each(["npm install qzstand@9d962429c6eeafce", "npm install zustand@9d962429c6eeafce"])("%s: never listed, never as latest", async (task) => {
+    const r = await brief(task);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toContain("9d962429c6eeafce");
+    expect(JSON.stringify(r)).not.toMatch(/"to":"latest"/);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+  });
 });

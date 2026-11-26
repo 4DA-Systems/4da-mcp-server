@@ -43,6 +43,8 @@ import { executeDependencyCheck } from "./dependency-check.js";
 export interface RequestedVersion {
   name: string;
   ecosystem: CheckEcosystem;
+  /** Sent for a declaration (round 7, C6): the item dependency_check would get, `to` exactly as declared or written. */
+  declared?: true;
   /** The version or constraint the task names, as written. */
   to: string;
   /** The installed version, when the project has exactly one copy of it. */
@@ -667,9 +669,9 @@ function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): Task
  * dependency_check's verdict for each named version, within the briefing's budget. Offline or past
  * the budget a version is `unknown`: never read as safe.
  */
-export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string }>) => void): Promise<RequestedVersionFinding[]> {
+export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string; declared?: boolean }>) => void): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
-  const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
+  const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, declared: _d, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
     verdict: "unknown",
     resolved: null,
@@ -689,12 +691,12 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
         executeDependencyCheck(
           null,
           // In the form dependency_check reads for that ecosystem (briefing-names.ts checkableSpec; round 10, W3).
-          { items: list.map((x) => ({ ecosystem: x.ecosystem, package: x.name, to: checkableSpec(x.ecosystem, x.to) ?? x.to, ...(x.from ? { from: x.from } : {}) })) },
+          { items: list.map((x) => ({ ecosystem: x.ecosystem, package: x.name, to: x.declared ? x.to : (checkableSpec(x.ecosystem, x.to) ?? x.to), ...(x.from ? { from: x.from } : {}) })) },
           liveIntel as LiveIntelligence,
           now ? { now } : {},
         ).then((answer) => {
           // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
-          onAnswer?.(answer.results as readonly CheckedItem[], list.map((x) => ({ ecosystem: x.ecosystem, name: x.name, to: x.to })));
+          onAnswer?.(answer.results as readonly CheckedItem[], list.map((x) => ({ ecosystem: x.ecosystem, name: x.name, to: x.to, ...(x.declared ? { declared: true } : {}) })));
           return answer;
         }),
         new Promise<null>((resolve) => {
@@ -720,7 +722,7 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
   };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (r: RequestedVersion, item: Answer["results"][number] | undefined): RequestedVersionFinding => {
-    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...own } = r;
+    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, declared: _declared, ...own } = r;
     if (!item) return unknown(own, "the lookups did not finish in time");
     const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
     const rc = item.range_check;

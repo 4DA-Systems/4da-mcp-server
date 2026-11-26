@@ -481,9 +481,10 @@ describe("a name the task gives no ecosystem for is checked in every ecosystem t
     const r = await executeWhatShouldIKnow(db, { packages: [], task }, intel(READY_SCAN, { getResolvedDeps: () => MIXED }));
     expect(askedFor("ctx", ecosystem === "npm" ? "PyPI" : "npm")).toBe(false);
     if (ecosystem === "npm") {
-      // npm's ctx is on no bundled list: handed back for npm only, never asked on PyPI.
+      // npm's ctx is on no bundled list: handed back, never asked on PyPI. Round 7 (K2): a command's operand is the
+      // npm pair; a name the sentence only ties to package.json is a prose candidate, offered in every project ecosystem.
       expect(r.new_packages).toBeUndefined();
-      expect(waitingWords(r)).toEqual([{ word: "ctx", read_as: "npm" }]);
+      expect(waitingWords(r)).toEqual([{ word: "ctx", read_as: task.includes("package.json") ? "npm or PyPI" : "npm" }]);
       expect(r.delegation_assessment.level).toBe("confirmation_needed");
     } else {
       expect(r.new_packages).toHaveLength(1);

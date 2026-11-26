@@ -143,7 +143,10 @@ afterEach(() => {
   }
 });
 
-const NEVER_SAFE = (c: Case) => c.set === "nR" || c.set === "nK" || (c.set === "nT" && c.id !== "t04");
+// Round 7, C4: a declared entry is checked at the version it declares (the level rests on the declaration, K1): v02,
+// v11 and v18 declare a clean version beside the vulnerable one the task writes, so they end at what was declared.
+const DECLARED_OVER = new Set(["v02", "v11", "v18"]);
+const NEVER_SAFE = (c: Case) => c.set === "nR" || c.set === "nK" || (c.set === "nT" && c.id !== "t04" && !DECLARED_OVER.has(c.id));
 
 describe("review-confirm2 cases hold the invariants", () => {
   it.each(CASES.map((c) => [`${c.set}/${c.id}: ${c.note ?? ""}`, c] as const))("%s", async (_label, c) => {

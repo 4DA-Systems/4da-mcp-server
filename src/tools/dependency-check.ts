@@ -514,9 +514,10 @@ export function validateItem(r: unknown, i: number): Requested {
   if (!ecosystem) throw new Error(`${where}.ecosystem must be one of ${ECOSYSTEMS.map((e) => `"${e}"`).join(", ")}`);
   if (typeof o.package !== "string" || !o.package.trim()) throw new Error(`${where}.package must be a non-empty string`);
   const notes: string[] = [];
-  // Cargo ignores build metadata (`1.0.0+build`) when it resolves: it is dropped before any lookup,
-  // so it never reaches crates.io or OSV.dev, and the answer says so.
-  const cargoBuild = (v: string) => (ecosystem === "crates.io" ? v.replace(CARGO_BUILD_METADATA, "$1") : v);
+  // Build metadata (`1.0.0+build`, Cargo and npm ignore it when they order versions) and a PEP 440 local label
+  // (`1.0.0+corp.5`, never on the public index) can name a private build: dropped before any lookup, so they never
+  // reach a registry or OSV.dev, and the answer says so. Go's `+incompatible` is part of a public version: kept.
+  const cargoBuild = (v: string) => (ecosystem === "Go" ? v : v.replace(CARGO_BUILD_METADATA, "$1"));
   const givenTo = typeof o.to === "string" ? o.to.trim() : "";
   // Round 6b, item 6: a version label shaped like a credential is refused before anything reads it: not sent, not
   // recorded, never repeated (the briefing's declarations apply the same screen).
@@ -524,7 +525,10 @@ export function validateItem(r: unknown, i: number): Requested {
     throw new SecretVersionError(`${where}.${versionLooksSecret(givenTo) ? "to" : "from"} looks like a credential (a secret in a version label): it was not sent or recorded; write the version without it`);
   }
   const rawTo = cargoBuild(givenTo);
-  if (rawTo !== givenTo) notes.push(`Build metadata in ${JSON.stringify(quoteThirdParty(givenTo, 80))} was ignored, as Cargo ignores it when resolving: checked ${rawTo}, and the metadata was not sent.`);
+  if (rawTo !== givenTo) {
+    const why = ecosystem === "crates.io" ? "Build metadata in %s was ignored, as Cargo ignores it when resolving" : ecosystem === "npm" ? "Build metadata in %s was ignored, as npm ignores it when it orders versions" : "The local version label in %s was set aside, as no local build is on the public index";
+    notes.push(`${why.replace("%s", JSON.stringify(quoteThirdParty(givenTo.replace(CARGO_BUILD_METADATA, "$1+..."), 80)))}: checked ${rawTo}, and the ${ecosystem === "PyPI" ? "label" : "metadata"} was not sent.`);
+  }
   // An npm alias (`"my-lodash": "npm:lodash@4.17.20"` in package.json) installs the package it names:
   // that package is the one judged, not the alias, which is no package on the registry.
   const alias = ecosystem === "npm" ? /^npm:((?:@[^/@\s]+\/)?[^@\s]+)(?:@(.+))?$/.exec(rawTo) : null;
@@ -570,7 +574,7 @@ function fieldName(name: string): string {
   return `${shown}${lead && trail ? " (with a leading and a trailing blank)" : lead ? " (with a leading blank)" : trail ? " (with a trailing blank)" : ""}`;
 }
 
-/** A version's build metadata (`+build.5`) after its last digit: Cargo ignores it. Linear: one character class each side. */
+/** A version's build metadata or local label (`+build.5`) after its last digit. Linear: one character class each side. */
 const CARGO_BUILD_METADATA = /(\d)\+[0-9A-Za-z.-]*/g;
 
 const EXAMPLES: Record<CheckEcosystem, string> = {

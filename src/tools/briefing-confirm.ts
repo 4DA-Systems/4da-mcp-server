@@ -98,6 +98,9 @@ export const NEXT_STEP =
 export const SCAN_STILL_READS =
   "A declaration keeps this briefing from looking a name up for the task; it does not change this project's own vulnerability scan, which reads the installed dependencies and sends their names unless the project's configuration marks them private (FOURDA_PRIVATE_PACKAGES, an .npmrc scope or registry, a pip index, GOPRIVATE).";
 
+/** Round 7, C3: why a name the task adds was not looked up when the task names a package source of its own. */
+export const SOURCE_HELD = "not looked up: the task names a package source of its own; if it is on the public registry, check it with dependency_check";
+
 /** The last sentence of every safe_to_delegate reason (contract K1). */
 export const RESTS_ON_DECLARATION = "This rests on your declaration: a package you did not declare was not checked.";
 
@@ -177,15 +180,16 @@ export function readDeclarations(raw: unknown): { entries: DeclaredPackage[]; re
     if (problem) {
       refused.push({ shown: where, reason: `refused: ${problem}; nothing in it was sent` });
       const o = (item ?? {}) as Record<string, unknown>;
-      if (typeof item === "object" && o.public === false && typeof o.name === "string" && o.name.trim() && o.name.length <= MAX_NAME_ARG_LENGTH) forbidOnly.push(goUnescaped(o.name.trim()));
+      // A refused entry that says private (`false`, or the string "false": round 7, C9c) still forbids its name.
+      if (typeof item === "object" && (o.public === false || (typeof o.public === "string" && o.public.trim().toLowerCase() === "false")) && typeof o.name === "string" && o.name.trim() && o.name.length <= MAX_NAME_ARG_LENGTH) forbidOnly.push(goUnescaped(o.name.trim()));
       return;
     }
     const o = item as Record<string, unknown>;
     const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
-    const given = typeof o.version === "string" && o.version.trim() ? o.version.trim() : undefined;
-    // Item 7: a Poetry caret or tilde the reader offers for PyPI goes to the engine as the PEP 440 range it means.
-    const version = given && ecosystem === "PyPI" ? (poetrySpec(given) ?? given) : given;
-    const name = ecosystem === "Go" ? goUnescaped(String(o.name).trim()) : String(o.name).trim();
+    // As declared (round 7, C6): the item dependency_check would get. A Poetry `^` / `~` is refused for PyPI here as
+    // dependency_check refuses it (the smaller change: neither accepts it); a Go `!` path is kept as written.
+    const version = typeof o.version === "string" && o.version.trim() ? o.version.trim() : undefined;
+    const name = String(o.name).trim();
     entries.push({ ecosystem, name, ...(version ? { version } : {}), public: o.public as boolean, at });
   });
   return { entries, refused, forbidOnly };
@@ -239,7 +243,7 @@ function declarationProblem(item: unknown): string | null {
     if (v && versionLooksSecret(v)) return "`version` looks like a credential (it is not recorded either)";
     if (v) {
       try {
-        validateItem({ ecosystem, package: ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim(), to: ecosystem === "PyPI" ? (poetrySpec(v) ?? v) : v }, 0);
+        validateItem({ ecosystem, package: ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim(), to: v }, 0);
       } catch (error) {
         // The refused value is never repeated (round 6b, item 1): dependency_check's message ends "(got <value>)".
         return `\`version\` is refused as dependency_check refuses it: ${(error instanceof Error ? error.message : String(error)).replace(/^items\[0\]\.to /, "").replace(/\s*\(got [\s\S]*\)\s*$/, "")}`;

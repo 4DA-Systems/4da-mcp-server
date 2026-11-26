@@ -414,7 +414,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("the built server, started inside a
     expect(resultText(results[1])).toMatch(/NOT CHECKED/);
     // The 8 KB constraint is refused by its length, immediately, with what was too long.
     expect(results[2].isError).toBe(true);
-    expect(resultText(results[2])).toMatch(/items\[0\]\.to is 8,003 characters long; the limit is 256\. It starts /);
+    expect(resultText(results[2])).toMatch(/items\[0\]\.to is 8,003 characters long; the limit is 256\. Nothing of it was read or sent/);
     expect(resultText(results[2]).length).toBeLessThan(400);
     expect(timings[5].ms).toBeLessThan(5_000);
   }, 240_000);

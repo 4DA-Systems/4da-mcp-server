@@ -20,102 +20,9 @@
  */
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { pushAll } from "../array-utils.js";
-
-const MANAGERS: ReadonlyMap<string, CheckEcosystem> = new Map([
-  ...["npm", "pnpm", "yarn", "bun", "bunx", "npx", "pnpx"].map((m) => [m, "npm"] as const),
-  ...["pip", "pip3", "pipx", "uv", "uvx", "poetry"].map((m) => [m, "PyPI"] as const),
-  ["cargo", "crates.io"] as const,
-  ["go", "Go"] as const,
-  // Deno installs npm packages by their `npm:` specifier; its other operands are files and URLs.
-  ["deno", "npm"] as const,
-]);
-type Family = "js" | "py" | "cargo" | "go";
-const FAMILY: Record<CheckEcosystem, Family> = { npm: "js", PyPI: "py", "crates.io": "cargo", Go: "go" };
-/**
- * Round 6, item 3: options known to take NO value, per family (a short positive list). The word after any other
- * option is that option's value: never an operand, never offered, never repeated.
- */
-const SWITCHES: Record<Family, ReadonlySet<string>> = {
-  js: new Set([
-    "-D", "--save-dev", "-S", "--save", "-P", "--save-prod", "-O", "--save-optional", "--save-peer", "-E", "--save-exact", "-g", "--global", "--no-save",
-    "--legacy-peer-deps", "--strict-peer-deps", "--force", "-f", "--ignore-scripts", "--no-audit", "--no-fund", "--dry-run", "--prefer-offline", "--offline",
-    "--production", "--prod", "--no-package-lock", "-B", "--save-bundle", "-y", "--yes", "-W", "--ignore-workspace-root-check", "--dev", "-d", "--peer",
-    "--optional", "--exact", "-T", "--tilde", "--frozen-lockfile", "--no-frozen-lockfile", "--recursive", "-r", "--latest", "-L", "--silent", "-s", "--quiet",
-    "-q", "--verbose", "--trust", "--interactive", "-i", "--no-optional", "--frozen", "--immutable", "--json", "--ci",
-  ]),
-  py: new Set([
-    "-U", "--upgrade", "--user", "--no-deps", "--pre", "-q", "--quiet", "-v", "--verbose", "--force-reinstall", "--no-cache-dir", "--break-system-packages",
-    "-I", "--ignore-installed", "--no-build-isolation", "--require-hashes", "--no-input", "--isolated", "--dev", "--frozen", "--locked", "--no-sync",
-    "--system", "--compile", "--dry-run", "--prefer-binary", "--all-extras", "--refresh", "--reinstall", "--optional", "--editable-false", "-y", "--yes",
-  ]),
-  cargo: new Set(["--dev", "--build", "--optional", "--no-optional", "--no-default-features", "--locked", "--frozen", "--offline", "--force", "-f", "--dry-run", "-q", "--quiet", "-v", "--verbose", "--all-features", "--debug", "--no-track"]),
-  go: new Set(["-u", "-d", "-t", "-v", "-x", "-insecure"]),
-};
-/** pnpm's and yarn's -w is --workspace-root (no value); npm's -w is --workspace <name>. */
-const WORKSPACE_ROOT = new Set(["pnpm", "yarn", "bun"]);
-const isSwitch = (family: Family, flag: string, manager = "") => SWITCHES[family].has(flag) || (WORKSPACE_ROOT.has(manager) && (flag === "-w" || flag === "--workspace-root"));
-
-/** Options whose value IS a package (the runner's package, uv's `--with`): never a script. */
-const PACKAGE_OPTIONS = new Set(["--with", "--with-editable", "--spec", "--from", "--package", "-p"]);
-/** pip's index options: a value that is not the public index makes the command's operands private. */
-const INDEX_OPTIONS = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "--registry"]);
-/** A script or program file a runner runs (`uv run --with X s.py`): not a package when no option carries it. */
-const SCRIPT = /\.(?:py|pyw|sh|ps1|ts|tsx|js|mjs|cjs)$/i;
-/** Runner words: the word is its own verb, the next non-option word the package. */
-const RUNNERS = new Set(["npx", "pnpx", "bunx", "uvx"]);
-const VERBS = new Set([
-  "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "it", "install-test", "add", "x", "exec", "dlx", "create",
-  "init", "up", "upgrade", "update", "get", "inject", "binstall",
-]);
-/** Words that end a command's operands in a sentence: function words, clause verbs and the nouns "the deps" uses. */
-const STOPS = new Set([
-  "to", "for", "with", "so", "because", "the", "a", "an", "in", "on", "at", "from", "into", "then", "if", "when", "it", "them", "this", "that", "which",
-  "as", "by", "via", "after", "before", "using", "use", "but", "also", "please", "first", "now", "here", "there", "we", "our", "my", "your", "its", "their",
-  "is", "are", "be", "was", "will", "should", "must", "can", "need", "needs", "make", "move", "keep", "run", "build", "test", "fix", "update", "wire",
-  "expose", "point", "store", "add", "remove", "set", "configure", "check", "write", "rename", "refactor", "deploy", "commit", "push", "open", "start",
-  "deps", "dependencies", "dependency", "packages", "package", "modules", "module", "crates", "crate", "everything", "all", "again", "locally", "globally",
-  "work", "works", "working", "properly", "correctly", "fine", "succeed", "succeeds", "pass", "passes",
-  // What a sentence says about a command or a package rather than an operand of it: "npm install fails behind
-  // the proxy", "add the stripe SDK with npm" (fp16, fp20, fp50 of the third check).
-  "fails", "failed", "failing", "fail", "breaks", "broke", "broken", "hangs", "hung", "crashes", "crashed", "errors", "errored", "times", "timed",
-  "behind", "step", "steps", "command", "commands", "script", "scripts", "sdk", "sdks", "client", "clients", "cli", "plugin", "plugins", "wrapper",
-  "bindings", "library", "libraries", "lib", "libs", "tool", "tools", "version", "versions", "again", "too", "only", "instead", "later", "manually",
-]);
-/** Long options whose value never names a registry package (a directory, a feature, a source to fetch from). */
-const VALUE_OPTIONS = new Set([
-  "--features", "--timeout", "--loglevel", "--log-level", "--network-timeout", "--prefix", "--cwd", "--dir", "--filter", "--target", "--registry",
-  "--index-url", "--extra-index-url", "--index", "--default-index", "-i", "--rev", "--branch", "--tag", "--python", "--root", "--manifest-path", "--profile",
-  "--cache-dir", "--config", "--userconfig", "--requirement", "-r", "--constraint", "-e", "--editable",
-  // Round 6, item 3: options known to take a value that is no package (a path, a workspace, a date, a feature).
-  "--path", "--git", "--version", "--vers", "-F", "--workspace", "-w", "--omit", "--include", "--before", "-C", "--modfile", "-tags", "--find-links",
-  "-f", "-t", "--only-binary", "--no-binary", "--platform", "--implementation", "--abi", "--progress-bar", "--group", "-G", "--optional-group", "--extra",
-]);
-const MAX_SEGMENT_WORDS = 400;
-const MAX_TEXT = 120;
-/** No package name is longer (briefing-task-screen.ts MAX_TASK_WORD is of the same order). */
-const MAX_WORD = 302;
-/** Plain English connectives: the first one ends a command's operand run (F2); later words are prose. */
-const CONNECTIVES = new Set(["and", "or", "then", "in", "into", "to", "for", "so", "with", "on", "from", "plus", "but", "&", "+", "after", "before", "because", "if", "when", "while", "using", "via"]);
-/** The prose form's link words: "install X with|using|via|from <manager>" (F1 b). */
-const PROSE_LINKS = new Set(["with", "using", "via", "from"]);
-/** Words between the verb and the link of "install the package with npm: X". */
-const PACKAGE_NOUNS = new Set(["the", "a", "an", "package", "packages", "dependency", "dependencies", "module", "modules", "crate", "crates", "library", "libraries", "lib", "libs"]);
-/** An ecosystem label in parentheses after a name. */
-const LABEL_ECOSYSTEM: ReadonlyMap<string, CheckEcosystem> = new Map([
-  ...["npm", "pnpm", "yarn", "bun", "node", "js", "javascript", "typescript"].map((w) => [w, "npm"] as const),
-  ...["pypi", "pip", "uv", "poetry", "python"].map((w) => [w, "PyPI"] as const),
-  ...["crates", "crates.io", "cargo", "rust"].map((w) => [w, "crates.io"] as const),
-  ...["go", "golang"].map((w) => [w, "Go"] as const),
-]);
-/** What a parenthetical right after an operand may say and still belong to it: an ecosystem label, latest, a version. */
-const LABEL = /^(?:latest|stable|next|v?\d+(?:\.\d+)*(?:[-+.][\w.-]*)?)$/i;
-/** Manifest files a sentence may add a name to, and the ecosystem each one installs from (K2). */
-const MANIFESTS: ReadonlyArray<[RegExp, CheckEcosystem]> = [
-  [/^package\.json$/i, "npm"],
-  [/^(?:requirements[\w.-]*\.(?:txt|in)|pyproject\.toml|pipfile|setup\.py|setup\.cfg)$/i, "PyPI"],
-  [/^cargo\.toml$/i, "crates.io"],
-  [/^go\.mod$/i, "Go"],
-];
+import { canonicalCommands, type CanonicalCommand } from "./briefing-canonical.js";
+import { checkableSpec } from "./briefing-names.js";
+import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
 
 export interface InstallCommand {
   /** The command as written, capped: for tests and diagnosis only, never repeated in an answer (K3). */
@@ -129,24 +36,12 @@ export interface InstallCommand {
   /** The manager word and the verb, from this module's fixed lists: what an answer may say of the command. */
   manager: string;
   verb: string;
-  /** Why its shape could not be read, when it could not (K3). */
-  unreadable?: "an unclosed quote" | "a command substitution among its words";
+  /** Why it is not read whole, when it is not (K3; fixed wording, never the task's words). */
+  unreadable?: string;
   /** It installs from an index the task names that is not the public one (`pip install -i <private> X`). */
   privateIndex?: boolean;
   /** The requirements files it installs from (`pip install -r requirements-extra.txt`), as written (V2). */
   requirementFiles?: string[];
-}
-
-const OPEN = new Set(['"', "'", "`", "(", "[", "{", "<", "*", "_"]);
-const CLOSE = new Set(['"', "'", "`", ")", "]", "}", ">", ".", ",", ";", ":", "!", "?", "*"]);
-/** A word without its quotes, brackets and trailing punctuation: a walk, not a regex (a 150 KB run of dots was quadratic). */
-function bare(word: string): string {
-  const w = word.length > MAX_WORD ? word.slice(0, MAX_WORD) : word;
-  let a = 0;
-  let b = w.length;
-  while (a < b && OPEN.has(w[a])) a++;
-  while (b > a && CLOSE.has(w[b - 1])) b--;
-  return w.slice(a, b);
 }
 
 /**
@@ -160,243 +55,6 @@ export function readingText(task: string): string {
     .replace(/(?<=\s|^)(?:\*\*|__)|(?:\*\*|__)(?=\s|$|[.,;:!?])/g, "")
     // A lookbehind, not a leading `[ \t]+`: a 100 KB run of blanks was rescanned from every position (quadratic).
     .replace(/(?<=[ \t])[\\`^][ \t]*\r?\n[ \t]*/g, " ");
-}
-
-/** The task cut into commands and sentences: at a new line, `;`, `&&`, `||`, `|`, and a sentence end. */
-function segments(task: string): string[] {
-  return task.split(/\r?\n|;|&&|\|\||\||(?<=[.!?])\s+/);
-}
-
-/** One whitespace token: its bare word, whether it opens a parenthetical, and whether it ends the run after itself. */
-interface Token {
-  raw: string;
-  word: string;
-  opens: boolean;
-  /** A trailing comma, semicolon, colon, closing parenthesis or backtick: the run ends after this token. */
-  closes: boolean;
-}
-const tokenOf = (raw: string): Token => {
-  const word = bare(raw);
-  return { raw, word: word.toLowerCase(), opens: raw.startsWith("("), closes: /[,;:)`]["'`)]*$/.test(raw) && !raw.startsWith("(") };
-};
-/** The manager a word names, with a Windows launcher's extension (`npm.cmd`, `npx.exe`, `pip.ps1`, `yarn.bat`). */
-const managerOf = (word: string) => MANAGERS.get(word.replace(/\.(?:exe|cmd|ps1|bat)$/, ""));
-const managerName = (word: string) => word.replace(/\.(?:exe|cmd|ps1|bat)$/, "");
-
-interface Operand {
-  text: string;
-  /** The value of an option that names a package (`--with X`, `-p X`). */
-  ofOption: boolean;
-  /** The ecosystem of a label right after it: "papaparse (npm)". */
-  label?: CheckEcosystem;
-}
-
-/** A public package index URL (pip's own default, its JSON mirror name). */
-const publicIndex = (url: string) => /^https?:\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org|registry\.npmjs\.org|registry\.yarnpkg\.com)(?:\/|$)/i.test(url);
-
-/**
- * The operand run from `from` (F2): the contiguous words after the verb, ending at the first token that cannot be
- * an operand or option. `end` is the index of the first token after it.
- */
-function operandRun(t: Token[], from: number, family: Family = "js", manager = ""): { operands: Operand[]; end: number; privateIndex: boolean; requirementFiles: string[]; hiddenValues: string[]; unreadable?: InstallCommand["unreadable"] } {
-  const operands: Operand[] = [];
-  const requirementFiles: string[] = [];
-  /** The options this module does not know whose following word it took as their value (item 3). */
-  const hiddenValues: string[] = [];
-  let end = from;
-  let packageNext = false;
-  let privateIndex = false;
-  let unreadable: InstallCommand["unreadable"];
-  for (; end < t.length; end++) {
-    const { word: w, raw } = t[end];
-    if (t[end].opens) {
-      // "hono (latest)", "litestar (PyPI)", "papaparse (npm)": the label belongs to the operand before it.
-      const closed = /\)["'`]*[,;:.]?$/.test(raw);
-      const ecosystem = LABEL_ECOSYSTEM.get(w);
-      if (operands.length > 0 && closed && (LABEL.test(w) || ecosystem)) {
-        if (ecosystem) operands[operands.length - 1].label = ecosystem;
-        if (/[,;:]$/.test(raw)) {
-          end++;
-          break;
-        }
-        continue;
-      }
-      break;
-    }
-    if (!w) continue;
-    if (w.startsWith("-")) {
-      const flag = w.replace(/=.*$/, "");
-      if (VALUE_OPTIONS.has(flag) && !isSwitch(family, flag, manager)) {
-        const value = w.includes("=") ? w.slice(w.indexOf("=") + 1) : end + 1 < t.length ? t[end + 1].word : "";
-        if (INDEX_OPTIONS.has(flag) && value && !publicIndex(value)) privateIndex = true;
-        if ((flag === "-r" || flag === "--requirement") && value) requirementFiles.push(w.includes("=") ? bare(t[end].raw).slice(bare(t[end].raw).indexOf("=") + 1) : bare(t[end + 1].raw));
-        if (!w.includes("=") && end + 1 < t.length) end++;
-      } else if (w.includes("=")) {
-        // `--package=x`, `--with=x` name a package; another option's value (`--omit=dev`) never does.
-        if (PACKAGE_OPTIONS.has(flag)) operands.push({ text: bare(raw).replace(/^[^=]*=/, ""), ofOption: true });
-      }
-      else if (PACKAGE_OPTIONS.has(flag)) packageNext = true;
-      else if (!isSwitch(family, flag, manager)) {
-        // Item 3: an option not known to take no value takes the next word as its value, unless that word ends the
-        // run or is another option: never an operand, never offered; it is counted as "the word after <option>".
-        const next = t[end + 1];
-        if (next && !t[end].closes && !next.opens && !next.word.startsWith("-") && !CONNECTIVES.has(next.word) && !STOPS.has(next.word) && !managerOf(next.word)) {
-          hiddenValues.push(flag);
-          end++;
-        }
-      }
-      if (t[end].closes) {
-        end++;
-        break;
-      }
-      continue;
-    }
-    if (CONNECTIVES.has(w) || STOPS.has(w) || managerOf(w)) break;
-    // K3: a substitution or an unclosed quote among the command's words: its shape cannot be read.
-    if (raw.includes("$(") || raw.includes("${") || (raw.startsWith("`") && !/^`[^`\s]+`[.,;:)]*$/.test(raw))) unreadable = "a command substitution among its words";
-    const quote = raw[0] === '"' || raw[0] === "'" ? raw[0] : null;
-    if (quote && raw.indexOf(quote, 1) < 0 && !t.slice(end + 1).some((x) => x.raw.includes(quote))) unreadable ??= "an unclosed quote";
-    operands.push({ text: bare(raw), ofOption: packageNext });
-    packageNext = false;
-    if (t[end].closes) {
-      end++;
-      break;
-    }
-  }
-  return { operands: operands.filter((o) => o.text !== ""), end, privateIndex, requirementFiles, hiddenValues, ...(unreadable ? { unreadable } : {}) };
-}
-
-/**
- * The verb of a command that starts at `managerAt` (F1 a): the manager's verb with only options between them
- * (`npm install`, `pnpm -w add`, `uv tool run`, `uv run --with`); a runner is its own verb. -1 when it is no command.
- */
-function verbAfter(t: Token[], managerAt: number): number {
-  const manager = managerName(t[managerAt].word);
-  if (RUNNERS.has(manager)) return managerAt;
-  const family = FAMILY[MANAGERS.get(manager) ?? "npm"];
-  for (let k = managerAt + 1; k < t.length && k - managerAt <= 8; k++) {
-    const w = t[k].word;
-    if (t[k].opens) return -1;
-    // `cargo +nightly install x`: the toolchain.
-    if (manager === "cargo" && w.startsWith("+")) continue;
-    if (w.startsWith("-")) {
-      // An option between the manager and its verb, with its value when it is not known to take none and the word
-      // after it is no verb (`npm -w web install x`, `npm --workspace web install x`; round 6, item 1).
-      const next = t[k + 1]?.word ?? "";
-      if (!w.includes("=") && !isSwitch(family, w, manager) && next && !next.startsWith("-") && !VERBS.has(next) && VERBS.has(t[k + 2]?.word ?? "")) k++;
-      if (t[k].closes) return -1;
-      continue;
-    }
-    if (VERBS.has(w)) return k;
-    // `yarn global add x`, `yarn workspace web add x`, `pnpm --filter web add x` (the option is skipped above).
-    if (manager === "yarn" && w === "global") continue;
-    if ((manager === "yarn" || manager === "pnpm") && w === "workspace" && VERBS.has(t[k + 2]?.word ?? "")) {
-      k++;
-      continue;
-    }
-    if (w === "tool" && (t[k + 1]?.word === "run" || t[k + 1]?.word === "install")) return k + 1;
-    if (w === "run" && (manager === "deno" || t.slice(k + 1, k + 40).some((x) => /^--(?:with|spec)(?:-editable|-requirements)?(?:=|$)/.test(x.word)))) return k;
-    return -1;
-  }
-  return -1;
-}
-
-const manifestEcosystem = (word: string): CheckEcosystem | undefined => MANIFESTS.find(([re]) => re.test(word))?.[1];
-
-/** Every command (and prose install) in the task that can add or run a package. Linear in the task's length. */
-/** A word that ends a command's operand run: no operand of a command is ever one (V6: "make pip install -e . work"). */
-export const isRunStop = (word: string) => STOPS.has(word.toLowerCase()) || CONNECTIVES.has(word.toLowerCase());
-
-export function scanCommands(task: string): InstallCommand[] {
-  const commands: InstallCommand[] = [];
-  const text = readingText(task.length > 200_000 ? task.slice(0, 200_000) : task);
-  for (const seg of segments(text)) {
-    const t = seg.split(/\s+/).filter(Boolean).slice(0, MAX_SEGMENT_WORDS).map(tokenOf);
-    for (let m = 0; m < t.length; m++) {
-      const w = t[m].word;
-      // (a) A command: a manager or runner word (or `python -m pip`) and its verb with only options between.
-      const pythonPip = (w === "python" || w === "python3" || w === "py" || w === "python.exe") && t[m + 1]?.word === "-m" && (t[m + 2]?.word === "pip" || t[m + 2]?.word === "pip3");
-      const managerAt = pythonPip ? m + 2 : m;
-      const ecosystem = managerOf(t[managerAt]?.word ?? "");
-      if (ecosystem && !t[managerAt].closes) {
-        const v = verbAfter(t, managerAt);
-        if (v >= 0) {
-          const read = t[v].closes && v !== managerAt ? { operands: [] as Operand[], end: v + 1, privateIndex: false, requirementFiles: [] as string[], hiddenValues: [] as string[] } : operandRun(t, v + 1, FAMILY[ecosystem], managerName(t[managerAt].word));
-          const manager = managerName(t[managerAt].word);
-          const deno = manager === "deno";
-          const verb = v === managerAt ? manager : t[v].word;
-          const runs = deno || verb === "run" || RUNNERS.has(verb) || verb === "x" || verb === "exec" || verb === "dlx";
-          // A runner's script file is no package; deno reads only its `npm:` and `jsr:` operands as packages.
-          // A runner runs one package: its first operand (or an option's package); the rest are the program's
-          // arguments (`npx prisma migrate dev`: prisma).
-          const runner = RUNNERS.has(verb) || verb === "x" || verb === "exec" || verb === "dlx" || (verb === "run" && !deno && manager !== "uv");
-          const named = read.operands.some((o) => o.ofOption);
-          let firstSeen = false;
-          const kept = read.operands
-            .filter((o) => !(runs && !o.ofOption && SCRIPT.test(o.text) && !RUNNERS.has(verb)))
-            .filter((o) => !deno || /^(?:npm|jsr):/i.test(o.text))
-            .filter((o) => {
-              if (!runner || o.ofOption) return true;
-              if (named || firstSeen) return false;
-              firstSeen = true;
-              return true;
-            });
-          const operands = kept.map((o) => o.text);
-
-          commands.push({
-            text: t.slice(m, Math.max(read.end, v + 1)).map((x) => x.raw).join(" ").slice(0, MAX_TEXT),
-            ecosystem,
-            operands,
-            manager,
-            verb,
-            ...("unreadable" in read && read.unreadable ? { unreadable: read.unreadable } : {}),
-            ...(read.privateIndex ? { privateIndex: true } : {}),
-            ...(read.hiddenValues.length > 0 ? { hiddenValues: read.hiddenValues } : {}),
-            ...(read.requirementFiles.length > 0 && ecosystem === "PyPI" ? { requirementFiles: read.requirementFiles } : {}),
-          });
-          m = Math.max(m, read.end - 1);
-          continue;
-        }
-      }
-      if (w !== "install" && w !== "add") continue;
-      // (b) "install the package with npm: zqxevil".
-      let n = m + 1;
-      while (n < t.length && PACKAGE_NOUNS.has(t[n].word) && !t[n].closes) n++;
-      if (n > m + 1 && PROSE_LINKS.has(t[n]?.word ?? "") && t[n + 1] && managerOf(t[n + 1].word) && t[n + 1].raw.endsWith(":")) {
-        const read = operandRun(t, n + 2);
-        if (read.operands.length > 0) {
-          commands.push({ text: t.slice(m, read.end).map((x) => x.raw).join(" ").slice(0, MAX_TEXT), ecosystem: managerOf(t[n + 1].word)!, operands: read.operands.map((o) => o.text), manager: managerName(t[n + 1].word), verb: w });
-          m = read.end - 1;
-          continue;
-        }
-      }
-      // (b) "install / add <names> with|using|via|from <manager>" ("add the ctx package to package.json" too).
-      let first = m + 1;
-      while (first < t.length && (t[first].word === "the" || t[first].word === "a" || t[first].word === "an") && !t[first].closes) first++;
-      const read = operandRun(t, first);
-      if (read.operands.length === 0) continue;
-      if (PACKAGE_NOUNS.has(t[read.end]?.word ?? "") && !t[read.end].opens && !t[read.end - 1]?.closes) read.end++;
-      const link = t[read.end];
-      const after = t[read.end + 1]?.word === "the" ? read.end + 2 : read.end + 1;
-      const named = link && PROSE_LINKS.has(link.word) && !link.opens ? managerOf(t[after]?.word ?? "") : undefined;
-      if (named) {
-        commands.push({ text: t.slice(m, after + 1).map((x) => x.raw).join(" ").slice(0, MAX_TEXT), ecosystem: named, operands: read.operands.map((o) => o.text), manager: managerName(t[after].word), verb: w });
-        m = after;
-        continue;
-      }
-      // (c) "add X to package.json and to requirements.txt": one pair per manifest file the sentence names.
-      const files = new Set<CheckEcosystem>();
-      for (let k = read.end; k < t.length && k - read.end < 12; k++) {
-        const eco = manifestEcosystem(t[k].word);
-        if (eco) files.add(eco);
-        else if (!CONNECTIVES.has(t[k].word) && !PACKAGE_NOUNS.has(t[k].word) && t[k].word !== "both" && t[k].word !== "file") break;
-      }
-      for (const eco of files) commands.push({ text: t.slice(m, read.end).map((x) => x.raw).join(" ").slice(0, MAX_TEXT), ecosystem: eco, operands: read.operands.map((o) => o.text), manager: "a manifest", verb: w });
-      // (c) "install papaparse (npm)": a label ties the name before it to that ecosystem.
-      for (const o of read.operands) if (o.label && !files.has(o.label)) commands.push({ text: t.slice(m, read.end).map((x) => x.raw).join(" ").slice(0, MAX_TEXT), ecosystem: o.label, operands: [o.text], manager: "a label", verb: w });
-    }
-  }
-  return commands;
 }
 
 /** The name an operand names, its version or extras aside (`x@1.2`, `@s/x@^1`, `x==1.0`, `x[extra]>=2`). */
@@ -468,43 +126,60 @@ export interface StrictPair {
   seen?: "command" | "manifest";
 }
 
-/** The strict pairs of the task, and the commands whose shape could not be read (K2, K3). */
-export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[]; hiddenValues: string[] } {
+/**
+ * The strict pairs of the task and the commands it does not read whole (round 7, C1/C2): the operands of every
+ * canonical command (briefing-canonical.ts) and the entries of every manifest snippet. Read on the task as written
+ * (markup dropped, continuations joined): a credential, a substitution or a quote problem among a command's words
+ * makes it not read whole, and nothing of it is offered.
+ */
+export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[]; hiddenValues: string[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; namedWords: Set<string>; manifestNotWhole: boolean } {
   const pairs: StrictPair[] = [];
   const unreadable: InstallCommand[] = [];
   const requirementFiles: string[] = [];
-  const hiddenValues: string[] = [];
   const seen = new Set<string>();
-  for (const c of scanCommands(task)) {
-    // Bounded like the reader (MAX_READ_PACKAGES): the briefing's matching of each pair is linear in the pairs, and
-    // 16,000 one-line commands took 8 s of CPU (CPU sweep, round 6). Past the cap the reader says NOT CHECKED.
-    if (pairs.length >= MAX_PAIRS) break;
-    if (c.unreadable) unreadable.push(c);
-    for (const f of c.requirementFiles ?? []) if (!requirementFiles.includes(f)) requirementFiles.push(f);
-    for (const f of c.hiddenValues ?? []) if (!hiddenValues.includes(f)) hiddenValues.push(f);
-    // A command whose shape cannot be read gives no pairs (K3). A word that may be an unknown option's value is
-    // marked: it is offered by name only where the task screen left it readable (what-should-i-know.ts).
-    if (c.unreadable) continue;
+  /** Every word of every command the grammar named, read whole or not (lower case, quotes and marks set aside). */
+  const namedWords = new Set<string>();
+  for (const c of canonicalCommands(readingText(task))) {
+    for (const w of c.text.split(/\s+/)) {
+      const word = w.replace(/^[`"'(]+|[`"'),.;:!?]+$/g, "").toLowerCase();
+      namedWords.add(word);
+      // Its name, a spec aside (`qzws@7.4.5`, `x==1.0`, `x[extra]>=2`), and every piece of a word a comma, `=`, `:`
+      // or `@` joins (`a,b`, `x=1`, `x@npm:y`): no word of a command is offered by another reader (C2).
+      for (const piece of [word, ...word.split(/[,=:@]+/)]) if (piece) namedWords.add(operandName(piece.replace(/^npm:/, "")) || piece);
+    }
+    if (!c.canonical) {
+      unreadable.push(asInstallCommand(c));
+      continue;
+    }
+    for (const f of c.requirementFiles) if (!requirementFiles.includes(f)) requirementFiles.push(f);
     for (const o of c.operands) {
-
-      if (namesNoPackage(o)) continue;
-      const names = operandNames(o);
-      for (const name of names) {
-        if (namesNoPackage(name) || name.endsWith("/") || !/[a-z0-9]/i.test(name)) continue;
-        // npm names are lower case (a scoped one with capitals is no name); a Go module path starts with a domain.
-        if (c.ecosystem === "npm" && name.startsWith("@") && /[A-Z]/.test(name)) continue;
-        if (c.ecosystem === "Go" && !/^[^/]*\.[^/]+\//.test(name)) continue;
-        const own = names.length === 1 || name === names[names.length - 1];
-        const version = own ? operandSpec(/^npm:/i.test(o) ? o.slice(4) : o.includes("@npm:") ? o.slice(o.indexOf("@npm:") + 5) : o, c.ecosystem) : undefined;
-        const key = `${c.ecosystem}\0${name.toLowerCase()}\0${version ?? ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        pairs.push({ ecosystem: c.ecosystem, name, ...(version ? { version } : {}), ...(c.privateIndex ? { privateIndex: true } : {}) });
-      }
+      if (pairs.length >= MAX_PAIRS) break;
+      const key = `${c.ecosystem}\0${o.name}\0${o.spec ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({ ecosystem: c.ecosystem, name: o.name, ...(o.spec !== undefined ? { version: o.spec } : {}), seen: "command" });
     }
   }
-  pushAll(pairs, manifestPairs(task));
-  return { pairs, unreadable, requirementFiles, hiddenValues };
+  const manifest = manifestPairs(task);
+  pushAll(pairs, manifest.pairs);
+  pushAll(unreadable, manifest.unreadable);
+  for (const w of manifest.entryWords) namedWords.add(w);
+  return { pairs, unreadable, requirementFiles, hiddenValues: [], privateNames: manifest.privateNames, namedWords, manifestNotWhole: manifest.unreadable.length > 0 };
+}
+
+const asInstallCommand = (c: CanonicalCommand): InstallCommand => ({
+  text: c.text,
+  ecosystem: c.ecosystem,
+  operands: c.operands.map((o) => (o.spec !== undefined ? `${o.name}${c.ecosystem === "PyPI" ? "" : "@"}${o.spec}` : o.name)),
+  manager: c.manager,
+  verb: c.verb,
+  ...(c.canonical ? {} : { unreadable: (c.why ?? "a shape it cannot read") as InstallCommand["unreadable"] }),
+  ...(c.requirementFiles.length > 0 ? { requirementFiles: c.requirementFiles } : {}),
+});
+
+/** Every named command of the task, as the canonical grammar reads it (tests and the C3 property view). */
+export function scanCommands(task: string): InstallCommand[] {
+  return canonicalCommands(readingText(task)).map(asInstallCommand);
 }
 
 /**
@@ -532,34 +207,96 @@ export function requirementsPairs(root: string, files: readonly string[], read: 
  * fence), pyproject `dependencies = [...]`, a Poetry table, a Cargo.toml dependencies table, go.mod requires.
  * Bounded: at most 200 entries, each block read to at most 20,000 characters. Linear.
  */
-export function manifestPairs(task: string): StrictPair[] {
+export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; entryWords: Set<string> } {
   const text = task.length > 200_000 ? task.slice(0, 200_000) : task;
   const out: StrictPair[] = [];
-  const push = (ecosystem: CheckEcosystem, name: string, version?: string) => {
-    if (out.length >= 200 || !name || namesNoPackage(name)) return;
-    if (ecosystem === "PyPI" && name.toLowerCase() === "python") return;
-    // `==1.0.0` is the release 1.0.0, as the reader writes it.
-    const spec = version && /^===?[^=<>!~,]+$/.test(version) ? version.replace(/^===?/, "") : version;
-    out.push({ ecosystem, name, ...(spec ? { version: spec } : {}), seen: "manifest" });
+  const unreadable: InstallCommand[] = [];
+  const privateNames: Array<{ ecosystem: CheckEcosystem; name: string }> = [];
+  /** The words of an entry not read whole: nothing of them is offered by another reader (C2, C5). */
+  const entryWords = new Set<string>();
+  const notWhole = (ecosystem: CheckEcosystem, why: string, entry = "") => {
+    for (const w of entry.toLowerCase().split(/[^a-z0-9@/._-]+/)) if (w) entryWords.add(w);
+    if (!unreadable.some((u) => u.unreadable === why && u.ecosystem === ecosystem)) unreadable.push({ text: "", ecosystem, operands: [], manager: "a manifest", verb: "", unreadable: why });
   };
-  // package.json: "dependencies": { "x": "1.0.0", ... } (and dev/peer/optional).
+  // As written (round 7, C4/C6): the spec is what dependency_check would be given for this entry.
+  const push = (ecosystem: CheckEcosystem, name: string, version?: string) => {
+    if (out.length >= 200 || !name) return;
+    if (ecosystem === "PyPI" && name.toLowerCase() === "python") return;
+    // C5: an entry is read only when its name and its spec are: a spec no checker reads (`password==hunter2`, a tag)
+    // or a name of a credential's shape makes the snippet not read whole, and the entry is never offered.
+    if (credentialShape(name) || looksLikeSecret(name) || (version !== undefined && !/^(?:latest|\*)$/i.test(version) && checkableSpec(ecosystem, version) === null)) {
+      notWhole(ecosystem, "an entry it cannot read", `${name} ${version ?? ""}`);
+      return;
+    }
+    out.push({ ecosystem, name, ...(version ? { version } : {}), seen: "manifest" });
+  };
+  // package.json: "dependencies": { "x": "1.0.0", ... } (and dev/peer/optional). A value that is no registry spec
+  // (git, a path, a URL, `workspace:`) is a source of the task's own for that name (C5).
   for (const m of text.matchAll(/"(?:dev|peer|optional)?[dD]ependencies"\s*:\s*\{([^{}]{0,4000})\}/g)) {
-    for (const e of m[1].matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,100})"/gi)) push("npm", e[1], e[2]);
+    const body = m[1].trim();
+    const entries = [...body.matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,200})"/gi)];
+    if (body && body.replace(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,200})"\s*,?/gi, "").trim() !== "") notWhole("npm", "an entry it cannot read", body);
+    for (const e of entries) {
+      if (/^(?:git|github:|file:|link:|workspace:|https?:|\.|\/|~)/i.test(e[2]) || e[2].includes("://") || e[2].includes("/")) privateNames.push({ ecosystem: "npm", name: e[1] });
+      else push("npm", e[1], e[2]);
+    }
   }
-  // A TOML table: [dependencies] / [dev-dependencies] (Cargo) or [tool.poetry.dependencies] / group (Poetry).
-  for (const m of text.matchAll(/\[((?:tool\.poetry\.(?:group\.[\w-]+\.)?)?(?:dev-|build-)?dependencies)\]([^[]{0,20000})/g)) {
+  // A TOML table: [dependencies] / [dev-dependencies] / [build-dependencies] (Cargo) or [tool.poetry.dependencies]
+  // and its groups (Poetry). `package = "real"` names the real crate; git / path / registry / workspace keys are a
+  // source of the task's own; any other entry shape is not read whole.
+  for (const m of text.matchAll(/\[((?:tool\.poetry\.(?:group\.[\w-]+\.)?)?(?:dev-|build-)?dependencies)\][^\n]*/g)) {
     const ecosystem: CheckEcosystem = m[1].startsWith("tool.poetry") ? "PyPI" : "crates.io";
-    for (const line of m[2].split(/\r?\n/).slice(0, 400)) {
-      const e = /^\s*([A-Za-z0-9][\w.-]*)\s*=\s*(.{0,400})$/.exec(line);
-      if (!e) continue;
+    // The table's lines, up to the next table header (a line that starts with `[`): an inline array is no header.
+    const lines: string[] = [];
+    for (const line of text.slice(m.index! + m[0].length, m.index! + m[0].length + 20000).split(/\r?\n/).slice(1, 400)) {
+      if (/^\s*\[/.test(line)) break;
+      lines.push(line);
+    }
+    for (const line of lines) {
+      const l = line.replace(/\s+#.*$/, "").trim();
+      if (!l || l.startsWith("#") || l.startsWith("```")) continue;
+      const e = /^([A-Za-z0-9][\w.-]*)\s*=\s*(.{0,400})$/.exec(l);
+      if (!e) {
+        notWhole(ecosystem, "an entry it cannot read", l);
+        continue;
+      }
       const value = e[2].trim();
-      const spec = value.startsWith('"') ? /^"([^"]{0,100})"/.exec(value)?.[1] : value.startsWith("{") ? /\bversion\s*=\s*"([^"]{0,100})"/.exec(value)?.[1] : undefined;
-      if (value.startsWith('"') || value.startsWith("{")) push(ecosystem, e[1], spec);
+      const plain = /^"([^"]{0,100})"$/.exec(value);
+      if (plain) {
+        push(ecosystem, e[1], plain[1]);
+        continue;
+      }
+      const table = /^\{(.*)\}$/.exec(value);
+      if (!table) {
+        notWhole(ecosystem, "an entry it cannot read", l);
+        continue;
+      }
+      const keys = [...table[1].matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|true|false|\[[^\]]*\])/g)];
+      if (table[1].replace(/([\w-]+)\s*=\s*(?:"([^"]*)"|true|false|\[[^\]]*\])\s*,?/g, "").trim() !== "") {
+        notWhole(ecosystem, "an entry it cannot read", l);
+        continue;
+      }
+      const key = (k: string) => keys.find((x) => x[1] === k);
+      const name = key("package")?.[2] ?? e[1];
+      if (["git", "path", "registry", "workspace", "url", "source", "develop"].some((k) => key(k))) {
+        privateNames.push({ ecosystem, name });
+        continue;
+      }
+      if (keys.some((x) => !["version", "features", "optional", "default-features", "package", "extras", "markers", "python", "allow-prereleases"].includes(x[1]))) {
+        notWhole(ecosystem, "an entry it cannot read", l);
+        continue;
+      }
+      push(ecosystem, name, key("version")?.[2]);
     }
   }
   // pyproject (PEP 621): dependencies = ["x>=1", ...] and optional groups.
   for (const m of text.matchAll(/(?:^|\s)dependencies\s*=\s*\[([^\]]{0,4000})\]/g)) {
-    for (const e of m[1].matchAll(/["']([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*([<>=!~][^"';]{0,100})?["']/g)) push("PyPI", e[1], e[2]?.trim());
+    for (const e of m[1].matchAll(/["']([^"']{0,300})["']/g)) {
+      const d = /^\s*([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*((?:===?|~=|!=|>=|<=|>|<)\s*[\w.*+!-]+(?:\s*,\s*(?:===?|~=|!=|>=|<=|>|<)\s*[\w.*+!-]+)*)?\s*$/.exec(e[1]);
+      if (d) push("PyPI", d[1], d[2]?.replace(/\s+/g, ""));
+      else if (/@|:\/\//.test(e[1])) privateNames.push({ ecosystem: "PyPI", name: e[1].split(/[\s@[<>=!~]/)[0] });
+      else notWhole("PyPI", "an entry it cannot read", e[1]);
+    }
   }
   // requirements lines: after a requirements file is named, or inside a ```txt / ```requirements / ```pip fence.
   const reqStart = [...text.matchAll(/requirements[\w.-]*\.(?:txt|in)\b|```(?:txt|text|requirements|pip)\b/gi)].map((m) => m.index! + m[0].length);
@@ -578,13 +315,21 @@ export function manifestPairs(task: string): StrictPair[] {
     else for (const e of m[1].matchAll(/([a-z0-9.-]+\.[a-z]{2,}\/[^\s]+)\s+(v[\w.+-]+)/gi)) push("Go", e[1], e[2]);
   }
   const seen = new Set<string>();
-  return out.filter((p) => {
-    const key = `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.version ?? ""}`;
+  const pairs = out.filter((p) => {
+    const key = `${p.ecosystem}\0${p.name}\0${p.version ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  return { pairs, unreadable, privateNames, entryWords };
 }
+
+/**
+ * Round 7, C3: the task's raw text names a package source of its own. The presence of the word is the evidence;
+ * which package it applies to is not parsed. Case-insensitive.
+ */
+export const RAW_SOURCE =
+  /--registry|registry\s*=|:registry|--index-url|(?:^|\s)-i\s+\S|--extra-index-url|--default-index|--index\b|--find-links|(?:^|\s)-f\s+\S|--source\b|--git\b|--path\b|npm_config_registry|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|UV_INDEX|GOPRIVATE|GOPROXY|GONOSUMDB|npmRegistryServer|\[\[tool\.uv\.index\]\]|\[\[tool\.poetry\.source\]\]|\[registries[.\]]|\[registry\]|\[source\.|\[patch\.|\breplace\s+\S+(?:\s+v\S+)?\s+=>/i;
 
 /**
  * The first command with an operand the briefing did not account for, or null (the C3 property test's view of the
@@ -593,8 +338,8 @@ export function manifestPairs(task: string): StrictPair[] {
  */
 export function unreadCommand(task: string, accounted: (ecosystem: CheckEcosystem, name: string) => boolean): InstallCommand | null {
   for (const c of scanCommands(task)) {
-    // A word an unknown option took as its value is never accounted for (round 6, item 3).
-    if ((c.hiddenValues?.length ?? 0) > 0) return c;
+    // A command not read whole is never accounted for (round 7, C2).
+    if (c.unreadable) return c;
     for (const o of c.operands) {
       if (namesNoPackage(o)) continue;
       for (const name of operandNames(o)) if (!namesNoPackage(name) && !accounted(c.ecosystem, name)) return c;
@@ -605,4 +350,6 @@ export function unreadCommand(task: string, accounted: (ecosystem: CheckEcosyste
 
 /** The review reason for a command whose shape could not be read (K3): its manager and verb only, never its words. */
 export const unreadableReason = (c: InstallCommand) =>
-  `This task holds a command${c.manager === "a manifest" || c.manager === "a label" ? "" : ` (${c.manager} ${c.verb})`} this briefing could not read whole (${c.unreadable}): check what it installs with dependency_check.`;
+  c.manager === "a manifest"
+    ? `This task holds a manifest snippet this briefing could not read whole (${c.unreadable}): check what it adds with dependency_check.`
+    : `This task holds a command (${[c.manager, c.verb].filter(Boolean).join(" ")}) this briefing could not read whole (${c.unreadable}): check what it installs with dependency_check.`;

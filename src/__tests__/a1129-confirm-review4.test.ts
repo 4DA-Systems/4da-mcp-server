@@ -212,8 +212,10 @@ describe("review-confirm4 cases hold the invariants", () => {
       if (bareHumanOnly && answers.length > 1) expect(level, `step ${k}`).not.toBe("safe_to_delegate");
       if (NEVER_SAFE(c)) expect(level, `step ${k}`).not.toBe("safe_to_delegate");
     }
-    // o: the reviewer's 80 ordinary tasks, declared exactly: nothing of the task is held against them (round 6, item
-    // 8). That they end safe is measured on the reviewer's harness, whose registries carry full release data.
-    if (c.set === "o") expect(answers.at(-1)?.r.delegation_assessment.reason ?? "").not.toMatch(/could not read whole|was not looked up|not looked up \(|the word after/);
+    // o: the reviewer's 80 ordinary tasks, declared exactly: nothing but the round-7 grammar holds them. A command
+    // written into a sentence ("npm i bullmq ioredis, then add a worker file") is not read whole (C1, review_needed);
+    // no prose version, withheld option value or unlooked-up name does (C10). How many end safe is measured on the
+    // reviewer's harness, whose registries carry full release data.
+    if (c.set === "o") expect(answers.at(-1)?.r.delegation_assessment.reason ?? "").not.toMatch(/was not looked up|not looked up \(|the word after|could not tie/);
   });
 });

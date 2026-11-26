@@ -143,7 +143,9 @@ describe("the version a task names is judged, at that version", () => {
     // version the task names; dependency_check says the path is not one the go command accepts.
     const result = await brief("go get github.com/gin-gonic/gin/@v1.6.0", { react: "18.2.0" });
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(waitingWords(result)).toEqual([{ word: "github.com/gin-gonic/gin/", read_as: "Go", version: "v1.6.0" }]);
+    // Round 7, C1: a path the go command would not accept is no plain operand: the command is not read whole.
+    expect(waitingWords(result)).toBeUndefined();
+    expect(result.delegation_assessment.reason).toMatch(/could not read whole/);
     const items = [{ ecosystem: "Go" as const, package: "github.com/gin-gonic/gin/", to: "v1.6.0" }];
     const check = (await executeDependencyCheck(null, { items }, project({ react: "18.2.0" }))) as { results: Array<{ verdict: string; reason: string }> };
     expect(check.results[0]).toMatchObject({ verdict: "unknown" });
@@ -184,10 +186,10 @@ describe("the version a task names is judged, at that version", () => {
     }
   });
 
-  it("a version the briefing cannot tie to a package keeps it from safe_to_delegate, and says which", async () => {
+  // Round 7, C10: a version in prose tied to no package holds nothing (it was a false alarm on ordinary tasks).
+  it("a version the briefing cannot tie to a package holds nothing", async () => {
     const result = await brief("fix the login bug and bump the version to 2.4.1", { lodash: "4.17.21" });
-    expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(result.delegation_assessment.reason).toContain("the task names 2.4.1, which this briefing could not tie to a package");
+    expect(result.delegation_assessment.reason).not.toContain("could not tie to a package");
   });
 
   it.each(["Add the event-stream package at 3.3.6", "add event-stream at version 3.3.6", 'Write "event-stream": "3.3.6" into package.json'])(
@@ -304,6 +306,7 @@ describe("round 5: quoted versions, npm aliases and a version after the manifest
   it("a version written after `name@` that is not readable keeps the briefing from safe_to_delegate", async () => {
     const result = await brief("npm install lodash@next", { react: "18.2.0" });
     expect(result.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(result.delegation_assessment.reason).toContain("lodash@next");
+    // Round 7, C1: a tag is no spec the grammar reads: the command is said by manager and verb, its words never.
+    expect(result.delegation_assessment.reason).toMatch(/This task holds a command \(npm install\) this briefing could not read whole/);
   });
 });

@@ -69,7 +69,8 @@ describe("1. an entry is never a credential, and a version is never replaced by 
     if (r.requested_versions) {
       expect(r.requested_versions).toMatchObject([{ name, to: version, verdict: "avoid" }]);
     } else {
-      expect(waitingWords(r)).toContainEqual({ word: name, read_as: "npm", version });
+      // Round 7, C7: the entry carries no version; it is checked at that version once declared (C4).
+      expect(waitingWords(r)).toContainEqual({ word: name, read_as: "npm" });
     }
   });
 
