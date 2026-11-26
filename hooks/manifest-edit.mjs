@@ -207,7 +207,7 @@ const UV_REQUIREMENT_ARRAYS = new Set(["dev-dependencies", "constraint-dependenc
 /** package.json keys outside the dependency sections that hold a version. */
 const NPM_NOT_DEPENDENCIES = new Set(["version", "node", "npm", "pnpm", "yarn", "bun", "deno", "vscode", "packageManager"]);
 /** pnpm-workspace.yaml sections that set dependency versions. */
-const PNPM_VERSION_SECTIONS = new Set(["catalog", "catalogs", "overrides", "packageExtensions"]);
+const PNPM_VERSION_SECTIONS = new Set(["catalog", "catalogs", "overrides", "packageExtensions", "configDependencies"]);
 
 /**
  * For a JSON snippet, the object each position sits in, read in one forward pass (r8: a backward
@@ -1022,20 +1022,53 @@ function pnpmContentLines(text) {
 /** H3: the sections of a packageExtensions entry that add dependencies. */
 const PNPM_EXTENSION_SECTIONS = new Set(["dependencies", "optionalDependencies", "peerDependencies"]);
 /**
- * H3: pnpm-workspace.yaml's top-level keys this hook judges (PNPM_VERSION_SECTIONS) and the ones
- * known to put no registry release in the lockfile. A change under any other key is held.
+ * H3, re-derived in round 16 (J4) from pnpm's settings documentation: pnpm-workspace.yaml's
+ * top-level keys known to put no registry release into node_modules or the lockfile, each with the
+ * reason. Any other key (configDependencies, which installs packages, is judged; linkWorkspacePackages,
+ * dedupe*, catalogMode, minimumReleaseAge, resolutionMode, registry, supportedArchitectures,
+ * nodeVersion, updateConfig, the lockfile settings and every unknown key) is held when changed.
  */
-const PNPM_INERT_KEYS = new Set([
-  "packages", "onlyBuiltDependencies", "neverBuiltDependencies", "ignoredBuiltDependencies", "onlyBuiltDependenciesFile", "allowBuilds",
-  "publicHoistPattern", "hoistPattern", "hoist", "shamefullyHoist", "nodeLinker", "strictPeerDependencies", "autoInstallPeers", "resolvePeersFromWorkspaceRoot",
-  "linkWorkspacePackages", "injectWorkspacePackages", "saveWorkspaceProtocol", "preferWorkspacePackages", "sharedWorkspaceLockfile", "peerDependencyRules",
-  "patchedDependencies", "allowedDeprecatedVersions", "allowUnusedPatches", "ignorePatchFailures", "auditConfig", "updateConfig", "engineStrict",
-  "enablePrePostScripts", "ignoreScripts", "savePrefix", "saveExact", "dedupePeerDependents", "verifyDepsBeforeRun", "catalogMode", "cleanupUnusedCatalogs",
-  "minimumReleaseAge", "minimumReleaseAgeExclude", "trustPolicy", "trustPolicyExclude", "dedupeDirectDeps", "dedupeInjectedDeps", "virtualStoreDir",
-  "modulesDir", "storeDir", "childConcurrency", "networkConcurrency", "useNodeVersion", "nodeVersion", "executionEnv", "recursiveInstall", "requiredScripts",
-  "enableModulesDir", "symlink", "packageImportMethod", "sideEffectsCache", "sideEffectsCacheReadonly", "lockfile", "preferFrozenLockfile", "frozenLockfile",
-  "optimisticRepeatInstall", "strictDepBuilds", "dangerouslyAllowAllBuilds", "configDependencies",
-]);
+const PNPM_INERT_LIST = [
+  ["packages", "which folders are workspace packages"],
+  ["onlyBuiltDependencies", "which installed packages may run build scripts"],
+  ["neverBuiltDependencies", "which installed packages may not run build scripts"],
+  ["ignoredBuiltDependencies", "build scripts left unrun, without a warning"],
+  ["onlyBuiltDependenciesFile", "where the build allow list is read from"],
+  ["allowBuilds", "which installed packages may run build scripts"],
+  ["strictDepBuilds", "fails an install whose builds are not allowed"],
+  ["dangerouslyAllowAllBuilds", "lets every installed package run build scripts"],
+  ["ignoreScripts", "runs no scripts"],
+  ["enablePrePostScripts", "which scripts run"],
+  ["publicHoistPattern", "the node_modules layout"],
+  ["hoistPattern", "the node_modules layout"],
+  ["hoist", "the node_modules layout"],
+  ["shamefullyHoist", "the node_modules layout"],
+  ["nodeLinker", "the node_modules layout"],
+  ["symlink", "the node_modules layout"],
+  ["enableModulesDir", "whether packages are linked into node_modules"],
+  ["modulesDir", "where node_modules is"],
+  ["virtualStoreDir", "where the virtual store is"],
+  ["storeDir", "where the content store is"],
+  ["packageImportMethod", "how files are copied from the store"],
+  ["sideEffectsCache", "a cache of build results"],
+  ["sideEffectsCacheReadonly", "a cache of build results"],
+  ["childConcurrency", "how many builds run at once"],
+  ["networkConcurrency", "how many requests run at once"],
+  ["peerDependencyRules", "which peer warnings are shown"],
+  ["allowedDeprecatedVersions", "which deprecation warnings are shown"],
+  ["patchedDependencies", "a patch applied to a release already installed"],
+  ["allowUnusedPatches", "whether an unused patch fails"],
+  ["ignorePatchFailures", "whether a failing patch fails"],
+  ["auditConfig", "what pnpm audit reports"],
+  ["engineStrict", "fails an install whose engines do not fit"],
+  ["verifyDepsBeforeRun", "a check before pnpm run"],
+  ["requiredScripts", "a check that scripts exist"],
+  ["recursiveInstall", "whether install recurses into workspace packages"],
+  ["savePrefix", "the range written to package.json, around the release chosen"],
+  ["saveExact", "the range written to package.json, around the release chosen"],
+  ["optimisticRepeatInstall", "skips an install when nothing changed"],
+];
+const PNPM_INERT_KEYS = new Set(PNPM_INERT_LIST.map((r) => r[0]));
 
 /** H3: the top-level keys of a pnpm-workspace.yaml text, each with its block's content lines. */
 function pnpmTopBlocks(text) {
@@ -1120,7 +1153,8 @@ function pnpmWorkspaceVersions(text, out) {
       spec = alias.spec;
     } else {
       // Round 15 (H2): the positive form (a version or range, latest or what bounds nothing, a tag).
-      const d = npmDeclared(name ?? key, value);
+      // J4: a config dependency is `version+integrity`: the version is what pnpm installs.
+      const d = npmDeclared(name ?? key, top === "configDependencies" ? value.replace(/\+.*$/, "") : value);
       if (!d) continue;
       spec = d.spec;
     }
@@ -3702,7 +3736,9 @@ function heredocArgumentsAsText(line) {
       if (nl < 0) break;
       pos = nl + 1;
     }
-    if (end < 0 || !line.startsWith(')"', end)) {
+    // J6: a byte that ends a line for some shell (CR: Git Bash ends the heredoc at `EOF\r`; NEL, LS,
+    // PS, FF, VT, NUL) anywhere in the form: not rewritten, so held as before.
+    if (end < 0 || !line.startsWith(')"', end) || /[\r\u0085\u2028\u2029\f\v\0]/.test(line.slice(start, end + 2))) {
       out += line.slice(at, start + 1);
       at = start + 1;
       continue;
@@ -5761,6 +5797,16 @@ function introducedBy(input) {
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
   if (typeof toolInput.file_path !== "string") return null;
+  // Round 16 (J7): pnpm reads package.yaml and package.json5 as a project's manifest; this hook does not.
+  const last = (pathParts(toolInput.file_path).pop() ?? "").toLowerCase().replace(/[. ]+$/, "");
+  if (last === "package.yaml" || last === "package.json5") {
+    refuse(
+      `${last}, a manifest pnpm reads and this hook does not`,
+      "No dependency_check verdict releases this edit. pnpm reads package.json as well: write the project's manifest as package.json, which this hook reads, and the versions it sets are judged as in any other edit.",
+    );
+    unreadInstalls = true;
+    return { what: "edit", changes: [] };
+  }
   const kind = manifestKind(toolInput.file_path);
   if (!kind) return null;
   const changes = repeatable(introducedByEdit(kind, toolName, toolInput, toolInput.file_path));
@@ -6091,8 +6137,32 @@ export function respond(input, env = process.env, now = Date.now(), readBudgetMs
   if (input.hook_event_name === "PreToolUse") return mode === "block" ? preToolUse(input, env, now, readBudgetMs) : "";
   // Where nothing held the edit before it ran (FOURDA_GUARD=advise, or no ledger: an older server
   // or none), the advice follows it, as it did before 6.5.0.
+  if (input.hook_event_name === "PostToolUse" && (input.tool_name === "Bash" || input.tool_name === "PowerShell")) return installAdvice(input, env);
   if (input.hook_event_name === "PostToolUse") return mode === "advise" || !ledgerStarted(dataDir(env)) ? postToolUse(input) : "";
   return "";
+}
+
+/** J9: the one line of advice after an install, add or update command that ran (a ledger exists, the guard on or advising). */
+const INSTALL_ADVICE = "The package manager decides the releases actually installed. Run vulnerability_scan to check them.";
+
+/**
+ * Round 16 (J9): after a Bash or PowerShell command whose own program is a package manager with one
+ * of its install, add or update words (not text that only mentions one), one line of advice, never a
+ * denial: the hook judges what a command names, the manager decides what it installs.
+ */
+function installAdvice(input, env) {
+  const command = input?.tool_input?.command;
+  if (typeof command !== "string" || command.length > MAX_ACCOUNT_CHARS || !detectsInstall(command)) return "";
+  if (!readLedgerExists(dataDir(env))) return "";
+  const dialect = input.tool_name === "PowerShell" ? "powershell" : "bash";
+  const commands = quietly(() => simpleCommands(dialect === "powershell" ? psEnvAssignments(command).line : heredocArgumentsAsText(command), dialect, null, null, MAX_ACCOUNT_CHARS)) ?? [];
+  const runs = commands.some((words) => {
+    const start = commandStart(words);
+    if (start < 0 || start >= words.length) return false;
+    const manager = managerWord(programName(words[start]));
+    return manager !== null && words.slice(start + 1).some((w) => isManagerVerb(manager, w.toLowerCase()));
+  });
+  return runs ? JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: INSTALL_ADVICE } }) : "";
 }
 
 /** The payload as it arrives on stdin (rawHold decides on it when anything goes wrong). */
@@ -6282,7 +6352,7 @@ function oversizedParsed(input) {
  * comes after those 64 KB, or text the escaping hides, is not seen: such a payload goes ahead (a
  * known limit). FOURDA_GUARD and the ledger are honoured.
  */
-function oversized(head) {
+function oversized(head, what = `over ${MAX_PARSE_CHARS / 1024 / 1024} MB`) {
   const mode = guardMode(process.env.FOURDA_GUARD);
   if (mode !== "block" || !/"hook_event_name"\s*:\s*"PreToolUse"/.test(head)) return "";
   const tool = /"tool_name"\s*:\s*"(\w+)"/.exec(head)?.[1];
@@ -6306,7 +6376,8 @@ function oversized(head) {
   // PowerShell call held, an edit of a manifest (or with no path it can read) held, and a payload
   // whose tool cannot be found in its first part held; any other call gets nothing.
   if (!readLedgerExists(dataDir(process.env))) return "";
-  const why = `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`;
+  // J8: the size said is the one that applies (over 64 MB, or over 8 MB and not JSON).
+  const why = `the hook payload is ${what}, so it was not read whole`;
   if (!tool || tool === "Bash" || tool === "PowerShell") return denyJson(notReadDenial("command", why));
   if (["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(tool) && (path === null || mayInstall(input))) return denyJson(notReadDenial("edit", why));
   return "";
@@ -6325,7 +6396,7 @@ if (!isMainThread && workerData && typeof workerData === "object" && typeof work
       input = null;
     }
     // Not JSON: past MAX_INPUT_CHARS judged from its first part's text (oversized); any other goes ahead.
-    if (input === null) out = workerData.fourdaRaw.length > MAX_INPUT_CHARS ? oversized(workerData.fourdaRaw.slice(0, 64 * 1024)) : rawHold(workerData.fourdaRaw);
+    if (input === null) out = workerData.fourdaRaw.length > MAX_INPUT_CHARS ? oversized(workerData.fourdaRaw.slice(0, 64 * 1024), `over ${MAX_INPUT_CHARS / 1024 / 1024} MB and not JSON`) : rawHold(workerData.fourdaRaw);
     else out = workerData.oversize ? oversizedParsed(input) : respond(input);
   } catch {
     out = rawHold(workerData.fourdaRaw);

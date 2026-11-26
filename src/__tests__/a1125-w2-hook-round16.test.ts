@@ -6,7 +6,11 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
+import { timed } from "./helpers/a1125-hook-run.js";
 
 let s: Sandbox;
 beforeEach(() => {
@@ -150,5 +154,62 @@ describe("J3: an index is the project's own only when private by shape; any othe
   it("a private record releases a name judged from another host", () => {
     s.ledger([{ ecosystem: "npm", package: "acme-widget", version: "1.0.0", verdict: "unknown", not_checked: "private", reason: "a private-registry rule covers it" }]);
     expect(run("npm install --registry https://npm.mycorp.com acme-widget@1.0.0").decision).toBe("allow");
+  });
+});
+
+describe("J4: configDependencies are judged; a setting off the inert list is held", () => {
+  it("configDependencies: lodash 4.17.20 (avoid) held", () => {
+    s.ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid", reason: "test avoid" }]);
+    const r = s.write(`${s.project}/pnpm-workspace.yaml`, "configDependencies:\n  lodash: '4.17.20+sha512-abc'\n");
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("answered avoid");
+  });
+  it.each(["linkWorkspacePackages: false\n", "dedupePeerDependents: false\n", "catalogMode: prefer\n", "minimumReleaseAge: 1440\n", "supportedArchitectures:\n  os:\n    - linux\n", "nodeVersion: 18.0.0\n"])("%j: held when changed", (content) => {
+    expect(s.write(`${s.project}/pnpm-workspace.yaml`, content).text).toContain("could not be read");
+  });
+  it("a setting on the list goes ahead", () => {
+    expect(s.write(`${s.project}/pnpm-workspace.yaml`, "packages:\n  - 'apps/*'\nnodeLinker: hoisted\nonlyBuiltDependencies:\n  - esbuild\n").decision).toBe("allow");
+  });
+});
+
+describe("J6: a byte that ends a line for some shell inside the heredoc-argument form: not text", () => {
+  it.each(["\r", "\u0085", " ", " ", "\f", "\v"])("%j inside: held", (b) => {
+    s.ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid", reason: "test avoid" }]);
+    const command = `git commit -m "$(cat <<'EOF'\ndocs\nEOF${b}\nnpm i lodash@4.17.20\nEOF\n)"`;
+    expect(run(command).decision, JSON.stringify(command)).toBe("deny");
+  });
+  it("the plain form still goes ahead", () => {
+    expect(run(`git commit -m "$(cat <<'EOF'\ndocs: npm install x\nEOF\n)"`).decision).toBe("allow");
+  });
+});
+
+describe("J7: pnpm's package.yaml and package.json5 are manifests this hook does not read: held", () => {
+  it.each(["package.yaml", "package.json5", "sub/Package.YAML"])("a Write of %s is held with the remedy", (name) => {
+    const r = s.write(`${s.project}/${name}`, "dependencies:\n  lodash: 4.17.20\n");
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("write the project's manifest as package.json");
+  });
+});
+
+describe("J9: after an install command that ran, one line of advice (never a denial)", () => {
+  const post = (command: string, tool = "Bash", env: Record<string, string> = {}) => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PostToolUse", tool_name: tool, tool_input: { command }, tool_response: {} }, env);
+  it.each([["npm install lodash@4.17.21", "Bash"], ["pip install -r requirements.txt", "Bash"], ["cd app && pnpm add -D zod", "Bash"], ["npm ci; npm update", "PowerShell"]])("%s: advised", (command, tool) => {
+    const r = post(command, tool);
+    expect(r.decision).not.toBe("deny");
+    expect(r.text).toBe("The package manager decides the releases actually installed. Run vulnerability_scan to check them.");
+  });
+  it.each(["echo 'npm install lodash'", "git commit -m 'npm install x'", "ls -la", "npm test"])("%s: nothing", (command) => {
+    expect(post(command).text).toBe("");
+  });
+  it("in advise mode too; never with no ledger or the guard off", () => {
+    expect(post("npm install lodash@4.17.21", "Bash", { FOURDA_GUARD: "advise" }).text).toContain("vulnerability_scan");
+    expect(post("npm install lodash@4.17.21", "Bash", { FOURDA_GUARD: "off" }).text).toBe("");
+    rmSync(join(s.home, "check-ledger.jsonl"));
+    expect(post("npm install lodash@4.17.21").text).toBe("");
+  });
+  it("an ordinary command costs under 100 ms of the hook's CPU", () => {
+    const r = timed(s.home, { session_id: "s", cwd: s.project, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "ls -la" }, tool_response: {} });
+    expect(r.decision).not.toBe("deny");
+    expect(r.cpu).toBeLessThan(100);
   });
 });
