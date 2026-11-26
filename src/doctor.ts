@@ -7,7 +7,7 @@
  * 2. A SQLite driver opens a database (node:sqlite, else better-sqlite3)
  * 3. The data folder, the server's own database, the cache and the app's
  *    database, each named by its path with its state (dataFolderChecks)
- * 4. LLM providers are configured (optional)
+ * 4. The embedding provider for semantic recall, when one is configured (optional)
  * 5. OSV.dev and the registries answer, through the configured proxy
  *
  * Usage:
@@ -29,7 +29,7 @@ import {
   standaloneDbPath,
 } from "./db.js";
 import { closeServerCacheDb, getServerCacheDb, serverCacheState } from "./live/cache.js";
-import { NODE_SQLITE_MIN, openDatabase, sqliteDriverStatus } from "./sqlite-driver.js";
+import { openDatabase, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { checkLookupReachability } from "./doctor-network.js";
@@ -222,6 +222,16 @@ function appDatabaseCheck(selected: string, standaloneMode: boolean): Check {
   return { name, status: "pass", detail: `${selected}: ${v.tables?.length ?? 0} tables, read-only${leftover}` };
 }
 
+/**
+ * The colour codes for the check marks: none unless stdout is a terminal, and none when NO_COLOR is
+ * set to anything (https://no-color.org). Piped into a file or a client's log, `--doctor` printed
+ * raw escape codes (audit 2026-11-25).
+ */
+export function doctorColors(isTTY: boolean, env: NodeJS.ProcessEnv): { colors: Record<"pass" | "warn" | "fail", string>; reset: string } {
+  if (!isTTY || (env.NO_COLOR ?? "") !== "") return { colors: { pass: "", warn: "", fail: "" }, reset: "" };
+  return { colors: { pass: "\x1b[32m", warn: "\x1b[33m", fail: "\x1b[31m" }, reset: "\x1b[0m" };
+}
+
 export async function runDoctor(): Promise<void> {
   console.log("\n  4DA MCP Server — Doctor\n");
 
@@ -254,7 +264,7 @@ export async function runDoctor(): Promise<void> {
       ? (sqlite.problem ?? "no SQLite driver")
       : sqlite.driver.name === "node:sqlite"
         ? `node:sqlite (built into Node ${process.versions.node}) opened an in-memory database`
-        : `better-sqlite3 opened an in-memory database (${passedOver || `node:sqlite needs Node ${NODE_SQLITE_MIN}+`})`,
+        : `better-sqlite3 opened an in-memory database (${passedOver || "node:sqlite needs Node 22.13+ or 23.4+"})`,
   });
 
   // 3. The data folder and every database the tools use, by path. Opening them needs a driver.
@@ -300,8 +310,7 @@ export async function runDoctor(): Promise<void> {
 
   // Print results
   const icons = { pass: "\u2713", warn: "!", fail: "\u2717" };
-  const colors = { pass: "\x1b[32m", warn: "\x1b[33m", fail: "\x1b[31m" };
-  const reset = "\x1b[0m";
+  const { colors, reset } = doctorColors(Boolean(process.stdout.isTTY), process.env);
 
   for (const check of checks) {
     const icon = icons[check.status];

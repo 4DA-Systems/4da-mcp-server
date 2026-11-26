@@ -29,7 +29,7 @@
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 
-import { checkNativeBindings, NATIVE_BINDING_FIX } from "./native-bindings.js";
+import { checkNativeBindings, nativeBindingRemedy } from "./native-bindings.js";
 
 export interface SqliteRunResult {
   changes: number;
@@ -408,8 +408,7 @@ export function resolveSqliteDriver(
     ? "FOURDA_SQLITE_DRIVER=none disables SQLite: the database tools are unavailable. Unset it to let the server choose a driver."
     : forced
     ? `FOURDA_SQLITE_DRIVER=${env.FOURDA_SQLITE_DRIVER} forces ${forced}, which cannot be used here (${tried}). Unset it to let the server choose.`
-    : `No SQLite driver is usable (${tried}). Fix either one: upgrade Node.js to ${NODE_SQLITE_MIN} or later ` +
-      `(its built-in node:sqlite needs no install step), or let better-sqlite3 build: ${NATIVE_BINDING_FIX}`;
+    : `No SQLite driver is usable (${tried}). ${nativeBindingRemedy()}`;
   return { driver: null, rejected, problem };
 }
 

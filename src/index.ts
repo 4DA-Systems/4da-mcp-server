@@ -33,6 +33,8 @@
  * connection/request, so 2025-era hosts (classic `initialize` handshake) and
  * 2026-07-28 hosts (stateless `server/discover`) are both supported.
  */
+// First, before any other module runs: below Node.js 22 the process stops here with one line (node-gate.ts).
+import "./node-gate.js";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { StdioGate } from "./stdio-gate.js";
 import type { Server } from "@modelcontextprotocol/server";

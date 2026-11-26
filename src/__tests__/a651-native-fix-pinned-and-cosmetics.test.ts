@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import type { HeldDependency } from "../live/held-dependencies.js";
 import { heldText } from "../live/held-dependencies.js";
 import { NATIVE_BINDING_FIX, nativeBindingMessage } from "../native-bindings.js";
-import { RUNNING_VERSION, serverUsage } from "../usage.js";
+import { serverUsage } from "../usage.js";
 
 /** An npx line that names this package with no version after it. */
 const UNPINNED = /npx\s+(?:-\S+\s+)*@4da\/mcp-server(?!@)/;
@@ -23,7 +23,8 @@ const UNPINNED = /npx\s+(?:-\S+\s+)*@4da\/mcp-server(?!@)/;
 describe("the better-sqlite3 remedy names the pinned server", () => {
   it("no unpinned npx line, and the pinned one with --allow-scripts", () => {
     expect(NATIVE_BINDING_FIX).not.toMatch(UNPINNED);
-    expect(NATIVE_BINDING_FIX).toContain(`npx -y --prefer-offline --allow-scripts=better-sqlite3 @4da/mcp-server@${RUNNING_VERSION ?? "<version>"}`);
+    // No npx line at all since audit 2026-11-25 (H-5): the remedy names no command that runs a package.
+    expect(NATIVE_BINDING_FIX).not.toMatch(/\bnpx\s/);
     expect(nativeBindingMessage(new Error("Could not locate the bindings file"))).not.toMatch(UNPINNED);
   });
 });

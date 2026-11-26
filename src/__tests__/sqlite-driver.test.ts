@@ -258,9 +258,10 @@ describe("driver selection", () => {
   it("rejects a better-sqlite3 whose import succeeds but whose native module is missing", () => {
     const r = resolveSqliteDriver({ node: noNodeSqlite, better: missingBindings }, {});
     expect(r.driver).toBeNull();
-    expect(r.problem).toContain("upgrade Node.js to 22.13.0 or later");
+    // Audit 2026-11-25 (H-5): the remedy for this Node line, in words, once; no npm 12 steps.
+    expect(r.problem).toContain("reinstall @4da/mcp-server with the Node.js that runs it");
     expect(r.problem).toContain("Could not locate the bindings file");
-    expect(r.problem).toContain("npm install-scripts approve better-sqlite3");
+    expect(r.problem).not.toContain("npm install-scripts approve better-sqlite3");
   });
 
   it("reports better-sqlite3 as not installed when it is absent (an optional dependency)", () => {
