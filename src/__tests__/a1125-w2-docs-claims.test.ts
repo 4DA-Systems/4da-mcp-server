@@ -344,3 +344,32 @@ describe("what_should_i_know after confirmation round 11: one promise, the rest 
     }
   });
 });
+
+describe("what_should_i_know after confirmation round 12: the wordings the docs quote", () => {
+  const wsik = text("src/tools/what-should-i-know.ts");
+  it("a requirements file the task names: the three wordings", () => {
+    for (const said of ["a requirements file outside the project is not read", "the requirements file it names could not be read"]) {
+      expect(wsik).toContain(`unreadable: "${said}"`);
+      expect(next).toContain(`"${said}"`);
+    }
+    expect(text("src/tools/briefing-confirm.ts")).toContain('file: "a line of the requirements file the task names"');
+    expect(next).toContain('seen as "a line of the requirements file the task names"');
+  });
+  it("the not_packages rule has no lines or fences, and the best-effort sentence is unconditional", () => {
+    for (const doc of [readme, next]) {
+      expect(doc).not.toContain("on its line, a continued line or in the same fenced block");
+      expect(doc).not.toContain("Where the task holds a fenced block, a manifest file name or a command");
+      expect(doc).not.toContain("Where the task holds a command, a fenced block or a manifest file name");
+    }
+    expect(next).toContain("when a package manager's name stands anywhere earlier in the task");
+    expect(next).toContain("In a call that declared at least one package, every `safe_to_delegate` reason says");
+    expect(readme).toContain("In a call that declared at least one package, every `safe_to_delegate` reason says so");
+  });
+  it("a public entry without version is never safe_to_delegate", () => {
+    expect(next).toContain("the answer is never `safe_to_delegate`");
+    expect(readme).toContain("the answer is never `safe_to_delegate`");
+  });
+  it("the near-miss cap wording in the code (a safeguard; not quoted in the docs)", () => {
+    expect(wsik).toContain("than one call checks for near-miss names (${WORD_SCAN_CAP})");
+  });
+});
