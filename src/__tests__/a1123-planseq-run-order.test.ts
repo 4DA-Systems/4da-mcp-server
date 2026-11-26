@@ -252,7 +252,9 @@ describe("parseCommand reads every form the planner writes", () => {
     ['cargo add "git2@^0.21.0" --dev', { kind: "set", tool: "cargo", pkg: "git2", version: "0.21.0", flags: "--dev" }],
     ["yarn upgrade @babel/core", { kind: "refresh", tool: "yarn", pkg: "@babel/core" }],
     ["pnpm update -r vite --depth Infinity", { kind: "refresh", tool: "pnpm", pkg: "vite" }],
-    ["uv lock --upgrade-package h11", { kind: "refresh", tool: "uv", pkg: "h11" }],
+    // Wave 2 (2b): every uv upgrade of one lockfile merges into one `uv lock` (no pin lowers another).
+    ["uv lock --upgrade-package h11", { kind: "uvlock", pkg: "h11", version: null }],
+    ["uv lock --upgrade-package mem0ai==2.0.18", { kind: "uvlock", pkg: "mem0ai", version: "2.0.18" }],
     ["cargo update -p url@2.2.2 --precise 2.5.9", { kind: "precise", pkg: "url", from: "2.2.2", to: "2.5.9" }],
     ["go get golang.org/x/net@v0.62.0", { kind: "goget" }],
     ['uv pip compile requirements.in -o requirements.txt --upgrade-package "django==4.2.30"', { kind: "compile" }],

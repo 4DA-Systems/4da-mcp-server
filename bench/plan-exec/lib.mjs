@@ -64,7 +64,8 @@ export function tokenize(line) {
 const ALLOWED = {
   npm: ["install", "i", "update", "up", "uninstall", "un", "rm", "remove", "dedupe", "ddp", "pkg"],
   pnpm: ["install", "i", "update", "up", "upgrade", "add", "remove", "rm", "dedupe"],
-  yarn: ["", "install", "upgrade", "up", "add", "remove", "dedupe"],
+  // `yarn workspace <member> add <spec>`: the planner's command for a Yarn workspace member (fix-paths.ts yarnMemberFix).
+  yarn: ["", "install", "upgrade", "up", "add", "remove", "dedupe", "workspace"],
   bun: ["install", "i", "update", "add", "remove"],
   cargo: ["update", "add", "remove", "rm"],
   uv: ["lock", "add", "remove"],
@@ -91,6 +92,7 @@ export function prepareCommand(argv, { yarnFlavor = "classic" } = {}) {
   if (!allowed.includes(sub) && !(tool === "yarn" && sub.startsWith("-"))) return { refused: `\`${tool} ${sub}\` is not a lockfile or manifest change this harness runs` };
   if (tool === "npm" && sub === "pkg" && argv[2] !== "set") return { refused: "only `npm pkg set` is run" };
   if (tool === "go" && sub === "mod" && argv[2] !== "tidy") return { refused: "only `go mod tidy` is run" };
+  if (tool === "yarn" && sub === "workspace" && (argv.length < 5 || argv[3] !== "add")) return { refused: "only `yarn workspace <member> add <spec>` is run" };
   const has = (f) => argv.includes(f);
   const added = [];
   const env = {};
@@ -290,6 +292,26 @@ export function findLockfiles(root) {
 
 /** `yarn.lock` flavour: berry lockfiles carry `__metadata:`. */
 export const yarnFlavorOf = (lockText) => (/^__metadata:/m.test(lockText) ? "berry" : "classic");
+
+/**
+ * The Yarn flavour of the project a step runs in: the nearest yarn.lock at or above `cwd`, inside
+ * the copy. A workspace member's step runs in the member's directory, which has no yarn.lock of its
+ * own; judged from that directory alone, a Berry member's `yarn workspace <m> add` got Yarn 1's flags
+ * and failed with a Usage Error (redux-toolkit v1.9.0, audit 2026-11-25). Classic when none is found.
+ */
+export function yarnFlavorFor(copy, cwd) {
+  const top = path.resolve(copy);
+  let at = path.resolve(cwd);
+  for (let i = 0; i < 64; i++) {
+    const rel = path.relative(top, at);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) break;
+    const lock = path.join(at, "yarn.lock");
+    if (fs.existsSync(lock)) return yarnFlavorOf(fs.readFileSync(lock, "utf8"));
+    if (at === top) break;
+    at = path.dirname(at);
+  }
+  return "classic";
+}
 
 /** name -> Set(version) from one lockfile's text. */
 export function lockfileVersions(base, text) {
@@ -619,13 +641,45 @@ export function predictionCheck({ beforeRows, afterRows, steps }) {
   const after = vulnerableCopies(afterRows);
   const predictedRemaining = [...before].filter((k) => !planned.has(k));
   const remained = [...before].filter((k) => after.has(k));
+  // A planned copy that moved to another release which still carries one of its advisories fell
+  // short of the fix (crewAI: the merged uv lock stopped cryptography at 45.0.7, under the row's
+  // 50.0.0): it counts as planned but remained, written `old -> new`, and the new copy is not
+  // counted again as one the run brought in.
+  const idsOf = (rows) => {
+    const m = new Map();
+    for (const v of rows) {
+      const k = copyKey(v.ecosystem, v.package, v.current_version);
+      if (!m.has(k)) m.set(k, new Set());
+      for (const i of rowIds(v)) m.get(k).add(i);
+    }
+    return m;
+  };
+  const beforeIds = idsOf(beforeRows);
+  const afterIds = idsOf(afterRows);
+  const pkgOf = (k) => k.slice(0, k.lastIndexOf("|"));
+  const fresh = [...after].filter((k) => !before.has(k));
+  // The target each planned copy's row named: only a copy that landed BELOW it fell short (a copy
+  // that reached the target and still carries an advisory no release fixes did what was planned).
+  const targets = new Map();
+  for (const s of steps) if (s.actions.length > 0) for (const r of s.rows) if (r.targetVersion) targets.set(copyKey(r.ecosystem, r.package, r.currentVersion), r.targetVersion);
+  const shortOf = new Set();
+  const fellShort = [];
+  for (const k of before) {
+    if (!planned.has(k) || after.has(k) || !targets.has(k)) continue;
+    const ids = beforeIds.get(k) ?? new Set();
+    const below = (n) => compareLoose(n.slice(n.lastIndexOf("|") + 1), targets.get(k)) < 0;
+    const landed = fresh.filter((n) => pkgOf(n) === pkgOf(k) && below(n) && [...(afterIds.get(n) ?? [])].some((i) => ids.has(i)));
+    if (landed.length === 0) continue;
+    for (const n of landed) shortOf.add(n);
+    fellShort.push(`${k} -> ${landed.map((n) => n.slice(n.lastIndexOf("|") + 1)).join(", ")}`);
+  }
   return {
     vulnerable_copies_before: before.size,
     predicted_remaining: predictedRemaining.length,
     remaining: remained.length,
     vulnerable_copies_after: after.size,
-    new_vulnerable_copies: [...after].filter((k) => !before.has(k)).length,
-    planned_but_remained: remained.filter((k) => planned.has(k)).sort(),
+    new_vulnerable_copies: fresh.filter((k) => !shortOf.has(k)).length,
+    planned_but_remained: [...remained.filter((k) => planned.has(k)), ...fellShort].sort(),
     not_planned_but_cleared: predictedRemaining.filter((k) => !after.has(k)).sort(),
   };
 }
@@ -696,6 +750,44 @@ export function gateFindings(t, thresholds, projects = []) {
   if (thresholds.require_order_source) {
     const other = Object.entries(t.order_sources).filter(([s]) => s !== thresholds.require_order_source);
     if (other.length > 0) f.push(`plans without ${thresholds.require_order_source}: ${other.map(([s, n]) => `${n} from ${s}`).join(", ")}`);
+  }
+  // Groups (`groups.<name>`: `ids` and the corpus-wide keys): a set of projects held to numbers of its
+  // own, so the projects an earlier release was gated on keep that gate when the corpus grows.
+  const groups = thresholds.groups && typeof thresholds.groups === "object" ? thresholds.groups : {};
+  for (const [name, g] of Object.entries(groups)) {
+    const ids = Array.isArray(g.ids) ? g.ids : [];
+    const members = projects.filter((p) => ids.includes(p.id));
+    if (members.length === 0) continue;
+    const gt = totals(members);
+    const gmax = (key, value, what) => {
+      if (typeof g[key] === "number" && value > g[key]) f.push(`${name}: ${value} ${what} (allowed in the group: ${g[key]})`);
+    };
+    gmax("max_failed_steps", gt.steps_failed, "step(s) failed");
+    gmax("max_lowering_steps", gt.steps_lowering, "step(s) lowered a version that was installed or that an earlier step set");
+    gmax("max_refused_steps", gt.steps_refused, "step(s) named a command this harness does not run");
+    gmax("max_planned_but_remained", gt.planned_but_remained, "vulnerable copies a step ran for were still there after the run");
+    gmax("max_new_vulnerable_copies", gt.new_vulnerable_copies, "vulnerable copies the run brought in that were not there before");
+    if (typeof g.min_net_cleared_ratio === "number" && (gt.net_cleared_ratio ?? 0) < g.min_net_cleared_ratio) {
+      f.push(`${name}: advisories ${gt.advisories_before} -> ${gt.advisories_after}: ${gt.net_cleared_ratio} cleared, below the group's ${g.min_net_cleared_ratio}`);
+    }
+  }
+  // Per-project floors (`projects.<id>`): a project measured on its own, so a regression there is not
+  // hidden by the corpus total. Each floor is never below what the published release measured there.
+  const own = thresholds.projects && typeof thresholds.projects === "object" ? thresholds.projects : {};
+  for (const p of projects) {
+    const o = own[p.id];
+    if (!o || p.error) continue;
+    const pmax = (key, value, what) => {
+      if (typeof o[key] === "number" && value > o[key]) f.push(`${p.id}: ${value} ${what} (allowed there: ${o[key]})`);
+    };
+    pmax("max_failed_steps", p.counts.steps_failed, "step(s) failed");
+    pmax("max_lowering_steps", p.counts.steps_lowering, "step(s) lowered a version that was installed or that an earlier step set");
+    pmax("max_refused_steps", p.counts.steps_refused, "step(s) named a command this harness does not run");
+    pmax("max_planned_but_remained", p.prediction.planned_but_remained?.length ?? 0, "vulnerable copies a step ran for were still there after the run");
+    const ratio = p.advisories.before > 0 ? Math.trunc(((p.advisories.before - p.advisories.after) / p.advisories.before) * 10_000) / 10_000 : null;
+    if (typeof o.min_net_cleared_ratio === "number" && (ratio ?? 0) < o.min_net_cleared_ratio) {
+      f.push(`${p.id}: advisories ${p.advisories.before} -> ${p.advisories.after}: ${ratio} cleared, below its floor ${o.min_net_cleared_ratio}`);
+    }
   }
   return f;
 }

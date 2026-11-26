@@ -111,6 +111,25 @@ export function unsafeDirLabel(dir: string): string {
   return `[unsafe directory name, escaped: ${out}${dir.length > MAX_DIR_LENGTH ? "..." : ""}]`;
 }
 
+/** A name in the package / dependency-group grammar (PEP 503, PEP 735): letters and digits, with `.`, `_`, `-` inside. */
+const PLAIN_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$/;
+
+export function isPlainName(name: string): boolean {
+  return PLAIN_NAME.test(name);
+}
+
+/**
+ * How a name from a repository's file that is not a plain name is said in words: every character
+ * outside letters, digits, `.`, `_` and `-` written as `\uXXXX`, inside a marker
+ * (`[dependency group whose name is not plain, escaped: dev\u0024\u0028x\u0029]`).
+ */
+export function escapedNameLabel(name: string, kind: string): string {
+  const shown = name.length > 128 ? name.slice(0, 128) : name;
+  let out = "";
+  for (const ch of shown) out += /^[A-Za-z0-9._-]$/.test(ch) ? ch : hex(ch.codePointAt(0)!);
+  return `[${kind} whose name is not plain, escaped: ${out}${name.length > 128 ? "..." : ""}]`;
+}
+
 /** The sentence a step in such a directory carries in place of its command. */
 export function unsafeDirWords(dir: string): string {
   return `the directory ${unsafeDirLabel(dir)} has a name that is not safe to put in a command (it holds characters a shell reads as code, or starts with "-" or "@"), so no command or directory is named for it: handle that directory by hand, with its name quoted`;

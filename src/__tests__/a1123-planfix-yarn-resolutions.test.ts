@@ -44,15 +44,16 @@ describe("a Yarn classic in-range refresh", () => {
     const row = step("child");
     expect(row.action).toBe("lockfile_refresh");
     expect(row.commands).toEqual([
-      { dir: ".", run: 'npm pkg set "resolutions.child=1.0.2"' },
+      { dir: ".", run: 'npm pkg set "resolutions.child=1.0.3"' },
       { dir: ".", run: "yarn install" },
     ]);
     expect(row.reasons.join(" ")).toMatch(/Yarn classic has no command that refreshes one package's yarn\.lock entries/);
-    expect(result.run_order.map((s: { run: string }) => s.run)).toEqual(['npm pkg set "resolutions.child=1.0.2"', "yarn install"]);
+    expect(result.run_order.map((s: { run: string }) => s.run)).toEqual(['npm pkg set "resolutions.child=1.0.3"', "yarn install"]);
   });
 
-  it("with a copy on another line, or above the target: the hand step only", async () => {
-    for (const other of ["2.5.0", "1.0.3"]) {
+  it("with a copy on another line, or above the release a refresh resolves to: the hand step only", async () => {
+    // 1.0.3, the newest release on the line, is what the resolution forces now (a1125 w2): a copy at it is no longer above it.
+    for (const other of ["2.5.0"]) {
       project([
         ["child@^1.0.0", "1.0.0"],
         [`child@^${other}`, other],

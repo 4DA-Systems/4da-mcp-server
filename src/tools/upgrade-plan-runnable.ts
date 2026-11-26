@@ -26,7 +26,10 @@ import { expandWorkspaces, memberNamesOf, pnpmYamlList } from "../live/js-manife
 import { normalizePythonName } from "../live/lockfile-parsers-pygo.js";
 import { tomlHeader, tomlKeyValue, tomlLines, tomlStrings } from "../live/private-hosts.js";
 import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.js";
-import { lowestPython, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { lockedVersions, lowestPython, parsePep508, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { groupAdvisories } from "../live/advisory-groups.js";
+import { isPrereleaseVersion } from "../live/osv-ranges.js";
+import type { ResolvedDependency, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { isShellSafeDir, unsafeDirWords } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { overrideCommandsOf, recordOverrideCommands } from "./upgrade-plan-overrides.js";
@@ -317,6 +320,269 @@ export async function withPythonSupport(rows: RunnableRow[], projectRoot: string
   }
 }
 
+/** The packages a uv.lock records as the project's own (editable or virtual sources), with their versions. */
+function uvOwnPackages(dir: string): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const lock = readText(path.join(dir, "uv.lock"));
+  if (lock === null) return out;
+  for (const block of lock.split(/^\[\[package\]\]\s*$/m).slice(1)) {
+    const body = block.split(/^\[(?!\[package\]\])/m)[0];
+    const name = /^name\s*=\s*"([^"]+)"/m.exec(body)?.[1];
+    const source = /^source\s*=\s*\{([^}]*)\}/m.exec(body)?.[1] ?? "";
+    if (!name || !/\b(?:editable|virtual)\s*=/.test(source)) continue;
+    out.set(normalizePythonName(name), /^version\s*=\s*"([^"]+)"/m.exec(body)?.[1] ?? null);
+  }
+  return out;
+}
+
+/**
+ * A `uv lock --upgrade-package name==version` whose release requires the project itself at a
+ * version the project is not (crewAI 0.86.0: crewai-tools 1.15.1 requires crewai==1.15.1, and the
+ * project is crewai 0.86.0): uv cannot lock it ("requirements are unsatisfiable"). Moved to words.
+ * Read from the release's own requirements (cached); a release whose requirements are not known
+ * keeps its command.
+ */
+export async function withoutSelfRequiringTargets(rows: RunnableRow[], projectRoot: string, sources: Pick<FixPathSources, "pypiRequiresDist"> | null): Promise<void> {
+  if (!sources) return;
+  for (const r of rows) {
+    if (r.ecosystem !== "PyPI") continue;
+    const lists: Array<{ list: Array<{ dir: string; command: string }>; set: (left: Array<{ dir: string; command: string }>, words: Array<{ dir: string; instruction: string }>) => void }> = [];
+    if (r.upgradeCommands) {
+      lists.push({
+        list: r.upgradeCommands,
+        set: (left, words) => {
+          if (left.length > 0) r.upgradeCommands = left as RunnableRow["upgradeCommands"];
+          else delete r.upgradeCommands;
+          r.upgradeInstructions = [...(r.upgradeInstructions ?? []), ...words];
+        },
+      });
+    }
+    for (const u of r.parentUpgrades ?? []) {
+      for (const l of u.levers) {
+        if (!l.commands) continue;
+        lists.push({
+          list: l.commands,
+          set: (left, words) => {
+            if (left.length > 0) l.commands = left as typeof l.commands;
+            else delete l.commands;
+            l.instructions = [...(l.instructions ?? []), ...words];
+          },
+        });
+      }
+    }
+    for (const { list, set } of lists) {
+      const words: Array<{ dir: string; command: string; instruction: string }> = [];
+      for (const c of list) {
+        const m = UV_PIN.exec(c.command);
+        if (!m) continue;
+        const own = uvOwnPackages(path.resolve(projectRoot, c.dir));
+        if (own.size === 0) continue;
+        const requires = await sources.pypiRequiresDist(m[1], m[2]).catch(() => null);
+        if (!requires) {
+          // Not established: what the release requires could not be read, so whether it requires the project itself is not known.
+          words.push({
+            dir: c.dir,
+            command: c.command,
+            instruction: `no command: whether ${m[1]} ${m[2]} requires another version of this project itself (${[...own.keys()].slice(0, 3).join(", ")}) could not be checked in this call (PyPI did not answer for what ${m[1]} ${m[2]} requires), so \`${c.command}\` is not given; call upgrade_planner again`,
+          });
+          continue;
+        }
+        for (const req of requires) {
+          const parsed = parsePep508(req);
+          if (!parsed || parsed.extra || !own.has(parsed.name)) continue;
+          const version = own.get(parsed.name) ?? null;
+          if (parsed.spec !== "" && version !== null && pythonSpecAdmits(parsed.spec, version) !== false) continue;
+          const spec = /^[A-Za-z0-9.*!=<>~,+_-]{0,64}$/.test(parsed.spec) ? ` "${parsed.spec}"` : "";
+          words.push({
+            dir: c.dir,
+            command: c.command,
+            instruction: `no command: ${m[1]} ${m[2]} requires ${parsed.name}${spec}, and ${parsed.name} is this project itself${version ? ` (${version} in uv.lock)` : ""}: uv cannot lock a release that requires another version of the project, so \`${c.command}\` fails ("requirements are unsatisfiable"). It becomes possible once the project's own version is one ${m[1]} ${m[2]} admits; until then this advisory stays`,
+          });
+          break;
+        }
+      }
+      if (words.length === 0) continue;
+      set(
+        list.filter((c) => !words.some((w) => w.dir === c.dir && w.command === c.command)),
+        words.map((w) => ({ dir: w.dir, instruction: w.instruction })),
+      );
+      r.reasons = r.reasons.filter((t) => !(t.startsWith("Fixable now with a lockfile refresh") && words.some((w) => t.includes(`\`${w.command}\``))));
+      for (const w of words) if (!r.reasons.includes(`${SELF_REQUIRING_START}${w.instruction}`)) r.reasons.push(`${SELF_REQUIRING_START}${w.instruction}`);
+    }
+  }
+}
+
+/**
+ * Whether a PEP 508 marker holds on Python `python`: only `python_version` / `python_full_version`
+ * comparisons joined by `and` / `or` are read; anything else is null (not known).
+ */
+function pythonMarkerHolds(marker: string, python: string): boolean | null {
+  const text = marker.trim();
+  if (text === "") return true;
+  const ors = text.split(/\s+or\s+/);
+  let any = false;
+  for (const or of ors) {
+    let all = true;
+    for (const clause of or.split(/\s+and\s+/)) {
+      const m = /^\(?\s*python(?:_full)?_version\s*(<=|>=|==|!=|<|>|~=)\s*["']([0-9.*]+)["']\s*\)?$/.exec(clause.trim());
+      if (!m) return null;
+      const admits = pythonSpecAdmits(`${m[1]}${m[2]}`, python);
+      if (admits === null) return null;
+      all &&= admits;
+    }
+    any ||= all;
+  }
+  return any;
+}
+
+/**
+ * A uv pin whose release requires a dependency that, on the project's lowest supported Python,
+ * resolves to an affected release (crewAI 0.86.0: virtualenv 21.14.13 requires filelock
+ * ">=3.24.2,<5" on Python 3.10, where the newest filelock it can install is 4.1.0, which 18
+ * advisories affect; 4.2.x needs Python 3.11). The step would bring the affected copy in: it is held
+ * as NOT a clean fix (out of run_order, not counted as fixed). Only a pick the Python floor changes
+ * is judged here (the newest release the requirement admits is the planner's own held check);
+ * whatever cannot be read leaves the step as it is.
+ */
+export async function withPythonFloorHolds(
+  rows: RunnableRow[],
+  projectRoot: string,
+  sources: Pick<FixPathSources, "pypiRequiresDist" | "releaseFacts"> | null,
+  query: ((deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>) | null,
+  deadline: number,
+  /** The scan's advisories on one installed copy (for what the upgrade would clear). */
+  advisoriesOf: (name: string, version: string | null) => VulnerabilityEntry[] = () => [],
+): Promise<void> {
+  for (const r of rows) {
+    if (r.ecosystem !== "PyPI") continue;
+    const commands = [...(r.upgradeCommands ?? []), ...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.levers.flatMap((l) => l.commands ?? []))];
+    for (const c of commands) {
+      const m = UV_PIN.exec(c.command);
+      if (!m) continue;
+      const python = projectPython(path.resolve(projectRoot, c.dir));
+      const lowest = lowestPython(python?.spec ?? null);
+      // No Python floor declared: there is nothing to judge the release's requirements against.
+      if (!python || !lowest) continue;
+      // Three outcomes, never two: a check that could not finish holds the step (it never reads as a pass).
+      const notEstablished = (why: string) => {
+        const text = `${m[1]} ${m[2]} is NOT a clean fix: confirm a release with dependency_check before pinning it. Whether what it requires installs a release an advisory affects on this project's lowest supported Python (${lowest}, from ${python.from}) could not be checked in this call (${why}); call upgrade_planner again`;
+        if (!r.reasons.includes(text)) r.reasons.push(text);
+      };
+      if (!sources || !query) {
+        notEstablished("live lookups are off");
+        break;
+      }
+      if (Date.now() > deadline) {
+        notEstablished("the time for this check ran out");
+        break;
+      }
+      const requires = await sources.pypiRequiresDist(m[1], m[2]).catch(() => null);
+      if (!requires) {
+        notEstablished(`PyPI did not answer for what ${m[1]} ${m[2]} requires`);
+        break;
+      }
+      let unfinished: string | null = null;
+      for (const raw of requires) {
+        const parsed = parsePep508(raw);
+        if (!parsed || parsed.extra || parsed.spec === "") continue;
+        const marker = raw.includes(";") ? raw.slice(raw.indexOf(";") + 1) : "";
+        // A marker this check cannot read may hold on the floor: judged, never skipped.
+        if (pythonMarkerHolds(marker, lowest) === false) continue;
+        if (Date.now() > deadline) {
+          unfinished = "the time for this check ran out";
+          break;
+        }
+        const facts = await sources.releaseFacts("PyPI", parsed.name).catch(() => null);
+        if (!facts) {
+          unfinished = `PyPI did not answer for ${parsed.name}'s releases`;
+          break;
+        }
+        const admitted = facts.versions
+          .filter((v) => !isPrereleaseVersion(v, "PyPI") && pythonSpecAdmits(parsed.spec, v) === true)
+          .sort((a, b) => compareVersions(b, a, "PyPI"));
+        const onFloor = admitted.find((v) => {
+          const needs = facts.requiresPython?.[v];
+          return !needs || pythonSpecAdmits(needs, lowest) !== false;
+        });
+        if (!onFloor || onFloor === admitted[0]) continue;
+        // The release on the floor, and the releases above it the requirement admits (the first clean one is named).
+        const above = admitted.filter((v) => compareVersions(v, onFloor, "PyPI") > 0).reverse().slice(0, 8);
+        const dep = (version: string): ResolvedDependency => ({ name: parsed.name, version, ecosystem: "PyPI", isDev: false, isDirect: false, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] });
+        const answer = await query([onFloor, ...above].map(dep)).catch(() => null);
+        if (!answer) {
+          unfinished = `OSV.dev did not answer for ${parsed.name} ${onFloor}`;
+          break;
+        }
+        const unchecked = new Set(answer.uncheckedDependencies ?? []);
+        if (unchecked.has(`PyPI\0${parsed.name}\0${onFloor}`)) {
+          unfinished = `OSV.dev gave no answer for ${parsed.name} ${onFloor}`;
+          break;
+        }
+        const at = (v: string) => answer.vulnerabilities.filter((x) => !x.maintenance && x.package === parsed.name && x.currentVersion === v);
+        const landing = groupAdvisories(at(onFloor));
+        if (landing.length === 0) continue;
+        const clean = above.find((v) => !unchecked.has(`PyPI\0${parsed.name}\0${v}`) && at(v).length === 0) ?? null;
+        r.reasons.push(pythonFloorWords({
+          pkg: m[1], target: m[2], command: c.command, installed: r.currentVersion, lowest, from: python.from, spec: python.spec,
+          dep: parsed.name, depSpec: parsed.spec, onFloor, landing, clean, cleanNeeds: clean ? (facts.requiresPython?.[clean] ?? null) : null,
+          own: groupAdvisories(advisoriesOf(r.package, r.currentVersion)).length,
+          depLocked: uvLockedVersion(path.resolve(projectRoot, c.dir), parsed.name),
+          advisoriesOf,
+        }));
+        unfinished = null;
+        break;
+      }
+      if (unfinished) notEstablished(unfinished);
+    }
+  }
+}
+
+const SEVERITY_ORDER = ["critical", "high", "medium", "low", "unknown"] as const;
+
+/** The version of `name` a uv.lock in `dir` holds, when it holds exactly one. */
+function uvLockedVersion(dir: string, name: string): string | null {
+  const found = lockedVersions(path.join(dir, "uv.lock"), name);
+  return found.length === 1 ? found[0] : null;
+}
+
+/**
+ * The held row's words, for a person to decide in one read: what the upgrade would clear, what it
+ * would install on the lowest supported Python (how many advisories, the worst grade), which Python
+ * the clean release needs, and the two ways out.
+ */
+function pythonFloorWords(x: {
+  pkg: string; target: string; command: string; installed: string | null; lowest: string; from: string; spec: string;
+  dep: string; depSpec: string; onFloor: string; landing: ReturnType<typeof groupAdvisories>; clean: string | null; cleanNeeds: string | null;
+  own: number; depLocked: string | null; advisoriesOf: (name: string, version: string | null) => VulnerabilityEntry[];
+}): string {
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const depOwn = x.depLocked ? groupAdvisories(x.advisoriesOf(x.dep, x.depLocked)).length : 0;
+  const clears = [
+    ...(x.own > 0 ? [`${n(x.own, "advisory", "advisories")} on ${x.pkg} ${x.installed ?? ""}`.replace(/ $/, "")] : []),
+    ...(x.depLocked && depOwn > 0 ? [`${n(depOwn, "advisory", "advisories")} on ${x.dep} ${x.depLocked}, which it moves`] : []),
+  ];
+  const worst = SEVERITY_ORDER.find((s) => x.landing.some((g) => g.members.some((m) => m.severity === s))) ?? "unknown";
+  const ids = x.landing.map((g) => g.best.vulnId);
+  const shown = ids.slice(0, 3).join(", ") + (ids.length > 3 ? ` and ${ids.length - 3} more` : "");
+  const unlock = x.clean
+    ? x.cleanNeeds
+      ? `The first clean ${x.dep} it admits is ${x.clean}, which needs Python "${x.cleanNeeds}". Two ways out: raise requires-python in pyproject.toml to "${x.cleanNeeds}" (it is "${x.spec}" now) and call upgrade_planner again; or take the upgrade knowingly by writing the requirement ${x.pkg}==${x.target} yourself (the command is \`${x.command}\`; it is not in run_order).`
+      : `The first clean ${x.dep} it admits is ${x.clean}. Two ways out: raise requires-python in pyproject.toml so ${x.dep} ${x.clean} can install, then call upgrade_planner again; or take the upgrade knowingly by writing the requirement ${x.pkg}==${x.target} yourself (the command is \`${x.command}\`; it is not in run_order).`
+    : `No ${x.dep} release it admits was found clean, on any Python. Take the upgrade knowingly by writing the requirement ${x.pkg}==${x.target} yourself (the command is \`${x.command}\`; it is not in run_order), or wait for a fixed ${x.dep}.`;
+  return (
+    `${x.pkg} ${x.target} is NOT a clean fix: confirm a release with dependency_check before pinning it. ` +
+    `${clears.length > 0 ? `It would clear ${clears.join(" and ")}, but on` : "On"} this project's lowest supported Python (${x.lowest}, from ${x.from}) it requires ${x.dep} "${x.depSpec}", and the newest ${x.dep} that Python can install is ${x.onFloor}, which ${n(x.landing.length, "advisory affects", "advisories affect")} (worst: ${worst}; ${shown}). ${unlock}`
+  );
+}
+
+/** How the reason withoutSelfRequiringTargets writes starts. */
+export const SELF_REQUIRING_START = "uv: ";
+
+/** Whether withoutSelfRequiringTargets took a step off the row: not counted as fixed. */
+export function hasSelfRequiringTarget(row: { reasons: string[] }): boolean {
+  return row.reasons.some((r) => r.startsWith(`${SELF_REQUIRING_START}no command: `));
+}
+
 /** run_order_note's sentence for uv workspace members' own lockfiles. */
 export function staleLocksNote(files: string[]): string {
   const shown = files.slice(0, 6);
@@ -360,6 +626,29 @@ const YARN_DELETE = /^delete every yarn\.lock entry that resolves to /;
  * `npm pkg set "resolutions.<name>=<target>"`, then `yarn install`. It stays in package.json, which
  * the row says. Anything else (another line, a newer copy, an alias) keeps the hand step.
  */
+/**
+ * The release an exact Yarn classic resolution forces: the one a refresh of the parents'
+ * requirements resolves to (the newest clean release they admit, which the row's reason states),
+ * not the smallest fix, and never below a release another row's step sets for the package on that
+ * line. formik 2.2.9 (2026-11-26 replay): resolutions at the smallest fix (@babel/helpers 7.26.10),
+ * then `yarn workspace formik add` (Yarn 1 ignores the root's resolutions there) raised it to
+ * 7.29.15, and the root's next install forced it back down.
+ */
+function resolutionRelease(r: RunnableRow, rows: RunnableRow[], line: string | null): string {
+  const target = r.targetVersion!;
+  let pin = target;
+  const said = r.reasons.map((x) => /\(a refresh resolves it to ([^),\s]+)\)/.exec(x)?.[1]).find((v) => v !== undefined);
+  if (said && line !== null && lineOf(said) === line && compareVersions(said, pin, "npm") > 0) pin = said;
+  for (const o of rows) {
+    if (o.package !== r.package || o.ecosystem !== r.ecosystem) continue;
+    for (const c of o.upgradeCommands ?? []) {
+      const m = /@[=^~]?(\d[^\s"]*)"?(?: --\S+)*$/.exec(c.command);
+      if (m && line !== null && lineOf(m[1]) === line && compareVersions(m[1], pin, "npm") > 0) pin = m[1];
+    }
+  }
+  return pin;
+}
+
 export function withYarnClassicResolutions(rows: Array<RunnableRow & { action: string }>, projectRoot: string): void {
   for (const r of rows) {
     if (r.ecosystem !== "npm" || !r.currentVersion || !r.targetVersion) continue;
@@ -372,15 +661,16 @@ export function withYarnClassicResolutions(rows: Array<RunnableRow & { action: s
     const dirs = [...new Set(manual)];
     if (dirs.length === 0) continue;
     const line = lineOf(r.targetVersion);
+    const pin = resolutionRelease(r, rows, line);
     const ok = dirs.every((d) => {
       const held = yarnClassicVersions(path.join(path.resolve(projectRoot, d), "yarn.lock"), r.package);
-      return held !== null && held.length > 0 && line !== null && held.every((v) => lineOf(v) === line && compareVersions(v, r.targetVersion!, "npm") <= 0);
+      return held !== null && held.length > 0 && line !== null && held.every((v) => lineOf(v) === line && compareVersions(v, pin, "npm") <= 0);
     });
     if (!ok) continue;
-    recordOverrideCommands(r, dirs.map((dir) => ({ format: "yarn" as const, dir })), projectRoot, r.package, r.targetVersion, null);
+    recordOverrideCommands(r, dirs.map((dir) => ({ format: "yarn" as const, dir })), projectRoot, r.package, pin, null);
     const cmds = overrideCommandsOf(r);
     if (cmds.length === 0) continue;
-    const why = `Yarn classic has no command that refreshes one package's yarn.lock entries; every ${r.package} copy ${dirs.length === 1 && dirs[0] === "." ? "the lockfile" : `the lockfile in ${dirs.join(", ")}`} holds is on the ${line}.x line at or below ${r.targetVersion}, so an exact resolution moves them all there and nothing else: ${cmds.map((c) => `\`${c.command}\`${c.dir === "." ? "" : ` in ${c.dir}`}`).join(", then ")} (the resolution stays in package.json; remove it once every parent's own release holds ${r.targetVersion} or later)`;
+    const why = `Yarn classic has no command that refreshes one package's yarn.lock entries; every ${r.package} copy ${dirs.length === 1 && dirs[0] === "." ? "the lockfile" : `the lockfile in ${dirs.join(", ")}`} holds is on the ${line}.x line at or below ${pin}${pin === r.targetVersion ? "" : ` (the release a refresh resolves it to; ${r.targetVersion} is the smallest fix)`}, so an exact resolution moves them all there and nothing else: ${cmds.map((c) => `\`${c.command}\`${c.dir === "." ? "" : ` in ${c.dir}`}`).join(", then ")} (the resolution stays in package.json; remove it once every parent's own release holds ${pin} or later)`;
     if (!r.reasons.includes(why)) r.reasons.push(why);
   }
 }

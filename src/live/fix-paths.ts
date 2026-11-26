@@ -46,7 +46,7 @@ import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
-import { CRATES_USER_AGENT, releaseFeatureNames } from "./crates-versions.js";
+import { CRATES_USER_AGENT, defaultEnabledDependencies, releaseFeatureNames } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
@@ -136,6 +136,18 @@ export interface CratesSparse {
    * cached before it was read: such a record is read again (upgrade-planner-rust-version.ts).
    */
   rustVersions?: Record<string, string>;
+  /**
+   * version -> the native library that release links (the index's `links`, Cargo allows one package
+   * per value in a build); a release that links none is absent. The whole field is absent on a record
+   * cached before it was read: such a record is read again (upgrade-planner-cargo-steps.ts).
+   */
+  links?: Record<string, string>;
+  /**
+   * version -> the optional dependencies its `default` feature turns on (crates-versions.ts
+   * defaultEnabledDependencies): a build with default features has them, so `--precise` must meet
+   * their requirements too (chrono 0.4.30's iana-time-zone). Absent on a record cached before it was read.
+   */
+  defaultDeps?: Record<string, string[]>;
 }
 
 /** npm's abbreviated document: per version, the fields fix paths read. */
@@ -483,7 +495,7 @@ export class FixPathSources {
     try {
       const res = await fetchWithTimeout(sparseIndexUrl(name), { headers: { "User-Agent": CRATES_USER_AGENT } }, TIMEOUT_MS);
       if (!res.ok) return null;
-      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {} };
+      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {}, links: {}, defaultDeps: {} };
       for (const line of (await res.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -494,6 +506,7 @@ export class FixPathSources {
             features?: unknown;
             features2?: unknown;
             rust_version?: unknown;
+            links?: unknown;
           };
           if (!entry.yanked) out.versions.push(entry.vers);
           else out.yanked!.push(entry.vers);
@@ -501,6 +514,11 @@ export class FixPathSources {
           if (offered) (out.features ??= {})[entry.vers] = offered;
           // A Rust version as Cargo writes one ("1.64", "1.67.1"); anything else is not kept.
           if (typeof entry.rust_version === "string" && /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(entry.rust_version.trim())) out.rustVersions![entry.vers] = entry.rust_version.trim();
+          if (typeof entry.links === "string" && entry.links.length > 0 && entry.links.length <= 128) out.links![entry.vers] = entry.links;
+          // Features name a dependency by the name the crate uses; reqs key it by the crate's own name.
+          const optional = new Map((entry.deps ?? []).filter((d) => d.optional === true).map((d) => [d.name, d.package ?? d.name] as const));
+          const byDefault = [...defaultEnabledDependencies(entry as Parameters<typeof defaultEnabledDependencies>[0])].filter((d) => optional.has(d)).map((d) => optional.get(d)!);
+          if (byDefault.length > 0) out.defaultDeps![entry.vers] = byDefault;
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
@@ -1797,7 +1815,9 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       if (bounded && npmRangeAdmits(declared, target) === true) return isShellSafeName(name, "npm") ? { command: npmDirectRefresh(manager, name), refresh: true } : null;
       const command = npmDirectCommand(manager, declared, name, target);
       // berry's `yarn up` is a project command: at a workspace root it rewrites the members' declarations too (hasWorkspaces).
-      return command ? { command: manager === "yarn-berry" && hasWorkspaces(json!) ? command.replace(/^yarn up /, "yarn add ") : command } : null;
+      if (!command || manager !== "yarn-berry" || !hasWorkspaces(json!)) return command ? { command } : null;
+      const flag = berryAddFlag(json!, name);
+      return flag === null ? null : { command: `${command.replace(/^yarn up /, "yarn add ")}${flag}` };
     }
     case "crates.io": {
       const manifest = read("Cargo.toml");
@@ -1866,8 +1886,33 @@ function yarnMemberFix(projectDir: string, manager: "yarn1" | "yarn-berry", name
   if (op === null) return null;
   const spec = op === "" ? `${name}@${target}` : `"${name}@${op}${target}"`;
   const section = declared[0].section;
-  const flag = manager === "yarn1" && section === "devDependencies" ? " --dev" : manager === "yarn1" && section === "optionalDependencies" ? " --optional" : "";
+  if (manager === "yarn-berry") {
+    // Berry refuses `add` for a package the manifest also lists as a peer unless -D or -P says which entry.
+    const peer = member.declared.some((d) => d.name === name && d.section === "peerDependencies");
+    if (peer && section !== "devDependencies") return null;
+    return { command: `yarn workspace ${member.name} add ${spec}${peer ? " --dev" : ""}` };
+  }
+  const flag = section === "devDependencies" ? " --dev" : section === "optionalDependencies" ? " --optional" : "";
   return { command: `yarn workspace ${member.name} add ${spec}${flag}` };
+}
+
+/**
+ * The flag a Yarn Berry `yarn add` at a workspace root needs for `name`: "" when the root lists no peer
+ * entry for it, " --dev" for a dev dependency it also lists as a peer, null for a dependency or optional
+ * dependency it also lists as a peer. Berry refuses `add` for a peer-listed package without -D or -P
+ * ("is already listed as a peer dependency", yarn 3.2.4 and 4.9.1, 2026-11-26), and -P would move the
+ * peer range instead, so no `yarn add` moves such a dependency (`yarn up` does, but at a workspace root
+ * it rewrites the members' declarations too).
+ */
+function berryAddFlag(packageJson: string, name: string): string | null {
+  let pkg: Record<string, Record<string, unknown> | undefined>;
+  try {
+    pkg = JSON.parse(packageJson);
+  } catch {
+    return null;
+  }
+  if (typeof pkg?.peerDependencies?.[name] !== "string") return "";
+  return typeof pkg?.devDependencies?.[name] === "string" ? " --dev" : null;
 }
 
 /**
@@ -2083,12 +2128,18 @@ export async function cargoPrecisePrerequisites(
     if (visited.has(`${crate}@${version}`)) continue;
     visited.add(`${crate}@${version}`);
     if (visited.size > MAX_CLOSURE_CRATES) return null;
-    const deps = (await sources.cratesSparse(crate))?.reqs[version];
+    let record = await sources.cratesSparse(crate);
+    // A record cached before the default features were read is read again (chrono 0.4.30 needs iana-time-zone by default).
+    // An unanswered re-read is unknown, never the old record's guess (an unfinished check never reads as a pass).
+    if (record && record.defaultDeps === undefined) record = await sources.cratesSparse(crate, true);
+    const deps = record?.reqs[version];
     if (!deps) return null;
+    const byDefault = new Set(record?.defaultDeps?.[version] ?? []);
     for (const [dep, entries] of Object.entries(deps)) {
       const lockedVersions = locked.get(dep) ?? [];
       for (const { req, optional } of entries) {
-        if (optional && lockedVersions.length === 0) continue; // a feature this build does not enable
+        // An optional dependency no locked copy and no default feature brings in: a feature this build does not enable.
+        if (optional && lockedVersions.length === 0 && !byDefault.has(dep)) continue;
         if (lockedVersions.some((v) => cargoReqAdmits(req, v) === true)) continue;
         const available = (await sources.cratesSparse(dep))?.versions;
         if (!available) return null;

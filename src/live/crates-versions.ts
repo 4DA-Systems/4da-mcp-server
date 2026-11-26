@@ -103,7 +103,7 @@ const CRATES_IO_INDEXES = new Set(["https://github.com/rust-lang/crates.io-index
  * them: `dep:x`, `x/feature` (not `x?/feature`), or the feature an optional dependency defines by
  * its own name, followed through the features `default` enables.
  */
-function defaultEnabledDependencies(line: SparseLine): Set<string> {
+export function defaultEnabledDependencies(line: SparseLine): Set<string> {
   const features = new Map<string, string[]>();
   for (const table of [line.features, line.features2]) {
     if (!table || typeof table !== "object") continue;
