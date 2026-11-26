@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { manifestPairs, pep508, unreadCommandLines, wordsAfterManager } from "../tools/briefing-command-check.js";
@@ -137,13 +138,16 @@ describe("G4: CPU is bounded", () => {
   it.skipIf(!existsSync(dist))("the reviewer's slow inputs each cost under 3 s of child CPU", () => {
     for (const c of cases) {
       const script = `
-        const { executeWhatShouldIKnow } = await import(${JSON.stringify("file:///" + dist.replace(/\\/g, "/"))});
+        import { readFileSync } from "node:fs";
+        const { executeWhatShouldIKnow } = await import(${JSON.stringify(pathToFileURL(dist).href)});
         process.env.FOURDA_OFFLINE = "true";
+        const task = readFileSync(0, "utf8");
         const t0 = process.cpuUsage();
-        await executeWhatShouldIKnow(null, { task: process.env.TASK }, null);
+        await executeWhatShouldIKnow(null, { task }, null);
         const u = process.cpuUsage(t0);
         console.log((u.user + u.system) / 1000);`;
-      const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, TASK: c.task }, maxBuffer: 1 << 24 }).trim().split("\n").pop());
+      // The task goes in on stdin: a 199 KB environment value is over Linux's limit for one string (E2BIG).
+      const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input: c.task, maxBuffer: 1 << 24 }).trim().split("\n").pop());
       expect(ms, c.id).toBeLessThan(3000);
     }
   }, 300_000);

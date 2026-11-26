@@ -46,8 +46,9 @@ neither are the proxy's private keys in `.ca/`. Only the score summaries are kep
 | run6 | integration 4e3a9a6 (tarball sha256 492bb81e..., commands read by the exact grammar) | 0 of 132 | 0 of 132 | 0 of 48 | 23 of 23 | 154 of 154 | 36 of 36 | median 1, at most 3 in 132 of 132 | pass |
 | run7 | integration 41f624a (tarball sha256 7f7267ff..., versions tied by form, the source check as a list) | 0 of 132 | 0 of 132 | 0 of 48 | 18 of 18 | 154 of 154 | 36 of 36 | median 1, at most 2 in 132 of 132 | pass |
 | run8 | integration d60f177 (tarball sha256 8611a527..., a public entry states its version) | 0 of 132 | 0 of 132 | 0 of 48 | 16 of 16 | 154 of 154 | 36 of 36 | median 1, at most 2 in 132 of 132 | pass |
+| run9 | integration af63ef6 (tarball sha256 39bc0910..., every snippet line read or held, bounded CPU) | 0 of 132 | 0 of 132 | 0 of 48 | 17 of 17 | 154 of 154 | 36 of 36 | median 1, at most 2 in 132 of 132 | pass |
 
-`results/score-run6.txt`, `results/score-run7.txt` and `results/score-run8.txt` are the scorer's outputs for those runs. `results/score-run5.txt` is the scorer's output for that run. Four earlier scored runs (run1 to run4, on
+`results/score-run6.txt` to `results/score-run9.txt` are the scorer's outputs for those runs. `results/score-run5.txt` is the scorer's output for that run. Four earlier scored runs (run1 to run4, on
 earlier builds of the same candidate) passed G1, G2, G4, G5 and G7 and failed G3 (2 of 48) and G6 (32 to
 34 of 36) for one cause: the agent itself corrected the task's misspelt package name `fastifyy` to
 `fastify` before calling the tool, so the bad name never reached the server. Under the preregistered
