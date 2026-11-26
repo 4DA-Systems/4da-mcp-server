@@ -2478,7 +2478,7 @@ function registryFile(word) {
   if (typeof word !== "string" || word.length > 2048) return null;
   const npm = /^https?:\/\/(?:registry\.npmjs\.org|registry\.npmjs\.com|registry\.yarnpkg\.com|registry\.npmmirror\.com)\/((?:@[a-z0-9][a-z0-9._~-]*\/)?([a-z0-9._~][a-z0-9._~-]*))\/-\/(?:@[a-z0-9][a-z0-9._~-]*\/)?([a-z0-9._~][a-z0-9._~-]*)-(\d+\.\d+\.\d+(?:-[0-9a-z.-]+)?)\.tgz(?:[?#].*)?$/i.exec(word);
   if (npm && npm[2].toLowerCase() === npm[3].toLowerCase()) return { ecosystem: "npm", name: npm[1].toLowerCase(), spec: npm[4] };
-  const py = /^https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org)\/[^?#]*\/([^/?#]+)(?:[?#].*)?$/i.exec(word);
+  const py = /^https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org|(?:www\.)?pypi\.io)\/[^?#]*\/([^/?#]+)(?:[?#].*)?$/i.exec(word);
   if (!py) return null;
   const file = decodeURIComponent(py[1]);
   const wheel = /^([A-Za-z0-9][A-Za-z0-9._]*?)-(\d[A-Za-z0-9.!+]*)-[^-]+(?:-[^-]+){2,3}\.whl$/.exec(file);
@@ -3301,7 +3301,7 @@ const ACCOUNT_TABLES = {
   uvpip: optionTable("--all-extras --allow-insecure-host= --break-system-packages --build-constraints= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --dry-run --editable= --exact --exclude= --excludes= --extra= --extra-index-url= --find-links= --group= --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary= --no-break-system-packages --no-build --no-build-isolation --no-build-isolation-package= --no-cache --no-config --no-deps --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --no-verify-hashes --offline --only-binary= --overrides= --prefix= --project= --python= --python-platform= --python-version= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --require-hashes --requirements= --strict --system --target= --torch-backend= --upgrade --upgrade-package= --user --verbose --version -C= -P= -U -V -b= -c= -e= -f= -h -i= -n -p= -q -r= -t= -v"),
   uvtool: optionTable("--allow-insecure-host= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --editable --extra-index-url= --find-links= --force --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --offline --overrides= --project= --python= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --upgrade-package= --verbose --version --with= --with-editable= --with-requirements= -C= -P= -V -c= -e -f= -h -i= -n -p= -q -v"),
   uvadd: optionTable("--active --all-extras --all-groups --all-packages --allow-insecure-host= --branch= --cache-dir= --check --check-exists --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --dev --directory= --dry-run --editable --extra= --extra-index-url= --find-links= --frozen --group= --help --index= --index-strategy= --index-url= --inexact --keyring-provider= --link-mode= --locked --managed-python --marker= --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-default-groups --no-dev --no-editable --no-extra= --no-group= --no-index --no-install-package= --no-install-project --no-install-workspace --no-managed-python --no-progress --no-python-downloads --no-sources --no-sync --offline --only-dev --only-group= --optional= --package= --project= --python= --quiet --raw-sources --refresh --refresh-package= --reinstall --reinstall-package= --requirements= --rev= --script= --tag= --upgrade-package= --verbose --version -C= -P= -V -c= -f= -h -i= -m= -n -p= -q -r= -v"),
-  cargo: optionTable("--all-features --base= --bin? --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example? --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
+  cargo: optionTable("--all-features --base= --bin? --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example? --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --vers= --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
   go: optionTable("-C= -u -d -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
   yarn: optionTable("--all --audit --cache-folder= --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --verbose --version --worktree -A -C -D -E -L -O -P -R -T -W -g -h -j= -p -s -t -v"),
@@ -3321,7 +3321,14 @@ const MANAGER_SETTING = /^(?:npm_config_|yarn_|bun_config|pip_|uv_|poetry_|cargo
 const GH_DATA = new Set(["pr", "issue", "release", "gist"]);
 const GH_DATA_VERBS = new Set(["create", "edit", "comment", "review", "view", "list", "close", "reopen"]);
 /** Public registry and index hosts (an index naming one installs the public package). */
-const PUBLIC_INDEX_HOSTS = new Set(["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com", "pypi.org", "pypi.python.org", "files.pythonhosted.org", "index.crates.io", "crates.io", "static.crates.io", "proxy.golang.org", "sum.golang.org"]);
+// Round 15 (H6): the registries' own aliases (pypi.io, www.pypi.io) and the public mirrors that serve
+// the public registry unchanged (npmmirror, the Tsinghua and Aliyun PyPI mirrors, goproxy.io,
+// goproxy.cn): public, so a name fetched from them is judged, never taken as the project's own source.
+const PUBLIC_INDEX_HOSTS = new Set([
+  "registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com",
+  "pypi.org", "pypi.python.org", "pypi.io", "www.pypi.io", "files.pythonhosted.org", "pypi.tuna.tsinghua.edu.cn", "mirrors.aliyun.com",
+  "index.crates.io", "crates.io", "static.crates.io", "proxy.golang.org", "sum.golang.org", "goproxy.io", "goproxy.cn",
+]);
 const ACCOUNT_REMEDY =
   "Run the install as a plain command of its own, with its own options as you wrote them, not inside a wrapper, a heredoc, a variable or a substitution: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs (if it is held for a verdict, its denial names the call). If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.";
 
@@ -6011,8 +6018,14 @@ function oversized(head) {
     const what = tool === "Bash" || tool === "PowerShell" ? "command" : marks.some((m) => normal.includes(m)) ? "edit" : "name";
     return denyJson(ledgerDenial(what, resolve(dataDir(process.env))));
   }
-  if (!tool || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
-  return denyJson(notReadDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
+  // Round 15 (H5): a payload this hook cannot read whole is the failure rule's: every Bash and
+  // PowerShell call held, an edit of a manifest (or with no path it can read) held, and a payload
+  // whose tool cannot be found in its first part held; any other call gets nothing.
+  if (!readLedgerExists(dataDir(process.env))) return "";
+  const why = `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`;
+  if (!tool || tool === "Bash" || tool === "PowerShell") return denyJson(notReadDenial("command", why));
+  if (["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(tool) && (path === null || mayInstall(input))) return denyJson(notReadDenial("edit", why));
+  return "";
 }
 
 // A worker started by judgeInWorker: judge the one call it was given, and answer.
