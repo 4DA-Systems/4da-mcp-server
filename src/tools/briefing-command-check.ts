@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * C3: the reader is not trusted for safe_to_delegate. A coarse detector over the raw task text finds every
- * command that can add or run a package: a package-manager or runner word (npm, pnpm, yarn, bun, bunx, npx, pnpx,
- * pip, pip3, pipx, uv, uvx, poetry, cargo, go, and `python -m pip`) followed later in the same sentence or line
- * by a verb that adds or runs one (install and npm's aliases, i, add, x, exec, dlx, create, init, up, upgrade,
- * update, get, inject, binstall, `tool run` / `tool install`, `run --with` / `run --spec`), and a sentence that
- * installs with a manager named after the verb ("Install zqxevil with npm."). It does not parse options: every
- * non-option word after the verb, up to the end of the command, is an operand the briefing must account for (a
- * pair it checked, one the caller declared, a project dependency) or a form naming no registry package (a path,
- * a URL, a file, a version). An option's value counts as an operand unless the option is one whose value never
- * names a package: reading too many operands costs a review, reading too few would cost a missed install. One
- * operand not accounted for keeps the briefing from safe_to_delegate (what-should-i-know.ts). The 16 forms the
- * second independent check found (`pnpm add -w X`, `npm i -m X`, `yarn up X`, `npm init X`, `uv run --with X`,
- * `cargo binstall X` ...) fall to it without a list of each manager's options.
+ * C3: the reader is not trusted for safe_to_delegate. A detector over the raw task text finds every command that
+ * can add or run a package, by its SHAPE, never by co-occurrence (round 4, F1):
+ * (a) a manager or runner word (npm, pnpm, yarn, bun, bunx, npx, pnpx, pip, pip3, pipx, uv, uvx, poetry, cargo, go,
+ *     deno, `python -m pip`) followed by its verb with only options between them (`npm install`, `pnpm -w add`,
+ *     `go get`, `uv tool run`, `uv run --with`); a runner word is its own verb;
+ * (b) the prose form "install / add <names> with | using | via | from <manager>".
+ * "Add chi (github.com/go-chi/chi/v5) to a Go project" names a manager word and a verb in one sentence: no command.
+ * The command's operands are the contiguous run after the verb (F2). It ends at the first token that cannot be an
+ * operand or option: an opening parenthesis, a comma, semicolon or closing mark, a sentence or line end, a plain
+ * connective (and, then, in, into, to, for, so, with, on, from ...). A parenthetical that is an ecosystem label,
+ * "latest" or a version right after an operand belongs to it ("npm install hono (latest)"). Words after the run
+ * are prose for the ordinary reader, where a name-shaped word still waits in to_confirm (F3).
+ * Every operand of the run must be accounted for (a pair checked, one the caller declared, a project dependency)
+ * or name no registry package (a path, a URL, a file, a version); an option's value counts as an operand unless
+ * the option's value never names a package. One operand not accounted for keeps the briefing from safe_to_delegate
+ * (what-should-i-know.ts). A not_packages word is no account of an operand.
  */
 import type { CheckEcosystem } from "../live/release-metadata.js";
 
@@ -42,8 +45,6 @@ const STOPS = new Set([
   "expose", "point", "store", "add", "remove", "set", "configure", "check", "write", "rename", "refactor", "deploy", "commit", "push", "open", "start",
   "deps", "dependencies", "dependency", "packages", "package", "modules", "module", "crates", "crate", "everything", "all", "again", "locally", "globally",
 ]);
-/** List words between operands: neither operand nor stop. */
-const LIST = new Set(["and", "or", "plus", "&", "+"]);
 /** Long options whose value never names a registry package (a directory, a feature, a source to fetch from). */
 const VALUE_OPTIONS = new Set([
   "--features", "--timeout", "--loglevel", "--log-level", "--network-timeout", "--prefix", "--cwd", "--dir", "--filter", "--target", "--registry",
@@ -87,81 +88,138 @@ interface Operand {
   ofOption: boolean;
 }
 
-/** Operands from `from` to the end of the command; `end` is where it stopped. */
-function operandsFrom(raw: string[], words: string[], from: number, upto: number): { operands: Operand[]; end: number } {
+/** Plain English connectives: the first one ends a command's operand run (F2); later words are prose. */
+const CONNECTIVES = new Set(["and", "or", "then", "in", "into", "to", "for", "so", "with", "on", "from", "plus", "but", "&", "+", "after", "before", "because", "if", "when", "while", "using", "via"]);
+/** The prose form's link words: "install X with|using|via|from <manager>" (F1 b). */
+const PROSE_LINKS = new Set(["with", "using", "via", "from"]);
+/** What a parenthetical right after an operand may say and still belong to it: an ecosystem or manager, latest, a version. */
+const LABEL = /^(?:npm|pypi|crates(?:\.io)?|cargo|go|golang|pip|pnpm|yarn|bun|uv|poetry|latest|stable|next|v?\d+(?:\.\d+)*(?:[-+.][\w.-]*)?)$/i;
+
+/** One whitespace token: its bare word, whether it opens a parenthetical, and whether it ends the run after itself. */
+interface Token {
+  raw: string;
+  word: string;
+  opens: boolean;
+  /** A trailing comma, semicolon, colon, closing parenthesis or backtick: the run ends after this token. */
+  closes: boolean;
+}
+const tokenOf = (raw: string): Token => {
+  const word = bare(raw);
+  return { raw, word: word.toLowerCase(), opens: raw.startsWith("("), closes: /[,;:)`]["'`)]*$/.test(raw) && !raw.startsWith("(") };
+};
+
+interface Operand {
+  text: string;
+  /** The value of an option that names a package (`--with X`, `-p X`). */
+  ofOption: boolean;
+}
+
+/**
+ * The operand run from `from` (F2): the contiguous words after the verb, ending at the first token that cannot be
+ * an operand or option: an opening parenthesis (unless it is a label right after an operand), a comma, semicolon or
+ * closing mark, a connective or another stop word, a manager word. `end` is the index of the first token after it.
+ */
+function operandRun(t: Token[], from: number): { operands: Operand[]; end: number } {
   const operands: Operand[] = [];
   let end = from;
   let packageNext = false;
-  for (; end < upto; end++) {
-    const w = words[end];
-    if (!w || LIST.has(w)) continue;
+  for (; end < t.length; end++) {
+    const { word: w, raw } = t[end];
+    if (t[end].opens) {
+      // "hono (latest)", "litestar (PyPI)": the label belongs to the operand before it.
+      if (operands.length > 0 && LABEL.test(w) && /\)["'`]*[,;:.]?$/.test(raw)) {
+        if (/[,;:]$/.test(raw)) {
+          end++;
+          break;
+        }
+        continue;
+      }
+      break;
+    }
+    if (!w) continue;
     if (w.startsWith("-")) {
       const flag = w.replace(/=.*$/, "");
       if (VALUE_OPTIONS.has(flag)) {
-        if (!w.includes("=") && end + 1 < upto) end++;
-      } else if (w.includes("=")) operands.push({ text: bare(raw[end]).replace(/^[^=]*=/, ""), ofOption: true });
+        if (!w.includes("=") && end + 1 < t.length) end++;
+      } else if (w.includes("=")) operands.push({ text: bare(raw).replace(/^[^=]*=/, ""), ofOption: true });
       else packageNext = PACKAGE_OPTIONS.has(flag);
+      if (t[end].closes) {
+        end++;
+        break;
+      }
       continue;
     }
-    if (STOPS.has(w) || MANAGERS.has(w)) break;
-    operands.push({ text: bare(raw[end]), ofOption: packageNext });
+    if (CONNECTIVES.has(w) || STOPS.has(w) || MANAGERS.has(w)) break;
+    operands.push({ text: bare(raw), ofOption: packageNext });
     packageNext = false;
+    if (t[end].closes) {
+      end++;
+      break;
+    }
   }
   return { operands: operands.filter((o) => o.text !== ""), end };
+}
+
+/**
+ * The verb of a command that starts at `managerAt` (F1 a): the manager's verb with only options between them
+ * (`npm install`, `pnpm -w add`, `uv tool run`, `uv run --with`); a runner is its own verb. -1 when it is no command.
+ */
+function verbAfter(t: Token[], managerAt: number): number {
+  const manager = t[managerAt].word;
+  if (RUNNERS.has(manager)) return managerAt;
+  for (let k = managerAt + 1; k < t.length; k++) {
+    const w = t[k].word;
+    if (w.startsWith("-") && !t[k].opens) {
+      if (VALUE_OPTIONS.has(w) && k + 1 < t.length) k++;
+      if (t[k].closes) return -1;
+      continue;
+    }
+    if (VERBS.has(w)) return k;
+    if (w === "tool" && (t[k + 1]?.word === "run" || t[k + 1]?.word === "install")) return k + 1;
+    if (w === "run" && (manager === "deno" || t.slice(k + 1, k + 40).some((x) => /^--(?:with|spec)(?:-editable|-requirements)?(?:=|$)/.test(x.word)))) return k;
+    return -1;
+  }
+  return -1;
 }
 
 /** Every command (and prose install) in the task that can add or run a package. Linear in the task's length. */
 export function scanCommands(task: string): InstallCommand[] {
   const commands: InstallCommand[] = [];
   for (const seg of segments(task.length > 200_000 ? task.slice(0, 200_000) : task)) {
-    const raw = seg.split(/\s+/).filter(Boolean).slice(0, MAX_SEGMENT_WORDS);
-    const words = raw.map((w) => bare(w).toLowerCase());
-    let sawCommand = false;
-    for (let m = 0; m < words.length; m++) {
-      const pythonPip = (words[m] === "python" || words[m] === "python3" || words[m] === "py") && words[m + 1] === "-m" && (words[m + 2] === "pip" || words[m + 2] === "pip3");
+    const t = seg.split(/\s+/).filter(Boolean).slice(0, MAX_SEGMENT_WORDS).map(tokenOf);
+    for (let m = 0; m < t.length; m++) {
+      const w = t[m].word;
+      // (a) A command: a manager or runner word (or `python -m pip`) and its verb with only options between.
+      const pythonPip = (w === "python" || w === "python3" || w === "py") && t[m + 1]?.word === "-m" && (t[m + 2]?.word === "pip" || t[m + 2]?.word === "pip3");
       const managerAt = pythonPip ? m + 2 : m;
-      const ecosystem = MANAGERS.get(words[managerAt]);
-      if (!ecosystem) continue;
-      let v = -1;
-      if (RUNNERS.has(words[managerAt])) v = managerAt;
-      else {
-        for (let k = managerAt + 1; k < words.length; k++) {
-          if (MANAGERS.has(words[k])) break;
-          if (VERBS.has(words[k])) {
-            v = k;
-            break;
-          }
-          if (words[k] === "tool" && (words[k + 1] === "run" || words[k + 1] === "install")) {
-            v = k + 1;
-            break;
-          }
-          if (words[k] === "run" && (words[managerAt] === "deno" || words.slice(k + 1).some((w) => /^--(?:with|spec)(?:-editable|-requirements)?(?:=|$)/.test(w)))) {
-            v = k;
-            break;
-          }
+      const ecosystem = MANAGERS.get(t[managerAt]?.word ?? "");
+      if (ecosystem && !t[managerAt].closes) {
+        const v = verbAfter(t, managerAt);
+        if (v >= 0) {
+          const read = t[v].closes && v !== managerAt ? { operands: [], end: v + 1 } : operandRun(t, v + 1);
+          const deno = t[managerAt].word === "deno";
+          const verb = t[v].word;
+          const runs = deno || verb === "run" || RUNNERS.has(verb) || verb === "x" || verb === "exec" || verb === "dlx";
+          // A runner's script file is no package; deno reads only its `npm:` and `jsr:` operands as packages.
+          const operands = read.operands
+            .filter((o) => !(runs && !o.ofOption && SCRIPT.test(o.text) && !RUNNERS.has(verb)))
+            .filter((o) => !deno || /^(?:npm|jsr):/i.test(o.text))
+            .map((o) => o.text);
+          commands.push({ text: t.slice(m, Math.max(read.end, v + 1)).map((x) => x.raw).join(" ").slice(0, MAX_TEXT), ecosystem, operands });
+          m = Math.max(m, read.end - 1);
+          continue;
         }
       }
-      if (v < 0) continue;
-      const read = operandsFrom(raw, words, v + 1, words.length);
-      const end = read.end;
-      const deno = words[managerAt] === "deno";
-      const runs = deno || words[v] === "run" || RUNNERS.has(words[v]) || words[v] === "x" || words[v] === "exec" || words[v] === "dlx";
-      // A runner's script file is no package; deno reads only its `npm:` and `jsr:` operands as packages.
-      const operands = read.operands
-        .filter((o) => !(runs && !o.ofOption && SCRIPT.test(o.text) && !RUNNERS.has(words[v])))
-        .filter((o) => !deno || /^(?:npm|jsr):/i.test(o.text))
-        .map((o) => o.text);
-      commands.push({ text: raw.slice(m, Math.max(end, v + 1)).join(" ").slice(0, MAX_TEXT), ecosystem, operands });
-      sawCommand = true;
-      m = Math.max(m, end - 1);
-    }
-    // A prose install: an installing verb, then a manager named later in the sentence ("Install zqxevil with npm.").
-    if (!sawCommand) {
-      const verbAt = words.findIndex((w) => w === "install" || w === "add" || w === "use");
-      const managerAt = verbAt < 0 ? -1 : words.findIndex((w, k) => k > verbAt && MANAGERS.has(w));
-      if (managerAt > verbAt + 1) {
-        const operands = raw.slice(verbAt + 1, managerAt).map(bare).filter((w) => w && !STOPS.has(w.toLowerCase()) && !LIST.has(w.toLowerCase()) && !w.startsWith("-"));
-        commands.push({ text: raw.slice(verbAt, managerAt + 1).join(" ").slice(0, MAX_TEXT), ecosystem: MANAGERS.get(words[managerAt])!, operands });
+      // (b) The prose form: "install / add <names> with|using|via|from <manager>".
+      if (w === "install" || w === "add") {
+        const read = operandRun(t, m + 1);
+        const link = t[read.end];
+        const after = t[read.end + 1]?.word === "the" ? read.end + 2 : read.end + 1;
+        const named = link && PROSE_LINKS.has(link.word) && !link.opens ? MANAGERS.get(t[after]?.word ?? "") : undefined;
+        if (named && read.operands.length > 0) {
+          commands.push({ text: t.slice(m, after + 1).map((x) => x.raw).join(" ").slice(0, MAX_TEXT), ecosystem: named, operands: read.operands.map((o) => o.text) });
+          m = after;
+        }
       }
     }
   }

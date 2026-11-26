@@ -646,6 +646,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const endsList = (j: number) => j >= words.length || words[j] === "then" || CLAUSE_VERBS.has(words[j]) || IN_VERBS.has(words[j]) || ON_VERBS.has(words[j]);
 
   let truncated = false;
+  /** The list word right after a command's operands (F3): read as an install verb, the list goes on as prose. */
+  let listAfterCommand = -1;
   for (let i = 0; i < words.length; i++) {
     if (found.length >= MAX_READ_PACKAGES) {
       truncated = true;
@@ -813,10 +815,13 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         lastAdded = pkg;
         if (separatorAfter(j) === "clause") break;
       }
+      // F3: "npm install ky and fastifyy": the command's operands end at the connective, and what the list goes
+      // on to name is read as prose after an install verb, so it waits in to_confirm (never silently dropped).
+      if (lastAdded && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
       i = j - 1;
       continue;
     }
-    const installing = INSTALL_VERBS.has(word);
+    const installing = INSTALL_VERBS.has(word) || i === listAfterCommand;
     // "bring in ctx", "pull in left-pad", "depend on event-stream": the verb is the pair.
     const bringingIn =
       (IN_VERBS.has(word) && (words[i + 1] === "in" || words[i + 1] === "into")) || (ON_VERBS.has(word) && (words[i + 1] === "on" || words[i + 1] === "upon"));
