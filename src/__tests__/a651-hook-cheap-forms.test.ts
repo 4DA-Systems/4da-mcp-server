@@ -78,7 +78,8 @@ describe("commands", () => {
     expect(read("npm i yargs-parser@npm:minimist@1.2.6")).toEqual(["npm minimist 1.2.6"]);
     expect(read("pnpm add my-lodash@npm:lodash@^4.17.0")).toEqual(["npm lodash ^4.17.0"]);
     expect(read("npm i x@npm:@scope/pkg@1.0.0")).toEqual(["npm @scope/pkg 1.0.0"]);
-    expect(read("npm i x@npm:lodash")).toEqual([]);
+    // An alias with no version installs its target's newest release (wave 2: the request "latest").
+    expect(read("npm i x@npm:lodash")).toEqual(["npm lodash latest"]);
   });
 
   it("a PowerShell block comment is not a command", () => {

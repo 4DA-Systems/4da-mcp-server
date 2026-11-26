@@ -32,19 +32,35 @@
  * subcommand is resolved as npm resolves it (aliases, typos, unique prefixes: npmCommand).
  * A global install that names its version (`npm i -g x@1`, `pnpm add -g`, `bun add -g`) is read
  * and checked like any other.
+ * A package named without a version, with `@latest`, or as an `npm:` alias without one
+ * (`npm install x`, `yarn add x`, `pip install x`, `uv add x`, `poetry add x`, `cargo add x`,
+ * `go get x`, and `pnpm up -L x`, Berry's `yarn up x`, `yarn upgrade x --latest`, which move it to
+ * the newest release) writes the registry's newest release into the manifest and the lockfile: it
+ * is the request "latest", judged like a constraint on the verdict recorded for that request (the
+ * server records `requested: "latest"`). A dist-tag other than latest (`x@next`) or a Go branch is
+ * held with "name the version": no dependency_check call clears a tag.
  * A command this hook does not take apart exactly (a variable, a substitution, a heredoc, a
  * registry or index other than the public one, a git or path source), a bare `npm install` or
- * `npm ci`, a global tool install that is not a package manager's add (`cargo install`,
- * `yarn global add`, `go install`), an `npm:` alias without a version, and a package named
- * without a version all go ahead without comment. An `npm:` alias with a version (on the command
- * line or in package.json) is read as the package it installs; the public index or registry named
- * explicitly (`-i https://pypi.org/simple`, `--registry crates-io`) is the public one.
+ * `npm ci`, `pnpm up x` / `yarn upgrade x` (inside the manifest's range), a global tool install that
+ * is not a package manager's add (`cargo install`, `yarn global add`, `go install`) and a tool run
+ * (npx, `pnpm dlx`, bunx, uvx, pipx) all go ahead without comment. An `npm:` alias with a version
+ * (on the command line or in package.json) is read as the package it installs; the public index
+ * or registry named explicitly (`-i https://pypi.org/simple`, `--registry crates-io`) is the
+ * public one.
  * In a manifest only dependency declarations count (never a comment or another string field),
  * each section's are compared on their own, a renamed Cargo dependency is the crate `package =`
  * names, and a dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`,
  * `registry`; npm `file:`, `link:`, `workspace:`; a PEP 508 direct reference; [tool.uv.sources];
  * Poetry `path`, `git`, `url`, a named source; a go.mod `replace` to a directory) goes ahead, its
  * name never repeated. go.mod `exclude` and `retract` introduce no version.
+ *
+ * The check ledger is the server's: a call that names it (its file name or the data folder's path,
+ * found in the call's raw text) is held unless it is one plain read command alone on its line. The
+ * hook is a guard-rail against an agent's mistakes and shortcuts, not a sandbox: a command that
+ * removes or renames the data folder's parent or matches the folder by a wildcard, a path built
+ * from a variable, and a program that writes the file without naming it are not seen; and since
+ * the hook denies only where a ledger exists, a removed ledger means no denials until the server
+ * starts again.
  *
  * FOURDA_GUARD=advise: never denies; after a manifest edit (PostToolUse) the agent is told which
  * versions moved and which calls check them. FOURDA_GUARD=off: the hook does nothing.
@@ -549,35 +565,70 @@ function cargoFieldsOf(entries) {
  * with the old names `dev_dependencies` and `build_dependencies` too (audit 2026-11-25, D minors). A
  * snippet whose table is not known (table null) is read as a dependency table, as it always was.
  */
+/**
+ * A section name as the dependency maps key it: a long one (a header of thousands of parts) by a
+ * short stand-in, the same for the same name within this call, so each of thousands of keys under
+ * it is not a string of that length (a 40,000-part header with 8,000 keys took 3 s).
+ */
+const LONG_SECTIONS = new Map();
+function shortSection(section) {
+  if (section.length <= 300) return section;
+  let id = LONG_SECTIONS.get(section);
+  if (id === undefined) LONG_SECTIONS.set(section, (id = `${section.slice(0, 120)}...#${LONG_SECTIONS.size}`));
+  return id;
+}
+
 function cargoEntries(entries, found) {
-  const walk = (path, tableLength, value) => {
+  // Each table's joined name, once (entries under one header share its parts).
+  const joined = new Map();
+  const sectionOf = (table, keys, at) => {
+    if (at >= table.length) return shortSection([...table, ...keys.slice(0, at + 1 - table.length)].join("."));
+    let byAt = joined.get(table);
+    if (!byAt) joined.set(table, (byAt = new Map()));
+    if (!byAt.has(at)) byAt.set(at, shortSection(table.slice(0, at + 1).join(".")));
+    return byAt.get(at);
+  };
+  // `keys`: the key parts after the table's, an inline table's keys appended. Linear in the parts:
+  // a dependency table stands at the table's last or second-to-last part, or (cargo's dotted and
+  // inline forms) at part 0, 1 under `workspace` or 2 under `target`, so nothing past part 2 of
+  // the full path is searched, and an inline table is followed only while the path is shorter
+  // than that (99,000 dotted parts took 24 s with a copy per part; fifth independent check).
+  const walk = (table, keys, value) => {
+    tick();
+    const T = table.length;
+    const part = (i) => (i < T ? table[i] : keys[i - T]);
+    const length = T + keys.length;
     let at = -1;
-    if (tableLength >= 1 && CARGO_DEPENDENCY_TABLES.has(path[tableLength - 1])) at = tableLength - 1;
-    else if (tableLength >= 2 && CARGO_DEPENDENCY_TABLES.has(path[tableLength - 2])) at = tableLength - 2;
+    if (T >= 1 && CARGO_DEPENDENCY_TABLES.has(table[T - 1])) at = T - 1;
+    else if (T >= 2 && CARGO_DEPENDENCY_TABLES.has(table[T - 2])) at = T - 2;
     else {
-      for (let i = tableLength; i < path.length && at < 0; i++) {
-        const before = path.slice(0, i);
-        if (CARGO_DEPENDENCY_TABLES.has(path[i]) && (i === 0 || (i === 1 && before[0] === "workspace") || (i === 2 && before[0] === "target"))) at = i;
+      for (let i = T; i < Math.min(length, 3) && at < 0; i++) {
+        if (CARGO_DEPENDENCY_TABLES.has(part(i)) && (i === 0 || (i === 1 && part(0) === "workspace") || (i === 2 && part(0) === "target"))) at = i;
       }
     }
-    const rest = at >= 0 ? path.slice(at + 1) : [];
-    if (at >= 0 && rest.length >= 1) {
-      const section = path.slice(0, at + 1).join(".");
-      if (rest.length > 1) found(section, rest[0], rest.slice(1).join("."), value);
-      else if (!TOML_NOT_DEPENDENCIES.has(rest[0].toLowerCase())) found(section, rest[0], null, value);
+    if (at >= 0 && length > at + 1) {
+      const name = part(at + 1);
+      const fieldStart = at + 2;
+      const field = fieldStart >= length ? null : (fieldStart >= T ? keys.slice(fieldStart - T) : [...table.slice(fieldStart), ...keys]).join(".");
+      // Inside a dependency table every key is a dependency, `version` and `name` included
+      // (`version = { version = "1.6.0", package = "smallvec" }`; fifth independent check, G3a).
+      found(sectionOf(table, keys, at), name, field, value);
       return;
     }
     // Not yet below a dependency table: an inline table's keys go on the path (`dependencies = { serde = "1" }`).
-    if (value.t && path.length < MAX_NESTING) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], tableLength, v);
+    // (followed while the dependency table has no name below it yet, or none is found and the path
+    // is under 3 parts).
+    if (value.t && (at >= 0 ? length === at + 1 : length < 3)) for (const [k, v] of Object.entries(value.t)) walk(table, [...keys, ...k.split(".")], v);
   };
   for (const { table, keys, value } of entries) {
     if (!keys) continue;
     if (table === null) {
+      // A snippet whose table is not known: `version = ...` there is most likely [package]'s.
       if (keys.length > 1) found("", keys[0], keys.slice(1).join("."), value);
       else if (!TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) found("", keys[0], null, value);
       continue;
     }
-    walk([...table, ...keys], table.length, value);
+    walk(table, keys, value);
   }
 }
 
@@ -671,9 +722,24 @@ function pyprojectDependencies(entries, local = new Set()) {
       else if (keys.length === 1 && value.s !== undefined && VERSION_SHAPED.test(value.s) && !TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) {
         out.push({ name: keys[0], section: null, spec: value.s });
       }
-    } else {
-      section = pyRequirementArray([...table, ...keys]);
-      if (section !== null && value.a) strings = value.a;
+    } else if (table.length + keys.length <= 5) {
+      // pyRequirementArray names paths of 2 to 5 parts; an inline table's keys go on the path
+      // (`project = { dependencies = [..] }`, `[project]` with `optional-dependencies = { dev = [..] }`,
+      // `dependency-groups = { dev = [..] }`, `[tool]` with `uv = { dev-dependencies = [..] }`:
+      // fifth independent check, G3c), followed only while the path is short enough to become one.
+      const arrays = (path, v) => {
+        tick();
+        const at = pyRequirementArray(path);
+        if (at !== null) {
+          if (v.a) for (const s of v.a) if (typeof s.s === "string") {
+            const r = requirementString(s.s);
+            if (r) out.push({ name: r.name, section: at, spec: r.spec });
+          }
+          return;
+        }
+        if (v.t && path.length < 5) for (const [k, inner] of Object.entries(v.t)) arrays([...path, ...k.split(".")], inner);
+      };
+      arrays([...table, ...keys], value);
     }
     for (const v of strings) {
       const r = typeof v.s === "string" ? requirementString(v.s) : null;
@@ -690,11 +756,13 @@ function pyprojectDependencies(entries, local = new Set()) {
 function poetryDependencies(entries) {
   const poetry = new Map();
   const walk = (path, value) => {
+    tick();
     const at = poetryDependencyAt(path);
     if (!at) {
       // Not yet at a dependency: an inline table's keys go on the path, as Poetry reads them
       // (`[tool.poetry]` with `dependencies = { requests = "2.19.0" }`; audit 2026-11-25, D minors).
-      if (value.t && path.length < MAX_NESTING) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], v);
+      // poetryDependencyAt reads parts 0 to 5 only: past 6 parts no key added can make one.
+      if (value.t && path.length < 6) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], v);
       return;
     }
     if (at.name.toLowerCase() === "python") return;
@@ -708,6 +776,12 @@ function poetryDependencies(entries) {
   };
   for (const { table, keys, value } of entries) {
     if (!keys || table === null) continue;
+    // Built only where it can name a Poetry dependency (`tool.poetry.` first): a long header with
+    // many keys under it is not copied once per key.
+    const part = (i) => (i < table.length ? table[i] : keys[i - table.length]);
+    const length = table.length + keys.length;
+    if (part(0) !== "tool" || (length > 1 && part(1) !== "poetry")) continue;
+    if (length > 6 && !(part(2) === "dependencies" || part(2) === "dev-dependencies" || (part(2) === "group" && part(4) === "dependencies"))) continue;
     walk([...table, ...keys], value);
   }
   for (const d of poetry.values()) d.alternatives = d.list ?? [d.fields];
@@ -812,7 +886,13 @@ function pnpmContentLines(text) {
  * (three blind checks of the a1125 hook lane: `''` escapes, tags and anchors before a quote,
  * carried quotes, block scalars holding braces), so a brace anywhere stands for one.
  */
-const pnpmHasBrace = (lines) => lines.some((line) => !line.trimStart().startsWith("#") && /[{}]/.test(line.replace(/\{[ \t]*\}/g, "")));
+function pnpmHasBrace(lines) {
+  for (const line of lines) {
+    tick();
+    if (!line.trimStart().startsWith("#") && /[{}]/.test(line.replace(/\{[ \t]*\}/g, ""))) return true;
+  }
+  return false;
+}
 
 /**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
@@ -1196,11 +1276,61 @@ function wholeFileChanges(file, before, after) {
       return [];
     }
   }
+  if (file === "Cargo.toml" || file === "pyproject.toml") {
+    // A TOML escape (`"smallve\u0063"`, `["dependencie\u0073"]`, `"1.6.\u0030"`, a line-ending
+    // backslash in `"""`) is not decoded here: a new or changed line that holds a backslash in a
+    // basic string or quoted key is held as not read; an unchanged one never is (fifth independent
+    // check, G3b). Literal strings in single quotes have no escapes and are read as they are.
+    const was = tomlEscapeLines(before);
+    if ([...tomlEscapeLines(after)].some((line) => !was.has(line))) {
+      refuse(
+        `a ${file} line with a backslash escape in a double-quoted string or key, which this hook does not decode`,
+        "Write each dependency's name and version without escapes, and any other value that needs a backslash as a literal string in single quotes ('C:\\path', '\\d+'), which has no escapes: the hook then reads the file, and the versions it sets are judged as in any other edit.",
+      );
+    }
+  }
   const versionsOf = (text) => {
     const context = fileContext(text);
     return declaredVersions(file, text, () => context, 0, true);
   };
   return diffVersions(versionsOf(before), versionsOf(after), specKey(file));
+}
+
+/**
+ * The lines of a TOML text (trimmed) that hold a backslash inside a basic string or a quoted key
+ * (`"..."` or `"""..."""`), read in one pass: comments and literal strings ('...', '''...''')
+ * hold no escape.
+ */
+function tomlEscapeLines(text) {
+  const out = new Set();
+  if (typeof text !== "string" || !text.includes("\\")) return out;
+  const lines = text.split("\n");
+  let state = ""; // "" | '"' | '"""' | "'" | "'''"
+  for (const raw of lines) {
+    tick();
+    const line = raw.replace(/\r$/, "");
+    let escaped = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (state === "") {
+        if (ch === "#") break;
+        if (line.startsWith('"""', i)) (state = '"""'), (i += 2);
+        else if (line.startsWith("'''", i)) (state = "'''"), (i += 2);
+        else if (ch === '"' || ch === "'") state = ch;
+      } else if (state === '"' || state === '"""') {
+        if (ch === "\\") {
+          escaped = true;
+          i++;
+        } else if (state === '"' && ch === '"') state = "";
+        else if (state === '"""' && line.startsWith('"""', i)) (state = ""), (i += 2);
+      } else if (state === "'" && ch === "'") state = "";
+      else if (state === "'''" && line.startsWith("'''", i)) (state = ""), (i += 2);
+    }
+    // A one-line string never runs past its line.
+    if (state === '"' || state === "'") state = "";
+    if (escaped) out.add(line.trim());
+  }
+  return out;
 }
 
 const ECOSYSTEM = {
@@ -1268,6 +1398,13 @@ function refuse(part, remedy = null) {
 }
 /** What releases the first part that could not be read, when it is not the usual remedy (notReadDenial). */
 let unreadRemedy = null;
+/**
+ * True when the part not read is a command the command reader itself found to install (a
+ * PowerShell comma or --% beside an install): it is held whatever the quick look says, since that
+ * look does not see inside a quoted argument (`pwsh -Command "pip --% install x==1"`): the stricter
+ * answer wins (fifth independent check, row 17).
+ */
+let unreadInstalls = false;
 
 /** Thrown out of a reader's loop once the call is past its time budget (preToolUse holds it). */
 const TOO_SLOW = new Error("over the time budget");
@@ -1629,14 +1766,28 @@ export function simpleCommands(line, dialect, redirects = null) {
   const endCommand = () => {
     endWord();
     if (unreadCommand !== null) {
-      // Not read. When the quick look sees an install in it, the call is held as not read, with a
-      // remedy that releases it; otherwise it installs nothing and the rest of the line is read.
-      if (namesInstall(line.slice(cmdStart, pos), "powershell")) {
+      // Not read exactly. When the command reader itself sees an install or add subcommand of a
+      // package manager with a package operand in it (its words split at the commas, an option's
+      // value left whole: `--only-binary=:all:,numpy` names no package), the call is held as not
+      // read, with a remedy that releases it; otherwise it installs nothing and the rest is read.
+      // Two readings, held if either installs: a comma at a word's edge as a separator and one inside
+      // a word as part of it (PowerShell 5.1 and 7.5.1 both pass `a,b` as one argument), and each such
+      // word as its first part (`lodash@4.17.20,x`); an option's value stays where it is
+      // (`--exclude a,b`). After --% the words are literal and PowerShell's own reading of them is
+      // version-bound: there the quick look over the text counts too, whichever is stricter.
+      const edges = words.map((w) => w.replace(/^,+|,+$/g, "")).filter(Boolean);
+      const firsts = edges.map((w) => (w.startsWith("-") ? w : w.split(",")[0])).filter(Boolean);
+      const reads = (ws) => ws.length > 0 && commandInstalls(ws, 0, "powershell").length > 0;
+      const installs = reads(edges) || reads(firsts) || (unreadCommand.includes("--%") && namesInstall(line.slice(cmdStart, pos), "powershell"));
+      if (installs) {
         held = true;
-        refuse(
-          `${unreadCommand} in a PowerShell command that installs`,
-          "Run the install as a command of its own, each package a separate argument, with no comma and no --%: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs.",
-        );
+        if (unreadPart === null) {
+          refuse(
+            `${unreadCommand} in a PowerShell command that installs`,
+            "Run the install as a command of its own, each package a separate argument, with no comma and no --% (a value that holds a comma can instead be put in quotes: '--only-binary=:all:,numpy'): the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs.",
+          );
+          unreadInstalls = true;
+        }
       }
       unreadCommand = null;
     } else if (words.length > 0) commands.push(words);
@@ -1756,8 +1907,12 @@ export function simpleCommands(line, dialect, redirects = null) {
       // a `;` included. Not read: the rest of the line goes with this command (endCommand holds it
       // when it installs, the text after a pipe included).
       unreadCommand ??= "the stop-parsing token --%";
-      const nl = line.indexOf("\n", i);
-      i = (nl < 0 ? line.length : nl) - 1;
+      // The words after it, as written (to a newline or a pipe), are what the program is given.
+      let end = i + 3;
+      while (end < line.length && line[end] !== "\n" && line[end] !== "\r" && line[end] !== "|") end++;
+      endWord();
+      for (const w of line.slice(i + 3, end).split(/[ \t]+/)) if (w) words.push(w);
+      i = end - 1;
     } else {
       word = (word ?? "") + ch;
     }
@@ -1908,6 +2063,34 @@ function jsVersion(raw) {
 }
 
 const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9._~][a-z0-9._~-]*)@(.+)$/i;
+
+/**
+ * A package named on an install command without a version is written at the registry's newest
+ * release (the manifest and the lockfile get it), so it is read as the request "latest", which
+ * needs a dependency_check verdict for that same request (the server records `requested:
+ * "latest"`). A dist-tag other than latest (`next`, `beta`) is read as itself (`tag`):
+ * dependency_check reads exact versions, ranges and latest, so no call clears it, and the denial
+ * says to name the version. Each test below keeps out what installs no public package by name:
+ * a path, a tarball, a URL or git source, a GitHub `user/repo`, a version-like word.
+ */
+const LATEST = "latest";
+/** An npm package name standing alone (`lodash`, `@types/node`): no path, tarball, URL or `user/repo`. */
+const npmBareName = (w) =>
+  w.length <= 214 && /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i.test(w) && /[a-z]/i.test(w) && !/\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip)$/i.test(w);
+/** A dist-tag (`next`, `beta`, `canary`): a word that is no version, range or wildcard. */
+const isDistTag = (raw) => raw.length <= 100 && /^[A-Za-z][A-Za-z0-9._-]*$/.test(raw) && !/^[vV]\d/.test(raw) && !/^[xX](?:$|\.)/.test(raw);
+/** A PyPI requirement that is a name alone (`requests`, `requests[socks]`): no specifier, path, archive or URL. */
+function pyBareName(w) {
+  const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?$/.exec(w);
+  return m && /[A-Za-z]/.test(m[1]) && !/\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar|egg)$/i.test(m[1]) ? m[1] : null;
+}
+/** A PyPI install operand: its requirement, or the name alone as the request "latest". */
+function pyOperand(w) {
+  const r = pep508(w);
+  if (r) return [{ ecosystem: "PyPI", name: r.name, spec: r.spec }];
+  const bare = pyBareName(w);
+  return bare ? [{ ecosystem: "PyPI", name: bare, spec: LATEST }] : [];
+}
 const CARGO_SPEC = /^([A-Za-z0-9_][A-Za-z0-9_-]*)@(.+)$/;
 const GO_SPEC = /^([A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*)@(.+)$/;
 const PEP508_NAME = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]]{0,200}\])?\s*/;
@@ -1933,13 +2116,15 @@ function poetrySpec(word) {
   const at = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?@(.+)$/.exec(word);
   if (at) {
     const v = at[2].trim();
-    if (v.toLowerCase() === "latest" || /[/:]/.test(v)) return null;
+    if (v.toLowerCase() === LATEST) return { name: at[1], spec: LATEST };
+    if (/[/:]/.test(v)) return null;
     if (specTooLong(v)) return refuse(specTooLong(v));
     if (exactFor("PyPI", v) || /^[~^]\s*\d/.test(v)) return { name: at[1], spec: v };
     const set = PEP440_SPECIFIERS.exec(v);
     return set && set[1].length === v.length ? { name: at[1], spec: v } : null;
   }
-  return pep508(word);
+  const bare = pep508(word) ? null : pyBareName(word);
+  return bare ? { name: bare, spec: LATEST } : pep508(word);
 }
 
 const JS_VALUES = {
@@ -2034,7 +2219,7 @@ const CARGO_VALUES = new Set(["-C", "-F", "--features", "--rename", "-p", "--pac
 const CARGO_REFUSE = new Set(["--git", "--path", "--registry", "--branch", "--tag", "--rev", "--index"]);
 const PY_INDEX = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links"]);
 /** pip options that take a value, its general ones (`pip --help`: `--cert`, `--client-cert`, ...) first: they may stand before `install`. */
-const PIP_VALUES = new Set(["--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
+const PIP_VALUES = new Set(["--exclude", "--excludes", "--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
 /** uv's global options that take a value, which may stand before its subcommand (uv help). */
 const UV_GLOBAL_VALUES = new Set(["--cache-dir", "--color", "--allow-insecure-host", "--directory", "--project", "--config-file", "--python-preference"]);
 const UV_ADD_VALUES = new Set(["--group", "--optional", "--extra", "--package", "--project", "--directory", "--python", "-p", "--marker", "-m", "--bounds", "--script", "--config-file", "--cache-dir", "-r", "--requirements", "-c", "--constraints", "--tag", "--branch", "--rev", "--refresh-package", "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package", "--exclude-newer", "--link-mode", "--keyring-provider", "--resolution", "--prerelease", "--fork-strategy", "--index-strategy", "--python-preference", "--color"]);
@@ -2126,13 +2311,36 @@ function jsInstalls(manager, args) {
   else if (all && manager === "yarn" && all[0] === "workspaces" && all[1] === "foreach") all = all.slice(2);
   if (all && manager === "npm" && npmCommand(all[0]) === "pkg" && all[1] === "set") return npmPkgSet(all.slice(2), args.includes("--json"));
   if (!all || all.length === 0 || !isInstallCommand(manager, all[0])) return [];
+  // Which subcommands write the newest release for a name given alone: an install or add, `pnpm up
+  // -L` / `--latest`, Berry's `yarn up`, classic `yarn upgrade --latest`. `pnpm up x` and `yarn
+  // upgrade x` without it stay inside the manifest's range: a name alone is not read there.
+  const sub = all[0];
+  const latestFlag = args.includes("-L") || args.includes("--latest");
+  const writesNewest =
+    manager === "npm" ||
+    (manager === "pnpm" && (["add", "install", "i"].includes(sub) || latestFlag)) ||
+    (manager === "yarn" && (sub === "add" || sub === "up" || (sub === "upgrade" && latestFlag))) ||
+    (manager === "bun" && ["add", "a", "install", "i"].includes(sub));
   const out = [];
   for (const word of all.slice(1)) {
     const m = NPM_SPEC.exec(word);
-    // `alias@npm:target@1.2.3` installs target 1.2.3.
-    const target = m && m[2].startsWith("npm:") ? NPM_SPEC.exec(m[2].slice(4)) : m;
-    const version = target ? jsVersion(target[2]) : null;
-    if (version) out.push({ ecosystem: "npm", name: target[1], spec: version });
+    if (!m) {
+      if (writesNewest && npmBareName(word)) out.push({ ecosystem: "npm", name: word, spec: LATEST });
+      continue;
+    }
+    // `alias@npm:target@1.2.3` installs target 1.2.3; `alias@npm:target` its newest release.
+    let name = m[1];
+    let raw = m[2];
+    if (raw.startsWith("npm:")) {
+      const inner = NPM_SPEC.exec(raw.slice(4));
+      if (inner) [name, raw] = [inner[1], inner[2]];
+      else if (npmBareName(raw.slice(4))) [name, raw] = [raw.slice(4), LATEST];
+      else continue;
+    }
+    const version = jsVersion(raw);
+    if (version) out.push({ ecosystem: "npm", name, spec: version });
+    else if (raw.trim().toLowerCase() === LATEST) out.push({ ecosystem: "npm", name, spec: LATEST });
+    else if (isDistTag(raw.trim())) out.push({ ecosystem: "npm", name, spec: raw.trim(), tag: true });
   }
   return out;
 }
@@ -2141,10 +2349,7 @@ function jsInstalls(manager, args) {
 function pipInstalls(args) {
   const all = operands(args, { values: PIP_VALUES, refuse: PY_INDEX });
   if (!all || all[0] !== "install") return [];
-  return all.slice(1).flatMap((w) => {
-    const r = pep508(w);
-    return r ? [{ ecosystem: "PyPI", name: r.name, spec: r.spec }] : [];
-  });
+  return all.slice(1).flatMap(pyOperand);
 }
 
 /**
@@ -2439,6 +2644,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     if (all && all[0] === "update") return cargoUpdate(rest);
     if (!all || all[0] !== "add") return [];
     return all.slice(1).flatMap((w) => {
+      // A crate named alone: its newest release.
+      if (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(w)) return [{ ecosystem: "crates.io", name: w, spec: LATEST }];
       const m = CARGO_SPEC.exec(w);
       const v = m ? m[2].trim() : null;
       if (v && specTooLong(v)) return refuse(specTooLong(v)) ?? [];
@@ -2468,13 +2675,7 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     // `uv lock` / `uv sync` / `uv add` move a package to the version `--upgrade-package x==v` names.
     const upgrades = upgradePackages(args);
     if (all[0] !== "add") return upgrades;
-    return [
-      ...upgrades,
-      ...all.slice(1).flatMap((w) => {
-        const r = pep508(w);
-        return r ? [{ ecosystem: "PyPI", name: r.name, spec: r.spec }] : [];
-      }),
-    ];
+    return [...upgrades, ...all.slice(1).flatMap(pyOperand)];
   }
   if (program === "pip-compile") return upgradePackages(args);
   // `uvx pip-compile ...`: uv runs the pip-tools command named first.
@@ -2493,11 +2694,18 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     if (all && (all[0] === "mod" || all[0] === "work") && all[1] === "edit") return goModEdit(args);
     if (!all || all[0] !== "get") return [];
     return all.slice(1).flatMap((w) => {
+      // A module named alone, or `@latest` / `@upgrade`: its newest release.
+      const bare = /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*$/.test(w) ? w : null;
+      if (bare && !bare.includes("...")) return [{ ecosystem: "Go", name: bare, spec: LATEST }];
       const m = GO_SPEC.exec(w);
       if (!m || m[1].includes("...")) return [];
       const v = m[2];
       if (specTooLong(v)) return refuse(specTooLong(v)) ?? [];
-      return GO_EXACT.test(v) || /^v\d+(?:\.\d+)?$/.test(v) ? [{ ecosystem: "Go", name: m[1], spec: v }] : [];
+      if (v === "latest" || v === "upgrade") return [{ ecosystem: "Go", name: m[1], spec: LATEST }];
+      if (v === "none") return [];
+      if (GO_EXACT.test(v) || /^v\d+(?:\.\d+)?$/.test(v)) return [{ ecosystem: "Go", name: m[1], spec: v }];
+      // A branch, a tag or `@patch`: no version this hook or dependency_check can read.
+      return isDistTag(v) ? [{ ecosystem: "Go", name: m[1], spec: v, tag: true }] : [];
     });
   }
   return [];
@@ -2777,6 +2985,7 @@ function denialFor(introduced, ledger, dir, what) {
   const unreadable = [];
   const local = [];
   const unchecked = [];
+  const tagged = [];
   const index = byPackage(ledger);
   for (const c of introduced) {
     // Past the budget the call is held as not read (judgeCall), whatever is left to judge.
@@ -2786,9 +2995,10 @@ function denialFor(introduced, ledger, dir, what) {
     if (verdict.deny) held.push({ c, entry: verdict.deny });
     else if (verdict.unreadable) unreadable.push({ c, entry: verdict.unreadable });
     else if (verdict.localSource) local.push({ c, entry: verdict.localSource });
+    else if (c.tag) tagged.push({ c });
     else unchecked.push({ c, last: verdict.check });
   }
-  if (held.length === 0 && unreadable.length === 0 && local.length === 0 && unchecked.length === 0) return null;
+  if (held.length === 0 && unreadable.length === 0 && local.length === 0 && unchecked.length === 0 && tagged.length === 0) return null;
   const lines = [`4DA guard: this ${what} was stopped before it ran.`];
   for (const { c, entry } of held.slice(0, 10)) {
     lines.push(`- ${quotedChange(c)}: dependency_check answered ${entry.verdict} at ${when(entry)}, recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}. Write a version it answers proceed for.`);
@@ -2802,7 +3012,12 @@ function denialFor(introduced, ledger, dir, what) {
   }
   for (const { c, entry } of local.slice(0, 10)) {
     lines.push(
-      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove that non-registry spec from the manifest that declares it (that edit goes ahead; one that puts a registry version in its place is held like this command), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. FOURDA_GUARD is the user's setting, not yours to change.`,
+      `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove that non-registry spec from the manifest that declares it (that edit goes ahead; one that puts a registry version in its place is held like this command), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. If the name is a package of this workspace: with pnpm or Yarn install it as ${quoted(`${c.name}@workspace:*`)} (that command goes ahead); with any manager, have it marked private with FOURDA_PRIVATE_PACKAGES=${quoted(c.name)} in the 4da server's environment (the name then never leaves this machine: the next dependency_check call for it sends nothing, records it private, and this ${what} passes), or add it to the manifest by hand as a file: path (that edit goes ahead). FOURDA_GUARD is the user's setting, not yours to change.`,
+    );
+  }
+  for (const { c } of tagged.slice(0, 10)) {
+    lines.push(
+      `- ${quotedChange(c)}: a dist-tag or branch, not a version. dependency_check reads exact versions, ranges and latest, so no call clears a tag: name the version the tag points to, check that version with dependency_check, and run the ${what} with that version.`,
     );
   }
   for (const { c, last } of unchecked.slice(0, 10)) {
@@ -2837,8 +3052,10 @@ function denialFor(introduced, ledger, dir, what) {
       );
     }
     lines.push(
-      "dependency_check sends each name to its public registry and to OSV.dev unless this project's private rules cover it (an .npmrc scope mapped to a private registry, GOPRIVATE, a private Cargo or Python index, FOURDA_PRIVATE_PACKAGES); a name they cover is never sent, and any version of it then goes ahead. " +
-        "A private package no such rule covers: add the rule first rather than make the call. A name not published on its public registry comes back unknown and stays blocked: correct the name or remove it rather than retrying.",
+      "dependency_check sends each name to its public registry and to OSV.dev unless this project's private rules cover it (an .npmrc scope mapped to a private registry, GOPRIVATE, a private Cargo or Python index, FOURDA_PRIVATE_PACKAGES); a name they cover is never sent, it is recorded private, and any version of it then goes ahead. " +
+        "A package from a private registry that no such rule covers must NOT be checked: the call would send its name to the public registry. Add the rule first (the registry line in .npmrc, pip.conf or GOPRIVATE, or FOURDA_PRIVATE_PACKAGES=<name> in the 4da server's environment, which the user sets), then make the call: it sends nothing, records the name private, and this " +
+        what +
+        " passes. Saying a name is private anywhere else (what_should_i_know's `public: false`) records nothing and releases nothing. A name not published on its public registry comes back unknown and stays blocked: correct the name or remove it rather than retrying.",
     );
     // A call that was made and left nothing behind would be stopped here for ever: say what that
     // means, once, where a version has no entry at all (an `unknown` answer is named above).
@@ -2861,151 +3078,97 @@ function denialFor(introduced, ledger, dir, what) {
 // =============================================================================
 
 /**
- * A path as compared with the ledger's: absolute, its folder's links resolved where the folder
- * exists, case folded on Windows. `~` is the home folder, and on Windows Git Bash's `/c/...` is
- * `C:\...`. A shell variable is not followed (`$HOME/...`, `$env:LOCALAPPDATA\...`): a command
- * holding one is not taken apart at all (simpleCommands).
+ * A tool call that NAMES the check ledger is held unless it is plainly a read (fifth independent
+ * check of the a1125 hook lane: a reader of the ways shell text can write a file was beaten 38
+ * times in 88, by quoting, `cd`, `-Confirm:$false`, `if { }`, here-docs and more). No shell is read
+ * to decide what a command does with the file. "Names" is a plain search of the call's raw text,
+ * case folded, whatever its size: the file's name `check-ledger` (not a source file of that name,
+ * `check-ledger.ts`), or the data folder's path in either slash form, its Git Bash `/c/...` form or
+ * `~/...` form, as written and as resolved. A read goes ahead only as one plain command from
+ * LEDGER_READ_COMMANDS, with nothing else on the line.
+ *
+ * What this does not see (the hook is a guard-rail against an agent's mistakes and shortcuts, not
+ * a sandbox): a command that removes or renames the data folder's parent or matches the folder by
+ * a wildcard, a path built from a variable, and a program that writes the file without naming it.
+ * And since the hook denies only where a ledger exists, a removed ledger means no denials until the
+ * server starts again.
  */
-function comparablePath(word, cwd) {
-  let w = word.replace(/[\\/]+$/, "") || word;
-  if (w === "~" || w.startsWith("~/") || w.startsWith("~\\")) w = join(homedir(), w.slice(1));
-  else if (process.platform === "win32" && /^\/[A-Za-z](?:\/|$)/.test(w)) w = `${w[1]}:\\${w.slice(3)}`;
-  let full = resolve(cwd, w);
+const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?\b)/;
+/** Programs that only show a file or a folder: one of them, alone on the line, may name the ledger. */
+const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "more", "wc", "get-content", "gc", "ls", "dir", "get-childitem", "gci", "du"]);
+
+/** The case-folded spellings of the data folder a call's text may hold. */
+function ledgerFolderMarks(env) {
+  const marks = new Set();
+  const home = homedir().replace(/[\\/]+$/, "").toLowerCase().replace(/\\/g, "/");
+  const add = (p) => {
+    const f = p.replace(/[\\/]+$/, "").toLowerCase().replace(/\\/g, "/");
+    if (f.length < 4) return;
+    marks.add(f);
+    marks.add(f.replace(/\//g, "\\"));
+    if (/^[a-z]:\//.test(f)) marks.add(`/${f[0]}${f.slice(2)}`);
+    if (home.length >= 3 && f.startsWith(`${home}/`)) {
+      marks.add(`~${f.slice(home.length)}`);
+      marks.add(`~${f.slice(home.length)}`.replace(/\//g, "\\"));
+    }
+  };
+  const dir = resolve(dataDir(env));
+  add(dir);
   try {
-    full = join(realpathSync.native(dirname(full)), basename(full));
+    add(realpathSync.native(dir));
   } catch {
-    // The folder does not exist: compared as written.
+    // No such folder yet: its spelling as written.
   }
-  return process.platform === "win32" ? full.toLowerCase() : full;
+  return [...marks];
 }
 
-/** The last part of a path word. */
-const lastPart = (word) => word.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
-
-/** Whether a file name (a glob allowed: `check-ledger*`, `*`) could name one of the ledger's files. */
-function ledgerName(name) {
-  if (!name.toLowerCase().startsWith("check-ledger") && !/[*?[]/.test(name)) return false;
-  if (name.length > 300) return true;
-  const source = name.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-  try {
-    const pattern = new RegExp(`^${source}$`, process.platform === "win32" ? "i" : "");
-    return LEDGER_FILES.some((file) => pattern.test(file));
-  } catch {
-    return true;
-  }
+/** Whether a call's raw text names the ledger (LEDGER_MENTION, or a spelling of its folder). */
+function namesLedgerText(text, marks) {
+  const t = text.toLowerCase();
+  return LEDGER_MENTION.test(t) || marks.some((m) => t.includes(m));
 }
 
-/**
- * Whether a word of a command (or a path a tool writes) names a ledger file the hook reads in
- * `ledgerDir` (comparablePath), or with `folder` that folder itself (removing or moving it removes
- * the ledger): the word itself, or a path written inside it (a `-c` / `-e` code string, `cmd /c "..."`).
- */
-function namesLedger(word, cwd, ledgerDir, folder = false) {
-  const parts = word.split(/[\s'"`(),;=+{}<>|&]+/);
-  for (const part of parts.length === 1 ? parts : [word, ...parts]) {
-    if (!part) continue;
-    const name = lastPart(part);
-    const isFolder = folder && name.toLowerCase() === basename(ledgerDir).toLowerCase();
-    if (!isFolder && !ledgerName(name)) continue;
-    const full = comparablePath(part, cwd);
-    if (isFolder ? full === ledgerDir : dirname(full) === ledgerDir) return true;
-  }
-  return false;
+/** Whether a command is one plain command from LEDGER_READ_COMMANDS: no pipe, redirection, separator, line end, backquote or substitution. */
+function plainLedgerRead(command, dialect) {
+  if (command.length > MAX_COMMAND_CHARS || /[|;&<>\r\n`]|\$\(/.test(command)) return false;
+  const kept = [unreadPart, unreadRemedy, unreadInstalls];
+  const commands = simpleCommands(command, dialect);
+  [unreadPart, unreadRemedy, unreadInstalls] = kept;
+  return commands !== null && commands.length === 1 && LEDGER_READ_COMMANDS.has(programName(commands[0][0]));
 }
 
-/** Programs that only read the files they name: one of them may name the ledger. */
-const LEDGER_READERS = new Set([
-  "cat", "type", "more", "less", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "jq", "ls", "dir", "stat", "file",
-  "sha256sum", "sha1sum", "md5sum", "cksum", "od", "xxd", "hexdump", "strings", "cut", "nl",
-  "get-content", "gc", "select-string", "sls", "get-item", "gi", "get-itemproperty", "gp", "test-path", "get-childitem", "gci", "get-filehash", "format-hex", "fhx",
-]);
-/** Commands that pass on what a reader gives them and write no file. */
-const LEDGER_PIPE_SAFE = new Set([
-  "sort", "uniq", "echo", "printf", "true", "select-object", "select", "where-object", "where", "?", "foreach-object", "%", "sort-object",
-  "measure-object", "measure", "format-table", "ft", "format-list", "fl", "out-string", "out-host", "group-object", "convertfrom-json", "convertto-json", "write-output", "write-host",
-]);
-/** Programs that copy: one may name the ledger as the file it copies from. */
-const LEDGER_COPIERS = new Set(["cp", "copy", "copy-item", "cpi"]);
-
-/**
- * How a command writes the ledger file the hook reads, or null. Held: a redirection onto it; a
- * program that names it, or its folder, other than one that only reads it (LEDGER_READERS, `sed`
- * without `-i`, a copy from it to a path outside its folder): `tee`, `Set-Content`, `Out-File`,
- * `sed -i`, `mv`, `rm`, `node -e` / `python -c` code naming its path, a copy or rename onto it or
- * into its folder; and a read of it beside another command that is not a plain filter (a pipe
- * passes its path on: `Get-Item <ledger> | Remove-Item`). `cd` / `Set-Location` with a plain path
- * is followed. A command this reader cannot take apart (a variable, a substitution) is not.
- */
-function ledgerWriteIn(command, dialect, cwd, ledgerDir) {
-  if (typeof command !== "string") return null;
-  const lower = command.toLowerCase();
-  if (!lower.includes("check-ledger") && !/[*?[]/.test(command) && !lower.includes(basename(ledgerDir).toLowerCase())) return null;
-  // The tokenizer's own holds (a comma beside an install) are the install reader's to report.
-  const kept = [unreadPart, unreadRemedy];
-  const redirects = [];
-  const commands = simpleCommands(command, dialect, redirects);
-  [unreadPart, unreadRemedy] = kept;
-  if (!commands) return null;
-  let dir = cwd;
-  // Each folder a `cd` on the line moves to: a redirection is judged from every one of them.
-  const dirs = [cwd];
-  let readBy = null;
-  let other = null;
-  for (const words of commands) {
-    tick();
-    const start = commandStart(words);
-    const program = start >= 0 && start < words.length ? programName(words[start]) : "";
-    const args = start >= 0 ? words.slice(start + 1) : words;
-    if (["cd", "chdir", "pushd", "set-location", "sl"].includes(program)) {
-      const to = args.find((a) => !a.startsWith("-"));
-      if (to) dirs.push((dir = resolve(dir, to === "~" || to.startsWith("~/") || to.startsWith("~\\") ? join(homedir(), to.slice(1)) : to)));
-      continue;
-    }
-    const named = args.some((a) => namesLedger(a, dir, ledgerDir, true));
-    // A rename gives the new name alone (`Rename-Item <folder>\x.jsonl check-ledger.jsonl`).
-    const renamed =
-      !named && args.some((a) => ledgerName(lastPart(a))) && args.some((a) => !a.startsWith("-") && dirname(comparablePath(a, dir)) === ledgerDir);
-    if (!named && !renamed) {
-      if (!LEDGER_READERS.has(program) && !LEDGER_PIPE_SAFE.has(program)) other ??= program || "a command";
-      continue;
-    }
-    if (LEDGER_READERS.has(program) || (program === "sed" && !args.some((a) => /^-(?:[a-zA-Z]*i|-in-place)/.test(a)))) {
-      readBy ??= program;
-      continue;
-    }
-    if (LEDGER_COPIERS.has(program) && !renamed) {
-      // From the ledger to a path outside its folder, no option: a read. Anything else is held.
-      const positional = args.filter((a) => !a.startsWith("-"));
-      const to = positional.at(-1) ?? "";
-      const into = comparablePath(to, dir);
-      if (positional.length === args.length && positional.length >= 2 && !positional.slice(1).some((a) => namesLedger(a, dir, ledgerDir, true)) && into !== ledgerDir && dirname(into) !== ledgerDir) {
-        readBy ??= program;
-        continue;
-      }
-    }
-    return program || "a command";
-  }
-  for (const r of redirects) if (r.write && dirs.some((d) => namesLedger(r.target, d, ledgerDir))) return "a redirection onto it";
-  if (readBy !== null && other !== null) return `${readBy} beside ${other}, which may be passed its path`;
-  return null;
-}
-
-/** For a PreToolUse call, how it writes the ledger the hook reads, or null. */
-function writesLedger(input, env) {
+/** For a PreToolUse call, "command" or "edit" when it names the ledger and is not plainly a read, else null. */
+function ledgerCall(input, env) {
   const toolInput = input.tool_input;
   if (!toolInput || typeof toolInput !== "object") return null;
-  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  const ledgerDir = comparablePath(dataDir(env), cwd);
-  if (input.tool_name === "Bash" || input.tool_name === "PowerShell") return ledgerWriteIn(toolInput.command, input.tool_name === "PowerShell" ? "powershell" : "bash", cwd, ledgerDir);
-  if ((input.tool_name === "Edit" || input.tool_name === "MultiEdit" || input.tool_name === "Write") && typeof toolInput.file_path === "string") {
-    return ledgerName(lastPart(toolInput.file_path)) && dirname(comparablePath(toolInput.file_path, cwd)) === ledgerDir ? input.tool_name : null;
+  const marks = ledgerFolderMarks(env);
+  if (input.tool_name === "Bash" || input.tool_name === "PowerShell") {
+    const command = toolInput.command;
+    if (typeof command !== "string" || !namesLedgerText(command, marks)) return null;
+    return plainLedgerRead(command, input.tool_name === "PowerShell" ? "powershell" : "bash") ? null : "command";
+  }
+  const path = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.notebook_path === "string" ? toolInput.notebook_path : null;
+  if (path === null) return null;
+  if (namesLedgerText(path, marks)) return "edit";
+  // Another spelling of the folder (an 8.3 name, a junction): the file's folder, resolved.
+  try {
+    const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+    const folder = realpathSync.native(dirname(resolve(cwd, path)));
+    if (namesLedgerText(folder, marks)) return "edit";
+  } catch {
+    // The folder does not exist: not the data folder.
   }
   return null;
 }
 
-/** The denial for a call that writes the ledger. */
-function ledgerDenial(what, how, dir) {
-  return `4DA guard: this ${what} was stopped before it ran: it writes the check ledger in ${quoted(dir, 300)} (${how}). Only the 4da server writes this file: it records each dependency_check verdict there, and this guard reads it to decide what may be installed. To change a verdict, call dependency_check again. Reading the file stays allowed in a command of its own (cat, head, tail, grep, Get-Content, Select-String, or a copy of it to another folder). If the user wants the file changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`;
+/** The denial for a call that names the ledger. */
+function ledgerDenial(what, dir) {
+  // The path as both shells read it as written: forward slashes, in single quotes (no escapes).
+  const plain = `${dir.replace(/\\/g, "/").replace(/\/+$/, "")}/check-ledger.jsonl`;
+  const file = plain.includes("'") ? plain : `'${plain}'`;
+  return what === "command"
+    ? `4DA guard: this command was stopped before it ran: it names the 4da check ledger (${file}). Only the 4da server writes it: it records each dependency_check verdict there, and this guard reads it to decide what may be installed. To read it, run cat ${file} (or Get-Content ${file}) as a command of its own, with nothing else on the line (no pipe, redirection or second command). To change a verdict, call dependency_check again. If the user wants the file changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`
+    : `4DA guard: this edit was stopped before it ran: it writes in the 4da data folder (${quoted(dir, 300)}), where the check ledger is. Only the 4da server writes there: it records each dependency_check verdict, and this guard reads it to decide what may be installed. To change a verdict, call dependency_check again. To read the ledger, run cat ${file} as a command of its own. If the user wants it changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`;
 }
 
 /** "block" (the default), "advise" or "off", from FOURDA_GUARD. */
@@ -3021,7 +3184,7 @@ function introducedBy(input) {
   if (!toolInput || typeof toolInput !== "object") return null;
   if (toolName === "Bash" || toolName === "PowerShell") {
     const found = installsIn(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash");
-    return { what: "command", changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null })) };
+    return { what: "command", changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null, ...(r.tag ? { tag: true } : {}) })) };
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
   if (typeof toolInput.file_path !== "string") return null;
@@ -3042,6 +3205,7 @@ function introducedBy(input) {
 function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
   unreadPart = null;
   unreadRemedy = null;
+  unreadInstalls = false;
   // From the hook's own start: Node's start-up and reading stdin count against the budget too.
   deadline = readBudgetMs >= 0 ? Math.min(performance.now() + readBudgetMs, mainStartedAt === null ? Infinity : mainStartedAt + readBudgetMs + 500) : -1;
   try {
@@ -3062,9 +3226,9 @@ function judgeCall(input, env, now) {
   if (overBudget()) {
     // Already past the budget before reading (a slow start or stdin): read nothing more.
   }
-  // The check ledger is the server's: an edit or command that writes it is held, whatever else it does.
-  const ledgerWrite = writesLedger(input, env);
-  if (ledgerWrite) return denyJson(ledgerDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", ledgerWrite, dataDir(env)));
+  // The check ledger is the server's: a call that names it is held unless it is plainly a read, whatever else it does.
+  const namesLedger = ledgerCall(input, env);
+  if (namesLedger) return denyJson(ledgerDenial(namesLedger, resolve(dataDir(env))));
   const found = introducedBy(input);
   if (!found) return "";
   const changes = [];
@@ -3072,11 +3236,11 @@ function judgeCall(input, env, now) {
     const spec = String(c.spec).trim();
     // A version or constraint past its bound is held as not read, never dropped (it was in round 2).
     if (specTooLong(spec)) refuse(specTooLong(spec));
-    else if (NAME_TEXT.test(c.name) && specText(c.spec) === spec) changes.push(c);
+    else if (NAME_TEXT.test(c.name) && (specText(c.spec) === spec || (c.tag && isDistTag(spec)))) changes.push(c);
     else if (String(c.name).length > 214) refuse("a package name over 214 characters");
   }
   overBudget();
-  const unread = () => unreadPart !== null && mayInstall(input);
+  const unread = () => unreadPart !== null && (unreadInstalls || mayInstall(input));
   if (changes.length === 0 && !unread()) return "";
   const dir = dataDir(env);
   const ledger = readLedger(dir, now);
@@ -3363,6 +3527,9 @@ const MAX_PARSE_CHARS = 64 * 1024 * 1024;
 function oversizedParsed(input) {
   if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || !input.tool_input || typeof input.tool_input !== "object") return "";
   if (guardMode(process.env.FOURDA_GUARD) !== "block") return "";
+  // The ledger check reads the raw text only: it holds a call this size too.
+  const ledger = ledgerCall(input, process.env);
+  if (ledger) return denyJson(ledgerDenial(ledger, resolve(dataDir(process.env))));
   // The pre-check of a command this size is timed: one it cannot finish inside the budget is held.
   let may = true;
   precheckStopAt = (mainStartedAt ?? performance.now()) + READ_BUDGET_MS + 500;
@@ -3397,6 +3564,11 @@ function oversized(head) {
     path = null;
   }
   const input = { tool_name: tool, tool_input: { file_path: path ?? undefined, command } };
+  // The ledger, named anywhere in the first part as it arrives (JSON-escaped: a backslash doubled).
+  const marks = ledgerFolderMarks(process.env);
+  if (tool && namesLedgerText(head, [...marks, ...marks.map((m) => m.replace(/\\/g, "\\\\"))])) {
+    return denyJson(ledgerDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", resolve(dataDir(process.env))));
+  }
   if (!tool || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
   return denyJson(notReadDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
 }

@@ -86,9 +86,9 @@ describe("what Poetry takes from elsewhere stays unread", () => {
     expect(s.write(s.file("pyproject.toml", HEAD), text).decision).toBe("allow");
   });
 
-  it("[project] as a root inline table stays a documented limit (a652)", () => {
+  it("[project] as a root inline table is read since round 7 (G3c)", () => {
     s.ledger([AVOID]);
-    expect(s.write(s.file("pyproject.toml", ""), 'project = { name = "a", version = "1", dependencies = ["requests==2.19.0"] }\n').decision).toBe("allow");
+    expect(s.write(s.file("pyproject.toml", ""), 'project = { name = "a", version = "1", dependencies = ["requests==2.19.0"] }\n').text).toContain("answered avoid");
   });
 });
 

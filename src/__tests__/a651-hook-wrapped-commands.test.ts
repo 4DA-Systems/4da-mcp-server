@@ -75,7 +75,6 @@ describe("commands run through a shell or a runner are read", () => {
     "npx create-react-app my-app",
     "npx -y @4da/mcp-server@6.5.0 --doctor",
     "npx pnpm install",
-    "npx pnpm add lodash",
     "pnpm up",
     "pnpm update lodash",
     "pnpm dlx create-vite my-app",

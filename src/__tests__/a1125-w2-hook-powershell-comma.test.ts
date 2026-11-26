@@ -44,8 +44,6 @@ describe("an install beside a comma or --% is held", () => {
     ["beside a variable later on the line", "npm i lodash@4.17.20,ms@2.0.0; Write-Output $x", "a comma outside quotes"],
     ["--% before the subcommand", "npm --% i lodash@4.17.20", "the stop-parsing token --%"],
     ["--% after it", "npm i --% lodash@4.17.20", "the stop-parsing token --%"],
-    ["--% where a pipe follows with the install", "Write-Output a | node --% x | npm i lodash@4.17.20", "the stop-parsing token --%"],
-    ["--% where a ; would not end it", "Write-Output --% x; npm i lodash@4.17.20", "the stop-parsing token --%"],
     ["CRLF lines", "Write-Output a\r\nnpm i lodash@4.17.20,ms@2.0.0\r\n", "a comma outside quotes"],
   ])("%s: held as not read, naming the part and the way through", (_label, command, part) => {
     s.ledger([AVOID]);
@@ -53,6 +51,23 @@ describe("an install beside a comma or --% is held", () => {
     expect(run.decision).toBe("deny");
     expect(run.text).toContain(`could not be read (${part} in a PowerShell command that installs)`);
     expect(run.text).toContain(REMEDY);
+  });
+
+  it("--% ends at a pipe: an install after a pipe is read; one after a ; is a word of the --% command in PowerShell 7.5.1 and 5.1, held anyway (the stricter reading)", () => {
+    s.ledger([AVOID]);
+    expect(ps("Write-Output a | node --% x | npm i lodash@4.17.20").text).toContain("answered avoid");
+    expect(ps("Write-Output --% x; npm i lodash@4.17.20").text).toContain("could not be read (the stop-parsing token --%");
+    expect(ps("node --% x; npm i lodash@4.17.20").text).toContain("could not be read (the stop-parsing token --%");
+    expect(ps("Get-ChildItem --% /s *.ts").decision).toBe("allow");
+  });
+
+  it("the command reader decides what installs: an option's value with a comma, a lint list, and quoting are not held", () => {
+    s.ledger([AVOID]);
+    for (const c of ["yarn workspace web lint --ext .ts,.tsx", "pip install -r requirements.txt --only-binary=:all:,numpy", "uv pip install -r requirements.txt --exclude a,b", "npm run lint -- --ext .ts,.tsx", "pnpm --filter web,api build"]) {
+      expect(ps(c).decision, c).toBe("allow");
+    }
+    expect(ps("pip install requests==2.31.0,idna==3.7").text).toContain("put in quotes");
+    expect(ps("pwsh -NoProfile -Command \"pip --% install requests==2.19.0\"").decision).toBe("deny");
   });
 
   it("following the remedy literally releases it", () => {
