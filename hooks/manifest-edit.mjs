@@ -1390,6 +1390,13 @@ function refuse(part, remedy = null) {
 }
 /** What releases the first part that could not be read, when it is not the usual remedy (notReadDenial). */
 let unreadRemedy = null;
+/**
+ * True when the part not read is a command the command reader itself found to install (a
+ * PowerShell comma or --% beside an install): it is held whatever the quick look says, since that
+ * look does not see inside a quoted argument (`pwsh -Command "pip --% install x==1"`): the stricter
+ * answer wins (fifth independent check, row 17).
+ */
+let unreadInstalls = false;
 
 /** Thrown out of a reader's loop once the call is past its time budget (preToolUse holds it). */
 const TOO_SLOW = new Error("over the time budget");
@@ -1751,14 +1758,28 @@ export function simpleCommands(line, dialect, redirects = null) {
   const endCommand = () => {
     endWord();
     if (unreadCommand !== null) {
-      // Not read. When the quick look sees an install in it, the call is held as not read, with a
-      // remedy that releases it; otherwise it installs nothing and the rest of the line is read.
-      if (namesInstall(line.slice(cmdStart, pos), "powershell")) {
+      // Not read exactly. When the command reader itself sees an install or add subcommand of a
+      // package manager with a package operand in it (its words split at the commas, an option's
+      // value left whole: `--only-binary=:all:,numpy` names no package), the call is held as not
+      // read, with a remedy that releases it; otherwise it installs nothing and the rest is read.
+      // Two readings, held if either installs: a comma at a word's edge as a separator and one inside
+      // a word as part of it (PowerShell 5.1 and 7.5.1 both pass `a,b` as one argument), and each such
+      // word as its first part (`lodash@4.17.20,x`); an option's value stays where it is
+      // (`--exclude a,b`). After --% the words are literal and PowerShell's own reading of them is
+      // version-bound: there the quick look over the text counts too, whichever is stricter.
+      const edges = words.map((w) => w.replace(/^,+|,+$/g, "")).filter(Boolean);
+      const firsts = edges.map((w) => (w.startsWith("-") ? w : w.split(",")[0])).filter(Boolean);
+      const reads = (ws) => ws.length > 0 && commandInstalls(ws, 0, "powershell").length > 0;
+      const installs = reads(edges) || reads(firsts) || (unreadCommand.includes("--%") && namesInstall(line.slice(cmdStart, pos), "powershell"));
+      if (installs) {
         held = true;
-        refuse(
-          `${unreadCommand} in a PowerShell command that installs`,
-          "Run the install as a command of its own, each package a separate argument, with no comma and no --%: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs.",
-        );
+        if (unreadPart === null) {
+          refuse(
+            `${unreadCommand} in a PowerShell command that installs`,
+            "Run the install as a command of its own, each package a separate argument, with no comma and no --% (a value that holds a comma can instead be put in quotes: '--only-binary=:all:,numpy'): the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs.",
+          );
+          unreadInstalls = true;
+        }
       }
       unreadCommand = null;
     } else if (words.length > 0) commands.push(words);
@@ -1878,8 +1899,12 @@ export function simpleCommands(line, dialect, redirects = null) {
       // a `;` included. Not read: the rest of the line goes with this command (endCommand holds it
       // when it installs, the text after a pipe included).
       unreadCommand ??= "the stop-parsing token --%";
-      const nl = line.indexOf("\n", i);
-      i = (nl < 0 ? line.length : nl) - 1;
+      // The words after it, as written (to a newline or a pipe), are what the program is given.
+      let end = i + 3;
+      while (end < line.length && line[end] !== "\n" && line[end] !== "\r" && line[end] !== "|") end++;
+      endWord();
+      for (const w of line.slice(i + 3, end).split(/[ \t]+/)) if (w) words.push(w);
+      i = end - 1;
     } else {
       word = (word ?? "") + ch;
     }
@@ -2186,7 +2211,7 @@ const CARGO_VALUES = new Set(["-C", "-F", "--features", "--rename", "-p", "--pac
 const CARGO_REFUSE = new Set(["--git", "--path", "--registry", "--branch", "--tag", "--rev", "--index"]);
 const PY_INDEX = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links"]);
 /** pip options that take a value, its general ones (`pip --help`: `--cert`, `--client-cert`, ...) first: they may stand before `install`. */
-const PIP_VALUES = new Set(["--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
+const PIP_VALUES = new Set(["--exclude", "--excludes", "--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
 /** uv's global options that take a value, which may stand before its subcommand (uv help). */
 const UV_GLOBAL_VALUES = new Set(["--cache-dir", "--color", "--allow-insecure-host", "--directory", "--project", "--config-file", "--python-preference"]);
 const UV_ADD_VALUES = new Set(["--group", "--optional", "--extra", "--package", "--project", "--directory", "--python", "-p", "--marker", "-m", "--bounds", "--script", "--config-file", "--cache-dir", "-r", "--requirements", "-c", "--constraints", "--tag", "--branch", "--rev", "--refresh-package", "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package", "--exclude-newer", "--link-mode", "--keyring-provider", "--resolution", "--prerelease", "--fork-strategy", "--index-strategy", "--python-preference", "--color"]);
@@ -3226,6 +3251,7 @@ function introducedBy(input) {
 function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
   unreadPart = null;
   unreadRemedy = null;
+  unreadInstalls = false;
   // From the hook's own start: Node's start-up and reading stdin count against the budget too.
   deadline = readBudgetMs >= 0 ? Math.min(performance.now() + readBudgetMs, mainStartedAt === null ? Infinity : mainStartedAt + readBudgetMs + 500) : -1;
   try {
@@ -3260,7 +3286,7 @@ function judgeCall(input, env, now) {
     else if (String(c.name).length > 214) refuse("a package name over 214 characters");
   }
   overBudget();
-  const unread = () => unreadPart !== null && mayInstall(input);
+  const unread = () => unreadPart !== null && (unreadInstalls || mayInstall(input));
   if (changes.length === 0 && !unread()) return "";
   const dir = dataDir(env);
   const ledger = readLedger(dir, now);
