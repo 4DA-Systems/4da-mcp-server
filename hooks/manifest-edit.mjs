@@ -1911,6 +1911,8 @@ function introducedByEdit(kind, toolName, toolInput, path) {
  */
 export function simpleCommands(line, dialect, redirects = null, dropped = null, cap = MAX_COMMAND_CHARS, links = null) {
   if (typeof line !== "string") return null;
+  // PowerShell reads its typographic quotes as quotes: one string's quote characters are one class.
+  if (dialect === "powershell") line = psQuotes(line);
   if (line.length > cap) return refuse(`a command over ${cap / 1024} KB`);
   const commands = [];
   let words = [];
@@ -2090,6 +2092,15 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
   if (held) return null;
   return commands;
 }
+
+/**
+ * PowerShell's quote characters, from its own tokenizer (System.Management.Automation, parser
+ * CharTraits.cs: IsSingleQuote is ' and U+2018, U+2019, U+201A, U+201B; IsDoubleQuote is " and
+ * U+201C, U+201D, U+201E): a string opened by one of a class is closed by any of that class.
+ */
+const PS_SINGLE_QUOTES = /[\u2018\u2019\u201a\u201b]/g;
+const PS_DOUBLE_QUOTES = /[\u201c\u201d\u201e]/g;
+const psQuotes = (line) => (/[\u2018-\u201e]/.test(line) ? line.replace(PS_SINGLE_QUOTES, "'").replace(PS_DOUBLE_QUOTES, '"') : line);
 
 /** A word PowerShell passes as written although it starts with `@`: an npm scope, `/`, then more. */
 const SCOPED_WORD = /^@[a-z0-9][a-z0-9._~-]*\/[^\s;&|,()'"{}$`@]/i;
@@ -3183,7 +3194,8 @@ export function detectsInstall(text) {
   if (/[\\`]\r?\n/.test(text)) text = text.replace(/[\\`]\r?\n/g, " ");
   // A second pass with the shell's escape and quote characters taken out: `n\pm`, `np''m`, `` n`pm ``
   // are npm to the shell.
-  return detectIn(text, []) || (/[\\`'"]/.test(text) && detectIn(text.replace(/[\\`'"]/g, ""), []));
+  // PowerShell's typographic quotes (psQuotes) are quotes too, whatever the dialect: the safe side.
+  return detectIn(text, []) || (/[\\`'"\u2018-\u201e]/.test(text) && detectIn(text.replace(/[\\`'"\u2018\u2019\u201a\u201b\u201c\u201d\u201e]/g, ""), []));
 }
 
 /** The detector over a parsed command's words, word by word (a quoted word keeps its spaces: never re-joined). */
