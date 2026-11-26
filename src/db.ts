@@ -230,6 +230,67 @@ export function serverDataDir(): string {
   return path.join(base, "4da-mcp");
 }
 
+/** Whether the data folder can be written, decided once per process and folder (dataFolderWriteProblem). */
+let folderVerdict: { dir: string; problem: string | null } | null = null;
+
+/**
+ * Why this process cannot write to its data folder ("the data folder <dir> is not writable
+ * (EPERM)"), or null when it can. Decided once per process and folder by creating and removing an
+ * empty file in it: a folder made writable later is used after a restart.
+ */
+export function dataFolderWriteProblem(): string | null {
+  const dir = serverDataDir();
+  if (folderVerdict?.dir === dir) return folderVerdict.problem;
+  const codeOf = (error: unknown) => String((error as { code?: unknown } | null)?.code ?? "");
+  const denied = (code: string) => code === "EACCES" || code === "EPERM" || code === "EROFS";
+  let problem: string | null = null;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.write-check-${process.pid}-${Date.now()}.tmp`);
+    try {
+      fs.writeFileSync(probe, "", { flag: "wx" });
+      try {
+        fs.unlinkSync(probe);
+      } catch {
+        // Created but not removable: the folder is writable, which is the question.
+      }
+    } catch (error) {
+      if (denied(codeOf(error))) problem = `the data folder ${dir} is not writable (${codeOf(error)})`;
+    }
+  } catch (error) {
+    const code = codeOf(error);
+    if (denied(code)) problem = `the data folder ${dir} is not writable (${code})`;
+    else if (code === "EEXIST" || code === "ENOTDIR") problem = `the data folder ${dir} is not a folder (${code})`;
+  }
+  // SQLite opens files without the backup semantics Node uses on Windows, so an elevated process can
+  // create a file there that SQLite cannot (measured 2026-11-27 under a deny ACL): SQLite is asked too.
+  if (!problem && sqliteDriverStatus().driver) {
+    const probe = path.join(dir, `.write-check-${process.pid}-${Date.now()}.db`);
+    let db: SqliteDatabase | null = null;
+    try {
+      db = openDatabase(probe);
+      db.exec("CREATE TABLE IF NOT EXISTS write_check (x INTEGER)");
+    } catch (error) {
+      problem = `the data folder ${dir} is not writable (${codeOf(error) || (error instanceof Error ? error.message : String(error))})`;
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        // Not open.
+      }
+      for (const file of [probe, `${probe}-journal`, `${probe}-wal`, `${probe}-shm`]) {
+        try {
+          fs.rmSync(file, { force: true });
+        } catch {
+          // Left behind in a folder that refuses deletes: an empty file, harmless.
+        }
+      }
+    }
+  }
+  folderVerdict = { dir, problem };
+  return problem;
+}
+
 /** The server's response cache (registry, OSV, changelogs). Disposable: deleting it costs refetches only. */
 export function serverCacheDbPath(): string {
   return path.join(serverDataDir(), "cache.db");
@@ -1049,6 +1110,17 @@ export class FourDADatabase {
       console.error(`[4DA] ${this.creationNote}`);
     }
     if (notSetUpNote) this.creationNote = notSetUpNote;
+
+    // A data folder this user cannot write to: said at once, plainly, and decided once per process.
+    // Opening the store there failed only after SQLite's own retries, about 3 s on every call, with
+    // "unable to open database file" (audit 2026-11-25, F-m3).
+    const folderProblem = isOwnStorePath(absolutePath) ? dataFolderWriteProblem() : null;
+    if (folderProblem) {
+      throw new DatabaseUnavailableError(
+        `${folderProblem}, so this server's own store (decisions and agent memory) cannot be opened: give your user write access to it and restart the server, or set FOURDA_MCP_HOME to a folder you can write. The dependency tools still answer from the project's files.`,
+        `${folderProblem}, ${FROM_DISK_ONLY}.`,
+      );
+    }
 
     let opened: SqliteDatabase | null = null;
     let standalone = ownFormat;

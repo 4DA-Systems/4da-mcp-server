@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { openDatabase, sqliteDriverStatus, type SqliteDatabase, type SqliteStatement } from "../sqlite-driver.js";
 
-import { isOwnStorePath, serverCacheDbPath } from "../db.js";
+import { dataFolderWriteProblem, isOwnStorePath, serverCacheDbPath } from "../db.js";
 
 let serverCache: SqliteDatabase | null = null;
 
@@ -165,11 +165,16 @@ export function getServerCacheDb(): SqliteDatabase | null {
   if (!sqliteDriverStatus().driver) return null;
   const file = serverCacheDbPath();
   let opened: CacheOpenResult;
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    opened = openCacheFile(file);
-  } catch (error) {
-    opened = { db: null, attempts: 0, error };
+  // A data folder this user cannot write to is said as that, and not tried (audit 2026-11-25, F-m3).
+  const folderProblem = dataFolderWriteProblem();
+  if (folderProblem) opened = { db: null, attempts: 0, error: new Error(folderProblem) };
+  else {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      opened = openCacheFile(file);
+    } catch (error) {
+      opened = { db: null, attempts: 0, error };
+    }
   }
   if (opened.db) {
     serverCache = opened.db;
