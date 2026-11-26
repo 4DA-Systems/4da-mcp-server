@@ -171,13 +171,32 @@ describe("a uv pin whose requirement resolves to an affected release on the proj
   const requires = ['distlib<1,>=0.4.3', 'filelock<5,>=3.24.2; python_version >= "3.10"', 'filelock<=3.19.1,>=3.19.1; python_version < "3.10"'];
   const facts = { versions: ["3.16.1", "3.24.2", "4.1.0", "4.2.1"], withdrawn: [], withdrawnWhy: {}, latest: "4.2.1", requiresPython: { "4.1.0": ">=3.10", "4.2.1": ">=3.11" } };
   const sources = { pypiRequiresDist: async () => requires, releaseFacts: async (_e: string, n: string) => (n === "filelock" ? facts : { versions: [], withdrawn: [], withdrawnWhy: {}, latest: null }) } as unknown as Pick<FixPathSources, "pypiRequiresDist" | "releaseFacts">;
-  const answer = (affected: boolean) => async () => ({ vulnerabilities: affected ? [{ package: "filelock", currentVersion: "4.1.0", vulnId: "GHSA-v4x8-3wr5-3wq8", maintenance: false }] : [] }) as unknown as VulnerabilityScanResult;
+  // OSV.dev for filelock: 4.1.0 is affected (high, medium, low), 4.2.1 is clean.
+  const v41 = [
+    { package: "filelock", currentVersion: "4.1.0", vulnId: "GHSA-v4x8-3wr5-3wq8", aliases: [], severity: "high", maintenance: false },
+    { package: "filelock", currentVersion: "4.1.0", vulnId: "GHSA-2g95-wg33-c5x2", aliases: [], severity: "medium", maintenance: false },
+    { package: "filelock", currentVersion: "4.1.0", vulnId: "GHSA-567q-5qvw-pf92", aliases: [], severity: "low", maintenance: false },
+  ];
+  const answer = (affected: boolean) => async () => ({ vulnerabilities: affected ? v41 : [] }) as unknown as VulnerabilityScanResult;
+  // The scan: virtualenv 20.27.0 has 2 advisories, the locked filelock 3.16.1 has 1.
+  const scan = (name: string, version: string | null) =>
+    (name === "virtualenv" && version === "20.27.0"
+      ? [{ vulnId: "GHSA-aaaa-aaaa-aaaa", aliases: [] }, { vulnId: "GHSA-bbbb-bbbb-bbbb", aliases: [] }]
+      : name === "filelock" && version === "3.16.1"
+        ? [{ vulnId: "GHSA-cccc-cccc-cccc", aliases: [] }]
+        : []) as never;
 
   it("virtualenv 21.14.13 on Python 3.10 brings filelock 4.1.0 (4.2.x needs 3.11): NOT a clean fix", async () => {
     const r = row();
-    await withPythonFloorHolds([r], root, sources, answer(true), Date.now() + 5_000);
+    fs.writeFileSync(path.join(root, "uv.lock"), 'version = 1\nrequires-python = ">=3.10, <=3.13"\n\n[[package]]\nname = "filelock"\nversion = "3.16.1"\nsource = { registry = "https://pypi.org/simple" }\n');
+    await withPythonFloorHolds([r], root, sources, answer(true), Date.now() + 5_000, scan);
     const held = r.reasons.find((x) => HELD_UNCLEAN_REASON.test(x));
-    expect(held).toContain('On this project\'s lowest supported Python (3.10, from uv.lock) it requires filelock "<5,>=3.24.2", and the newest filelock that Python can install is 4.1.0 (4.2.1 needs a newer Python), which GHSA-v4x8-3wr5-3wq8 affect');
+    // One read: what it clears, what it installs on the lowest Python, what the clean release needs, the two ways out.
+    expect(held).toBe(
+      "virtualenv 21.14.13 is NOT a clean fix: confirm a release with dependency_check before pinning it. " +
+        'It would clear 2 advisories on virtualenv 20.27.0 and 1 advisory on filelock 3.16.1, which it moves, but on this project\'s lowest supported Python (3.10, from uv.lock) it requires filelock "<5,>=3.24.2", and the newest filelock that Python can install is 4.1.0, which 3 advisories affect (worst: high; GHSA-v4x8-3wr5-3wq8, GHSA-2g95-wg33-c5x2, GHSA-567q-5qvw-pf92). ' +
+        'The first clean filelock it admits is 4.2.1, which needs Python ">=3.11". Two ways out: raise requires-python in pyproject.toml to ">=3.11" (it is ">=3.10, <=3.13" now) and call upgrade_planner again; or take the upgrade knowingly by writing the requirement virtualenv==21.14.13 yourself (the command is `uv lock --upgrade-package virtualenv==21.14.13`; it is not in run_order).',
+    );
   });
 
   it("a clean release on the floor, or a floor that changes nothing, keeps the step", async () => {

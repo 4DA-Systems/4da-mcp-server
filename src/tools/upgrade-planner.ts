@@ -924,7 +924,9 @@ async function executeStandalonePlanner(
   // A uv target that requires the project itself at another version cannot lock (upgrade-plan-runnable.ts).
   await withoutSelfRequiringTargets(limited, root, liveIntel.getFixPathSources());
   // A uv pin whose requirement resolves, on the project's lowest Python, to an affected release is held (upgrade-plan-runnable.ts).
-  await withPythonFloorHolds(limited, root, liveIntel.getFixPathSources(), (deps) => liveIntel.queryAdvisories(deps), Date.now() + withinCallBudget(PYTHON_FLOOR_BUDGET_MS, 500));
+  await withPythonFloorHolds(limited, root, liveIntel.getFixPathSources(), (deps) => liveIntel.queryAdvisories(deps), Date.now() + withinCallBudget(PYTHON_FLOOR_BUDGET_MS, 500), (name, version) =>
+    (vulnResult?.vulnerabilities ?? []).filter((v) => v.ecosystem === "PyPI" && v.package === name && v.currentVersion === version && !isMaintenanceNotice(v)),
+  );
   // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
   await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
   // A Cargo step's preconditions, read before it is named: the pre-update a `--precise` needs, and
