@@ -238,9 +238,14 @@ describe("it fails open", () => {
   });
 
   it("input it does not understand: exit 0, no output", () => {
-    for (const payload of ["not json", "", "[]", "null", { hook_event_name: "PreToolUse" }, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: "x" }, { tool_name: "Bash", tool_input: { command: "npm i lodash@4.17.20" } }, pre("Read", { file_path: "package.json" }), pre("Bash", { command: 42 }), pre("Edit", { file_path: 7 })]) {
+    for (const payload of ["", "[]", "null", { hook_event_name: "PreToolUse" }, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: "x" }, { tool_name: "Bash", tool_input: { command: "npm i lodash@4.17.20" } }, pre("Read", { file_path: "package.json" }), pre("Bash", { command: 42 }), pre("Edit", { file_path: 7 })]) {
       expect(hook(payload), JSON.stringify(payload)).toEqual({ status: 0, stdout: "" });
     }
+  });
+
+  // Round 13: a payload that does not parse at all is held where a ledger exists (eleventh independent check, S31).
+  it("a payload that does not parse is held", () => {
+    expect(hook("not json").stdout).toContain("could not read it");
   });
 
   it("garbage and torn lines in the ledger are skipped; the good ones still count", () => {

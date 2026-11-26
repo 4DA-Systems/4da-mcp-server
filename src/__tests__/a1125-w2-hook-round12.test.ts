@@ -128,11 +128,17 @@ describe("4: one outermost handler: nothing goes silent", () => {
   });
 
   const POINTS = ["stdin", "parse", "respond", "ledger-guard", "reader", "detector", "account", "ledger-read", "denial", "worker-start", "worker"];
-  it.each(POINTS)("a fault injected at %s: an install is held, a plain command is not", (point) => {
+  // Round 13: on a failure every Bash / PowerShell call is held, and an edit only of a manifest or the ledger.
+  it.each(POINTS)("a fault injected at %s: an install is held, so is a plain command; an edit of a README is not", (point) => {
     for (const pad of [0, 9000]) {
-      const held = spawnHook(JSON.stringify(install(pad)), { FOURDA_HOOK_FAULT: point });
-      expect(held, `${point} pad ${pad}`).toContain('"deny"');
-      expect(spawnHook(JSON.stringify(plain(pad)), { FOURDA_HOOK_FAULT: point }), `${point} pad ${pad}`).toBe("");
+      expect(spawnHook(JSON.stringify(install(pad)), { FOURDA_HOOK_FAULT: point }), `${point} pad ${pad}`).toContain('"deny"');
+      // A plain command meets the fault only where its path passes that point (it reads no ledger, makes no denial; the worker points are past 8 KB).
+      const reached = !["ledger-read", "denial"].includes(point) && (pad > 0 || !["worker-start", "worker"].includes(point));
+      const out = spawnHook(JSON.stringify(plain(pad)), { FOURDA_HOOK_FAULT: point });
+      if (reached) expect(out, `${point} pad ${pad}`).toContain('"deny"');
+      else expect(out, `${point} pad ${pad}`).toBe("");
+      const readme = { session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: `${s.project}/README.md`, content: `npm install ${"x".repeat(pad)}` } };
+      expect(spawnHook(JSON.stringify(readme), { FOURDA_HOOK_FAULT: point }), `${point} README pad ${pad}`).toBe("");
     }
   });
 

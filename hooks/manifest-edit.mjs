@@ -1977,6 +1977,7 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
   let words = [];
   let word = null;
   const endWord = () => {
+    tick();
     if (word !== null) words.push(word);
     word = null;
   };
@@ -1987,6 +1988,7 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
   let pos = 0;
   let held = false;
   const endCommand = (link = "") => {
+    tick();
     endWord();
     if (unreadCommand !== null) {
       // Not read exactly. When the command reader itself sees an install or add subcommand of a
@@ -3491,10 +3493,15 @@ function accountLine(line, dialect, depth = 0) {
   // J1 (b): a data program's text is text only when it goes nowhere that runs it: no write to a
   // manifest or lockfile on the line, and every later stage of its pipeline a listed sink or data program.
   const writesManifest = redirects.some((r) => r.write && manifestFile(r.target));
+  // safeAfter[k]: every later stage of command k's pipeline runs nothing it is given (one backward pass).
+  const safeAfter = new Array(commands.length).fill(true);
+  for (let k = commands.length - 2; k >= 0; k--) {
+    tick();
+    safeAfter[k] = links[k] === "|" ? sinkCommand(commands[k + 1]) && safeAfter[k + 1] : true;
+  }
   for (let k = 0; k < commands.length; k++) {
     tick();
-    let exempt = !writesManifest && !(gitSetting && programName(commands[k][Math.max(0, commandStart(commands[k]))] ?? "") === "git");
-    for (let j = k; exempt && links[j] === "|" && j + 1 < commands.length; j++) exempt = sinkCommand(commands[j + 1]);
+    const exempt = !writesManifest && !(gitSetting && programName(commands[k][Math.max(0, commandStart(commands[k]))] ?? "") === "git") && safeAfter[k];
     const why = accountCommand(commands[k], dialect, depth, exempt);
     if (why) {
       accountFailed ??= commands[k];
@@ -4936,14 +4943,14 @@ function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
   deadline = readBudgetMs >= 0 ? Math.min(performance.now() + readBudgetMs, mainStartedAt === null ? Infinity : mainStartedAt + readBudgetMs + 500) : -1;
   try {
     return judgeCall(input, env, now);
-  } catch {
-    // An error of the hook's own while reading: an install or manifest call it could not read is held.
-    // The budget is spent or broken: this check runs without it (a throw here reaches rawHold).
+  } catch (error) {
+    // Round 13: an error of the hook's own, or the budget spent, is rawHold's rule: every Bash and
+    // PowerShell call held, an edit of a manifest or the ledger held, nothing else.
     deadline = Infinity;
-    if (!mayInstall(input)) return "";
-    refuse("the hook could not read it");
-    const dir = dataDir(env);
-    return readLedgerExists(dir) ? denyJson(notReadDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", unreadPart)) : "";
+    const held = rawHold(".", input, env);
+    if (!held || error !== TOO_SLOW) return held;
+    unreadRemedy = null;
+    return denyJson(notReadDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", unreadPart ?? OVER_BUDGET));
   } finally {
     deadline = Infinity;
   }
@@ -5255,7 +5262,17 @@ async function main() {
   // stdin never closed: after SELF_LIMIT_MS the hook answers from what has arrived (rawHold: held
   // when that text already shows a tool it judges and a manager word, manifest or ledger name).
   setTimeout(() => {
-    answer(rawHold(stdinText));
+    // The text that has arrived: judged as any other when it parses (its stream was left open after
+    // it), else rawHold's (a payload cut short is held where a ledger exists).
+    let out;
+    try {
+      const raw = stdinText.charCodeAt(0) === 0xfeff ? stdinText.slice(1) : stdinText;
+      const input = JSON.parse(raw);
+      out = respond(input);
+    } catch {
+      out = rawHold(stdinText);
+    }
+    answer(out);
     process.exit(0);
   }, SELF_LIMIT_MS).unref();
   process.stdin.setEncoding("utf8");
@@ -5328,19 +5345,50 @@ function judgeInWorker(raw, oversize) {
  * PreToolUse call that names a tool the hook judges and holds any manager word, manifest file name
  * or the ledger's name is held, where a ledger exists and the guard blocks; any other gets nothing.
  */
-const RAW_TOOLS = ['"bash"', '"powershell"', '"edit"', '"multiedit"', '"write"'];
-const RAW_WORDS = ["npm", "pnpm", "yarn", "bun", "pip", "uv ", "uvx", "poetry", "cargo", "go ", "go.exe", "npx", "corepack", "package.json", "cargo.toml", "pyproject.toml", "requirements", "go.mod", "pnpm-workspace", "check-ledger"];
-const RAW_HOLD =
-  "4DA guard: this call was stopped before it ran: the hook could not finish reading this call, so the dependency versions it may install or write were not checked. Run it again as a plain command or a smaller edit; if it is held again, tell the user. FOURDA_GUARD is the user's setting, not yours to change.";
-function rawHold(raw) {
+const RAW_HOLD_COMMAND =
+  "4DA guard: this command was stopped before it ran: the hook could not finish reading this command, so the dependency versions it may install were not checked. Run it in smaller parts; if it is held again, tell the user. FOURDA_GUARD is the user's setting, not yours to change.";
+const RAW_HOLD_EDIT =
+  "4DA guard: this edit was stopped before it ran: the hook could not finish reading this edit, so the dependency versions it may write were not checked. Make it in smaller parts; if it is held again, tell the user. FOURDA_GUARD is the user's setting, not yours to change.";
+const RAW_HOLD_CALL =
+  "4DA guard: this call was stopped before it ran: the hook could not read it, so the dependency versions it may install or write were not checked. If it is held again, tell the user. FOURDA_GUARD is the user's setting, not yours to change.";
+const rawDeny = (reason) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+
+/**
+ * Round 13 (eleventh independent check, S31 / S47): the hook's one answer when it fails or runs out
+ * of time. It does not look for words (quotes, escapes and an escaped tool name defeated that); it
+ * decides by tool, where a ledger exists and the guard blocks. A payload that does not parse is
+ * held. Of a PreToolUse call: every Bash and PowerShell call is held; an Edit, MultiEdit, Write or
+ * NotebookEdit is held when its path names a manifest or the ledger, or when the path cannot be
+ * read; any other gets nothing.
+ */
+function rawHold(raw, parsed, env = process.env) {
   try {
-    if (typeof raw !== "string" || raw.length === 0 || guardMode(process.env.FOURDA_GUARD) !== "block") return "";
-    const text = raw.toLowerCase();
-    if (text.indexOf('"pretooluse"') < 0) return "";
-    if (!RAW_TOOLS.some((w) => text.indexOf(w) >= 0)) return "";
-    if (!RAW_WORDS.some((w) => text.indexOf(w) >= 0)) return "";
-    if (!readLedgerExists(dataDir(process.env))) return "";
-    return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: RAW_HOLD } });
+    if (typeof raw !== "string" || raw.length === 0 || guardMode(env.FOURDA_GUARD) !== "block") return "";
+    if (!readLedgerExists(dataDir(env))) return "";
+    let input = parsed;
+    if (input === undefined) {
+      try {
+        input = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+      } catch {
+        // Does not parse at all: held.
+        return rawDeny(RAW_HOLD_CALL);
+      }
+    }
+    if (!input || typeof input !== "object") return "";
+    if (input.hook_event_name !== "PreToolUse") return "";
+    const tool = input.tool_name;
+    if (tool === "Bash" || tool === "PowerShell") return rawDeny(RAW_HOLD_COMMAND);
+    if (tool === "Edit" || tool === "MultiEdit" || tool === "Write" || tool === "NotebookEdit") {
+      const ti = input.tool_input;
+      const path = ti && typeof ti === "object" ? (typeof ti.file_path === "string" ? ti.file_path : typeof ti.notebook_path === "string" ? ti.notebook_path : null) : null;
+      if (path === null) return rawDeny(RAW_HOLD_EDIT);
+      try {
+        if (manifestKind(path) !== null || namesLedgerText(path, ledgerFolderMarks(env))) return rawDeny(RAW_HOLD_EDIT);
+      } catch {
+        return rawDeny(RAW_HOLD_EDIT);
+      }
+    }
+    return "";
   } catch {
     return "";
   }
@@ -5414,6 +5462,7 @@ if (!isMainThread && workerData && typeof workerData === "object" && typeof work
     fault("worker");
     let input = null;
     try {
+      fault("parse");
       input = JSON.parse(workerData.fourdaRaw);
     } catch {
       input = null;
